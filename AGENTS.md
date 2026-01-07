@@ -57,9 +57,17 @@ Raises:
 
 - When renaming variables, ensure callsites are updated and tests still pass.
 
+## Environment
+
+- If the environment is not activated (for example when python is not found), you can activate it using `source .venv/bin/activate`.
+
 ## Running code
 
 - Code can be run using uv. For example, run a script `uv run script.py`, or `uv run pytest`.
+
+## Testing the code
+
+- When adapting code, do run the tests to confirm behaviour. If there are no tests, suggest to the user to make those tests. Never run the tests in test_model.py though, unless explictly requested by the user.
 
 ## Checking and formatting
 

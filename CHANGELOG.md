@@ -8,6 +8,11 @@
 - Added a new option so that households can adapt to actual floods in the model
 - Implemented a simple version on runoff concentration so runoff is slowed down on its way to become discharge
 - Updated the performance_hydrodynamics function so it uses a list of observation files and matches these to the right flood map per event from sfincs. The name of the observation file has to be the same of the flood event (i.e. startdate - enddate.zarr)
+- For evaluation, the evaluation module now needs to be prefixed. So `geb evaluate --methods plot_discharge` becomes `geb evaluate --methods hydrology.plot_discharge`. Because we now have multiple evaluation files this keeps the logic clear.
+- dict in the input files in now updated to params. It is recommended to change the dict entry to params manually. Otherwise, it is also possible to re-build the model. This is because dict was giving issues with the type checker, because dict is a reserved name.
+
+To support this version:
+- It is required to change the dict entry to params manually in `input/files.yml`. Otherwise, it is also possible to re-build the model.
 
 # v1.0.0b8
 - Improve model startup time

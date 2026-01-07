@@ -3,11 +3,11 @@
 import calendar
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 import numpy as np
-import numpy.typing as npt
 from hydromt.data_catalog import DataCatalog
+
+from geb.types import TwoDArrayInt32
 
 
 def get_day_index(date: date) -> int:
@@ -45,11 +45,11 @@ def get_growing_season_length(start_day_index: int, end_day_index: int) -> int:
 
 
 def parse_MIRCA_file(
-    parsed_calendar: dict[str, Any],
+    parsed_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
     crop_calendar: Path,
-    MIRCA_units: npt.ArrayLike,
+    MIRCA_units: list[int],
     is_irrigated: bool,
-) -> dict[str, Any]:
+) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
     """Parse a MIRCA2000 crop calendar file.
 
     Args:
@@ -211,8 +211,8 @@ def parse_MIRCA_file(
 
 
 def parse_MIRCA2000_crop_calendar(
-    data_catalog: DataCatalog, MIRCA_units: npt.ArrayLike
-) -> dict[str, Any]:
+    data_catalog: DataCatalog, MIRCA_units: list[int]
+) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
     """Parse MIRCA2000 crop calendars for given MIRCA units.
 
     Args:
@@ -222,12 +222,12 @@ def parse_MIRCA2000_crop_calendar(
     Returns:
         A dictionary containing the parsed crop calendars.
     """
-    rainfed_crop_calendar_fp = data_catalog.get_source(
-        "MIRCA2000_cropping_calendar_rainfed"
-    ).path
-    irrigated_crop_calendar_fp = data_catalog.get_source(
-        "MIRCA2000_cropping_calendar_irrigated"
-    ).path
+    rainfed_crop_calendar_fp = Path(
+        data_catalog.get_source("MIRCA2000_cropping_calendar_rainfed").path
+    )
+    irrigated_crop_calendar_fp = Path(
+        data_catalog.get_source("MIRCA2000_cropping_calendar_irrigated").path
+    )
 
     MIRCA2000_data = {}
 

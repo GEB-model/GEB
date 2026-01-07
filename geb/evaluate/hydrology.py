@@ -1,10 +1,12 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
+from __future__ import annotations
+
 import base64
 import os
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import branca.colormap as cm
 import contextily as ctx
@@ -22,9 +24,13 @@ from matplotlib.cm import get_cmap
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
-from rasterio.crs import CRS
+from rasterio.crs import CRS  # ty:ignore[unresolved-import]
 from rasterio.features import geometry_mask
 from tqdm import tqdm
+
+if TYPE_CHECKING:
+    from geb.evaluate import Evaluate
+    from geb.model import GEBModel
 
 from geb.workflows.io import read_zarr, write_zarr
 
@@ -85,9 +91,10 @@ def calculate_critical_success_index(
 class Hydrology:
     """Implements several functions to evaluate the hydrological module of GEB."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: GEBModel, evaluator: Evaluate) -> None:
         """Initialize the Hydrology evaluation module."""
-        pass
+        self.model = model
+        self.evaluator = evaluator
 
     def plot_discharge(
         self, run_name: str = "default", *args: Any, **kwargs: Any
@@ -138,19 +145,20 @@ class Hydrology:
 
         write_zarr(
             mean_discharge,
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
+            self.evaluator.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
             crs=4326,
         )
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        mean_discharge.plot(ax=ax, cmap="Blues")
+        mean_discharge.plot(ax=ax, cmap="Blues")  # ty:ignore[missing-argument]
 
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
 
         plt.savefig(
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
+            self.evaluator.output_folder_evaluate / "mean_discharge_m3_per_s.png",
+            dpi=300,
         )
 
     def evaluate_discharge(
@@ -186,10 +194,12 @@ class Hydrology:
         """
         #  create folders
         eval_plot_folder: Path = (
-            Path(self.output_folder_evaluate) / "discharge" / "plots"
+            Path(self.evaluator.output_folder_evaluate) / "discharge" / "plots"
         )
         eval_result_folder = (
-            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+            Path(self.evaluator.output_folder_evaluate)
+            / "discharge"
+            / "evaluation_results"
         )
 
         eval_plot_folder.mkdir(parents=True, exist_ok=True)
@@ -216,15 +226,17 @@ class Hydrology:
 
             # Create empty evaluation dataframe with proper structure
             empty_evaluation_df = pd.DataFrame(
-                columns=[
-                    "station_name",
-                    "x",
-                    "y",
-                    "Q_obs_to_GEB_upstream_area_ratio",
-                    "KGE",
-                    "NSE",
-                    "R",
-                ]
+                columns=np.array(
+                    [
+                        "station_name",
+                        "x",
+                        "y",
+                        "Q_obs_to_GEB_upstream_area_ratio",
+                        "KGE",
+                        "NSE",
+                        "R",
+                    ]
+                )
             ).set_index(pd.Index([], name="station_ID"))
 
             # Save empty evaluation metrics as Excel file
@@ -523,11 +535,11 @@ class Hydrology:
                 # Get available years from validation_df (intersection of obs & sim time range)
                 if include_yearly_plots:
                     print("yearly plots!!!")
-                    years_to_plot = sorted(validation_df.index.year.unique())
+                    years_to_plot = sorted(validation_df.index.year.unique())  # ty:ignore[possibly-missing-attribute]
                     print(years_to_plot)
                     for year in years_to_plot:
                         # Filter data for the current year
-                        one_year_df = validation_df[validation_df.index.year == year]
+                        one_year_df = validation_df[validation_df.index.year == year]  # ty:ignore[possibly-missing-attribute]
 
                         # Skip if there's no data for the year
                         if one_year_df.empty:
@@ -672,19 +684,19 @@ class Hydrology:
             ctx.add_basemap(
                 ax[0],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
             ctx.add_basemap(
                 ax[1],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
             ctx.add_basemap(
                 ax[2],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
 
@@ -996,7 +1008,9 @@ class Hydrology:
             export: Whether to save the skill score graphs to PNG files.
         """
         eval_result_folder = (
-            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+            Path(self.evaluator.output_folder_evaluate)
+            / "discharge"
+            / "evaluation_results"
         )
         evaluation_df = pd.read_excel(
             eval_result_folder.joinpath("evaluation_metrics.xlsx")
@@ -1369,7 +1383,7 @@ class Hydrology:
 
         if export:
             water_circle.write_image(
-                self.output_folder_evaluate / "water_circle.png", scale=5
+                self.evaluator.output_folder_evaluate / "water_circle.png", scale=5
             )
 
         return water_circle
@@ -1395,7 +1409,7 @@ class Hydrology:
 
         def parse_flood_forecast_initialisation(
             filename: str,
-        ) -> tuple[str | None, str | None, str, str, str]:
+        ) -> tuple[str | None, str | None, str, str, str] | None:
             """Parse flood map filename to extract components.
 
             Expected format: YYYYMMDDTHHMMSS - MEMBER - EVENT_START - EVENT_END.zarr
@@ -1439,7 +1453,7 @@ class Hydrology:
                     f"Skipping file '{filename}': does not match expected flood map format.",
                     RuntimeWarning,
                 )
-                return None
+                return
 
             return forecast_init, member, event_start, event_end, event_name
 
@@ -1697,7 +1711,7 @@ class Hydrology:
 
                     # Add a comment about the metrics in the plot
                     legend_bbox = legend.get_window_extent(
-                        renderer=fig.canvas.get_renderer()
+                        renderer=fig.canvas.get_renderer()  # ty:ignore[unresolved-attribute]
                     )
                     legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
 
@@ -2077,7 +2091,9 @@ class Hydrology:
 
         self.config = self.model.config["hazards"]
 
-        eval_hydrodynamics_folders = Path(self.output_folder_evaluate) / "hydrodynamics"
+        eval_hydrodynamics_folders = (
+            Path(self.evaluator.output_folder_evaluate) / "hydrodynamics"
+        )
 
         eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
 
@@ -2110,7 +2126,7 @@ class Hydrology:
                 observation_files = [Path(obs_raw)]
             else:
                 observation_files = [Path(p) for p in obs_raw]
-            obs_file: Path = find_exact_observation_file(event_name, observation_files)
+            obs_file = find_exact_observation_file(event_name, observation_files)
 
             # check if observation file exists, if not, raise an error
             if obs_file is None:

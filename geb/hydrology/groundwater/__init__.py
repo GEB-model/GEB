@@ -36,7 +36,6 @@ from geb.module import Module
 from geb.types import ArrayFloat32, TwoDArrayFloat64
 from geb.workflows import balance_check
 
-from ..routing import get_channel_ratio
 from .model import ModFlowSimulation
 
 if TYPE_CHECKING:
@@ -101,11 +100,6 @@ class GroundWater(Module):
             self.grid.var.hydraulic_conductivity.shape
             == self.grid.var.specific_yield.shape
         )
-
-        self.grid.var.leakageriver_factor = 0.001  # in m/day
-        self.grid.var.leakagelake_factor = 0.001  # in m/day
-
-        self.initial_water_table_depth = 2
 
         def get_initial_head() -> npt.NDArray[np.float64]:
             heads = self.hydrology.grid.load(
@@ -199,19 +193,13 @@ class GroundWater(Module):
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
-        channel_ratio: npt.NDArray[np.float32] = get_channel_ratio(
-            river_length=self.grid.var.river_length,
-            river_width=np.where(
-                ~np.isnan(self.grid.var.average_river_width),
-                self.grid.var.average_river_width,
-                0,
-            ),
-            cell_area=self.grid.var.cell_area,
-        )
-        channel_ratio.fill(1)
+        # we assume that all the baseflow ends up in the river
+        channel_ratio = np.float32(1.0)
 
         # this is the capillary rise for the NEXT timestep
-        self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
+        self.grid.var.capillar = (groundwater_drainage * (1 - channel_ratio)).astype(
+            np.float32
+        )
         baseflow = (groundwater_drainage * channel_ratio).astype(np.float32)
 
         self.report(locals())

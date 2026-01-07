@@ -360,19 +360,9 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
         },
     },
-    "esa_worldcover_2020": {
-        "adapter": ESAWorldCover(),
-        "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2020_AWS_V1",
-        "source": {
-            "name": "ESA WorldCover",
-            "author": "European Space Agency (ESA)",
-            "version": "v100",
-            "license": "CC BY 4.0",
-        },
-    },
     "esa_worldcover_2021": {
         "adapter": ESAWorldCover(),
-        "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
+        "url": "https://planetarycomputer.microsoft.com/api/stac/v1",
         "source": {
             "name": "ESA WorldCover",
             "author": "European Space Agency (ESA)",

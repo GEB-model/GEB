@@ -9,6 +9,7 @@
 - [Rafaella Oliveira](https://research.vu.nl/en/persons/rafaella-gouveia-loureiro-oliveira)
 - [Carolina Carral](https://vu.nl/en/research/scientists/carolina-ferman-carral)
 - [Roy Pontman](https://research.vu.nl/en/persons/roy-pontman/)
+- [Lisanne van Amelsvoort](https://research.vu.nl/en/persons/lisanne-van-amelsvoort/)
 
 # Grandmasters
 
@@ -16,6 +17,7 @@ We are also extremely grateful to the grandmasters without whom the GEB model wo
 
 - [Jeroen Aerts](https://research.vu.nl/en/persons/jeroen-aerts/)
 - [Hans de Moel](https://research.vu.nl/en/persons/hans-de-moel/)
+- [Wouter Botzen](https://research.vu.nl/en/persons/wouter-botzen/)
 
 # Past contributors
 
@@ -23,7 +25,7 @@ We are also extremely grateful to the grandmasters without whom the GEB model wo
 - [Peter Burek](https://iiasa.ac.at/staff/peter-burek) - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 - Luca Guillaumot - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 
-# Students who used and contributed directly or indirectly
+# Students who contributed directly or indirectly
 
 - Romijn Servaas
 - Thomas van Eldik

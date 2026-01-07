@@ -18,6 +18,7 @@ import pandas as pd
 import yaml
 from numpy.typing import NDArray
 
+from geb.types import ArrayStr
 from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
@@ -46,11 +47,11 @@ class DynamicArray:
 
     def __init__(
         self,
-        input_array: npt.ArrayLike | None = None,
+        input_array: np.ndarray | None = None,
         n: int | None = None,
         max_n: int | None = None,
         extra_dims: tuple[int, ...] | None = None,
-        extra_dims_names: Iterable[str] = [],
+        extra_dims_names: Iterable[str] | ArrayStr = [],
         dtype: npt.DTypeLike | None = None,
         fill_value: Any | None = None,
     ) -> None:
@@ -186,17 +187,22 @@ class DynamicArray:
         return self._n
 
     @property
-    def extra_dims_names(self) -> npt.NDArray[np.str_] | None:
+    def extra_dims_names(self) -> ArrayStr:
         """
         Names associated with any extra trailing dimensions.
 
         Returns:
             Array of names for extra trailing dimensions, or None.
+
+        Raises:
+            AttributeError: If `extra_dims_names` has not been set.
         """
+        if not hasattr(self, "_extra_dims_names"):
+            raise AttributeError("extra_dims_names attribute not set")
         return self._extra_dims_names
 
     @extra_dims_names.setter
-    def extra_dims_names(self, value: npt.NDArray[np.str_]) -> None:
+    def extra_dims_names(self, value: ArrayStr) -> None:
         """
         Set names for extra trailing dimensions.
 
@@ -452,7 +458,7 @@ class DynamicArray:
             "_extra_dims_names",
             "extra_dims_names",
         ):
-            return super().__getattr__(name)
+            return object.__getattribute__(self, name)
         else:
             return getattr(self.data, name)
 
@@ -950,7 +956,7 @@ class Bucket:
 
     """
 
-    def __init__(self, validator: Callable | None = None) -> None:
+    def __init__(self, validator: Callable[..., bool] | None = None) -> None:
         """Initialize the Bucket with an optional validator.
 
         Args:
@@ -984,7 +990,8 @@ class Bucket:
         | str
         | dict
         | datetime
-        | Callable,
+        | Callable[..., bool]
+        | None,
     ) -> None:
         """Set an value in the bucket with optional validation, except if the name is '_validator'.
 

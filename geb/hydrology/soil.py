@@ -62,6 +62,151 @@ def add_water_to_topwater_and_evaporate_open_water(
 
 
 @njit(cache=True, inline="always")
+def calculate_arno_runoff(
+    current_soil_water_storage: np.float32,
+    max_soil_water_capacity: np.float32,
+    arno_shape_parameter: np.float32,
+    topwater_m: np.float32,
+    infiltration_capacity_m: np.float32,
+) -> tuple[np.float32, np.float32]:
+    """Calculate runoff and infiltration using the Arno/Xinanjiang scheme.
+
+    This implementation uses the analytical solution for the Xinanjiang model,
+    calculating the change in storage by moving along the capacity distribution curve.
+
+    Derivation:
+        The model assumes a spatial distribution of point infiltration capacities across the basin.
+        This distribution is described by a probability density function, where the fraction of the basin
+        with a capacity less than or equal to a value 'i' is given by a power law.
+
+        Definitions:
+        - i: Point infiltration capacity (or local storage capacity) at a specific fraction of the basin.
+        - i_max: The maximum point infiltration capacity in the basin.
+        - b: The shape parameter of the distribution.
+        - ws: The maximum total water storage capacity of the basin (average of i over the basin).
+        - w: The current total water storage of the basin.
+
+        1. Distribution of Capacities:
+        The fraction of the basin area (As) with infiltration capacity less than or equal to i is assumed to be:
+            As = 1 - (1 - i / i_max)^b
+        This implies that a small portion of the basin has very low capacity, while most has higher capacity, controlled by 'b'.
+
+        2. Total Basin Capacity (ws):
+        The maximum storage capacity of the basin (ws) is the integral of the capacity 'i' over the entire area (from As=0 to As=1).
+        First, express i as a function of As by inverting the distribution equation:
+            i(As) = i_max * [1 - (1 - As)^(1/b)]
+        Then, integrate i(As) from 0 to 1:
+            ws = ∫₀¹ { i_max * [1 - (1 - As)^(1/b)] } dAs
+            ws = i_max * [ 1 - b / (b + 1) ]
+            ws = i_max / (b + 1)
+        Rearranging gives:
+            i_max = ws * (b + 1)
+
+        3. Current Basin Storage (w):
+        The current storage 'w' is the integral of the capacity curve up to the current saturation point 'i'.
+        It is derived by calculating the storage deficit (empty space) and subtracting it from the total capacity 'ws'.
+        The deficit is the integral of remaining capacity (i(As) - i) over the unsaturated area (from As to 1).
+        Here, i(As) is the local capacity at fraction As (as defined in step 2).
+            Deficit = ∫_As^1 (i(As) - i) dAs
+        Substituting i(As) = i_max * [1 - (1 - As)^(1/b)] and letting u = 1 - As:
+            Deficit = ∫_0^(1-As) (i_max * [1 - u^(1/b)] - i) du
+        Solving this integral and using the relation (1 - As) = (1 - i / i_max)^b yields:
+            Deficit = ws * (1 - i / i_max)^(b + 1)
+        Thus, the current storage is:
+            w = ws - Deficit = ws * [1 - (1 - i / i_max)^(b + 1)]
+
+        4. Inverting for Relative Saturation:
+        To find the current position on the capacity curve based on the current storage, we invert the equation:
+            1 - i / i_max = (1 - w / ws)^(1 / (b + 1))
+
+        5. Adding Precipitation:
+        The model assumes that precipitation 'p' is added uniformly to the soil water storage across the basin.
+        Conceptually, 'i' represents the current "filled depth" or tension water level in the soil column.
+        Since 'i' is measured in depth units (e.g., mm), adding precipitation 'p' directly increases this level.
+        This assumes that infiltration happens uniformly until local capacity is reached.
+        Therefore, the state of the basin moves along the capacity curve from 'i' to 'i + p':
+            i_new = i_current + p
+
+        6. Calculating New Storage:
+        Substituting 'i_new' back into the storage equation gives the new total storage 'w_new'.
+        We replace (1 - i_current / i_max) with the term derived in step 4.
+            w_new = ws * [1 - ( (1 - w / ws)^(1 / (b + 1)) - p / i_max )^(b + 1) ]
+
+    References:
+    - Zhao Ren-Jun (1992). The Xinanjiang model applied in China. Journal of hydrology, 135(1-4), 371-381.
+    - Todini, E. (1996). The ARNO rainfall—runoff model. Journal of hydrology, 175(1-4), 339-382.
+
+    Args:
+        current_soil_water_storage: Current soil water content (m).
+        max_soil_water_capacity: Maximum soil water capacity (m).
+        arno_shape_parameter: Arno shape parameter.
+        topwater_m: Incoming water (precipitation) (m).
+        infiltration_capacity_m: Maximum infiltration capacity (m).
+
+    Returns:
+        A tuple containing:
+            - Runoff (m)
+            - Infiltration (m)
+    """
+    # If precipitation is 0, no runoff
+    if topwater_m <= np.float32(0.0):
+        return np.float32(0.0), np.float32(0.0)
+
+    # Relative saturation
+    relative_saturation = current_soil_water_storage / max_soil_water_capacity
+    if relative_saturation >= np.float32(1.0):
+        # Already saturated, all P becomes runoff
+        return topwater_m, np.float32(0.0)
+
+    # Calculate the term (1 - w/ws)^(1/(b+1))
+    # This corresponds to (1 - i / i_max)
+    # where i_max = ws * (b + 1)
+    # Step 4: Inverting for Relative Saturation (finding position on capacity curve)
+    term_current = (np.float32(1.0) - relative_saturation) ** (
+        np.float32(1.0) / (arno_shape_parameter + np.float32(1.0))
+    )
+
+    # Calculate the new term after adding precipitation 'p'
+    # We are filling the capacity, so we move up the capacity curve (increasing i)
+    # The amount of "capacity depth" filled is 'p'.
+    # Step 2 & 3: Total Basin Capacity (i_max)
+    max_infiltration_capacity = max_soil_water_capacity * (
+        arno_shape_parameter + np.float32(1.0)
+    )
+
+    # The new term corresponds to (1 - i_new / i_max)
+    # i_new = i + p
+    # (1 - i_new/i_max) = (1 - i/i_max) - p/i_max
+    # Step 5: Adding Precipitation (moving along the capacity curve)
+    term_new = term_current - topwater_m / max_infiltration_capacity
+
+    if term_new <= np.float32(0.0):
+        # Saturated
+        new_soil_water_storage = max_soil_water_capacity
+    else:
+        # Calculate new storage w_new
+        # w_new = ws * (1 - term_new^(b+1))
+        # Step 6: Calculating New Storage
+        new_soil_water_storage = max_soil_water_capacity * (
+            np.float32(1.0) - term_new ** (arno_shape_parameter + np.float32(1.0))
+        )
+
+    infiltration_amount_m: np.float32 = (
+        new_soil_water_storage - current_soil_water_storage
+    )
+    infiltration_amount_m = max(infiltration_amount_m, np.float32(0.0))
+    infiltration_amount_m = min(infiltration_amount_m, topwater_m)
+
+    # Limit infiltration by infiltration capacity
+    if infiltration_amount_m > infiltration_capacity_m:
+        infiltration_amount_m = infiltration_capacity_m
+
+    runoff_m: np.float32 = topwater_m - infiltration_amount_m
+
+    return runoff_m, infiltration_amount_m
+
+
+@njit(cache=True, inline="always")
 def rise_from_groundwater(
     w: ArrayFloat32,
     ws: ArrayFloat32,
@@ -121,11 +266,12 @@ def get_infiltration_capacity(
 @njit(cache=True, inline="always")
 def infiltration(
     ws: ArrayFloat32,
-    saturated_hydraulic_conductivity: np.float32,
+    saturated_hydraulic_conductivity: ArrayFloat32,
     land_use_type: np.int32,
     soil_is_frozen: bool,
     w: ArrayFloat32,
     topwater_m: np.float32,
+    arno_shape_parameter: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Simulates vertical transport of water in the soil for a single cell.
 
@@ -136,40 +282,50 @@ def infiltration(
         soil_is_frozen: Boolean indicating if the soil is frozen.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
+        arno_shape_parameter: Arno shape parameter for the cell.
 
     Returns:
         A tuple containing:
+            - topwater_m: Updated topwater in meters.
             - direct_runoff: Direct runoff from the cell in meters.
             - groundwater_recharge: Groundwater recharge from the cell in meters (currently set to 0.0).
             - infiltration: Infiltration into the soil for the cell in meters.
     """
-    # Calculate potential infiltration for the cell
-    potential_infiltration: np.float32 = get_infiltration_capacity(
-        saturated_hydraulic_conductivity
-    )
-    top_layer_capacity: np.float32 = ws[0] - w[0]
-    potential_infiltration = min(potential_infiltration, top_layer_capacity)
+    if soil_is_frozen or land_use_type == SEALED or land_use_type == OPEN_WATER:
+        # No infiltration allowed
+        infiltration_amount: np.float32 = np.float32(0.0)
+        direct_runoff: np.float32 = topwater_m
+        topwater_m: np.float32 = np.float32(0.0)
+        return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
+    else:
+        direct_runoff, infiltration_amount = calculate_arno_runoff(
+            current_soil_water_storage=w[0] + w[1],
+            max_soil_water_capacity=ws[0] + ws[1],
+            arno_shape_parameter=arno_shape_parameter,
+            topwater_m=topwater_m,
+            infiltration_capacity_m=saturated_hydraulic_conductivity[0],
+        )
+        toplayer_infiltration = min(infiltration_amount, ws[0] - w[0])
+        second_layer_infiltration = infiltration_amount - toplayer_infiltration
 
-    # Calculate infiltration for the cell
-    infiltration_amount: np.float32 = min(
-        potential_infiltration
-        * ~soil_is_frozen
-        * ~(land_use_type == SEALED)  # no infiltration on sealed areas
-        * ~(land_use_type == OPEN_WATER),  # no infiltration on open water
-        topwater_m,
-    )
-    topwater_m -= infiltration_amount
+        w[0] += toplayer_infiltration
+        # Ensure we don't exceed saturation due to float errors
+        w[0] = min(w[0], ws[0])
 
-    w[0] += infiltration_amount
-    w[0] = min(w[0], ws[0])  # ensure that the top layer does not exceed saturation
+        w[1] += second_layer_infiltration
+        # Ensure we don't exceed saturation due to float errors
+        w[1] = min(w[1], ws[1])
 
-    # Calculate direct runoff
-    direct_runoff = max(
-        np.float32(0),
-        topwater_m - np.float32(0.05) * (land_use_type == PADDY_IRRIGATED),
-    )
-    topwater_m -= direct_runoff
-    return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
+        # In Arno scheme, all topwater is processed into runoff or infiltration
+        topwater_m: np.float32 = np.float32(0.0)
+
+        if land_use_type == PADDY_IRRIGATED:
+            ponding_allowance: np.float32 = np.float32(0.05)
+            ponding = min(direct_runoff, ponding_allowance)
+            topwater_m += ponding
+            direct_runoff -= ponding
+
+        return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
 
 
 @njit(cache=True, inline="always")
@@ -240,61 +396,6 @@ def get_soil_water_flow_parameters(
     return psi, unsaturated_hydraulic_conductivity
 
 
-@njit(cache=True, inline="always")
-def get_mean_unsaturated_hydraulic_conductivity(
-    unsaturated_hydraulic_conductivity_1: np.float32,
-    unsaturated_hydraulic_conductivity_2: np.float32,
-) -> np.float32:
-    """Calculate the mean unsaturated hydraulic conductivity between two soil layers using the geometric mean.
-
-    Args:
-        unsaturated_hydraulic_conductivity_1: Unsaturated hydraulic conductivity of the first soil layer.
-        unsaturated_hydraulic_conductivity_2: Unsaturated hydraulic conductivity of the second soil layer.
-
-    Returns:
-        The mean unsaturated hydraulic conductivity between the two soil layers.
-    """
-    # harmonic mean
-    # mean_unsaturated_hydraulic_conductivity = (
-    #     2
-    #     * unsaturated_hydraulic_conductivity_1
-    #     * unsaturated_hydraulic_conductivity_2
-    #     / (unsaturated_hydraulic_conductivity_1 + unsaturated_hydraulic_conductivity_2)
-    # )
-    # geometric mean
-    mean_unsaturated_hydraulic_conductivity = np.sqrt(
-        unsaturated_hydraulic_conductivity_1 * unsaturated_hydraulic_conductivity_2
-    )
-    # ensure that there is some minimum flow is possible
-    mean_unsaturated_hydraulic_conductivity = max(
-        mean_unsaturated_hydraulic_conductivity, np.float32(1e-9)
-    )
-    return mean_unsaturated_hydraulic_conductivity
-
-
-@njit(cache=True, inline="always")
-def get_flux(
-    mean_unsaturated_hydraulic_conductivity: np.float32,
-    psi_lower: np.float32,
-    psi_upper: np.float32,
-    delta_z: np.float32,
-) -> np.float32:
-    """Calculate the flux between two soil layers using Darcy's law.
-
-    Args:
-        mean_unsaturated_hydraulic_conductivity: Mean unsaturated hydraulic conductivity between the two soil layers.
-        psi_lower: Soil water potential of the lower soil layer.
-        psi_upper: Soil water potential of the upper soil layer.
-        delta_z: Distance between the two soil layers.
-
-    Returns:
-        The flux between the two soil layers.
-    """
-    return -mean_unsaturated_hydraulic_conductivity * (
-        (psi_lower - psi_upper) / delta_z - np.float32(1)
-    )
-
-
 @njit(
     cache=True,
     inline="always",
@@ -328,8 +429,34 @@ def get_soil_moisture_at_pressure(
     return water_retention_curve * (thetas - thetar) + thetar
 
 
+def clip_brakensiek(
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    sand: np.ndarray[Shape, np.dtype[np.float32]],
+) -> tuple[
+    np.ndarray[Shape, np.dtype[np.float32]], np.ndarray[Shape, np.dtype[np.float32]]
+]:
+    """Clip clay and sand percentages for Brakensiek pedotransfer functions.
+
+    The Brakensiek functions expect clay in [5, 60] and sand in [5, 70].
+
+    Args:
+        clay: Clay percentage array [%].
+        sand: Sand percentage array [%].
+
+    Returns:
+        Tuple of (clay_clipped, sand_clipped) with values clipped to the valid ranges.
+    """
+    clay_out = np.empty_like(clay)
+    sand_out = np.empty_like(sand)
+
+    np.clip(clay, np.float32(5), np.float32(60), out=clay_out)
+    np.clip(sand, np.float32(5), np.float32(70), out=sand_out)
+
+    return clay_out, sand_out
+
+
 def thetas_toth(
-    soil_organic_carbon: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
@@ -343,7 +470,7 @@ def thetas_toth(
     Soil Sci., 66, 226-238. doi: 10.1111/ejss.121921211, 2015.
 
     Args:
-        soil_organic_carbon: soil organic carbon content [%].
+        organic_carbon_percentage: soil organic carbon content [%].
         bulk_density: bulk density [g /cm3].
         clay: clay percentage [%].
         silt: fsilt percentage [%].
@@ -355,12 +482,12 @@ def thetas_toth(
     """
     return (
         np.float32(0.6819)
-        - np.float32(0.06480) * (1 / (soil_organic_carbon + 1))
+        - np.float32(0.06480) * (1 / (organic_carbon_percentage + 1))
         - np.float32(0.11900) * bulk_density**2
         - np.float32(0.02668) * is_top_soil
         + np.float32(0.001489) * clay
         + np.float32(0.0008031) * silt
-        + np.float32(0.02321) * (1 / (soil_organic_carbon + 1)) * bulk_density**2
+        + np.float32(0.02321) * (1 / (organic_carbon_percentage + 1)) * bulk_density**2
         + np.float32(0.01908) * bulk_density**2 * is_top_soil
         - np.float32(0.0011090) * clay * is_top_soil
         - np.float32(0.00002315) * silt * clay
@@ -373,7 +500,7 @@ def thetas_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
-    soil_organic_carbon: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculates the saturated water content (theta_S) based on the provided equation.
@@ -384,7 +511,7 @@ def thetas_wosten(
         clay: Clay percentage (C).
         bulk_density: Bulk density (D).
         silt: Silt percentage (S).
-        soil_organic_carbon: Organic matter percentage (OM).
+        organic_carbon_percentage: Organic matter percentage (OM).
         is_topsoil: 1 for topsoil, 0 for subsoil.
 
     Returns:
@@ -395,13 +522,13 @@ def thetas_wosten(
         + 0.00169 * clay
         - 0.29619 * bulk_density
         - 0.000001491 * silt**2
-        + 0.0000821 * soil_organic_carbon**2
+        + 0.0000821 * organic_carbon_percentage**2
         + 0.02427 * (1 / clay)
         + 0.01113 * (1 / silt)
         + 0.01472 * np.log(silt)
-        - 0.0000733 * soil_organic_carbon * clay
+        - 0.0000733 * organic_carbon_percentage * clay
         - 0.000619 * bulk_density * clay
-        - 0.001183 * bulk_density * soil_organic_carbon
+        - 0.001183 * bulk_density * organic_carbon_percentage
         - 0.0001664 * is_topsoil * silt
     )
 
@@ -432,8 +559,8 @@ def thetar_brakensiek(
     Returns:
         residual water content [m3/m3].
     """
-    clay = np.clip(clay, 5, 60)
-    sand = np.clip(sand, 5, 70)
+    # Clip clay and sand values to avoid unrealistic results and in accordance with original paper
+    clay, sand = clip_brakensiek(clay, sand)
     return (
         np.float32(-0.0182482)
         + np.float32(0.00087269) * sand
@@ -513,8 +640,8 @@ def get_pore_size_index_brakensiek(
         pore size distribution index [-].
 
     """
-    clay = np.clip(clay, 5, 60)
-    sand = np.clip(sand, 5, 70)
+    # Clip clay and sand values to avoid unrealistic results and in accordance with original paper
+    clay, sand = clip_brakensiek(clay, sand)
     poresizeindex = np.exp(
         -0.7842831
         + 0.0177544 * sand
@@ -536,7 +663,7 @@ def get_pore_size_index_brakensiek(
 def get_pore_size_index_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
-    soil_organic_carbon: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
@@ -547,7 +674,7 @@ def get_pore_size_index_wosten(
     Args:
         clay: clay percentage [%].
         silt: silt percentage [%].
-        soil_organic_carbon: soil organic carbon content [%].
+        organic_carbon_percentage: soil organic carbon content [%].
         bulk_density: bulk density [g /cm3].
         is_top_soil: top soil flag.
 
@@ -558,19 +685,19 @@ def get_pore_size_index_wosten(
         -25.23
         - 0.02195 * clay
         + 0.0074 * silt
-        - 0.1940 * soil_organic_carbon
+        - 0.1940 * organic_carbon_percentage
         + 45.5 * bulk_density
         - 7.24 * bulk_density**2
         + 0.0003658 * clay**2
-        + 0.002855 * soil_organic_carbon**2
+        + 0.002855 * organic_carbon_percentage**2
         - 12.81 * bulk_density**-1
         - 0.1524 * silt**-1
-        - 0.01958 * soil_organic_carbon**-1
+        - 0.01958 * organic_carbon_percentage**-1
         - 0.2876 * np.log(silt)
-        - 0.0709 * np.log(soil_organic_carbon)
+        - 0.0709 * np.log(organic_carbon_percentage)
         - 44.6 * np.log(bulk_density)
         - 0.02264 * bulk_density * clay
-        + 0.0896 * bulk_density * soil_organic_carbon
+        + 0.0896 * bulk_density * organic_carbon_percentage
         + 0.00718 * is_top_soil * clay
     )
 
@@ -595,8 +722,8 @@ def kv_brakensiek(
     Returns:
         saturated hydraulic conductivity [m/s].
     """
-    clay = np.clip(clay, 5, 60)
-    sand = np.clip(sand, 5, 70)
+    # Clip clay and sand values to avoid unrealistic results and in accordance with original paper
+    clay, sand = clip_brakensiek(clay, sand)
     kv = np.exp(
         19.52348 * thetas
         - 8.96847
@@ -620,7 +747,7 @@ def kv_wosten(
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
-    organic_matter: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculates the saturated value based on the provided equation.
@@ -632,7 +759,7 @@ def kv_wosten(
         is_topsoil: 1 for topsoil, 0 for subsoil.
         bulk_density: Bulk density (D).
         clay: Clay percentage (C).
-        organic_matter: Organic matter percentage (OM).
+        organic_carbon_percentage: Organic matter percentage (OM).
 
     Returns:
         float: The calculated Ks* value [m/s].
@@ -645,10 +772,10 @@ def kv_wosten(
         - 0.000484 * clay**2
         - 0.000322 * silt**2
         + 0.001 * (1 / silt)
-        - 0.0748 * (1 / organic_matter)
+        - 0.0748 * (1 / organic_carbon_percentage)
         - 0.643 * np.log(silt)
         - 0.01398 * bulk_density * clay
-        - 0.1673 * bulk_density * organic_matter
+        - 0.1673 * bulk_density * organic_carbon_percentage
         + 0.02986 * np.float32(is_topsoil) * clay
         - 0.03305 * np.float32(is_topsoil) * silt
     ) / (100 * 86400)  # convert to m/s

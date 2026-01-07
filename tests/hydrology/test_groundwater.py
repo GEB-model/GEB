@@ -98,7 +98,7 @@ gt: tuple[float, float, float, float, float, float] = (
     -0.0001,
 )
 
-cell_area = calculate_cell_area(Affine.from_gdal(*gt), (YSIZE, XSIZE))
+cell_area = calculate_cell_area(Affine.from_gdal(*gt), YSIZE, XSIZE)
 
 
 layer_boundary_elevation = np.full((NLAY + 1, YSIZE, XSIZE), np.nan, dtype=np.float32)

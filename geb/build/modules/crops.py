@@ -9,9 +9,24 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from geb.agents.crop_farmers import (
+    FIELD_EXPANSION_ADAPTATION,
+    INDEX_INSURANCE_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION,
+    PERSONAL_INSURANCE_ADAPTATION,
+    PR_INSURANCE_ADAPTATION,
+    SURFACE_IRRIGATION_EQUIPMENT,
+    WELL_ADAPTATION,
+)
 from geb.build.methods import build_method
+from geb.types import ArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
-from geb.workflows.raster import sample_from_map
+from geb.workflows.raster import (
+    get_linear_indices,
+    get_neighbor_cell_ids_for_linear_indices,
+    interpolate_na_2d,
+    sample_from_map,
+)
 
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
@@ -20,9 +35,10 @@ from ..workflows.conversions import (
 )
 from ..workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from ..workflows.farmers import get_farm_locations
+from .base import BuildModelBase
 
 
-class Crops:
+class Crops(BuildModelBase):
     """Contains all build methods for setting up crops for GEB."""
 
     def __init__(self) -> None:
@@ -116,7 +132,7 @@ class Crops:
             "type": type,
         }
 
-        self.set_dict(crop_data, name="crops/crop_data")
+        self.set_params(crop_data, name="crops/crop_data")
 
     @build_method(depends_on=[])
     def setup_crops_from_source(
@@ -151,12 +167,12 @@ class Crops:
                 "type": "MIRCA2000",
             }
 
-        self.set_dict(crop_data, name="crops/crop_data")
+        self.set_params(crop_data, name="crops/crop_data")
 
     def process_crop_data(
         self,
         crop_prices: str | int | float,
-        translate_crop_names: dict | None = None,
+        translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
     ) -> dict[str, Any]:
         """Process crop price inputs into model-ready time series or constants.
@@ -297,7 +313,7 @@ class Crops:
 
             # combine and rename crops
             all_crop_names_model = [
-                d["name"] for d in self.dict["crops/crop_data"]["data"].values()
+                d["name"] for d in self.params["crops/crop_data"]["data"].values()
             ]
             for crop_name in all_crop_names_model:
                 if (
@@ -320,7 +336,7 @@ class Crops:
             # Extract the crop names from the dictionary and convert them to lowercase
             crop_names = [
                 crop["name"].lower()
-                for crop in self.dict["crops/crop_data"]["data"].values()
+                for crop in self.params["crops/crop_data"]["data"].values()
             ]
 
             # Filter the columns of the data DataFrame
@@ -333,18 +349,13 @@ class Crops:
                 ]
             ]
 
-            data = self.inter_and_extrapolate_prices(data, unique_regions)
+            data: pd.DataFrame = self.inter_and_extrapolate_prices(data, unique_regions)
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
-            crop_data = self.dict["crops/crop_data"]["data"]
-            formatted_data = {
-                "type": "time_series",
-                "data": {},
-                "time": data.index.get_level_values("year")
-                .unique()
-                .tolist(),  # Extract unique years for the time key
-            }
+            crop_data = self.params["crops/crop_data"]["data"]
+            time_index = data.index.get_level_values("year").unique().tolist()
+            data_per_region: dict[str, dict] = {}
 
             # If national_data is True, create a mapping from ISO3 code to representative region_id
             if national_data:
@@ -377,7 +388,7 @@ class Crops:
                 else:
                     # If data is not available for the region, fill with NaNs
                     region_data = pd.DataFrame(
-                        np.nan, index=formatted_data["time"], columns=data.columns
+                        np.nan, index=time_index, columns=data.columns
                     )
 
                 region_data.index.name = "year"  # Ensure index name is 'year'
@@ -413,25 +424,26 @@ class Crops:
                     else:
                         # If data is not available for the crop, but is not in the crop calendar, it
                         # is no issue, so we can fill with NaNs
-                        region_dict[str(crop_id)] = [np.nan] * len(
-                            formatted_data["time"]
-                        )
+                        region_dict[str(crop_id)] = [np.nan] * len(time_index)
+                data_per_region[str(region_id)] = region_dict
 
-                formatted_data["data"][str(region_id)] = region_dict
-
-            data = formatted_data.copy()
+            parsed_crop_prices: dict[str, str | dict | list[int]] = {
+                "type": "time_series",
+                "data": data_per_region,
+                "time": time_index,  # Extract unique years for the time key
+            }
 
         # data is a file path
         elif isinstance(crop_prices, str):
-            crop_prices = Path(crop_prices)
-            if not crop_prices.exists():
-                raise ValueError(f"file {crop_prices.resolve()} does not exist")
-            with open(crop_prices) as f:
+            crop_prices_path = Path(crop_prices)
+            if not crop_prices_path.exists():
+                raise ValueError(f"file {crop_prices_path.resolve()} does not exist")
+            with open(crop_prices_path) as f:
                 data = json.load(f)
             data = pd.DataFrame(
                 {
                     crop_id: data["crops"][crop_data["name"]]
-                    for crop_id, crop_data in self.dict["crops/crop_data"][
+                    for crop_id, crop_data in self.params["crops/crop_data"][
                         "data"
                     ].items()
                 },
@@ -466,7 +478,7 @@ class Crops:
                 data, self.geom["regions"], adjust_currency
             )
 
-            data = {
+            parsed_crop_prices = {
                 "type": "time_series",
                 "time": data.xs(
                     data.index.get_level_values(0)[0], level=0
@@ -478,7 +490,7 @@ class Crops:
             }
 
         elif isinstance(crop_prices, (int, float)):
-            data = {
+            parsed_crop_prices: dict[str, str | int | float | dict] = {
                 "type": "constant",
                 "data": crop_prices,
             }
@@ -487,7 +499,7 @@ class Crops:
                 f"must be a file path or an integer, got {type(crop_prices)}"
             )
 
-        return data
+        return parsed_crop_prices
 
     def donate_and_receive_crop_prices(
         self,
@@ -527,7 +539,7 @@ class Crops:
             but still the original region is used.
         """
         # create a copy of the data to avoid using data that was adjusted in this function
-        data_out = None
+        data_out = pd.DataFrame()
 
         for _, region in recipient_regions.iterrows():
             ISO3 = region["ISO3"]
@@ -606,10 +618,11 @@ class Crops:
                             [[region["region_id"]], donor_data_country.index],
                             names=["region_id", "year"],
                         ),
-                        columns=[donor_data_country.name],
+                        columns=np.array([donor_data_country.name]),
                     )
-                    if data_out is None:
-                        data_out = new_data.copy()
+
+                    if data_out.empty:
+                        data_out = new_data
                     else:
                         data_out = data_out.combine_first(new_data)
 
@@ -623,10 +636,11 @@ class Crops:
                             ],
                             names=["region_id", "year"],
                         ),
-                        columns=[column],
+                        columns=np.array([column]),
                     )
-                    if data_out is None:
-                        data_out = new_data.copy()
+
+                    if data_out.empty:
+                        data_out = new_data
                     else:
                         data_out = data_out.combine_first(new_data)
 
@@ -674,23 +688,23 @@ class Crops:
             years_with_no_crop_inflation_data = costs.loc[
                 region_id, "_crop_price_inflation"
             ]
-            region_inflation_rates = self.dict["socioeconomics/inflation_rates"][
+            region_inflation_rates = self.params["socioeconomics/inflation_rates"][
                 "data"
             ][str(region["region_id"])]
-            region_currency_conversion_rates = self.dict["socioeconomics/LCU_per_USD"][
-                "data"
-            ][str(region["region_id"])]
+            region_currency_conversion_rates = self.params[
+                "socioeconomics/LCU_per_USD"
+            ]["data"][str(region["region_id"])]
 
             for year, crop_inflation_rate in years_with_no_crop_inflation_data.items():
                 year_currency_conversion = region_currency_conversion_rates[
-                    self.dict["socioeconomics/LCU_per_USD"]["time"].index(str(year))
+                    self.params["socioeconomics/LCU_per_USD"]["time"].index(str(year))
                 ]
                 costs.at[(region_id, year), "_crop_price_LCU_USD"] = (
                     year_currency_conversion
                 )
                 if np.isnan(crop_inflation_rate):
                     year_inflation_rate = region_inflation_rates[
-                        self.dict["socioeconomics/inflation_rates"]["time"].index(
+                        self.params["socioeconomics/inflation_rates"]["time"].index(
                             str(year)
                         )
                     ]
@@ -795,12 +809,12 @@ class Crops:
             translate_crop_names: Optional mapping to aggregate/rename source crop columns.
             adjust_currency: Whether to convert to USD using currency conversion when available.
         """
-        cultivation_costs = self.process_crop_data(
+        parsed_cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
             adjust_currency=adjust_currency,
         )
-        self.set_dict(cultivation_costs, name="crops/cultivation_costs")
+        self.set_params(parsed_cultivation_costs, name="crops/cultivation_costs")
 
     @build_method(
         depends_on=[
@@ -824,20 +838,38 @@ class Crops:
             translate_crop_names: Optional mapping to aggregate/rename source crop columns.
             adjust_currency: Whether to convert to USD using currency conversion when available.
         """
-        crop_prices = self.process_crop_data(
+        parsed_crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,
             adjust_currency=adjust_currency,
         )
-        self.set_dict(crop_prices, name="crops/crop_prices")
-        self.set_dict(crop_prices, name="crops/cultivation_costs")
+        self.set_params(parsed_crop_prices, name="crops/crop_prices")
+        self.set_params(parsed_crop_prices, name="crops/cultivation_costs")
 
     @build_method(depends_on=[])
     def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:
+        """This method is removed. You can remove it entirely.
+
+        Args:
+            resolution: Resolution tag for plotting/output naming.
+
+        Raises:
+            ValueError: This method is removed.
+        """
+        raise ValueError("This method is removed. You can remove it entirely.")
+
+    def get_crop_area_fractions(
+        self, resolution: str = "5-arcminute"
+    ) -> tuple[xr.DataArray, xr.DataArray]:
         """Compute MIRCA crop area fractions and summarize per region.
 
         Args:
             resolution: Resolution tag for plotting/output naming.
+
+        Returns:
+            A tuple containing two xarray DataArrays:
+            - The first DataArray contains the fraction of each crop to the total cropped area for each year.
+            - The second DataArray contains the fraction of irrigated area for each crop for each
         """
         output_folder = "plot/mirca_crops"
         os.makedirs(output_folder, exist_ok=True)
@@ -885,8 +917,10 @@ class Crops:
                         self.data_catalog.get_source(dataset_name).path
                     )
                     crop_map = crop_map.isel(
-                        **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
-                        band=0,
+                        {
+                            **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
+                            **{"band": 0},
+                        },
                     )
 
                     crop_map = crop_map.fillna(0)
@@ -965,14 +999,7 @@ class Crops:
             irrigated_fraction_da_list, dim="year"
         )
 
-        # Save the concatenated DataArrays as NetCDF files
-        save_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
-        save_dir.mkdir(parents=True, exist_ok=True)
-
-        all_years_fraction_da.to_netcdf(save_dir / "crop_area_fraction_all_years.nc")
-        all_years_irrigated_fraction_da.to_netcdf(
-            save_dir / "crop_irrigated_fraction_all_years.nc"
-        )
+        return all_years_fraction_da, all_years_irrigated_fraction_da
 
     @build_method(depends_on=[])
     def setup_farmer_crop_calendar_multirun(
@@ -990,6 +1017,168 @@ class Crops:
                 self.setup_farmer_crop_calendar(
                     year_nr, reduce_crops, replace_base, export
                 )
+
+    def setup_farmer_irrigation_source(
+        self, irrigating_farmers: ArrayBool, year: int
+    ) -> None:
+        """Sets up the irrigation source for farmers based on global irrigation area data.
+
+        Args:
+            irrigating_farmers: A boolean array indicating which farmers are irrigating.
+            year: The year for which to set up the irrigation source.
+        """
+        fraction_sw_irrigation_data = self.new_data_catalog.fetch(
+            "global_irrigation_area_surface_water"
+        ).read()
+        fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
+
+        fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
+            get_window(
+                fraction_sw_irrigation_data.x,
+                fraction_sw_irrigation_data.y,
+                self.bounds,
+                buffer=5,
+            ),
+        )
+        fraction_sw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_sw_irrigation_data
+        )
+
+        fraction_gw_irrigation_data = self.new_data_catalog.fetch(
+            "global_irrigation_area_groundwater"
+        ).read()
+        fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
+
+        fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
+            get_window(
+                fraction_gw_irrigation_data.x,
+                fraction_gw_irrigation_data.y,
+                self.bounds,
+                buffer=5,
+            ),
+        )
+        fraction_gw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_gw_irrigation_data
+        )
+
+        farmer_locations = get_farm_locations(
+            self.subgrid["agents/farmers/farms"], method="centroid"
+        )
+
+        # Determine which farmers are irrigating
+        grid_id_da = get_linear_indices(fraction_sw_irrigation_data)
+        ny, nx = (
+            fraction_sw_irrigation_data.sizes["y"],
+            fraction_sw_irrigation_data.sizes["x"],
+        )
+
+        n_cells = grid_id_da.max().item()
+        n_farmers = self.array["agents/farmers/id"].size
+
+        farmer_cells = sample_from_map(
+            grid_id_da.values,
+            farmer_locations,
+            grid_id_da.rio.transform(recalc=True).to_gdal(),
+        )
+        fraction_sw_irrigation_farmers = sample_from_map(
+            fraction_sw_irrigation_data.values,
+            farmer_locations,
+            fraction_sw_irrigation_data.rio.transform(recalc=True).to_gdal(),
+        )
+        fraction_gw_irrigation_farmers = sample_from_map(
+            fraction_gw_irrigation_data.values,
+            farmer_locations,
+            fraction_gw_irrigation_data.rio.transform(recalc=True).to_gdal(),
+        )
+
+        adaptations = np.full(
+            (
+                n_farmers,
+                max(
+                    [
+                        SURFACE_IRRIGATION_EQUIPMENT,
+                        WELL_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION,
+                        FIELD_EXPANSION_ADAPTATION,
+                        PERSONAL_INSURANCE_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
+                    ]
+                )
+                + 1,
+            ),
+            -1,
+            dtype=np.int32,
+        )
+
+        for i in range(n_cells):
+            farmers_cell_mask = farmer_cells == i  # Boolean mask for farmers in cell i
+            farmers_cell_indices = np.where(farmers_cell_mask)[0]  # Absolute indices
+
+            irrigating_farmers_mask = irrigating_farmers[farmers_cell_mask]
+            num_irrigating_farmers = np.sum(irrigating_farmers_mask)
+
+            if num_irrigating_farmers > 0:
+                fraction_sw = fraction_sw_irrigation_farmers[farmers_cell_mask][0]
+                fraction_gw = fraction_gw_irrigation_farmers[farmers_cell_mask][0]
+
+                # Normalize fractions
+                total_fraction = fraction_sw + fraction_gw
+
+                # Handle edge cases if there are irrigating farmers but no data on sw/gw
+                if total_fraction == 0:
+                    # Find neighboring cells with valid data
+                    neighbor_ids = get_neighbor_cell_ids_for_linear_indices(i, nx, ny)
+                    found_valid_neighbor = False
+
+                    for neighbor_id in neighbor_ids:
+                        if neighbor_id not in np.unique(farmer_cells):
+                            continue
+
+                        neighbor_mask = farmer_cells == neighbor_id
+                        fraction_sw_neighbor = fraction_sw_irrigation_farmers[
+                            neighbor_mask
+                        ][0]
+                        fraction_gw_neighbor = fraction_gw_irrigation_farmers[
+                            neighbor_mask
+                        ][0]
+                        neighbor_total_fraction = (
+                            fraction_sw_neighbor + fraction_gw_neighbor
+                        )
+
+                        if neighbor_total_fraction > 0:
+                            # Found valid neighbor
+                            fraction_sw = fraction_sw_neighbor
+                            fraction_gw = fraction_gw_neighbor
+                            total_fraction = neighbor_total_fraction
+
+                            found_valid_neighbor = True
+                            break
+                    if not found_valid_neighbor:
+                        # No valid neighboring cells found, handle accordingly
+                        print(f"No valid data found for cell {i} and its neighbors.")
+                        continue  # Skip this cell
+
+                # Normalize fractions
+                probabilities = np.array([fraction_sw, fraction_gw], dtype=np.float64)
+                probabilities_sum = probabilities.sum()
+                probabilities /= probabilities_sum
+
+                # Indices of irrigating farmers in the region (absolute indices)
+                farmer_indices_in_region = farmers_cell_indices[irrigating_farmers_mask]
+
+                # Assign irrigation sources using np.random.choice
+                irrigation_equipment_per_farmer = np.random.choice(
+                    [SURFACE_IRRIGATION_EQUIPMENT, WELL_ADAPTATION],
+                    size=len(farmer_indices_in_region),
+                    p=probabilities,
+                )
+
+                adaptations[
+                    farmer_indices_in_region, irrigation_equipment_per_farmer
+                ] = 1
+
+        self.set_array(adaptations, name="agents/farmers/adaptations")
 
     @build_method(depends_on=["setup_create_farms"])
     def setup_farmer_crop_calendar(
@@ -1019,18 +1208,24 @@ class Crops:
         )
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
-            **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
-            band=0,
+            {
+                **get_window(
+                    MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2
+                ),
+                **{"band": 0},
+            }
         )
 
-        crop_calendar = parse_MIRCA2000_crop_calendar(
-            self.data_catalog,
-            MIRCA_units=np.unique(MIRCA_unit_grid.values),
+        crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = (
+            parse_MIRCA2000_crop_calendar(
+                self.data_catalog,
+                MIRCA_units=np.unique(MIRCA_unit_grid.values).tolist(),
+            )
         )
 
         def fix_365_in_crop_calendar(
-            crop_calendar: dict[str, list[tuple[float, np.ndarray]]],
-        ) -> None:
+            crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
+        ) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
             """Replace any 365 day-of-year values with 364 in the 4th column.
 
             Scans each (area, arr) pair in every dictionary entry. If a value 365 is
@@ -1122,6 +1317,7 @@ class Crops:
             minimum_area_ratio=minimum_area_ratio,
             replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
         )
+
         self.setup_farmer_irrigation_source(is_irrigated, year)
 
         all_farmers_assigned = []
@@ -1520,14 +1716,8 @@ class Crops:
         Raises:
             ValueError: If no valid neighbor data is found while assigning crops.
         """
-        # Define the directory and file paths
-        data_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
-        # Load the DataArrays
-        all_years_fraction_da = xr.open_dataarray(
-            data_dir / "crop_area_fraction_all_years.nc"
-        )
-        all_years_irrigated_fraction_da = xr.open_dataarray(
-            data_dir / "crop_irrigated_fraction_all_years.nc"
+        all_years_fraction_da, all_years_irrigated_fraction_da = (
+            self.get_crop_area_fractions()
         )
 
         crop_dict = {
@@ -1574,7 +1764,7 @@ class Crops:
             len(crop_ids_in_dataarray)
         )
 
-        grid_id_da = self.get_linear_indices(all_years_fraction_da)
+        grid_id_da = get_linear_indices(all_years_fraction_da)
 
         ny, nx = area_fraction_2000.sizes["y"], area_fraction_2000.sizes["x"]
 
@@ -1633,7 +1823,7 @@ class Crops:
                 max_radius = max(nx, ny)  # Maximum possible radius
                 radius = 1
                 while not found_valid_neighbor and radius <= max_radius:
-                    neighbor_ids = self.get_neighbor_cell_ids_for_linear_indices(
+                    neighbor_ids = get_neighbor_cell_ids_for_linear_indices(
                         cell_idx, nx, ny, radius
                     )
                     for neighbor_id in neighbor_ids:

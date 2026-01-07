@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from geb.module import Module
-from geb.types import ArrayFloat64, TwoDArrayFloat64
+from geb.types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 if TYPE_CHECKING:
@@ -21,6 +21,8 @@ class RunoffConcentrator(Module):
     Receives sub-daily runoff (24 timesteps per day) and maintains a
     rolling buffer to carry over runoff to future days.
     """
+
+    overland_runoff_storage_end_m3: np.float64
 
     def __init__(
         self,
@@ -47,7 +49,7 @@ class RunoffConcentrator(Module):
 
         self.lagtime: int = lagtime
         self.runoff_peak: float = runoff_peak
-        self.overland_runoff_storage_end_m3: float = 0.0
+        self.overland_runoff_storage_end_m3 = np.float64(0.0)
 
         # precompute triangular weights
         self.weights_runoff = self._triangular_weights(runoff_peak)
@@ -111,7 +113,7 @@ class RunoffConcentrator(Module):
                 # else: future contribution beyond lagtime is dropped
 
     def _advance_buffer(self, n_steps: int) -> None:
-        """Shift buffer forward by n_steps (24 hours)."""
+        """Shift buffer forward by n_steps."""
         if n_steps >= self.lagtime:
             self.grid.var.buffer[:] = 0.0
             return
@@ -123,7 +125,7 @@ class RunoffConcentrator(Module):
     def step(
         self,
         interflow: TwoDArrayFloat64,  # shape (24, n_cells)
-        baseflow: ArrayFloat64,  # shape (n_cells,)
+        baseflow: ArrayFloat32,  # shape (n_cells,)
         runoff: TwoDArrayFloat64,  # shape (24, n_cells)
     ) -> TwoDArrayFloat64:
         """Concentrate runoff using triangular weighting.
@@ -182,7 +184,7 @@ class RunoffConcentrator(Module):
         overland_runoff_storage_end_m: TwoDArrayFloat64 = (
             self.grid.var.buffer[n_steps:].copy().astype(np.float64)
         )  # Everything that is stored for the next day
-        self.overland_runoff_storage_end_m3: float = (
+        self.overland_runoff_storage_end_m3 = (
             overland_runoff_storage_end_m * self.grid.var.cell_area
         ).sum()
 

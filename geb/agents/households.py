@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import datetime
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
-import numpy.typing as npt
 import osmnx as ox
 import pandas as pd
 import xarray as xr
@@ -21,13 +19,13 @@ from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
-from geb.types import TwoDArrayBool, TwoDArrayInt
-from geb.workflows.io import read_dict
+from geb.types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
+from geb.workflows.io import read_params
 
 from ..hydrology.landcovers import (
     FOREST,
 )
-from ..store import DynamicArray
+from ..store import Bucket, DynamicArray
 from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
@@ -62,8 +60,56 @@ def from_landuse_raster_to_polygon(
     return gdf
 
 
+class HouseholdVariables(Bucket):
+    """Variables for the Households agent."""
+
+    household_points: gpd.GeoDataFrame
+    actions_taken: DynamicArray
+    possible_measures: list[str]
+    possible_warning_triggers: list[str]
+    municipal_water_demand_per_capita_m3_baseline: ArrayFloat32
+    water_demand_per_household_m3: ArrayFloat32
+    income: DynamicArray
+    building_id_of_household: DynamicArray
+    wealth: DynamicArray
+    property_value: DynamicArray
+    locations: DynamicArray
+    years_since_last_flood: DynamicArray
+    risk_perception: DynamicArray
+    sizes: DynamicArray
+    water_efficiency_per_household: ArrayFloat32
+    municipal_water_withdrawal_m3_per_capita_per_day_multiplier: pd.DataFrame
+    risk_perc_max: float
+    risk_perc_min: float
+    risk_decr: float
+    wlranges_and_measures: dict[int, Any]
+    implementation_times: Any
+    rail_curve: pd.DataFrame
+    warning_trigger: DynamicArray
+    evacuated: DynamicArray
+    warning_level: DynamicArray
+    warning_reached: DynamicArray
+    response_probability: DynamicArray
+    amenity_value: DynamicArray
+    adaptation_costs: DynamicArray
+    recommended_measures: DynamicArray
+    time_adapted: DynamicArray
+    max_dam_buildings_structure: float
+    forest_curve: pd.DataFrame
+    agriculture_curve: pd.DataFrame
+    road_curves: pd.DataFrame
+    adapted: DynamicArray
+    max_dam_buildings_content: float
+    max_dam_rail: float
+    max_dam_forest_m2: float
+    max_dam_agriculture_m2: float
+    region_id: DynamicArray
+
+
 class Households(AgentBaseClass):
     """This class implements the household agents."""
+
+    var: HouseholdVariables
 
     def __init__(self, model: GEBModel, agents: Agents, reduncancy: float) -> None:
         """Initialize the Households agent module.
@@ -246,9 +292,8 @@ class Households(AgentBaseClass):
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
         self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
-        self.var.region_id = read_array(
-            self.model.files["array"]["agents/households/region_id"]
-        )
+        region_id = read_array(self.model.files["array"]["agents/households/region_id"])
+        self.var.region_id = DynamicArray(region_id, max_n=self.max_n)
 
         # load household sizes
         sizes = read_array(self.model.files["array"]["agents/households/size"])
@@ -377,12 +422,12 @@ class Households(AgentBaseClass):
 
         # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
         self.var.property_value = DynamicArray(
-            np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
+            (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
         )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
-        adaptation_costs = np.int64(
+        adaptation_costs = (
             np.maximum(self.var.property_value.data * 0.05, 10_800)
-        )
+        ).astype(np.int64)
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
 
         # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
@@ -536,7 +581,7 @@ class Households(AgentBaseClass):
         )
         self.flood_risk_perceptions.append(df)
 
-    def load_ensemble_flood_maps(self, date_time: datetime.datetime) -> xr.DataArray:
+    def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.
 
         Args:
@@ -577,7 +622,7 @@ class Households(AgentBaseClass):
 
         return ensemble_flood_maps
 
-    def load_ensemble_damage_maps(self, date_time: datetime.datetime) -> pd.DataFrame:
+    def load_ensemble_damage_maps(self, date_time: datetime) -> pd.DataFrame:
         """Loads the damage maps for all ensemble members and aggregates them into a single dataframe. Work in standby for now.
 
         Args:
@@ -617,8 +662,8 @@ class Households(AgentBaseClass):
         return ensemble_damage_maps
 
     def create_flood_probability_maps(
-        self, date_time: datetime.datetime, strategy: int = 1, exceedance: bool = False
-    ) -> dict[tuple[datetime.datetime, int], xr.DataArray]:
+        self, date_time: datetime, strategy: int = 1, exceedance: bool = False
+    ) -> dict[tuple[datetime, int], xr.DataArray]:
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
         Args:
@@ -706,7 +751,7 @@ class Households(AgentBaseClass):
         return probability_maps
         # Right now I am not using this for anything, but maybe useful later to replace the file loading
 
-    def create_damage_probability_maps(self, date_time: datetime.datetime) -> None:
+    def create_damage_probability_maps(self, date_time: datetime) -> None:
         """Creates an object-based (buildings) probability map based on the ensemble of damage maps. Work in standby for now.
 
         Args:
@@ -787,7 +832,7 @@ class Households(AgentBaseClass):
 
     def water_level_warning_strategy(
         self,
-        date_time: datetime.datetime,
+        date_time: datetime,
         prob_threshold: float = 0.6,
         area_threshold: float = 0.1,
         strategy_id: int = 1,
@@ -1114,7 +1159,7 @@ class Households(AgentBaseClass):
         critical_facilities_with_postal_codes.to_parquet(path)
 
     def critical_infrastructure_warning_strategy(
-        self, date_time: datetime.datetime, prob_threshold: float = 0.6
+        self, date_time: datetime, prob_threshold: float = 0.6
     ) -> None:
         """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
 
@@ -1490,7 +1535,7 @@ class Households(AgentBaseClass):
         return lead_time
 
     def household_decision_making(
-        self, date_time: datetime.datetime, responsive_ratio: float = 0.7
+        self, date_time: datetime, responsive_ratio: float = 0.7
     ) -> None:
         """Simulate household emergency response decisions based on warnings and lead time.
 
@@ -1593,7 +1638,6 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
@@ -1650,7 +1694,7 @@ class Households(AgentBaseClass):
         """Load maximum damage values from model files and store them in the model variables."""
         # Load maximum damages
         self.var.max_dam_buildings_structure = float(
-            read_dict(
+            read_params(
                 self.model.files["dict"][
                     "damage_parameters/flood/buildings/structure/maximum_damage"
                 ]
@@ -1658,7 +1702,7 @@ class Households(AgentBaseClass):
         )
         self.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
 
-        max_dam_buildings_content = read_dict(
+        max_dam_buildings_content = read_params(
             self.model.files["dict"][
                 "damage_parameters/flood/buildings/content/maximum_damage"
             ]
@@ -1669,7 +1713,7 @@ class Households(AgentBaseClass):
         self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         self.var.max_dam_rail = float(
-            read_dict(
+            read_params(
                 self.model.files["dict"][
                     "damage_parameters/flood/rail/main/maximum_damage"
                 ]
@@ -1708,14 +1752,14 @@ class Households(AgentBaseClass):
         ]
 
         for road_type, path in road_types:
-            max_dam_road_m[road_type] = read_dict(self.model.files["dict"][path])[
+            max_dam_road_m[road_type] = read_params(self.model.files["dict"][path])[
                 "maximum_damage"
             ]
 
         self.roads["maximum_damage_m"] = self.roads["object_type"].map(max_dam_road_m)
 
         self.var.max_dam_forest_m2 = float(
-            read_dict(
+            read_params(
                 self.model.files["dict"][
                     "damage_parameters/flood/land_use/forest/maximum_damage"
                 ]
@@ -1723,7 +1767,7 @@ class Households(AgentBaseClass):
         )
 
         self.var.max_dam_agriculture_m2 = float(
-            read_dict(
+            read_params(
                 self.model.files["dict"][
                     "damage_parameters/flood/land_use/agriculture/maximum_damage"
                 ]
@@ -1749,16 +1793,13 @@ class Households(AgentBaseClass):
             ("trunk_link", "damage_parameters/flood/road/trunk_link/curve"),
         ]
 
-        severity_column = None
         for road_type, path in road_types:
             df = pd.read_parquet(self.model.files["table"][path])
-
-            if severity_column is None:
-                severity_column = df["severity"]
-
             df = df.rename(columns={"damage_ratio": road_type})
 
             road_curves.append(df[[road_type]])
+
+        severity_column: pd.DataFrame = df[["severity"]]
 
         self.var.road_curves = pd.concat([severity_column] + road_curves, axis=1)
         self.var.road_curves.set_index("severity", inplace=True)
@@ -1961,7 +2002,7 @@ class Households(AgentBaseClass):
                     "building_flood_proofed"
                 ],
             }
-            damage_buildings: pd.Series = VectorScannerMultiCurves(
+            damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
@@ -1998,7 +2039,7 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def update_households_geodataframe_w_warning_variables(
-        self, date_time: datetime.datetime
+        self, date_time: datetime
     ) -> None:
         """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
 
@@ -2216,7 +2257,7 @@ class Households(AgentBaseClass):
 
         # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
-            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
+            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
             vulnerability_curves=self.buildings_structure_curve,
         )
@@ -2306,9 +2347,9 @@ class Households(AgentBaseClass):
     def water_demand(
         self,
     ) -> tuple[
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
+        ArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat32,
     ]:
         """Calculate the water demand per household in m3 per day.
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import zarr.storage
@@ -533,8 +534,11 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
-        self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
-        del self.model.config["report"]["_config"]
+        if "_config" not in self.model.config["report"]:
+            self.config: dict[str, int] = {}
+        else:
+            self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
+            del self.model.config["report"]["_config"]
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -993,13 +997,15 @@ class Reporter:
                     )
 
                 root_group = config["_root_group"]
+                value_store_array = root_group[name]
+                assert isinstance(value_store_array, zarr.Array)
 
                 assert isinstance(value, (np.ndarray, DynamicArray))
-                if value.size < root_group[name].shape[0]:
+                if value.size < value_store_array.shape[0]:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
                         value.data if isinstance(value, DynamicArray) else value,
-                        (0, root_group[name].shape[0] - value.size),
+                        (0, value_store_array.shape[0] - value.size),
                         mode="constant",
                         constant_values=get_fill_value(value) or False,
                     )
@@ -1115,6 +1121,14 @@ class Reporter:
                     folder.mkdir(parents=True, exist_ok=True)
 
                     df.to_csv(folder / (name + ".csv"))
+
+                    fig, ax = plt.subplots(figsize=(30, 5))
+                    fig.tight_layout()
+
+                    df.plot(y=name, title=f"{module_name}.{name}", ax=ax)
+                    plt.grid()
+                    plt.savefig(folder / (name + ".svg"), format="svg")
+                    plt.close()
 
     def report(
         self, module: Module, local_variables: dict[str, Any], module_name: str

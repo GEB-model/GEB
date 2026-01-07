@@ -439,6 +439,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     capillar_rise_m = np.array([capillar_rise_m_data], dtype=flt)
     frost_index = np.array([frost_index_data], dtype=flt)
     natural_crop_groups = np.array([natural_crop_groups_data], dtype=flt)
+    arno_shape_parameter = np.array([0.0], dtype=flt)  # not used in this test
 
     # 2D arrays: add cell dimension and set dtype
     w = w_data.reshape(-1, 1).astype(flt)
@@ -490,6 +491,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         soil_layer_height=soil_layer_height,
         root_depth_m=root_depth_m,
         topwater_m=topwater_m,
+        arno_shape_parameter=arno_shape_parameter,
         snow_water_equivalent_m=snow_water_equivalent_m,
         liquid_water_in_snow_m=liquid_water_in_snow_m,
         snow_temperature_C=snow_temperature_C,

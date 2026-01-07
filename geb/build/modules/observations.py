@@ -1,7 +1,10 @@
 """This module contains the classes and functions processing observational data during model building."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
+from typing import Literal
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -17,9 +20,7 @@ from tqdm import tqdm
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
-"""
-This module contains the Observations class. 
-"""
+from .base import BuildModelBase
 
 
 def plot_snapping(
@@ -58,11 +59,11 @@ def plot_snapping(
     fig, ax = plt.subplots(
         subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
     )
-    ax.coastlines()
-    ax.add_feature(cfeature.BORDERS)
-    ax.add_feature(cfeature.LAND)
-    ax.add_feature(cfeature.OCEAN)
-    ax.add_feature(cfeature.LAKES)
+    ax.coastlines()  # ty:ignore[unresolved-attribute]
+    ax.add_feature(cfeature.BORDERS)  # ty:ignore[unresolved-attribute]
+    ax.add_feature(cfeature.LAND)  # ty:ignore[unresolved-attribute]
+    ax.add_feature(cfeature.OCEAN)  # ty:ignore[unresolved-attribute]
+    ax.add_feature(cfeature.LAKES)  # ty:ignore[unresolved-attribute]
 
     # Set the extent to zoom in around the gauge location
     buffer = 0.05  # Adjust this value to control the zoom level
@@ -72,7 +73,7 @@ def plot_snapping(
     ymin = Q_obs_station_coords[1] - buffer
     ymax = Q_obs_station_coords[1] + buffer
 
-    ax.set_extent(
+    ax.set_extent(  # ty:ignore[unresolved-attribute]
         [
             xmin,
             xmax,
@@ -128,7 +129,7 @@ def plot_snapping(
         cbar_kwargs={"label": "Upstream area [m2]"},
         zorder=0,
         alpha=1,
-    )
+    )  # ty:ignore[missing-argument]
     rivers.plot(ax=ax, color="blue", linewidth=1)
     closest_river_segment.plot(
         ax=ax, color="green", linewidth=3, label="Closest river segment"
@@ -293,8 +294,8 @@ def select_river_segment(
     max_uparea_difference_ratio: float,
     max_spatial_difference_degrees: float,
     Q_obs_uparea_m2: float,
-    rivers_sorted: pd.DataFrame,
-) -> pd.DataFrame | bool:
+    rivers_sorted: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame | Literal[False]:
     """This function selects the closest river segment to the Q_obs station based on the spatial distance.
 
     It returns false if the spatial distance is larger than the max_spatial_difference_degrees.
@@ -338,7 +339,7 @@ def select_river_segment(
     return closest_river_segment
 
 
-class Observations:
+class Observations(BuildModelBase):
     """Collects, parses and processes observational data for model evaluation."""
 
     def __init__(self) -> None:
@@ -459,7 +460,7 @@ class Observations:
                 "Q_obs_to_GEB_upstream_area_ratio",
                 "snapping_distance_degrees",
             ]
-            discharge_snapping_df = pd.DataFrame(columns=empty_cols)
+            discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
                 self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
                 index=False,
@@ -470,11 +471,11 @@ class Observations:
             self.set_table(empty_discharge_df, name="discharge/Q_obs")
 
             # Create empty snapped locations geometry
-            empty_geom = gpd.GeoDataFrame(
+            empty_geom: gpd.GeoDataFrame = gpd.GeoDataFrame(
                 discharge_snapping_df,
                 geometry=gpd.GeoSeries([], crs="EPSG:4326"),
                 crs="EPSG:4326",
-            ).set_index(pd.Index([], name="Q_obs_station_ID"))
+            ).set_index(pd.Index([], name="Q_obs_station_ID"))  # ty:ignore[invalid-assignment]
             self.set_geom(empty_geom, name="discharge/discharge_snapped_locations")
 
             self.logger.info("Empty discharge datasets created")
@@ -516,7 +517,7 @@ class Observations:
             Q_obs_station_name = str(
                 Q_obs_station.station_name.values
             )  # get the name of the station
-            Q_obs_station_coords = list(
+            Q_obs_station_coords = tuple(
                 (
                     float(Q_obs_station.x.values),
                     float(Q_obs_station.y.values),
@@ -608,19 +609,19 @@ class Observations:
             )  # get the value of the selected pixel
 
             # make variables for all the different coordinates
-            closest_point_coords = list(
+            closest_point_coords = tuple(
                 (
                     float(closest_point_on_riverline.x),
                     float(closest_point_on_riverline.y),
                 )
             )  # closest point coordinates
-            subgrid_pixel_coords = list(
+            subgrid_pixel_coords = tuple(
                 (
                     float(selected_subgrid_pixel.x.values),
                     float(selected_subgrid_pixel.y.values),
                 )
             )  ## subgrid pixel coordinates
-            grid_pixel_coords = list(
+            grid_pixel_coords = tuple(
                 (
                     float(upstream_area_grid_pixel.x.values),
                     float(upstream_area_grid_pixel.y.values),
@@ -672,7 +673,7 @@ class Observations:
             index=False,
         )  # save the dataframe to an excel file
 
-        discharge_snapping_gdf = gpd.GeoDataFrame(
+        discharge_snapping_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
             discharge_snapping_df,
             geometry=gpd.points_from_xy(
                 discharge_snapping_df["snapped_grid_pixel_lonlat"].apply(
@@ -683,7 +684,7 @@ class Observations:
                 ),
             ),
             crs="EPSG:4326",  # Set the coordinate reference system
-        ).set_index("Q_obs_station_ID")
+        ).set_index("Q_obs_station_ID")  # ty:ignore[invalid-assignment]
 
         # drop the columns that have not associated snapped stations
         discharge_df = discharge_df[discharge_snapping_gdf.index]

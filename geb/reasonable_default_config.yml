@@ -72,7 +72,7 @@ agent_settings:
     warning_response: false
     water_demand:
       method: default
-    adjust_demand_factor: 1
+    adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand
     expected_utility:
       flood_risk_calculations:
         risk_perception:

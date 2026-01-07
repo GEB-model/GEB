@@ -4,6 +4,7 @@ import logging
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 from numba import njit
 
 from geb.types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
@@ -443,9 +444,7 @@ def get_farm_distribution(
     return n_farms, farm_sizes
 
 
-def get_farm_locations(
-    farms: TwoDArrayInt32, method: str = "centroid"
-) -> TwoDArrayInt32:
+def get_farm_locations(farms: xr.DataArray, method: str = "centroid") -> TwoDArrayInt32:
     """Get farm locations from farm map.
 
     Args:
@@ -459,7 +458,7 @@ def get_farm_locations(
         raise NotImplementedError
     gt = farms.rio.transform().to_gdal()
 
-    farms = farms.values
+    farms: np.ndarray = farms.values
     n_farmers = np.unique(farms[farms != -1]).size
 
     vertical_index = (

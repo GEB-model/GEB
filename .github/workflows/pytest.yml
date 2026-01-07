@@ -7,43 +7,16 @@ on:
     branches: '*'
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up uv
-      run: curl -LsSf https://astral.sh/uv/install.sh | sh
-    - name: Install the project
-      run: uv sync
-    - name: Build package
-      run: uv build
-    - uses: actions/upload-artifact@v4
-      with:
-        name: dist
-        path: dist/
-
   test:
-    needs: build
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v4
-      with:
-        name: dist
-        path: dist
     - name: Set up uv
       # Install latest uv version using the installer
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
     - name: Install the project
-      run: |
-        mkdir test_run
-        cp -r tests test_run/
-        cd test_run
-        uv venv
-        uv pip install ../dist/*.whl
+      run: uv sync --dev
     - name: Run tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        cd test_run
-        uv run pytest -s
+      run: uv run pytest -s

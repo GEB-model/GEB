@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import xclim.indices as xci
+import xclim.indices.stats as xcistats
 from dateutil.relativedelta import relativedelta
 from matplotlib.colors import ListedColormap
 from zarr.codecs.numcodecs import FixedScaleOffset
@@ -29,16 +30,17 @@ from geb.build.methods import build_method
 from geb.workflows.raster import resample_like
 
 from ...workflows.io import calculate_scaling, write_zarr
-
-if TYPE_CHECKING:
-    from geb.build import GEBModel
+from .base import BuildModelBase
 
 
-def plot_forcing(self: GEBModel, da: xr.DataArray, name: str) -> None:
+def plot_normal_forcing(
+    mask: xr.DataArray, report_dir: Path, da: xr.DataArray, name: str
+) -> None:
     """Plot forcing data with a temporal (timeline) plot and a spatial plot.
 
     Args:
-        self: The class instance.
+        mask: The grid mask for the model.
+        report_dir: The directory where reports are saved.
         da: The xarray DataArray containing the forcing data. Must have dimensions 'time',
         name: The name of the variable being plotted, used for titles and filenames.
     """
@@ -46,7 +48,6 @@ def plot_forcing(self: GEBModel, da: xr.DataArray, name: str) -> None:
         4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5}
     )  # Create 4 subplots stacked vertically
 
-    mask = self.grid["mask"]  # get the GEB grid
     data = (
         (da * ~mask).sum(dim=("y", "x")) / (~mask).sum()
     ).compute()  # Area-weighted average
@@ -69,40 +70,26 @@ def plot_forcing(self: GEBModel, da: xr.DataArray, name: str) -> None:
                 axes[i + 1],  # axis to plot on
             )
 
-    fp = self.report_dir / (
-        name + "_timeline.png"
-    )  # file path for saving the timeline plot
+    fp = report_dir / (name + "_timeline.png")  # file path for saving the timeline plot
     fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
     plt.savefig(fp)  # save the timeline plot
     plt.close(fig)  # close the figure to free memory
 
-    spatial_data = da.mean(dim="time")  # mean over time for spatial plot
 
-    spatial_data.plot()  # plot the spatial data
-
-    plt.title(name)  # title
-    plt.xlabel("Longitude")  # x-axis label
-    plt.ylabel("Latitude")  # y-axis label
-
-    spatial_fp: Path = self.report_dir / (
-        name + "_spatial.png"
-    )  # file path for saving the spatial plot
-    plt.savefig(spatial_fp)  # save the spatial plot
-    plt.close()  # close the plot to free memory
-
-
-def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> None:
+def plot_forecasts(
+    mask: xr.DataArray, report_dir: Path, da: xr.DataArray, name: str
+) -> None:
     """Plot forecast data with a temporal (timeline) plot and a spatial plot.
 
     Handles only ensemble forecasts for now. Makes a spatial plot for every single ensemble member.
 
     Args:
-        geb_build_model: The class instance.
+        mask: The grid mask for the model.
+        report_dir: The directory where reports are saved.
         da: The xarray DataArray containing the forecast data. Must have dimensions 'time', 'y', 'x', and 'member'.
         name: The name of the variable being plotted, used for titles and filenames.
     """
     # pre-processing of plotting data
-    mask = geb_build_model.grid["mask"]  # get the GEB grid
     da_plot = da.copy()  # make a copy to avoid modifying the original data
     # Convert data to mm/hour if it's precipitation
     if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
@@ -117,7 +104,9 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
     # Timeline plot
     fig, ax_time = plt.subplots(1, 1, figsize=(12, 9))  # Create temporal plot
 
-    colors = plt.cm.viridis(np.linspace(0, 1, n_members))  # Distinct colors for members
+    colors = plt.cm.viridis(  # ty:ignore[unresolved-attribute]
+        np.linspace(0, 1, n_members)
+    )  # Distinct colors for members
 
     spatial_average = (
         (da_plot * ~mask).sum(dim=("y", "x")) / (~mask).sum()
@@ -154,7 +143,7 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
     ax_time.set_title(f"{name} - Ensemble Forecast Timeline")  # title
     ax_time.grid(True, alpha=0.3)  # light grid
 
-    fp = geb_build_model.report_dir / (name + "_ensemble_timeline.png")  # File path
+    fp = report_dir / (name + "_ensemble_timeline.png")  # File path
     fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
     plt.tight_layout()  # tight layout
     plt.savefig(fp, dpi=300, bbox_inches="tight")  # save figure
@@ -175,7 +164,9 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
         hspace=0.2, wspace=0.2, bottom=0.05, left=0.05, right=0.85
     )  # Tighter spacing
 
-    custom_cmap = plt.cm.Blues  # Use simple Blues colormap
+    custom_cmap = (
+        plt.cm.Blues  # ty:ignore[unresolved-attribute]
+    )  # Use simple Blues colormap
     da_plot_max_over_time = da_plot.max(dim="time")  # max over time for color scale
     for i, member in enumerate(
         da_plot_max_over_time.member
@@ -228,7 +219,7 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
         )  # add country borders
 
         # Add region shapefile boundary with thick line
-        geb_build_model.geom["mask"].boundary.plot(
+        mask.boundary.plot(
             ax=ax, color="red", linewidth=3, transform=ccrs.PlateCarree()
         )
 
@@ -242,9 +233,7 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
     fig.suptitle(
         f"{name} - Ensemble Spatial Distribution (Max over Time)", y=0.99
     )  # Overall title
-    spatial_fp: Path = geb_build_model.report_dir / (
-        name + "_ensemble_spatial.png"
-    )  # File path
+    spatial_fp: Path = report_dir / (name + "_ensemble_spatial.png")  # File path
     plt.savefig(spatial_fp, dpi=300, bbox_inches="tight")  # Save figure
     plt.close(fig)  # Close figure to free memory
 
@@ -279,6 +268,7 @@ def plot_gif(
         forecast_date = ""
 
     for dim in da.dims:
+        assert isinstance(dim, str)
         if (
             "member" in dim.lower()
             or "ensemble" in dim.lower()
@@ -417,7 +407,7 @@ def plot_gif(
                 ctx.add_basemap(
                     ax,
                     crs="EPSG:4326",
-                    source=ctx.providers.OpenStreetMap.Mapnik,
+                    source=ctx.providers.OpenStreetMap.Mapnik,  # ty:ignore[unresolved-attribute]
                     zorder=0,
                 )
 
@@ -467,20 +457,23 @@ def plot_gif(
     imageio.mimsave(gif_fp, frames, fps=5)
 
 
-def _plot_data(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> None:
+def plot_forcing(
+    mask: xr.DataArray, report_dir: Path, da: xr.DataArray, name: str
+) -> None:
     """Plot data using appropriate method based on data type.
 
-    Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_forcing.
+    Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_normal_forcing.
 
     Args:
-        geb_build_model: The class instance.
+        mask: The grid mask for the model.
+        report_dir: The directory where reports are saved.
         da: Data to plot.
         name: Name for the plots and file outputs.
     """
     if "forecast" in name.lower():
-        plot_forecasts(geb_build_model, da, name)  # plot forecasts
+        plot_forecasts(mask, report_dir, da, name)  # plot forecasts
     else:
-        plot_forcing(geb_build_model, da, name)  # plot historical forcing data
+        plot_normal_forcing(mask, report_dir, da, name)  # plot historical forcing data
 
 
 def plot_timeline(
@@ -523,7 +516,7 @@ def get_chunk_size(da: xr.DataArray, target: float | int = 1e8) -> int:
     return int(target / (da.dtype.itemsize * spatial_size))
 
 
-class Forcing:
+class Forcing(BuildModelBase):
     """Contains methods to download and process climate forcing data for GEB."""
 
     def __init__(self) -> None:
@@ -539,7 +532,6 @@ class Forcing:
         self,
         da: xr.DataArray,
         name: str = "climate/pr_kg_per_m2_per_s",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Precipitation DataArray with appropriate attributes and scaling.
@@ -549,7 +541,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the precipitation data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -586,13 +577,12 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         if "forecasts" in name.lower():
             # Check if GIF files already exist before creating them
             gif_fp_regular = self.report_dir / f"{name.replace('/', '_')}_animation.gif"
@@ -622,7 +612,6 @@ class Forcing:
         self,
         da: xr.DataArray,
         name: str = "climate/rsds_W_per_m2",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Downwelling Shortwave Radiation DataArray with appropriate attributes and scaling.
@@ -632,7 +621,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the shortwave radiation data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -662,20 +650,18 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_rlds_W_per_m2(
         self,
         da: xr.DataArray,
         name: str = "climate/rlds_W_per_m2",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Downwelling Longwave Radiation DataArray with appropriate attributes and scaling.
@@ -685,7 +671,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the longwave radiation data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -715,20 +700,18 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_tas_2m_K(
         self,
         da: xr.DataArray,
         name: str = "climate/tas_2m_K",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Air Temperature DataArray with appropriate attributes and scaling.
@@ -738,7 +721,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the air temperature data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -770,21 +752,19 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
 
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_dewpoint_tas_2m_K(
         self,
         da: xr.DataArray,
         name: str = "climate/dewpoint_tas_2m_K",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Dewpoint Temperature DataArray with appropriate attributes and scaling.
@@ -794,7 +774,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the dewpoint temperature data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -826,20 +805,18 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_ps_pascal(
         self,
         da: xr.DataArray,
         name: str = "climate/ps_pascal",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Air Pressure DataArray with appropriate attributes and scaling.
@@ -849,7 +826,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the surface air pressure data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -880,13 +856,12 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_wind_10m_m_per_s(
@@ -894,7 +869,6 @@ class Forcing:
         da: xr.DataArray,
         direction: str,
         name: str = "climate/wind_{direction}10m_m_per_s",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Wind Speed DataArray with appropriate attributes and scaling.
@@ -905,7 +879,6 @@ class Forcing:
             da: The xarray DataArray containing the wind speed data.
             direction: The wind direction component (e.g., 'u' or 'v').
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -939,17 +912,16 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_SPEI(
-        self, da: xr.DataArray, name: str = "climate/SPEI", *args: Any, **kwargs: Any
+        self, da: xr.DataArray, name: str = "climate/SPEI", **kwargs: Any
     ) -> xr.DataArray:
         """Sets the Standard Precipitation Evapotranspiration Index (SPEI) DataArray with appropriate attributes and scaling.
 
@@ -958,7 +930,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the SPEI data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -995,12 +966,11 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
             **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def setup_forcing_ERA5(self) -> None:
@@ -1251,7 +1221,9 @@ class Forcing:
                     .compute()
                 )
 
-                GEV = xci.stats.fit(SPEI_yearly_min, dist="genextreme").compute()
+                GEV: xr.DataArray = xcistats.fit(
+                    SPEI_yearly_min, dist="genextreme"
+                ).compute()
 
                 self.set_other(
                     GEV.sel(dparams="c").astype(np.float32), name="climate/gev_c"

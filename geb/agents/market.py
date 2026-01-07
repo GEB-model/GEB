@@ -10,15 +10,24 @@ import statsmodels.api as sm
 from numpy.linalg import LinAlgError
 
 from geb.types import TwoDArrayFloat32
-from geb.workflows.io import read_dict
+from geb.workflows.io import read_params
 
-from ..data import load_regional_crop_data_from_dict
+from ..data import DateIndex, load_regional_crop_data_from_dict
 from ..store import DynamicArray
 from .general import AgentBaseClass
 
 if TYPE_CHECKING:
     from geb.agents import Agents
     from geb.model import GEBModel
+
+
+class MarketVariables:
+    """Class to hold Market agent variables."""
+
+    production: DynamicArray
+    total_farmer_income: DynamicArray
+    parameters: DynamicArray
+    cumulative_inflation_per_region: np.ndarray
 
 
 class Market(AgentBaseClass):
@@ -31,6 +40,8 @@ class Market(AgentBaseClass):
     Note:
         Currently assume single market for all crops.
     """
+
+    var: MarketVariables
 
     def __init__(self, model: GEBModel, agents: Agents) -> None:
         """Initialize the Market agent module.
@@ -122,7 +133,7 @@ class Market(AgentBaseClass):
             extra_dims_names=["params"],
         )
 
-        inflation = read_dict(
+        inflation = read_params(
             self.model.files["dict"]["socioeconomics/inflation_rates"]
         )
         inflation["time"] = [int(time) for time in inflation["time"]]
@@ -312,7 +323,9 @@ class Market(AgentBaseClass):
             simulated_price = self.get_modelled_crop_prices()
             return simulated_price
         else:
-            index = self._crop_prices[0].get(self.model.current_time)
+            date_index = self._crop_prices[0]
+            assert isinstance(date_index, DateIndex)
+            index: int = date_index.get(self.model.current_time)
             return self._crop_prices[1][index]
 
     @property

@@ -82,8 +82,6 @@ class OpenBuildingMap(Adapter):
             mask=geom,
             columns=["id", "occupancy", "floorspace", "height", "geometry"],
         )
-        # only keep buildings that intersect with the geom (to be sure, maybe can be removed)
-        buildings = buildings[buildings.intersects(geom)]
         if len(buildings) == 0:
             print("No buildings found in region geom")
             return
