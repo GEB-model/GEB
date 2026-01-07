@@ -16,6 +16,7 @@ We are also extremely grateful to the grandmasters without whom the GEB model wo
 
 - [Jeroen Aerts](https://research.vu.nl/en/persons/jeroen-aerts/)
 - [Hans de Moel](https://research.vu.nl/en/persons/hans-de-moel/)
+- [Wouter Botzen](https://research.vu.nl/en/persons/wouter-botzen/)
 
 # Past contributors
 
