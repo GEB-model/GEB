@@ -36,7 +36,7 @@ The LDD is a 2D array where each cell contains a value representing the directio
 
 All routing algorithms in GEB inherit from a common `Router` base class. This class handles the initialization of the river network topology, including:
 
-*   Determining the upstream connections for every cell.
+*   Determining the upstream connections for every cell using the LDD.
 *   Sorting cells from upstream to downstream to allow for efficient iterative solving.
 *   Identifying waterbody locations and their outflow points.
 
@@ -81,10 +81,12 @@ The `Kinematic Wave` router approximates the full Saint-Venant equations [@chow1
 
 #### Governing Equations
 
-The method couples the **continuity equation** (conservation of mass):
+The method couples the continuity equation (conservation of mass):
+
 $$ \frac{\partial Q}{\partial x} + \frac{\partial A}{\partial t} = q_{lat} $$
 
-with a simplified **momentum equation** expressed as a power law relationship between channel cross-sectional area ($A$) and discharge ($Q$):
+with a simplified momentum equation expressed as a power law relationship between channel cross-sectional area ($A$) and discharge ($Q$):
+
 $$ A = \alpha Q^{\beta} $$
 
 Where:
