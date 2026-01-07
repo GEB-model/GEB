@@ -516,6 +516,7 @@ def rasterize_like(
 
     if dtype == bool:
         da = da.astype(bool)
+        da.attrs["_FillValue"] = None
 
     return da
 
