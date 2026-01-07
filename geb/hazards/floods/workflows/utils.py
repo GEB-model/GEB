@@ -19,7 +19,8 @@ import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
 from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from scipy.stats import genpareto, kstest
-from shapely.geometry import LineString, Point
+from shapely import line_locate_point
+from shapely.geometry import GeometryCollection, LineString, Point
 from tqdm import tqdm
 
 from geb.types import ArrayFloat32, ArrayInt64
@@ -1159,3 +1160,45 @@ def assign_return_periods(
             rivers.loc[idx, f"{prefix}_{T}"] = discharge_value
 
     return rivers
+
+
+def select_most_downstream_point(
+    river: gpd.GeoDataFrame, outflow_points: GeometryCollection
+) -> Point:
+    """Select the most downstream point from a collection of outflow points.
+
+    Args:
+        river: GeoDataFrame containing the river geometry.
+        outflow_points: GeometryCollection of outflow points (can contain Points and LineStrings).
+
+    Returns:
+        The most downstream Point from the outflow_points.
+
+    Raises:
+        TypeError: If an unsupported geometry type is found in outflow_points.
+    """
+    points: list[Point] = []
+    for geom in outflow_points.geoms:
+        if isinstance(geom, Point):
+            points.append(geom)
+        elif isinstance(geom, LineString):
+            for coord in geom.coords:
+                points.append(Point(coord))
+        else:
+            raise TypeError(
+                f"Unsupported geometry type in outflow_points: {type(geom)}"
+            )
+
+    most_downstream_point: Point = points[0]
+    most_downstream_point_loc: float = line_locate_point(
+        river.geometry, most_downstream_point
+    )
+    for point in points[1:]:
+        loc = line_locate_point(river.geometry, point)
+        if loc > most_downstream_point_loc:
+            most_downstream_point = point
+            most_downstream_point_loc = loc
+
+    outflow_point: Point = most_downstream_point
+
+    return outflow_point
