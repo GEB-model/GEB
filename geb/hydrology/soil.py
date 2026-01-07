@@ -161,6 +161,7 @@ def calculate_arno_runoff(
     # Calculate the term (1 - w/ws)^(1/(b+1))
     # This corresponds to (1 - i / i_max)
     # where i_max = ws * (b + 1)
+    # Step 4: Inverting for Relative Saturation (finding position on capacity curve)
     term_current = (np.float32(1.0) - relative_saturation) ** (
         np.float32(1.0) / (arno_shape_parameter + np.float32(1.0))
     )
@@ -168,6 +169,7 @@ def calculate_arno_runoff(
     # Calculate the new term after adding precipitation 'p'
     # We are filling the capacity, so we move up the capacity curve (increasing i)
     # The amount of "capacity depth" filled is 'p'.
+    # Step 2 & 3: Total Basin Capacity (i_max)
     max_infiltration_capacity = max_soil_water_capacity * (
         arno_shape_parameter + np.float32(1.0)
     )
@@ -175,6 +177,7 @@ def calculate_arno_runoff(
     # The new term corresponds to (1 - i_new / i_max)
     # i_new = i + p
     # (1 - i_new/i_max) = (1 - i/i_max) - p/i_max
+    # Step 5: Adding Precipitation (moving along the capacity curve)
     term_new = term_current - topwater_m / max_infiltration_capacity
 
     if term_new <= np.float32(0.0):
@@ -183,6 +186,7 @@ def calculate_arno_runoff(
     else:
         # Calculate new storage w_new
         # w_new = ws * (1 - term_new^(b+1))
+        # Step 6: Calculating New Storage
         new_soil_water_storage = max_soil_water_capacity * (
             np.float32(1.0) - term_new ** (arno_shape_parameter + np.float32(1.0))
         )
