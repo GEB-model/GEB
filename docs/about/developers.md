@@ -9,6 +9,7 @@
 - [Rafaella Oliveira](https://research.vu.nl/en/persons/rafaella-gouveia-loureiro-oliveira)
 - [Carolina Carral](https://vu.nl/en/research/scientists/carolina-ferman-carral)
 - [Roy Pontman](https://research.vu.nl/en/persons/roy-pontman/)
+- [Lisanne van Amelsvoort](https://research.vu.nl/en/persons/lisanne-van-amelsvoort/)
 
 # Grandmasters
 
