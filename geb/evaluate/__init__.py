@@ -6,6 +6,7 @@ Contains the Evaluate class which contains evaluation routines for model runs.
 
 from __future__ import annotations
 
+from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,13 +55,12 @@ class Evaluate:
         """
         if methods is None:
             methods: list = [
-                "plot_discharge",
-                "evaluate_discharge",
-                "water_circle",
-                "evaluate_hydrodynamics",
-                "evaluate_forecasts",
-                "plot_discharge_floods",
-                "water_balance",
+                "hydrology.plot_discharge",
+                "hydrology.evaluate_discharge",
+                "hydrology.water_circle",
+                "hydrology.evaluate_hydrodynamics",
+                "hydrology.water_balance",
+                "meteriological_forecasts.evaluate_forecasts",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (
@@ -71,15 +71,10 @@ class Evaluate:
             )
 
         for method in methods:
-            assert hasattr(self, method), (
-                f"Method {method} is not implemented in Evaluate class."
-            )
-
-        for method in methods:
-            if hasattr(self, method):
-                attr = getattr(self, method)
-            else:
-                raise ValueError(
+            try:
+                attr = attrgetter(method)(self)
+            except AttributeError:
+                raise AttributeError(
                     f"Method {method} is not implemented in Evaluate class."
                 )
             attr(

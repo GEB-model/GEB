@@ -179,19 +179,19 @@ def test_rasterize_like(dtype: type) -> None:
     assert result.shape == raster.shape
     assert result.dims == raster.dims
     assert result.dtype == dtype
-    assert result.attrs["_FillValue"] == nodata
     assert result.coords.equals(raster.coords)
 
     if dtype is bool:
         assert np.all(result.values[0:4, 0:4])
         assert np.all(result.values[5:8, 5:8])
+        assert result.attrs["_FillValue"] == None
     else:
+        assert result.attrs["_FillValue"] == nodata
         assert np.all(result.values[0:4, 0:4] == 1)
         assert np.all(result.values[5:8, 5:8] == 2)
-
-    # Check that areas outside polygons are nodata
-    # For example, bottom-left corner
-    assert result.values[0, -1] == nodata
+        # Check that areas outside polygons are nodata
+        # For example, bottom-left corner
+        assert result.values[0, -1] == nodata
 
 
 def test_rasterize_like_geographic() -> None:

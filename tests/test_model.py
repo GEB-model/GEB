@@ -214,6 +214,7 @@ def test_update_with_file() -> None:
     """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
+        del args["continue_"]
         args["build_config"] = Path("update.yml")
         update_fn(**args)
 
@@ -227,6 +228,7 @@ def test_update_with_dict() -> None:
     """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
+        del args["continue_"]
         update = {"setup_land_use_parameters": {}}
         args["build_config"] = update
         update_fn(**args)
@@ -245,6 +247,7 @@ def test_update_with_method(method: str) -> None:
     """
     with WorkingDirectory(working_directory):
         args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
+        del args["continue_"]
 
         build_config: dict[str, dict] = parse_config(BUILD_DEFAULT)
 
@@ -391,6 +394,7 @@ def test_alter() -> None:
     """
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+        del args["continue_"]
         args["build_config"] = {
             "set_ssp": {"ssp": "ssp1"},
             "setup_CO2_concentration": {},
@@ -422,7 +426,7 @@ def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "methods": ["water_circle"],
+            "methods": ["hydrology.water_circle"],
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
@@ -439,7 +443,7 @@ def test_evaluate() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "methods": ["plot_discharge", "evaluate_discharge"],
+            "methods": ["hydrology.plot_discharge", "hydrology.evaluate_discharge"],
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
