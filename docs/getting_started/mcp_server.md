@@ -8,21 +8,24 @@ To set up the model you can use the following prompt in the [gemini-cli](https:/
 
 **Prompt:**
 
->   **MCP Configuration**: Create a file at `.gemini/settings.json` with the following content:
->   ```json
->   {
->       "mcpServers": {
->           "geb": {
->               "command": "uv",
->               "args": ["run", "geb/mcp_server.py"]
->           }
->       }
->   }
->   ```
+```
+To configure the MCP server, create a file at `.gemini/settings.json` with the following content:
+   
+{
+    "mcpServers": {
+        "geb": {
+            "command": "uv",
+            "args": ["run", "geb/mcp_server.py"]
+        }
+    }
+}
+
+Then remind the user to restart gemini before the mcp server can be used.
+```
 
 ## Usage
 
-Once the Gemini CLI is running and connected to the GEB server, you can use natural language to interact with the model.
+If you added the configuration through gemini, you will need to restart gemini (press ctrl+c twice). Once the Gemini CLI is running again, you can use natural language to interact with GEB.
 
 ### Example Prompts
 
