@@ -69,11 +69,11 @@ Happy gebbing! Let us know when you run into issues, and any contributions to GE
 
 ## Contributing to GEB
 
-To allow contributions to the GEB model, first make sure you are a [member of the GEB-model](https://github.com/orgs/GEB-model/people/) and put the right user credentials in your git, by pasting the following in your git bash shell or VS code terminal:
+To allow contributions to the GEB model, first make sure you are a [member of the GEB-model](https://github.com/orgs/GEB-model/people/) and put your GitHub user credentials in your git, by pasting the following in your git bash shell or VS code terminal replacing "GITHUB-USERNAME" and "GITHUB-EMAIL":
 
 ```bash
-git config --global user.name "USERNAME"
-git config --global user.email "GITHUB EMAIL"
+git config --global user.name "GITHUB-USERNAME"
+git config --global user.email "GITHUB-EMAIL"
 ```
 
-We need to connect to Github through SSH before we can clone the repo. For this, carefully follow all the steps to generate a SSH key and to [add this SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent?platform=windows). Select the right operator system (Max, Windows or Linux).
+We need to connect to Github through SSH before we can clone the repo. For this, carefully follow all the steps to generate a SSH key and to [add this SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent). Select the right operator system (Max, Windows or Linux).
