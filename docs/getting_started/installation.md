@@ -4,7 +4,7 @@
 
 To install GEB using an LLM agent, you can use the following prompt.
 
-> Please set up the GEB model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. If the user is already in VSCode, don't create a new subfolder "GEB" but assume that GEB should be cloned into the currently open directory in VSCode. At the end, check if the ssh keys and the connection to GitHub are set up already. If not, ask the user whether they want to set this up to allow the user to contribute via GitHub.
+> Please set up the GEB model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. At the end, check if the ssh keys and the connection to GitHub are set up already. You can use "ssh -T git@github.com". If this is not working, ask the user whether they want to set this up to allow the user to contribute via GitHub. Note that the cloning itself can be done without the keys as it is a public repository.
 
 ## Installation (not for development)
 
@@ -31,9 +31,9 @@ To run SFINCS (the hydrodynamic model), you also need to install Docker (on Wind
 
 ### Installation
 
-Create a folder called "GEB" where you would like to store the model code. Note that this folder should NOT be placed into a cloud synchronized folder (e.g., OneDrive).
+In this guide, we assume that you already created a folder where you would like the code to be created and that you have this folder open in the terminal.
 
-Then, within the "GEB" folder open a terminal and run the following command to *clone* (download) all the code from the repository:
+First, *clone* (download) all the code from the repository:
 
 ```bash
 git clone git@github.com:GEB-model/GEB.git .
