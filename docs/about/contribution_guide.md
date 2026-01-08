@@ -1,13 +1,30 @@
 # Contribution Guide
 
-## General Recommendations
+## Developing with git
+
+In this guide, we will assume you use VS Code and already set up GEB for [development](../getting_started/installation.md) and have a basic knowledge of git ([here](https://www.codecademy.com/learn/learn-git) is a nice course).
+
+1. [create a new branch](https://code.visualstudio.com/docs/sourcecontrol/branches-worktrees), which you name `your_name-feature_name`. For example, when Alice wants to allow people in the model to have pets, the branch could be called `alice-pets`. This allows you to develop the feature independently from the main branch.
+2. Develop your feature or do the bugfix. Try to keep this to a single feature or bugfix.
+3. After you are done, stage and commit your code. Make sure to write a clear commit message. More info on staging and commiting can be found [here](https://code.visualstudio.com/docs/sourcecontrol/staging-commits). If you are working on something larger, there may also be multiple commits.
+4. After you finished the feature or bugfix, make sure to push all your changes to GitHub, where you should be able to find the branch with your changes.
+5. Now you can [open a pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request). This is a request to merge your code with the main branch.
+6. Once you opened the request, there will first be an automated review from copilot after a few minutes. Have a look at these suggestions and implement them if you feel they are useful. Note that this is AI so not everything is useful, but it often allows you to catch some errors or make some clarifications.
+7. In addition, all sorts of other automated checks are performed related to formatting and tests. Ensure that all tests tests pass.
+8. Then, [request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/requesting-a-pull-request-review) someone (a human this time) to review your code. They will review your code and approve the code or request you to make changes. If they request changes, make these changes and request a re-review.
+9. Once the code is approved, you or the reviewer can merge the branch with the main branch and delete the feature branch (so we keep things clean).
+10. Congrats your code is now in the main branch!
+
+## Rules and recommendations
+
+### General Recommendations
 
 - It is RECOMMENDED to turn on notifications of GitHub issues to remain aware of current issues and suggested solutions. You can do so using the "watch" feature on the GEB GitHub page.
 - You MUST use descriptive commit messages for every commit (e.g., no "some fixes", "progress", etc.).
 - It is RECOMMENDED to keep up-to-date with the main branch by frequently (at least once a week) pulling updates from the main. This will reduce the number of merge conflicts and avoid work duplication.
 - You MUST use your name followed by a descriptive branch name. For example, `tim-loves-forecasting`.
 
-## Feature Development
+### Feature Development
 
 The main version of GEB is always on the `main` branch. This branch SHOULD be stable, and we aim for it to be free of bugs (acknowledging that this is an almost impossible aim). New features are developed in other branches.
 
@@ -16,7 +33,7 @@ The main version of GEB is always on the `main` branch. This branch SHOULD be st
 - When the (sub-)features are complete, the branch MUST be merged into `main` using a pull request on GitHub.
 - It is REQUIRED to get feedback on the code from one of the main developers. You can use the reviewer mechanism on the pull request page.
 
-## Bugs
+### Bugs
 
 We use GitHub issues for tracking bugs.
 
@@ -28,7 +45,7 @@ We use GitHub issues for tracking bugs.
 - Alternatively, you can make a fix directly in your working branch and create a commit that fixes the bug, and only the bug. Then, use git cherry-pick to apply the fix to the `main` branch.
 - It is also RECOMMENDED to communicate the bug to developers who may be affected.
 
-## Testing
+### Testing
 
 We use `pytest` for automated testing of the GEB model.
 
@@ -36,7 +53,7 @@ We use `pytest` for automated testing of the GEB model.
 - Unit tests are automatically run on GitHub when any branch is pushed.
 - Integration tests are RECOMMENDED to run locally before pushing to GitHub. They can be run using the command `pytest` or in vscode.
 
-## Coding Practices
+### Coding Practices
 
 - All variable names MUST be clear. Prefer long and descriptive names over short, unclear ones.
 - Function documentation MUST be provided for all functions, including the function's purpose, parameters, and return values. Use the Google style for docstrings.
