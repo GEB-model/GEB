@@ -30,6 +30,8 @@ The subbasin option allows you to define your study region based on a hydrologic
 
 - `subbasin`: The subbasin ID of the model. This is the ID of the subbasin in the [MERIT-BASINS dataset](https://www.reachhydro.org/home/params/merit-basins) (version MERIT-Hydro v0.7/v1.0). This can be either a single subbasin or list of subbasins. All upstream basins are automatically included in the model, so only the most downstream subbasin of a specific catchments needs to be specified.
 
+There is a very nice viewer to select the right basin [here](https://cw3e.ucsd.edu/hydro/merit_rivers/merit_rivers_carto.html).
+
 ``` yaml
 general:
   region:
