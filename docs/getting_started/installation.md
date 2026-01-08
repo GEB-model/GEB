@@ -4,7 +4,7 @@
 
 To install GEB using an LLM agent, you can use the following prompt.
 
-> Please set up the GEB model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, note that you should clone the repository to the CURRENT folder using `git clone git@github.com:GEB-model/GEB.git .` including the `.`. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. At the end, check if the ssh keys and the connection to GitHub are set up already. You can use "ssh -T git@github.com". If this is not working, ask the user whether they want to set this up to allow the user to contribute via GitHub. Note that the cloning itself can be done without the keys as it is a public repository.
+> Please set up the GEB model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, note that you should clone the repository to the CURRENT folder using `git clone https://github.com/GEB-model/GEB.git .` including the `.`. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. At the end, check if the ssh keys and the connection to GitHub are set up already. You can use "ssh -T git@github.com". If this is not working, ask the user whether they want to set this up to allow the user to contribute via GitHub. Note that the cloning itself can be done without the keys as it is a public repository.
 
 ## Installation (not for development)
 
@@ -36,7 +36,7 @@ In this guide, we assume that you already created a folder where you would like 
 First, *clone* (download) all the code from the repository into the current working directory (that's what the `.` at the end of the command is for):
 
 ```bash
-git clone git@github.com:GEB-model/GEB.git .
+git clone https://github.com/GEB-model/GEB.git .
 ```
 
 Then to install GEB and its dependencies:
@@ -65,7 +65,7 @@ We have also prepared a configuration for the debugger in `.vscode/launch.json.s
 
 The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`). You may need to adjust the paths in  `.vscode/launch.json` to match your setup.
 
-Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome.
+Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome. If you make a contribution and push it to GitHub, you will also need to perform the steps in the next section.
 
 ## Contributing to GEB
 
