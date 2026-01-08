@@ -85,7 +85,7 @@ class DestinationEarth(Adapter):
             engine="zarr",
         )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+        da: xr.DataArray = da.drop_vars(["number", "surface"])
 
         buffer: float = 0.5
 
