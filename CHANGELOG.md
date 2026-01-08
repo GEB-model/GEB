@@ -1,4 +1,4 @@
-# v1.0.0b10
+# dev
 - Add documentation for modules, variables and routing.
 - Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
 - Flood maps of varying spatial domains can now be merged into one return period map.
