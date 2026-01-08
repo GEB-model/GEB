@@ -2,6 +2,11 @@
 - Add documentation for modules, variables and routing.
 - Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
 - Flood maps of varying spatial domains can now be merged into one return period map.
+- Add llms.txt, llms-full.txt
+- Add MCP server for interacting with natural language (very much in beta)
+- Add a prompt to installation docs for setting up geb using llm agents
+- Update and simplify installation docs
+- Write documentation for spinning up and running models
 
 # v1.0.0b9
 - Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.

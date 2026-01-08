@@ -37,6 +37,26 @@ plugins:
               - griffe_pydantic
   - bibtex:
       bib_file: docs/references.bib
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        Home:
+          - index.md
+        Getting Started:
+          - getting_started/*.md
+        Model:
+          - model/*.md
+        Agents:
+          - agents/*.md
+          - agents/ODD/*.md
+        Hydrology:
+          - hydrology/*.md
+        Hazards:
+          - hazards/*.md
+        Advanced topics:
+          - advanced_topics/*.md
+        About:
+          - about/*.md
 
 markdown_extensions:
   - footnotes

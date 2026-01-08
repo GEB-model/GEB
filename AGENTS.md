@@ -1,6 +1,9 @@
-## Purpose
+## Context
 
-These instructions translate the project's Pull Request checklist into explicit guidance for GitHub Copilot / code generation helpers. Use them when proposing code, docstrings, tests, or PR descriptions.
+If needed, you can find full documentation about the geb model specific for llms here:
+
+navigatable version: https://docs.geb.sh/llms.txt
+full version (requires large context window): https://docs.geb.sh/llms-full.txt
 
 ## Checklist (requirements to satisfy)
 - Documentation: All new or substantially edited functions must have documentation in the project's existing style (see examples below).

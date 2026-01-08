@@ -108,6 +108,7 @@ dev = [
     "mkdocs-gen-files>=0.5.0",
     "mkdocs-literate-nav>=0.6.0",
     "mkdocs-macros-plugin>=1.0.0",
+    "mkdocs-llmstxt>=0.2.0",
     "griffe-pydantic>=1.1.8",
 ]
 
