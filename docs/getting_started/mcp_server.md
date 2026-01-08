@@ -4,24 +4,21 @@ The GEB MCP (Model Context Protocol) server allows you to interact with the GEB 
 
 ## Automated Setup via Agent Prompt
 
-To set up the model you can use the following prompt in the [gemini-cli](https://geminicli.com/docs/get-started/).
+To set up the model you can use the following prompt in the [gemini-cli](https://geminicli.com/docs/get-started/) or follow the instructions yourself.
 
 **Prompt:**
 
-> **"Please set up the GEB hydrological model environment for me.**
->
-> 1.  **Install GEB**: Follow the instructions [here](installation.md).
-> 2.  **MCP Configuration**: Create a file at `.gemini/settings.json` with the following content:
->     ```json
->     {
->         "mcpServers": {
->             "geb": {
->                 "command": "uv",
->                 "args": ["run", "geb/mcp_server.py"]
->             }
->         }
->     }
->     ```
+>   **MCP Configuration**: Create a file at `.gemini/settings.json` with the following content:
+>   ```json
+>   {
+>       "mcpServers": {
+>           "geb": {
+>               "command": "uv",
+>               "args": ["run", "geb/mcp_server.py"]
+>           }
+>       }
+>   }
+>   ```
 
 ## Usage
 
