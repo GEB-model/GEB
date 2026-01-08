@@ -3,6 +3,7 @@ site_description: GEB simulates the environment (e.g., hydrology, floods), the i
 site_author: Jens de Bruijn
 repo_url: https://github.com/GEB-model/GEB
 repo_name: GEB-model/GEB
+site_url: https://docs.geb.sh/
 edit_uri: edit/main/docs/
 docs_dir: docs
 
