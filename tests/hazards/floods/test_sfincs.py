@@ -14,12 +14,13 @@ import pytest
 import xarray as xr
 from shapely.geometry import LineString
 
-from geb.cli import CONFIG_DEFAULT, parse_config, run_model_with_method
+from geb.cli import CONFIG_DEFAULT
+from geb.geb_types import TwoDArrayFloat64, TwoDArrayInt32
 from geb.hazards.floods import create_river_graph, group_subbasins
 from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
-from geb.types import TwoDArrayFloat64, TwoDArrayInt32
+from geb.runner import parse_config, run_model_with_method
 from geb.workflows.io import WorkingDirectory, read_geom, read_grid, read_zarr
 from geb.workflows.raster import rasterize_like
 

@@ -13,6 +13,7 @@ import pandas as pd
 import pyflwdir
 import pytest
 
+from geb.geb_types import ArrayFloat32, ArrayInt32
 from geb.hydrology.routing import (
     Accuflux,
     KinematicWave,
@@ -21,7 +22,6 @@ from geb.hydrology.routing import (
     get_channel_ratio,
     update_node_kinematic,
 )
-from geb.types import ArrayFloat32, ArrayInt32
 
 
 def test_fill_discharge_gaps() -> None:

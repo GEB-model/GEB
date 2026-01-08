@@ -14,18 +14,18 @@ import numpy as np
 import numpy.typing as npt
 from affine import Affine
 
-from geb.hydrology.groundwater.model import (
-    ModFlowSimulation,
-    distribute_well_abstraction_m3_per_layer,
-    get_groundwater_storage_m,
-    get_water_table_depth,
-)
-from geb.types import (
+from geb.geb_types import (
     ArrayFloat32,
     ArrayFloat64,
     TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayFloat64,
+)
+from geb.hydrology.groundwater.model import (
+    ModFlowSimulation,
+    distribute_well_abstraction_m3_per_layer,
+    get_groundwater_storage_m,
+    get_water_table_depth,
 )
 from geb.workflows.raster import calculate_cell_area, compress
 
