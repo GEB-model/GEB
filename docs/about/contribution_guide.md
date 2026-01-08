@@ -15,6 +15,15 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 9. Once the code is approved, you or the reviewer can merge the branch with the main branch and delete the feature branch (so we keep things clean).
 10. Congrats your code is now in the main branch!
 
+## Making a release
+
+To create a release of GEB, and creating a package on PyPi, take the following steps.
+
+1. Bump the version of GEB using `uv version --bump xxxx`. Replacing xxxx with major, minor, patch, stable, alpha, beta, rc, post or dev.
+2. Update the [changelog](https://github.com/GEB-model/GEB/blob/main/CHANGELOG.md), moving the updates to the appropriate version (keeping the dev header for the next version).
+3. Create a [new release](https://github.com/GEB-model/GEB/releases). Both the tag and the title should match the new version number. In the release notes, paste the relevant updates from the [changelog](https://github.com/GEB-model/GEB/blob/main/CHANGELOG.md).
+4. Now, a [GitHub action](https://github.com/GEB-model/GEB/actions/workflows/publish.yml) should automatically start and upload the new version to PyPi. Confirm the release is indeed available [here](https://pypi.org/project/geb/). 
+
 ## Rules and recommendations
 
 ### General Recommendations
