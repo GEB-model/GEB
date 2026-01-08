@@ -4,7 +4,7 @@
 
 To install GEB using an LLM agent, you can use the following prompt.
 
-> Please set up the GEB hydrological model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. If the user is already in VSCode, don't create a new subfolder "GEB" but assume that GEB should be cloned into the currently open directory in VSCode. At the end, ask the user whether they want to set up ssh keys and connect to GitHub to allow the user to contribute via the repository. First check, if this is not already set up.
+> Please set up the GEB hydrological model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. If the user is already in VSCode, don't create a new subfolder "GEB" but assume that GEB should be cloned into the currently open directory in VSCode. At the end, check if the ssh keys and the connection to GitHub are set up already. If not, ask the user whether they want to set this up to allow the user to contribute via GitHub.
 
 ## Installation (not for development)
 
