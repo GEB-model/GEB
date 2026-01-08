@@ -39,14 +39,6 @@ First, *clone* (download) all the code from the repository:
 git clone git@github.com:GEB-model/GEB.git .
 ```
 
-Now the directory structure should look like this:
-
-```
-GEB
-|   README.md
-|   (all files and folders from the repository)
-```
-
 Then to install GEB and its dependencies:
 
 ```bash
