@@ -4,7 +4,7 @@
 
 To install GEB using an LLM agent, you can use the following prompt.
 
-> Please set up the GEB hydrological model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. If the user is already in VSCode, don't create a new subfolder "GEB" but assume that GEB should be cloned into the currently open directory in VSCode.
+> Please set up the GEB hydrological model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. If the user is already in VSCode, don't create a new subfolder "GEB" but assume that GEB should be cloned into the currently open directory in VSCode. At the end, ask the user whether they want to set up ssh keys and connect to GitHub to allow the user to contribute via the repository. First check, if this is not already set up.
 
 ## Installation (not for development)
 
@@ -84,4 +84,4 @@ git config --global user.name "USERNAME"
 git config --global user.email "GITHUB EMAIL"
 ```
 
-We need to connect to Github through SSH before we can clone the repo. For this, carefully follow all the steps to generate a SSH key and to [add this SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent?platform=windows). Select the right operator system (Max, Windows or Linux). See “Notes when installing on a HPC cluster” for instructions on how to do this on a remote machine.
+We need to connect to Github through SSH before we can clone the repo. For this, carefully follow all the steps to generate a SSH key and to [add this SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent?platform=windows). Select the right operator system (Max, Windows or Linux).
