@@ -1,5 +1,7 @@
 # v1.0.0b10
 - Add documentation for modules, variables and routing.
+- Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
+- Flood maps of varying spatial domains can now be merged into one return period map.
 
 # v1.0.0b9
 - Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
