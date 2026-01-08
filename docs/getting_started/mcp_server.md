@@ -15,7 +15,8 @@ To configure the MCP server, create a file at `.gemini/settings.json` with the f
     "mcpServers": {
         "geb": {
             "command": "uv",
-            "args": ["run", "geb/mcp_server.py"]
+            "args": ["run", "geb/mcp_server.py"],
+            "timeout": 604800000
         }
     }
 }
