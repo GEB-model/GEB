@@ -33,7 +33,7 @@ To run SFINCS (the hydrodynamic model), you also need to install Docker (on Wind
 
 In this guide, we assume that you already created a folder where you would like the code to be created and that you have this folder open in the terminal.
 
-First, *clone* (download) all the code from the repository:
+First, *clone* (download) all the code from the repository into the current working directory:
 
 ```bash
 git clone git@github.com:GEB-model/GEB.git .
