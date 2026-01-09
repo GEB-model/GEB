@@ -79,4 +79,4 @@ git config --global user.name "GITHUB-USERNAME"
 git config --global user.email "GITHUB-EMAIL"
 ```
 
-We need to connect to Github through SSH before we can clone the repo. For this, carefully follow all the steps to generate a SSH key and to [add this SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent). Select the right operator system (Max, Windows or Linux).
+We need to connect to Github through SSH before we can clone the repo. For this, carefully follow all the steps to generate a SSH key and to [add this SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent). Select the right operating system (Mac, Windows or Linux).
