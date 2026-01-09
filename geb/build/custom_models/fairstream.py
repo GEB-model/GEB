@@ -14,10 +14,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
-from pgmpy.factors.discrete import State
-from pgmpy.models import BayesianNetwork
-from pgmpy.sampling import BayesianModelSampling
+
+try:
+    from pgmpy.estimators import (  # ty:ignore[unresolved-import]
+        BayesianEstimator,
+        HillClimbSearch,
+        K2Score,
+    )
+    from pgmpy.factors.discrete import State  # ty:ignore[unresolved-import]
+    from pgmpy.models import BayesianNetwork  # ty:ignore[unresolved-import]
+    from pgmpy.sampling import BayesianModelSampling  # ty:ignore[unresolved-import]
+
+except ImportError as e:
+    raise ImportError(
+        "Failed to import required pgmpy modules for Bayesian network functionality. "
+        "Please ensure pgmpy is installed."
+    ) from e
+
 from scipy.stats import chi2_contingency, norm
 
 from geb.agents.crop_farmers import (

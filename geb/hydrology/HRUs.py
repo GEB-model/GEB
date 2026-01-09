@@ -121,7 +121,7 @@ def to_grid(
     Returns:
         ouput_data: Data converted to grid.
     """
-    output_data = np.empty(grid_to_HRU.size, dtype=data.dtype)
+    output_data = np.empty_like(data, shape=grid_to_HRU.size)
 
     assert grid_to_HRU[0] != 0, (
         "First value of grid_to_HRU cannot be 0. This would mean that the first HRU is empty."

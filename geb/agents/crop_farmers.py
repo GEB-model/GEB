@@ -107,8 +107,8 @@ def _r2(y: np.ndarray, yhat: np.ndarray) -> float:
 
 
 def cumulative_mean(
-    mean: np.ndarray,
-    counter: np.ndarray,
+    mean: DynamicArray,
+    counter: DynamicArray,
     update: np.ndarray,
     mask: np.ndarray | None = None,
 ) -> None:
@@ -139,7 +139,7 @@ def cumulative_mean(
         counter += 1
 
 
-def shift_and_update(array: np.ndarray, update: np.ndarray | float | int) -> None:
+def shift_and_update(array: DynamicArray, update: DynamicArray | float | int) -> None:
     """Shift each row right by one and set the first column to ``update``.
 
     Args:
@@ -155,15 +155,15 @@ def shift_and_update(array: np.ndarray, update: np.ndarray | float | int) -> Non
     array[:, 0] = update
 
 
-def shift_and_reset_matrix(matrix: np.ndarray) -> None:
+def shift_and_reset_matrix(matrix: np.ndarray | DynamicArray) -> None:
     """Shifts columns to the right in the matrix and sets the first column to zero."""
     matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
     matrix[:, 0] = 0  # Reset the first column to 0
 
 
 def advance_crop_rotation_year(
-    current_crop_calendar_rotation_year_index: np.ndarray,
-    crop_calendar_rotation_years: np.ndarray,
+    current_crop_calendar_rotation_year_index: DynamicArray,
+    crop_calendar_rotation_years: DynamicArray,
 ) -> None:
     """Update the crop rotation year for each farmer. This function is used to update the crop rotation year for each farmer at the end of the year.
 
@@ -188,7 +188,7 @@ class CropFarmersVariables(Bucket):
     remaining_irrigation_limit_m3_reservoir: DynamicArray
     remaining_irrigation_limit_m3_groundwater: DynamicArray
     crop_data: pd.DataFrame
-    crop_data_type: Literal["GAEZ", "MIRCA2000"]
+    crop_data_type: str
     crop_ids: dict[int, str]
     field_indices: ArrayInt32
     harvested_crop: DynamicArray
@@ -221,9 +221,9 @@ class CropFarmersVariables(Bucket):
     total_spinup_time: int
     return_fraction: DynamicArray
     n_loans: int
-    risk_perc_max: float
-    risk_perc_min: float
-    risk_decr: float
+    risk_perc_max: DynamicArray
+    risk_perc_min: DynamicArray
+    risk_decr: DynamicArray
     specific_weight_water: float
     previous_month: int
     p_droughts: ArrayInt32
@@ -1486,9 +1486,9 @@ class CropFarmers(AgentBaseClass):
 
         Combines reservoir access and any yearly channel abstraction.
         """
-        return (self.command_area >= 0).astype(np.int8) | np.int8(
+        return (self.command_area >= 0).astype(np.int8) | (
             self.var.yearly_abstraction_m3_by_farmer[:, CHANNEL_IRRIGATION, 0] > 0
-        )
+        ).astype(np.int8)
 
     @property
     def well_irrigated(self) -> DynamicArray:
@@ -1496,7 +1496,7 @@ class CropFarmers(AgentBaseClass):
         return self.var.adaptations[:, WELL_ADAPTATION] > 0
 
     @property
-    def irrigated(self) -> np.ndarray:
+    def irrigated(self) -> DynamicArray:
         """Boolean mask of farmers that are irrigated (surface or well)."""
         return self.surface_irrigated | self.well_irrigated  # | is the OR operator
 
@@ -2499,7 +2499,7 @@ class CropFarmers(AgentBaseClass):
 
     def insured_payouts_personal(
         self,
-        insured_farmers_mask: npt.NDArray[np.bool_],
+        insured_farmers_mask: DynamicArray,
     ) -> npt.NDArray[np.floating]:
         """Compute insured payouts for personal insurance and update state.
 
@@ -2631,7 +2631,7 @@ class CropFarmers(AgentBaseClass):
         strike: npt.NDArray[np.floating],
         exit: npt.NDArray[np.floating],
         rate: npt.NDArray[np.floating],
-        insured_farmers_mask: npt.NDArray[np.bool_],
+        insured_farmers_mask: DynamicArray,
         index_nr: int,
     ) -> npt.NDArray[np.floating]:
         """Compute index-insurance payouts historically and update state.
@@ -2962,8 +2962,8 @@ class CropFarmers(AgentBaseClass):
 
     def calculate_yield_spei_relation_group_exp(
         self,
-        yearly_yield_ratio: npt.NDArray[np.floating],
-        yearly_SPEI_probability: npt.NDArray[np.floating],
+        yearly_yield_ratio: DynamicArray,
+        yearly_SPEI_probability: DynamicArray,
         drop_k: int = 2,
     ) -> npt.NDArray[np.floating]:
         """Fit grouped exponential yield-SPEI model and return per-farmer parameters.
@@ -3064,8 +3064,8 @@ class CropFarmers(AgentBaseClass):
 
     def calculate_yield_spei_relation_group_lin(
         self,
-        yearly_yield_ratio: npt.NDArray[np.floating],
-        yearly_SPEI_probability: npt.NDArray[np.floating],
+        yearly_yield_ratio: DynamicArray | np.ndarray,
+        yearly_SPEI_probability: DynamicArray | np.ndarray,
         drop_k: int = 2,
     ) -> npt.NDArray[np.floating]:
         """Fit grouped linear yield-SPEI model and return per-farmer parameters.
@@ -3720,7 +3720,7 @@ class CropFarmers(AgentBaseClass):
         self.var.adapted[expired_adaptations, adaptation_type] = 0
         self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
-        adapted = np.where((self.var.adapted[:, adaptation_type] == 1), 1, 0)
+        adapted = self.var.adapted[:, adaptation_type] == 1
 
         (
             total_profits,
@@ -3984,7 +3984,7 @@ class CropFarmers(AgentBaseClass):
     def update_adaptation_decision(
         self,
         adaptation_type: int,
-        adapted: npt.NDArray[np.bool_],
+        adapted: DynamicArray,
         loan_duration: int,
         annual_cost: npt.NDArray[np.floating],
         SEUT_do_nothing: npt.NDArray[np.floating],
@@ -4354,7 +4354,7 @@ class CropFarmers(AgentBaseClass):
     def profits_SEUT(
         self,
         additional_diffentiators: npt.NDArray,
-        adapted: npt.NDArray[np.bool_],
+        adapted: DynamicArray,
         farmer_yield_probability_relation: npt.NDArray[np.floating],
     ) -> tuple[
         npt.NDArray[np.floating],
@@ -4684,7 +4684,7 @@ class CropFarmers(AgentBaseClass):
     def adaptation_yield_ratio_difference(
         self,
         additional_diffentiators: npt.NDArray[np.integer],
-        adapted: npt.NDArray[np.bool_],
+        adapted: DynamicArray,
         yield_ratios: npt.NDArray[np.floating],
     ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.int32]]:
         """Compute yield-ratio gains from an adaptation within peer groups.
@@ -4755,8 +4755,8 @@ class CropFarmers(AgentBaseClass):
     def reset_adaptation_status(
         self,
         farmer_yield_probability_relation: npt.NDArray[np.floating],
-        adapted: npt.NDArray[np.bool_],
-        additional_diffentiator_expiration: npt.NDArray[np.bool_],
+        adapted: DynamicArray,
+        additional_diffentiator_expiration: DynamicArray,
         additional_diffentiator_grouping: npt.NDArray[np.integer],
         adaptation_type: npt.NDArray[np.integer] | int,
     ) -> None:
@@ -4803,7 +4803,7 @@ class CropFarmers(AgentBaseClass):
     def adaptation_water_cost_difference(
         self,
         additional_diffentiators: npt.NDArray[np.integer],
-        adapted: npt.NDArray[np.bool_],
+        adapted: DynamicArray,
         energy_cost: npt.NDArray[np.floating],
         water_cost: npt.NDArray[np.floating],
     ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
@@ -4876,7 +4876,7 @@ class CropFarmers(AgentBaseClass):
         return energy_cost_adaptation_gain, water_cost_adaptation_gain
 
     def yield_ratio_to_profit(
-        self, yield_ratios: np.ndarray, crops_mask: np.ndarray, nan_array: np.ndarray
+        self, yield_ratios: np.ndarray, crops_mask: DynamicArray, nan_array: np.ndarray
     ) -> np.ndarray:
         """Convert yield ratios to monetary profit values.
 
@@ -5635,96 +5635,96 @@ class CropFarmers(AgentBaseClass):
         assert (self.HRU.var.land_owners[HRUs_farmer_to_be_removed] == -1).all()
         return HRUs_farmer_to_be_removed
 
-    def add_agent(
-        self,
-        indices: ArrayInt32,
-        values: dict[str, object] = {
-            "risk_aversion": 1,
-            "interest_rate": 1,
-            "discount_rate": 1,
-            "adapted": False,
-            "time_adapted": False,
-            "SEUT_no_adapt": 1,
-            "EUT_no_adapt": 1,
-            "crops": -1,
-            "irrigation_source": -1,
-            "well_depth": -1,
-            "channel_abstraction_m3_by_farmer": 0,
-            "reservoir_abstraction_m3_by_farmer": 0,
-            "groundwater_abstraction_m3_by_farmer": 0,
-            "yearly_abstraction_m3_by_farmer": 0,
-            "total_crop_age": 0,
-            "per_harvest_yield_ratio": 0,
-            "per_harvest_SPEI": 0,
-            "monthly_SPEI": 0,
-            "disposable_income": 0,
-            "household_size": 2,
-            "yield_ratios_drought_event": 1,
-            "risk_perception": 1,
-            "drought_timer": 1,
-            "yearly_SPEI_probability": 1,
-            "yearly_yield_ratio": 1,
-            "yearly_income": 1,
-            "yearly_potential_income": 1,
-            "farmer_yield_probability_relation": 1,
-            "irrigation_efficiency": 0.9,
-            "base_management_yield_ratio": 1,
-            "yield_ratio_management": 1,
-            "annual_costs_all_adaptations": 1,
-            "farmer_class": 1,
-            "water_use": 1,
-            "GEV_parameters": 1,
-            "risk_perc_min": 1,
-            "risk_perc_max": 1,
-            "risk_decr": 1,
-            "decision_horizon": 1,
-        },
-    ) -> None:
-        """Add a new farmer at given HRU indices and initialize arrays.
+    # def add_agent(
+    #     self,
+    #     indices: ArrayInt32,
+    #     values: dict[str, object] = {
+    #         "risk_aversion": 1,
+    #         "interest_rate": 1,
+    #         "discount_rate": 1,
+    #         "adapted": False,
+    #         "time_adapted": False,
+    #         "SEUT_no_adapt": 1,
+    #         "EUT_no_adapt": 1,
+    #         "crops": -1,
+    #         "irrigation_source": -1,
+    #         "well_depth": -1,
+    #         "channel_abstraction_m3_by_farmer": 0,
+    #         "reservoir_abstraction_m3_by_farmer": 0,
+    #         "groundwater_abstraction_m3_by_farmer": 0,
+    #         "yearly_abstraction_m3_by_farmer": 0,
+    #         "total_crop_age": 0,
+    #         "per_harvest_yield_ratio": 0,
+    #         "per_harvest_SPEI": 0,
+    #         "monthly_SPEI": 0,
+    #         "disposable_income": 0,
+    #         "household_size": 2,
+    #         "yield_ratios_drought_event": 1,
+    #         "risk_perception": 1,
+    #         "drought_timer": 1,
+    #         "yearly_SPEI_probability": 1,
+    #         "yearly_yield_ratio": 1,
+    #         "yearly_income": 1,
+    #         "yearly_potential_income": 1,
+    #         "farmer_yield_probability_relation": 1,
+    #         "irrigation_efficiency": 0.9,
+    #         "base_management_yield_ratio": 1,
+    #         "yield_ratio_management": 1,
+    #         "annual_costs_all_adaptations": 1,
+    #         "farmer_class": 1,
+    #         "water_use": 1,
+    #         "GEV_parameters": 1,
+    #         "risk_perc_min": 1,
+    #         "risk_perc_max": 1,
+    #         "risk_decr": 1,
+    #         "decision_horizon": 1,
+    #     },
+    # ) -> None:
+    #     """Add a new farmer at given HRU indices and initialize arrays.
 
-        Args:
-            indices: Row/column index arrays that
-                define the HRUs to assign to the new farmer.
-            values: Per-array initialization values
-                keyed by agent array name.
-        """
-        HRU = self.model.hydrology.split(indices)
-        assert self.HRU.var.land_owners[HRU] == -1, "There is already a farmer here."
-        self.HRU.var.land_owners[HRU] = self.var.n
+    #     Args:
+    #         indices: Row/column index arrays that
+    #             define the HRUs to assign to the new farmer.
+    #         values: Per-array initialization values
+    #             keyed by agent array name.
+    #     """
+    #     HRU = self.model.hydrology.split(indices)
+    #     assert self.HRU.var.land_owners[HRU] == -1, "There is already a farmer here."
+    #     self.HRU.var.land_owners[HRU] = self.var.n
 
-        pixels = np.column_stack(indices)[:, [1, 0]]
-        agent_location = np.mean(
-            pixels_to_coords(pixels + 0.5, self.HRU.gt), axis=0
-        )  # +.5 to use center of pixels
+    #     pixels = np.column_stack(indices)[:, [1, 0]]
+    #     agent_location = np.mean(
+    #         pixels_to_coords(pixels + 0.5, self.HRU.gt), axis=0
+    #     )  # +.5 to use center of pixels
 
-        self.var.n += 1  # increment number of agents
-        for name, agent_array in self.agent_arrays.items():
-            agent_array.n += 1
-            if name == "locations":
-                agent_array[self.var.n - 1] = agent_location
-            elif name == "elevation":
-                agent_array[self.var.n - 1] = self.var.elevation_subgrid.sample_coords(
-                    np.expand_dims(agent_location, axis=0)
-                )
-            elif name == "region_id":
-                agent_array[self.var.n - 1] = self.var.subdistrict_map.sample_coords(
-                    np.expand_dims(agent_location, axis=0)
-                )
-            elif name == "field_indices_by_farmer":
-                # TODO: Speed up field index updating.
-                self.update_field_indices()
-            else:
-                agent_array[self.var.n - 1] = values[name]
+    #     self.var.n += 1  # increment number of agents
+    #     for name, agent_array in self.agent_arrays.items():
+    #         agent_array.n += 1
+    #         if name == "locations":
+    #             agent_array[self.var.n - 1] = agent_location
+    #         elif name == "elevation":
+    #             agent_array[self.var.n - 1] = self.var.elevation_subgrid.sample_coords(
+    #                 np.expand_dims(agent_location, axis=0)
+    #             )
+    #         elif name == "region_id":
+    #             agent_array[self.var.n - 1] = self.var.subdistrict_map.sample_coords(
+    #                 np.expand_dims(agent_location, axis=0)
+    #             )
+    #         elif name == "field_indices_by_farmer":
+    #             # TODO: Speed up field index updating.
+    #             self.update_field_indices()
+    #         else:
+    #             agent_array[self.var.n - 1] = values[name]
 
     @property
     def n(self) -> int:
         """Number of farmer agents."""
-        return self.var._n
+        return self.var.n
 
     @n.setter
     def n(self, value: int) -> None:
         """Set the number of farmer agents."""
-        self.var._n = value
+        self.var.n = value
 
     def get_farmer_elevation(self) -> DynamicArray:
         """Compute mean elevation per farmer.

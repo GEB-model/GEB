@@ -114,7 +114,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     binding.load_library_permanently(str(tbb_library))
 
     # set threading layer
-    config.THREADING_LAYER = "tbb"
+    config.THREADING_LAYER = "tbb"  # ty:ignore[unresolved-attribute]
 
     # test import
     from numba.np.ufunc import tbbpool  # noqa: F401 # ty: ignore[unresolved-import]

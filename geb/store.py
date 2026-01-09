@@ -301,7 +301,7 @@ class DynamicArray:
         types: tuple[Any],
         args: tuple[Any],
         kwargs: dict[str, Any],
-    ) -> Any:
+    ) -> Any | DynamicArray:
         """
         Delegate NumPy __array_function__ calls to the underlying NumPy array.
 
@@ -325,7 +325,14 @@ class DynamicArray:
         # Explicitly call __array_function__ of the underlying NumPy array
         modified_args = tuple(recursive_convert(arg) for arg in args)
 
-        return self._data.__array_function__(func, (np.ndarray,), modified_args, kwargs)
+        result = self._data.__array_function__(
+            func, (np.ndarray,), modified_args, kwargs
+        )
+
+        if func == np.where and len(args) == 3:
+            return self.__class__(input_array=result, max_n=self._data.shape[0])
+
+        return result
 
     def __setitem__(
         self,
@@ -341,10 +348,49 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
+    @overload
+    def __getitem__(
+        self, key: tuple[slice[None, int | None, int | None], *Any]
+    ) -> DynamicArray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[slice[int, int, int], *Any]) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: slice[None, int | None, int | None]) -> DynamicArray: ...
+
+    @overload
+    def __getitem__(self, key: slice[int, int, int | None]) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: list) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: DynamicArray) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: int) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(
+        self, key: NDArray[np.integer] | NDArray[np.bool_]
+    ) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[int, ...]) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(
+        self, key: tuple[NDArray[np.integer] | NDArray[np.bool_], ...]
+    ) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[Any, ...]) -> DynamicArray | np.ndarray: ...
+
     def __getitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
-    ) -> DynamicArray | np.ndarray:
+        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_] | list,
+    ) -> DynamicArray | NDArray[Any]:
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -771,7 +817,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: object, operation: str) -> Any:
+    def _compare(self, value: Any, operation: str) -> DynamicArray:
         """
         Helper for comparison operations.
 
@@ -796,9 +842,12 @@ class DynamicArray:
     def __eq__(self, value: DynamicArray) -> DynamicArray: ...
 
     @overload
+    def __eq__(self, value: Any) -> DynamicArray: ...
+
+    @overload
     def __eq__(self, value: object) -> Any: ...
 
-    def __eq__(self, value: object) -> Any:
+    def __eq__(self, value: object | DynamicArray | int) -> Any | DynamicArray:
         """Equality comparison.
 
         Args:
@@ -870,7 +919,7 @@ class DynamicArray:
         """
         return self._compare(value, "__le__")
 
-    def __and__(self, other: npt.NDArray[Any]) -> DynamicArray:
+    def __and__(self, other: npt.NDArray[Any] | DynamicArray) -> DynamicArray:
         """Bitwise and / logical and operator.
 
         Returns:
@@ -878,7 +927,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__and__")
 
-    def __or__(self, other: npt.NDArray[Any]) -> DynamicArray:
+    def __or__(self, other: npt.NDArray[Any] | DynamicArray) -> DynamicArray:
         """Bitwise or / logical or operator.
 
         Returns:

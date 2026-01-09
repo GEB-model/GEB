@@ -553,7 +553,7 @@ class Households(AgentBaseClass):
                 np.random.random() < 0.1
             ):  # generate random flood (not based on actual modeled flood data)
                 print("Flood event!")
-                self.var.years_since_last_flood.data = 0
+                self.var.years_since_last_flood[:] = 0
 
         self.var.risk_perception.data = (
             self.var.risk_perc_max
