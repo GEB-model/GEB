@@ -17,7 +17,7 @@ In each timestep, the groundwater module interacts with the rest of the model th
 
 *   **Recharge**: Water entering the groundwater table from the lowest soil layer (provided by the [Land Surface](landsurface.md) module).
 *   **Abstraction**: Water pumped from the aquifer for irrigation, industry, or domestic use (provided by the [Water Demand](water_demand.md) module).
-*   **Baseflow**: Water flowing from the aquifer into the river channels, maintaining flow during dry periods (passed to the [Runoff Concentration](routing.md) and [Routing](routing.md) modules).
+*   **Baseflow**: Water flowing from the aquifer into the river channels, maintaining flow during dry periods (passed to the [Runoff Concentration](runoff_concentration.md) and [Routing](routing.md) modules).
 *   **Capillary Rise**: Upward movement of water from the water table to the soil zone (passed back to the [Land Surface](landsurface.md) module for the *next* timestep).
 
 ## Groundwater Step
