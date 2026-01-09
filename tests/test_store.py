@@ -458,6 +458,7 @@ def test_save_and_restore(array: DynamicArray) -> None:
     assert (array.extra_dims_names == array2.extra_dims_names).all()
     os.remove(tmp_folder / "test.storearray.npz")
 
+
 def test_dynamic_array_where() -> None:
     """Test np.where usage with DynamicArray.
 
