@@ -29,7 +29,7 @@ The LDD is a 2D array where each cell contains a value representing the directio
 </table>
 
 *   **1-4, 6-9**: Direction of flow to one of the 8 neighbors.
-*   **5**: Represents a **Pit** or sink (locally lowest point), where flow ends or leaves the domain (e.g., the ocean).
+*   **5**: Represents a pit or sink (locally lowest point), where flow ends or leaves the domain (e.g., the ocean).
 *   **255**: Undefined/No data.
 
 ## General Framework
@@ -79,8 +79,6 @@ GEB currently supports two routing algorithms. Kinematic wave is the best one fo
 
 The `Kinematic Wave` router approximates the full Saint-Venant equations [@chow1988applied] by assuming that the friction slope equals the bed slope. This simplification implies that there is no backwater effect and that flow is always moving downstream.
 
-#### Governing Equations
-
 The method couples the continuity equation (conservation of mass):
 
 $$ \frac{\partial Q}{\partial x} + \frac{\partial A}{\partial t} = q_{lat} $$
@@ -96,8 +94,6 @@ Where:
 *   $q_{lat}$ is lateral inflow per unit length [$m^2/s$].
 *   $t$ is time [$s$] and $x$ is distance along the river [$m$].
 *   $\alpha$ and $\beta$ are parameters related to channel geometry and roughness. For a wide rectangular channel using Manning's equation, $\beta = 0.6$ and $\alpha = (n \cdot P^{2/3} / \sqrt{S})^{0.6}$, where $n$ is Manning's roughness, $P$ is wetted perimeter, and $S$ is the slope.
-
-#### Numerical Solution
 
 Substituting the momentum equation into the continuity equation yields a non-linear Partial Differential Equation (PDE) for $Q$. GEB discretizes this equation using a fully implicit finite difference scheme over a generic cell of length $\Delta x$:
 
@@ -118,8 +114,6 @@ Since this equation is non-linear in $Q_{new}$, it is solved iteratively using t
 ### Accuflux (Simple Accumulation)
 
 The `Accuflux` router is a simple accumulation scheme. It assumes that all water entering a river cell (from upstream or sideflow) flows out of that cell within the same timestep. This algorithm is mostly used for debugging and testing purposes because it is very easy to close the water balance.
-
-**Mechanism:**
 
 For every cell (processed from upstream to downstream):
 
