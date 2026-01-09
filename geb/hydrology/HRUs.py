@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -121,7 +121,7 @@ def to_grid(
     Returns:
         ouput_data: Data converted to grid.
     """
-    output_data = np.empty_like(data, shape=grid_to_HRU.size)
+    output_data = cast(T_ArrayNumber, np.empty(grid_to_HRU.size, dtype=data.dtype))
 
     assert grid_to_HRU[0] != 0, (
         "First value of grid_to_HRU cannot be 0. This would mean that the first HRU is empty."
