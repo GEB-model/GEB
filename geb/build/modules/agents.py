@@ -12,6 +12,7 @@ from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 
 from geb.build.methods import build_method
+from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
 from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
@@ -2432,8 +2433,13 @@ class Agents(BuildModelBase):
 
         unique_regions = self.geom["regions"]
 
-        data = self.donate_and_receive_crop_prices(
-            donor_data, unique_regions, GLOBIOM_regions
+        data = donate_and_receive_crop_prices(
+            donor_data,
+            unique_regions,
+            GLOBIOM_regions,
+            self.data_catalog,
+            self.geom["global_countries"],
+            self.geom["regions"],
         )
 
         # Map to corresponding region
