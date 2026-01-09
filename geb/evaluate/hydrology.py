@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import os
-import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -1409,7 +1408,7 @@ class Hydrology:
 
         def parse_flood_forecast_initialisation(
             filename: str,
-        ) -> tuple[str | None, str | None, str, str, str] | None:
+        ) -> tuple[str | None, str | None, str, str, str]:
             """Parse flood map filename to extract components.
 
             Expected format: YYYYMMDDTHHMMSS - MEMBER - EVENT_START - EVENT_END.zarr
@@ -1419,6 +1418,9 @@ class Hydrology:
 
             Returns:
                 Tuple containing (forecast_init, member, event_start, event_end, event_name)
+
+            Raises:
+                ValueError: If the filename does not match the expected format.
 
             """
             # Remove .zarr extension
@@ -1448,12 +1450,9 @@ class Hydrology:
                 event_name = f"{event_start} - {event_end}"
 
             else:
-                # Warn and skip file
-                warnings.warn(
-                    f"Skipping file '{filename}': does not match expected flood map format.",
-                    RuntimeWarning,
+                raise ValueError(
+                    f"Filename '{filename}' does not match expected flood map format."
                 )
-                return
 
             return forecast_init, member, event_start, event_end, event_name
 

@@ -31,9 +31,11 @@ from geb.workflows.raster import (
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
     M49_to_ISO3,
-    setup_donor_countries,
 )
-from ..workflows.crop_calendars import parse_MIRCA2000_crop_calendar
+from ..workflows.crop_calendars import (
+    donate_and_receive_crop_prices,
+    parse_MIRCA2000_crop_calendar,
+)
 from ..workflows.farmers import get_farm_locations
 from .base import BuildModelBase
 
@@ -294,8 +296,13 @@ class Crops(BuildModelBase):
                 (slice(None), slice(self.start_date.year, self.end_date.year)), :
             ]
 
-            data = self.donate_and_receive_crop_prices(
-                donor_data, unique_regions, GLOBIOM_regions
+            data = donate_and_receive_crop_prices(
+                donor_data,
+                unique_regions,
+                GLOBIOM_regions,
+                self.data_catalog,
+                self.geom["global_countries"],
+                self.geom["regions"],
             )
 
             # exand data to include all data empty rows from start to end year
@@ -500,155 +507,6 @@ class Crops(BuildModelBase):
             )
 
         return parsed_crop_prices
-
-    def donate_and_receive_crop_prices(
-        self,
-        donor_data: pd.DataFrame,
-        recipient_regions: pd.DataFrame,
-        GLOBIOM_regions: pd.DataFrame,
-    ) -> pd.DataFrame:
-        """Gets crop prices from other regions to fill missing data.
-
-        If there are multiple countries in one selected basin, where one country has prices for a certain crop,
-        but the other does not, this gives issues. This function adjusts crop data for those countries by
-        filling in missing values using data from nearby regions and PPP conversion rates. In case crop data
-        is missing for a country, and is also not in countries in the same GLOBIOM dataset, it uses the prices
-        for that crop from the country in the model region with least nan values.
-
-        Args:
-            donor_data: A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'.
-                The DataFrame contains crop prices for different regions.
-            recipient_regions: DataFrame containing recipient region information with 'region_id' and 'ISO3' columns.
-            GLOBIOM_regions: DataFrame containing GLOBIOM region mapping with 'ISO3' and 'Region37' columns.
-
-        Returns:
-            The updated DataFrame with missing crop data filled in using PPP conversion rates from nearby regions.
-
-        Notes:
-            The function performs the following steps:
-            1. Identifies columns where all values are NaN for each country and stores this information.
-            2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
-            3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
-            4. Drops the 'ISO3' column before returning the updated DataFrame.
-
-            Some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)).
-            For these countries, we cannot assess which donor we should take, and the country_data will be
-            empty for these countries. Therefore, we first estimate the most similar country based on the
-            setup_donor_countries function. The ISO3 of these countries will be replaced by the ISO3 of the donor.
-            However, the region_id will remain the same, so that only the data is used from the donor,
-            but still the original region is used.
-        """
-        # create a copy of the data to avoid using data that was adjusted in this function
-        data_out = pd.DataFrame()
-
-        for _, region in recipient_regions.iterrows():
-            ISO3 = region["ISO3"]
-            region_id = region["region_id"]
-            self.logger.info(f"Processing region {region_id}")
-
-            # Filter the data for the current country
-            country_data = donor_data[donor_data["ISO3"] == ISO3]
-
-            if country_data.empty:  # happens if country is not in GLOBIOM regions dataset (e.g. Kosovo). Fill these countries using data from a country that is in the GLOBIOM regions dataset, using the regular donor countries setup.
-                countries_with_donor_data = donor_data.ISO3.unique().tolist()
-                donor_countries = setup_donor_countries(
-                    self.data_catalog,
-                    self.geom["global_countries"],
-                    countries_with_donor_data,
-                    alternative_countries=self.geom["regions"]["ISO3"]
-                    .unique()
-                    .tolist(),
-                )
-                ISO3 = donor_countries.get(ISO3, None)
-                self.logger.info(
-                    f"Missing price donor data for {region['ISO3']}, using donor country {ISO3}. This country is NOT in the GLOBIOM regions dataset"
-                )
-                assert ISO3 is not None, (
-                    f"Could not find a donor country for {region['ISO3']}. Please check the donor countries setup."
-                )
-
-                country_data = donor_data[donor_data["ISO3"] == ISO3]
-
-                assert not country_data.empty, (
-                    f"Donor country {ISO3} has no data for {region['ISO3']}. Please check the donor countries setup."
-                )
-                # note: it can be that a country is donor for another in the first donor step (outside this function) (e.g. Isreal for cyprus), and that here cyprus is again selected as a donor country for another country (e.g. Liechtenstein)
-
-            GLOBIOM_region = GLOBIOM_regions.loc[
-                GLOBIOM_regions["ISO3"] == ISO3, "Region37"
-            ].item()
-
-            assert len(GLOBIOM_region) > 0, (
-                f"GLOBIOM region for {ISO3} is empty. Please check the GLOBIOM regions setup."
-            )
-
-            GLOBIOM_region_countries = GLOBIOM_regions.loc[
-                GLOBIOM_regions["Region37"] == GLOBIOM_region, "ISO3"
-            ]
-
-            for column in country_data.columns:
-                if country_data[column].isna().all():
-                    donor_data_region = donor_data.loc[
-                        donor_data["ISO3"].isin(GLOBIOM_region_countries), column
-                    ]
-
-                    # Check if data is available within the GLOBIOM region
-                    non_na_values = donor_data_region.groupby("ISO3").count()
-
-                    if (
-                        non_na_values.max() > 0
-                    ):  # if there is at least one non-NaN value
-                        donor_country = non_na_values.idxmax()
-                        donor_data_country = donor_data_region[donor_country]
-
-                    else:
-                        # if no data is available, take the country with most non-nan values
-                        donor_data_crop = donor_data[column]
-                        donor_data_crop = donor_data_crop.reset_index()
-                        donor_data_crop = donor_data_crop.set_index("year")
-                        amount_of_non_na = donor_data_crop.groupby("ISO3").count()
-                        donor_country = amount_of_non_na[column].idxmax()
-                        donor_data_country = donor_data_crop.loc[
-                            donor_data_crop["ISO3"] == donor_country, column
-                        ]
-
-                    new_data = pd.DataFrame(
-                        donor_data_country.values,
-                        index=pd.MultiIndex.from_product(
-                            [[region["region_id"]], donor_data_country.index],
-                            names=["region_id", "year"],
-                        ),
-                        columns=np.array([donor_data_country.name]),
-                    )
-
-                    if data_out.empty:
-                        data_out = new_data
-                    else:
-                        data_out = data_out.combine_first(new_data)
-
-                else:
-                    new_data = pd.DataFrame(
-                        country_data[column].values,
-                        index=pd.MultiIndex.from_product(
-                            [
-                                [region["region_id"]],
-                                country_data.droplevel(level=0).index,
-                            ],
-                            names=["region_id", "year"],
-                        ),
-                        columns=np.array([column]),
-                    )
-
-                    if data_out.empty:
-                        data_out = new_data
-                    else:
-                        data_out = data_out.combine_first(new_data)
-
-        data_out = data_out.drop(columns=["ISO3"])
-        data_out = data_out.dropna(axis=1, how="all")
-        data_out = data_out.dropna(axis=0, how="all")
-
-        return data_out
 
     def assign_crop_price_inflation(
         self, costs: pd.DataFrame, unique_regions: pd.DataFrame

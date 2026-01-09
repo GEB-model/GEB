@@ -830,6 +830,10 @@ class LandSurface(Module):
             "parameters"
         ]["saturated_hydraulic_conductivity_multiplier"]  # calibration parameter
 
+        self.HRU.var.soil_temperature_C: TwoDArrayFloat32 = np.full_like(
+            self.HRU.var.soil_layer_height, 0.0, dtype=np.float32
+        )
+
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
         natural_crop_groups: ArrayFloat32 = self.hydrology.grid.load(
