@@ -15,6 +15,7 @@ from geb.agents.workflows.crop_farmers import (
     withdraw_groundwater,
     withdraw_reservoir,
 )
+from geb.store import DynamicArray
 
 
 def test_cumulative_mean() -> None:
@@ -24,10 +25,8 @@ def test_cumulative_mean() -> None:
     assert mean == 4.5
 
     # test normal operation
-    cumulative_mean_, cumulative_count = (
-        np.array([0], dtype=np.float32),
-        np.array([0], dtype=np.float32),
-    )
+    cumulative_mean_ = DynamicArray(np.array([0], dtype=np.float32))
+    cumulative_count = DynamicArray(np.array([0], dtype=np.float32))
     for item in a:
         cumulative_mean(cumulative_mean_, cumulative_count, item)
 
@@ -45,8 +44,8 @@ def test_cumulative_mean() -> None:
 
 def test_shift_and_update() -> None:
     """Test the shift_and_update function."""
-    a = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]])
-    shift_and_update(a, np.array([9, 10, 11]))
+    a = DynamicArray(np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]]))
+    shift_and_update(a, DynamicArray(np.array([9, 10, 11])))
     assert np.array_equal(a, np.array([[9, 0, 1], [10, 3, 4], [11, 6, 7]]))
 
 
@@ -860,8 +859,8 @@ def test_withdraw_reservoir_maximum_abstraction() -> None:
 
 def test_advance_crop_rotation_year() -> None:
     """Test the advance_crop_rotation_year function."""
-    current_crop_calendar_rotation_year_index = np.array([0, 1, 0, 6, 0])
-    crop_calendar_rotation_years = np.array([1, 2, 2, 7, 10])
+    current_crop_calendar_rotation_year_index = DynamicArray(np.array([0, 1, 0, 6, 0]))
+    crop_calendar_rotation_years = DynamicArray(np.array([1, 2, 2, 7, 10]))
     advance_crop_rotation_year(
         current_crop_calendar_rotation_year_index=current_crop_calendar_rotation_year_index,
         crop_calendar_rotation_years=crop_calendar_rotation_years,

@@ -426,7 +426,7 @@ def prepare_agent_group(
     name: str,
     config: dict,
     time: ArrayInt64,
-    example_value: np.ndarray[Any] | int | float | bool | np.floating | np.integer,
+    example_value: np.ndarray[Any] | int | float | bool,
     chunk_target_size_bytes: int,
     compression_level: int,
 ) -> None:
@@ -764,8 +764,9 @@ class Reporter:
             for v in value:
                 assert not np.isnan(value) and not np.isinf(v)
         elif np.isscalar(value):
-            value = value.item()
             assert not np.isnan(value) and not np.isinf(value)
+            if isinstance(value, (np.floating, np.integer, np.bool_)):
+                value = value.item()
 
         self.process_value(module_name, name, value, config)
 
@@ -773,7 +774,7 @@ class Reporter:
         self,
         module_name: str,
         name: str,
-        value: np.ndarray | int | float | np.floating | np.integer,
+        value: np.ndarray | int | float | bool,
         config: dict,
     ) -> None:
         """Exports an array of values to the export folder.

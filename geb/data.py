@@ -114,7 +114,7 @@ def load_regional_crop_data_from_dict(
         raise ValueError(f"Unknown type: {timedata['type']}")
 
 
-def load_crop_data(files: dict[str, dict[str, Path]]) -> tuple[dict, pd.DataFrame]:
+def load_crop_data(files: dict[str, dict[str, Path]]) -> tuple[str, pd.DataFrame]:
     """Read csv-file of values for crop water depletion.
 
     Returns:

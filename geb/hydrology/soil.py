@@ -807,3 +807,43 @@ def kv_cosby(
     kv = kv / (1000 * 86400)  # convert to m/s
 
     return kv
+
+
+def get_heat_capacity(
+    sand: np.ndarray[Shape, np.dtype[np.float32]],
+    silt: np.ndarray[Shape, np.dtype[np.float32]],
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    theta_v: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
+    """Calculate the soil heat capacity [J/(m3·K)] per Campbell (1985).
+
+    Args:
+        sand: Sand fraction [0-1].
+        silt: Silt fraction [0-1].
+        clay: Clay fraction [0-1].
+        theta_v: Volumetric water content [m3/m3].
+        bulk_density: Soil bulk density [kg/m3].
+
+    Returns:
+        The soil volumetric heat capacity [J/(m3·K)].
+    """
+    # Constants for volumetric heat capacity [J/(m3·K)]
+    C_SAND = np.float32(2.13e6)
+    C_SILT = np.float32(2.13e6)
+    C_CLAY = np.float32(2.13e6)
+    C_WATER = np.float32(4.18e6)
+
+    # Particle density of minerals [kg/m3]
+    RHO_MINERAL = np.float32(2650.0)
+
+    # Calculate total volume fraction of solids from bulk density
+    phi_s = bulk_density / RHO_MINERAL
+
+    # Calculate volumetric heat capacity
+    # Weighting the solid fraction by the texture distribution
+    heat_capacity = phi_s * (sand * C_SAND + silt * C_SILT + clay * C_CLAY) + (
+        theta_v * C_WATER
+    )
+
+    return heat_capacity.astype(np.float32)
