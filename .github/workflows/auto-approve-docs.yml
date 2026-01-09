@@ -23,46 +23,12 @@ jobs:
 
       - name: Check for changes outside of docs folder
         id: check_changes
-        run: |
-          # Fetch the comparison target (base branch)
-          git fetch origin ${{ github.base_ref }}
-          
-          # Get list of changed files between the PR head and the base branch
-          # Using --name-only to just get filenames
-          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD)
-          
-          echo "Changed files:"
-          echo "$CHANGED_FILES"
-          
-          # Check if any file is NOT in the docs/ folder or mkdocs.yml
-          # We assume any file starting with docs/ or mkdocs.yml is safe.
-          
-          NON_DOCS_CHANGES=false
-          
-          if [ -z "$CHANGED_FILES" ]; then
-            echo "No changed files found."
-            NON_DOCS_CHANGES=true # Treat as "change outside docs" (or effectively no change) to avoid auto-approving empty stuffs or errors, though git diff shouldn't be empty on a PR usually.
-          fi
-          
-          while IFS= read -r file; do
-            if [[ -z "$file" ]]; then continue; fi
-            if [[ "$file" != docs/* && "$file" != "mkdocs.yml" ]]; then
-              echo "Found file outside docs/ and not mkdocs.yml: $file"
-              NON_DOCS_CHANGES=true
-              break
-            fi
-          done <<< "$CHANGED_FILES"
-          
-          if [ "$NON_DOCS_CHANGES" = false ]; then
-            echo "Only docs/ files or mkdocs.yml changed."
-            echo "should_approve=true" >> $GITHUB_OUTPUT
-          else
-            echo "Changes outside docs/ and mkdocs.yml detected."
-            echo "should_approve=false" >> $GITHUB_OUTPUT
-          fi
+        uses: ./.github/actions/check-docs-changes
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Approve Pull Request
-        if: steps.check_changes.outputs.should_approve == 'true'
+        if: steps.check_changes.outputs.only_docs_changed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
