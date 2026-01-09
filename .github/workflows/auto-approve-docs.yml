@@ -34,8 +34,8 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
           
-          # Check if any file is NOT in the docs/ folder
-          # We assume any file starting with docs/ is safe.
+          # Check if any file is NOT in the docs/ folder or mkdocs.yml
+          # We assume any file starting with docs/ or mkdocs.yml is safe.
           
           NON_DOCS_CHANGES=false
           
@@ -46,18 +46,18 @@ jobs:
           
           while IFS= read -r file; do
             if [[ -z "$file" ]]; then continue; fi
-            if [[ "$file" != docs/* ]]; then
-              echo "Found file outside docs/: $file"
+            if [[ "$file" != docs/* && "$file" != "mkdocs.yml" ]]; then
+              echo "Found file outside docs/ and not mkdocs.yml: $file"
               NON_DOCS_CHANGES=true
               break
             fi
           done <<< "$CHANGED_FILES"
           
           if [ "$NON_DOCS_CHANGES" = false ]; then
-            echo "Only docs/ files changed."
+            echo "Only docs/ files or mkdocs.yml changed."
             echo "should_approve=true" >> $GITHUB_OUTPUT
           else
-            echo "Changes outside docs/ detected."
+            echo "Changes outside docs/ and mkdocs.yml detected."
             echo "should_approve=false" >> $GITHUB_OUTPUT
           fi
 
