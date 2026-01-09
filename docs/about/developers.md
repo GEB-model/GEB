@@ -10,6 +10,7 @@
 - [Carolina Carral](https://vu.nl/en/research/scientists/carolina-ferman-carral)
 - [Roy Pontman](https://research.vu.nl/en/persons/roy-pontman/)
 - [Lisanne van Amelsvoort](https://research.vu.nl/en/persons/lisanne-van-amelsvoort/)
+- [Joshua Kiesel](https://research.vu.nl/en/persons/joshua-kiesel/)
 
 # Grandmasters
 

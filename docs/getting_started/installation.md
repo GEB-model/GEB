@@ -30,6 +30,7 @@ To run SFINCS (the hydrodynamic model), you also need to install Docker (on Wind
 
 - git: if not installed, you can obtain it for example [here](https://git-scm.com/).
 - uv: if not installed, you can find it [here](https://docs.astral.sh/uv/getting-started/installation/). If it is installed, ensure that it is updated using `uv self update`.
+- docker/apptainer: To run SFINCS (the hydrodynamic flood model), you also need to install [Docker](https://www.docker.com) (on Windows) or [Apptainer](https://apptainer.org) (on Linux and Mac OS X).
 
 ### Installation
 
