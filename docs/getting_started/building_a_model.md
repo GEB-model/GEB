@@ -30,6 +30,8 @@ The subbasin option allows you to define your study region based on a hydrologic
 
 - `subbasin`: The subbasin ID of the model. This is the ID of the subbasin in the [MERIT-BASINS dataset](https://www.reachhydro.org/home/params/merit-basins) (version MERIT-Hydro v0.7/v1.0). This can be either a single subbasin or list of subbasins. All upstream basins are automatically included in the model, so only the most downstream subbasin of a specific catchments needs to be specified.
 
+There is a very nice viewer to select the right basin [here](https://cw3e.ucsd.edu/hydro/merit_rivers/merit_rivers_carto.html). You will need the "COMID".
+
 ``` yaml
 general:
   region:
@@ -102,15 +104,21 @@ You can find the personal access token [here](https://earthdatahub.destine.eu/ac
 
 ### Building to model
 
-The `build.yml`-file contains the name of functions that should be run to preprocess the data. You can build the model using the following command, assuming you are in the working directory of the model which contains the `model.yml`-file and `build.yml`-file:
+The `build.yml`-file contains the name of functions that should be run to preprocess the data. The processed data will be stored in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model. You can build the model using the following command, assuming you are in the working directory of the model which contains the `model.yml`-file and `build.yml`-file:
 
-``` python
+```bash
 geb build
 ```
 
-This will preprocess all the data required for the model. The data will be stored in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model. Optionally, you can specify the path to the `build.yml`-file using the `-b/--build-config` flag, and the path to the `model.yml`-file using the `-c/--config` flag. You can find more information about the flags by running:
+Optionally, you can include `--continue` to continue a previously interrupted build.
 
-``` python
+```bash
+geb build --continue
+```
+
+Optionally, you can specify the path to the `build.yml`-file using the `-b/--build-config` flag, and the path to the `model.yml`-file using the `-c/--config` flag. You can find more information about this and other options by running:
+
+```bash
 geb build --help
 ```
 
@@ -118,20 +126,34 @@ geb build --help
 
 It is also possible to update an already existing model by running the following command.
 
-``` python
+```bash
 geb update
 ```
 
 This assumes you have a "update.yml"-file in the working directory. The `update.yml`-file contains the name of functions that should be run to update the data. The functions are defined in the "geb" plugin of HydroMT. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
 
-For example to update the forcing data of the model, your "update.yml"-file could look like this:
+For example to update the forcing data of the model, your "update.yml"-file could look like this, essentially a subset of the build.yml-file:
 
-``` yaml
-setup_forcing_era5:
+```yaml
+setup_forcing:
 ```
 
-Optionally, you can specify the path to the "update.yml"-file using the `-b/--build-config` flag, and the path to the `model.yml`-file using the `-c/--config` flag. You can find more information about the flags by running:
+Optionally, you can specify the path to the "update.yml"-file using the `-b/--build-config` flag, and the path to the `model.yml`-file using the `-c/--config` flag. 
 
-``` python
+You can also run update with the build.yml-file by using the following syntax, running the setup_forcing step from the build.yml (or any other) file.
+
+```bash
+geb update -b build.yml::setup_forcing
+```
+
+To do the same, and also run all subsequent methods, you can add a `+` at the end:
+
+```bash
+geb update -b build.yml::setup_forcing+
+```
+
+You can find more information about these and other options by running:
+
+```bash
 geb update --help
 ```
