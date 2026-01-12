@@ -810,10 +810,11 @@ class Forcing(BuildModelBase):
         min_value: float = -100 + K_to_C
         max_value: float = 60 + K_to_C
 
-        da = da.clip(min_value, max_value)
-
+        # Set spatial (xy) attributes before clipping to ensure consistency
+        # with other forcing setters and avoid unexpected behavior.
         self.set_xy_attrs(da)
 
+        da = da.clip(min_value, max_value)
         offset: float = -15 - K_to_C  # average temperature on earth
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
             da, min_value, max_value, offset=offset, precision=0.1
