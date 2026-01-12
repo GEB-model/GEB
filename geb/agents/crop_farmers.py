@@ -524,7 +524,9 @@ class CropFarmers(AgentBaseClass):
         ).astype(int)
 
         self.var.locations = DynamicArray(
-            pixels_to_coords(pixels + 0.5, self.HRU.gt), max_n=self.var.max_n
+            pixels_to_coords(pixels + 0.5, self.HRU.gt),
+            max_n=self.var.max_n,
+            extra_dims_names=["lonlat"],
         )
 
         self.set_social_network()

@@ -44,7 +44,9 @@ def test_cumulative_mean() -> None:
 
 def test_shift_and_update() -> None:
     """Test the shift_and_update function."""
-    a = DynamicArray(np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]]))
+    a = DynamicArray(
+        np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]]), extra_dims_names=["test"]
+    )
     shift_and_update(a, DynamicArray(np.array([9, 10, 11])))
     assert np.array_equal(a, np.array([[9, 0, 1], [10, 3, 4], [11, 6, 7]]))
 
