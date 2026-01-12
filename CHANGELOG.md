@@ -7,6 +7,7 @@
 - Add a prompt to installation docs for setting up geb using llm agents
 - Update and simplify installation docs
 - Write documentation for spinning up and running models
+- Fix rare out of bounds values in ERA5 data that led to undefined behaviour due to compression and decompression roundtrip
 
 # v1.0.0b9
 - Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
