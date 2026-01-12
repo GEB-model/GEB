@@ -2,11 +2,11 @@
 
 ## Introduction
 
-The groundwater module in GEB simulates the storage and movement of water in the subsurface. It is powered by [MODFLOW 6](https://www.usgs.gov/software/modflow-6-usgs-modular-hydrologic-model), the USGS's modular hydrologic model. This module handles the interaction between the deep soil layers, the river network (baseflow), and human water abstractions.
+The groundwater module in GEB simulates the storage and movement of water in the subsurface, the interaction between the deep soil layers, the river network (baseflow), and human water abstractions. It is uses [MODFLOW 6](https://www.usgs.gov/software/modflow-6-usgs-modular-hydrologic-model), and is connected to the other hydrological model using [xmipy](https://github.com/Deltares/xmipy) allowing in-memory and efficient exchange of data between the models.
 
-## General Framework
+The groundwater domain is discretized into one or more layers. The horizontal resolution matches the GEB grid. Vertical discretization is defined by `layer_boundary_elevation` and `elevation` (topography).
 
-The groundwater module is implemented in the `GroundWater` class, which acts as a wrapper around a `ModFlowSimulation` instance. This creates a tight coupling between GEB and MODFLOW, allowing them to exchange fluxes at every timestep.
+The module is implemented in the `GroundWater` class, which acts as a wrapper around a `ModFlowSimulation` instance. This creates a tight coupling between GEB and MODFLOW, allowing them to exchange fluxes at every timestep.
 
 The module manages the following key state variables:
 
@@ -20,7 +20,7 @@ In each timestep, the groundwater module interacts with the rest of the model th
 *   **Baseflow**: Water flowing from the aquifer into the river channels, maintaining flow during dry periods (passed to the [Runoff Concentration](runoff_concentration.md) and [Routing](routing.md) modules).
 *   **Capillary Rise**: Upward movement of water from the water table to the soil zone (passed back to the [Land Surface](landsurface.md) module for the *next* timestep).
 
-## Groundwater Step
+## Model step
 
 The groundwater simulation proceeds in the following steps during each model timestep:
 
@@ -36,9 +36,6 @@ The groundwater simulation proceeds in the following steps during each model tim
     *   **Drainage/Baseflow**: The exchange between the aquifer and the surface (specifically rivers/drains) is retrieved. In GEB, this drainage is treated as baseflow.
     *   **Capillary Rise**: A portion of the drainage flux is partitioned into capillary rise (water moving back up to the unsaturated zone), though currently, the implementation assigns most drainage to river baseflow.
     *   **State Update**: The updated hydraulic heads are synchronized back to the GEB grid state.
-
-### Discretization
-The groundwater domain is discretized into one or more layers. The horizontal resolution matches the GEB grid. Vertical discretization is defined by `layer_boundary_elevation` and `elevation` (topography).
 
 ## Code
 
