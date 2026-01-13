@@ -290,7 +290,9 @@ class Households(AgentBaseClass):
         # load household locations
         locations = read_array(self.model.files["array"]["agents/households/location"])
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
-        self.var.locations = DynamicArray(locations, max_n=self.max_n)
+        self.var.locations = DynamicArray(
+            locations, max_n=self.max_n, extra_dims_names=["lonlat"]
+        )
 
         region_id = read_array(self.model.files["array"]["agents/households/region_id"])
         self.var.region_id = DynamicArray(region_id, max_n=self.max_n)
@@ -358,7 +360,9 @@ class Households(AgentBaseClass):
         # initiate array for storing the trigger of the warning
         self.var.possible_warning_triggers = ["critical_infrastructure", "water_levels"]
         self.var.warning_trigger = DynamicArray(
-            np.zeros((self.n, len(self.var.possible_warning_triggers)), dtype=bool)
+            np.zeros((self.n, len(self.var.possible_warning_triggers)), dtype=bool),
+            extra_dims_names=["trigger_type"],
+            max_n=self.max_n,
         )
 
         # initiate array for response probability (between 0 and 1)
@@ -369,7 +373,11 @@ class Households(AgentBaseClass):
         )
 
         # initiate array for evacuation status [0=not evacuated, 1=evacuated]
-        self.var.evacuated = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
+        self.var.evacuated = DynamicArray(
+            np.zeros(self.n, np.int32),
+            max_n=self.max_n,
+            extra_dims_names=["evacuation_status"],
+        )
 
         # this list defines the possible measures that can be recommended to/taken by households
         self.var.possible_measures = [
@@ -382,12 +390,14 @@ class Households(AgentBaseClass):
         self.var.recommended_measures = DynamicArray(
             np.zeros((self.n, len(self.var.possible_measures)), dtype=bool),
             max_n=self.max_n,
+            extra_dims_names=["measure_type"],
         )
 
         # initiate array for storing the actions taken by the household
         self.var.actions_taken = DynamicArray(
             np.zeros((self.n, len(self.var.possible_measures)), dtype=bool),
             max_n=self.max_n,
+            extra_dims_names=["measure_type"],
         )
 
         # initiate array with risk perception [dummy data for now]

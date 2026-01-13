@@ -108,9 +108,13 @@ class DynamicArray:
             raise ValueError("Only one of input_array or dtype can be given")
 
         if input_array is not None:
-            assert extra_dims is None, (
-                "extra_dims cannot be given if input_array is given"
-            )
+            if (
+                input_array.ndim > 1
+                and input_array.ndim - 1 != self.extra_dims_names.size
+            ):
+                raise ValueError(
+                    "extra_dims_names must be given if input_array has extra dimensions"
+                )
             assert n is None, "n cannot be given if input_array is given"
             # assert dtype is not object
             assert input_array.dtype != object, "dtype cannot be object"
@@ -293,7 +297,11 @@ class DynamicArray:
         elif not isinstance(inputs[0], DynamicArray):
             return result
         else:
-            return self.__class__(result, max_n=self._data.shape[0])
+            return self.__class__(
+                result,
+                extra_dims_names=self.extra_dims_names,
+                max_n=self._data.shape[0],
+            )
 
     def __array_function__(
         self,
@@ -330,7 +338,11 @@ class DynamicArray:
         )
 
         if func == np.where and len(args) == 3:
-            return self.__class__(input_array=result, max_n=self._data.shape[0])
+            return self.__class__(
+                input_array=result,
+                max_n=self._data.shape[0],
+                extra_dims_names=self.extra_dims_names,
+            )
 
         return result
 
@@ -574,7 +586,11 @@ class DynamicArray:
             self.data = result
             return self
         else:
-            return self.__class__(result, max_n=self._data.shape[0])
+            return self.__class__(
+                result,
+                max_n=self._data.shape[0],
+                extra_dims_names=self.extra_dims_names,
+            )
 
     def __add__(self, other: Any) -> DynamicArray:
         """Addition operator.
@@ -832,11 +848,15 @@ class DynamicArray:
             res = getattr(self.data, operation)(value.data)
             if res is NotImplemented:
                 return NotImplemented
-            return self.__class__(res, max_n=self._data.shape[0])
+            return self.__class__(
+                res, extra_dims_names=self.extra_dims_names, max_n=self._data.shape[0]
+            )
         res = getattr(self.data, operation)(value)
         if res is NotImplemented:
             return NotImplemented
-        return self.__class__(res)
+        return self.__class__(
+            res, extra_dims_names=self.extra_dims_names, max_n=self.max_n
+        )
 
     @overload
     def __eq__(self, value: DynamicArray) -> DynamicArray: ...
