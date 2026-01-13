@@ -1,4 +1,23 @@
-"""This script downloads all CSV files from a specific country folder in the global_exposure_model GitHub repository."""
+"""Utilities to fetch and convert Global Exposure Model (GEM) CSV exposures.
+
+This module provides an adapter that downloads CSV files from the
+`gem/global_exposure_model` GitHub repository for one or more countries,
+processes those CSVs to compute damages per square metre for residential
+(`OCCUPANCY == 'Res'`) assets and writes the aggregated parameters to a
+JSON file named `global_exposure_model.json` next to the adapter's path.
+
+Operations performed by the adapter:
+- Query the GitHub tree API to find CSV file paths for requested countries.
+- Download matching raw CSV files from the `raw.githubusercontent.com` URL.
+- Parse CSVs with pandas, filter residential rows and aggregate by
+    `NAME_1` (admin_1) to compute damage per sqm for several damage columns.
+- Merge results across files and write the final parameter mapping using
+    `geb.workflows.io.write_params`.
+
+The class is intentionally lightweight: network interactions use
+`requests`, temporary files are used for pandas reads, and numerical
+division is guarded against zero area values.
+"""
 
 from __future__ import annotations
 
@@ -41,6 +60,9 @@ class GlobalExposureModel(Adapter):
         Raises:
             ValueError: If no matching country folder is found.
         """
+        # Find folders in the repository tree whose leaf name matches the
+        # requested country (case-insensitive). The GitHub tree entries of
+        # type 'tree' represent directories.
         matching_paths = [
             item["path"]
             for item in tree
@@ -48,17 +70,13 @@ class GlobalExposureModel(Adapter):
             and item["path"].split("/")[-1].lower() == country.lower()
         ]
 
+        # Raise an error if no matching folder is found
         if not matching_paths:
             raise ValueError(f"No folder found for country: {country}")
 
-        print("Found matching country folders:")
-        for p in matching_paths:
-            print(" -", p)
-
-        # ============================
-        # 3. Look for CSV files inside that folder
-        # ============================
-
+        # Search for CSV-like blobs under any matching folder. We further
+        # restrict to paths that include 'exposure_res' (case-insensitive)
+        # to focus on residential exposure result files.
         for item in tree:
             if item["type"] == "blob":
                 for folder in matching_paths:
@@ -68,8 +86,6 @@ class GlobalExposureModel(Adapter):
                     ):
                         csv_files.append(item["path"])
 
-        print(f"\nCSV files found: {len(csv_files)}")
-
     def _download_and_process_csv(self, raw_base: str, csv_files: list[str]) -> None:
         """Download and process CSV files from the repository.
 
@@ -77,10 +93,10 @@ class GlobalExposureModel(Adapter):
             raw_base: The base URL for raw file access in the GitHub repository.
             csv_files: List of CSV file paths to download and process.
         """
+        # Will collect per-file dictionaries mapping admin_1 -> damage metrics
         damages_per_sqm = []
         for csv in csv_files:
             url = raw_base + quote(csv)
-            print("Downloading:", csv)
 
             r = requests.get(url)
             r.raise_for_status()
@@ -90,11 +106,15 @@ class GlobalExposureModel(Adapter):
                 out_path = temp_dir / os.path.basename(csv)
                 with open(out_path, "wb") as f:
                     f.write(r.content)
-                # open the file with pandas process
+                # Read the downloaded CSV into a pandas DataFrame for
+                # processing. Using a temporary file avoids holding raw
+                # bytes in memory and keeps pandas happy with local paths.
                 df = pd.read_csv(out_path)
                 damages_per_sqm.append(self._process_csv(df))
 
-        # merge the dictionaries stored in the list
+        # Merge per-file dictionaries. Later files overwrite earlier keys
+        # for the same admin_1; this behavior matches a simple update
+        # aggregation strategy.
         merged = {}
         for d in damages_per_sqm:
             merged.update(d)
@@ -114,7 +134,8 @@ class GlobalExposureModel(Adapter):
         Returns:
             A dictionary with damages per square meter by admin_1 region.
         """
-        # filter on Res
+        # Only consider residential occupancy rows for damage-per-sqm
+        # calculations.
         result = {}
         df = df[df["OCCUPANCY"] == "Res"]
         for admin_1 in df["NAME_1"].unique():
@@ -128,6 +149,8 @@ class GlobalExposureModel(Adapter):
                 df_admin_1 = df[df["NAME_1"] == admin_1]
                 total_damage = df_admin_1[damage_type].sum()
                 total_area = df_admin_1["TOTAL_AREA_SQM"].sum()
+                # Compute damage per square metre, guarding against
+                # division-by-zero when total_area is zero or missing.
                 result[admin_1][damage_type + "_SQM"] = float(
                     total_damage / total_area if total_area > 0 else 0
                 )
@@ -142,18 +165,22 @@ class GlobalExposureModel(Adapter):
         Returns:
             GlobalExposureModel: The adapter instance with the processed data.
         """
+        # Query the repository tree for all files in the `main` branch so we
+        # can locate country-specific folders without cloning the repo.
         branch = "main"
         tree_url = f"https://api.github.com/repos/gem/global_exposure_model/git/trees/{branch}?recursive=1"
         resp = requests.get(tree_url)  # , headers=HEADERS)
         resp.raise_for_status()
         tree = resp.json()["tree"]
+        # Base URL for fetching raw file contents by path
         raw_base = (
             f"https://raw.githubusercontent.com/gem/global_exposure_model/{branch}/"
         )
 
         csv_files = []
         for country in countries:
-            # clean country name for matching
+            # Normalize the country name to ASCII for matching against
+            # repository folder names (avoids accented-character mismatches).
             country = (
                 unicodedata.normalize("NFKD", country)
                 .encode("ascii", "ignore")
@@ -166,7 +193,7 @@ class GlobalExposureModel(Adapter):
         return self
 
     def read(self, **kwargs: Any) -> dict[str, dict[str, float]]:
-        """Read the dataset into an xarray DataArray.
+        """Read the dataset into a dictionary.
 
         Args:
             **kwargs: Additional keyword arguments to pass to the reader function.
