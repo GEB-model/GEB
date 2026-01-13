@@ -1,6 +1,9 @@
-## Purpose
+## Context
 
-These instructions translate the project's Pull Request checklist into explicit guidance for GitHub Copilot / code generation helpers. Use them when proposing code, docstrings, tests, or PR descriptions.
+If needed, you can find full documentation about the geb model specific for llms here:
+
+navigatable version: https://docs.geb.sh/llms.txt
+full version (requires large context window): https://docs.geb.sh/llms-full.txt
 
 ## Checklist (requirements to satisfy)
 - Documentation: All new or substantially edited functions must have documentation in the project's existing style (see examples below).
@@ -57,9 +60,17 @@ Raises:
 
 - When renaming variables, ensure callsites are updated and tests still pass.
 
+## Environment
+
+- If the environment is not activated (for example when python is not found), you can activate it using `source .venv/bin/activate`.
+
 ## Running code
 
 - Code can be run using uv. For example, run a script `uv run script.py`, or `uv run pytest`.
+
+## Testing the code
+
+- When adapting code, do run the tests to confirm behaviour. If there are no tests, suggest to the user to make those tests. Never run the tests in test_model.py though, unless explictly requested by the user.
 
 ## Checking and formatting
 

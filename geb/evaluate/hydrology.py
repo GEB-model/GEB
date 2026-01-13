@@ -1,9 +1,11 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
+from __future__ import annotations
+
 import base64
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import branca.colormap as cm
 import contextily as ctx
@@ -17,12 +19,17 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
+from matplotlib.cm import get_cmap
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
-from rasterio.crs import CRS
+from rasterio.crs import CRS  # ty:ignore[unresolved-import]
 from rasterio.features import geometry_mask
 from tqdm import tqdm
+
+if TYPE_CHECKING:
+    from geb.evaluate import Evaluate
+    from geb.model import GEBModel
 
 from geb.workflows.io import read_zarr, write_zarr
 
@@ -83,9 +90,10 @@ def calculate_critical_success_index(
 class Hydrology:
     """Implements several functions to evaluate the hydrological module of GEB."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: GEBModel, evaluator: Evaluate) -> None:
         """Initialize the Hydrology evaluation module."""
-        pass
+        self.model = model
+        self.evaluator = evaluator
 
     def plot_discharge(
         self, run_name: str = "default", *args: Any, **kwargs: Any
@@ -136,19 +144,20 @@ class Hydrology:
 
         write_zarr(
             mean_discharge,
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
+            self.evaluator.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
             crs=4326,
         )
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        mean_discharge.plot(ax=ax, cmap="Blues")
+        mean_discharge.plot(ax=ax, cmap="Blues")  # ty:ignore[missing-argument]
 
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
 
         plt.savefig(
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
+            self.evaluator.output_folder_evaluate / "mean_discharge_m3_per_s.png",
+            dpi=300,
         )
 
     def evaluate_discharge(
@@ -156,7 +165,7 @@ class Hydrology:
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
-        include_yearly_plots: bool = False,
+        include_yearly_plots: bool = True,
         correct_Q_obs: bool = False,
     ) -> None:
         """Evaluate the discharge grid from GEB against observations from the Q_obs database.
@@ -184,10 +193,12 @@ class Hydrology:
         """
         #  create folders
         eval_plot_folder: Path = (
-            Path(self.output_folder_evaluate) / "discharge" / "plots"
+            Path(self.evaluator.output_folder_evaluate) / "discharge" / "plots"
         )
         eval_result_folder = (
-            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+            Path(self.evaluator.output_folder_evaluate)
+            / "discharge"
+            / "evaluation_results"
         )
 
         eval_plot_folder.mkdir(parents=True, exist_ok=True)
@@ -214,15 +225,17 @@ class Hydrology:
 
             # Create empty evaluation dataframe with proper structure
             empty_evaluation_df = pd.DataFrame(
-                columns=[
-                    "station_name",
-                    "x",
-                    "y",
-                    "Q_obs_to_GEB_upstream_area_ratio",
-                    "KGE",
-                    "NSE",
-                    "R",
-                ]
+                columns=np.array(
+                    [
+                        "station_name",
+                        "x",
+                        "y",
+                        "Q_obs_to_GEB_upstream_area_ratio",
+                        "KGE",
+                        "NSE",
+                        "R",
+                    ]
+                )
             ).set_index(pd.Index([], name="station_ID"))
 
             # Save empty evaluation metrics as Excel file
@@ -269,7 +282,7 @@ class Hydrology:
         evaluation_per_station: list = []
 
         print("Starting discharge evaluation...")
-
+        print(Q_obs)
         for ID in tqdm(Q_obs.columns):
             # create a discharge timeseries dataframe
             discharge_Q_obs_df = Q_obs[ID]
@@ -520,11 +533,12 @@ class Hydrology:
                 # Making yearly plots for every year in validation_df
                 # Get available years from validation_df (intersection of obs & sim time range)
                 if include_yearly_plots:
-                    years_to_plot = sorted(validation_df.index.year.unique())
-
+                    print("yearly plots!!!")
+                    years_to_plot = sorted(validation_df.index.year.unique())  # ty:ignore[possibly-missing-attribute]
+                    print(years_to_plot)
                     for year in years_to_plot:
                         # Filter data for the current year
-                        one_year_df = validation_df[validation_df.index.year == year]
+                        one_year_df = validation_df[validation_df.index.year == year]  # ty:ignore[possibly-missing-attribute]
 
                         # Skip if there's no data for the year
                         if one_year_df.empty:
@@ -669,19 +683,19 @@ class Hydrology:
             ctx.add_basemap(
                 ax[0],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
             ctx.add_basemap(
                 ax[1],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
             ctx.add_basemap(
                 ax[2],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
 
@@ -755,7 +769,6 @@ class Hydrology:
             )
             plt.show()
             plt.close()
-            # plt.close()
 
         plot_validation_map()
 
@@ -994,7 +1007,9 @@ class Hydrology:
             export: Whether to save the skill score graphs to PNG files.
         """
         eval_result_folder = (
-            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+            Path(self.evaluator.output_folder_evaluate)
+            / "discharge"
+            / "evaluation_results"
         )
         evaluation_df = pd.read_excel(
             eval_result_folder.joinpath("evaluation_metrics.xlsx")
@@ -1367,7 +1382,7 @@ class Hydrology:
 
         if export:
             water_circle.write_image(
-                self.output_folder_evaluate / "water_circle.png", scale=5
+                self.evaluator.output_folder_evaluate / "water_circle.png", scale=5
             )
 
         return water_circle
@@ -1377,10 +1392,10 @@ class Hydrology:
     ) -> None:
         """Evaluate hydrodynamic model performance against flood observations.
 
-        Calculates performance metrics (hit rate, false alarm ratio, critical success index)
-        for flood maps generated by the hydrodynamic model by comparing them against
-        observed flood extent data.
-
+        This method loads modelled flood maps and corresponding observations,
+        computes spatial performance metrics (e.g., hit rate, false alarm ratio,
+        critical success index), and generates diagnostic visualisations and
+        summary outputs for the specified simulation run.
         Args:
             run_name: Name of the simulation run to evaluate.
             *args: Additional positional arguments (ignored).
@@ -1406,6 +1421,7 @@ class Hydrology:
 
             Raises:
                 ValueError: If the filename does not match the expected format.
+
             """
             # Remove .zarr extension
             name_without_ext = filename.replace(".zarr", "")
@@ -1434,9 +1450,8 @@ class Hydrology:
                 event_name = f"{event_start} - {event_end}"
 
             else:
-                # Raise error for files that don't match expected format
                 raise ValueError(
-                    f"Filename '{filename}' does not match expected format for flood map."
+                    f"Filename '{filename}' does not match expected flood map format."
                 )
 
             return forecast_init, member, event_start, event_end, event_name
@@ -1476,22 +1491,18 @@ class Hydrology:
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
-                / "run"
-                / "segments.geoparquet"
-            )
-            region = gpd.read_file(
+                / "group_0"
+                / "rivers.geoparquet"
+            ).to_crs(obs.rio.crs)
+            region = gpd.read_parquet(
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
-                / "run"
-                / "gis"
-                / "region.geojson"
+                / "group_0"
+                / "region.geoparquet"
             ).to_crs(obs.rio.crs)
 
-            # Step 2: Clip out rivers from observations and simulations
-            crs_wgs84 = CRS.from_epsg(4326)
             crs_mercator = CRS.from_epsg(3857)
-            rivers.set_crs(crs_wgs84, inplace=True)
             gdf_mercator = rivers.to_crs(crs_mercator)
             gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
 
@@ -1517,10 +1528,10 @@ class Hydrology:
             )
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
-            # Step 3: Clip out region from observations
+            # Clip out region from observations
             obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
 
-            # Step 4: Optionally clip using extra validation region from config yml
+            # Optionally clip using extra validation region from config yml
             extra_validation_path = self.config["floods"].get(
                 "extra_validation_region", None
             )
@@ -1541,8 +1552,9 @@ class Hydrology:
                 sim_extra_clipped = sim_no_rivers
                 clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
 
-            # Step 5: Mask water depth values
-            hmin = 0.15
+            # Mask water depth values
+            hmin: float = self.config["floods"]["minimum_flood_depth"]
+
             sim_extra_clipped = sim_extra_clipped.raster.reproject_like(obs_region)
             simulation_final = sim_extra_clipped > hmin
             observation_final = obs_region > 0
@@ -1553,7 +1565,7 @@ class Hydrology:
             xmin, ymin, xmax, ymax = observation_final.rio.bounds()
             flood_extent: tuple[float, float, float, float] = (xmin, xmax, ymin, ymax)
 
-            # Step 6: Calculate performance metrics
+            # Calculate performance metrics
             # Compute the arrays first to get concrete values
             sim_final_computed = simulation_final.compute()
             obs_final_computed = observation_final.compute()
@@ -1698,7 +1710,7 @@ class Hydrology:
 
                     # Add a comment about the metrics in the plot
                     legend_bbox = legend.get_window_extent(
-                        renderer=fig.canvas.get_renderer()
+                        renderer=fig.canvas.get_renderer()  # ty:ignore[unresolved-attribute]
                     )
                     legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
 
@@ -2053,9 +2065,34 @@ class Hydrology:
                 f"Forecast performance spread plot saved as: {output_folder / plot_filename}"
             )
 
+        def find_exact_observation_file(
+            event_name: str, files: list[Path]
+        ) -> Path | None:
+            """Find the matching observation file for a flood event.
+
+            The observation files must be named exactly using the event's
+            start and end times (e.g., `20210712T090000 - 20210720T090000.zarr`).
+            Matching is done by comparing the filename stem (without extension)
+            to the event_name.
+
+            Args:
+                event_name: The event identifier in the format
+                    "YYYYMMDDTHHMMSS - YYYYMMDDTHHMMSS".
+                files: List of file paths to available observation files.
+
+            Returns:
+                Path | None: The matching observation file if found, otherwise None.
+            """
+            for f in files:
+                if f.stem == event_name:
+                    return f
+            return None
+
         self.config = self.model.config["hazards"]
 
-        eval_hydrodynamics_folders = Path(self.output_folder_evaluate) / "hydrodynamics"
+        eval_hydrodynamics_folders = (
+            Path(self.evaluator.output_folder_evaluate) / "hydrodynamics"
+        )
 
         eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
 
@@ -2077,18 +2114,30 @@ class Hydrology:
                 flood_maps_folder = self.model.output_folder / "flood_maps"
 
             # check if run file exists, if not, raise an error
-
             if not flood_maps_folder.exists():
                 raise FileNotFoundError(
                     "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
                 )
 
+            # Extract the observation files, find the match with the flood event
+            obs_raw = self.config["floods"]["observation_files"]
+            if isinstance(obs_raw, str):
+                observation_files = [Path(obs_raw)]
+            else:
+                observation_files = [Path(p) for p in obs_raw]
+            obs_file = find_exact_observation_file(event_name, observation_files)
+
             # check if observation file exists, if not, raise an error
-            if not Path(self.config["floods"]["event_observation_file"]).exists():
+            if obs_file is None:
+                print(
+                    f"No observation file for this event: '{event_name}'. Skipping event."
+                )
+                continue
+            if not obs_file.exists():
                 raise FileNotFoundError(
                     "Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
                 )
-            if Path(self.config["floods"]["event_observation_file"]).suffix != ".zarr":
+            if obs_file.suffix != ".zarr":
                 raise ValueError(
                     "Flood observation file is not in the correct format. Please provide a .zarr file."
                 )
@@ -2099,9 +2148,13 @@ class Hydrology:
             # Filter flood_map_files for the current event only
             flood_map_files = []
             for flood_map_path in all_flood_map_files:
-                forecast_init, member, event_start, event_end, parsed_event_name = (
-                    parse_flood_forecast_initialisation(flood_map_path.name)
-                )
+                parsed = parse_flood_forecast_initialisation(flood_map_path.name)
+
+                # Skip files that do not match the expected format
+                if parsed is None:
+                    continue
+
+                file_forecast_init, _, _, _, parsed_event_name = parsed
                 # Check if file matches current event
                 if parsed_event_name == event_name:
                     flood_map_files.append(flood_map_path)
@@ -2119,7 +2172,7 @@ class Hydrology:
                     Path(self.model.output_folder) / "flood_maps" / flood_map_name
                 )
                 calculate_performance_metrics(
-                    observation=self.config["floods"]["event_observation_file"],
+                    observation=str(obs_file),
                     flood_map_path=flood_map_path,
                     output_folder=event_folder,
                     visualization_type="OSM",
@@ -2165,9 +2218,16 @@ class Hydrology:
 
                     matching_flood_maps = []
                     for flood_map_path in flood_map_files:
-                        file_forecast_init, _, _, _, parsed_event_name = (
-                            parse_flood_forecast_initialisation(flood_map_path.name)
+                        parsed = parse_flood_forecast_initialisation(
+                            flood_map_path.name
                         )
+
+                        # Skip files that do not match the expected format
+                        if parsed is None:
+                            continue
+
+                        file_forecast_init, _, _, _, parsed_event_name = parsed
+
                         # Only include files that match current forecast init and event
                         if (
                             file_forecast_init == forecast_init
@@ -2185,7 +2245,7 @@ class Hydrology:
                         print(f"   Evaluating: {flood_map_path.name}")
 
                         metrics = calculate_performance_metrics(
-                            observation=self.config["floods"]["event_observation_file"],
+                            observation=str(obs_file),
                             flood_map_path=flood_map_path,
                             visualization_type="OSM",
                             output_folder=forecast_folder,
@@ -2224,3 +2284,248 @@ class Hydrology:
             print(f"Completed processing event: {event_name}\n")
 
         print("Flood map performance metrics calculated for all events.")
+
+    def water_balance(
+        self,
+        run_name: str,
+        include_spinup: bool,
+        spinup_name: str,
+        *args: Any,
+        export: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        """Create a csv file and plot showing the water balance components.
+
+        Args:
+            run_name: Name of the run to evaluate.
+            include_spinup: Whether to include the spinup run in the evaluation.
+            spinup_name: Name of the spinup run to include in the evaluation.
+            export: Whether to export the water balance plot to a file.
+            *args: ignored.
+            **kwargs: ignored.
+        """
+        folder = self.model.output_folder / "report" / run_name
+
+        def read_csv_with_date_index(
+            folder: Path,
+            module: str,
+            name: str,
+        ) -> pd.Series:
+            """Read a CSV file with a date index.
+
+            Args:
+                folder: Path to the folder containing the CSV file.
+                module: Name of the module (subfolder) containing the CSV file.
+                name: Name of the CSV file (without extension).
+
+            Returns:
+                A pandas Series with the date index and the values from the CSV file.
+
+            """
+            df = pd.read_csv(
+                (folder / module / name).with_suffix(".csv"),
+                index_col=0,
+                parse_dates=True,
+            )[name]
+
+            return df
+
+        # because storage is the storage at the end of the timestep, we need to calculate the change
+        # across the entire simulation period.
+        storage = read_csv_with_date_index(
+            folder, "hydrology", "_water_balance_storage"
+        )
+        storage_change = storage.iloc[-1] - storage.iloc[0]
+
+        rain = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_rain"
+        )
+        snow = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_snow"
+        )
+
+        domestic_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_balance_domestic_water_loss"
+        )
+        industry_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_balance_industry_water_loss"
+        )
+        livestock_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_balance_livestock_water_loss"
+        )
+
+        river_outflow = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_balance_river_outflow"
+        )
+
+        transpiration = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_transpiration"
+        )
+        bare_soil_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_bare_soil_evaporation"
+        )
+        open_water_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_open_water_evaporation"
+        )
+        interception_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_interception_evaporation"
+        )
+        sublimation_or_deposition = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_sublimation_or_deposition"
+        )
+        river_evaporation = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_balance_river_evaporation"
+        )
+        waterbody_evaporation = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_balance_waterbody_evaporation"
+        )
+
+        hierarchy: dict[str, Any] = {
+            "in": {
+                "rain": rain,
+                "snow": snow,
+            },
+            "out": {
+                "evapotranspiration": {
+                    "transpiration": transpiration,
+                    "bare soil evaporation": bare_soil_evaporation,
+                    "open water evaporation": open_water_evaporation,
+                    "interception evaporation": interception_evaporation,
+                    "river evaporation": river_evaporation,
+                    "waterbody evaporation": waterbody_evaporation,
+                },
+                "water demand": {
+                    "domestic water loss": domestic_water_loss,
+                    "industry water loss": industry_water_loss,
+                    "livestock water loss": livestock_water_loss,
+                },
+                "river outflow": river_outflow,
+            },
+            "storage change": abs(storage_change),
+        }
+
+        if sublimation_or_deposition.sum() > 0:
+            hierarchy["in"]["deposition"] = sublimation_or_deposition
+        else:
+            hierarchy["out"]["evapotranspiration"]["sublimation"] = abs(
+                sublimation_or_deposition
+            )
+
+        storage_delta = storage.diff().fillna(
+            0
+        )  # Convert storage change into a Series so it appears in yearly results
+
+        # Replace scalar in hierarchy
+        hierarchy["storage change"] = storage_delta
+
+        flat: dict[str, pd.Series] = {}
+
+        def flatten(prefix: str, obj: dict[str, Any]) -> None:
+            for k, v in obj.items():
+                name = f"{prefix}_{k}" if prefix else k
+                if isinstance(v, dict):
+                    flatten(name, v)
+                elif isinstance(v, pd.Series):
+                    flat[name] = v
+                else:
+                    pass
+
+        flatten("", hierarchy)
+
+        df = pd.DataFrame(flat)
+        df_yearly = df.resample("Y").sum()
+        df_yearly.to_csv(folder / "water_balance_yearly.csv")
+        print("Water balance yearly values saved.")
+
+        years = df_yearly.index.year
+        n_years = len(years)
+
+        fig, axes = plt.subplots(n_years, 1, figsize=(16, 4 * n_years), sharex=True)
+        if n_years == 1:
+            axes = [axes]
+
+        inputs_cols = [c for c in df_yearly.columns if c.startswith("in_")]
+        outputs_cols = [c for c in df_yearly.columns if c.startswith("out_")]
+        storage_cols = [c for c in df_yearly.columns if "storage" in c.lower()]
+
+        # legend building
+        legend_handles = []
+        legend_labels = []
+
+        # Colormaps
+        input_cmap = get_cmap("Blues")
+        output_cmap = get_cmap("Set3")
+        storage_cmap = get_cmap("Greens")
+
+        # Assign distinct colors per column
+        input_colors = {
+            col: input_cmap(0.4 + 0.5 * i / max(1, len(inputs_cols) - 1))
+            for i, col in enumerate(inputs_cols)
+        }
+
+        output_colors = {
+            col: output_cmap(i % output_cmap.N) for i, col in enumerate(outputs_cols)
+        }
+
+        storage_colors = {
+            col: storage_cmap(0.5 + 0.4 * i / max(1, len(storage_cols) - 1))
+            for i, col in enumerate(storage_cols)
+        }
+
+        def add_legend_entry(handle: Any, label: str) -> None:
+            if label not in legend_labels:
+                legend_handles.append(handle)
+                legend_labels.append(label)
+
+        for ax, year in zip(axes, years):
+            row = df_yearly.loc[df_yearly.index.year == year].iloc[0]
+
+            bottom = 0
+            for col in inputs_cols:
+                label = col.replace("in_", "").replace("_", " ")
+                h = ax.bar(
+                    "inputs",
+                    row[col],
+                    bottom=bottom,
+                    color=input_colors[col],
+                )
+                add_legend_entry(h[0], f"input • {label}")
+                bottom += row[col]
+
+            bottom = 0
+            for col in outputs_cols:
+                label = col.replace("out_", "").replace("_", " ")
+                h = ax.bar(
+                    "outputs",
+                    row[col],
+                    bottom=bottom,
+                    color=output_colors[col],
+                )
+                add_legend_entry(h[0], f"output • {label}")
+                bottom += row[col]
+
+            for col in storage_cols:
+                label = col.replace("_", " ")
+                h = ax.bar(
+                    "storage",
+                    row[col],
+                    color=storage_colors[col],
+                )
+                add_legend_entry(h[0], label)
+
+            ax.set_title(f"Water Balance – {year}")
+            ax.set_ylabel("m3/year")
+
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="lower center",
+            ncol=4,
+        )
+
+        if export:
+            fig_path = folder / "water_balance_yearly_subplots.png"
+            plt.savefig(fig_path, dpi=300)
+            print(f"Water balance yearly plot saved as: {fig_path}")
+
+        plt.show()

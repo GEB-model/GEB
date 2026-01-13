@@ -1,0 +1,3 @@
+# Industry
+
+::: geb.agents.industry

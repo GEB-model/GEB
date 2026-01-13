@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import hashlib
 import json
 import os
 import platform
@@ -17,7 +18,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, overload
 
+import dask.tokenize
 import geopandas as gpd
+import joblib
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -37,15 +40,16 @@ from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.zstd import ZstdCodec
 
-from geb.types import (
+from geb.geb_types import (
     ArrayDatetime64,
-    ArrayFloat32,
     ArrayFloat64,
     ThreeDArray,
     ThreeDArrayFloat32,
     TwoDArray,
     TwoDArrayFloat32,
 )
+
+zarr.config.set({"codec_pipeline.fill_missing_chunks": False})
 
 
 def read_table(fp: Path) -> pd.DataFrame:
@@ -157,8 +161,11 @@ def read_grid(
         data_array: zarr.Array | zarr.Group = group[filepath.stem]
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
+        assert isinstance(data, np.ndarray)
+        data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
         if data.dtype == np.float64:
-            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
+            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
+        assert data.ndim in (2, 3)
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)
@@ -218,7 +225,7 @@ def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
     )
 
 
-def read_dict(filepath: Path) -> Any:
+def read_params(filepath: Path) -> Any:
     """Load a dictionary from a JSON or YAML file.
 
     Args:
@@ -260,7 +267,7 @@ def _convert_paths_to_strings(obj: Any) -> Any:
         return obj
 
 
-def write_dict(d: dict, filepath: Path) -> None:
+def write_params(d: dict, filepath: Path) -> None:
     """Save a dictionary to a YAML file.
 
     Args:
@@ -638,7 +645,7 @@ def write_zarr(
 def get_window(
     x: xr.DataArray,
     y: xr.DataArray,
-    bounds: tuple[int | float, int | float, int | float, int | float],
+    bounds: tuple[float, float, float, float],
     buffer: int = 0,
     raise_on_out_of_bounds: bool = True,
     raise_on_buffer_out_of_bounds: bool = True,
@@ -770,6 +777,8 @@ class AsyncGriddedForcingReader:
     for occasional Zarr async loading issues.
     """
 
+    array: zarr.Array
+
     def __init__(
         self,
         filepath: Path,
@@ -818,7 +827,9 @@ class AsyncGriddedForcingReader:
         self.time_size = self.datetime_index.size
 
         # Check if the variable uses NaN as fill value for the retry workaround
-        self.array = self.ds[self.variable_name]
+        array = self.ds[self.variable_name]
+        assert isinstance(array, zarr.Array)
+        self.array: zarr.Array = array
 
         for compressor in self.array.compressors:
             # Blosc is not supported due to known issues with async reading
@@ -870,8 +881,10 @@ class AsyncGriddedForcingReader:
         """
         assert isinstance(self.array, zarr.Array)
         data = self.array[start_index:end_index]
-        assert isinstance(data, np.ndarray)
-        return data
+        assert (
+            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 3
+        )
+        return data  # ty:ignore[invalid-return-type]
 
     async def load_await(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
         """Load data asynchronously via reusable async group.
@@ -885,23 +898,30 @@ class AsyncGriddedForcingReader:
         assert self.io_lock is not None
         async with self.io_lock:
             # Select the variable array from the pre-opened async group.
-            arr = self.array.async_array
+            arr: zarr.AsyncArray[Any] = self.array.async_array
+
+            attempts: int = 100
 
             # Try up to 100 times
-            for _ in range(100):
+            for _ in range(attempts):
                 data = await arr.getitem(
                     (slice(start_index, end_index), slice(None), slice(None))
                 )
 
                 if not np.any(np.isnan(data)):
-                    return data
+                    assert (
+                        isinstance(data, np.ndarray)
+                        and data.dtype == np.float32
+                        and data.ndim == 3
+                    )
+                    return data  # ty:ignore[invalid-return-type]
                 print(
                     f"Async load returned NaN values for indices {start_index}:{end_index}, retrying..."
                 )
 
             else:
                 raise IOError(
-                    f"Async load failed after 3 attempts for indices {start_index}:{end_index}"
+                    f"Async load failed after {attempts} attempts for indices {start_index}:{end_index}"
                 )
 
     async def preload_next(
@@ -1080,22 +1100,22 @@ class AsyncGriddedForcingReader:
             self.thread.join(timeout=1)
 
     @property
-    def x(self) -> ArrayFloat32 | ArrayFloat64:
+    def x(self) -> ArrayFloat64:
         """The x-coordinates of the grid."""
         x_array = self.ds["x"]
         assert isinstance(x_array, zarr.Array)
         x = x_array[:]
-        assert isinstance(x, np.ndarray)
-        return x
+        assert isinstance(x, np.ndarray) and x.dtype == np.float64 and x.ndim == 1
+        return x  # ty:ignore[invalid-return-type]
 
     @property
-    def y(self) -> ArrayFloat32 | ArrayFloat64:
+    def y(self) -> ArrayFloat64:
         """The y-coordinates of the grid."""
         y_array = self.ds["y"]
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
-        assert isinstance(y, np.ndarray)
-        return y
+        assert isinstance(y, np.ndarray) and y.dtype == np.float64 and y.ndim == 1
+        return y  # ty:ignore[invalid-return-type]
 
 
 class WorkingDirectory:
@@ -1339,3 +1359,87 @@ def fast_rmtree(path: Path) -> None:
         raise NotImplementedError(
             f"Optimized fast deletion is not implemented for system: {system}"
         )
+
+
+def create_hash_from_parameters(
+    parameters: dict[str, Any], code_path: Path | None = None
+) -> str:
+    """Create a hash from a dictionary of parameters.
+
+    Args:
+        parameters: A dictionary of parameters.
+        code_path: Optional path to a file or directory containing code to include in the hash.
+
+    Returns:
+        A hexadecimal string representing the hash of the parameters.
+
+    Raises:
+        ValueError: If the parameters dictionary contains a key named '_code_content'.
+    """
+
+    def make_hashable(value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            value = str(value.tobytes())
+        elif isinstance(value, (xr.DataArray, xr.Dataset)):
+            value = dask.tokenize.tokenize(value, ensure_deterministic=True)
+        elif isinstance(value, dict):
+            value = {k: make_hashable(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            value = [make_hashable(v) for v in value]
+        elif isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
+            value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
+        elif isinstance(value, np.generic):
+            value = value.item()
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"Value {value} is not JSON serializable")
+        return value
+
+    hashable_dict = make_hashable(parameters)
+
+    if code_path is not None:
+        if "_code_content" in hashable_dict:
+            raise ValueError(
+                "The parameters dictionary cannot contain a key named '_code_content'"
+            )
+        code_content: dict[str, str] = {}
+        if code_path.is_file():
+            code_content[code_path.name] = code_path.read_text()
+        elif code_path.is_dir():
+            for root, _, files in sorted(os.walk(code_path)):
+                for file in sorted(files):
+                    file_path = Path(root) / file
+                    try:
+                        rel_path = str(file_path.relative_to(code_path))
+                        code_content[rel_path] = file_path.read_text()
+                    except UnicodeDecodeError:
+                        continue
+        hashable_dict["_code_content"] = code_content
+
+    hash_: str = hashlib.md5(
+        json.dumps(hashable_dict, sort_keys=True).encode()
+    ).hexdigest()
+    return hash_
+
+
+def write_hash(path: Path, hash: str) -> None:
+    """Write a hash to a file in hexadecimal format.
+
+    Args:
+        path: The path to the file where the hash will be written.
+        hash: The hash as a str object.
+    """
+    path.write_text(hash)
+
+
+def read_hash(path: Path) -> str:
+    """Read a hash from a file in hexadecimal format.
+
+    Args:
+        path: The path to the file containing the hash.
+
+    Returns:
+        The hash as a str object.
+    """
+    return path.read_text().strip()

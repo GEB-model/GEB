@@ -17,10 +17,10 @@ geb/examples/*/*
 .snakemake
 **.code-workspace
 libmf6.so
-
-#ignore folder
-model
 ssh_script
+.gemini/
+model/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -5,8 +5,10 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -17,13 +19,18 @@ import xarray
 # from matplotlib_scalebar.scalebar import ScaleBar
 from geb.workflows.io import read_zarr
 
+if TYPE_CHECKING:
+    from geb.evaluate import Evaluate
+    from geb.model import GEBModel
+
 
 class MeteorologicalForecasts:
     """Implements several functions to evaluate the meteorological forecasts inside GEB."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: GEBModel, evaluator: Evaluate) -> None:
         """Initialize MeteorologicalForecasts."""
-        pass
+        self.model = model
+        self.evaluator = evaluator
 
     def evaluate_forecasts(
         self, model: Any, output_folder: Path, *args: Any, **kwargs: Any
@@ -163,12 +170,10 @@ class MeteorologicalForecasts:
 
             def format_time_axis(
                 ax: plt.Axes,
-                x_start: pd.Timestamp,
-                x_end: pd.Timestamp,
-                x_ticks: list[pd.Timestamp],
+                x_ticks: pd.DatetimeIndex,
             ) -> None:
                 """Format the time axis for the plots."""
-                ax.set_xlim(x_start, x_end)
+                ax.set_xlim(x_ticks[0], x_ticks[-1])
                 ax.set_xticks(x_ticks)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m %H:%M"))
                 ax.tick_params(axis="x", rotation=45)
@@ -242,7 +247,7 @@ class MeteorologicalForecasts:
                     "2024-05-06T00:00:00.000000000"
                 )
                 ax.axvline(
-                    moment_of_inundation,
+                    moment_of_inundation,  # ty:ignore[invalid-argument-type]
                     color="red",
                     linestyle="--",
                     linewidth=2,
@@ -261,10 +266,10 @@ class MeteorologicalForecasts:
                 else:
                     ax.set_yticks(range(0, 47, 5))  # For intensity mm/h values
 
-                x_ticks: list[pd.Timestamp] = pd.date_range(
+                x_ticks: pd.DatetimeIndex = pd.date_range(
                     start=x_start, end=x_end, freq="12h"
                 )
-                format_time_axis(ax, x_start, x_end, x_ticks)
+                format_time_axis(ax, x_ticks)
 
                 if show_legend:
                     ax.legend(fontsize=12, loc="upper right")
@@ -299,7 +304,7 @@ class MeteorologicalForecasts:
 
             # Handle single subplot case
             if num_forecasts == 1:
-                axes = [axes]
+                axes = np.array([axes])
 
             for idx, init_time in enumerate(forecast_initialisations):
                 print(

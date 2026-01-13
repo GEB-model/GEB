@@ -25,7 +25,7 @@ hazards:
     flood_map_output_interval_seconds: null  # interval in seconds to output flood maps. null means no output.
     grid_size_multiplier: 1  # must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.
     subgrid: false
-    force_overwrite: true
+    overwrite: auto  # whether to overwrite existing flood model. True, False, "auto". If "auto", it will check if the model input parameters have changed.
     coastal_only: false
     write_figures: true  # whether to generate and save diagnostic figures
     return_periods:
@@ -43,6 +43,13 @@ hazards:
       end_time: 2021-07-20 09:00:00
     SFINCS:
       gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
+    detect_floods_from_discharge: false # If True, floods are detected based on discharge thresholds at a specific location.
+    discharge_threshold: 30  # discharge threshold in m3/s for flood detection
+    threshold_location: 
+    - lon
+    - lat  # [lon, lat] of the location where the discharge threshold is applied.
+    observation_files:
+    - 20210712T090000 - 20210720T090000.zarr # list of observations files for all floods, should be formatted start date - end date.zarr
   damage:
     simulate: false
   erosion:
@@ -63,11 +70,12 @@ agent_settings:
     dynamic_market: false
     price_frequency: yearly
   households:
-    adapt: false
+    adapt: false # If True households adapt their houses based on random floods, like DYNAMO-M
+    adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
     warning_response: false
     water_demand:
       method: default
-    adjust_demand_factor: 1
+    adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand
     expected_utility:
       flood_risk_calculations:
         risk_perception:

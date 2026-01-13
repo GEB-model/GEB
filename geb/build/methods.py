@@ -6,7 +6,7 @@ import logging
 from logging import Logger
 from pathlib import Path
 from time import time
-from typing import Any, Callable
+from typing import Any
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -14,6 +14,14 @@ import networkx as nx
 logger: Logger = logging.getLogger("GEB")
 
 __all__: list[str] = ["build_method"]
+
+from typing import Any, Protocol
+
+
+class NamedCallable(Protocol):
+    __name__: str
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 class _build_method:
@@ -24,10 +32,10 @@ class _build_method:
 
     def __call__(
         self,
-        func: Callable[..., Any] | None = None,
+        func: NamedCallable | None = None,
         depends_on: str | list[str] | None = None,
-    ) -> Callable[..., Any]:
-        def partial_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    ) -> NamedCallable:
+        def partial_decorator(func: NamedCallable) -> NamedCallable:
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 self.logger.info(f"Running method: {func.__name__}")
@@ -57,16 +65,16 @@ class _build_method:
                 else:
                     raise ValueError("depends_on must be a string or a list of strings")
 
-            wrapper.__is_build_method__ = True
+            setattr(wrapper, "__is_build_method__", True)
             return wrapper
 
         if func is None:
             return partial_decorator
         else:
-            f: Callable[..., Any] = partial_decorator(func)
+            f: NamedCallable = partial_decorator(func)
             return f
 
-    def add_tree_node(self, func: Callable[..., Any]) -> None:
+    def add_tree_node(self, func: NamedCallable) -> None:
         """Add a node to the dependency tree."""
         parameters = inspect.signature(func).parameters
         required_parameters = [
@@ -88,7 +96,7 @@ class _build_method:
             },
         )
 
-    def add_tree_edge(self, func: Callable[..., Any], depends_on: str) -> None:
+    def add_tree_edge(self, func: NamedCallable, depends_on: str) -> None:
         """Add an edge to the dependency tree.
 
         Raises:
@@ -256,7 +264,7 @@ class _build_method:
         if not progress_path.exists():
             return []
         with open(progress_path, "r") as f:
-            completed_methods = f.read().splitlines()
+            completed_methods: list[str] = f.read().splitlines()
         return completed_methods
 
     def log_time_taken(self) -> None:

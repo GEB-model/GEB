@@ -9,15 +9,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import zarr.storage
 from dateutil.relativedelta import relativedelta
 from zarr.codecs import ZstdCodec
 
+from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
 from geb.workflows.io import fast_rmtree
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
@@ -97,6 +98,84 @@ WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
             "type": "scalar",
         },
         "_water_circle_livestock_water_loss": {
+            "varname": ".livestock_water_loss_m3",
+            "type": "scalar",
+        },
+    },
+}
+
+WATER_BALANCE_REPORT_CONFIG = {
+    "hydrology": {
+        "_water_balance_storage": {
+            "varname": ".current_storage",
+            "type": "scalar",
+        },
+        "_water_balance_routing_loss": {
+            "varname": ".routing_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.landsurface": {
+        "_water_balance_rain": {
+            "varname": ".rain_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_snow": {
+            "varname": ".snow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_transpiration": {
+            "varname": ".transpiration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_bare_soil_evaporation": {
+            "varname": ".bare_soil_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_open_water_evaporation": {
+            "varname": ".open_water_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_interception_evaporation": {
+            "varname": ".interception_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_sublimation_or_deposition": {
+            "varname": ".sublimation_or_deposition_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+    "hydrology.routing": {
+        "_water_balance_river_evaporation": {
+            "varname": ".total_evaporation_in_rivers_m3",
+            "type": "scalar",
+        },
+        "_water_balance_waterbody_evaporation": {
+            "varname": ".total_waterbody_evaporation_m3",
+            "type": "scalar",
+        },
+        "_water_balance_river_outflow": {
+            "varname": ".total_outflow_at_pits_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.water_demand": {
+        "_water_balance_domestic_water_loss": {
+            "varname": ".domestic_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_balance_industry_water_loss": {
+            "varname": ".industry_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_balance_livestock_water_loss": {
             "varname": ".livestock_water_loss_m3",
             "type": "scalar",
         },
@@ -347,7 +426,7 @@ def prepare_agent_group(
     name: str,
     config: dict,
     time: ArrayInt64,
-    example_value: np.ndarray[Any] | int | float | bool | np.floating | np.integer,
+    example_value: np.ndarray[Any] | int | float | bool,
     chunk_target_size_bytes: int,
     compression_level: int,
 ) -> None:
@@ -455,8 +534,11 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
-        self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
-        del self.model.config["report"]["_config"]
+        if "_config" not in self.model.config["report"]:
+            self.config: dict[str, int] = {}
+        else:
+            self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
+            del self.model.config["report"]["_config"]
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -526,6 +608,12 @@ class Reporter:
                             report_config = multi_level_merge(
                                 report_config,
                                 WATER_CIRCLE_REPORT_CONFIG,
+                            )
+                    elif module_name == "_water_balance":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                WATER_BALANCE_REPORT_CONFIG,
                             )
                     else:
                         raise ValueError(
@@ -676,8 +764,9 @@ class Reporter:
             for v in value:
                 assert not np.isnan(value) and not np.isinf(v)
         elif np.isscalar(value):
-            value = value.item()
             assert not np.isnan(value) and not np.isinf(value)
+            if isinstance(value, (np.floating, np.integer, np.bool_)):
+                value = value.item()
 
         self.process_value(module_name, name, value, config)
 
@@ -685,7 +774,7 @@ class Reporter:
         self,
         module_name: str,
         name: str,
-        value: np.ndarray | int | float | np.floating | np.integer,
+        value: np.ndarray | int | float | bool,
         config: dict,
     ) -> None:
         """Exports an array of values to the export folder.
@@ -705,7 +794,7 @@ class Reporter:
         if type_ is None:
             raise ValueError(f"Type not specified for {config}.")
 
-        if config["function"] is None and "path" not in config:
+        if "function" in config and config["function"] is None and "path" not in config:
             zarr_path: Path = self.report_folder / module_name / (name + ".zarr")
             zarr_path.parent.mkdir(parents=True, exist_ok=True)
             config["path"] = str(zarr_path)
@@ -909,13 +998,15 @@ class Reporter:
                     )
 
                 root_group = config["_root_group"]
+                value_store_array = root_group[name]
+                assert isinstance(value_store_array, zarr.Array)
 
                 assert isinstance(value, (np.ndarray, DynamicArray))
-                if value.size < root_group[name].shape[0]:
+                if value.size < value_store_array.shape[0]:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
                         value.data if isinstance(value, DynamicArray) else value,
-                        (0, root_group[name].shape[0] - value.size),
+                        (0, value_store_array.shape[0] - value.size),
                         mode="constant",
                         constant_values=get_fill_value(value) or False,
                     )
@@ -1000,7 +1091,7 @@ class Reporter:
         # Flush any remaining buffers
         for module_name, configs in self.model.config["report"].items():
             for name, config in configs.items():
-                if config["function"] is None:
+                if "function" in config and config["function"] is None:
                     chunk_time_size: int = config["_chunk_data"].shape[0]
                     buffer_end: int = config["_index"] % chunk_time_size
                     if buffer_end == 0:
@@ -1031,6 +1122,14 @@ class Reporter:
                     folder.mkdir(parents=True, exist_ok=True)
 
                     df.to_csv(folder / (name + ".csv"))
+
+                    fig, ax = plt.subplots(figsize=(30, 5))
+                    fig.tight_layout()
+
+                    df.plot(y=name, title=f"{module_name}.{name}", ax=ax)
+                    plt.grid()
+                    plt.savefig(folder / (name + ".svg"), format="svg")
+                    plt.close()
 
     def report(
         self, module: Module, local_variables: dict[str, Any], module_name: str

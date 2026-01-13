@@ -88,7 +88,7 @@ class OpenStreetMap(Adapter):
                     if response.status_code != 404:
                         urls.append(url)
 
-        all_features: dict[str, gpd.GeoDataFrame | list[gpd.GeoDataFrame]] = {}
+        all_features_list: dict[str, list[gpd.GeoDataFrame]] = {}
 
         print(
             f"Downloading and processing OSM data for {len(urls)} tiles (note: some tiles are larger than others)..."
@@ -102,8 +102,8 @@ class OpenStreetMap(Adapter):
                 )
 
                 for feature_type in feature_types:
-                    if feature_type not in all_features:
-                        all_features[feature_type] = []
+                    if feature_type not in all_features_list:
+                        all_features_list[feature_type] = []
 
                     if feature_type == "buildings":
                         features: gpd.GeoDataFrame = gpd.read_file(
@@ -153,11 +153,12 @@ class OpenStreetMap(Adapter):
                     else:
                         raise ValueError(f"Unknown feature type {feature_type}")
 
-                    all_features[feature_type].append(features)
+                    all_features_list[feature_type].append(features)
 
+        all_features: dict[str, gpd.GeoDataFrame] = {}
         for feature_type in feature_types:
             all_features[feature_type] = pd.concat(
-                all_features[feature_type], ignore_index=True
-            )
+                all_features_list[feature_type], ignore_index=True
+            )  # ty:ignore[invalid-assignment]
 
         return all_features
