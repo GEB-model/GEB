@@ -37,7 +37,10 @@ class Module(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Return the name of the module. This method should be overridden by subclasses."""
+        """Return the name of the module. This method should be overridden by subclasses.
+
+        The name is used to save data from the variables to disk and to restore it. The name must be the same as the name that the instantiated module is assigned to in the model.
+        """
         pass
 
     @abstractmethod

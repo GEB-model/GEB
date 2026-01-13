@@ -6,10 +6,18 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import zarr
+import zarr.storage
 from numba import njit, prange  # noqa: F401
 
+from geb.geb_types import (
+    ArrayFloat32,
+    ArrayInt32,
+    ThreeDArrayFloat32,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+)
 from geb.module import Module
-from geb.types import ArrayFloat32, ArrayInt32, TwoDArrayBool, TwoDArrayFloat32
+from geb.store import Bucket
 from geb.workflows import balance_check
 from geb.workflows.io import read_grid
 
@@ -31,8 +39,6 @@ from .snow_glaciers import snow_model
 from .soil import (
     add_water_to_topwater_and_evaporate_open_water,
     get_bubbling_pressure,
-    get_flux,
-    get_mean_unsaturated_hydraulic_conductivity,
     get_pore_size_index_brakensiek,
     get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
@@ -59,6 +65,7 @@ def land_surface_model(
     soil_layer_height: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     root_depth_m: ArrayFloat32,
     topwater_m: ArrayFloat32,
+    arno_shape_parameter: ArrayFloat32,
     snow_water_equivalent_m: ArrayFloat32,
     liquid_water_in_snow_m: ArrayFloat32,
     snow_temperature_C: ArrayFloat32,
@@ -119,6 +126,7 @@ def land_surface_model(
         topwater_m: Topwater in meters, which is >=0 for paddy and 0 for non-paddy. Within
             this function topwater is used to add water from natural infiltration and
             irrigation and to calculate open water evaporation.
+        arno_shape_parameter: Arno runoff model shape parameter for the cell.
         snow_water_equivalent_m: Snow water equivalent in meters.
         liquid_water_in_snow_m: Liquid water in snow in meters.
         snow_temperature_C: Snow temperature in Celsius.
@@ -169,7 +177,7 @@ def land_surface_model(
     capillar_rise_m = capillar_rise_m / 24.0
     saturated_hydraulic_conductivity_m_per_hour = (
         saturated_hydraulic_conductivity_m_per_s
-    ) * 3600.0
+    ) * np.float32(3600.0)
 
     runoff_m = np.zeros_like(pr_kg_per_m2_per_s)
     interflow_m = np.zeros_like(pr_kg_per_m2_per_s)
@@ -346,12 +354,15 @@ def land_surface_model(
                 soil_is_frozen=soil_is_frozen,
                 w=w[:, i],
                 topwater_m=topwater_m[i],
+                arno_shape_parameter=arno_shape_parameter[i],
             )
             runoff_m[hour, i] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
 
             bottom_layer = N_SOIL_LAYERS - 1  # ty: ignore[unresolved-reference]
 
+            psi: np.float32
+            unsaturated_hydraulic_conductivity_m_per_hour: np.float32
             psi, unsaturated_hydraulic_conductivity_m_per_hour = (
                 get_soil_water_flow_parameters(
                     w=w[bottom_layer, i],
@@ -373,10 +384,12 @@ def land_surface_model(
             # Assume draining under gravity. If there is capillary rise from groundwater, there will be no
             # percolation to the groundwater. A potential capillary rise from
             # the groundwater is already accounted for in rise_from_groundwater
-            flux = unsaturated_hydraulic_conductivity_m_per_hour * (
+            flux: np.float32 = unsaturated_hydraulic_conductivity_m_per_hour * (
                 capillar_rise_m[i] <= np.float32(0)
             )
-            available_water_source = w[bottom_layer, i] - wres[bottom_layer, i]
+            available_water_source: np.float32 = (
+                w[bottom_layer, i] - wres[bottom_layer, i]
+            )
             flux = min(flux, available_water_source)
             w[bottom_layer, i] -= flux
             w[bottom_layer, i] = max(w[bottom_layer, i], wres[bottom_layer, i])
@@ -404,31 +417,44 @@ def land_surface_model(
                     )
                 )
 
-                # Compute the mean of the conductivities
-                mean_unsaturated_hydraulic_conductivity: np.float32 = (
-                    get_mean_unsaturated_hydraulic_conductivity(
-                        unsaturated_hydraulic_conductivity_m_per_hour,
-                        unsaturated_hydraulic_conductivity_layer_below,
-                    )
-                )
-
                 # Compute flux using Darcy's law. The -1 accounts for gravity.
                 # Positive flux is downwards; see minus sign in the equation, which negates
                 # the -1 of gravity and other terms.
-                flux: np.float32 = get_flux(
-                    mean_unsaturated_hydraulic_conductivity,
-                    psi_layer_below,
-                    psi,
-                    delta_z[layer, i],
+                # We use upstream weighting for the hydraulic conductivity,
+                # which means that we use the hydraulic conductivity of the layer
+                # that the flux is coming from.
+                flux_gradient_term: np.float32 = -(
+                    (psi_layer_below - psi) / delta_z[layer, i] - np.float32(1.0)
                 )
 
-                # Determine the positive flux and source/sink layers without if statements
-                positive_flux = abs(flux)
-                flux_direction = flux >= 0  # 1 if flux >= 0, 0 if flux < 0
-                source = layer + (
+                # if the flux gradient term is positive, the flux is going downwards
+                # and we use the hydraulic conductivity of the current layer
+                if flux_gradient_term > 0:
+                    flux: np.float32 = (
+                        unsaturated_hydraulic_conductivity_m_per_hour
+                        * flux_gradient_term
+                    )
+                    flux_direction = 1  # 1 if flux >= 0, 0 if flux < 0
+                # if the flux gradient term is negative, the flux is going upwards
+                # thus we use the hydraulic conductivity of the layer below
+                else:
+                    flux: np.float32 = -(
+                        unsaturated_hydraulic_conductivity_layer_below
+                        * flux_gradient_term
+                    )
+                    flux_direction = 0  # 1 if flux >= 0, 0 if flux < 0
+
+                # Limit flux by the minimum saturated hydraulic conductivity of the two layers
+                min_saturated_hydraulic_conductivity_m_per_hour = min(
+                    saturated_hydraulic_conductivity_m_per_hour[layer, i],
+                    saturated_hydraulic_conductivity_m_per_hour[layer + 1, i],
+                )
+                flux = min(flux, min_saturated_hydraulic_conductivity_m_per_hour)
+
+                source: int = layer + (
                     1 - flux_direction
                 )  # layer if flux >= 0, layer + 1 if flux < 0
-                sink = (
+                sink: int = (
                     layer + flux_direction
                 )  # layer + 1 if flux >= 0, layer if flux < 0
 
@@ -436,15 +462,15 @@ def land_surface_model(
                 remaining_storage_capacity_sink = ws[sink, i] - w[sink, i]
                 available_water_source = w[source, i] - wres[source, i]
 
-                positive_flux = min(
-                    positive_flux,
+                flux = min(
+                    flux,
                     remaining_storage_capacity_sink,
                     available_water_source,
                 )
 
                 # Update water content in source and sink layers
-                w[source, i] -= positive_flux
-                w[sink, i] += positive_flux
+                w[source, i] -= flux
+                w[sink, i] += flux
 
                 # Ensure water content stays within physical bounds
                 w[sink, i] = min(w[sink, i], ws[sink, i])
@@ -485,6 +511,7 @@ def land_surface_model(
                 open_water_evaporation_m=open_water_evaporation_m_cell_hour,
                 w_m=w[:, i],
                 wres_m=wres[:, i],
+                unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity_m_per_hour,
             )
 
         snow_water_equivalent_m[i] = snow_water_equivalent_m_cell
@@ -521,8 +548,27 @@ def land_surface_model(
     )
 
 
+class LandSurfaceVariables(Bucket):
+    """Land surface variables for GEB."""
+
+    topwater: ArrayFloat32
+    clay_percentage: TwoDArrayFloat32
+    sand_percentage: TwoDArrayFloat32
+    silt_percentage: TwoDArrayFloat32
+    soil_layer_height: TwoDArrayFloat32
+    snow_water_equivalent_m: ArrayFloat32
+    liquid_water_in_snow_m: ArrayFloat32
+    snow_temperature_C: ArrayFloat32
+    interception_storage_m: ArrayFloat32
+    arno_shape_parameter: TwoDArrayFloat32
+    crop_map: ArrayInt32
+    minimum_effective_root_depth_m: np.float32
+
+
 class LandSurface(Module):
     """Land surface module for GEB."""
+
+    var: LandSurfaceVariables
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the potential evaporation module.
@@ -574,13 +620,29 @@ class LandSurface(Module):
             0.0, dtype=np.float32
         )
 
+        self.HRU.var.arno_shape_parameter = self.HRU.full_compressed(
+            0.0, dtype=np.float32
+        )
+
         store = zarr.storage.LocalStore(
             self.model.files["grid"]["landcover/forest/interception_capacity"],
             read_only=True,
         )
 
-        self.grid.var.interception_capacity_forest = self.grid.compress(
-            zarr.open_group(store, mode="r")["interception_capacity"][:]
+        interception_capacity_forest_group = zarr.open_group(store, mode="r")[
+            "interception_capacity"
+        ]
+        assert isinstance(interception_capacity_forest_group, zarr.Array)
+        interception_capacity_forest_array = interception_capacity_forest_group[:]
+        assert isinstance(interception_capacity_forest_array, np.ndarray)
+        # fmt: off
+        interception_capacity_forest_array: ThreeDArrayFloat32 = (
+            interception_capacity_forest_array
+        )  # ty:ignore[invalid-assignment]
+        # fmt: on
+
+        self.grid.var.interception_capacity_forest: TwoDArrayFloat32 = (
+            self.grid.compress(interception_capacity_forest_array)
         )
 
         store = zarr.storage.LocalStore(
@@ -588,17 +650,43 @@ class LandSurface(Module):
             read_only=True,
         )
 
-        self.grid.var.interception_capacity_grassland = self.grid.compress(
-            zarr.open_group(store, mode="r")["interception_capacity"][:]
+        interception_capacity_grassland_group = zarr.open_group(store, mode="r")[
+            "interception_capacity"
+        ]
+        assert isinstance(interception_capacity_grassland_group, zarr.Array)
+        interception_capacity_grassland_array = interception_capacity_grassland_group[:]
+        assert isinstance(interception_capacity_grassland_array, np.ndarray)
+
+        # fmt: off
+        interception_capacity_grassland_array: ThreeDArrayFloat32 = (
+            interception_capacity_grassland_array
+        )  # ty:ignore[invalid-assignment]
+        # fmt: on
+
+        self.grid.var.interception_capacity_grassland: TwoDArrayFloat32 = (
+            self.grid.compress(interception_capacity_grassland_array)
         )
 
         store = zarr.storage.LocalStore(
             self.model.files["grid"]["landcover/forest/crop_coefficient"],
             read_only=True,
         )
-        self.grid.var.forest_crop_factor_per_10_days = zarr.open_group(store, mode="r")[
+        forest_crop_factor_per_10_days_group = zarr.open_group(store, mode="r")[
             "crop_coefficient"
-        ][:]
+        ]
+        assert isinstance(forest_crop_factor_per_10_days_group, zarr.Array)
+        forest_crop_factor_per_10_days_group_array = (
+            forest_crop_factor_per_10_days_group[:]
+        )
+        # fmt: off
+        forest_crop_factor_per_10_days_group_array: ThreeDArrayFloat32 = (
+            forest_crop_factor_per_10_days_group_array
+        )  # ty:ignore[invalid-assignment]
+        # fmt: on
+
+        self.grid.var.forest_crop_factor_per_10_days = (
+            forest_crop_factor_per_10_days_group_array
+        )
 
         # Default follows AQUACROP recommendation, see reference manual for AquaCrop v7.1 – Chapter 3
         self.var.minimum_effective_root_depth_m: np.float32 = np.float32(0.25)
@@ -618,7 +706,7 @@ class LandSurface(Module):
             )
         )
 
-        soil_organic_carbon: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
+        organic_carbon_percentage: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon"],
                 layer=None,
@@ -632,46 +720,58 @@ class LandSurface(Module):
             ),
             method="mean",
         )
-        self.HRU.var.silt: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            read_grid(
-                self.model.files["subgrid"]["soil/silt"],
-                layer=None,
-            ),
-            method="mean",
+        self.HRU.var.silt_percentage: TwoDArrayFloat32 = (
+            self.HRU.convert_subgrid_to_HRU(
+                read_grid(
+                    self.model.files["subgrid"]["soil/silt"],
+                    layer=None,
+                ),
+                method="mean",
+            )
         )
-        self.HRU.var.clay: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            read_grid(
-                self.model.files["subgrid"]["soil/clay"],
-                layer=None,
-            ),
-            method="mean",
+        self.HRU.var.clay_percentage: TwoDArrayFloat32 = (
+            self.HRU.convert_subgrid_to_HRU(
+                read_grid(
+                    self.model.files["subgrid"]["soil/clay"],
+                    layer=None,
+                ),
+                method="mean",
+            )
         )
 
         # calculate sand content based on silt and clay content (together they should sum to 100%)
-        self.HRU.var.sand: TwoDArrayFloat32 = (
-            100 - self.HRU.var.silt - self.HRU.var.clay
+        self.HRU.var.sand_percentage: TwoDArrayFloat32 = (
+            100 - self.HRU.var.silt_percentage - self.HRU.var.clay_percentage
         )
 
         # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
-        is_top_soil: TwoDArrayBool = np.zeros_like(self.HRU.var.clay, dtype=bool)
+        is_top_soil: TwoDArrayBool = np.zeros_like(
+            self.HRU.var.clay_percentage, dtype=bool
+        )
         is_top_soil[0:3] = True
 
         thetas: TwoDArrayFloat32 = thetas_toth(
-            soil_organic_carbon=soil_organic_carbon,
+            organic_carbon_percentage=organic_carbon_percentage,
             bulk_density=bulk_density,
             is_top_soil=is_top_soil,
-            clay=self.HRU.var.clay,
-            silt=self.HRU.var.silt,
+            clay=self.HRU.var.clay_percentage,
+            silt=self.HRU.var.silt_percentage,
         )
 
         thetar: TwoDArrayFloat32 = thetar_brakensiek(
-            sand=self.HRU.var.sand, clay=self.HRU.var.clay, thetas=thetas
+            sand=self.HRU.var.sand_percentage,
+            clay=self.HRU.var.clay_percentage,
+            thetas=thetas,
         )
         self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
-            clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
+            clay=self.HRU.var.clay_percentage,
+            sand=self.HRU.var.sand_percentage,
+            thetas=thetas,
         )
         self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
-            sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
+            sand=self.HRU.var.sand_percentage,
+            thetas=thetas,
+            clay=self.HRU.var.clay_percentage,
         )
 
         # θ saturation, field capacity, wilting point and residual moisture content
@@ -714,21 +814,25 @@ class LandSurface(Module):
 
         # self.HRU.var.saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = kv_cosby(
         #     sand=self.HRU.var.sand, clay=self.HRU.var.clay
-        # )  # m/day
+        # )
 
         self.HRU.var.saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = (
             kv_wosten(
-                silt=self.HRU.var.silt,
-                clay=self.HRU.var.clay,
+                silt=self.HRU.var.silt_percentage,
+                clay=self.HRU.var.clay_percentage,
                 bulk_density=bulk_density,
-                organic_matter=soil_organic_carbon,
+                organic_carbon_percentage=organic_carbon_percentage,
                 is_topsoil=is_top_soil,
             )
-        )  # m/day
+        )
 
         self.HRU.var.saturated_hydraulic_conductivity_m_per_s *= self.model.config[
             "parameters"
         ]["saturated_hydraulic_conductivity_multiplier"]  # calibration parameter
+
+        self.HRU.var.soil_temperature_C: TwoDArrayFloat32 = np.full_like(
+            self.HRU.var.soil_layer_height, 0.0, dtype=np.float32
+        )
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
@@ -930,6 +1034,7 @@ class LandSurface(Module):
             root_depth_m=root_depth_m,
             land_use_type=self.HRU.var.land_use_type,
             topwater_m=self.HRU.var.topwater_m,
+            arno_shape_parameter=self.HRU.var.arno_shape_parameter,
             snow_water_equivalent_m=self.HRU.var.snow_water_equivalent_m,
             liquid_water_in_snow_m=self.HRU.var.liquid_water_in_snow_m,
             snow_temperature_C=self.HRU.var.snow_temperature_C,
@@ -1025,6 +1130,7 @@ class LandSurface(Module):
                 soil_layer_height=self.HRU.var.soil_layer_height,
                 root_depth_m=root_depth_m,
                 topwater_m=topwater_m_prev,
+                arno_shape_parameter=self.HRU.var.arno_shape_parameter,
                 snow_water_equivalent_m=snow_water_equivalent_prev,
                 liquid_water_in_snow_m=liquid_water_in_snow_prev,
                 snow_temperature_C=snow_temperature_C_prev,

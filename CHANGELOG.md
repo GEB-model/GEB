@@ -1,5 +1,18 @@
-# v1.0.0b10
-- updated building damages by incorperating the global exposure model. Now only averages for residential buildings are used. 
+# dev
+- Add documentation for modules, variables and routing.
+- Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
+- Flood maps of varying spatial domains can now be merged into one return period map.
+- Add llms.txt, llms-full.txt
+- Add MCP server for interacting with natural language (very much in beta)
+- Add a prompt to installation docs for setting up geb using llm agents
+- Update and simplify installation docs
+- Write documentation for spinning up and running models
+- Fix rare out of bounds values in ERA5 data that led to undefined behaviour due to compression and decompression roundtrip
+- Require extra_dims_names to be set in DynamicArray and update model in places where it was not set
+
+To support this version:
+
+- Re-run `setup_forcing` and `setup_spei`
 
 # v1.0.0b9
 - Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
@@ -7,6 +20,15 @@
 - Fix JSON serialization error in hash file generation by properly converting NumPy scalar types (bool, int, float) to Python native types.
 - Update to new SFINCS version.
 - Migrated documentation to mkdocs
+- Added a new option to detect floods based on actual discharge values from the hydrological model
+- Added a new option so that households can adapt to actual floods in the model
+- Implemented a simple version on runoff concentration so runoff is slowed down on its way to become discharge
+- Updated the performance_hydrodynamics function so it uses a list of observation files and matches these to the right flood map per event from sfincs. The name of the observation file has to be the same of the flood event (i.e. startdate - enddate.zarr)
+- For evaluation, the evaluation module now needs to be prefixed. So `geb evaluate --methods plot_discharge` becomes `geb evaluate --methods hydrology.plot_discharge`. Because we now have multiple evaluation files this keeps the logic clear.
+- dict in the input files in now updated to params. It is recommended to change the dict entry to params manually. Otherwise, it is also possible to re-build the model. This is because dict was giving issues with the type checker, because dict is a reserved name.
+
+To support this version:
+- It is required to change the dict entry to params manually in `input/files.yml`. Otherwise, it is also possible to re-build the model.
 
 # v1.0.0b8
 - Improve model startup time

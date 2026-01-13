@@ -9,18 +9,26 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
-import rasterio
+import rasterio.features
 import xarray as xr
 from pyflwdir import FlwdirRaster
-from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.types import ArrayBool, ArrayFloat32, ArrayInt32
+from geb.geb_types import (
+    ArrayBool,
+    ArrayFloat32,
+    ArrayInt32,
+    TwoDArrayFloat64,
+    TwoDArrayInt32,
+    TwoDArrayInt64,
+)
+from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import rasterize_like, snap_to_grid
+
+from .base import BuildModelBase
 
 
 def get_all_upstream_subbasin_ids(
@@ -87,13 +95,14 @@ def get_subbasins_geometry(
         A GeoDataFrame containing the subbasins geometry for the given subbasin IDs.
             The index of the GeoDataFrame is the subbasin ID (COMID).
     """
-    subbasins: gpd.GeoDataFrame = data_catalog.fetch("merit_basins_catchments").read(
+    subbasins = data_catalog.fetch("merit_basins_catchments").read(
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
     )
+    assert isinstance(subbasins, gpd.GeoDataFrame)
     assert len(subbasins) == len(subbasin_ids), "Some subbasins were not found"
-    return subbasins.set_index("COMID")
+    return subbasins.set_index("COMID")  # ty:ignore[invalid-return-type]
 
 
 def get_rivers(
@@ -110,46 +119,44 @@ def get_rivers(
     Returns:
         A GeoDataFrame containing the rivers for the given subbasin IDs.
     """
-    rivers: gpd.GeoDataFrame = (
-        data_catalog.fetch("merit_basins_rivers")
-        .read(
-            columns=[
-                "COMID",
-                "lengthkm",
-                "slope",
-                "uparea",
-                "maxup",
-                "NextDownID",
-                "geometry",
-            ],
-            filters=[
-                ("COMID", "in", subbasin_ids),
-            ],
-        )
-        .rename(
-            columns={
-                "NextDownID": "downstream_ID",
-            }
-        )
+    rivers = data_catalog.fetch("merit_basins_rivers").read(
+        columns=[
+            "COMID",
+            "lengthkm",
+            "slope",
+            "uparea",
+            "maxup",
+            "NextDownID",
+            "geometry",
+        ],
+        filters=[
+            ("COMID", "in", subbasin_ids),
+        ],
     )
+    assert isinstance(rivers, gpd.GeoDataFrame)
+    rivers: gpd.GeoDataFrame = rivers.rename(
+        columns={
+            "NextDownID": "downstream_ID",
+        }
+    ).set_index("COMID")  # ty:ignore[invalid-assignment]
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
     rivers["is_headwater_catchment"] = rivers["maxup"] == 0
-    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
+    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])  # ty:ignore[invalid-assignment]
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
     # reverse the river lines to have the downstream direction
     rivers["geometry"] = rivers["geometry"].apply(
         lambda x: LineString(list(x.coords)[::-1])
     )
-    return rivers.set_index("COMID")
+    return rivers
 
 
 def create_river_raster_from_river_lines(
     rivers: gpd.GeoDataFrame,
     target: xr.DataArray,
     column: str | None = None,
-    index: str | None = None,
-) -> npt.NDArray[np.int32]:
+    index: bool | None = None,
+) -> TwoDArrayInt32:
     """Create a river raster from river lines.
 
     Args:
@@ -174,7 +181,7 @@ def create_river_raster_from_river_lines(
         raise ValueError(
             "Either column or index must be provided, or both must be None"
         )
-    river_raster = rasterize(
+    river_raster = rasterio.features.rasterize(
         zip(rivers.geometry, values),
         out_shape=target.shape,
         fill=-1,
@@ -187,7 +194,7 @@ def create_river_raster_from_river_lines(
 
 def get_SWORD_translation_IDs_and_lengths(
     data_catalog: NewDataCatalog, rivers: gpd.GeoDataFrame
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+) -> tuple[TwoDArrayInt64, TwoDArrayFloat64]:
     """Get the SWORD reach IDs and lengths for each river based on the MERIT basin ID.
 
     Each river can have multiple SWORD reach IDs, so the output is a 2D array of shape (N, M)
@@ -204,12 +211,15 @@ def get_SWORD_translation_IDs_and_lengths(
         - SWORD_reach_lengths: A 2D numpy array of shape (N, M) where N is the number of SWORD reaches per river
             and M is the number of rivers. Each element is the length of the SWORD reach for that river.
     """
-    MERIT_Basins_to_SWORD: xr.Dataset = (
+    MERIT_Basins_to_SWORD = (
         data_catalog.fetch("merit_sword").read().sel(mb=rivers.index.tolist())
     )
+    assert isinstance(MERIT_Basins_to_SWORD, xr.Dataset)
 
-    SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)
-    SWORD_reach_lengths = np.full(
+    SWORD_reach_IDs: TwoDArrayInt64 = np.full(
+        (40, len(rivers)), dtype=np.int64, fill_value=-1
+    )
+    SWORD_reach_lengths: TwoDArrayFloat64 = np.full(
         (40, len(rivers)), dtype=np.float64, fill_value=np.nan
     )
     for i in range(1, 41):
@@ -224,8 +234,8 @@ def get_SWORD_translation_IDs_and_lengths(
 
 
 def get_SWORD_river_widths(
-    data_catalog: NewDataCatalog, SWORD_reach_IDs: npt.NDArray[np.int64]
-) -> npt.NDArray[np.float64]:
+    data_catalog: NewDataCatalog, SWORD_reach_IDs: TwoDArrayInt64
+) -> TwoDArrayFloat64:
     """Get the river widths from the SWORD dataset based on the SWORD reach IDs.
 
     Each river can have multiple SWORD reach IDs, so the input is a 2D array of shape (N, M).
@@ -242,13 +252,11 @@ def get_SWORD_river_widths(
     """
     unique_SWORD_reach_ids = np.unique(SWORD_reach_IDs[SWORD_reach_IDs != -1])
 
-    SWORD = (
-        data_catalog.fetch("sword")
-        .read(
-            sql=f"""SELECT * FROM sword WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})"""
-        )
-        .set_index("reach_id")
+    SWORD = data_catalog.fetch("sword").read(
+        sql=f"""SELECT * FROM sword WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})"""
     )
+    assert isinstance(SWORD, pd.DataFrame)
+    SWORD = SWORD.set_index("reach_id")
 
     assert len(SWORD) == len(unique_SWORD_reach_ids), (
         "Some SWORD reaches were not found, possibly the SWORD and MERIT data version are not correct"
@@ -271,7 +279,7 @@ def get_SWORD_river_widths(
     return SWORD_river_width
 
 
-class Hydrography:
+class Hydrography(BuildModelBase):
     """Contains all build methods for the hydrography for GEB."""
 
     def __init__(self) -> None:
@@ -294,12 +302,14 @@ class Hydrography:
             The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
             `set_grid()` method.
         """
-        a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
-        a = xr.where(a < 1, a, 1, keep_attrs=True)
-        b = self.grid["routing/outflow_elevation"] / 2000
-        b = xr.where(b < 1, b, 1, keep_attrs=True)
+        a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
+            "routing/upstream_area"
+        ]
+        a: xr.DataArray = xr.where(a < 1, a, 1, keep_attrs=True)
+        b: xr.DataArray = self.grid["routing/outflow_elevation"] / 2000
+        b: xr.DataArray = xr.where(b < 1, b, 1, keep_attrs=True)
 
-        mannings = 0.025 + 0.015 * a + 0.030 * b
+        mannings: xr.DataArray = 0.025 + 0.015 * a + 0.030 * b
         mannings.attrs["_FillValue"] = np.nan
 
         self.set_grid(mannings, "routing/mannings")
@@ -331,7 +341,7 @@ class Hydrography:
         downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
         subbasin_ids.update(downstream_subbasins)
 
-        subbasins = get_subbasins_geometry(self.new_data_catalog, subbasin_ids)
+        subbasins = get_subbasins_geometry(self.new_data_catalog, list(subbasin_ids))
         subbasins["is_downstream_outflow_subbasin"] = pd.Series(
             True, index=downstream_subbasins
         ).reindex(subbasins.index, fill_value=False)
@@ -489,7 +499,7 @@ class Hydrography:
         )
 
         # flow direction
-        ldd: npt.NDArray[np.uint8] = self.full_like(
+        ldd: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=255, nodata=255, dtype=np.uint8
         )
         ldd.data = flow_raster.to_array(ftype="ldd")
@@ -1033,7 +1043,7 @@ class Hydrography:
         )
         assert waterbodies["waterbody_type"].dtype == np.int32
 
-        water_body_id: xr.DataArray = rasterize_like(
+        waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
             column="waterbody_id",
             raster=self.grid["mask"],
@@ -1042,7 +1052,7 @@ class Hydrography:
             all_touched=True,
         )
 
-        sub_water_body_id: xr.DataArray = rasterize_like(
+        sub_waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
             column="waterbody_id",
             raster=self.subgrid["mask"],
@@ -1051,15 +1061,16 @@ class Hydrography:
             all_touched=True,
         )
 
-        self.set_grid(water_body_id, name="waterbodies/water_body_id")
-        self.set_subgrid(sub_water_body_id, name="waterbodies/sub_water_body_id")
+        self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
+        self.set_subgrid(sub_waterbody_id, name="waterbodies/sub_waterbody_id")
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         if command_areas:
             command_areas = self.data_catalog.get_geodataframe(
                 command_areas, geom=self.region, predicate="intersects"
-            )
+            )  # ty:ignore[invalid-assignment]
+            assert isinstance(command_areas, gpd.GeoDataFrame)
             command_areas = command_areas[
                 ~command_areas["waterbody_id"].isnull()
             ].reset_index(drop=True)
@@ -1114,7 +1125,7 @@ class Hydrography:
             )
 
         else:
-            command_areas = self.full_like(
+            command_areas: xr.DataArray = self.full_like(
                 self.grid["mask"],
                 fill_value=-1,
                 nodata=-1,
@@ -1168,7 +1179,7 @@ class Hydrography:
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.data_catalog.get_source("GTSM").path.format(1979, "01")
+        ref_file = self.data_catalog.get_source("GTSM").path.format(1979, "01")  # ty:ignore[possibly-missing-attribute]
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
@@ -1195,7 +1206,7 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM").path.format(
+                f = self.data_catalog.get_source("GTSM").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1236,7 +1247,7 @@ class Hydrography:
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.data_catalog.get_source("GTSM_surge").path.format(1979, "01")
+        ref_file = self.data_catalog.get_source("GTSM_surge").path.format(1979, "01")  # ty:ignore[possibly-missing-attribute]
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
@@ -1254,7 +1265,7 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM_surge").path.format(
+                f = self.data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})

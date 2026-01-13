@@ -3,6 +3,7 @@ site_description: GEB simulates the environment (e.g., hydrology, floods), the i
 site_author: Jens de Bruijn
 repo_url: https://github.com/GEB-model/GEB
 repo_name: GEB-model/GEB
+site_url: https://docs.geb.sh/
 edit_uri: edit/main/docs/
 docs_dir: docs
 
@@ -12,6 +13,7 @@ theme:
     - navigation.indexes
     - navigation.sections
     - content.code.copy
+    - content.action.edit
   palette:
     - scheme: default
       primary: teal
@@ -37,6 +39,26 @@ plugins:
               - griffe_pydantic
   - bibtex:
       bib_file: docs/references.bib
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        Home:
+          - index.md
+        Getting Started:
+          - getting_started/*.md
+        Model:
+          - model/*.md
+        Agents:
+          - agents/*.md
+          - agents/ODD/*.md
+        Hydrology:
+          - hydrology/*.md
+        Hazards:
+          - hazards/*.md
+        Advanced topics:
+          - advanced_topics/*.md
+        About:
+          - about/*.md
 
 markdown_extensions:
   - footnotes
@@ -52,8 +74,15 @@ markdown_extensions:
       alternate_style: true
   - attr_list
   - md_in_html
+  - pymdownx.arithmatex:
+      generic: true
   - toc:
       permalink: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 nav:
   - Home: index.md
@@ -62,9 +91,12 @@ nav:
     - Configuration: getting_started/configuration.md
     - Building a model: getting_started/building_a_model.md
     - Running the model: getting_started/running.md
+    - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
   - Model:
     - Model: model/model.md
+    - Modules: model/modules.md
+    - Variables: model/variables.md
   - Agents:
     - Overview: agents/index.md
     - Households: agents/households.md
@@ -77,15 +109,16 @@ nav:
     - ODD protocol: agents/ODD/protocol.md
   - Hydrology:
     - Overview: hydrology/index.md
-    - Groundwater: hydrology/groundwater.md
-    - Land Surface: hydrology/landsurface.md
-    - Routing: hydrology/routing.md
-    - Lakes and Reservoirs: hydrology/lakes_reservoirs.md
     - Evapotranspiration: hydrology/evapotranspiration.md
+    - Land Surface: hydrology/landsurface.md
     - Interception: hydrology/interception.md
     - Snow and Glaciers: hydrology/snow_glaciers.md
     - Soil: hydrology/soil.md
     - Water Demand: hydrology/water_demand.md
+    - Groundwater: hydrology/groundwater.md
+    - Runoff concentration: hydrology/runoff_concentration.md
+    - Routing: hydrology/routing.md
+    - Waterbodies: hydrology/waterbodies.md
     - HRUs: hydrology/HRUs.md
   - Hazards:
     - Overview: hazards/index.md

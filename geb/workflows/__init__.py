@@ -4,8 +4,8 @@ from time import time
 
 import numpy as np
 
+from geb.geb_types import ArrayFloat
 from geb.store import DynamicArray
-from geb.types import ArrayFloat
 
 
 class TimingModule:

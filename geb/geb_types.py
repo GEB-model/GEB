@@ -36,6 +36,8 @@ ArrayInt = (
 ArrayBool = np.ndarray[tuple[int], np.dtype[np.bool_]]
 ArrayDatetime64 = np.ndarray[tuple[int], np.dtype[np.datetime64]]
 
+ArrayStr = np.ndarray[tuple[int], np.dtype[np.str_]]
+
 Array = np.ndarray[tuple[int], Any]  # General array type
 
 TwoDArrayFloat16 = np.ndarray[tuple[int, int], np.dtype[np.float16]]
@@ -71,19 +73,19 @@ ThreeDArrayFloat32 = np.ndarray[tuple[int, int, int], np.dtype[np.float32]]
 ThreeDArrayFloat64 = np.ndarray[tuple[int, int, int], np.dtype[np.float64]]
 ThreeDArrayFloat = ThreeDArrayFloat16 | ThreeDArrayFloat32 | ThreeDArrayFloat64
 
-ThreeArrayInt8 = np.ndarray[tuple[int, int, int], np.dtype[np.int8]]
-ThreeArrayInt16 = np.ndarray[tuple[int, int, int], np.dtype[np.int16]]
-ThreeArrayInt32 = np.ndarray[tuple[int, int, int], np.dtype[np.int32]]
-ThreeArrayInt64 = np.ndarray[tuple[int, int, int], np.dtype[np.int64]]
+ThreeDArrayInt8 = np.ndarray[tuple[int, int, int], np.dtype[np.int8]]
+ThreeDArrayInt16 = np.ndarray[tuple[int, int, int], np.dtype[np.int16]]
+ThreeDArrayInt32 = np.ndarray[tuple[int, int, int], np.dtype[np.int32]]
+ThreeDArrayInt64 = np.ndarray[tuple[int, int, int], np.dtype[np.int64]]
 ThreeDArrayUint8 = np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]
 ThreeDArrayUint16 = np.ndarray[tuple[int, int, int], np.dtype[np.uint16]]
 ThreeDArrayUint32 = np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]
 ThreeDArrayUint64 = np.ndarray[tuple[int, int, int], np.dtype[np.uint64]]
 ThreeDArrayInt = (
-    ThreeArrayInt8
-    | ThreeArrayInt16
-    | ThreeArrayInt32
-    | ThreeArrayInt64
+    ThreeDArrayInt8
+    | ThreeDArrayInt16
+    | ThreeDArrayInt32
+    | ThreeDArrayInt64
     | ThreeDArrayUint8
     | ThreeDArrayUint16
     | ThreeDArrayUint32

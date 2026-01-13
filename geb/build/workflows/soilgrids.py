@@ -11,7 +11,7 @@ from ..data_catalog import NewDataCatalog
 
 
 def load_soilgrids(
-    data_catalog: NewDataCatalog, mask: xr.Dataset, region: gpd.GeoDataFrame
+    data_catalog: NewDataCatalog, mask: xr.DataArray, region: gpd.GeoDataFrame
 ) -> xr.Dataset:
     """Load soilgrids data from ISRIC SoilGrids.
 
@@ -37,9 +37,10 @@ def load_soilgrids(
     for variable_name in variables:
         variable_layers: list[xr.DataArray] = []
         for i, layer in enumerate(layers, start=1):
-            da: xr.DataArray = data_catalog.fetch("soilgrids").read(
+            da = data_catalog.fetch("soilgrids").read(
                 variable=variable_name, depth=layer
             )
+            assert isinstance(da, xr.DataArray)
             da: xr.DataArray = (
                 da.isel(
                     get_window(

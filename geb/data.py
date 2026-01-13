@@ -8,10 +8,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from dateutil.relativedelta import relativedelta
 
-from geb.types import ThreeDArrayFloat32
-from geb.workflows.io import read_dict
+from geb.geb_types import ArrayDatetime64, ThreeDArrayFloat32
+from geb.workflows.io import read_params
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -25,7 +24,7 @@ class DateIndex:
     value can be be selected from another indexed object (e.g. a numpy array).
     """
 
-    def __init__(self, dates: list[date | datetime]) -> None:
+    def __init__(self, dates: list[datetime] | list[date]) -> None:
         """Create a DateIndex object that allows for fast lookup of dates.
 
         This class takes a list of dates and creates an index that allows for fast lookup of the index of a date in the list.
@@ -34,11 +33,10 @@ class DateIndex:
         Args:
             dates: a list of dates in datetime format. The dates should be sorted in ascending order.
         """
-        self.dates = np.array(dates)
+        self.dates: ArrayDatetime64 = np.array(dates, dtype=np.datetime64)
 
-        self.last_valid_date = self.dates[-1] + relativedelta(
-            self.dates[-1], self.dates[-2]
-        )  # extrapolate last date.
+        # the last valid date is extrapolated based on the last two dates
+        self.last_valid_date = self.dates[-1] + (self.dates[-1] - self.dates[-2])
 
     def get(self, date: date | datetime) -> int:
         """Get the index of a date in the list of dates.
@@ -64,6 +62,9 @@ class DateIndex:
                 f"Date {date} is after last valid date {self.last_valid_date}"
             )
 
+        # convert date to numpy datetime64 for comparison
+        date: np.datetime64 = np.datetime64(date)
+
         return np.searchsorted(self.dates, date, side="right").item() - 1
 
     def __len__(self) -> int:
@@ -88,7 +89,7 @@ def load_regional_crop_data_from_dict(
     Raises:
         ValueError: if the data is invalid according to the validation criteria.
     """
-    timedata = read_dict(model.files["dict"][name])
+    timedata = read_params(model.files["dict"][name])
 
     if timedata["type"] == "constant":
         return None, timedata["data"]
@@ -113,13 +114,13 @@ def load_regional_crop_data_from_dict(
         raise ValueError(f"Unknown type: {timedata['type']}")
 
 
-def load_crop_data(files: dict[str, dict[str, Path]]) -> tuple[dict, pd.DataFrame]:
+def load_crop_data(files: dict[str, dict[str, Path]]) -> tuple[str, pd.DataFrame]:
     """Read csv-file of values for crop water depletion.
 
     Returns:
         yield_factors: dictonary with np.ndarray of values per crop for each variable.
     """
-    crop_data = read_dict(files["dict"]["crops/crop_data"])
+    crop_data = read_params(files["dict"]["crops/crop_data"])
     data = pd.DataFrame.from_dict(crop_data["data"], orient="index")
     data.index = data.index.astype(int)
     return crop_data["type"], data
@@ -162,7 +163,7 @@ def load_economic_data(fp: Path) -> tuple[DateIndex, dict[int, np.ndarray]]:
     Returns:
         A tuple containing a DateIndex object and a dictionary mapping region IDs to numpy arrays of values.
     """
-    data = read_dict(fp)
+    data = read_params(fp)
     dates = parse_dates(data["time"])
     date_index = DateIndex(dates)
     d = {int(region_id): values for region_id, values in data["data"].items()}

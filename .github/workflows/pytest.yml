@@ -7,43 +7,43 @@ on:
     branches: '*'
 
 jobs:
-  build:
+  check-docs-only:
     runs-on: ubuntu-latest
+    outputs:
+      skip-tests: ${{ steps.check.outputs.skip_tests }}
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up uv
-      run: curl -LsSf https://astral.sh/uv/install.sh | sh
-    - name: Install the project
-      run: uv sync
-    - name: Build package
-      run: uv build
-    - uses: actions/upload-artifact@v4
-      with:
-        name: dist
-        path: dist/
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Check if only docs changes
+        id: check_changes_action
+        uses: ./.github/actions/check-docs-changes
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set skip output
+        id: check
+        run: |
+          if [ "${{ steps.check_changes_action.outputs.only_docs_changed }}" == "true" ]; then
+            echo "skip_tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip_tests=false" >> $GITHUB_OUTPUT
+          fi
 
   test:
-    needs: build
     runs-on: ubuntu-latest
+    needs: check-docs-only
+    if: needs.check-docs-only.outputs.skip-tests == 'false'
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v4
-      with:
-        name: dist
-        path: dist
     - name: Set up uv
       # Install latest uv version using the installer
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
     - name: Install the project
-      run: |
-        mkdir test_run
-        cp -r tests test_run/
-        cd test_run
-        uv venv
-        uv pip install ../dist/*.whl
+      run: uv sync --dev
     - name: Run tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        cd test_run
-        uv run pytest -s
+      run: uv run pytest -s

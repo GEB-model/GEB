@@ -307,8 +307,11 @@ def generate_surge_hydrograph(
 
     # generate storm surge hydrograph
     hours = 36
-    df_before_peak = pd.DataFrame(index=np.around(np.arange(0, 1.0001, 0.005), 3))
-    df_after_peak = pd.DataFrame(index=np.around(np.arange(0, 1.0001, 0.005), 3))
+    timesteps_before_peak = np.around(np.arange(0, 1.0001, 0.005), 3)
+    df_before_peak = pd.DataFrame(index=timesteps_before_peak)
+
+    timesteps_after_peak = np.around(np.arange(0, 1.0001, 0.005), 3)
+    df_after_peak = pd.DataFrame(index=timesteps_after_peak)
     for k in range(len(surge_peaks_POT)):
         timeseries_before_peak = surgepd.loc[
             surge_peaks_POT.iloc[k].name
@@ -377,9 +380,7 @@ def generate_surge_hydrograph(
     surge_hydrograph_height = np.concatenate(
         (
             np.zeros(247),
-            np.hstack(
-                (df_before_peak.index.values, np.flipud(df_after_peak.index.values)[1:])
-            ),
+            np.hstack((timesteps_before_peak, np.flipud(timesteps_after_peak)[1:])),
             np.zeros(246),
         )
     )

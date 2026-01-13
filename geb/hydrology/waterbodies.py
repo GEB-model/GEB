@@ -27,9 +27,11 @@ from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 
+from geb.geb_types import Array, ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.module import Module
-from geb.types import Array, ArrayBool, ArrayFloat32, ArrayInt32
+from geb.store import Bucket
 from geb.workflows import balance_check
 from geb.workflows.io import read_grid
 
@@ -124,7 +126,7 @@ else:
 
 
 def get_lake_height_from_bottom(
-    lake_storage: ArrayFloat32, lake_area: ArrayFloat32
+    lake_storage: ArrayFloat64, lake_area: ArrayFloat32
 ) -> ArrayFloat32:
     """Calculate the height of a lake above the bottom given its storage and area.
 
@@ -137,13 +139,13 @@ def get_lake_height_from_bottom(
     Returns:
         Height of the lake above the bottom in m
     """
-    height_from_bottom = lake_storage / lake_area
+    height_from_bottom = (lake_storage / lake_area).astype(np.float32)
     return height_from_bottom
 
 
 def get_lake_storage_from_height_above_bottom(
     lake_height: ArrayFloat32, lake_area: ArrayFloat32
-) -> ArrayFloat32:
+) -> ArrayFloat64:
     """Calculate the storage of a lake given its height above the bottom and area.
 
     Args:
@@ -153,11 +155,11 @@ def get_lake_storage_from_height_above_bottom(
     Returns:
         Storage of the lake in m3
     """
-    return lake_height * lake_area
+    return (lake_height * lake_area).astype(np.float64)
 
 
 def get_lake_height_above_outflow(
-    lake_storage: ArrayFloat32,
+    lake_storage: ArrayFloat64,
     lake_area: ArrayFloat32,
     outflow_height: ArrayFloat32,
 ) -> ArrayFloat32:
@@ -227,7 +229,7 @@ def get_lake_factor(
 
 
 def estimate_outflow_height(
-    lake_capacity: ArrayFloat32,
+    lake_capacity: ArrayFloat64,
     lake_factor: ArrayFloat32,
     lake_area: ArrayFloat32,
     avg_outflow: ArrayFloat32,
@@ -253,7 +255,7 @@ def estimate_outflow_height(
 
 def get_lake_outflow(
     dt: float,
-    storage: ArrayFloat32,
+    storage: ArrayFloat64,
     lake_factor: ArrayFloat32,
     lake_area: ArrayFloat32,
     outflow_height: ArrayFloat32,
@@ -286,7 +288,21 @@ def get_lake_outflow(
     return outflow_m3, height_above_outflow
 
 
-class LakesReservoirs(Module):
+class WaterBodyVariables(Bucket):
+    """Variables for the Lakes and Reservoirs module."""
+
+    storage: ArrayFloat64
+    lake_area: ArrayFloat32
+    lake_factor: ArrayFloat32
+    waterbody_mapping: ArrayInt32
+    waterbody_ids_original: ArrayInt32
+    waterbody_data: pd.DataFrame
+    capacity: ArrayFloat64
+    waterbody_type: ArrayInt32
+    outflow_height: ArrayFloat32
+
+
+class WaterBodies(Module):
     """Implements all lakes and reservoir operations in the hydrological model.
 
     For reservoir it gets the outflow from the reservoir operator agents.
@@ -295,6 +311,8 @@ class LakesReservoirs(Module):
         model: The GEB model instance.
         hydrology: The hydrology submodel instance.
     """
+
+    var: WaterBodyVariables
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initializes the Lakes and Reservoirs module.
@@ -319,7 +337,7 @@ class LakesReservoirs(Module):
         Returns:
             The name of the module.
         """
-        return "hydrology.lakes_reservoirs"
+        return "hydrology.waterbodies"
 
     def spinup(self) -> None:
         """Spinup part to initialize lakes and reservoirs.
@@ -339,10 +357,10 @@ class LakesReservoirs(Module):
         """
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped: np.ndarray = self.grid.load(
-            self.model.files["grid"]["waterbodies/water_body_id"]
+            self.model.files["grid"]["waterbodies/waterbody_id"]
         )
         self.grid.var.waterBodyID, self.var.waterbody_mapping = (
-            self.map_water_bodies_IDs(waterBodyID_unmapped)
+            self.map_waterbodies_IDs(waterBodyID_unmapped)
         )
 
         # set discharge to NaN for all cells that are not part of a water body
@@ -361,33 +379,33 @@ class LakesReservoirs(Module):
             ]
         )
 
-        self.var.water_body_data = self.load_water_body_data(
+        self.var.waterbody_data = self.load_waterbody_data(
             self.var.waterbody_mapping, waterBodyID_unmapped
         )
         # sort the water bodies in the same order as the compressed water body IDs (waterbody_ids)
-        self.var.water_body_data = self.var.water_body_data.sort_index()
+        self.var.waterbody_data = self.var.waterbody_data.sort_index()
 
-        assert np.array_equal(self.var.water_body_data.index, waterbody_ids)
+        assert np.array_equal(self.var.waterbody_data.index, waterbody_ids)
 
-        self.var.water_body_type = self.var.water_body_data["waterbody_type"].values
-        self.var.waterbody_ids_original = self.var.water_body_data[
+        self.var.waterbody_type = self.var.waterbody_data["waterbody_type"].values
+        self.var.waterbody_ids_original = self.var.waterbody_data[
             "original_waterbody_id"
         ].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
-        self.var.water_body_type[self.var.water_body_type == LAKE_CONTROL] = LAKE
+        self.var.waterbody_type[self.var.waterbody_type == LAKE_CONTROL] = LAKE
 
         # print("setting all water body types to LAKE")
-        # self.var.water_body_type.fill(LAKE)
+        # self.var.waterbody_type.fill(LAKE)
 
-        assert (np.isin(self.var.water_body_type, [LAKE, RESERVOIR])).all()
+        assert (np.isin(self.var.waterbody_type, [LAKE, RESERVOIR])).all()
 
-        self.var.lake_area = self.var.water_body_data["average_area"].values
-        self.var.capacity = self.var.water_body_data["volume_total"].values
+        self.var.lake_area = self.var.waterbody_data["average_area"].values
+        self.var.capacity = self.var.waterbody_data["volume_total"].values
 
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
         # Lake parameter A (suggested  value equal to outflow width in [m])
         average_discharge = np.maximum(
-            self.var.water_body_data["average_discharge"].values,
+            self.var.waterbody_data["average_discharge"].values,
             0.1,
         )
 
@@ -425,7 +443,7 @@ class LakesReservoirs(Module):
             < 1e-5
         ).all()
 
-    def map_water_bodies_IDs(
+    def map_waterbodies_IDs(
         self, waterBodyID_unmapped: ArrayInt32
     ) -> tuple[ArrayInt32, ArrayInt32]:
         """Maps the water body IDs to a continuous range of IDs starting from 0.
@@ -438,24 +456,24 @@ class LakesReservoirs(Module):
         Returns:
             A tuple containing:
                 - waterBodyID_mapped: The mapped water body IDs.
-                - water_body_mapping: The mapping from original IDs to mapped IDs.
+                - waterbody_mapping: The mapping from original IDs to mapped IDs.
         """
-        unique_water_bodies = np.unique(waterBodyID_unmapped)
-        unique_water_bodies = unique_water_bodies[unique_water_bodies != -1]
-        if unique_water_bodies.size == 0:
+        unique_waterbodies = np.unique(waterBodyID_unmapped)
+        unique_waterbodies = unique_waterbodies[unique_waterbodies != -1]
+        if unique_waterbodies.size == 0:
             return np.full_like(waterBodyID_unmapped, -1), np.full(
                 1, -1, dtype=np.int32
             )
         else:
-            water_body_mapping = np.full(
-                unique_water_bodies.max() + 2, -1, dtype=np.int32
+            waterbody_mapping = np.full(
+                unique_waterbodies.max() + 2, -1, dtype=np.int32
             )  # make sure that the last entry is also -1, so that -1 maps to -1
-            water_body_mapping[unique_water_bodies] = np.arange(
-                0, unique_water_bodies.size, dtype=np.int32
+            waterbody_mapping[unique_waterbodies] = np.arange(
+                0, unique_waterbodies.size, dtype=np.int32
             )
-            return water_body_mapping[waterBodyID_unmapped], water_body_mapping
+            return waterbody_mapping[waterBodyID_unmapped], waterbody_mapping
 
-    def load_water_body_data(
+    def load_waterbody_data(
         self,
         waterbody_mapping: ArrayInt32,
         waterbody_original_ids: ArrayInt32,
@@ -471,7 +489,7 @@ class LakesReservoirs(Module):
         Returns:
             A GeoDataFrame containing the water body data with the index set to the mapped water body IDs.
         """
-        water_body_data = gpd.read_parquet(
+        waterbody_data = gpd.read_parquet(
             self.model.files["geom"]["waterbodies/waterbody_data"],
         )
         # drop all data that is not in the original ids
@@ -479,17 +497,17 @@ class LakesReservoirs(Module):
         waterbody_original_ids_compressed = waterbody_original_ids_compressed[
             waterbody_original_ids_compressed != -1
         ]
-        water_body_data = water_body_data[
-            water_body_data["waterbody_id"].isin(waterbody_original_ids_compressed)
+        waterbody_data = waterbody_data[
+            waterbody_data["waterbody_id"].isin(waterbody_original_ids_compressed)
         ]
         # map the waterbody ids to the new ids, save old ids
-        water_body_data["original_waterbody_id"] = water_body_data["waterbody_id"]
-        water_body_data["waterbody_id"] = waterbody_mapping[
-            water_body_data["waterbody_id"]
+        waterbody_data["original_waterbody_id"] = waterbody_data["waterbody_id"]
+        waterbody_data["waterbody_id"] = waterbody_mapping[
+            waterbody_data["waterbody_id"]
         ]
 
-        water_body_data = water_body_data.set_index("waterbody_id")
-        return water_body_data
+        waterbody_data = waterbody_data.set_index("waterbody_id")
+        return waterbody_data
 
     def get_outflows(self, waterBodyID: ArrayInt32) -> ArrayInt32:
         """Identifies the outflow points for each water body.
@@ -672,8 +690,10 @@ class LakesReservoirs(Module):
         if __debug__:
             prestorage = self.var.storage.copy()
 
-        outflow_to_drainage_network_m3 = np.zeros_like(self.var.storage)
-        command_area_release_m3 = np.zeros_like(self.var.storage)
+        outflow_to_drainage_network_m3 = np.zeros_like(
+            self.var.storage, dtype=np.float32
+        )
+        command_area_release_m3 = np.zeros_like(self.var.storage, dtype=np.float32)
 
         outflow_to_drainage_network_m3[self.is_lake] = self.routing_lakes(
             routing_step_length_seconds
@@ -705,7 +725,7 @@ class LakesReservoirs(Module):
         Returns:
             A boolean array where True indicates that the corresponding water body is a reservoir.
         """
-        return self.var.water_body_type == RESERVOIR
+        return self.var.waterbody_type == RESERVOIR
 
     @property
     def is_lake(self) -> ArrayBool:
@@ -714,10 +734,10 @@ class LakesReservoirs(Module):
         Returns:
             A boolean array where True indicates that the corresponding water body is a lake.
         """
-        return self.var.water_body_type == LAKE
+        return self.var.waterbody_type == LAKE
 
     @property
-    def reservoir_storage(self) -> ArrayFloat32:
+    def reservoir_storage(self) -> ArrayFloat64:
         """Gets the storage of each reservoir in the model.
 
         Returns:
@@ -726,12 +746,12 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_reservoir]
 
     @reservoir_storage.setter
-    def reservoir_storage(self, value: ArrayFloat32) -> None:
+    def reservoir_storage(self, value: ArrayFloat64) -> None:
         """Sets the storage of each reservoir in the model."""
         self.var.storage[self.is_reservoir] = value
 
     @property
-    def reservoir_capacity(self) -> ArrayFloat32:
+    def reservoir_capacity(self) -> ArrayFloat64:
         """Gets the capacity of each reservoir in the model.
 
         Returns:
@@ -740,7 +760,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_reservoir]
 
     @reservoir_capacity.setter
-    def reservoir_capacity(self, value: ArrayFloat32) -> None:
+    def reservoir_capacity(self, value: ArrayFloat64) -> None:
         """Sets the capacity of each reservoir in the model.
 
         Args:
@@ -749,7 +769,7 @@ class LakesReservoirs(Module):
         self.var.capacity[self.is_reservoir] = value
 
     @property
-    def lake_storage(self) -> ArrayFloat32:
+    def lake_storage(self) -> ArrayFloat64:
         """Gets the storage of each lake in the model.
 
         Returns:
@@ -758,12 +778,12 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_lake]
 
     @lake_storage.setter
-    def lake_storage(self, value: ArrayFloat32) -> None:
+    def lake_storage(self, value: ArrayFloat64) -> None:
         """Sets the storage of each lake in the model."""
         self.var.storage[self.is_lake] = value
 
     @property
-    def lake_capacity(self) -> ArrayFloat32:
+    def lake_capacity(self) -> ArrayFloat64:
         """Gets the capacity of each lake in the model.
 
         Returns:
@@ -772,7 +792,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_lake]
 
     @lake_capacity.setter
-    def lake_capacity(self, value: ArrayFloat32) -> None:
+    def lake_capacity(self, value: ArrayFloat64) -> None:
         """Sets the capacity of each lake in the model."""
         self.var.capacity[self.is_lake] = value
 
@@ -783,7 +803,9 @@ class LakesReservoirs(Module):
         Returns:
             The fill percentage of each reservoir in the model.
         """
-        return self.reservoir_storage / self.reservoir_capacity * 100
+        return (self.reservoir_storage / self.reservoir_capacity * 100).astype(
+            np.float32
+        )
 
     @property
     def n(self) -> int:
@@ -815,8 +837,8 @@ class LakesReservoirs(Module):
         if self.model.current_timestep == 1 or (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
         ):
-            if self.hydrology.dynamic_water_bodies:
-                raise NotImplementedError("dynamic_water_bodies not implemented yet")
+            if self.hydrology.dynamic_waterbodies:
+                raise NotImplementedError("dynamic_waterbodies not implemented yet")
 
         # print(self.reservoir_fill_percentage.astype(int))
         self.report(locals())

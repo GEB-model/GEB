@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
+import aiohttp
 import numpy as np
 import xarray as xr
 
 from geb.workflows.raster import convert_nodata, interpolate_na_along_time_dim
 
 from .base import Adapter
+
+N_CONNECTION_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 5
 
 
 class DestinationEarth(Adapter):
@@ -77,15 +82,34 @@ class DestinationEarth(Adapter):
 
         Returns:
             Downloaded ERA5 data as an xarray DataArray.
-        """
-        da: xr.DataArray = xr.open_dataset(
-            self.url,
-            storage_options={"headers": self.get_authentication_header()},
-            chunks={},
-            engine="zarr",
-        )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+        Raises:
+            ConnectionError: If unable to connect to the Destination Earth API after multiple attempts.
+        """
+        for attempt in range(N_CONNECTION_ATTEMPTS):
+            try:
+                da: xr.DataArray = xr.open_dataset(
+                    self.url,
+                    storage_options={"headers": self.get_authentication_header()},
+                    chunks={},
+                    engine="zarr",
+                )[variable].rename(
+                    {"valid_time": "time", "latitude": "y", "longitude": "x"}
+                )
+                break
+            except aiohttp.ClientResponseError:
+                print(
+                    f"Error connecting to Destination Earth API. This could be due to erroneous credentials or a temporary server issue. Retrying ({attempt}/{N_CONNECTION_ATTEMPTS})..."
+                )
+                time.sleep(RETRY_DELAY_SECONDS)
+        else:
+            raise ConnectionError(
+                "Failed to connect to Destination Earth API after 3 attempts."
+            )
+
+        da: xr.DataArray = da.drop_vars(
+            ["number", "surface", "depthBelowLandLayer"], errors="ignore"
+        )
 
         buffer: float = 0.5
         buffered_bounds: tuple[float, float, float, float] = (
