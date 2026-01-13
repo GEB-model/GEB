@@ -1067,7 +1067,7 @@ def test_solve_energy_balance_implicit_iterative() -> None:
     pressure = np.float32(101325.0)
     dt_seconds = np.float32(3600.0)
 
-    t_new, sensible_flux = solve_energy_balance_implicit_iterative(
+    t_new = solve_energy_balance_implicit_iterative(
         soil_temperature_C=soil_temperature_old,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
@@ -1086,7 +1086,7 @@ def test_solve_energy_balance_implicit_iterative() -> None:
     lw_in = np.float32(350.0)
     air_temp_k = np.float32(303.15)
 
-    t_new_hot, _ = solve_energy_balance_implicit_iterative(
+    t_new_hot = solve_energy_balance_implicit_iterative(
         soil_temperature_C=soil_temperature_old,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
@@ -1103,7 +1103,7 @@ def test_solve_energy_balance_implicit_iterative() -> None:
     lw_in = np.float32(200.0)
     air_temp_k = np.float32(263.15)
 
-    t_new_cold, _ = solve_energy_balance_implicit_iterative(
+    t_new_cold = solve_energy_balance_implicit_iterative(
         soil_temperature_C=soil_temperature_old,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
