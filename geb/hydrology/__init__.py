@@ -225,7 +225,7 @@ class Hydrology(Data, Module):
         timer.finish_split("GW")
 
         total_runoff_m = self.runoff_concentrator.step(
-            interflow=interflow_m, baseflow=baseflow_m, runoff=overland_runoff_m
+            interflow_m=interflow_m, baseflow_m=baseflow_m, runoff_m=overland_runoff_m
         ).astype(np.float32)
 
         if __debug__:
