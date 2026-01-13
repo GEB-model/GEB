@@ -12,7 +12,7 @@ from urllib.parse import quote
 import pandas as pd
 import requests
 
-from geb.workflows.io import write_dict
+from geb.workflows.io import write_params
 
 from .base import Adapter
 
@@ -101,7 +101,7 @@ class GlobalExposureModel(Adapter):
 
         # and write to file
         os.makedirs(self.path.parent, exist_ok=True)
-        write_dict(
+        write_params(
             merged,
             self.path.with_name("global_exposure_model.json"),
         )
@@ -142,26 +142,11 @@ class GlobalExposureModel(Adapter):
         Returns:
             GlobalExposureModel: The adapter instance with the processed data.
         """
-        country = countries[0]  # For simplicity, only handle the first country
-        output_dir = f"./downloads/{country}"
         branch = "main"
         tree_url = f"https://api.github.com/repos/gem/global_exposure_model/git/trees/{branch}?recursive=1"
-        os.makedirs(output_dir, exist_ok=True)
-
-        # ============================
-        # 1. Get entire repo tree in ONE request
-        # ============================
-
-        print("Downloading repository index...")
         resp = requests.get(tree_url)  # , headers=HEADERS)
         resp.raise_for_status()
-
         tree = resp.json()["tree"]
-
-        # ============================
-        # 4. Download CSVs via raw URLs
-        # ============================
-
         raw_base = (
             f"https://raw.githubusercontent.com/gem/global_exposure_model/{branch}/"
         )
@@ -178,9 +163,6 @@ class GlobalExposureModel(Adapter):
             self._filter_folders(tree, csv_files, country)
         self._download_and_process_csv(raw_base, csv_files)
 
-        print("\nDone!")
-
-        # Implementation would go here
         return self
 
     def read(self, **kwargs: Any) -> dict[str, dict[str, float]]:
