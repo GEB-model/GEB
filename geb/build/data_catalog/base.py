@@ -156,6 +156,8 @@ class Adapter:
             return read_zarr(self.path)
         elif self.path.suffix == ".nc":
             return xr.open_dataarray(self.path, **kwargs)
+        elif self.path.suffix in (".tif", ".asc"):
+            return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix == ".json":
             with open(self.path, "r") as file:
                 return yaml.safe_load(file)
