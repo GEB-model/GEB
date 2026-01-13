@@ -12,7 +12,9 @@ from geb.hydrology.landcovers import (
 from geb.hydrology.soil import (
     add_water_to_topwater_and_evaporate_open_water,
     calculate_arno_runoff,
+    calculate_sensible_heat_flux,
     get_bubbling_pressure,
+    get_heat_capacity_solid_fraction,
     get_infiltration_capacity,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
@@ -23,6 +25,7 @@ from geb.hydrology.soil import (
     kv_cosby,
     kv_wosten,
     rise_from_groundwater,
+    solve_energy_balance_implicit_iterative,
     thetar_brakensiek,
     thetas_toth,
     thetas_wosten,
@@ -783,7 +786,7 @@ def test_pedotransfer_functions_consistency() -> None:
         sand = np.array([props["sand"]], dtype=np.float32)
         clay = np.array([props["clay"]], dtype=np.float32)
         silt = np.array([props["silt"]], dtype=np.float32)
-        bulk_density = np.array([props["bulk_density"]], dtype=np.float32)
+        bulk_density_gr_per_cm3 = np.array([props["bulk_density"]], dtype=np.float32)
         organic_carbon_percentage = np.array(
             [props["organic_carbon"]], dtype=np.float32
         )
@@ -793,7 +796,7 @@ def test_pedotransfer_functions_consistency() -> None:
         # Using Toth as a baseline for Brakensiek input
         thetas_val_toth = thetas_toth(
             organic_carbon_percentage=organic_carbon_percentage,
-            bulk_density=bulk_density,
+            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
             is_top_soil=is_top_soil,
             clay=clay,
             silt=silt,
@@ -801,7 +804,7 @@ def test_pedotransfer_functions_consistency() -> None:
 
         thetas_val_wosten = thetas_wosten(
             clay=clay,
-            bulk_density=bulk_density,
+            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
             silt=silt,
             organic_carbon_percentage=organic_carbon_percentage,
             is_topsoil=is_top_soil,
@@ -820,7 +823,7 @@ def test_pedotransfer_functions_consistency() -> None:
         kv_w = kv_wosten(
             silt=silt,
             clay=clay,
-            bulk_density=bulk_density,
+            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
             organic_carbon_percentage=organic_carbon_percentage,
             is_topsoil=is_top_soil,
         )
@@ -842,7 +845,7 @@ def test_pedotransfer_functions_consistency() -> None:
             clay=clay,
             silt=silt,
             organic_carbon_percentage=organic_carbon_percentage,
-            bulk_density=bulk_density,
+            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
             is_top_soil=is_top_soil,
         )
 
@@ -932,3 +935,183 @@ def test_pedotransfer_functions_consistency() -> None:
     assert results["Clay"]["thetas_wosten"] > results["Sand"]["thetas_wosten"], (
         "Clay should have higher Thetas than Sand (Wosten)"
     )
+
+
+def test_get_heat_capacity() -> None:
+    """Test get_heat_capacity_solid_fraction."""
+    # Test valid input
+    # Bulk density of 1.3 g/cm3 (~1300 kg/m3) should yield a porosity of roughly 0.5
+    # (actually 1 - 1300/2650 = 0.49 void, 0.51 solid).
+    # Solid fraction phi_s = 1300 / 2650 = 0.490566
+    # Volumetric Heat capacity C_s = phi_s * C_mineral = 0.490566 * 2.13e6 = 1.045e6
+    # Layer thickness = 1.0 m
+    # Areal Heat Capacity = 1.045e6 * 1.0 = 1.045e6 J/(m2 K)
+
+    bulk_density = np.array([1.3], dtype=np.float32)
+    layer_thickness = np.array([1.0], dtype=np.float32)
+
+    expected_phi_s = 1300.0 / 2650.0
+    volumetric_hc = expected_phi_s * 2.13e6
+    expected_areal_hc = volumetric_hc * 1.0
+
+    result = get_heat_capacity_solid_fraction(bulk_density, layer_thickness)
+
+    np.testing.assert_allclose(
+        result, np.array([expected_areal_hc], dtype=np.float32), rtol=1e-5
+    )
+
+    # Test with bulk density equal to mineral density (solid rock)
+    # Bulk density 2.65 g/cm3. phi_s should be 1.0. Heat capacity = C_mineral = 2.13e6.
+    # Layer thickness = 2.0 m
+    # Areal Heat Capacity = 2.13e6 * 2.0
+
+    bulk_density_rock = np.array([2.65], dtype=np.float32)
+    layer_thickness_rock = np.array([2.0], dtype=np.float32)
+
+    expected_hc_rock = 2.13e6
+    expected_areal_hc_rock = expected_hc_rock * 2.0
+
+    result_rock = get_heat_capacity_solid_fraction(
+        bulk_density_rock, layer_thickness_rock
+    )
+    np.testing.assert_allclose(
+        result_rock, np.array([expected_areal_hc_rock], dtype=np.float32), rtol=1e-5
+    )
+
+    # Test with multiple layers summing to 1.0 m thickness
+    # Bulk density 1.3 g/cm3 for all layers
+    bulk_density_val = 1.3
+    # Layer thicknesses: 0.1, 0.2, 0.3, 0.4 -> Sum = 1.0
+    layer_thicknesses = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+    bulk_densities = np.full_like(layer_thicknesses, bulk_density_val)
+
+    # Expected volumetric heat capacity (same as first test case)
+    expected_phi_s_multi = 1300.0 / 2650.0
+    expected_volumetric_hc_multi = expected_phi_s_multi * 2.13e6
+
+    # Calculate for multi-layer case
+    result_multi = get_heat_capacity_solid_fraction(bulk_densities, layer_thicknesses)
+
+    # Total heat capacity sum should match calculation for single 1.0m layer
+    total_heat_capacity_sum = np.sum(result_multi)
+    expected_total_1m = expected_volumetric_hc_multi * 1.0
+
+    np.testing.assert_allclose(
+        total_heat_capacity_sum,
+        expected_total_1m,
+        rtol=1e-5,
+        err_msg="Sum of layer heat capacities should match single block of combined thickness",
+    )
+
+    # Individual layer Check
+    expected_result_multi = expected_volumetric_hc_multi * layer_thicknesses
+    np.testing.assert_allclose(
+        result_multi,
+        expected_result_multi,
+        rtol=1e-5,
+        err_msg="Individual layer heat capacities mismatch",
+    )
+
+
+def test_calculate_sensible_heat_flux() -> None:
+    """Test the calculate_sensible_heat_flux function."""
+    # Equilibrium (No transfer)
+    flux, G = calculate_sensible_heat_flux(
+        soil_temperature_C=np.float32(20.0),
+        air_temperature_K=np.float32(293.15),  # 20C
+        wind_speed_10m_m_per_s=np.float32(2.0),
+        surface_pressure_pa=np.float32(101325.0),
+    )
+    assert abs(flux) < 1e-4
+
+    # Air warmer than soil (Warming)
+    flux_warming, _ = calculate_sensible_heat_flux(
+        soil_temperature_C=np.float32(10.0),
+        air_temperature_K=np.float32(293.15),  # 20C
+        wind_speed_10m_m_per_s=np.float32(5.0),
+        surface_pressure_pa=np.float32(101325.0),
+    )
+    assert flux_warming > 0.0
+
+    # Soil warmer than air (Cooling)
+    flux_cooling, _ = calculate_sensible_heat_flux(
+        soil_temperature_C=np.float32(30.0),
+        air_temperature_K=np.float32(293.15),  # 20C
+        wind_speed_10m_m_per_s=np.float32(5.0),
+        surface_pressure_pa=np.float32(101325.0),
+    )
+    assert flux_cooling < 0.0
+
+
+def test_solve_energy_balance_implicit_iterative() -> None:
+    """Test the implicit iterative energy balance solver."""
+    # Common Parameters (Scalars)
+    soil_temperature_old = np.float32(10.0)  # 10 C
+    bulk_density = np.float32(1300.0)
+    layer_thickness = np.float32(0.1)
+
+    # Calculate heat capacity for scalar input
+    # Note: get_heat_capacity_solid_fraction expects arrays usually, but let's see.
+    # It seems to accept arrays. Let's compute it with array helper but use result as scalar.
+    heat_capacity_arr = get_heat_capacity_solid_fraction(
+        np.array([bulk_density / 1000.0], dtype=np.float32),
+        np.array([layer_thickness], dtype=np.float32),
+    )
+    heat_capacity_areal = heat_capacity_arr[0]
+
+    # Steady State / No Forcing
+    sw_in = np.float32(0.0)
+    lw_in = np.float32(363.0)  # Approx balance
+    air_temp_k = np.float32(283.15)
+    wind_speed = np.float32(2.0)
+    pressure = np.float32(101325.0)
+    dt_seconds = np.float32(3600.0)
+
+    t_new, sensible_flux = solve_energy_balance_implicit_iterative(
+        soil_temperature_C=soil_temperature_old,
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        air_temperature_K=air_temp_k,
+        wind_speed_10m_m_per_s=wind_speed,
+        surface_pressure_pa=pressure,
+        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
+        timestep_seconds=dt_seconds,
+    )
+
+    # Should stay close to 10.0
+    assert abs(t_new - 10.0) < 0.5, f"Steady state failed, got {t_new}"
+
+    # Strong heating (daytime)
+    sw_in = np.float32(800.0)
+    lw_in = np.float32(350.0)
+    air_temp_k = np.float32(303.15)
+
+    t_new_hot, _ = solve_energy_balance_implicit_iterative(
+        soil_temperature_C=soil_temperature_old,
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        air_temperature_K=air_temp_k,
+        wind_speed_10m_m_per_s=wind_speed,
+        surface_pressure_pa=pressure,
+        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
+        timestep_seconds=dt_seconds,
+    )
+    assert t_new_hot > 10.0, "Soil should warm up significantly"
+
+    # Strong cooling (nighttime clear sky)
+    sw_in = np.float32(0.0)
+    lw_in = np.float32(200.0)
+    air_temp_k = np.float32(263.15)
+
+    t_new_cold, _ = solve_energy_balance_implicit_iterative(
+        soil_temperature_C=soil_temperature_old,
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        air_temperature_K=air_temp_k,
+        wind_speed_10m_m_per_s=wind_speed,
+        surface_pressure_pa=pressure,
+        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
+        timestep_seconds=dt_seconds,
+    )
+
+    assert t_new_cold < 10.0, "Soil should cool down"
