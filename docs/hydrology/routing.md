@@ -6,7 +6,7 @@ The routing module in GEB is responsible for moving water through the river netw
 
 The river network topology is derived from a Local Drain Direction (LDD) map using the [pyflwdir](https://deltares.github.io/pyflwdir/) package.
 
-The LDD is a 2D array where each cell contains a value representing the direction of flow to its downstream neighbor. The coding scheme corresponds to the layout of a numeric keypad (look at your keyboard if you have one!):
+The LDD is a 2D array where each cell contains a value representing the direction of flow to its downstream neighbor. The coding scheme corresponds to the layout of a numeric keypad (look at your keyboard if you have one!!):
 
 <table style="border: 1px solid black; border-collapse: collapse; text-align: center; margin: auto;">
   <tbody>
