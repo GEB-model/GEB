@@ -10,6 +10,7 @@
 - Fix rare out of bounds values in ERA5 data that led to undefined behaviour due to compression and decompression roundtrip
 - Require extra_dims_names to be set in DynamicArray and update model in places where it was not set
 - Allow exporting of hourly values from reporter
+- Add initial soil temperature. Now still simplified but better than having no soil temperature.
 
 To support this version:
 
