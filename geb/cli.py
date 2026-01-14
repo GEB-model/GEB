@@ -732,7 +732,7 @@ def workflow(
 @click.option(
     "--region-shapefile",
     type=str,
-    help="Optional path to region shape file (in JSON format in the current working directory). Defaults to geometry bounds if not specified.",
+    help="Optional path to region shape file (in a format supported by geopandas and relative to the working directory). Defaults to geometry bounds if not specified.",
 )
 @click.option(
     "--target-area-km2",
@@ -775,7 +775,7 @@ def init_multiple(
     working_directory: Path,
     from_example: str,
     geometry_bounds: str,
-    region_shapefile: str,
+    region_shapefile: str | None,
     target_area_km2: float,
     area_tolerance: float,
     cluster_prefix: str,
