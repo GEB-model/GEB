@@ -731,7 +731,6 @@ def workflow(
 )
 @click.option(
     "--region-shapefile",
-    # default="region_shapefile.json",  # World: "-180.0,-90.0,180.0,90.0" Western Europe: "-10.0,35.0,20.0,70.0" Europe: "-10.0,35.0,40.0,70.0"
     type=str,
     help="Optional path to region shape file (in JSON format in the current working directory). Defaults to geometry bounds if not specified.",
 )
