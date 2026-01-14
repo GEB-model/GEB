@@ -73,7 +73,7 @@ class GroundWater(Module):
     def spinup(self) -> None:
         """Initialize groundwater model parameters and state variables."""
         # load hydraulic conductivity (md-1)
-        self.grid.var.hydraulic_conductivity = self.hydrology.grid.load(
+        self.grid.var.groundwater_hydraulic_conductivity = self.hydrology.grid.load(
             self.model.files["grid"]["groundwater/hydraulic_conductivity"],
             layer=None,
         )
@@ -97,7 +97,7 @@ class GroundWater(Module):
         )
 
         assert (
-            self.grid.var.hydraulic_conductivity.shape
+            self.grid.var.groundwater_hydraulic_conductivity.shape
             == self.grid.var.specific_yield.shape
         )
 
@@ -143,7 +143,7 @@ class GroundWater(Module):
             layer_boundary_elevation=self.grid.var.layer_boundary_elevation,
             basin_mask=self.model.hydrology.grid.mask,
             heads=self.grid.var.heads,
-            hydraulic_conductivity=self.grid.var.hydraulic_conductivity,
+            hydraulic_conductivity=self.grid.var.groundwater_hydraulic_conductivity,
             verbose=False,
             heads_update_callback=self.heads_update_callback,
         )

@@ -14,6 +14,8 @@
 - Enable return period maps for subbasins that discharge into the ocean, including several bugfixes for this.
 - Allow exporting of hourly values from reporter
 - Add initial soil temperature. Now still simplified but better than having no soil temperature.
+- Implement interflow
+- Limit drainage to groundwater to conductivity of groundwater top layer
 
 To support this version:
 
