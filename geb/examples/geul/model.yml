@@ -43,6 +43,10 @@ report:
       varname: .bare_soil_evaporation_m
       type: HRU
       function: weightednanmean
+    runoff_m:
+      varname: .runoff_m
+      type: HRU
+      function: weightednanmean
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s
