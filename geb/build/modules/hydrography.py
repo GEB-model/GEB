@@ -1,6 +1,7 @@
 """Build methods for the hydrography for GEB."""
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import geopandas as gpd
@@ -1313,3 +1314,40 @@ class Hydrography(BuildModelBase):
         self.setup_gtsm_water_levels(temporal_range)
         self.setup_gtsm_surge_levels(temporal_range)
         self.setup_coast_rp()
+
+    @build_method
+    def setup_inflow(
+        self, lon: float, lat: float, inflow_m3_per_s: float | int
+    ) -> None:
+        """Sets up a inflow hydrograph at a specified location.
+
+        Args:
+            lon: The longitude of the inflow location.
+            lat: The latitude of the inflow location.
+            inflow_m3_per_s: The inflow in cubic meters per second.
+
+        Raises:
+            ValueError: If the inflow location is outside of the model grid or study area.
+        """
+        mask = self.grid["mask"]
+        transform = mask.rio.transform()
+        y, x = rasterio.transform.rowcol(transform, lon, lat)
+
+        if y < 0 or y >= mask.shape[0] or x < 0 or x >= mask.shape[1]:
+            raise ValueError("Inflow location is outside of the model grid.")
+
+        if mask.values[y, x]:
+            raise ValueError("Inflow location is outside of the study area.")
+
+        inflow_df_m3_per_s = pd.DataFrame(
+            index=pd.date_range(
+                self.start_date,
+                end=self.end_date + timedelta(hours=23),
+                freq="H",
+                inclusive="both",
+            ),
+            columns=np.array([f"{y}_{x}"]),
+            data=inflow_m3_per_s,
+        )
+
+        self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")
