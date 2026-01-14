@@ -1568,7 +1568,7 @@ class Routing(Module):
             A GeoDataFrame containing the outflow rivers.
         """
         rivers: gpd.GeoDataFrame = self.rivers
-        rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        rivers = rivers[~rivers["is_downstream_outflow"]]
         outflow_rivers: gpd.GeoDataFrame = rivers[
             ~rivers["downstream_ID"].isin(rivers.index)
         ]

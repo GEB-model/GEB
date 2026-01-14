@@ -202,7 +202,7 @@ def create_sfincs_models(
             ]
             subbasins_group.loc[
                 subbasins_group.index.isin(outflow_basins),
-                "is_downstream_outflow_subbasin",
+                "is_downstream_outflow",
             ] = True
 
             sfincs_model: SFINCSRootModel = build_sfincs(
