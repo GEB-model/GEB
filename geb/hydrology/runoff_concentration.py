@@ -124,9 +124,9 @@ class RunoffConcentrator(Module):
 
     def step(
         self,
-        interflow: TwoDArrayFloat64,  # shape (24, n_cells)
-        baseflow: ArrayFloat32,  # shape (n_cells,)
-        runoff: TwoDArrayFloat64,  # shape (24, n_cells)
+        interflow_m: TwoDArrayFloat64,  # shape (24, n_cells)
+        baseflow_m: ArrayFloat32,  # shape (n_cells,)
+        runoff_m: TwoDArrayFloat64,  # shape (24, n_cells)
     ) -> TwoDArrayFloat64:
         """Concentrate runoff using triangular weighting.
 
@@ -136,26 +136,26 @@ class RunoffConcentrator(Module):
         changing the time component to also include slopes and land uses.
 
         Args:
-            runoff: 2D array with shape (24, n_cells) containing sub-daily surface runoff.
-            interflow: 2D array with shape (24, n_cells) containing sub-daily interflow.
-            baseflow: 1D array with shape (n_cells,) containing daily baseflow.
+            runoff_m: 2D array with shape (24, n_cells) containing sub-daily surface runoff.
+            interflow_m: 2D array with shape (24, n_cells) containing sub-daily interflow.
+            baseflow_m: 1D array with shape (n_cells,) containing daily baseflow.
 
         Returns:
             2D array with shape (24, n_cells) representing the runoff concentrated outflow.
         """
-        assert (runoff >= 0).all()
-        assert (interflow >= 0).all()
-        assert (baseflow >= 0).all()
+        assert (runoff_m >= 0).all()
+        assert (interflow_m >= 0).all()
+        assert (baseflow_m >= 0).all()
 
-        assert interflow.shape[0] == 24
-        assert runoff.shape[0] == 24
-        assert interflow.ndim == 2
-        assert baseflow.ndim == 1
-        assert runoff.ndim == 2
+        assert interflow_m.shape[0] == 24
+        assert runoff_m.shape[0] == 24
+        assert interflow_m.ndim == 2
+        assert baseflow_m.ndim == 1
+        assert runoff_m.ndim == 2
 
         n_steps: int
         n_cells: int
-        n_steps, n_cells = runoff.shape
+        n_steps, n_cells = runoff_m.shape
 
         # Advance buffer by one day (24 hours)
         self._advance_buffer(n_steps)
@@ -167,19 +167,19 @@ class RunoffConcentrator(Module):
         ).sum()
 
         # Baseflow is distributed evenly across 24 substeps
-        baseflow_per_step: ArrayFloat64 = (baseflow / n_steps).astype(np.float64)
+        baseflow_per_step: ArrayFloat64 = (baseflow_m / n_steps).astype(np.float64)
         baseflow_array: TwoDArrayFloat64 = np.broadcast_to(
             baseflow_per_step, (n_steps, n_cells)
         )  # Create array that matches the shape of the runoff
 
         # Apply triangular weighting to (for now only) runoff
-        self._apply_triangular(runoff, self.weights_runoff)
+        self._apply_triangular(runoff_m, self.weights_runoff)
 
         outflow_runoff_m: TwoDArrayFloat64 = (
             self.grid.var.buffer[:n_steps].copy()
         )  # Outflow is only the first 24 buffer steps which equals 24 hourly outflows
         total_outflow_m: TwoDArrayFloat64 = (
-            outflow_runoff_m + baseflow_array + interflow
+            outflow_runoff_m + baseflow_array + interflow_m
         )  # Get total outflow (including baseflow and interflow which did not change)
         overland_runoff_storage_end_m: TwoDArrayFloat64 = (
             self.grid.var.buffer[n_steps:].copy().astype(np.float64)
@@ -190,13 +190,13 @@ class RunoffConcentrator(Module):
 
         outflow_m3: float = (
             (outflow_runoff_m * self.grid.var.cell_area).sum()
-            + (interflow * self.grid.var.cell_area).sum()
+            + (interflow_m * self.grid.var.cell_area).sum()
             + (baseflow_array * self.grid.var.cell_area).sum()
         )
 
         inflow_m3: float = (
-            (runoff * self.grid.var.cell_area).sum()
-            + (interflow * self.grid.var.cell_area).sum()
+            (runoff_m * self.grid.var.cell_area).sum()
+            + (interflow_m * self.grid.var.cell_area).sum()
             + (baseflow_array * self.grid.var.cell_area).sum()
         )
 

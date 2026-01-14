@@ -12,6 +12,8 @@
 - Fill holes in subbasin maps by deriving subbasin maps directly from rivers ourselves. This also makes the original subbasins dataset not needed anymore.
 - Extend rivers to end up exactly in the ocean rather than the cell just before
 - Enable return period maps for subbasins that discharge into the ocean, including several bugfixes for this.
+- Allow exporting of hourly values from reporter
+- Add initial soil temperature. Now still simplified but better than having no soil temperature.
 
 To support this version:
 
