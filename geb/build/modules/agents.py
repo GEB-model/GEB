@@ -1633,10 +1633,12 @@ class Agents(BuildModelBase):
             geom=self.region.union_all(),
         )
         countries_in_model = gadm_level1["COUNTRY"].unique().tolist()
+        iso3_countries = gadm_level1["GID_0"].unique().tolist()
 
         global_exposure_model = self.new_data_catalog.fetch(
             "global_exposure_model",
             countries=countries_in_model,
+            iso3_countries=iso3_countries,
         ).read()
 
         # append the NAME_1 column to the buildings

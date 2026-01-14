@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import geopandas as gpd
 import pandas as pd
 import requests
 
@@ -86,7 +87,7 @@ class GlobalExposureModel(Adapter):
                     ):
                         csv_files.append(item["path"])
 
-    def _download_and_process_csv(self, raw_base: str, csv_files: list[str]) -> None:
+    def _download_and_process_csv(self, raw_base: str, csv_files: list[str]):
         """Download and process CSV files from the repository.
 
         Args:
@@ -125,6 +126,7 @@ class GlobalExposureModel(Adapter):
             merged,
             self.path.with_name("global_exposure_model.json"),
         )
+        return merged
 
     def _process_csv(self, df: pd.DataFrame) -> dict[str, dict[str, float]]:
         """Process a single CSV DataFrame to compute damages per square meter.
@@ -156,15 +158,23 @@ class GlobalExposureModel(Adapter):
                 )
         return result
 
-    def fetch(self, url: str, countries: list[str]) -> GlobalExposureModel:
+    def fetch(
+        self, url: str, countries: list[str], iso3_countries: list[str]
+    ) -> GlobalExposureModel:
         """Fetch and process data for specific countries.
 
         Args:
             url: required but not used in this implementation.
             countries: The list of countries to fetch data for.
+            iso3_countries: The list of ISO3 country codes to fetch data for.
         Returns:
             GlobalExposureModel: The adapter instance with the processed data.
         """
+        # Download gadm 4.0 levels for the specified countries
+        gadm_regions: gpd.GeoDataFrame = self._fetch_gadm_40_levels(
+            iso3_countries=iso3_countries
+        )
+
         # Query the repository tree for all files in the `main` branch so we
         # can locate country-specific folders without cloning the repo.
         branch = "main"
@@ -188,9 +198,52 @@ class GlobalExposureModel(Adapter):
             )
 
             self._filter_folders(tree, csv_files, country)
-        self._download_and_process_csv(raw_base, csv_files)
-
+        merged = self._download_and_process_csv(raw_base, csv_files)
+        self._merge_data_on_gadm(merged=merged, gadm_regions=gadm_regions)
         return self
+
+    def _download_gadm(self, url: str, fn: str) -> gpd.GeoDataFrame:
+        """Download and extract a GADM 4.0 geopackage zip file.
+
+        Args:
+            url: The URL of the GADM 4.0 geopackage zip file to download.
+            fn: The filename to save the downloaded geopackage as.
+        """
+        r = requests.get(url)
+        r.raise_for_status()
+
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            temp_dir: Path = Path(temp_dir_str)
+            gpkg_path = temp_dir / fn
+            with open(gpkg_path, "wb") as f:
+                f.write(r.content)
+            # load as gepandas dataframe
+            gadm = gpd.read_file(gpkg_path)
+        return gadm
+
+    def _fetch_gadm_40_levels(self, iso3_countries: list[str]) -> gpd.GeoDataFrame:
+        """Retrieve GADM 4.0 levels for subnational administrative boundaries.
+
+        The Global Exposure Model data uses GADM 4.0 admin names.
+        Args:
+            iso3_countries: The list of ISO3 country codes to fetch data for.
+        Returns:
+            A GeoDataFrame with the concatenated GADM data for the specified countries.
+        """
+        base_url = "https://geodata.ucdavis.edu/gadm/gadm4.0/json/"
+        gadm = []
+        for iso3 in iso3_countries:
+            fn = f"gadm40_{iso3}_1.json"
+            url = f"{base_url}gadm40_{iso3}_1.json"
+            gadm.append(self._download_gadm(url, fn))
+        gadm_df = pd.concat(gadm, ignore_index=True)
+        return gadm_df[["NAME_1", "geometry"]]
+
+    def _merge_data_on_gadm(self, merged, gadm_regions: gpd.GeoDataFrame) -> None:
+        # Load GADM admin names mapping
+        merged_pd = pd.DataFrame.from_dict(merged, orient="index")
+        
+        pass
 
     def read(self, **kwargs: Any) -> dict[str, dict[str, float]]:
         """Read the dataset into a dictionary.
