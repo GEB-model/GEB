@@ -82,6 +82,163 @@ FILES: dict[str, dict[str, str]] = {
 }
 
 
+class MeritBasins(Adapter):
+    """The MeritBasins adapter for downloading and processing HydroLAKES data.
+
+    Args:
+        Adapter: The base Adapter class.
+    """
+
+    def __init__(self, variable: str, *args: Any, **kwargs: Any) -> None:
+        """Initialize the MeritBasins adapter.
+
+        Args:
+            variable: The variable to download, either 'cat' for catchments or 'riv' for river network.
+            *args: Positional arguments to pass to the Adapter constructor.
+            **kwargs: Keyword arguments to pass to the Adapter constructor.
+        """
+        self.variable = variable
+        super().__init__(*args, **kwargs)
+
+    def check_quota(self, text: str, file_path: Path | None = None) -> None:
+        """Check if the Google Drive quota has been exceeded.
+
+        Args:
+            text: The HTML text to check.
+            file_path: The path to the file. If the quota is exceeded, the file will be deleted.
+                If None, no file will be deleted.
+
+        Raises:
+            ValueError: If the quota has been exceeded.
+        """
+        if "Google Drive - Quota exceeded" in text:
+            if file_path and file_path.exists():
+                file_path.unlink()  # remove the incomplete file
+            raise ValueError(
+                "Too many users have viewed or downloaded this file recently. Please try accessing the file again later. If the file you are trying to access is particularly large or is shared with many people, it may take up to 24 hours to be able to view or download the file."
+            )
+
+    def fetch(self, url: str) -> Adapter:
+        """Process HydroLAKES zip file to extract and convert to parquet.
+
+        Args:
+            url: The URL to download the HydroLAKES zip file from.
+
+        Returns:
+            Path to the processed parquet file.
+        """
+        if not self.is_ready:
+            download_path: Path = self.root
+
+            session: requests.Session = requests.Session()
+
+            files: dict[str, dict[str, str]] = FILES[self.variable]
+            downloaded_shp_files: list[Path] = []
+            all_downloaded_files: list[Path] = []
+            for continent, file_dict in files.items():
+                for ext, file_id in file_dict.items():
+                    file_path = (
+                        download_path
+                        / f"merit_basins_{self.variable}_{continent}.{ext}"
+                    )
+
+                    if not file_path.exists():
+                        response = session.get(
+                            f"https://drive.google.com/uc?export=download&id={file_id}",
+                        )
+
+                        self.check_quota(response.text)
+
+                        # Case 1: small file → direct content
+                        if (
+                            "content-disposition"
+                            in response.headers.get("content-type", "").lower()
+                            or "Content-Disposition" in response.headers
+                        ):
+                            # Just write the file
+                            with open(file_path, "wb") as f:
+                                f.write(response.content)
+
+                        else:
+                            # Case 2: large file → parse HTML form
+                            html = response.text
+
+                            # Regex-based parse of hidden inputs
+                            inputs = dict(
+                                re.findall(r'name="([^"]+)" value="([^"]+)"', html)
+                            )
+
+                            if "id" in inputs and "confirm" in inputs:
+                                action_url_match = re.search(
+                                    r'form[^>]+action="([^"]+)"', html
+                                )
+                                assert action_url_match, (
+                                    "Could not find form action URL, perhaps Google changed their HTML?"
+                                )
+                                action_url = action_url_match.group(1)
+                                fetch_and_save(
+                                    url=action_url,
+                                    file_path=file_path,
+                                    params=inputs,
+                                    session=session,
+                                )
+
+                                # if file is less than 100KB, it is probably an error page
+                                if file_path.stat().st_size < 100_000:
+                                    with open(file_path, "r") as f:
+                                        text = f.read()
+                                    if "Google Drive - Quota exceeded" in text:
+                                        self.check_quota(text, file_path)
+
+                    if ext == "shp":
+                        downloaded_shp_files.append(file_path)
+                    all_downloaded_files.append(file_path)
+
+            gdfs: list[gpd.GeoDataFrame] = []
+            for shp_path in downloaded_shp_files:
+                gdf: gpd.GeoDataFrame = gpd.read_file(shp_path)
+                gdfs.append(gdf)
+
+            merged: gpd.GeoDataFrame = pd.concat(gdfs, ignore_index=True)  # ty:ignore[invalid-assignment]
+
+            # clean memory
+            for gdf in gdfs:
+                del gdf
+            del gdfs
+
+            merged = merged.set_crs("EPSG:4326")  # ty:ignore[invalid-assignment]
+
+            ascending: bool = True
+            merged = merged.sort_values(by="COMID", ascending=ascending)  # ty:ignore[invalid-assignment]
+
+            # Use a temporary file to avoid partial writes in case of errors
+            with tempfile.NamedTemporaryFile(
+                dir=self.path.parent, suffix=".parquet", delete=False
+            ) as tmp_file:
+                tmp_path: Path = Path(tmp_file.name)
+                print(
+                    "Saving downloaded and processed data to temporary parquet file..."
+                )
+                merged.to_parquet(
+                    path=tmp_path,
+                    compression="gzip",
+                    write_covering_bbox=True,
+                    index=False,
+                    sorting_columns=[SortingColumn(0, descending=not ascending)],
+                    row_group_size=10_000,
+                    schema_version="1.1.0",
+                )
+                # Atomically move the temporary file to the final path
+                tmp_path.rename(self.path)
+
+            sleep(5)  # wait a bit to ensure all file handles are closed
+
+            for file_path in all_downloaded_files:
+                file_path.unlink()  # remove downloaded files
+
+        return self
+
+
 class MeritBasinsRivers(Adapter):
     """The MeritBasins adapter for downloading and processing HydroLAKES data.
 
@@ -233,3 +390,20 @@ class MeritBasinsRivers(Adapter):
                 file_path.unlink()  # remove downloaded files
 
         return self
+
+
+class MeritBasinsCatchments(MeritBasins):
+    """The MeritBasinsCatchments adapter for downloading and processing MERIT Basins catchment data.
+
+    Args:
+        MeritBasins: The base MeritBasins class.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize the MeritBasinsCat adapter.
+
+        Args:
+            *args: Positional arguments to pass to the Adapter constructor.
+            **kwargs: Keyword arguments to pass to the Adapter constructor.
+        """
+        super().__init__("cat", *args, **kwargs)
