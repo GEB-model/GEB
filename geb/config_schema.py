@@ -16,7 +16,9 @@ class ForecastsConfig(BaseModel):
 class RegionConfig(BaseModel):
     """Configuration for region."""
 
-    subbasin: int | None = Field(None, description="Subbasin ID.")
+    subbasin: int | list[int] | None = Field(
+        None, description="Subbasin ID or list of subbasin IDs."
+    )
 
 
 class GeneralConfig(BaseModel):
