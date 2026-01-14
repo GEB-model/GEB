@@ -7,6 +7,14 @@
 - Add a prompt to installation docs for setting up geb using llm agents
 - Update and simplify installation docs
 - Write documentation for spinning up and running models
+- Fix rare out of bounds values in ERA5 data that led to undefined behaviour due to compression and decompression roundtrip
+- Require extra_dims_names to be set in DynamicArray and update model in places where it was not set
+- Allow exporting of hourly values from reporter
+- Add initial soil temperature. Now still simplified but better than having no soil temperature.
+
+To support this version:
+
+- Re-run `setup_forcing` and `setup_spei`
 
 # v1.0.0b9
 - Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.

@@ -558,12 +558,15 @@ class Forcing(BuildModelBase):
         # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
         # we take a wide margin of 500 mm/h
         # this function is currently daily, so the hourly value should be save
+        min_value: float = 0.0
         max_value: float = 500 / 3600  # convert to kg/m2/s
         precision: float = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
+        da = da.clip(min_value, max_value)
+
         offset: int = 0
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, 0, max_value, offset=offset, precision=precision
+            da, min_value, max_value, offset=offset, precision=precision
         )
         filters: list = [
             FixedScaleOffset(
@@ -634,9 +637,14 @@ class Forcing(BuildModelBase):
         }
         self.set_xy_attrs(da)
 
+        min_value: float = 0  # W/m2
+        max_value: float = 1361  # W/m2
+
+        da = da.clip(min_value, max_value)
+
         offset = 0
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, 0, 1361, offset=offset, precision=0.1
+            da, min_value, max_value, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
@@ -684,9 +692,14 @@ class Forcing(BuildModelBase):
         }
         self.set_xy_attrs(da)
 
+        min_value: float = 0  # W/m2
+        max_value: float = 700  # W/m2
+
+        da = da.clip(min_value, max_value)
+
         offset = 0
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, 0, 1361, offset=offset, precision=0.1
+            da, min_value, max_value, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
@@ -735,9 +748,15 @@ class Forcing(BuildModelBase):
         self.set_xy_attrs(da)
 
         K_to_C = 273.15
+
+        min_value: float = -100 + K_to_C
+        max_value: float = 60 + K_to_C
+
+        da = da.clip(min_value, max_value)
+
         offset = -15 - K_to_C  # average temperature on earth
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
+            da, min_value, max_value, offset=offset, precision=0.1
         )
 
         filters: list = [
@@ -785,12 +804,20 @@ class Forcing(BuildModelBase):
             "units": "K",
             "_FillValue": np.nan,
         }
-        self.set_xy_attrs(da)
 
         K_to_C: float = 273.15
+
+        min_value: float = -100 + K_to_C
+        max_value: float = 60 + K_to_C
+
+        # Set spatial (xy) attributes before clipping to ensure consistency
+        # with other forcing setters and avoid unexpected behavior.
+        self.set_xy_attrs(da)
+
+        da = da.clip(min_value, max_value)
         offset: float = -15 - K_to_C  # average temperature on earth
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
+            da, min_value, max_value, offset=offset, precision=0.1
         )
 
         filters: list = [
@@ -837,11 +864,17 @@ class Forcing(BuildModelBase):
             "units": "Pa",
             "_FillValue": np.nan,
         }
+
+        min_value: float = 30_000  # Pa
+        max_value: float = 120_000  # Pa
+
+        da = da.clip(min_value, max_value)
+
         self.set_xy_attrs(da)
 
         offset: int = -100_000
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, 30_000, 120_000, offset=offset, precision=10
+            da, min_value, max_value, offset=offset, precision=10
         )
 
         filters: list = [
@@ -891,6 +924,12 @@ class Forcing(BuildModelBase):
             "units": "m s-1",
             "_FillValue": np.nan,
         }
+
+        min_value: float = -120  # m/s
+        max_value: float = 120  # m/s
+
+        da = da.clip(min_value, max_value)
+
         self.set_xy_attrs(da)
 
         offset = 0
@@ -898,7 +937,7 @@ class Forcing(BuildModelBase):
         # we assume a maximum wind speed of 120 m/s (432 km/h), which is a stronger
         # than the strongest wind gust ever recorded on earth (113 m/s)
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, -120, 120, offset=offset, precision=0.1
+            da, min_value, max_value, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(

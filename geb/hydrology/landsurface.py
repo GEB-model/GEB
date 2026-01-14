@@ -39,12 +39,14 @@ from .snow_glaciers import snow_model
 from .soil import (
     add_water_to_topwater_and_evaporate_open_water,
     get_bubbling_pressure,
+    get_heat_capacity_solid_fraction,
     get_pore_size_index_brakensiek,
     get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
     infiltration,
     kv_wosten,
     rise_from_groundwater,
+    solve_energy_balance_implicit_iterative,
     thetar_brakensiek,
     thetas_toth,
 )
@@ -61,6 +63,8 @@ def land_surface_model(
     wwp: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     wfc: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     ws: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
+    soil_temperature_C: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
+    solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32,
     delta_z: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     soil_layer_height: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     root_depth_m: ArrayFloat32,
@@ -120,6 +124,8 @@ def land_surface_model(
         wwp: Wilting point soil moisture content [m3/m3].
         wfc: Field capacity soil moisture content [m3/m3].
         ws: Soil moisture content at saturation [m3/m3].
+        soil_temperature_C: Soil temperature in Celsius.
+        solid_heat_capacity_J_per_m2_K: Solid heat capacity of soil layers [J/m2/K].
         delta_z: Thickness of soil layers [m].
         soil_layer_height: Soil layer heights for the cell in meters, shape (N_SOIL_LAYERS,).
         root_depth_m: Root depth for the cell in meters.
@@ -338,7 +344,18 @@ def land_surface_model(
                 capillary_rise_from_groundwater=capillar_rise_m[i],
             )
 
-            soil_is_frozen = frost_index[i] > np.float32(85.0)
+            soil_temperature_C[0, i] = solve_energy_balance_implicit_iterative(
+                soil_temperature_C=soil_temperature_C[0, i],
+                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0, i],
+                shortwave_radiation_W_per_m2=rsds_W_per_m2_cell[hour],
+                longwave_radiation_W_per_m2=rlds_W_per_m2_cell[hour],
+                air_temperature_K=tas_2m_K_cell[hour],
+                wind_speed_10m_m_per_s=wind_10m_m_per_s,
+                surface_pressure_pa=ps_pascal_cell[hour],
+                timestep_seconds=np.float32(3600.0),
+            )
+
+            soil_is_frozen = soil_temperature_C[0, i] <= np.float32(0.0)
 
             (
                 topwater_m[i],
@@ -713,7 +730,7 @@ class LandSurface(Module):
             ),
             method="mean",
         )
-        bulk_density: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
+        bulk_density_gr_per_cm3: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
                 self.model.files["subgrid"]["soil/bulk_density"],
                 layer=None,
@@ -752,7 +769,7 @@ class LandSurface(Module):
 
         thetas: TwoDArrayFloat32 = thetas_toth(
             organic_carbon_percentage=organic_carbon_percentage,
-            bulk_density=bulk_density,
+            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
             is_top_soil=is_top_soil,
             clay=self.HRU.var.clay_percentage,
             silt=self.HRU.var.silt_percentage,
@@ -820,7 +837,7 @@ class LandSurface(Module):
             kv_wosten(
                 silt=self.HRU.var.silt_percentage,
                 clay=self.HRU.var.clay_percentage,
-                bulk_density=bulk_density,
+                bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
                 organic_carbon_percentage=organic_carbon_percentage,
                 is_topsoil=is_top_soil,
             )
@@ -832,6 +849,13 @@ class LandSurface(Module):
 
         self.HRU.var.soil_temperature_C: TwoDArrayFloat32 = np.full_like(
             self.HRU.var.soil_layer_height, 0.0, dtype=np.float32
+        )
+
+        self.HRU.var.solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32 = (
+            get_heat_capacity_solid_fraction(
+                bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
+                layer_thickness_m=self.HRU.var.soil_layer_height,
+            )
         )
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
@@ -1029,6 +1053,8 @@ class LandSurface(Module):
             wwp=self.HRU.var.wwp,
             wfc=self.HRU.var.wfc,
             ws=self.HRU.var.ws,
+            soil_temperature_C=self.HRU.var.soil_temperature_C,
+            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
             delta_z=delta_z,
             soil_layer_height=self.HRU.var.soil_layer_height,
             root_depth_m=root_depth_m,

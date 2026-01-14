@@ -457,7 +457,7 @@ def clip_brakensiek(
 
 def thetas_toth(
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
@@ -471,7 +471,7 @@ def thetas_toth(
 
     Args:
         organic_carbon_percentage: soil organic carbon content [%].
-        bulk_density: bulk density [g /cm3].
+        bulk_density_gr_per_cm3: bulk density [g /cm3].
         clay: clay percentage [%].
         silt: fsilt percentage [%].
         is_top_soil: top soil flag.
@@ -483,22 +483,24 @@ def thetas_toth(
     return (
         np.float32(0.6819)
         - np.float32(0.06480) * (1 / (organic_carbon_percentage + 1))
-        - np.float32(0.11900) * bulk_density**2
+        - np.float32(0.11900) * bulk_density_gr_per_cm3**2
         - np.float32(0.02668) * is_top_soil
         + np.float32(0.001489) * clay
         + np.float32(0.0008031) * silt
-        + np.float32(0.02321) * (1 / (organic_carbon_percentage + 1)) * bulk_density**2
-        + np.float32(0.01908) * bulk_density**2 * is_top_soil
+        + np.float32(0.02321)
+        * (1 / (organic_carbon_percentage + 1))
+        * bulk_density_gr_per_cm3**2
+        + np.float32(0.01908) * bulk_density_gr_per_cm3**2 * is_top_soil
         - np.float32(0.0011090) * clay * is_top_soil
         - np.float32(0.00002315) * silt * clay
-        - np.float32(0.0001197) * silt * bulk_density**2
-        - np.float32(0.0001068) * clay * bulk_density**2
+        - np.float32(0.0001197) * silt * bulk_density_gr_per_cm3**2
+        - np.float32(0.0001068) * clay * bulk_density_gr_per_cm3**2
     )
 
 
 def thetas_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
@@ -509,7 +511,7 @@ def thetas_wosten(
 
     Args:
         clay: Clay percentage (C).
-        bulk_density: Bulk density (D).
+        bulk_density_gr_per_cm3: Bulk density (D).
         silt: Silt percentage (S).
         organic_carbon_percentage: Organic matter percentage (OM).
         is_topsoil: 1 for topsoil, 0 for subsoil.
@@ -520,15 +522,15 @@ def thetas_wosten(
     theta_s = (
         0.7919
         + 0.00169 * clay
-        - 0.29619 * bulk_density
+        - 0.29619 * bulk_density_gr_per_cm3
         - 0.000001491 * silt**2
         + 0.0000821 * organic_carbon_percentage**2
         + 0.02427 * (1 / clay)
         + 0.01113 * (1 / silt)
         + 0.01472 * np.log(silt)
         - 0.0000733 * organic_carbon_percentage * clay
-        - 0.000619 * bulk_density * clay
-        - 0.001183 * bulk_density * organic_carbon_percentage
+        - 0.000619 * bulk_density_gr_per_cm3 * clay
+        - 0.001183 * bulk_density_gr_per_cm3 * organic_carbon_percentage
         - 0.0001664 * is_topsoil * silt
     )
 
@@ -664,7 +666,7 @@ def get_pore_size_index_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine Brooks-Corey pore size distribution index [-].
@@ -675,7 +677,7 @@ def get_pore_size_index_wosten(
         clay: clay percentage [%].
         silt: silt percentage [%].
         organic_carbon_percentage: soil organic carbon content [%].
-        bulk_density: bulk density [g /cm3].
+        bulk_density_gr_per_cm3: bulk density [g /cm3].
         is_top_soil: top soil flag.
 
     Returns:
@@ -686,18 +688,18 @@ def get_pore_size_index_wosten(
         - 0.02195 * clay
         + 0.0074 * silt
         - 0.1940 * organic_carbon_percentage
-        + 45.5 * bulk_density
-        - 7.24 * bulk_density**2
+        + 45.5 * bulk_density_gr_per_cm3
+        - 7.24 * bulk_density_gr_per_cm3**2
         + 0.0003658 * clay**2
         + 0.002855 * organic_carbon_percentage**2
-        - 12.81 * bulk_density**-1
+        - 12.81 * bulk_density_gr_per_cm3**-1
         - 0.1524 * silt**-1
         - 0.01958 * organic_carbon_percentage**-1
         - 0.2876 * np.log(silt)
         - 0.0709 * np.log(organic_carbon_percentage)
-        - 44.6 * np.log(bulk_density)
-        - 0.02264 * bulk_density * clay
-        + 0.0896 * bulk_density * organic_carbon_percentage
+        - 44.6 * np.log(bulk_density_gr_per_cm3)
+        - 0.02264 * bulk_density_gr_per_cm3 * clay
+        + 0.0896 * bulk_density_gr_per_cm3 * organic_carbon_percentage
         + 0.00718 * is_top_soil * clay
     )
 
@@ -746,7 +748,7 @@ def kv_brakensiek(
 def kv_wosten(
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
@@ -757,25 +759,25 @@ def kv_wosten(
     Args:
         silt: Silt percentage (S).
         is_topsoil: 1 for topsoil, 0 for subsoil.
-        bulk_density: Bulk density (D).
+        bulk_density_gr_per_cm3: Bulk density (D).
         clay: Clay percentage (C).
         organic_carbon_percentage: Organic matter percentage (OM).
 
     Returns:
         float: The calculated Ks* value [m/s].
     """
-    ks = np.exp(
+    ks: np.ndarray[Shape, np.dtype[np.float32]] = np.exp(
         7.755
         + 0.0352 * silt
         + np.float32(0.93) * is_topsoil
-        - 0.967 * bulk_density**2
+        - 0.967 * bulk_density_gr_per_cm3**2
         - 0.000484 * clay**2
         - 0.000322 * silt**2
         + 0.001 * (1 / silt)
         - 0.0748 * (1 / organic_carbon_percentage)
         - 0.643 * np.log(silt)
-        - 0.01398 * bulk_density * clay
-        - 0.1673 * bulk_density * organic_carbon_percentage
+        - 0.01398 * bulk_density_gr_per_cm3 * clay
+        - 0.1673 * bulk_density_gr_per_cm3 * organic_carbon_percentage
         + 0.02986 * np.float32(is_topsoil) * clay
         - 0.03305 * np.float32(is_topsoil) * silt
     ) / (100 * 86400)  # convert to m/s
@@ -809,41 +811,250 @@ def kv_cosby(
     return kv
 
 
-def get_heat_capacity(
-    sand: np.ndarray[Shape, np.dtype[np.float32]],
-    silt: np.ndarray[Shape, np.dtype[np.float32]],
-    clay: np.ndarray[Shape, np.dtype[np.float32]],
-    theta_v: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+def get_heat_capacity_solid_fraction(
+    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
+    layer_thickness_m: np.ndarray[Shape, np.dtype[np.float32]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
-    """Calculate the soil heat capacity [J/(m3·K)] per Campbell (1985).
+    """Calculate the heat capacity of the solid fraction of the soil layer [J/(m2·K)].
+
+    This calculates the total heat capacity per unit area for the solid part of the soil layer.
 
     Args:
-        sand: Sand fraction [0-1].
-        silt: Silt fraction [0-1].
-        clay: Clay fraction [0-1].
-        theta_v: Volumetric water content [m3/m3].
-        bulk_density: Soil bulk density [kg/m3].
+        bulk_density_gr_per_cm3: Soil bulk density [g/cm3].
+        layer_thickness_m: Thickness of the soil layer [m].
 
     Returns:
-        The soil volumetric heat capacity [J/(m3·K)].
+        The areal heat capacity of the solid fraction [J/(m2·K)].
     """
     # Constants for volumetric heat capacity [J/(m3·K)]
-    C_SAND = np.float32(2.13e6)
-    C_SILT = np.float32(2.13e6)
-    C_CLAY = np.float32(2.13e6)
-    C_WATER = np.float32(4.18e6)
+    C_MINERAL = np.float32(2.13e6)
 
     # Particle density of minerals [kg/m3]
     RHO_MINERAL = np.float32(2650.0)
 
     # Calculate total volume fraction of solids from bulk density
-    phi_s = bulk_density / RHO_MINERAL
+    # Convert bulk density from g/cm3 to kg/m3 (factor 1000)
+    phi_s = (bulk_density_gr_per_cm3 * 1000.0) / RHO_MINERAL
 
-    # Calculate volumetric heat capacity
-    # Weighting the solid fraction by the texture distribution
-    heat_capacity = phi_s * (sand * C_SAND + silt * C_SILT + clay * C_CLAY) + (
-        theta_v * C_WATER
+    # Calculate volumetric heat capacity [J/(m3·K)]
+    volumetric_heat_capacity_solid = phi_s * C_MINERAL
+
+    # Calculate areal heat capacity [J/(m2·K)]
+    areal_heat_capacity = volumetric_heat_capacity_solid * layer_thickness_m
+
+    return areal_heat_capacity.astype(np.float32)
+
+
+@njit(cache=True, inline="always")
+def calculate_net_radiation_flux(
+    shortwave_radiation_W_per_m2: np.float32,
+    longwave_radiation_W_per_m2: np.float32,
+    soil_temperature_C: np.float32,
+) -> tuple[np.float32, np.float32]:
+    """Calculate the net radiation energy flux and its derivative.
+
+    Calculates absorbed incoming radiation - outgoing longwave radiation.
+    Also returns the derivative of the outgoing longwave radiation with respect to temperature,
+    which can be used for stability calculations in explicit schemes or damping in implicit schemes.
+
+    Args:
+        shortwave_radiation_W_per_m2: Incoming shortwave [W/m2].
+        longwave_radiation_W_per_m2: Incoming longwave [W/m2].
+        soil_temperature_C: Current soil temperature [C].
+
+    Returns:
+        Tuple of:
+            - Net radiation flux [W/m2]. Positive = warming (incoming > outgoing).
+            - Derivative of outgoing radiation flux [W/m2/K] (Conductance equivalent).
+    """
+    # Constants (matching other functions)
+    STEFAN_BOLTZMANN_CONSTANT = np.float32(5.670374419e-8)
+    SOIL_EMISSIVITY = np.float32(0.95)
+    SOIL_ALBEDO = np.float32(0.23)
+
+    # Calculate Fluxes
+    temperature_K = soil_temperature_C + np.float32(273.15)
+
+    absorbed_shortwave_W = (
+        np.float32(1.0) - SOIL_ALBEDO
+    ) * shortwave_radiation_W_per_m2
+    absorbed_longwave_W = SOIL_EMISSIVITY * longwave_radiation_W_per_m2
+    incoming_W = absorbed_shortwave_W + absorbed_longwave_W
+
+    outgoing_W = SOIL_EMISSIVITY * STEFAN_BOLTZMANN_CONSTANT * (temperature_K**4)
+
+    net_flux_W = incoming_W - outgoing_W
+
+    # Calculate Derivative of Outgoing Radiation with respect to T:
+    # d(sigma * eps * T^4)/dT = 4 * sigma * eps * T^3
+    conductance_W_per_m2_K = (
+        np.float32(4.0)
+        * SOIL_EMISSIVITY
+        * STEFAN_BOLTZMANN_CONSTANT
+        * (temperature_K**3)
     )
 
-    return heat_capacity.astype(np.float32)
+    return net_flux_W, conductance_W_per_m2_K
+
+
+@njit(cache=True, inline="always")
+def calculate_sensible_heat_flux(
+    soil_temperature_C: np.float32,
+    air_temperature_K: np.float32,
+    wind_speed_10m_m_per_s: np.float32,
+    surface_pressure_pa: np.float32,
+) -> tuple[np.float32, np.float32]:
+    """Calculate the sensible heat flux and aerodynamic conductance.
+
+    Args:
+        soil_temperature_C: Soil temperature in Celsius [C].
+        air_temperature_K: Air temperature at 2m height [K].
+        wind_speed_10m_m_per_s: Wind speed at 10m height [m/s].
+        surface_pressure_pa: Surface air pressure [Pa].
+
+    Returns:
+        Tuple of:
+            - Sensible heat flux [W/m2]. Positive = warming (Heat flow from Air to Soil).
+            - Aerodynamic conductance [W/m2/K].
+    """
+    # Physics Constants
+    SPECIFIC_HEAT_AIR_J_KG_K: np.float32 = np.float32(1005.0)
+    GAS_CONSTANT_AIR_J_KG_K: np.float32 = np.float32(287.058)
+    VON_KARMAN_CONSTANT: np.float32 = np.float32(0.41)
+
+    # Assumptions for Aerodynamic Resistance over bare soil
+    WIND_MEASUREMENT_HEIGHT_M: np.float32 = np.float32(10.0)
+    TEMP_MEASUREMENT_HEIGHT_M: np.float32 = np.float32(2.0)
+    ROUGHNESS_LENGTH_M: np.float32 = np.float32(0.001)
+
+    # Calculate Air Density [kg/m3]
+    # Ideal Gas Law: rho = P / (R * T)
+    # Using air temperature for density calculation
+    air_density_kg_per_m3: np.float32 = surface_pressure_pa / (
+        GAS_CONSTANT_AIR_J_KG_K * air_temperature_K
+    )
+
+    # Calculate Aerodynamic Resistance (ra) [s/m]
+    # For neutral conditions: ra = (ln((zm-d)/z0m) * ln((zh-d)/z0h)) / (k^2 * u)
+    # Assuming d=0, z0m=z0h=z0
+    # where zm = wind measurement height, zh = temp measurement height, z0 = roughness length, u = wind speed
+
+    # Ensure minimum wind speed to avoid division by zero
+    wind_speed_safe = np.maximum(wind_speed_10m_m_per_s, np.float32(0.1))
+
+    log_wind_height_over_roughness = np.log(
+        WIND_MEASUREMENT_HEIGHT_M / ROUGHNESS_LENGTH_M
+    )
+    log_temp_height_over_roughness = np.log(
+        TEMP_MEASUREMENT_HEIGHT_M / ROUGHNESS_LENGTH_M
+    )
+
+    aerodynamic_resistance_s_per_m = (
+        log_wind_height_over_roughness * log_temp_height_over_roughness
+    ) / (VON_KARMAN_CONSTANT**2 * wind_speed_safe)
+
+    # Calculate Conductance [W/m2/K]
+    # Conductance = rho * Cp / ra
+    conductance_W_per_m2_K = (
+        air_density_kg_per_m3 * SPECIFIC_HEAT_AIR_J_KG_K
+    ) / aerodynamic_resistance_s_per_m
+
+    # Calculate Explicit Sensible Heat Flux [W/m2]
+    # H = Conductance * (Ta - Ts)
+    air_temperature_C = air_temperature_K - np.float32(273.15)
+    temperature_difference_C = air_temperature_C - soil_temperature_C
+
+    sensible_heat_flux_W_per_m2 = conductance_W_per_m2_K * temperature_difference_C
+
+    return sensible_heat_flux_W_per_m2, conductance_W_per_m2_K
+
+
+@njit(cache=True, inline="always")
+def solve_energy_balance_implicit_iterative(
+    soil_temperature_C: np.float32,
+    solid_heat_capacity_J_per_m2_K: np.float32,
+    shortwave_radiation_W_per_m2: np.float32,
+    longwave_radiation_W_per_m2: np.float32,
+    air_temperature_K: np.float32,
+    wind_speed_10m_m_per_s: np.float32,
+    surface_pressure_pa: np.float32,
+    timestep_seconds: np.float32,
+) -> np.float32:
+    """Update soil temperature solving energy balance with an iterative implicit scheme.
+
+    Solves the non-linear energy balance equation using Newton-Raphson iteration.
+    Equation: C * (T_new - T_old) / dt = Q_rad(T_new) + Q_sens(T_new)
+
+    This combines the radiation and sensible heat balances into a single
+    implicit solution, which is robust and stable for large time steps.
+
+    Args:
+        soil_temperature_C: Initial soil temperature [C].
+        solid_heat_capacity_J_per_m2_K: Heat capacity of the soil layer [J/m2/K].
+        shortwave_radiation_W_per_m2: Incoming shortwave radiation [W/m2].
+        longwave_radiation_W_per_m2: Incoming longwave radiation [W/m2].
+        air_temperature_K: Air temperature [K].
+        wind_speed_10m_m_per_s: Wind speed [m/s].
+        surface_pressure_pa: Surface pressure [Pa].
+        timestep_seconds: Total time to simulate [s] (e.g. 3600.0).
+
+    Returns:
+        Updated soil temperature [C].
+    """
+    T_old = soil_temperature_C
+    T_curr = soil_temperature_C
+
+    # Newton-Raphson Configuration
+    MAX_ITERATIONS = 10
+    TOLERANCE_C = np.float32(0.01)
+
+    for _ in range(MAX_ITERATIONS):
+        # Calculate Fluxes and derivative/conductances at current estimate
+        net_radiation_flux_W_per_m2, radiation_conductance_W_per_m2_K = (
+            calculate_net_radiation_flux(
+                shortwave_radiation_W_per_m2=shortwave_radiation_W_per_m2,
+                longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
+                soil_temperature_C=T_curr,
+            )
+        )
+
+        sensible_heat_flux_W_per_m2, sensible_heat_conductance_W_per_m2_K = (
+            calculate_sensible_heat_flux(
+                soil_temperature_C=T_curr,
+                air_temperature_K=air_temperature_K,
+                wind_speed_10m_m_per_s=wind_speed_10m_m_per_s,
+                surface_pressure_pa=surface_pressure_pa,
+            )
+        )
+
+        # Function f(T_new) = C/dt * (T_new - T_old) - (Q_rad + Q_sens)
+        # We want f(T_new) = 0
+
+        storage_term_W_per_m2 = (solid_heat_capacity_J_per_m2_K / timestep_seconds) * (
+            T_curr - T_old
+        )
+        total_flux_W_per_m2 = net_radiation_flux_W_per_m2 + sensible_heat_flux_W_per_m2
+
+        f_val = storage_term_W_per_m2 - total_flux_W_per_m2
+
+        # Derivative f'(T_new) = C/dt - (Q'_rad + Q'_sens)
+        # Note: Q' terms are negative conductances (flux decreases as T increases)
+        # Q'_rad = -radiation_conductance
+        # Q'_sens = -sensible_heat_conductance
+        # So f'(T_new) = C/dt + radiation_conductance + sensible_heat_conductance
+
+        f_prime = (
+            (solid_heat_capacity_J_per_m2_K / timestep_seconds)
+            + radiation_conductance_W_per_m2_K
+            + sensible_heat_conductance_W_per_m2_K
+        )
+
+        # Newton Step: T_next = T_curr - f(T_curr) / f'(T_curr)
+        delta_T = f_val / f_prime
+
+        T_curr -= delta_T
+
+        if abs(delta_T) < TOLERANCE_C:
+            break
+
+    return T_curr

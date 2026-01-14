@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -161,7 +161,7 @@ def to_grid(
         else:
             raise NotImplementedError
         prev_index = cell_index
-    return output_data
+    return output_data  # ty:ignore[invalid-return-type]
 
 
 @njit(cache=True)
@@ -608,6 +608,8 @@ class HRUVariables(Bucket):
     canopy_cover: ArrayFloat32
     stem_diameter_harvested: ArrayFloat32
     no_elements_harvested: ArrayFloat32
+    soil_temperature_C: TwoDArrayFloat32
+    solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
 
 
 class HRUs(BaseVariables):
