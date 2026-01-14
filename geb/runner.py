@@ -837,6 +837,7 @@ def init_multiple_fn(
     working_directory: str | Path,
     from_example: str,
     geometry_bounds: str,
+    region_shapefile: str | None,
     target_area_km2: float,
     area_tolerance: float,
     cluster_prefix: str,
@@ -853,6 +854,7 @@ def init_multiple_fn(
         working_directory: Working directory for the models.
         from_example: Name of the example to use as a base for the models.
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
+        region_shapefile: Shapefile to use for the region geometry. If the file is not specified, a bounding box geometry is created from geometry_bounds.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
         cluster_prefix: Prefix for cluster directory names.
@@ -880,12 +882,15 @@ def init_multiple_fn(
     build_config: Path = Path(build_config)
     update_config: Path = Path(update_config)
     working_directory: Path = Path(working_directory)
-
+    if region_shapefile:
+        region_shapefile: Path = Path(region_shapefile)
     # Create the models/large_scale directory structure
-    models_dir = Path.cwd().parent / "models"
-    large_scale_dir = models_dir / "large_scale"
+    large_scale_dir = working_directory / "large_scale"
     if not large_scale_dir.exists():
         large_scale_dir.mkdir(parents=True, exist_ok=True)
+
+    # create logger
+    logger = create_logger(working_directory / "init_multiple.log")
 
     # Always create geoparquet and map files in large_scale directory if not specified
     if save_geoparquet is None:
@@ -903,19 +908,29 @@ def init_multiple_fn(
         raise ValueError(
             "geometry_bounds must be in format 'xmin,ymin,xmax,ymax' with numeric values"
         )
-
-    bbox_geom = gpd.GeoDataFrame(
-        geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
-    )
-
-    # Initialize data catalog and logger
-    data_catalog_instance = NewDataCatalog()
-    logger = create_logger(working_directory / "init_multiple.log")
-
     logger.info("Starting multiple model initialization")
-    logger.info(f"Using geometry bounds: {geometry_bounds}")
     logger.info(f"Target area: {target_area_km2:,.0f} km²")
     logger.info(f"Area tolerance: {area_tolerance:.1%}")
+    # Create bounding box geometry or read region shapefile
+    if not region_shapefile:
+        logger.info(f"Using geometry bounds: {geometry_bounds}")
+        bbox_geom = gpd.GeoDataFrame(
+            geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
+        )
+    else:
+        logger.info(f"Using region shapefile: {region_shapefile}")
+        region_shapefile_path: Path = working_directory / region_shapefile
+        if not region_shapefile_path.exists():
+            raise FileNotFoundError(
+                f"Region shapefile not found at: {region_shapefile_path}"
+            )
+        bbox_geom = gpd.read_file(region_shapefile_path)
+
+    # check crs bounding box geometry
+    if bbox_geom.crs != "EPSG:4326":
+        bbox_geom = bbox_geom.to_crs("EPSG:4326")
+    # Initialize data catalog and logger
+    data_catalog_instance = NewDataCatalog()
 
     logger.info("Loading river network...")
     river_graph = get_river_graph(data_catalog_instance)
