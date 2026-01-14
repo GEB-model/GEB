@@ -2,8 +2,8 @@
 # This profile configures Snakemake to submit jobs to SLURM with appropriate resources
 
 # Basic SLURM configuration  
-# Handle missing wildcards gracefully with conditional formatting
-cluster: "sbatch --parsable --job-name={rule}_{wildcards.cluster} --output=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/run_logs/{rule}_{wildcards.cluster}-%j.out --error=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/run_logs/{rule}_{wildcards.cluster}-%j.err --account={resources.slurm_account} --ntasks=1 --cpus-per-task={resources.cpus} --mem={resources.mem_mb}M --time=8-00:00:00 {resources.partition_arg}"
+# Simplified cluster command - logs go only to model directories
+cluster: "sbatch --parsable --job-name={rule}_{wildcards.cluster} --account={resources.slurm_account} --ntasks=1 --cpus-per-task={resources.cpus} --mem={resources.mem_mb}M --time=8-00:00:00 {resources.partition_arg}"
 
 # Configuration overrides
 config:
