@@ -116,4 +116,3 @@ class Government(AgentBaseClass):
         """This function is run each timestep."""
         self.set_irrigation_limit()
         self.report(locals())
-        print("government is running")
