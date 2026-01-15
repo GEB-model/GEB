@@ -21,6 +21,9 @@ from ....workflows.io import read_table
 warnings.filterwarnings("ignore")
 
 
+warnings.filterwarnings("ignore")
+
+
 def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> None:
     """Generate storm surge hydrographs for a given GEB model.
 
@@ -29,6 +32,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
         make_plot: Whether to create plots of the hydrographs.
     """
     # read geojson file to get station ids
+    # station_ids = load_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     station_ids = read_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     os.makedirs("plot/gtsm", exist_ok=True)
     percentile = 0.99
@@ -307,11 +311,8 @@ def generate_surge_hydrograph(
 
     # generate storm surge hydrograph
     hours = 36
-    timesteps_before_peak = np.around(np.arange(0, 1.0001, 0.005), 3)
-    df_before_peak = pd.DataFrame(index=timesteps_before_peak)
-
-    timesteps_after_peak = np.around(np.arange(0, 1.0001, 0.005), 3)
-    df_after_peak = pd.DataFrame(index=timesteps_after_peak)
+    df_before_peak = pd.DataFrame(index=np.around(np.arange(0, 1.0001, 0.005), 3))
+    df_after_peak = pd.DataFrame(index=np.around(np.arange(0, 1.0001, 0.005), 3))
     for k in range(len(surge_peaks_POT)):
         timeseries_before_peak = surgepd.loc[
             surge_peaks_POT.iloc[k].name
@@ -380,7 +381,9 @@ def generate_surge_hydrograph(
     surge_hydrograph_height = np.concatenate(
         (
             np.zeros(247),
-            np.hstack((timesteps_before_peak, np.flipud(timesteps_after_peak)[1:])),
+            np.hstack(
+                (df_before_peak.index.values, np.flipud(df_after_peak.index.values)[1:])
+            ),
             np.zeros(246),
         )
     )
