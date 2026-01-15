@@ -1049,7 +1049,7 @@ class Routing(Module):
                 self.model.files["geom"]["routing/inflow_locations"]
             )
             for inflow_id, inflow in inflow_per_location.items():
-                location: int = inflow_locations.loc[inflow_id]
+                location: pd.Series = inflow_locations.loc[inflow_id]
                 y: int = location["y"]
                 x: int = location["x"]
                 self.inflow[(y, x)] = inflow.to_numpy(dtype=np.float32)
