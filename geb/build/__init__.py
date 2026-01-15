@@ -25,7 +25,7 @@ import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
-from shapely.geometry import Point
+from shapely.geometry import Point, shape
 
 from geb import GEB_PACKAGE_DIR
 from geb.build.data_catalog import NewDataCatalog
@@ -53,6 +53,7 @@ from .modules import (
 )
 from .modules.hydrography import (
     create_river_raster_from_river_lines,
+    extend_rivers_into_ocean,
 )
 
 # Set environment options for robustness
@@ -1722,15 +1723,10 @@ class GEBModel(
         self.logger.info(
             f"Found {len(sink_subbasin_ids)} sink subbasins in region {region}."
         )
-        self.set_routing_subbasins(river_graph, sink_subbasin_ids)
-
-        subbasins = self.geom["routing/subbasins"]
-        subbasins_without_outflow_basin = subbasins[
-            ~subbasins["is_downstream_outflow_subbasin"]
-        ]
+        rivers: gpd.GeoDataFrame = self.get_rivers(river_graph, sink_subbasin_ids)
 
         buffer = 0.5  # buffer in degrees
-        xmin, ymin, xmax, ymax = subbasins_without_outflow_basin.total_bounds
+        xmin, ymin, xmax, ymax = rivers[~rivers["is_downstream_outflow"]].total_bounds
         xmin -= buffer
         ymin -= buffer
         xmax += buffer
@@ -1752,6 +1748,10 @@ class GEBModel(
             latlon=True,
         )
 
+        rivers: gpd.GeoDataFrame = extend_rivers_into_ocean(rivers, ldd_network)
+
+        self.set_geom(rivers, name="routing/rivers")
+
         self.logger.info("Preparing 2D grid.")
         if "outflow" in region:
             # get basin geometry
@@ -1763,9 +1763,49 @@ class GEBModel(
             )
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
         elif "subbasin" in region or "geom" in region:
+            rivers = rivers[~rivers["is_downstream_outflow"]]
+            outlet_lonlats = rivers.geometry.apply(
+                lambda geom: geom.coords[-2]
+            ).tolist()
+            subbasins_grid = ldd_network.basins(
+                xy=(
+                    [lon for lon, lat in outlet_lonlats],
+                    [lat for lon, lat in outlet_lonlats],
+                ),
+                ids=rivers.index,
+            ).astype(np.int32)
+            subbasins: list[tuple[dict[str, Any], float]] = list(
+                rasterio.features.shapes(
+                    subbasins_grid,
+                    mask=subbasins_grid != 0,
+                    transform=ldd_network.transform,
+                    connectivity=8,
+                )
+            )
+            subbasins: gpd.GeoDataFrame = (
+                gpd.GeoDataFrame.from_records(
+                    [
+                        {
+                            "COMID": int(value),
+                            "geometry": shape(geom),
+                        }
+                        for geom, value in subbasins
+                    ],
+                )
+                .set_index("COMID")
+                .set_crs(4326)
+            )  # ty:ignore[invalid-assignment]
+            subbasins["is_downstream_outflow"] = subbasins.index.isin(
+                rivers[rivers["is_downstream_outflow"]].index
+            )
+            subbasins["is_coastal"] = subbasins.apply(
+                lambda subbasin: rivers.loc[subbasin.name, "downstream_ID"] == -1,
+                axis=1,
+            )
+
             geom = gpd.GeoDataFrame(
-                geometry=[subbasins_without_outflow_basin.union_all()],
-                crs=subbasins_without_outflow_basin.crs,
+                geometry=[subbasins[~subbasins["is_downstream_outflow"]].union_all()],
+                crs=subbasins.crs,
             )
             # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
             # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
@@ -1779,7 +1819,9 @@ class GEBModel(
         else:
             raise ValueError(f"Region {region} not understood.")
 
-        if include_coastal_area and subbasins["is_coastal_basin"].any():
+        self.set_geom(subbasins, name="routing/subbasins")
+
+        if include_coastal_area and subbasins["is_coastal"].any():
             mask: xr.DataArray = self.extend_mask_to_coastal_area(
                 ldd, riverine_mask, subbasins
             )

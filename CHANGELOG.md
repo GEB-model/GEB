@@ -9,8 +9,13 @@
 - Write documentation for spinning up and running models
 - Fix rare out of bounds values in ERA5 data that led to undefined behaviour due to compression and decompression roundtrip
 - Require extra_dims_names to be set in DynamicArray and update model in places where it was not set
+- Fill holes in subbasin maps by deriving subbasin maps directly from rivers ourselves. This also makes the original subbasins dataset not needed anymore.
+- Extend rivers to end up exactly in the ocean rather than the cell just before
+- Enable return period maps for subbasins that discharge into the ocean, including several bugfixes for this.
 - Allow exporting of hourly values from reporter
 - Add initial soil temperature. Now still simplified but better than having no soil temperature.
+- Implement interflow
+- Limit drainage to groundwater to conductivity of groundwater top layer
 
 To support this version:
 

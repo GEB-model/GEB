@@ -1058,3 +1058,52 @@ def solve_energy_balance_implicit_iterative(
             break
 
     return T_curr
+
+
+@njit(cache=True, inline="always")
+def get_interflow(
+    w: np.float32,
+    wfc: np.float32,
+    ws: np.float32,
+    soil_layer_height_m: np.float32,
+    saturated_hydraulic_conductivity_m_per_hour: np.float32,
+    slope_m_per_m: np.float32,
+    hillslope_length_m: np.float32,
+    interflow_multiplier: np.float32,
+) -> np.float32:
+    """Calculate interflow from a soil layer.
+
+    Args:
+        w: Soil water content in the layer in meters.
+        wfc: Field capacity soil water content in the layer in meters.
+        ws: Saturated soil water content in the layer in meters.
+        soil_layer_height_m: Height of the soil layer in meters.
+        saturated_hydraulic_conductivity_m_per_hour: Saturated hydraulic conductivity for the layer in m/hour.
+        slope_m_per_m: Slope of the terrain in m/m.
+        hillslope_length_m: Length of the hillslope in meters.
+        interflow_multiplier: Calibration factor for interflow calculation.
+
+    Returns:
+        Interflow from the layer in meters.
+    """
+    free_water_m: np.float32 = max(w - wfc, np.float32(0.0))
+    drainable_porosity: np.float32 = (ws - wfc) / soil_layer_height_m
+
+    # Convert vertical saturated hydraulic conductivity to lateral
+    # Here we assume lateral conductivity is 10 times vertical
+    # This factor can be adjusted based on soil anisotropy
+    lateral_saturated_hydraulic_conductivity_m_per_hour = (
+        saturated_hydraulic_conductivity_m_per_hour
+    ) * 10
+
+    # Implicitly assume that the step is identical to the time step of the
+    # saturated hydraulic conductivity
+    storage_coefficient: np.float32 = (
+        lateral_saturated_hydraulic_conductivity_m_per_hour
+        * slope_m_per_m
+        / (drainable_porosity * hillslope_length_m)
+    ) * interflow_multiplier
+
+    interflow: np.float32 = free_water_m * storage_coefficient
+    interflow: np.float32 = min(interflow, free_water_m)
+    return interflow
