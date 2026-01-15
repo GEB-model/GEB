@@ -16,7 +16,7 @@ from .grdc import GRDC
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lowder import Lowder
-from .merit_basins import MeritBasinsRivers, MeritBasinsCatchments
+from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .open_building_map import OpenBuildingMap
