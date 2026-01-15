@@ -21,9 +21,6 @@ from ....workflows.io import read_table
 warnings.filterwarnings("ignore")
 
 
-warnings.filterwarnings("ignore")
-
-
 def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> None:
     """Generate storm surge hydrographs for a given GEB model.
 
@@ -32,7 +29,6 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
         make_plot: Whether to create plots of the hydrographs.
     """
     # read geojson file to get station ids
-    # station_ids = load_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     station_ids = read_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     os.makedirs("plot/gtsm", exist_ok=True)
     percentile = 0.99
