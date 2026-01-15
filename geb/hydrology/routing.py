@@ -1042,14 +1042,17 @@ class Routing(Module):
         self.inflow = {}
         self.inflow_idx: int = -1  # index for the current time step in the inflow data
         if "routing/inflow_m3_per_s" in self.model.files["table"]:
-            inflow: pd.DataFrame = read_table(
+            inflow_per_location: pd.DataFrame = read_table(
                 self.model.files["table"]["routing/inflow_m3_per_s"]
             )
-            for column in inflow.columns:
-                y, x = column.split("_")
-                self.inflow[(int(y), int(x))] = inflow[column].to_numpy(
-                    dtype=np.float32
-                )
+            inflow_locations: gpd.GeoDataFrame = read_geom(
+                self.model.files["geom"]["routing/inflow_locations"]
+            )
+            for inflow_id, inflow in inflow_per_location.items():
+                location: int = inflow_locations.loc[inflow_id]
+                y: int = location["y"]
+                x: int = location["x"]
+                self.inflow[(y, x)] = inflow.to_numpy(dtype=np.float32)
 
             # find the index for the current time step
             # and store it for later use. Should be incremented each time step

@@ -1331,7 +1331,17 @@ class Hydrography(BuildModelBase):
         """
         mask = self.grid["mask"]
         transform = mask.rio.transform()
+
         y, x = rasterio.transform.rowcol(transform, lon, lat)
+
+        inflow_locations = gpd.GeoDataFrame(
+            geometry=[Point(lon, lat)],
+            crs="EPSG:4326",
+            columns=["y", "x"],
+            data=[[y, x]],
+            index=[0],
+        )
+        self.set_geom(inflow_locations, name="routing/inflow_locations")
 
         if y < 0 or y >= mask.shape[0] or x < 0 or x >= mask.shape[1]:
             raise ValueError("Inflow location is outside of the model grid.")
@@ -1346,7 +1356,7 @@ class Hydrography(BuildModelBase):
                 freq="H",
                 inclusive="both",
             ),
-            columns=np.array([f"{y}_{x}"]),
+            columns=np.array([0]),
             data=inflow_m3_per_s,
         )
 
