@@ -1321,6 +1321,8 @@ class Hydrography(BuildModelBase):
     ) -> None:
         """Sets up a inflow hydrograph at a specified location.
 
+        Currently only a single constant inflow location at a single point is supported.
+
         Args:
             lon: The longitude of the inflow location.
             lat: The latitude of the inflow location.
