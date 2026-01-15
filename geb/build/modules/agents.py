@@ -2553,7 +2553,7 @@ class Agents(BuildModelBase):
         all_features: dict[str, gpd.GeoDataFrame] = self.new_data_catalog.fetch(
             "open_street_map"
         ).read(
-            self.region.geometry[0],
+            self.region.unary_union,
             feature_types=feature_types,
         )
 
