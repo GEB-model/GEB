@@ -11,6 +11,7 @@
 - Require extra_dims_names to be set in DynamicArray and update model in places where it was not set
 - Allow exporting of hourly values from reporter
 - Add initial soil temperature. Now still simplified but better than having no soil temperature.
+- Includes soil suction into the model using an approximation of the Green-Ampt equation.
 
 To support this version:
 

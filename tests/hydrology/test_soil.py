@@ -20,6 +20,7 @@ from geb.hydrology.soil import (
     get_pore_size_index_wosten,
     get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
+    get_suction_adjusted_infiltration_capacity,
     infiltration,
     kv_brakensiek,
     kv_cosby,
@@ -235,6 +236,8 @@ def test_infiltration() -> None:
             w,
             topwater,
             np.float32(0.1),
+            np.float32(100.0),
+            np.float32(0.25),
         )
     )
 
@@ -262,6 +265,8 @@ def test_infiltration() -> None:
             w,
             topwater,
             np.float32(0.1),
+            np.float32(100.0),
+            np.float32(0.25),
         )
     )
 
@@ -286,6 +291,8 @@ def test_infiltration() -> None:
             w,
             topwater,
             np.float32(0.1),
+            np.float32(100.0),
+            np.float32(0.25),
         )
     )
 
@@ -310,6 +317,8 @@ def test_infiltration() -> None:
             w,
             topwater,
             np.float32(0.1),
+            np.float32(100.0),
+            np.float32(0.25),
         )
     )
 
@@ -335,6 +344,8 @@ def test_infiltration() -> None:
             w,
             topwater,
             np.float32(0.1),
+            np.float32(100.0),
+            np.float32(0.25),
         )
     )
 
@@ -359,6 +370,8 @@ def test_infiltration() -> None:
             w,
             topwater,
             np.float32(0.1),
+            np.float32(100.0),
+            np.float32(0.25),
         )
     )
 
@@ -366,7 +379,8 @@ def test_infiltration() -> None:
     assert infiltration_amount > 0.0
     assert groundwater_recharge == 0.0
     # Direct runoff should be topwater - 0.05 (ponding allowance)
-    expected_runoff = topwater - 0.05 - infiltration_amount
+    remaining_after_infil = topwater - infiltration_amount
+    expected_runoff = max(0.0, remaining_after_infil - 0.05)
     assert abs(direct_runoff - expected_runoff) < 1e-6
 
     # Test case 7: Soil layers at different saturation levels
@@ -388,6 +402,8 @@ def test_infiltration() -> None:
             w,
             topwater,
             np.float32(0.1),
+            np.float32(100.0),
+            np.float32(0.25),
         )
     )
 
@@ -647,6 +663,8 @@ def test_infiltration_arno_integration() -> None:
         w_arno,
         topwater,
         np.float32(0.4),
+        np.float32(100.0),
+        np.float32(0.25),
     )
 
     # Arno should produce some runoff because of the curve
@@ -675,21 +693,73 @@ def test_infiltration_arno_capacity_limit() -> None:
     arno_shape_parameter = np.float32(0.4)
 
     # Run infiltration using .py_func
+    # Use a copy of w to prevent inplace modification affecting subsequent tests
     _, runoff, _, infiltration_amount = infiltration.py_func(
         ws,
         saturated_hydraulic_conductivity,
         land_use_type,
         soil_is_frozen,
-        w,
+        w.copy(),
         topwater,
         arno_shape_parameter,
+        np.float32(100.0),
+        np.float32(0.25),
     )
 
-    # Infiltration should be limited to Ksat (2.0)
-    assert infiltration_amount == 2.0
+    # With suction adjustment:
+    # Relative saturation S = 10.0 / 100.0 = 0.1
+    # Capacity = Ksat / S = 2.0 / 0.1 = 20.0
+    # Incoming water = 10.0
+    # Since 10.0 < 20.0, it is NOT limited by capacity.
+    # It is determined effectively by the Arno curve (8.947...)
 
-    # Runoff should be the rest (10.0 - 2.0 = 8.0)
-    assert runoff == 8.0
+    # We assert that infiltration significantly exceeds the old Ksat limit of 2.0
+    assert infiltration_amount > 2.0
+
+    # We can also check a case where we EXCEED the new higher capacity
+    # For this, we'll use a lower Ksat to lower the capacity threshold
+    # Ksat = 0.5. Capacity at start = 0.5 / 0.1 = 5.0.
+    # We provide topwater = 50.0.
+    # With sub-stepping (N=6):
+    # Step 1: P=8.33, Cap=0.833. Infil=0.833. w increases -> Cap decreases.
+    # Step 2: Cap < 0.833.
+    # ...
+    # Total infiltration should be roughly integrated capacity, which is < initial capacity (5.0)
+    # But significantly higher than Ksat (0.5).
+
+    saturated_hydraulic_conductivity_low = np.full_like(w, np.float32(0.5))
+    topwater_high = np.float32(50.0)
+
+    _, runoff_high, _, infiltration_amount_high = infiltration.py_func(
+        ws,
+        saturated_hydraulic_conductivity_low,
+        land_use_type,
+        soil_is_frozen,
+        w.copy(),  # Use a fresh copy of w (10.0, 50.0, ...)
+        topwater_high,
+        arno_shape_parameter,
+        np.float32(100.0),
+        np.float32(0.25),
+    )
+
+    # Check that we get the benefit of suction ( > Ksat)
+    assert infiltration_amount_high > 0.5, "Should exceed Ksat due to suction"
+
+    # Check that dynamic capacity reduces infiltration compared to static initial estimate
+    # Initial S = 0.1.
+    # Cap = Ksat * (1 + 4 * (0.9/0.1)) = 0.5 * 37 = 18.5
+    initial_static_capacity = np.float32(0.5) * (
+        np.float32(1.0) + np.float32(4.0) * (np.float32(0.9) / np.float32(0.1))
+    )
+    assert infiltration_amount_high < initial_static_capacity, (
+        "Should be less than static capacity due to wetting"
+    )
+
+    # Based on manual calculation/execution, result is ~4.25
+    assert infiltration_amount_high > 3.5, "Should still be substantial"
+
+    # Check runoff for the first case
+    assert np.isclose(runoff, 10.0 - infiltration_amount)
 
     # Verify that if Ksat is high, infiltration is higher
     saturated_hydraulic_conductivity_high = np.full_like(w, np.float32(20.0))
@@ -701,6 +771,8 @@ def test_infiltration_arno_capacity_limit() -> None:
         w,
         topwater,
         arno_shape_parameter,
+        np.float32(100.0),
+        np.float32(0.25),
     )
 
     # With high Ksat, infiltration should be higher than 2.0
@@ -1115,3 +1187,70 @@ def test_solve_energy_balance_implicit_iterative() -> None:
     )
 
     assert t_new_cold < 10.0, "Soil should cool down"
+
+
+def test_get_suction_adjusted_infiltration_capacity() -> None:
+    """Test get_suction_adjusted_infiltration_capacity behavior."""
+    ksat_val = 0.5  # m/timestep
+    ksat = np.array([ksat_val], dtype=np.float32)
+
+    ws_top = np.float32(100.0)  # saturated storage
+
+    # Case 1: Saturated soil (w=ws)
+    # Relative saturation = 1.0
+    # Capacity should be Ksat
+    inf_cap_saturated = get_suction_adjusted_infiltration_capacity(
+        ksat,
+        current_water_storage=ws_top,
+        saturated_water_storage=ws_top,
+        suction_ratio=np.float32(4.0),
+    )
+    assert np.isclose(inf_cap_saturated, ksat_val), (
+        "Saturated soil should have capacity = Ksat"
+    )
+
+    # Case 2: Dry soil (w < ws)
+    # Say relative saturation = 0.1
+    # Capacity approx Ksat * (1 + 4 * (1-S)/S)
+    # S=0.1 -> (1-S)/S = 9. -> 1 + 36 = 37.
+    # Capacity = 37 * Ksat
+    w_dry = np.float32(10.0)
+    inf_cap_dry = get_suction_adjusted_infiltration_capacity(
+        ksat,
+        current_water_storage=w_dry,
+        saturated_water_storage=ws_top,
+        suction_ratio=np.float32(4.0),
+    )
+    expected_dry_cap = ksat_val * (1.0 + 4.0 * (1.0 - 0.1) / 0.1)  # 37 * 0.5 = 18.5
+    assert np.isclose(inf_cap_dry, expected_dry_cap), (
+        f"Dry soil should have capacity {expected_dry_cap}, got {inf_cap_dry}"
+    )
+    assert inf_cap_dry > ksat_val, "Dry infiltration capacity should exceed Ksat"
+
+    # Case 3: Very dry soil (near 0)
+    # Should be clamped by 0.01 relative saturation
+    # S=0.01 -> (1-S)/S = 99 -> 1 + 396 = 397
+    w_very_dry = np.float32(0.0)
+    inf_cap_very_dry = get_suction_adjusted_infiltration_capacity(
+        ksat,
+        current_water_storage=w_very_dry,
+        saturated_water_storage=ws_top,
+        suction_ratio=np.float32(4.0),
+    )
+    expected_max = ksat_val * (1.0 + 4.0 * (1.0 - 0.01) / 0.01)  # 397 * 0.5 = 198.5
+    assert np.isclose(inf_cap_very_dry, expected_max), (
+        "Very dry soil should be clamped to max capacity"
+    )
+
+    # Case 4: Supersaturated (w > ws)
+    # Should be clamped to relative saturation 1.0 -> Ksat
+    w_wet = np.float32(110.0)
+    inf_cap_wet = get_suction_adjusted_infiltration_capacity(
+        ksat,
+        current_water_storage=w_wet,
+        saturated_water_storage=ws_top,
+        suction_ratio=np.float32(4.0),
+    )
+    assert np.isclose(inf_cap_wet, ksat_val), (
+        "Supersaturated soil should not drop below Ksat"
+    )

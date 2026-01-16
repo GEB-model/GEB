@@ -372,6 +372,8 @@ def land_surface_model(
                 w=w[:, i],
                 topwater_m=topwater_m[i],
                 arno_shape_parameter=arno_shape_parameter[i],
+                bubbling_pressure_cm=bubbing_pressure_cm[0, i],
+                soil_layer_height_m=soil_layer_height[0, i] + soil_layer_height[1, i],
             )
             runoff_m[hour, i] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m

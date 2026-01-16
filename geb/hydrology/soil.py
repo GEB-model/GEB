@@ -264,6 +264,85 @@ def get_infiltration_capacity(
 
 
 @njit(cache=True, inline="always")
+def get_suction_adjusted_infiltration_capacity(
+    saturated_hydraulic_conductivity: ArrayFloat32,
+    current_water_storage: np.float32,
+    saturated_water_storage: np.float32,
+    suction_ratio: np.float32,
+) -> np.float32:
+    """Calculate the infiltration capacity for a single cell, accounting for matric suction.
+
+    Ideally, we would like to apply the Green-Ampt infiltration model here. However,
+    because this is computationally expensive and requires tracking cumulative infiltration,
+    we use a simplified approach that captures the key effect of suction reducing
+    infiltration capacity as the soil wets up.
+
+    The Green-Ampt equation is:
+    f = Ksat * (1 + (Psi * dtheta) / F)
+
+    Where:
+    - f: infiltration rate (capacity) [L/T]
+    - Ksat: saturated hydraulic conductivity [L/T]
+    - Psi: suction head at the wetting front [L]
+    - dtheta: soil capacity (saturated_water_storage (i.e., porosity - initial moisture) [-]
+    - F: cumulative infiltration [L]
+
+    Note that cumulative infiltration here is the amount of water that has infiltrated,
+    not the depth of the wetting front, which is deeper than the infiltrated water depth due to
+    soil porosity.
+
+    Here, we adapt this for a fixed soil layer of depth D, using the current
+    relative saturation (S = w / ws) to approximate the wetting front terms.
+
+    Where S is the relative saturation (current_water_storage / saturated_water_storage).
+
+    1. dtheta is:
+        dtheta = porosity * (1 - S)
+
+    2. F is approximated by the current water storage depth (w).
+        F = porosity * S * D
+
+    3. Substitution:
+        Substituting these proxies into the Green-Ampt term (Psi * dtheta) / F:
+
+        Term = (Psi * [porosity * (1 - S)]) / (porosity * S * D])
+
+        The porosity cancels out:
+        Term = (Psi * (1 - S)) / (S * D)
+
+        Rearranging:
+        Term = (Psi / D) * ((1 - S) / S)
+
+    4. Thus, the infiltration capacity becomes:
+        f = Ksat * (1 + (Psi / D) * ((1 - S) / S))
+
+    The variable `suction_ratio` is pre-calculated as (Psi / D).
+
+    Args:
+        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the cell.
+        current_water_storage: Current water storage in the top layer.
+        saturated_water_storage: Saturated water storage in the top layer.
+        suction_ratio: Ratio of wetting front suction head to layer depth (Psi_f / D).
+
+    Returns:
+        The infiltration capacity for the cell.
+    """
+    relative_saturation = current_water_storage / saturated_water_storage
+
+    # prevent division by zero (max factor derived from min saturation)
+    relative_saturation = max(relative_saturation, np.float32(0.01))
+
+    # Capacity cannot drop below Ksat even if supersaturated
+    relative_saturation = min(relative_saturation, np.float32(1.0))
+
+    suction_term = (
+        suction_ratio * (np.float32(1.0) - relative_saturation) / relative_saturation
+    )
+
+    return saturated_hydraulic_conductivity[0] * (np.float32(1.0) + suction_term)
+
+
+@njit(cache=True, inline="always")
 def infiltration(
     ws: ArrayFloat32,
     saturated_hydraulic_conductivity: ArrayFloat32,
@@ -272,8 +351,13 @@ def infiltration(
     w: ArrayFloat32,
     topwater_m: np.float32,
     arno_shape_parameter: np.float32,
+    bubbling_pressure_cm: np.float32,
+    soil_layer_height_m: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Simulates vertical transport of water in the soil for a single cell.
+
+    Uses 6 substeps (10-minute intervals) to accurately capture the non-linear
+    decay of infiltration capacity due to suction as the soil wets up.
 
     Args:
         ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
@@ -283,6 +367,8 @@ def infiltration(
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
         arno_shape_parameter: Arno shape parameter for the cell.
+        bubbling_pressure_cm: Bubbling pressure for the top soil layer [cm].
+        soil_layer_height_m: Total height of the relevant soil layers for infiltration [m].
 
     Returns:
         A tuple containing:
@@ -298,23 +384,52 @@ def infiltration(
         topwater_m: np.float32 = np.float32(0.0)
         return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
     else:
-        direct_runoff, infiltration_amount = calculate_arno_runoff(
-            current_soil_water_storage=w[0] + w[1],
-            max_soil_water_capacity=ws[0] + ws[1],
-            arno_shape_parameter=arno_shape_parameter,
-            topwater_m=topwater_m,
-            infiltration_capacity_m=saturated_hydraulic_conductivity[0],
-        )
-        toplayer_infiltration = min(infiltration_amount, ws[0] - w[0])
-        second_layer_infiltration = infiltration_amount - toplayer_infiltration
+        # Calculate suction ratio from soil properties (Top layer)
+        # Psi_f approx bubbling_pressure (in meters)
+        # Ratio = Psi_f / Layer_Depth
+        suction_head_m = bubbling_pressure_cm / np.float32(100.0)
+        suction_ratio = suction_head_m / soil_layer_height_m
 
-        w[0] += toplayer_infiltration
-        # Ensure we don't exceed saturation due to float errors
-        w[0] = min(w[0], ws[0])
+        suction_ratio = max(suction_ratio, np.float32(1.0))
 
-        w[1] += second_layer_infiltration
-        # Ensure we don't exceed saturation due to float errors
-        w[1] = min(w[1], ws[1])
+        # Substepping parameters
+        n_substeps = 6  # 10-minute intervals for 1-hour timestep
+        topwater_step = topwater_m / np.float32(n_substeps)
+        # Use a copy of Ksat to avoid modifying original array, also scale for substep
+        ksat_step = saturated_hydraulic_conductivity / np.float32(n_substeps)
+
+        total_infiltration = np.float32(0.0)
+        total_runoff = np.float32(0.0)
+
+        for _ in range(n_substeps):
+            step_runoff, step_infiltration = calculate_arno_runoff(
+                current_soil_water_storage=w[0] + w[1],
+                max_soil_water_capacity=ws[0] + ws[1],
+                arno_shape_parameter=arno_shape_parameter,
+                topwater_m=topwater_step,
+                infiltration_capacity_m=get_suction_adjusted_infiltration_capacity(
+                    ksat_step, w[0] + w[1], ws[0] + ws[1], suction_ratio
+                ),
+            )
+
+            # Update soil layers
+            toplayer_infiltration = min(step_infiltration, ws[0] - w[0])
+            second_layer_infiltration = step_infiltration - toplayer_infiltration
+
+            w[0] += toplayer_infiltration
+            # Ensure we don't exceed saturation due to float errors
+            w[0] = min(w[0], ws[0])
+
+            w[1] += second_layer_infiltration
+            # Ensure we don't exceed saturation due to float errors
+            w[1] = min(w[1], ws[1])
+
+            total_infiltration += step_infiltration
+            total_runoff += step_runoff
+
+        # Accumulated values become the result
+        infiltration_amount = total_infiltration
+        direct_runoff = total_runoff
 
         # In Arno scheme, all topwater is processed into runoff or infiltration
         topwater_m: np.float32 = np.float32(0.0)
