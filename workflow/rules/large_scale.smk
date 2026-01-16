@@ -58,7 +58,7 @@ def get_resources(cluster_name, phase="build"):
     if area_km2 < 200000:  # Smaller basins
         memory_mb = 60000   # 60GB
     else:  # Larger basins
-        memory_mb = 200000  # 200GB
+        memory_mb = 300000  # 300GB
     
     # Strategic partition assignment to balance load and limit jobs per partition
     # Assign clusters to partitions based on size and index to ensure balanced distribution
@@ -82,8 +82,8 @@ def get_resources(cluster_name, phase="build"):
     if partition_index == 0:
         partition = "defq"
         partition_arg = ""  # defq uses default queue (no partition specified)
-        # For defq, always use 200GB (since defq handles any memory size)
-        memory_mb = 200000  # This overrides the basin-size based allocation!
+        # For defq, always use 300GB (since defq handles any memory size)
+        memory_mb = 300000  # This overrides the basin-size based allocation!
     elif partition_index == 1:
         partition = "ivm"
         partition_arg = "--partition=ivm"
@@ -91,7 +91,7 @@ def get_resources(cluster_name, phase="build"):
         partition = "ivm-fat"
         partition_arg = "--partition=ivm-fat"
         # Ensure ivm-fat gets enough memory
-        memory_mb = max(memory_mb, 200000)
+        memory_mb = max(memory_mb, 300000)
     
     return memory_mb, partition, partition_arg
 
