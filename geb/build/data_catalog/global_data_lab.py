@@ -81,6 +81,16 @@ class GlobalDataLabShapefile(Adapter):
             The processed data as a GeoDataFrame.
         """
         GDL_regions = super().read(**kwargs)
+
+        # Fix missing ISO codes based on GDLcode
+        # MLTt → MLT (Malta)
+        GDL_regions.loc[GDL_regions["GDLcode"] == "MLTt", "iso_code"] = "MLT"
+        # BHRt → BHR (Bahrain)
+        GDL_regions.loc[GDL_regions["GDLcode"] == "BHRt", "iso_code"] = "BHR"
+        # NA → IMN (Isle of Man)
+        GDL_regions.loc[GDL_regions["GDLcode"] == "NA", "iso_code"] = "IMN"
+
+        # Remove regions without GDL code (after fixing NA → IMN)
         GDL_regions = GDL_regions[
             GDL_regions["GDLcode"] != "NA"
         ]  # remove regions without GDL code
