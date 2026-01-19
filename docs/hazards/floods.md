@@ -1,6 +1,18 @@
 # Floods
 
+## Introduction
+
+Lorem ipsum
+
 ## Model building
+
+Lorem ipsum
+
+### Static input data
+
+Lorem ipsum
+
+### (Dynamic) forcing data
 
 ### Rebuilding
 
@@ -13,6 +25,18 @@ We distinguish two parts of a SFINCS model: the static data and dynamic data:
     - `false`: the model is always read, unless it doesn't exist yet
 
 - The dynamic data (e.g., forcing data) created in the [`SFINCS simulation`][geb.hazards.floods.sfincs.SFINCSSimulation] is different for each SFINCS simulation (and usually much smaller) and never saved between SFINCS runs.
+
+## Model runs
+
+Lorem ipsum
+
+### Flood events
+
+Lorem ipsum
+
+### Return period maps
+
+Lorem ipsum
 
 ## Code
 
