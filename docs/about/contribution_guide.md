@@ -15,6 +15,24 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 9. Once the code is approved, you or the reviewer can merge the branch with the main branch and delete the feature branch (so we keep things clean).
 10. Congrats your code is now in the main branch!
 
+## Contributing to documentation
+
+First of all, thank you for (thinking about) contributing to the documentation! When you are a member of the GEB repository, you can edit documentation yourself. Pull requests that only edit the documentation are automatically approved. For outside contributors, please make a pull request and we will merge it for you.
+
+For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
+
+```sh
+uv run mkdocs serve
+```
+
+It is also possible to just build the documentation locally:
+
+```sh
+uv run mkdocs build
+```
+
+Your files will end up in the folder `site`. Open `index.html` in your browser for the main page.
+
 ## Making a release
 
 To create a release of GEB, and creating a package on PyPi, take the following steps.
