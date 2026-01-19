@@ -65,7 +65,7 @@ Common outputs include:
   Stored as NetCDF (`.nc`) file containing water level, velocity, and other variables at each timestep.
 
 - **Auxiliary outputs**  
-  Depending on configuration, additional outputs such as figures for diagnostic may be produced.
+  Depending on configuration, additional outputs such as figures for diagnostics may be produced.
 
 ## Performance metrics
 
