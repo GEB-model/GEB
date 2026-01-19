@@ -65,6 +65,20 @@ agent_settings:
     water_demand:
       method: default
     adjust_demand_factor: 1
+    warning_system:
+      probability_threshold: 0.6 # Flood probability threshold for issuing warnings (0.0-1.0)  
+      area_threshold: 0.1 # Area threshold (percentage of postal code area) for warnings (0.0-1.0)
+      building_threshold: 0.1 # Building threshold (percentage of buildings in postal code) for warnings (0.0-1.0)
+      communication_efficiency: 0.78 # Communication efficiency: fraction of households that can be reached (0.0-1.0)
+      evacuation_lead_time_threshold: 24 # Lead time threshold for evacuation warnings (hours)
+      response_rates: # Response rates for different warning types
+        flood_general_warnings: 0.35 # Response rate for flood general warnings (0.0-1.0)
+        impact_based_warnings: 0.4 # Response rate for impact-based warnings with specific measures (0.0-1.0)
+      strategies: # Warning strategy settings
+        water_level_warnings: true # Enable water level based warnings with measures
+        critical_infrastructure_warnings: false  # Enable critical infrastructure based evacuation warnings  
+        warning_type: "flood_general" # Type of warnings: "flood_general" for basic flood warnings or "impact_based" for measure-specific warnings
+
     expected_utility:
       flood_risk_calculations:
         risk_perception:

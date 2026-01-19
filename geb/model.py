@@ -165,14 +165,17 @@ class GEBModel(Module, HazardDriver):
                 Any, float
             ] = {}  # dictionary to store mean discharge for each member
 
-        # load all zarr files for precipitation forecast data only for the given issue date
+        # load all zarr files for forecast data for all supported variables
         forecast_members: list[str] | None = None
         forecast_end_dt: datetime.datetime | None = None
         forecast_data: dict[str, xr.DataArray] = {}
+        print(
+            f"DEBUG: Starting to load forecast data for {len(self.forcing.loaders)} loaders",
+            flush=True,
+        )
         for loader_name, loader in self.forcing.loaders.items():
-            if loader.supports_forecast and "pr" in loader_name:
-                # open one forecast to see the number of members (only for precipitation)
-                forecast_data[loader_name] = open_zarr(
+            if loader.supports_forecast:
+                forecast_file_path = (
                     self.input_folder
                     / "other"
                     / "forecasts"
@@ -180,26 +183,41 @@ class GEBModel(Module, HazardDriver):
                     / self.config["general"]["forecasts"]["processing"]
                     / forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
-                )  # open the forecast data for the variable
-                # these are the forecast members to loop over
-                variable_forecast_members: list[str] = [
-                    i.item() for i in forecast_data[loader_name].member.values
-                ]
-                variable_forecast_end_dt = (
-                    forecast_data[loader_name].time.values[-1]
-                ).item()  # get the end datetime of the forecast
-                if forecast_members is None:
-                    forecast_members: list[str] = variable_forecast_members
-                    forecast_end_dt = variable_forecast_end_dt
+                )
+
+                # Check if forecast file exists for this variable
+                if forecast_file_path.exists():
+                    print(
+                        f"DEBUG: Forecast file exists for {loader_name}, loading...",
+                        flush=True,
+                    )
+                    # open one forecast to see the number of members
+                    forecast_data[loader_name] = open_zarr(forecast_file_path)
+                    # these are the forecast members to loop over
+                    variable_forecast_members: list[str] = [
+                        i.item() for i in forecast_data[loader_name].member.values
+                    ]
+                    variable_forecast_end_dt = (
+                        forecast_data[loader_name].time.values[-1]
+                    ).item()  # get the end datetime of the forecast
+
+                    if forecast_members is None:
+                        forecast_members: list[str] = variable_forecast_members
+                        forecast_end_dt = variable_forecast_end_dt
+                    else:
+                        if forecast_members != variable_forecast_members:
+                            raise ValueError(
+                                "Forecast members do not match between variables."
+                            )
+                        if forecast_end_dt != variable_forecast_end_dt:
+                            raise ValueError(
+                                "Forecast end datetimes do not match between variables."
+                            )
                 else:
-                    if forecast_members != variable_forecast_members:
-                        raise ValueError(
-                            "Forecast members do not match between variables."
-                        )
-                    if forecast_end_dt != variable_forecast_end_dt:
-                        raise ValueError(
-                            "Forecast end datetimes do not match between variables."
-                        )
+                    print(
+                        f"DEBUG: Forecast file does NOT exist for {loader_name}",
+                        flush=True,
+                    )
 
         assert len(forecast_data) > 0, (
             "No forecast data found for any variable. Please check the forecast files."
@@ -222,13 +240,13 @@ class GEBModel(Module, HazardDriver):
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
 
             for loader_name, loader in self.forcing.loaders.items():
-                if loader.supports_forecast:
+                if loader.supports_forecast and loader_name in forecast_data:
                     loader.set_forecast(
                         forecast_issue_datetime=forecast_issue_datetime,
                         da=forecast_data[loader_name].sel(member=member),
                     )
 
-            print(f"Running forecast member {member}")  # debugging print
+            print(f"Running forecast member {member}", flush=True)  # debugging print
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
 
             if return_mean_discharge:
@@ -272,6 +290,8 @@ class GEBModel(Module, HazardDriver):
         If configured, this function will also run the model in multiverse mode
         for the current timestep, using forecast data if available.
 
+        Raises:
+            ValueError: If forecast directories do not have the expected datetime format.
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
@@ -290,12 +310,17 @@ class GEBModel(Module, HazardDriver):
                 / self.config["general"]["forecasts"]["processing"]
             )
 
-            forecast_dirs: list[Path] = [
-                d
-                for d in forecast_base_path.iterdir()
-                if d.is_dir()
-                and d.name.startswith("2024")  # assuming forecasts start with year 2024
-            ]  # get all forecast initialization directories
+            if forecast_base_path.exists():
+                forecast_dirs: list[Path] = [
+                    d
+                    for d in forecast_base_path.iterdir()
+                    if d.is_dir()
+                    and d.name.startswith(
+                        "2024"
+                    )  # assuming forecasts start with year 2024
+                ]  # get all forecast initialization directories
+            else:
+                forecast_dirs = []
             forecast_issue_dates: list[
                 datetime.datetime
             ] = []  # list to store forecast issue dates
@@ -307,7 +332,8 @@ class GEBModel(Module, HazardDriver):
                     dt = datetime.datetime.strptime(forecast_dir.name, "%Y%m%dT%H%M%S")
 
                     # Check if this forecast directory contains precipitation data
-                    forecast_files = list(forecast_dir.glob("**/.zarr"))
+                    forecast_files = list(forecast_dir.glob("**/*.zarr"))
+
                     if (
                         forecast_files
                     ):  # Only include forecasts that have precipitation data
@@ -338,16 +364,31 @@ class GEBModel(Module, HazardDriver):
                         print(
                             f"Running flood early warning system for date time {self.current_time.strftime('%d-%m-%Y T%H:%M:%S')}..."
                         )
-                        self.agents.households.water_level_warning_strategy(
-                            date_time=self.current_time
-                        )
-                        # TODO: Enable when infrastructure warnings are ready
-                        # self.agents.households.critical_infrastructure_warning_strategy(
-                        #     date_time=self.current_time
-                        # )
+                        # Run warning strategies based on config settings
+                        if (
+                            self.config.get("warning_system", {})
+                            .get("water_level_strategy", {})
+                            .get("enabled", True)
+                        ):
+                            self.agents.households.water_level_warning_strategy(
+                                date_time=self.current_time, exceedance=True
+                            )
+
+                        if (
+                            self.config.get("warning_system", {})
+                            .get("critical_infrastructure_strategy", {})
+                            .get("enabled", True)
+                        ):
+                            self.agents.households.critical_infrastructure_warning_strategy(
+                                date_time=self.current_time, exceedance=True
+                            )
+
+                        # Run household decision-making to convert warnings into actions
                         self.agents.households.household_decision_making(
                             date_time=self.current_time
                         )
+
+                        # Update household geodataframe with warning parameters
                         self.agents.households.update_households_gdf(
                             date_time=self.current_time
                         )

@@ -119,7 +119,9 @@ class MeteorologicalForecasts:
                 )
 
             def load_forecast_data(
-                init_folder: Path, plot_type: str = "intensity"
+                init_folder: Path,
+                plot_type: str = "intensity",
+                moment_of_flooding: pd.Timestamp | None = None,
             ) -> tuple[
                 xarray.DataArray, xarray.DataArray, np.ndarray, xarray.DataArray
             ]:
@@ -131,6 +133,7 @@ class MeteorologicalForecasts:
                 Args:
                     init_folder: Path to forecast initialisation folder containing zarr files.
                     plot_type: If "cumulative", calculate cumulative precipitation. If "intensity", use intensity.
+                    moment_of_flooding: Optional moment when flooding actually occurred for debug plotting.
 
                 Returns:
                     Tuple containing ERA5 clipped data, control forecast, control time coordinates,
@@ -183,10 +186,12 @@ class MeteorologicalForecasts:
 
                 # Apply cumulative sum if requested
                 if plot_type == "cumulative":
-                    # For cumulative: first cumulative sum, then spatial maximum (same as spatial plot)
-                    era5_cumulative_spatial = era5_mm_per_h.sel(
+                    # For cumulative: both ERA5 and ensemble should use the same approach
+                    # First clip ERA5 to ensemble time range, then apply cumulative sum consistently
+                    era5_clipped_spatial = era5_mm_per_h.sel(
                         time=slice(ens_time[0], ens_time[-1])
-                    ).cumsum(dim="time")
+                    )
+                    era5_cumulative_spatial = era5_clipped_spatial.cumsum(dim="time")
                     era5_processed: xarray.DataArray = era5_cumulative_spatial.max(
                         dim=["y", "x"]
                     )
@@ -207,6 +212,81 @@ class MeteorologicalForecasts:
                 ensemble_processed: xarray.DataArray = ens_processed.isel(
                     member=slice(1, None)
                 )
+
+                # Create debug line plot for ERA5 data over time
+                init_time_str = init_folder.name  # e.g., '20240429T000000'
+                try:
+                    # Parse initialization time for readable filename
+                    init_datetime = pd.to_datetime(
+                        init_time_str, format="%Y%m%dT%H%M%S"
+                    )
+                    readable_time = init_datetime.strftime("%Y%m%d_%H%M")
+                except (ValueError, TypeError):
+                    # Fallback if time parsing fails
+                    readable_time = init_time_str
+
+                # Create debug plot
+                fig_debug, ax_debug = plt.subplots(figsize=(12, 6))
+
+                # Plot ERA5 data over time
+                time_values = (
+                    pd.to_datetime(ens_time)
+                    if hasattr(ens_time[0], "astype")
+                    else ens_time
+                )
+                ax_debug.plot(
+                    time_values,
+                    era5_processed.values,
+                    color="black",
+                    linewidth=2,
+                    marker="o",
+                    markersize=4,
+                    label="ERA5 Max Precipitation",
+                )
+
+                # Add moment of flooding line if available
+                if moment_of_flooding is not None:
+                    ax_debug.axvline(
+                        moment_of_flooding,
+                        color="red",
+                        linestyle="--",
+                        linewidth=2,
+                        alpha=0.8,
+                        label="Moment of Flooding",
+                    )
+
+                # Format the plot
+                ax_debug.set_title(
+                    f"ERA5 Debug Plot - {plot_type.title()} Precipitation\n"
+                    f"Init: {readable_time}",
+                    fontsize=14,
+                    fontweight="bold",
+                )
+                ax_debug.set_xlabel("Time", fontsize=12)
+
+                if plot_type == "cumulative":
+                    ax_debug.set_ylabel("Cumulative Precipitation (mm)", fontsize=12)
+                else:
+                    ax_debug.set_ylabel("Precipitation Intensity (mm/h)", fontsize=12)
+
+                ax_debug.grid(True, alpha=0.3)
+                ax_debug.legend()
+
+                # Format x-axis with daily major ticks and hourly minor ticks
+                ax_debug.xaxis.set_major_locator(mdates.DayLocator())
+                ax_debug.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m"))
+                ax_debug.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
+                ax_debug.xaxis.set_minor_formatter(mdates.DateFormatter("%H:%M"))
+                ax_debug.tick_params(axis="x", rotation=45)
+
+                # Save debug plot
+                debug_filename = f"era5_debug_{plot_type}_{readable_time}.png"
+                debug_path = forecast_folder / debug_filename
+                plt.tight_layout()
+                plt.savefig(debug_path, dpi=300, bbox_inches="tight")
+                plt.close(fig_debug)
+
+                print(f"Debug plot saved: {debug_path}")
 
                 return era5_processed, control_processed, ens_time, ensemble_processed
 
@@ -475,7 +555,9 @@ class MeteorologicalForecasts:
 
                 # Load data for this initialisation
                 era5_data, control_data, time_data, ensemble_data = load_forecast_data(
-                    init_folder, plot_type=plot_type
+                    init_folder,
+                    plot_type=plot_type,
+                    moment_of_flooding=moment_of_flooding,
                 )
 
                 # Load spatial data for cumulative plots
@@ -690,14 +772,14 @@ class MeteorologicalForecasts:
             moment_of_flooding: pd.Timestamp | None = None,
             threshold_time_unit: str = "daily",
             daily_cumulative_thresholds_mm_per_day: dict[str, float] = {
-                "yellow": 50.0,  # 50 mm/day threshold
-                "orange": 100.0,  # 100 mm/day threshold
-                "red": 150.0,  # High cumulative threshold
+                # "yellow": 50.0,  # 50 mm/day threshold
+                "orange": 50.0,  # 50 mm/day threshold
+                "red": 100.0,  # 100 mm/day threshold
             },
             ensemble_probability_thresholds: dict[str, float] = {
-                "yellow": 0.15,  # 15% of ensemble members exceed threshold
+                # "yellow": 0.15,  # 15% of ensemble members exceed threshold
                 "orange": 0.30,  # 30% of ensemble members exceed threshold
-                "red": 0.45,  # 45% of ensemble members exceed threshold
+                # "red": 0.45,  # 45% of ensemble members exceed threshold
                 "purple": 0.60,  # 60% of ensemble members exceed threshold
             },
         ) -> None:
@@ -728,6 +810,25 @@ class MeteorologicalForecasts:
                 raise ValueError(
                     f"threshold_time_unit must be 'daily' or 'hourly', got '{threshold_time_unit}'"
                 )
+
+            # Create dynamic warning system based on input thresholds
+            # Combine all threshold levels from both dictionaries
+            all_warning_levels = set(
+                daily_cumulative_thresholds_mm_per_day.keys()
+            ) | set(ensemble_probability_thresholds.keys())
+
+            # Define color mapping for warning levels (dynamic)
+            color_mapping = {
+                "yellow": "#FFD700",  # Gold
+                "orange": "#FF8C00",  # Dark orange
+                "red": "#FF0000",  # Red
+                "purple": "#8B008B",  # Dark magenta
+                "green": "#00FF00",  # Green (if needed)
+                "blue": "#0000FF",  # Blue (if needed)
+            }
+
+            # Sort warning levels for consistent ordering
+            sorted_levels = sorted(all_warning_levels)
 
             def create_binary_threshold_arrays(
                 data_array: xarray.DataArray,
@@ -801,10 +902,13 @@ class MeteorologicalForecasts:
                 warnings_array = xarray.zeros_like(clean_data, dtype=int)
 
                 # Convert binary arrays to final warning levels using "highest wins" logic
-                # Unlike the binary arrays, each grid cell gets exactly ONE warning level (0-3)
+                # Unlike the binary arrays, each grid cell gets exactly ONE warning level (0-N)
                 # If multiple thresholds exceeded, highest level overwrites lower ones
-                # Example: yellow=1, orange=1, red=0 → final warning = 2 (orange)
-                level_mapping = {"yellow": 1, "orange": 2, "red": 3}
+                # Create dynamic level mapping based on input thresholds
+                level_mapping = {}
+                for i, level in enumerate(sorted_levels, start=1):
+                    if level in daily_cumulative_thresholds_mm_per_day:
+                        level_mapping[level] = i
 
                 for level_name, level_value in level_mapping.items():
                     if level_name in binary_arrays:
@@ -827,21 +931,20 @@ class MeteorologicalForecasts:
                 """Create warning level time series for ensemble forecasts with probability thresholds.
 
                 Uses probabilistic approach where warnings are issued when a certain percentage
-                of ensemble members exceed precipitation thresholds. Purple level uses red threshold
-                but with higher probability requirement.
+                of ensemble members exceed precipitation thresholds. Special levels (e.g., purple)
+                use the highest precipitation threshold but with higher probability requirements.
 
                 Args:
                     ensemble_data: Precipitation ensemble data with member dimension (mm/h input).
                         Will be processed based on time_unit: resampled to mm/day for daily, kept as mm/h for hourly.
                     thresholds: Dictionary with precipitation threshold values.
-                        Expected keys: yellow, orange, red.
                     probability_thresholds: Probability thresholds for ensemble warnings.
-                        Expected keys: yellow, orange, red, purple.
+                        May contain levels not in thresholds dict (these use highest precip threshold).
                     time_unit: Time unit for thresholds ("daily" or "hourly").
 
                 Returns:
-                    DataArray with warning levels (0-4) for each grid cell and timestep.
-                        0 = No warning, 1 = Yellow, 2 = Orange, 3 = Red, 4 = Purple.
+                    DataArray with warning levels (0-N) for each grid cell and timestep.
+                        0 = No warning, higher numbers = escalating warning levels based on input thresholds.
 
                 Raises:
                     ValueError: If ensemble_data lacks member dimension or contains only NaN values.
@@ -881,8 +984,21 @@ class MeteorologicalForecasts:
                 )
 
                 # Process warning levels with probability thresholds
-                # Define hierarchy: yellow (1) < orange (2) < red (3) for "highest wins" logic
-                level_mapping = {"yellow": 1, "orange": 2, "red": 3}
+                # Create dynamic hierarchy based on input thresholds (ordered by their values)
+                # Get all levels that exist in both dictionaries for hierarchical processing
+                common_levels = set(thresholds.keys()) & set(
+                    probability_thresholds.keys()
+                )
+
+                # Sort by precipitation threshold value for "highest wins" logic
+                sorted_common_levels = sorted(
+                    common_levels, key=lambda x: thresholds[x]
+                )
+
+                # Create dynamic level mapping
+                level_mapping = {}
+                for i, level_name in enumerate(sorted_common_levels, start=1):
+                    level_mapping[level_name] = i
 
                 # Iterate through each warning level in hierarchical order
                 for level_name, level_value in level_mapping.items():
@@ -920,22 +1036,37 @@ class MeteorologicalForecasts:
                             ~prob_exceeded_mask, level_value
                         )
 
-                # Handle purple level separately (uses red threshold with higher probability)
-                if "purple" in probability_thresholds and "red" in thresholds:
-                    threshold_exceeded = (
-                        (clean_ensemble_data >= thresholds["red"])
-                        .fillna(False)
-                        .astype(int)
-                    )
-                    exceedance_probability = threshold_exceeded.mean(dim="member")
+                # Handle special warning levels that are only in probability_thresholds
+                # These use the highest precipitation threshold but with different probability requirements
+                special_levels = set(probability_thresholds.keys()) - set(
+                    thresholds.keys()
+                )
+                for special_level in special_levels:
+                    if special_level in probability_thresholds:
+                        # Use the highest available precipitation threshold for special levels
+                        if thresholds:
+                            highest_precip_threshold = max(thresholds.values())
+                            threshold_exceeded = (
+                                (clean_ensemble_data >= highest_precip_threshold)
+                                .fillna(False)
+                                .astype(int)
+                            )
+                            exceedance_probability = threshold_exceeded.mean(
+                                dim="member"
+                            )
 
-                    purple_prob_threshold = probability_thresholds["purple"]
-                    purple_exceeded_mask = (
-                        exceedance_probability >= purple_prob_threshold
-                    )
+                            special_prob_threshold = probability_thresholds[
+                                special_level
+                            ]
+                            special_exceeded_mask = (
+                                exceedance_probability >= special_prob_threshold
+                            )
 
-                    # Purple (level 4) overwrites all other warning levels
-                    warnings_array = warnings_array.where(~purple_exceeded_mask, 4)
+                            # Special level gets the highest level number (overwrites all others)
+                            special_level_value = len(sorted_levels)
+                            warnings_array = warnings_array.where(
+                                ~special_exceeded_mask, special_level_value
+                            )
                 return warnings_array.astype(int)
 
             def save_warning_timeseries(
@@ -958,11 +1089,16 @@ class MeteorologicalForecasts:
                 init_folder = output_folder / f"timeseries_{forecast_init}"
                 init_folder.mkdir(exist_ok=True)
 
+                # Create dynamic warning levels metadata
+                warning_levels_str = "0=No Warning"
+                for i, level in enumerate(sorted_levels, start=1):
+                    warning_levels_str += f", {i}={level.title()}"
+
                 # Define base clean attributes to avoid NaN conversion issues
                 base_attrs = {
                     "description": "Rainfall warning levels per grid cell and timestep",
                     "forecast_init": forecast_init,
-                    "warning_levels": "0=No Warning, 1=Yellow, 2=Orange, 3=Red, 4=Purple",
+                    "warning_levels": warning_levels_str,
                     "units": "warning_level",
                     "created_at": str(pd.Timestamp.now()),
                 }
@@ -1013,22 +1149,19 @@ class MeteorologicalForecasts:
                 Raises:
                     ValueError: If no suitable forecast is found for a given lead time.
                 """
-                # Define warning colormap
-                warning_colors: list[str] = [
-                    "white",
-                    "yellow",
-                    "orange",
-                    "red",
-                    "purple",
-                ]
+                # Create dynamic warning system based on input thresholds
+                # Create ordered list: start with white (no warning), then sorted threshold levels
+                warning_colors = ["white"]  # No warning = white
+                warning_labels = ["No Warning"]
+
+                # Add colors and labels for each threshold level
+                for level in sorted_levels:
+                    warning_colors.append(
+                        color_mapping.get(level, "#808080")
+                    )  # Default to gray if unknown
+                    warning_labels.append(f"{level.title()} Warning")
+
                 warning_cmap = mcolors.ListedColormap(warning_colors)
-                warning_labels: list[str] = [
-                    "No Warning",
-                    "Yellow",
-                    "Orange",
-                    "Red",
-                    "Purple",
-                ]
 
                 region = gpd.read_parquet(
                     Path(self.model.input_folder / "geom" / "mask.geoparquet")
@@ -1128,7 +1261,7 @@ class MeteorologicalForecasts:
                             ax=ax,
                             cmap=warning_cmap,
                             vmin=0,
-                            vmax=4,
+                            vmax=len(sorted_levels),
                             add_colorbar=False,
                             alpha=0.5,
                             zorder=1,
@@ -1179,7 +1312,7 @@ class MeteorologicalForecasts:
                     fraction=0.05,
                     location="right",
                 )
-                cbar.set_ticks(range(5))
+                cbar.set_ticks(range(len(sorted_levels) + 1))  # +1 for 'No Warning'
                 cbar.set_ticklabels(warning_labels)
                 cbar.set_label("Maximum Warning Level", fontsize=14)
 
@@ -1232,22 +1365,14 @@ class MeteorologicalForecasts:
                         control_warnings_dict[lead_time_key] = control_warnings_full
                         ensemble_warnings_dict[lead_time_key] = ensemble_warnings_full
 
-                # Enhanced color mapping for warning levels and forecast types
-                warning_level_colors = {
-                    0: "#90EE90",  # Light green (No warning)
-                    1: "#FFD700",  # Gold (Yellow warning)
-                    2: "#FF8C00",  # Dark orange (Orange warning)
-                    3: "#FF0000",  # Red (Red warning)
-                    4: "#8B008B",  # Dark magenta (Purple warning)
-                }
+                # Create dynamic warning level colors and labels based on threshold levels
+                warning_level_colors = {0: "#90EE90"}  # No warning = light green
+                warning_labels = {0: "No Warning"}
 
-                warning_labels = {
-                    0: "No Warning",
-                    1: "Yellow Warning",
-                    2: "Orange Warning",
-                    3: "Red Warning",
-                    4: "Purple Warning",
-                }
+                # Map warning levels dynamically based on sorted threshold levels
+                for i, level in enumerate(sorted_levels, start=1):
+                    warning_level_colors[i] = color_mapping.get(level, "#808080")
+                    warning_labels[i] = f"{level.title()} Warning"
 
                 # Enhanced forecast type styling with line styles for lead time distinction
                 base_forecast_colors = {
@@ -1567,12 +1692,14 @@ class MeteorologicalForecasts:
                 legend.get_title().set_fontweight("bold")
 
                 # Enhanced y-axis formatting for main plot
-                ax_main.set_ylim(-0.5, 4.5)
+                max_level = len(sorted_levels)
+                ax_main.set_ylim(-0.5, max_level + 0.5)
 
                 # Set y-ticks at warning levels
                 y_ticks = []
                 y_tick_labels = []
-                for level in range(5):
+                max_level = len(sorted_levels)
+                for level in range(max_level + 1):  # +1 for 'No Warning'
                     y_ticks.append(level)
                     y_tick_labels.append(warning_labels[level])
 
@@ -1580,13 +1707,15 @@ class MeteorologicalForecasts:
                 ax_main.set_yticklabels(y_tick_labels)
 
                 # Color the y-axis tick labels according to warning colors
-                for tick, level in zip(ax_main.get_yticklabels(), range(5)):
+                max_level = len(sorted_levels)
+                for tick, level in zip(ax_main.get_yticklabels(), range(max_level + 1)):
                     tick.set_color(warning_level_colors[level])
                     tick.set_fontweight("bold")
                     tick.set_fontsize(12)
 
                 # Add subtle background colors for warning levels (removed colorbar blocks)
-                for level in range(5):
+                max_level = len(sorted_levels)
+                for level in range(max_level + 1):  # +1 for 'No Warning'
                     ax_main.axhspan(
                         level - 0.4,
                         level + 0.4,
@@ -1801,7 +1930,7 @@ class MeteorologicalForecasts:
             print("\nCreating Warning Visualizations")
 
             # Define standard lead times for spatial analysis
-            standard_lead_times = [1, 2, 5, 10]  # days before event
+            standard_lead_times = [1, 2, 5, 7]  # days before event
 
             # Create maximum warning level maps for key lead times
             create_spatial_warning_maps(
@@ -1819,6 +1948,6 @@ class MeteorologicalForecasts:
         )
 
         # Call the rainfall warning analysis
-        # issue_rainfall_warning(
-        #    processing_forecasts, moment_of_flooding=moment_of_flooding
-        # )
+        issue_rainfall_warning(
+            processing_forecasts, moment_of_flooding=moment_of_flooding
+        )

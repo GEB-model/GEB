@@ -1352,6 +1352,39 @@ class SFINCSSimulation:
             assert not np.isin(
                 nodes.index, self.sfincs_model.forcing["dis"].index
             ).any(), "This forcing would overwrite existing discharge forcing points"
+        # Debug information
+        print(f"Original nodes CRS: {nodes.crs}")
+        print(f"SFINCS model CRS: {self.sfincs_model.crs}")
+        print(f"Model region bounds: {self.sfincs_model.region.total_bounds}")
+        nodes_reprojected = nodes.geometry.to_crs(self.sfincs_model.crs)
+        print(f"Nodes bounds (reprojected): {nodes_reprojected.total_bounds}")
+        # Check which nodes are outside
+
+        contains_check = self.sfincs_model.region.union_all().contains(
+            nodes_reprojected
+        )
+        outside_nodes = nodes[~contains_check]
+        if not outside_nodes.empty:
+            print(
+                f"Warning: Filtering {len(outside_nodes)} nodes outside model region:"
+            )
+            print(f"  Outside node IDs: {outside_nodes.index.tolist()}")
+            print(
+                f"  Outside nodes bounds: {outside_nodes.to_crs(self.sfincs_model.crs).total_bounds}"
+            )
+
+            # Filter nodes and timeseries to only include valid nodes
+            nodes = nodes[contains_check]
+            timeseries = timeseries[nodes.index]
+
+            if nodes.empty:
+                raise ValueError("All forcing locations are outside the model region")
+
+            print(f"Proceeding with {len(nodes)} valid nodes")
+        else:
+            nodes = nodes
+            timeseries = timeseries
+            print("All nodes are within model region")
 
         self.sfincs_model.region.to_parquet(
             self.path / "gis" / "model_region.geoparquet"
