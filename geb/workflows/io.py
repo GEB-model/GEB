@@ -162,7 +162,7 @@ def load_grid(
         raise ValueError("File format not supported.")
 
 
-def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+def read_geom(filepath: str | Path) -> gpd.GeoDataFrame:
     """Load a geometry for the GEB model from disk.
 
     Args:
