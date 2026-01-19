@@ -389,10 +389,13 @@ class Agents(BuildModelBase):
         # clean data
         cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         oecd_idd = oecd_idd[cols_to_keep]
-        # only done to check countries in region, could probably be done more efficiently
-        countries = self.new_data_catalog.fetch("GADM_level0").read(
-            geom=self.region.union_all(),
+        # get GDL regions to use their iso_code for consistent country mapping
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all()
         )
+
+        gdl_countries = GDL_regions["iso_code"].unique().tolist()
+
         # setup donor countries for country missing in oecd data
         donor_countries = setup_donor_countries(
             self.data_catalog,
@@ -401,7 +404,7 @@ class Agents(BuildModelBase):
             alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
         )
 
-        for country in countries["GID_0"]:
+        for country in gdl_countries:
             income_distribution_parameters[country] = {}
             income_distributions[country] = {}
             if country not in oecd_idd["REF_AREA"].values:
@@ -413,17 +416,27 @@ class Agents(BuildModelBase):
             else:
                 oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
 
-            # take the most recent year
-            most_recent_year = oecd_widd_country[
-                oecd_widd_country["TIME_PERIOD"]
-                == np.max(oecd_widd_country["TIME_PERIOD"])
+            # take the most recent year for each statistical operation separately
+            mean_data = oecd_widd_country[
+                oecd_widd_country["STATISTICAL_OPERATION"] == "MEAN"
             ]
-            income_distribution_parameters[country]["MEAN"] = most_recent_year[
-                most_recent_year["STATISTICAL_OPERATION"] == "MEAN"
-            ]["OBS_VALUE"].iloc[0]
-            income_distribution_parameters[country]["MEDIAN"] = most_recent_year[
-                most_recent_year["STATISTICAL_OPERATION"] == "MEDIAN"
-            ]["OBS_VALUE"].iloc[0]
+            median_data = oecd_widd_country[
+                oecd_widd_country["STATISTICAL_OPERATION"] == "MEDIAN"
+            ]
+
+            most_recent_mean = mean_data[
+                mean_data["TIME_PERIOD"] == np.max(mean_data["TIME_PERIOD"])
+            ]
+            most_recent_median = median_data[
+                median_data["TIME_PERIOD"] == np.max(median_data["TIME_PERIOD"])
+            ]
+
+            income_distribution_parameters[country]["MEAN"] = most_recent_mean[
+                "OBS_VALUE"
+            ].iloc[0]
+            income_distribution_parameters[country]["MEDIAN"] = most_recent_median[
+                "OBS_VALUE"
+            ].iloc[0]
 
             # now also create national income distribution
             mu = np.log(income_distribution_parameters[country]["MEDIAN"])
@@ -1810,7 +1823,7 @@ class Agents(BuildModelBase):
 
             # sample income from national distribution
             GLOPOP_S_region["disp_income"] = np.percentile(
-                np.array(national_income_distribution[GDL_code[:3]]),
+                np.array(national_income_distribution[GDL_region["iso_code"]]),
                 np.array(GLOPOP_S_region["income_percentile"]),
             )
 

@@ -164,7 +164,7 @@ rule spinup_cluster:
         """
         mkdir -p $(dirname {log})
         cd {params.cluster_dir}
-        geb spinup --continue &> {log}
+        geb spinup &> {log}
         touch {output}
         """
 
@@ -193,7 +193,7 @@ rule run_cluster:
         # Set scratch directory for temporary files to reduce memory usage
         export TMPDIR=/scratch/$SLURM_JOB_ID
         mkdir -p $TMPDIR
-        geb run --continue &> {log}
+        geb run &> {log}
         # Clean up scratch files
         rm -rf $TMPDIR
         touch {output}
@@ -222,7 +222,7 @@ rule evaluate_cluster:
         """
         mkdir -p $(dirname {log})
         cd {params.cluster_dir}
-        geb evaluate --continue --methods {params.methods} &> {log}
+        geb evaluate --methods {params.methods} &> {log}
         touch {output}
         """
 

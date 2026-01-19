@@ -82,7 +82,7 @@ class GlobalDataLabShapefile(Adapter):
         """
         GDL_regions = super().read(**kwargs)
 
-        # Fix missing ISO codes based on GDLcode
+        # Fix missing ISO codes based on GDLcode (these are the only 3 missing over the globe)
         # MLTt → MLT (Malta)
         GDL_regions.loc[GDL_regions["GDLcode"] == "MLTt", "iso_code"] = "MLT"
         # BHRt → BHR (Bahrain)
