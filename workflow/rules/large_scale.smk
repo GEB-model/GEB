@@ -133,7 +133,7 @@ rule build_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
-    group: lambda wildcards: get_resources(wildcards.cluster)[1]  # Use partition name as group
+    group: lambda wildcards: get_resources(wildcards.cluster)[1] + ("_empty" if get_resources(wildcards.cluster)[2] == "" else "_part")  # Use partition + partition_arg as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -159,7 +159,7 @@ rule spinup_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
-    group: lambda wildcards: get_resources(wildcards.cluster)[1]  # Use partition name as group
+    group: lambda wildcards: get_resources(wildcards.cluster)[1] + ("_empty" if get_resources(wildcards.cluster)[2] == "" else "_part")  # Use partition + partition_arg as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -185,7 +185,7 @@ rule run_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 56000)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster, 56000)[2],
         slurm_account="ivm"
-    group: lambda wildcards: get_resources(wildcards.cluster)[1]  # Use partition name as group
+    group: lambda wildcards: get_resources(wildcards.cluster)[1] + ("_empty" if get_resources(wildcards.cluster)[2] == "" else "_part")  # Use partition + partition_arg as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -215,8 +215,9 @@ rule evaluate_cluster:
         runtime=11520,  # 8 days
         cpus=2,
         slurm_partition="ivm",
+        partition_arg="--partition=ivm",  # Need to be explicit for consistent grouping
         slurm_account="ivm"
-    group: "ivm"  # Evaluations always run on ivm partition
+    group: "ivm_part"  # Consistent with other rules using ivm partition
     shell:
         """
         mkdir -p $(dirname {log})

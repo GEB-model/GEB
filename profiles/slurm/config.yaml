@@ -18,9 +18,9 @@ max-status-checks-per-second: 0.5
 
 # Partition-specific job limits
 group-components:
-  ivm: 2        # Max 2 concurrent jobs on regular ivm nodes
-  ivm-fat: 2    # Max 2 concurrent jobs on high-memory ivm-fat nodes
-  defq: 2       # Max 2 concurrent jobs on default queue (fallback)
+  defq_empty: 2     # Max 2 concurrent jobs on defq (no partition arg)
+  ivm_part: 2       # Max 2 concurrent jobs on ivm partition
+  ivm-fat_part: 2   # Max 2 concurrent jobs on ivm-fat partition
 
 # Resource defaults (will be overridden by rule-specific resources)
 # Keep coordinator job lightweight - only cluster rules need large memory
