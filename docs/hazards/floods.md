@@ -14,6 +14,16 @@ Lorem ipsum
 
 ### (Dynamic) forcing data
 
+Lorem ipsum
+
+#### Riverine forcing
+
+Lorem ipsum
+
+#### Coastal forcing
+
+Lorem ipsum
+
 ### Rebuilding
 
 We distinguish two parts of a SFINCS model: the static data and dynamic data:
