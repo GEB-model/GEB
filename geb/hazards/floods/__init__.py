@@ -662,6 +662,13 @@ class Floods(Module):
                 self.config["minimum_flood_depth"]
             )
 
+            # mask floodplain with land polyogons to remove inundation in the sea
+            flood_depth_return_period = flood_depth_return_period.rio.clip(
+                coastal_boundary_exclude_mask.geometry,
+                coastal_boundary_exclude_mask.crs,
+                invert=False,
+            )
+
             write_zarr(
                 flood_depth_return_period,
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
