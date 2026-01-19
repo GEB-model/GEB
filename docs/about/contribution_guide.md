@@ -19,7 +19,7 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 
 First of all, thank you for (thinking about) contributing to the documentation! When you are a member of the GEB repository, you can edit documentation yourself. Pull requests that only edit the documentation are automatically approved. For outside contributors, please make a pull request and we will merge it for you.
 
-For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
+You can also test your changes locally first. For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
 
 ```sh
 uv run mkdocs serve
