@@ -18,8 +18,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, overload
 
-import cftime
-import dask
+import dask.tokenize
 import geopandas as gpd
 import joblib
 import numpy as np
@@ -39,18 +38,21 @@ from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
-from zarr.codecs.blosc import BloscShuffle
+from zarr.codecs.zstd import ZstdCodec
 
-from geb.types import (
+from geb.geb_types import (
     ArrayDatetime64,
+    ArrayFloat64,
     ThreeDArray,
     ThreeDArrayFloat32,
     TwoDArray,
     TwoDArrayFloat32,
 )
 
+zarr.config.set({"codec_pipeline.fill_missing_chunks": False})
 
-def load_table(fp: Path | str) -> pd.DataFrame:
+
+def read_table(fp: Path) -> pd.DataFrame:
     """Load a parquet file as a pandas DataFrame.
 
     Args:
@@ -62,7 +64,22 @@ def load_table(fp: Path | str) -> pd.DataFrame:
     return pd.read_parquet(fp, engine="pyarrow")
 
 
-def load_array(fp: Path) -> np.ndarray:
+def write_table(df: pd.DataFrame, fp: Path) -> None:
+    """Save a pandas DataFrame to a parquet file.
+
+    brotli is a bit slower but gives better compression,
+    gzip is faster to read. Higher compression levels
+    generally don't make it slower to read, therefore
+    we use the highest compression level for gzip
+
+    Args:
+        df: The pandas DataFrame to save.
+        fp: The path to the output parquet file.
+    """
+    df.to_parquet(fp, engine="pyarrow", compression="gzip", compression_level=9)
+
+
+def read_array(fp: Path) -> np.ndarray:
     """Load a numpy array from a .npz or .zarr file.
 
     Args:
@@ -85,18 +102,30 @@ def load_array(fp: Path) -> np.ndarray:
 
 
 @overload
-def load_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
-) -> np.ndarray: ...
+def read_grid(
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+) -> TwoDArray: ...
 
 
 @overload
-def load_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = True
-) -> tuple[np.ndarray, Affine, str]: ...
+def read_grid(
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+) -> tuple[TwoDArray, Affine, str]: ...
 
 
-def load_grid(
+@overload
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
+) -> ThreeDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
+) -> tuple[ThreeDArray, Affine, str]: ...
+
+
+def read_grid(
     filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
 ) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
     """Load a raster grid from a .tif or .zarr file.
@@ -132,8 +161,11 @@ def load_grid(
         data_array: zarr.Array | zarr.Group = group[filepath.stem]
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
+        assert isinstance(data, np.ndarray)
+        data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
         if data.dtype == np.float64:
-            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
+            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
+        assert data.ndim in (2, 3)
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)
@@ -154,7 +186,8 @@ def load_grid(
                 f=y[0] - y_diff / 2,
             )
             crs = data_array.attrs["_CRS"]
-            wkt: str = crs["wkt"]  # ty: ignore[invalid-argument-type,non-subscriptable]
+            assert isinstance(crs, dict)
+            wkt: str = crs["wkt"]
             return data, transform, wkt
         else:
             return data
@@ -175,7 +208,24 @@ def read_geom(filepath: str | Path) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath)
 
 
-def load_dict(filepath: Path) -> Any:
+def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
+    """Save a GeoDataFrame to a parquet file.
+
+    Args:
+        gdf: The GeoDataFrame to save.
+        filepath: Path to the output parquet file.
+    """
+    gdf.to_parquet(
+        filepath,
+        engine="pyarrow",
+        compression="zstd",
+        compression_level=9,
+        row_group_size=10_000,
+        schema_version="1.1.0",
+    )
+
+
+def read_params(filepath: Path) -> Any:
     """Load a dictionary from a JSON or YAML file.
 
     Args:
@@ -217,7 +267,7 @@ def _convert_paths_to_strings(obj: Any) -> Any:
         return obj
 
 
-def to_dict(d: dict, filepath: Path) -> None:
+def write_params(d: dict, filepath: Path) -> None:
     """Save a dictionary to a YAML file.
 
     Args:
@@ -231,7 +281,7 @@ def to_dict(d: dict, filepath: Path) -> None:
 
 
 def calculate_scaling(
-    da: xr.DataArray,
+    da: xr.DataArray | np.ndarray,
     min_value: float,
     max_value: float,
     precision: float,
@@ -305,7 +355,7 @@ def calculate_scaling(
     return scaling_factor, in_dtype, out_dtype
 
 
-def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     """Open a zarr file as an xarray DataArray.
 
     If the data is a boolean type and does not have a _FillValue attribute,
@@ -437,7 +487,7 @@ def check_buffer_size(
         )
 
 
-def to_zarr(
+def write_zarr(
     da: xr.DataArray,
     path: str | Path,
     crs: int | pyproj.CRS,
@@ -445,7 +495,6 @@ def to_zarr(
     y_chunksize: int = 350,
     time_chunksize: int = 1,
     time_chunks_per_shard: int | None = 30,
-    byteshuffle: bool = True,
     filters: list = [],
     compressor: None | BytesBytesCodec = None,
     progress: bool = True,
@@ -461,7 +510,6 @@ def to_zarr(
         time_chunksize: The chunk size for the time dimension. Default is 1.
         time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
             to disable sharding.
-        byteshuffle: Whether to use byteshuffle compression. Default is True.
         filters: A list of filters to apply. Default is [].
         compressor: The compressor to use. Default is None, using the default Blosc compressor.
         progress: Whether to show a progress bar. Default is True.
@@ -526,10 +574,8 @@ def to_zarr(
                 shards["time"] = time_chunks_per_shard * chunks["time"]
 
         if compressor is None:
-            compressor: BloscCodec = BloscCodec(
-                cname="zstd",
-                clevel=9,
-                shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
+            compressor: ZstdCodec = ZstdCodec(
+                level=22,
             )
 
         check_buffer_size(da, chunks_or_shards=shards if shards else chunks)
@@ -585,7 +631,7 @@ def to_zarr(
             shutil.rmtree(path)
         shutil.move(tmp_zarr, folder)
 
-    da_disk: xr.DataArray = open_zarr(path)
+    da_disk: xr.DataArray = read_zarr(path)
 
     # perform some asserts to check if the data was written and read correctly
     assert da.dtype == da_disk.dtype, "dtype mismatch"
@@ -599,7 +645,7 @@ def to_zarr(
 def get_window(
     x: xr.DataArray,
     y: xr.DataArray,
-    bounds: tuple[int | float, int | float, int | float, int | float],
+    bounds: tuple[float, float, float, float],
     buffer: int = 0,
     raise_on_out_of_bounds: bool = True,
     raise_on_buffer_out_of_bounds: bool = True,
@@ -729,40 +775,9 @@ class AsyncGriddedForcingReader:
 
     This reader uses the Zarr async API for efficient reads, with a workaround
     for occasional Zarr async loading issues.
-
-    All instances of this class share a single event loop running in a background thread.
     """
 
-    # Class-level shared event loop and thread
-    _shared_loop: asyncio.AbstractEventLoop | None = None
-    _shared_thread: threading.Thread | None = None
-    _init_lock = threading.Lock()
-
-    @classmethod
-    def _get_loop(cls) -> asyncio.AbstractEventLoop:
-        """Get or create the shared event loop.
-
-        Returns:
-            The shared event loop.
-        """
-        if cls._shared_loop is None:
-            with cls._init_lock:
-                if cls._shared_loop is None:
-                    cls._shared_loop = asyncio.new_event_loop()
-                    cls._shared_thread = threading.Thread(
-                        target=cls._run_shared_loop,
-                        daemon=True,
-                        name="AsyncZarrLoop",
-                    )
-                    cls._shared_thread.start()
-        return cls._shared_loop
-
-    @classmethod
-    def _run_shared_loop(cls) -> None:
-        """Run the shared event loop in a background thread."""
-        assert cls._shared_loop is not None
-        asyncio.set_event_loop(cls._shared_loop)
-        cls._shared_loop.run_forever()
+    array: zarr.Array
 
     def __init__(
         self,
@@ -789,27 +804,40 @@ class AsyncGriddedForcingReader:
         self.ds = zarr.open_group(self.store, mode="r")
 
         # Metadata and time index
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Numcodecs codecs are not in the Zarr version 3 specification",
-            )
-            time_arr = self.ds["time"]
-            assert isinstance(time_arr, zarr.Array)
-            time = time_arr[:]
+        time_arr = self.ds["time"]
+        assert isinstance(time_arr, zarr.Array)
+        time = time_arr[:]
+        assert isinstance(time, np.ndarray)
 
-        datetime_index_unparsed = cftime.num2date(
-            time,
-            units=self.ds["time"].attrs.get("units"),
-            calendar=self.ds["time"].attrs.get("calendar"),
-        )
+        assert self.ds["time"].attrs.get("calendar") == "proleptic_gregorian"
+
+        time_unit = self.ds["time"].attrs.get("units")
+        assert isinstance(time_unit, str)
+        time_unit, origin = time_unit.split(" since ")
+        pandas_time_unit: str = {
+            "seconds": "s",
+            "minutes": "m",
+            "hours": "h",
+            "days": "D",
+        }[time_unit]
+
         self.datetime_index: ArrayDatetime64 = pd.to_datetime(
-            [obj.isoformat() for obj in datetime_index_unparsed]
+            time, unit=pandas_time_unit, origin=origin
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
         # Check if the variable uses NaN as fill value for the retry workaround
-        self.array = self.ds[self.variable_name]
+        array = self.ds[self.variable_name]
+        assert isinstance(array, zarr.Array)
+        self.array: zarr.Array = array
+
+        for compressor in self.array.compressors:
+            # Blosc is not supported due to known issues with async reading
+            if isinstance(compressor, BloscCodec):
+                raise ValueError(
+                    f"Variable {self.variable_name} uses Blosc compression, which is not supported by AsyncGriddedForcingReader. Please recompress the data using a different codec (e.g., Zstd)."
+                )
+
         fill_value = self.array.fill_value
         # The fill value is NaN if it's a float type and is NaN, or explicitly None for some types
         has_nan_fill = isinstance(fill_value, (float, np.floating)) and np.isnan(
@@ -824,76 +852,81 @@ class AsyncGriddedForcingReader:
         # Cache tracking
         self.current_start_index = -1
         self.current_end_index = -1
-        self.current_data: npt.NDArray[Any] | None = None
+        self.current_data: ThreeDArrayFloat32 | None = None
         self.preloaded_data_future: asyncio.Task | None = None
 
         # Async event loop setup
         if self.asynchronous:
-            self.loop: asyncio.AbstractEventLoop | None = self._get_loop()
-            assert self.loop is not None
+            self.loop: asyncio.AbstractEventLoop | None = asyncio.new_event_loop()
+            self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+            self.thread.start()
 
             # Initialize lock in the shared loop
-            async def _init_lock() -> asyncio.Lock:
-                return asyncio.Lock()
+            async def _init_lock() -> tuple[asyncio.Lock, asyncio.Lock]:
+                return asyncio.Lock(), asyncio.Lock()
 
-            self.async_lock = asyncio.run_coroutine_threadsafe(
+            self.async_lock, self.io_lock = asyncio.run_coroutine_threadsafe(
                 _init_lock(), self.loop
             ).result()
         else:
             self.loop = None
             self.async_lock = None
+            self.io_lock = None
 
-    def load(self, start_index: int, end_index: int) -> np.ndarray:
+    def load(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
         """Safe synchronous load (only used if asynchronous=False).
 
         Returns:
             The requested data slice.
         """
-        array = self.ds[self.variable_name]
-        assert isinstance(array, zarr.Array)
-        data = array[start_index:end_index]
-        assert isinstance(data, np.ndarray)
-        return data
+        assert isinstance(self.array, zarr.Array)
+        data = self.array[start_index:end_index]
+        assert (
+            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 3
+        )
+        return data  # ty:ignore[invalid-return-type]
 
-    async def load_await(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
+    async def load_await(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
         """Load data asynchronously via reusable async group.
-
-        Uses a workaround for Zarr async loading issues: if the first read returns
-        all NaN values (and the array uses NaN as fill value), retry the read.
 
         Returns:
             The requested data slice (not a copy - caller must copy if needed).
 
         Raises:
-            RuntimeError: If data loading fails after maximum retries.
+            IOError: If the async load returns only NaN values after multiple attempts.
         """
-        # Select the variable array from the pre-opened async group.
-        arr: zarr.AsyncArray[Any] = self.array.async_array
-        max_retries = 100
-        retries = 0
-        while retries < max_retries:
-            data = await arr.getitem(
-                (slice(start_index, end_index), slice(None), slice(None))
-            )
+        assert self.io_lock is not None
+        async with self.io_lock:
+            # Select the variable array from the pre-opened async group.
+            arr: zarr.AsyncArray[Any] = self.array.async_array
 
-            # Only apply the NaN workaround if the array actually uses NaN as fill value
-            if np.isnan(data).any():
-                retries += 1
-                print(
-                    f"Warning: Async read returned NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
+            attempts: int = 100
+
+            # Try up to 100 times
+            for _ in range(attempts):
+                data = await arr.getitem(
+                    (slice(start_index, end_index), slice(None), slice(None))
                 )
-                await asyncio.sleep(delay=0.1)  # brief pause before retrying
-            else:
-                return data
 
-        # If still NaN after retries, raise an error
-        raise RuntimeError(
-            f"Failed to load data for {self.variable_name} after {max_retries} retries due to NaN values."
-        )
+                if not np.any(np.isnan(data)):
+                    assert (
+                        isinstance(data, np.ndarray)
+                        and data.dtype == np.float32
+                        and data.ndim == 3
+                    )
+                    return data  # ty:ignore[invalid-return-type]
+                print(
+                    f"Async load returned NaN values for indices {start_index}:{end_index}, retrying..."
+                )
+
+            else:
+                raise IOError(
+                    f"Async load failed after {attempts} attempts for indices {start_index}:{end_index}"
+                )
 
     async def preload_next(
         self, start_index: int, end_index: int, n: int
-    ) -> npt.NDArray[Any] | None:
+    ) -> ThreeDArrayFloat32 | None:
         """Preload next timestep asynchronously.
 
         Returns:
@@ -905,7 +938,7 @@ class AsyncGriddedForcingReader:
 
     async def read_timestep_async(
         self, start_index: int, end_index: int, n: int
-    ) -> npt.NDArray[Any]:
+    ) -> ThreeDArrayFloat32:
         """Core async read with safe preload caching.
 
         This method ensures that only one read operation (including preloading)
@@ -953,6 +986,10 @@ class AsyncGriddedForcingReader:
             if data is None:
                 if self.preloaded_data_future and not self.preloaded_data_future.done():
                     self.preloaded_data_future.cancel()
+                    try:
+                        await self.preloaded_data_future
+                    except asyncio.CancelledError:
+                        pass
                 data = await self.load_await(start_index, end_index)
 
             # Consistency check
@@ -968,6 +1005,13 @@ class AsyncGriddedForcingReader:
 
             # Schedule next preload
             assert self.loop is not None
+            if self.preloaded_data_future and not self.preloaded_data_future.done():
+                self.preloaded_data_future.cancel()
+                try:
+                    await self.preloaded_data_future
+                except asyncio.CancelledError:
+                    pass
+
             self.preloaded_data_future = self.loop.create_task(
                 self.preload_next(start_index, end_index, n)
             )
@@ -1045,30 +1089,33 @@ class AsyncGriddedForcingReader:
                     await self.preloaded_data_future
                 except asyncio.CancelledError:
                     pass
+            # Stop the loop
+            asyncio.get_event_loop().stop()
 
         if self.loop and self.loop.is_running():
             try:
                 asyncio.run_coroutine_threadsafe(cleanup(), self.loop).result(timeout=5)
             except Exception:
                 pass
+            self.thread.join(timeout=1)
 
     @property
-    def x(self) -> np.ndarray:
+    def x(self) -> ArrayFloat64:
         """The x-coordinates of the grid."""
         x_array = self.ds["x"]
         assert isinstance(x_array, zarr.Array)
         x = x_array[:]
-        assert isinstance(x, np.ndarray)
-        return x
+        assert isinstance(x, np.ndarray) and x.dtype == np.float64 and x.ndim == 1
+        return x  # ty:ignore[invalid-return-type]
 
     @property
-    def y(self) -> npt.NDArray[Any]:
+    def y(self) -> ArrayFloat64:
         """The y-coordinates of the grid."""
         y_array = self.ds["y"]
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
-        assert isinstance(y, np.ndarray)
-        return y
+        assert isinstance(y, np.ndarray) and y.dtype == np.float64 and y.ndim == 1
+        return y  # ty:ignore[invalid-return-type]
 
 
 class WorkingDirectory:
@@ -1341,6 +1388,8 @@ def create_hash_from_parameters(
             value = [make_hashable(v) for v in value]
         elif isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
             value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
+        elif isinstance(value, np.generic):
+            value = value.item()
         try:
             json.dumps(value)
         except (TypeError, ValueError):

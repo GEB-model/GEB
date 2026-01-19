@@ -21,24 +21,24 @@ from geb.cli import (
     alter_fn,
     build_fn,
     init_fn,
-    parse_config,
     run_model_with_method,
     share_fn,
     update_fn,
 )
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, open_zarr
+from geb.runner import parse_config
+from geb.workflows.io import WorkingDirectory, read_zarr, write_params
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
 working_directory: Path = tmp_folder / "model"
+working_directory_coastal: Path = tmp_folder / "model_coastal"
 
-DEFAULT_BUILD_ARGS: dict[str, Any] = {}
+DEFAULT_BUILD_ARGS: dict[str, Any] = {"continue_": True}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "clean_working_directory",
     [False, True],
@@ -72,20 +72,90 @@ def test_init(clean_working_directory: bool) -> None:
         assert Path("build.yml").exists()
         assert Path("update.yml").exists()
 
-        assert pytest.raises(
-            FileExistsError,
-            init_fn,
-            **args,
-            overwrite=False,
-        )  # should raise an error if the folder already exists
+        # should raise an error if the folder already exists
+        with pytest.raises(FileExistsError):
+            init_fn(
+                **args,
+                overwrite=False,
+            )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_build() -> None:
+@pytest.mark.parametrize(
+    "clean_working_directory",
+    [False, True],
+)
+def test_init_coastal(clean_working_directory: bool) -> None:
+    """Test model initialization of a coastal model from example configuration.
+
+    Creates a new model directory from the 'geul' example, verifies that
+    all required configuration files are created, and tests error handling
+    when attempting to initialize in an existing directory without overwrite.
+
+    Only the coastal-specific build steps are included in the build configuration.
+    """
+    if clean_working_directory and working_directory_coastal.exists():
+        shutil.rmtree(working_directory_coastal, ignore_errors=True)
+    working_directory_coastal.mkdir(parents=True, exist_ok=True)
+
+    with WorkingDirectory(working_directory_coastal):
+        args: dict[str, Any] = {
+            "config": "model.yml",
+            "build_config": "build.yml",
+            "update_config": "update.yml",
+            "working_directory": ".",
+            "from_example": "geul",
+            "basin_id": "23010758",
+        }
+        init_fn(
+            **args,
+            overwrite=True,
+        )
+
+        build_config = parse_config("build.yml")
+        build_config = {
+            key: value
+            for key, value in build_config.items()
+            if key
+            in (
+                "setup_region",
+                "setup_hydrography",
+                "setup_elevation",
+                "setup_global_ocean_mean_dynamic_topography",
+                "setup_low_elevation_coastal_zone_mask",
+                "setup_coastlines",
+                "setup_osm_land_polygons",
+                "setup_coastal_sfincs_model_regions",
+                "setup_gtsm_station_data",
+            )
+        }
+        write_params(build_config, Path("build.yml"))
+
+        assert Path("model.yml").exists()
+        assert Path("build.yml").exists()
+        assert Path("update.yml").exists()
+
+        # should raise an error if the folder already exists
+        with pytest.raises(FileExistsError):
+            init_fn(
+                **args,
+                overwrite=False,
+            )
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.parametrize(
+    "working_directory",
+    [working_directory, working_directory_coastal],
+)
+def test_build(working_directory: Path) -> None:
     """Test the model build process with default arguments.
 
     Runs the build function with default build arguments to ensure
     the model can be properly built from configuration files.
+
+    Args:
+        working_directory: The working directory where the model is built.
     """
     with WorkingDirectory(working_directory):
         build_fn(**DEFAULT_BUILD_ARGS)
@@ -144,6 +214,7 @@ def test_update_with_file() -> None:
     """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
+        del args["continue_"]
         args["build_config"] = Path("update.yml")
         update_fn(**args)
 
@@ -157,6 +228,7 @@ def test_update_with_dict() -> None:
     """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
+        del args["continue_"]
         update = {"setup_land_use_parameters": {}}
         args["build_config"] = update
         update_fn(**args)
@@ -175,6 +247,7 @@ def test_update_with_method(method: str) -> None:
     """
     with WorkingDirectory(working_directory):
         args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
+        del args["continue_"]
 
         build_config: dict[str, dict] = parse_config(BUILD_DEFAULT)
 
@@ -209,7 +282,49 @@ def test_spinup() -> None:
         args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
-        run_model_with_method(method="spinup", **args)
+        geb: GEBModel = run_model_with_method(
+            method="spinup", **args, close_after_run=False
+        )
+
+        routing_report_folder: Path = (
+            working_directory / "output" / "report" / "spinup" / "hydrology.routing"
+        )
+
+        hourly_discharge_data = xr.open_dataarray(
+            routing_report_folder / "discharge_hourly.zarr"
+        )
+
+        daily_discharge_data = xr.open_dataarray(
+            routing_report_folder / "discharge_daily.zarr"
+        )
+
+        outflow_rivers = geb.hydrology.routing.outflow_rivers
+        for ID, river in outflow_rivers.iterrows():
+            outflow_data_csv: pd.DataFrame = pd.read_csv(
+                routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.csv",
+                parse_dates=["time"],
+            ).set_index("time")[f"river_outflow_hourly_m3_per_s_{ID}"]
+
+            outflow_xy = river["hydrography_xy"][-1]
+            hourly_outflow_data_zarr: pd.DataFrame = hourly_discharge_data.isel(
+                y=outflow_xy[1], x=outflow_xy[0]
+            ).to_dataframe()["discharge_hourly"]
+
+            np.testing.assert_almost_equal(
+                hourly_outflow_data_zarr.values, outflow_data_csv.values, decimal=5
+            )
+
+            daily_outflow_data_zarr: pd.DataFrame = daily_discharge_data.isel(
+                y=outflow_xy[1], x=outflow_xy[0]
+            ).to_dataframe()["discharge_daily"]
+
+            # aggregate hourly to daily
+            outflow_data_csv_daily = outflow_data_csv.resample("D").mean()
+            np.testing.assert_almost_equal(
+                daily_outflow_data_zarr.values, outflow_data_csv_daily.values, decimal=4
+            )
+
+        geb.close()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -234,7 +349,9 @@ def test_forcing() -> None:
             t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
             forcing_1 = loader.load(t_1)
 
-            if isinstance(forcing_0, (xr.DataArray, np.ndarray)):
+            if isinstance(forcing_0, (xr.DataArray, np.ndarray)) and isinstance(
+                forcing_1, (xr.DataArray, np.ndarray)
+            ):
                 assert forcing_0.shape == forcing_1.shape, (
                     f"Shape of forcing data for {name} does not match for times {t_0} and {t_1}."
                 )
@@ -277,6 +394,7 @@ def test_alter() -> None:
     """
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+        del args["continue_"]
         args["build_config"] = {
             "set_ssp": {"ssp": "ssp1"},
             "setup_CO2_concentration": {},
@@ -308,7 +426,7 @@ def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "methods": ["water_circle"],
+            "methods": ["hydrology.water_circle"],
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
@@ -325,7 +443,7 @@ def test_evaluate() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "methods": ["plot_discharge", "evaluate_discharge"],
+            "methods": ["hydrology.plot_discharge", "hydrology.evaluate_discharge"],
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
@@ -513,7 +631,7 @@ def test_multiverse() -> None:
         for forecast_variable, loader in geb.forcing.loaders.items():
             if not loader.supports_forecast:
                 continue
-            da: xr.DataArray = open_zarr(
+            da: xr.DataArray = read_zarr(
                 geb.files["other"][f"climate/{forecast_variable}"]
             ).drop_encoding()
             forecast_da: xr.DataArray = da.sel(

@@ -27,17 +27,18 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from geb.geb_types import TwoDArrayFloat32 as TwoDArrayFloat32
 from geb.hydrology.HRUs import Data
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
-from .lakes_reservoirs import LakesReservoirs
 from .landsurface import LandSurface
 from .routing import Routing
-from .runoff_concentration import concentrate_runoff
+from .runoff_concentration import RunoffConcentrator
 from .water_demand import WaterDemand
+from .waterbodies import WaterBodies
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -63,14 +64,15 @@ class Hydrology(Data, Module):
         if not self.model.simulate_hydrology:
             return
 
-        self.dynamic_water_bodies = False
+        self.dynamic_waterbodies = False
 
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.routing = Routing(self.model, self)
-        self.lakes_reservoirs = LakesReservoirs(self.model, self)
+        self.waterbodies = WaterBodies(self.model, self)
         self.water_demand = WaterDemand(self.model, self)
         self.hillslope_erosion = HillSlopeErosion(self.model, self)
+        self.runoff_concentrator = RunoffConcentrator(self.model, self)
 
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.
@@ -98,8 +100,9 @@ class Hydrology(Data, Module):
             )
             .astype(np.float64)
             .sum()
-            + self.lakes_reservoirs.var.storage.astype(np.float64).sum()
+            + self.waterbodies.var.storage.astype(np.float64).sum()
             + self.groundwater.groundwater_content_m3.astype(np.float64).sum()
+            + self.runoff_concentrator.overland_runoff_storage_end_m3.astype(np.float64)
         )
 
     def step(self) -> None:
@@ -114,14 +117,16 @@ class Hydrology(Data, Module):
             influx = (
                 self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
             ).sum()
+        else:
+            prev_storage: np.float64 = np.float64(np.nan)
 
-        self.lakes_reservoirs.step()
+        self.waterbodies.step()
         timer.finish_split("Waterbodies")
 
         (
             reference_evapotranspiration_water_m,
             interflow_m,
-            runoff_m,
+            overland_runoff_m,
             groundwater_recharge_m,
             groundwater_abstraction_m3,
             channel_abstraction_m3,
@@ -136,10 +141,13 @@ class Hydrology(Data, Module):
             influx += pr_total_m3
 
         interflow_m = self.to_grid(HRU_data=interflow_m, fn="weightedmean")
-        runoff_m = self.to_grid(HRU_data=runoff_m, fn="weightedmean")
+        overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m, fn="weightedmean")
         groundwater_recharge_m = self.to_grid(
             HRU_data=groundwater_recharge_m, fn="weightedmean"
         )
+
+        if self.model.config["hazards"]["floods"]["simulate"]:
+            self.model.hazard_driver.floods.save_runoff_m(overland_runoff_m)
 
         if __debug__:
             outflux_m3: np.float64 = (
@@ -157,7 +165,7 @@ class Hydrology(Data, Module):
                 - (
                     (
                         interflow_m.sum(axis=0)
-                        + runoff_m.sum(axis=0)
+                        + overland_runoff_m.sum(axis=0)
                         + return_flow_m
                         + groundwater_recharge_m
                     )
@@ -216,32 +224,56 @@ class Hydrology(Data, Module):
 
         timer.finish_split("GW")
 
-        self.grid.var.total_runoff_m = concentrate_runoff(
-            interflow_m, baseflow_m, runoff_m
-        )
+        total_runoff_m = self.runoff_concentrator.step(
+            interflow_m=interflow_m, baseflow_m=baseflow_m, runoff_m=overland_runoff_m
+        ).astype(np.float32)
+
+        if __debug__:
+            invented_water += (
+                (interflow_m.sum(axis=0) + overland_runoff_m.sum(axis=0) + baseflow_m)
+                * self.grid.var.cell_area
+            ).sum()  # added to sinks, so remove from invented water
+            invented_water -= (total_runoff_m * self.grid.var.cell_area).sum()
+
+            balance_check(
+                name="total water balance 3",
+                how="sum",
+                influxes=[influx, invented_water],
+                outfluxes=[
+                    outflux_m3,
+                ],
+                prestorages=[prev_storage],
+                poststorages=[self.get_current_storage()],
+                tolerance=self.grid.compressed_size
+                / 3,  # increase tolerance for large models
+            )
+
         timer.finish_split("Runoff concentration")
 
-        routing_loss_m3, over_abstraction_m3 = self.routing.step(
-            self.grid.var.total_runoff_m,
+        total_inflow_m3, routing_loss_m3, over_abstraction_m3 = self.routing.step(
+            total_runoff_m,
             channel_abstraction_m3,
             return_flow_m,
             reference_evapotranspiration_water_m,
         )
 
+        if self.model.config["hazards"]["floods"]["simulate"]:
+            self.model.hazard_driver.floods.save_discharge(
+                discharge_m3_s_per_substep=self.grid.var.discharge_m3_s_per_substep
+            )
+
         current_storage: np.float64 = self.get_current_storage()
 
         if __debug__:
             influx += over_abstraction_m3
+            influx += total_inflow_m3
 
             outflux_m3 += routing_loss_m3
             invented_water += (
-                (interflow_m.sum(axis=0) + runoff_m.sum(axis=0) + return_flow_m)
-                * self.grid.var.cell_area
+                return_flow_m * self.grid.var.cell_area
             ).sum()  # added to sinks, so remove from invented water
 
-            invented_water += (
-                baseflow_m * self.grid.var.cell_area
-            ).sum()  # now added to river
+            invented_water += (total_runoff_m * self.grid.var.cell_area).sum()
 
             invented_water -= (
                 channel_abstraction_m3.sum()  # now removed from river
@@ -249,7 +281,7 @@ class Hydrology(Data, Module):
             )
 
             balance_check(
-                name="total water balance 3",
+                name="total water balance 4",
                 how="sum",
                 influxes=[influx, invented_water],
                 outfluxes=[
@@ -263,7 +295,7 @@ class Hydrology(Data, Module):
 
         timer.finish_split("Routing")
 
-        self.hillslope_erosion.step()
+        self.hillslope_erosion.step(overland_runoff_m.sum(axis=0))
         timer.finish_split("Hill slope erosion")
 
         if self.model.timing:
@@ -278,7 +310,8 @@ class Hydrology(Data, Module):
             self.groundwater.modflow.finalize()
 
         if self.model.config["general"]["simulate_forest"]:
-            for plantFATE_model in self.plantFATE:
+            assert hasattr(self.model, "plantFATE")
+            for plantFATE_model in self.model.plantFATE:
                 if plantFATE_model is not None:
                     plantFATE_model.finalize()
 

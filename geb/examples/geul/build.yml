@@ -1,0 +1,384 @@
+setup_region:
+  subgrid_factor: 20
+
+set_time_range:
+  start_date: 1990-01-01
+  end_date: 2024-12-31
+
+set_ssp:
+  ssp: ssp3
+
+setup_hydrography:
+
+setup_assets:
+  feature_types:
+  - roads
+  - rails
+
+setup_gtsm_station_data:
+
+setup_elevation:
+
+setup_regions_and_land_use:
+  region_database: GADM_level1
+  ISO3_column: GID_0
+
+setup_cell_area:
+
+setup_mannings:
+  
+setup_economic_data:
+
+setup_soil_parameters:
+
+setup_land_use_parameters:
+
+setup_waterbodies:
+  command_areas: null
+  custom_reservoir_capacity: null
+
+setup_groundwater:
+
+setup_well_prices_by_reference_year_global:
+  WHY_10: 82.0209974 # $/m
+  WHY_20: 164 # $/m
+  WHY_30: 50 # $/m
+  reference_year: 2017
+
+setup_irrigation_sources:
+  irrigation_sources:
+    "no": -1
+    canal: 0
+    well: 1
+
+setup_create_farms:
+
+setup_income_distribution_parameters:
+
+setup_household_characteristics:
+
+setup_water_demand:
+
+setup_farmer_household_characteristics:
+
+setup_crops_from_source:
+  source: MIRCA2000
+
+setup_farmer_crop_calendar:
+  year: 2000
+  reduce_crops: true
+  replace_base: false
+
+setup_farmer_characteristics:
+  interest_rate: 0.05
+
+setup_crop_prices:
+  crop_prices: FAO_stat
+  translate_crop_names:
+    cassava: 
+      - cassava, fresh
+    citrus: 
+      - lemons and lime
+      - oranges
+      - other citrus fruit, n.e.c.
+      - pomelos and grapefruits
+      - tangerines, mandarins, clementines
+    coffee: 
+      - coffee, green
+    cocoa:
+      - cocoa beans
+    cotton: 
+      - cotton lint, ginned
+    date palm: 
+      - dates
+    groundnuts: 
+      - groundnuts, excluding shelled
+    maize: 
+      - maize (corn)
+    millet:
+      - millet
+    oil palm: 
+      - palm oil
+    others annual:
+      - buckwheat
+      - cabbages
+      - cantaloupes and other melons
+      - carrots and turnips
+      - cauliflowers and broccoli
+      - chillies and peppers, green (capsicum spp. and pimenta spp.)
+      - cucumbers and gherkins
+      - green garlic
+      - lettuce and chicory
+      - linseed
+      - lupins
+      - mushrooms and truffles
+      - mustard seed
+      - onions and shallots, dry (excluding dehydrated)
+      - onions and shallots, green
+      - other beans, green
+      - other fruits, n.e.c.
+      - other vegetables, fresh n.e.c.
+      - peas, dry
+      - peas, green
+      - pumpkins, squash and gourds
+      - shorn wool, greasy, including fleece-washed shorn wool
+      - spinach
+      - strawberries
+      - tomatoes
+      - triticale
+      - unmanufactured tobacco
+      - vetches
+    others perennial:
+      - apples
+      - apricots
+      - artichokes
+      - asparagus
+      - blueberries
+      - cherries
+      - currants
+      - gooseberries
+      - hop cones
+      - kiwi fruit
+      - leeks and other alliaceous vegetables
+      - other berries and fruits of the genus vaccinium n.e.c.
+      - other stone fruits
+      - peaches and nectarines
+      - pears
+      - plums and sloes
+      - quinces
+      - raspberries
+      - sour cherries
+      - walnuts, in shell
+    pulses: 
+      - bambara beans, dry
+      - beans, dry
+      - broad beans and horse beans, dry
+      - broad beans and horse beans, green
+      - chick peas, dry
+      - cow peas, dry
+      - lentils, dry
+      - lupins
+      - peas, dry
+      - peas, green
+      - pigeon peas, dry
+      - vetches
+    rapeseed: 
+      - rape or colza seed
+    soybeans: 
+      - soya beans
+    sugar beets: 
+      - sugar beet
+    sugar cane: 
+      - sugar cane
+    sunflower: 
+      - sunflower seed
+
+
+setup_damage_parameters:
+  parameters:
+    flood:
+      land_use:
+        forest:
+          curve:
+            - [0, 0]
+            - [0.1, 0.1]
+            - [0.25, 0.3]
+            - [0.50, 0.55]
+            - [1.00, 0.65]
+            - [1.50, 0.7]
+            - [2.00, 0.9]
+            - [2.50, 0.92]
+            - [3.00, 0.95]
+            - [4.00, 1.00]
+            - [5.00, 1.00]
+          maximum_damage: 10.79
+        agriculture:
+          curve:
+            - [0, 0]
+            - [0.1, 0.1]
+            - [0.25, 0.3]
+            - [0.50, 0.55]
+            - [1.00, 0.65]
+            - [1.50, 0.7]
+            - [2.00, 0.9]
+            - [2.50, 0.92]
+            - [3.00, 0.95]
+            - [4.00, 1.00]
+            - [5.00, 1.00]
+          maximum_damage: 1.83
+      buildings:
+        structure:
+          curve:
+            - [0, 0]
+            - [0.1, 0.27]
+            - [0.5, 0.35]
+            - [1, 0.37]
+            - [1.5, 0.42]
+            - [2, 0.45]
+            - [2.5, 0.47]
+            - [3, 0.5]
+          maximum_damage: 1806
+         
+        content:
+          curve:
+            - [0, 0]
+            - [0.10, 0.5]
+            - [0.50, 0.55]
+            - [1.00, 0.6]
+            - [1.50, 0.65]
+            - [2.00, 0.67]
+            - [2.50, 0.7]
+            - [3.00, 0.72]
+          maximum_damage: 78787
+      rail:
+        main:
+          curve:
+            - [0, 0]
+            - [0.05, 0.02]
+            - [0.20, 0.2]
+            - [1.40, 1]
+            - [6.00, 1]
+          maximum_damage: 7022
+      road:
+        residential:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 5
+        unclassified:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 5
+        tertiary:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 10
+        primary:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 50
+        secondary:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 25
+        motorway:
+          curve:
+            - [0, 0]
+            - [0.50, 0.01]
+            - [1.00, 0.03]
+            - [1.50, 0.075]
+            - [2.00, 0.1]
+            - [6.00, 0.2]
+          maximum_damage: 4000
+        motorway_link:
+          curve:
+            - [0, 0]
+            - [0.50, 0.01]
+            - [1.00, 0.03]
+            - [1.50, 0.075]
+            - [2.00, 0.1]
+            - [6.00, 0.2]
+          maximum_damage: 4000
+        trunk:
+          curve:
+            - [0, 0]
+            - [0.50, 0.01]
+            - [1.00, 0.03]
+            - [1.50, 0.075]
+            - [2.00, 0.1]
+            - [6.00, 0.2]
+          maximum_damage: 1000
+        trunk_link:
+          curve:
+            - [0, 0]
+            - [0.50, 0.01]
+            - [1.00, 0.03]
+            - [1.50, 0.075]
+            - [2.00, 0.1]
+            - [6.00, 0.2]
+          maximum_damage: 1000
+        primary_link:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 50
+        secondary_link:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 25
+        tertiary_link:
+          curve:
+            - [0, 0]
+            - [0.50, 0.015]
+            - [1.00, 0.025]
+            - [1.50, 0.03]
+            - [2.00, 0.035]
+            - [6.00, 0.05]
+          maximum_damage: 25
+
+setup_forcing:
+  forcing: ERA5
+
+# setup_forecasts:
+#   forecast_start: 2021-07-11 00:00:00 # Start date for forecast data downloads. Format: ``YYYY-MM-DD``
+#   forecast_end: 2021-07-12 00:00:00 # End date for forecast data downloads. Format: ``YYYY-MM-DD``
+#   forecast_provider: ECMWF # The forecast data provider. Currently only ``"ECMWF"`` is supported.
+#   forecast_model: probabilistic_forecast # The forecast model to use. Options are "probabilistic_forecast" or "control_forecast".
+#   forecast_resolution: 0.1/0.1 # The spatial resolution of the forecast data in degrees.
+#   forecast_horizon: 240 # The forecast horizon in hours.
+#   forecast_timestep_hours: 1 # The time step of the forecast output in hours.
+
+setup_SPEI:
+  window_months: 12
+  calibration_period_start: 2011-01-01
+  calibration_period_end: 2021-12-31
+
+setup_pr_GEV:
+
+setup_discharge_observations:
+  custom_river_stations: null
+
+setup_CO2_concentration:
+
+setup_global_ocean_mean_dynamic_topography:
+
+setup_low_elevation_coastal_zone_mask:
+
+setup_coastlines:
+
+setup_osm_land_polygons:
+
+setup_coastal_sfincs_model_regions:

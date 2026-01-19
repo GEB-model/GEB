@@ -330,7 +330,10 @@ def get_potential_transpiration(
     Returns:
         Potential transpiration [m]
     """
-    return max(0.0, potential_evapotranspiration_m - potential_bare_soil_evaporation_m)
+    return max(
+        np.float32(0.0),
+        potential_evapotranspiration_m - potential_bare_soil_evaporation_m,
+    )
 
 
 @njit(cache=True, inline="always")

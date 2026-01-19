@@ -3,7 +3,6 @@
 import copy
 import datetime
 import logging
-import os
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -15,6 +14,7 @@ import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 
+from geb import GEB_PACKAGE_DIR
 from geb.agents import Agents
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
@@ -22,15 +22,22 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 )
 from geb.module import Module
 from geb.reporter import Reporter
-from geb.store import Store
-from geb.workflows.io import load_dict, load_geom, open_zarr
+from geb.store import Bucket, Store
+from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
 from .hydrology import Hydrology
 
 
-class GEBModel(Module, HazardDriver):
+class GEBModelVariables(Bucket):
+    """Class to hold GEB model variables."""
+
+    _spinup_start: datetime.datetime
+    _run_start: datetime.datetime
+
+
+class GEBModel(Module):
     """GEB parent class.
 
     Args:
@@ -39,6 +46,9 @@ class GEBModel(Module, HazardDriver):
         mode: Mode of the model. Either `w` (write) or `r` (read).
         timing: Boolean indicating if the model steps should be timed.
     """
+
+    var: GEBModelVariables
+    plantFATE: list[Any]
 
     def __init__(
         self,
@@ -80,7 +90,7 @@ class GEBModel(Module, HazardDriver):
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
 
-        self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
+        self.mask = read_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
 
@@ -160,6 +170,11 @@ class GEBModel(Module, HazardDriver):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
+        original_is_activated: bool = (
+            self.reporter.is_activated
+        )  # store original reporter state
+        self.reporter.is_activated = False  # disable reporting during multiverse runs
+
         if return_mean_discharge:
             mean_discharge: dict[
                 Any, float
@@ -192,7 +207,7 @@ class GEBModel(Module, HazardDriver):
                         flush=True,
                     )
                     # open one forecast to see the number of members
-                    forecast_data[loader_name] = open_zarr(forecast_file_path)
+                    forecast_data[loader_name] = read_zarr(forecast_file_path)
                     # these are the forecast members to loop over
                     variable_forecast_members: list[str] = [
                         i.item() for i in forecast_data[loader_name].member.values
@@ -272,6 +287,10 @@ class GEBModel(Module, HazardDriver):
             timestep=store_timestep,
             n_timesteps=store_n_timesteps,
         )  # restore the initial state of the multiverse
+
+        self.reporter.is_activated = (
+            original_is_activated  # restore original reporter state
+        )
 
         # after all forecast members have been processed, restore the original forcing data
         for loader_name, loader in self.forcing.loaders.items():
@@ -398,7 +417,7 @@ class GEBModel(Module, HazardDriver):
         if self.simulate_hydrology:
             self.hydrology.step()
 
-        HazardDriver.step(self)
+        self.hazard_driver.step()
 
         self.report(locals())
 
@@ -443,13 +462,13 @@ class GEBModel(Module, HazardDriver):
         self.n_timesteps = n_timesteps
         self.current_timestep = 0
 
-        self.regions: gpd.GeoDataFrame = load_geom(self.files["geom"]["regions"])
+        self.regions: gpd.GeoDataFrame = read_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
         self.hydrology: Hydrology = Hydrology(self)
 
-        HazardDriver.__init__(self)
+        self.hazard_driver = HazardDriver(self)
 
         self.agents = Agents(self)
 
@@ -568,6 +587,47 @@ class GEBModel(Module, HazardDriver):
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
+    def refresh_agent_attributes(self, agent_type: str = "households") -> None:
+        """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
+
+        This function is only included for development purposes.
+
+        Args:
+            agent_type: Type of agent to refresh attributes for. Examples: "households", "crop_farmers", etc.
+
+        """
+        # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
+        current_time = self.spinup_start
+        end_time_exclusive = self.run_start
+
+        timestep_length = datetime.timedelta(days=1)
+        n_timesteps = (end_time_exclusive - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
+
+        # create var bucket
+        self.var: GEBModelVariables = self.store.create_bucket("var")
+
+        # initialize the model
+        self._initialize(
+            create_reporter=True,
+            current_time=current_time,
+            n_timesteps=n_timesteps,
+            timestep_length=datetime.timedelta(days=1),
+            load_data_from_store=False,
+            clean_report_folder=False,
+            in_spinup=True,
+        )
+
+        # save initial household attributes
+        print(f"Refreshing household attributes for {agent_type}...")
+        path: Path = self.store.path
+        name = getattr(self.agents, agent_type).name
+        self.logger.debug(f"Saving {name}.var")
+        bucket = self.store.buckets[f"{name}.var"]
+        bucket.save(path / f"{name}.var")
+
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
 
@@ -605,7 +665,7 @@ class GEBModel(Module, HazardDriver):
         #     }
         # }
 
-        self.var = self.store.create_bucket("var")
+        self.var: GEBModelVariables = self.store.create_bucket("var")
 
         self.check_time_range()
         self._initialize(
@@ -674,11 +734,11 @@ class GEBModel(Module, HazardDriver):
         )
 
         # ugly switch to determine whether model has coastal basins
-        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
 
-        self.floods.get_return_period_maps()
+        self.hazard_driver.floods.get_return_period_maps()
 
     def evaluate(self, *args: Any, **kwargs: Any) -> None:
         """Call the evaluator to evaluate the model results."""
@@ -786,7 +846,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             Path to the folder containing GEB binaries.
         """
-        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
+        return GEB_PACKAGE_DIR / "bin"
 
     @property
     def diagnostics_folder(self) -> Path:
@@ -861,7 +921,7 @@ class GEBModel(Module, HazardDriver):
 
             # Close all async forcing readers
             if hasattr(self, "forcing"):
-                for forcing_loader in self.forcing._loaders.values():
+                for forcing_loader in self.forcing.forcing_loaders.values():
                     if hasattr(forcing_loader, "reader"):
                         forcing_loader.reader.close()
 
@@ -906,7 +966,7 @@ class GEBModel(Module, HazardDriver):
             ValueError: If the spinup start date is before the model build start date.
             ValueError: If the run end date is after the model build end date.
         """
-        model_build_time_range: dict[str, str] = load_dict(
+        model_build_time_range: dict[str, str] = read_params(
             self.files["dict"]["model_time_range"]
         )
 

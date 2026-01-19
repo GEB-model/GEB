@@ -5,28 +5,28 @@ from __future__ import annotations
 import datetime
 import re
 from operator import attrgetter
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import zarr.codecs
 import zarr.storage
 from dateutil.relativedelta import relativedelta
+from zarr.codecs import ZstdCodec
 
+from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.types import TwoDArrayInt32
 from geb.workflows.io import fast_rmtree
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
-ZARR_TIME_CHUNK_SIZE = 5
-
 if TYPE_CHECKING:
     from geb.model import GEBModel
 
-WATER_CIRCLE_REPORT_CONFIG = {
+WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
     "hydrology": {
         "_water_circle_storage": {
             "varname": ".current_storage",
@@ -104,13 +104,152 @@ WATER_CIRCLE_REPORT_CONFIG = {
     },
 }
 
+WATER_BALANCE_REPORT_CONFIG = {
+    "hydrology": {
+        "_water_balance_storage": {
+            "varname": ".current_storage",
+            "type": "scalar",
+        },
+        "_water_balance_routing_loss": {
+            "varname": ".routing_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.landsurface": {
+        "_water_balance_rain": {
+            "varname": ".rain_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_snow": {
+            "varname": ".snow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_transpiration": {
+            "varname": ".transpiration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_bare_soil_evaporation": {
+            "varname": ".bare_soil_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_open_water_evaporation": {
+            "varname": ".open_water_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_interception_evaporation": {
+            "varname": ".interception_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_sublimation_or_deposition": {
+            "varname": ".sublimation_or_deposition_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+    "hydrology.routing": {
+        "_water_balance_river_evaporation": {
+            "varname": ".total_evaporation_in_rivers_m3",
+            "type": "scalar",
+        },
+        "_water_balance_waterbody_evaporation": {
+            "varname": ".total_waterbody_evaporation_m3",
+            "type": "scalar",
+        },
+        "_water_balance_river_outflow": {
+            "varname": ".total_outflow_at_pits_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.water_demand": {
+        "_water_balance_domestic_water_loss": {
+            "varname": ".domestic_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_balance_industry_water_loss": {
+            "varname": ".industry_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_balance_livestock_water_loss": {
+            "varname": ".livestock_water_loss_m3",
+            "type": "scalar",
+        },
+    },
+}
+
+ENERGY_BALANCE_REPORT_CONFIG = {
+    "hydrology.landsurface": {
+        "_energy_balance_soil_temperature_top_layer_C": {
+            "varname": "HRU.var.soil_temperature_C[0]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+    },
+}
+
+
+def get_fill_value(
+    data: np.ndarray[Any] | int | float | bool | np.floating | np.integer,
+) -> int | float | None:
+    """Get the fill value for a zarr array based on the data type.
+
+    Args:
+        data: The data array.
+
+    Returns:
+        fill_value: The fill value for the zarr array.
+
+    Raises:
+        ValueError: If the data type is not recognized.
+    """
+    if isinstance(data, float):
+        fill_value = np.nan
+    elif isinstance(data, int):
+        fill_value = -1
+    elif isinstance(data, bool):
+        fill_value = None
+    elif np.issubdtype(data.dtype, np.floating):
+        fill_value: int | float = np.nan
+    elif np.issubdtype(data.dtype, np.integer):
+        fill_value = -1
+    elif data.dtype == bool:
+        fill_value = None
+    else:
+        raise ValueError(f"Value dtype {data.dtype} not recognized.")
+    return fill_value
+
+
+def get_time_chunk_size(
+    dtype: np.dtype, *other_dim_sizes: int, target_size_bytes: int = 100_000_000
+) -> int:
+    """Get the time chunk size for a zarr array.
+
+    Args:
+        dtype: The data type of the array.
+        other_dim_sizes: The sizes of the other dimensions of the array.
+        target_size_bytes: The target size of the chunk in bytes.
+
+    Returns:
+        time_chunk_size: The size of the time chunk.
+    """
+    type_size: int = np.dtype(dtype).itemsize
+    other_dims_size: np.int64 = np.prod(other_dim_sizes)
+    time_chunk_size: int = (target_size_bytes // (type_size * other_dims_size)).item()
+    return max(1, time_chunk_size)
+
 
 def create_time_array(
     start: datetime.datetime,
     end: datetime.datetime,
     timestep: datetime.timedelta | relativedelta,
     conf: dict,
-) -> list:
+    substeps: None | int = None,
+) -> ArrayInt64:
     """Create a time array based on the start and end time, the timestep, and the frequency.
 
     Args:
@@ -118,12 +257,14 @@ def create_time_array(
         end: The end time.
         timestep: The timestep length.
         conf: The configuration for the frequency.
+        substeps: The number of substeps per timestep.
 
     Returns:
         time: The time array.
 
     Raises:
         ValueError: If the frequency is not recognized.
+        ValueError: If substeps are provided for a frequency that does not support them.
     """
     if "frequency" not in conf:
         frequency = {"every": "day"}
@@ -135,24 +276,247 @@ def create_time_array(
         current_time = start
         while current_time <= end:
             if every == "year":
+                if substeps is not None:
+                    raise ValueError(
+                        "Substeps not supported for yearly frequency in create_time_array."
+                    )
                 if (
                     frequency["month"] == current_time.month
                     and frequency["day"] == current_time.day
                 ):
                     time.append(current_time)
             elif every == "month":
+                if substeps is not None:
+                    raise ValueError(
+                        "Substeps not supported for monthly frequency in create_time_array."
+                    )
                 if frequency["day"] == current_time.day:
                     time.append(current_time)
             elif every == "day":
-                time.append(current_time)
+                if substeps is None:
+                    time.append(current_time)
+                else:
+                    for substep in range(substeps):
+                        time.append(current_time + substep * (timestep / substeps))
             current_time += timestep
-        return time
     elif frequency == "initial":
-        return [start]
+        if substeps is not None:
+            raise ValueError(
+                "Substeps not supported for initial frequency in create_time_array."
+            )
+        time = [start]
     elif frequency == "final":
-        return [end]
+        if substeps is not None:
+            raise ValueError(
+                "Substeps not supported for final frequency in create_time_array."
+            )
+        time = [end]
     else:
         raise ValueError(f"Frequency {frequency} not recognized.")
+
+    time_array = (
+        np.array(time, dtype="datetime64[ns]").astype("datetime64[s]").astype(np.int64)
+    )
+    return time_array
+
+
+def prepare_gridded_group(
+    name: str,
+    config: dict,
+    lon: ArrayFloat32 | ArrayFloat64,
+    lat: ArrayFloat32 | ArrayFloat64,
+    crs: str,
+    example_value: np.ndarray[Any],
+    time: ArrayInt64,
+    chunk_size: int,
+    compression_level: int,
+) -> None:
+    """Create a zarr group for gridded data.
+
+    Args:
+        name: The name of the variable.
+        config: The configuration for the variable.
+        lon: The longitude array.
+        lat: The latitude array.
+        crs: The coordinate reference system in WKT format.
+        example_value: An example value to determine the data type.
+        time: The time array.
+        chunk_size: The size of the time chunk.
+        compression_level: The compression level for the zarr array.
+    """
+    root_group = config["_root_group"]
+
+    # Create the y coordinate array
+    y_group = root_group.create_array(
+        "y",
+        shape=lat.shape,
+        dtype=lat.dtype,
+        dimension_names=["y"],
+    )
+    y_group[:] = lat
+    y_group.attrs.update(
+        {
+            "standard_name": "latitude",
+            "units": "degrees_north",
+        }
+    )
+
+    # Create the x coordinate array
+    x_group = root_group.create_array(
+        "x",
+        shape=lon.shape,
+        dtype=lon.dtype,
+        dimension_names=["x"],
+    )
+    x_group[:] = lon
+    x_group.attrs.update(
+        {
+            "standard_name": "longitude",
+            "units": "degrees_east",
+        }
+    )
+
+    # Create the time coordinate array
+    time_group = root_group.create_array(
+        "time",
+        shape=time.shape,
+        dtype=time.dtype,
+        dimension_names=["time"],
+    )
+    time_group[:] = time
+    time_group.attrs.update(
+        {
+            "standard_name": "time",
+            "units": "seconds since 1970-01-01T00:00:00",
+            "calendar": "gregorian",
+        }
+    )
+
+    # Create the variable array
+    variable_data: zarr.Array[Any] = root_group.create_array(
+        name,
+        shape=(
+            time_group.size,
+            lat.size,
+            lon.size,
+        ),
+        chunks=(
+            chunk_size,
+            lat.size,
+            lon.size,
+        ),
+        dtype=example_value.dtype,
+        compressors=(
+            ZstdCodec(
+                level=compression_level,
+            ),
+        ),
+        fill_value=get_fill_value(example_value),
+        dimension_names=["time", "y", "x"],
+    )
+
+    variable_data.attrs.update(
+        {
+            "grid_mapping": "crs",
+            "coordinates": "time y x",
+            "units": "unknown",
+            "long_name": name,
+            "_CRS": {"wkt": crs},
+        }
+    )
+    # Pre-allocate the writing buffer for the chunks
+    config["_chunk_data"] = np.full(
+        (chunk_size, lat.size, lon.size),
+        np.nan,
+        dtype=np.float32,
+    )
+
+
+def prepare_agent_group(
+    name: str,
+    config: dict,
+    time: ArrayInt64,
+    example_value: np.ndarray[Any] | int | float | bool,
+    chunk_target_size_bytes: int,
+    compression_level: int,
+) -> None:
+    """Create a zarr group for agent data.
+
+    Args:
+        name: The name of the variable.
+        config: The configuration for the variable.
+        time: The time array.
+        example_value: An example value to determine the data type.
+        chunk_target_size_bytes: The target size of the chunk in bytes.
+        compression_level: The compression level for the zarr array.
+    """
+    root_group = config["_root_group"]
+
+    # Create the time coordinate array
+    time_group = root_group.create_array(
+        "time",
+        shape=time.shape,
+        dtype=time.dtype,
+        dimension_names=["time"],
+    )
+    time_group[:] = time
+
+    time_group.attrs.update(
+        {
+            "standard_name": "time",
+            "units": "seconds since 1970-01-01T00:00:00",
+            "calendar": "gregorian",
+        }
+    )
+
+    # Determine chunk size and shape based on example value
+    if isinstance(example_value, (float, int)):
+        shape = (time_group.size,)
+        chunk_size = get_time_chunk_size(
+            np.dtype(type(example_value)),
+            1,
+            target_size_bytes=chunk_target_size_bytes,
+        )
+        if isinstance(example_value, float):
+            dtype_ = np.float32
+        else:
+            dtype_ = np.int32
+        chunk_size = min(chunk_size, time_group.size)
+        chunks = (chunk_size,)
+        compressors = None
+        array_dimensions = ["time"]
+    else:
+        shape = (time_group.size, example_value.size)
+        dtype_ = example_value.dtype
+        chunk_size = get_time_chunk_size(
+            np.dtype(example_value.dtype),
+            example_value.size,
+            target_size_bytes=chunk_target_size_bytes,
+        )
+        chunk_size = min(chunk_size, time_group.size)
+        chunks = (chunk_size, example_value.size)
+        compressors = (
+            ZstdCodec(
+                level=compression_level,
+            ),
+        )
+        array_dimensions = ["time", "agents"]
+
+    fill_value = get_fill_value(example_value)
+    root_group.create_array(
+        name,
+        shape=shape,
+        chunks=chunks,
+        dtype=dtype_,
+        compressors=compressors,
+        fill_value=fill_value,
+        dimension_names=array_dimensions,
+    )
+    # Pre-allocate the writing buffer for the chunks
+    if isinstance(example_value, (float, int)):
+        config["_chunk_data"] = np.full((chunk_size,), fill_value)
+    else:
+        config["_chunk_data"] = np.full((chunk_size, example_value.size), fill_value)
 
 
 class Reporter:
@@ -169,7 +533,10 @@ class Reporter:
         There are also several pre-defined report configurations that can be activated by adding
         special keys to the report configuration. These are:
         - _discharge_stations: if set to True, discharge at all discharge stations is reported.
+        - _outflow_points: if set to True, outflow at all outflow points is reported.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
+        - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
+        - _energy_balance: if set to True, a standard set of variables to monitor the energy balance is reported.
 
         Args:
             model: The GEB model instance.
@@ -179,6 +546,12 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
+        if "_config" not in self.model.config["report"]:
+            self.config: dict[str, int] = {}
+        else:
+            self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
+            del self.model.config["report"]["_config"]
+
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
@@ -195,41 +568,70 @@ class Reporter:
             and "report" in self.model.config
             and self.model.config["report"]
         ):
-            self.activated: bool = True
+            self.is_activated = True
 
             report_config: dict[str, Any] = self.model.config["report"]
 
             to_delete: list[str] = []
             for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
-                    if module_name == "_discharge_stations":
-                        if module_values is True:
-                            stations = gpd.read_parquet(
-                                self.model.files["geom"][
-                                    "discharge/discharge_snapped_locations"
-                                ]
-                            )
+                    if module_name == "_discharge_stations" and module_values is True:
+                        stations = gpd.read_parquet(
+                            self.model.files["geom"][
+                                "discharge/discharge_snapped_locations"
+                            ]
+                        )
 
-                            station_reporters = {}
-                            for station_ID, station_info in stations.iterrows():
-                                xy_grid = station_info["snapped_grid_pixel_xy"]
-                                station_reporters[
-                                    f"discharge_hourly_m3_per_s_{station_ID}"
-                                ] = {
-                                    "varname": f"grid.var.discharge_m3_s_per_substep",
-                                    "type": "grid",
-                                    "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
-                                    "substeps": 24,
-                                }
-                            report_config = multi_level_merge(
-                                report_config,
-                                {"hydrology.routing": station_reporters},
-                            )
+                        station_reporters = {}
+                        for station_ID, station_info in stations.iterrows():
+                            xy_grid = station_info["snapped_grid_pixel_xy"]
+                            station_reporters[
+                                f"discharge_hourly_m3_per_s_{station_ID}"
+                            ] = {
+                                "varname": "grid.var.discharge_m3_s_per_substep",
+                                "type": "grid",
+                                "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
+                                "substeps": 24,
+                            }
+                        report_config = multi_level_merge(
+                            report_config,
+                            {"hydrology.routing": station_reporters},
+                        )
+                    elif module_name == "_outflow_points" and module_values is True:
+                        outflow_rivers = self.model.hydrology.routing.outflow_rivers
+
+                        outflow_reporters = {}
+                        for river_ID, river in outflow_rivers.iterrows():
+                            xy = river["hydrography_xy"][-1]  # last point is outflow
+                            outflow_reporters[
+                                f"river_outflow_hourly_m3_per_s_{river_ID}"
+                            ] = {
+                                "varname": "grid.var.discharge_m3_s_per_substep",
+                                "type": "grid",
+                                "function": f"sample_xy,{xy[0]},{xy[1]}",
+                                "substeps": 24,
+                            }
+                        report_config = multi_level_merge(
+                            report_config,
+                            {"hydrology.routing": outflow_reporters},
+                        )
                     elif module_name == "_water_circle":
                         if module_values is True:
                             report_config = multi_level_merge(
                                 report_config,
                                 WATER_CIRCLE_REPORT_CONFIG,
+                            )
+                    elif module_name == "_water_balance":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                WATER_BALANCE_REPORT_CONFIG,
+                            )
+                    elif module_name == "_energy_balance":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                ENERGY_BALANCE_REPORT_CONFIG,
                             )
                     else:
                         raise ValueError(
@@ -251,11 +653,9 @@ class Reporter:
                         config, module_name, name
                     )
         else:
-            self.activated = False
+            self.is_activated = False
 
-    def create_variable(
-        self, config: dict, module_name: str, name: str
-    ) -> list | zarr.storage.LocalStore:
+    def create_variable(self, config: dict, module_name: str, name: str) -> list | None:
         """This function creates a variable for the reporter.
 
         For
@@ -269,8 +669,7 @@ class Reporter:
             name: The name of the variable.
 
         Returns:
-            zarr_store: The zarr store for the variable, or an empty list if the
-                variable is a scalar or has an aggregation function.
+            A list of values if the variable is scalar, None otherwise.
 
         Raises:
             ValueError: If the variable type is not recognized.
@@ -284,157 +683,13 @@ class Reporter:
             if config["function"] is not None:
                 return []
             else:
-                if config["type"] == "HRU":
-                    raster = self.hydrology.HRU
-                else:
-                    raster = self.hydrology.grid
-                zarr_path = self.report_folder / module_name / (name + ".zarr")
-                zarr_path.parent.mkdir(parents=True, exist_ok=True)
-                config["path"] = str(zarr_path)
-
-                zarr_store = zarr.storage.LocalStore(zarr_path, read_only=False)
-                zarr_group = zarr.open_group(zarr_store, mode="w")
-
-                time = create_time_array(
-                    start=self.model.simulation_start,
-                    end=self.model.simulation_end,
-                    timestep=self.model.timestep_length,
-                    conf=config,
-                )
-
-                time = (
-                    np.array(time, dtype="datetime64[ns]")
-                    .astype("datetime64[s]")
-                    .astype(np.int64)
-                )
-                time_group = zarr_group.create_array(
-                    "time",
-                    shape=time.shape,
-                    dtype=time.dtype,
-                    dimension_names=["time"],
-                )
-                time_group[:] = time
-                time_group.attrs.update(
-                    {
-                        "standard_name": "time",
-                        "units": "seconds since 1970-01-01T00:00:00",
-                        "calendar": "gregorian",
-                    }
-                )
-
-                y_group = zarr_group.create_array(
-                    "y",
-                    shape=raster.lat.shape,
-                    dtype=raster.lat.dtype,
-                    dimension_names=["y"],
-                )
-                y_group[:] = raster.lat
-                y_group.attrs.update(
-                    {
-                        "standard_name": "latitude",
-                        "units": "degrees_north",
-                    }
-                )
-
-                x_group = zarr_group.create_array(
-                    "x",
-                    shape=raster.lon.shape,
-                    dtype=raster.lon.dtype,
-                    dimension_names=["x"],
-                )
-                x_group[:] = raster.lon
-                x_group.attrs.update(
-                    {
-                        "standard_name": "longitude",
-                        "units": "degrees_east",
-                    }
-                )
-
-                zarr_data = zarr_group.create_array(
-                    name,
-                    shape=(
-                        time.size,
-                        raster.lat.size,
-                        raster.lon.size,
-                    ),
-                    chunks=(
-                        min(ZARR_TIME_CHUNK_SIZE, time.size),
-                        raster.lat.size,
-                        raster.lon.size,
-                    ),
-                    dtype=np.float32,
-                    compressors=(
-                        zarr.codecs.BloscCodec(
-                            cname="zlib",
-                            clevel=9,
-                            shuffle=zarr.codecs.BloscShuffle.shuffle,
-                        ),
-                    ),
-                    fill_value=np.nan,
-                    dimension_names=["time", "y", "x"],
-                )
-
-                crs = raster.crs
-                assert isinstance(crs, str)
-
-                zarr_data.attrs.update(
-                    {
-                        "grid_mapping": "crs",
-                        "coordinates": "time y x",
-                        "units": "unknown",
-                        "long_name": name,
-                        "_CRS": {"wkt": crs},
-                    }
-                )
-                config["_buffers"] = []
-                config["_store"] = zarr_store
-                return zarr_store
+                return None
 
         elif config["type"] == "agents":
             if config["function"] is not None:
                 return []
             else:
-                filepath = zarr_path = (
-                    self.report_folder / module_name / (name + ".zarr")
-                )
-                filepath.parent.mkdir(parents=True, exist_ok=True)
-
-                store = zarr.storage.LocalStore(filepath, read_only=False)
-                zarr_group = zarr.open_group(store, mode="w")
-
-                time = create_time_array(
-                    start=self.model.simulation_start,
-                    end=self.model.simulation_end,
-                    timestep=self.model.timestep_length,
-                    conf=config,
-                )
-                time = np.array(
-                    [np.datetime64(t, "s").astype(np.int64) for t in time],
-                    dtype=np.int64,
-                )
-
-                time_group = zarr_group.create_array(
-                    "time",
-                    shape=time.shape,
-                    dtype=time.dtype,
-                    dimension_names=["time"],
-                )
-                time_group[:] = time
-
-                time_group.attrs.update(
-                    {
-                        "standard_name": "time",
-                        "units": "seconds since 1970-01-01T00:00:00",
-                        "calendar": "gregorian",
-                    }
-                )
-
-                config["_file"] = zarr_group
-                config["_time_index"] = time
-                config["_buffers"] = []
-                config["_store"] = store
-
-                return store
+                return None
 
         else:
             raise ValueError(
@@ -527,8 +782,9 @@ class Reporter:
             for v in value:
                 assert not np.isnan(value) and not np.isinf(v)
         elif np.isscalar(value):
-            value = value.item()
             assert not np.isnan(value) and not np.isinf(value)
+            if isinstance(value, (np.floating, np.integer, np.bool_)):
+                value = value.item()
 
         self.process_value(module_name, name, value, config)
 
@@ -536,7 +792,7 @@ class Reporter:
         self,
         module_name: str,
         name: str,
-        value: np.ndarray | int | float | np.floating | np.integer,
+        value: np.ndarray | int | float | bool,
         config: dict,
     ) -> None:
         """Exports an array of values to the export folder.
@@ -555,6 +811,20 @@ class Reporter:
         type_: str | None = config.get("type", None)
         if type_ is None:
             raise ValueError(f"Type not specified for {config}.")
+
+        if "function" in config and config["function"] is None and "path" not in config:
+            zarr_path: Path = self.report_folder / module_name / (name + ".zarr")
+            zarr_path.parent.mkdir(parents=True, exist_ok=True)
+            config["path"] = str(zarr_path)
+
+            store = zarr.storage.LocalStore(zarr_path, read_only=False)
+            config["_store"] = store
+
+            root_group = zarr.open_group(store, mode="w")
+            config["_root_group"] = root_group
+
+            config["_index"] = 0
+
         if type_ in ("grid", "HRU"):
             if not isinstance(value, np.ndarray):
                 raise ValueError(
@@ -575,52 +845,91 @@ class Reporter:
                     error += f" grid id size {grid_size}. Did you mean to set type to 'grid' instead of 'HRU'?"
                 raise ValueError(error)
 
+            # in case of no aggregation function, we write the data directly to zarr
             if config["function"] is None:
                 if type_ == "HRU":
                     value: np.ndarray = self.hydrology.HRU.decompress(value)
                 else:
                     value: np.ndarray = self.hydrology.grid.decompress(value)
 
-                zarr_group: zarr.Group = zarr.open_group(
-                    self.variables[module_name][name]
-                )
-                time_array = zarr_group.get("time")
-                assert isinstance(time_array, zarr.Array), (
-                    "time_array must be a zarr.Array"
-                )
-                time_array = time_array[:]
-                if (
-                    np.isin(self.model.current_time_unix_s, time_array)
-                    and value is not None
-                ):
-                    time_index = np.where(time_array == self.model.current_time_unix_s)[
-                        0
-                    ].item()
-                    if "substeps" in config:
-                        time_index_start = np.where(time_index)[0][0]
-                        time_index_end = time_index_start + config["substeps"]
-                        data_array = zarr_group[name]
-                        assert isinstance(data_array, zarr.Array), (
-                            f"{name} must be a zarr.Array"
-                        )
-                        # Write data to zarr array
-                        data_array[time_index_start:time_index_end, ...] = value
+                # in the first timestep, we create the array that will hold the actual data
+                if value.ndim == 3:
+                    substeps: int = value.shape[0]
+                else:
+                    substeps: int = 1
+
+                if config["_index"] == 0:  # first time writing data
+                    if config["type"] == "HRU":
+                        raster = self.hydrology.HRU
                     else:
-                        # Batch write
-                        config["_buffers"].append((time_index, value))
-                        if len(config["_buffers"]) == ZARR_TIME_CHUNK_SIZE:
-                            self._flush_buffer_grid_hru(config, name)
-                return None
+                        raster = self.hydrology.grid
+
+                    time = create_time_array(
+                        start=self.model.simulation_start,
+                        end=self.model.simulation_end,
+                        timestep=self.model.timestep_length,
+                        conf=config,
+                        substeps=substeps,
+                    )
+
+                    chunk_size: int = get_time_chunk_size(
+                        value.dtype,
+                        raster.lat.size,
+                        raster.lon.size,
+                        target_size_bytes=self.config["chunk_target_size_bytes"],
+                    )
+                    chunk_size: int = min(chunk_size, time.size)
+
+                    # ensure chunk size is multiple of substeps
+                    chunk_size: int = max(chunk_size // substeps, 1) * substeps
+
+                    assert isinstance(raster.crs, str)
+                    prepare_gridded_group(
+                        name,
+                        config,
+                        raster.lon,
+                        raster.lat,
+                        raster.crs,
+                        value,
+                        time,
+                        chunk_size,
+                        self.config["compression_level"],
+                    )
+
+                root_group = config["_root_group"]
+
+                buffer = config["_chunk_data"]
+                chunk_size: int = buffer.shape[0]
+
+                # Calculate the index in the buffer
+                start_index = config["_index"] % chunk_size
+                end_index = start_index + substeps
+                buffer[start_index:end_index, ...] = value
+
+                # If the buffer is full, flush it to disk
+                if end_index == chunk_size:
+                    chunk_index = config["_index"] // chunk_size
+                    self._flush_chunk_data(root_group, name, buffer, chunk_index)
+
+                config["_index"] += substeps
+                return
             else:
+                # in the first timestep, we create the array that will hold the actual data
+                if value.ndim == 2:
+                    substeps: int = value.shape[0]
+                    config["substeps"] = substeps
+                else:
+                    substeps: int = 1
+
                 function, *args = config["function"].split(",")
                 if function == "mean":
-                    value = np.mean(value)
+                    value = np.mean(value, axis=-1)
                 elif function == "nanmean":
-                    value = np.nanmean(value)
+                    value = np.nanmean(value, axis=-1)
                 elif function == "sum":
-                    value = np.sum(value)
+                    value = np.sum(value, axis=-1)
                 elif function == "nansum":
-                    value = np.nansum(value)
+                    value = np.nansum(value, axis=-1)
                 elif function in ("sample_xy", "sample_lonlat"):
                     # for sample_xy, args are pixel coordinates, which we
                     # first need to convert to their pixel index in x and y
@@ -683,82 +992,67 @@ class Reporter:
                     else:
                         cell_area = self.hydrology.grid.var.cell_area
                     if function == "weightedmean":
-                        value = np.average(value, weights=cell_area)
+                        value = np.average(value, weights=cell_area, axis=-1)
                     elif function == "weightednanmean":
-                        value = np.nansum(value * cell_area) / np.sum(cell_area)
+                        value = np.nansum(value * cell_area, axis=-1) / np.sum(
+                            cell_area
+                        )
                     elif function == "weightedsum":
-                        value = np.sum(value * cell_area)
+                        value = np.sum(value * cell_area, axis=-1)
                     elif function == "weightednansum":
-                        value = np.nansum(value * cell_area)
+                        value = np.nansum(value * cell_area, axis=-1)
 
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
         elif type_ == "agents":
             if config["function"] is None:
-                ds = config["_file"]
-                if name not in ds:
-                    # zarr file has not been created yet
-                    if isinstance(value, (float, int)):
-                        shape = (ds["time"].size,)
-                        chunks = (min(ZARR_TIME_CHUNK_SIZE, ds["time"].size),)
-                        compressor = None
-                        dtype = type(value)
-                        array_dimensions = ["time"]
-                    else:
-                        shape = (ds["time"].size, value.size)
-                        chunks = (
-                            min(ZARR_TIME_CHUNK_SIZE, ds["time"].size),
-                            value.size,
-                        )
-                        compressor = zarr.codecs.BloscCodec(
-                            cname="zlib",
-                            clevel=9,
-                            shuffle=zarr.codecs.BloscShuffle.shuffle,
-                        )
-                        dtype = value.dtype
-                        array_dimensions = ["time", "agents"]
-                    if dtype in (float, np.float32, np.float64):
-                        fill_value = np.nan
-                    elif dtype in (int, np.int32, np.int64):
-                        fill_value = -1
-                    elif dtype == bool:
-                        fill_value = False
-                    else:
-                        raise ValueError(
-                            f"Value {dtype} of type {type(dtype)} not recognized."
-                        )
-                    ds.create_array(
+                if config["_index"] == 0:
+                    time = create_time_array(
+                        start=self.model.simulation_start,
+                        end=self.model.simulation_end,
+                        timestep=self.model.timestep_length,
+                        conf=config,
+                    )
+
+                    prepare_agent_group(
                         name,
-                        shape=shape,
-                        chunks=chunks,
-                        dtype=dtype,
-                        compressors=(compressor,),
-                        fill_value=fill_value,
-                        dimension_names=array_dimensions,
+                        config,
+                        time,
+                        value,
+                        self.config["chunk_target_size_bytes"],
+                        self.config["compression_level"],
                     )
-                index = np.argwhere(
-                    config["_time_index"]
-                    == np.datetime64(self.model.current_time, "s").astype(
-                        config["_time_index"].dtype
-                    )
-                ).item()
+
+                root_group = config["_root_group"]
+                value_store_array = root_group[name]
+                assert isinstance(value_store_array, zarr.Array)
+
                 assert isinstance(value, (np.ndarray, DynamicArray))
-                if value.size < ds[name][index].size:
+                if value.size < value_store_array.shape[0]:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
                         value.data if isinstance(value, DynamicArray) else value,
-                        (0, ds[name][index].size - value.size),
+                        (0, value_store_array.shape[0] - value.size),
                         mode="constant",
-                        constant_values=np.nan
-                        if value.dtype in (float, np.float32, np.float64)
-                        else -1,
+                        constant_values=get_fill_value(value) or False,
                     )
-                # Batch write
-                config["_buffers"].append((index, value))
-                if len(config["_buffers"]) == ZARR_TIME_CHUNK_SIZE:
-                    self._flush_buffer_agents(config, name)
-                return None
+
+                buffer = config["_chunk_data"]
+                chunk_size: int = buffer.shape[0]
+
+                # Calculate the index in the buffer
+                index = config["_index"] % chunk_size
+                buffer[index, ...] = value
+
+                # If the buffer is full, flush it to disk
+                if index + 1 == chunk_size:
+                    chunk_index = config["_index"] // chunk_size
+                    self._flush_chunk_data(root_group, name, buffer, chunk_index)
+
+                config["_index"] += 1
+
+                return
             else:
                 function, *args = config["function"].split(",")
                 if function == "mean":
@@ -796,44 +1090,48 @@ class Reporter:
         else:
             self.variables[module_name][name].append((self.model.current_time, value))
 
-    def _flush_buffer_grid_hru(self, config: dict, name: str) -> None:
-        """Flush the buffer for grid/HRU variables.
+    def _flush_chunk_data(
+        self, group: zarr.Group, name: str, buffer: np.ndarray, chunk_index: int
+    ) -> None:
+        """Flush a specific chunk for grid/HRU variables.
+
+        We write directly to the zarr blocks to avoid the overhead of zarr's
+        indexing and slicing. This is possible because we are writing full chunks.
 
         Args:
-            config: The configuration dictionary for the variable.
+            group: The zarr group where the variable is stored.
             name: The name of the variable.
+            buffer: The buffer containing the data to flush.
+            chunk_index: The index of the chunk to flush.
         """
-        buffer = config["_buffers"]
-        zarr_group = zarr.open_group(config["_store"])
-        time_indices = np.array([t for t, v in buffer])
-        values = np.stack([v for t, v in buffer])
-        zarr_group[name][time_indices] = values
-        config["_buffers"] = []
-
-    def _flush_buffer_agents(self, config: dict, name: str) -> None:
-        """Flush the buffer for agents variables.
-
-        Args:
-            config: The configuration dictionary for the variable.
-            name: The name of the variable.
-        """
-        buffer = config["_buffers"]
-        zarr_group = zarr.open_group(config["_store"])
-        time_indices = np.array([t for t, v in buffer])
-        values = np.stack([v for t, v in buffer])
-        zarr_group[name][time_indices] = values
-        config["_buffers"] = []
+        zarr_array = group[name]
+        assert isinstance(zarr_array, zarr.Array)
+        zarr_array.blocks[chunk_index, ...] = buffer
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
+        # If no data has been collected, we return
+        if self.model.config["report"] is None:
+            self.model.logger.info("No report configuration found. No data to report.")
+            return
+
         # Flush any remaining buffers
         for module_name, configs in self.model.config["report"].items():
             for name, config in configs.items():
-                if "_buffers" in config and config["_buffers"]:
-                    if config["type"] in ("grid", "HRU"):
-                        self._flush_buffer_grid_hru(config, name)
-                    elif config["type"] == "agents":
-                        self._flush_buffer_agents(config, name)
+                if "function" in config and config["function"] is None:
+                    chunk_time_size: int = config["_chunk_data"].shape[0]
+                    buffer_end: int = config["_index"] % chunk_time_size
+                    if buffer_end == 0:
+                        continue  # nothing to flush
+                    chunk_index: int = config["_index"] // chunk_time_size
+                    self._flush_chunk_data(
+                        group=config["_root_group"],
+                        name=name,
+                        buffer=config["_chunk_data"][:buffer_end, ...],
+                        chunk_index=chunk_index,
+                    )
+
+        # Export all scalar and aggregated variables to CSV
         for module_name, variables in self.variables.items():
             for name, values in variables.items():
                 if self.model.config["report"][module_name][name][
@@ -844,13 +1142,21 @@ class Reporter:
                 ):
                     # if the variable is a scalar or has an aggregation function, we report
                     df = pd.DataFrame.from_records(
-                        values, columns=["date", name], index="date"
+                        values, columns=["time", name], index="time"
                     )
 
                     folder = self.report_folder / module_name
                     folder.mkdir(parents=True, exist_ok=True)
 
                     df.to_csv(folder / (name + ".csv"))
+
+                    fig, ax = plt.subplots(figsize=(30, 5))
+                    fig.tight_layout()
+
+                    df.plot(y=name, title=f"{module_name}.{name}", ax=ax)
+                    plt.grid()
+                    plt.savefig(folder / (name + ".svg"), format="svg")
+                    plt.close()
 
     def report(
         self, module: Module, local_variables: dict[str, Any], module_name: str
@@ -863,7 +1169,7 @@ class Reporter:
                 that calls this one.
             module_name: The name of the module.
         """
-        if not self.activated:
+        if not self.is_activated:
             return None
         report = self.model.config["report"].get(module_name, None)
         if report is not None:
@@ -875,3 +1181,16 @@ class Reporter:
                     local_variables=local_variables,
                     config=config,
                 )
+
+    @property
+    def is_activated(self) -> bool:
+        """Returns whether the reporter is activated.
+
+        Returns:
+            True if the reporter is activated, False otherwise.
+        """
+        return self._is_activated
+
+    @is_activated.setter
+    def is_activated(self, value: bool) -> None:
+        self._is_activated = value

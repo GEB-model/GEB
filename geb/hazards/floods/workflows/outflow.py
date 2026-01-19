@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from geb.types import TwoDArrayBool, TwoDArrayInt64
+from geb.geb_types import TwoDArrayBool, TwoDArrayInt64
 
 
 def trace_border_4_connectivity(
@@ -94,10 +94,13 @@ def trace_border_4_connectivity(
     return np.array(path)
 
 
-def detect_outflow(
+def create_outflow_in_mask(
     mask: TwoDArrayBool, row: int, col: int, width_cells: int
 ) -> TwoDArrayBool:
-    """Detect outflow points in a binary mask.
+    """Create the outflow in the binary mask.
+
+    The outflow is centered on the specified cell and extends
+    outward along the border of the flood mask.
 
     Args:
         mask: 2D boolean array where True indicates presence of water.
@@ -123,7 +126,16 @@ def detect_outflow(
     # Check if the cell is on the border of the flood mask
     rows, cols = mask.shape
     is_border = False
-    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+    for dr, dc in [
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, -1),
+        (-1, 1),
+        (1, -1),
+        (1, 1),
+    ]:
         nr, nc = row + dr, col + dc
         if not (0 <= nr < rows and 0 <= nc < cols) or not mask[nr, nc]:
             is_border = True

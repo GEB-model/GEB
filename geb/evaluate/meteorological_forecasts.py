@@ -5,9 +5,10 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
-from datetime import datetime
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import contextily as ctx
 import geopandas as gpd
@@ -19,15 +20,20 @@ import pandas as pd
 import xarray
 
 # from matplotlib_scalebar.scalebar import ScaleBar
-from geb.workflows.io import open_zarr
+from geb.workflows.io import read_zarr
+
+if TYPE_CHECKING:
+    from geb.evaluate import Evaluate
+    from geb.model import GEBModel
 
 
 class MeteorologicalForecasts:
     """Implements several functions to evaluate the meteorological forecasts inside GEB."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: GEBModel, evaluator: Evaluate) -> None:
         """Initialize MeteorologicalForecasts."""
-        pass
+        self.model = model
+        self.evaluator = evaluator
 
     def evaluate_forecasts(
         self,
@@ -165,14 +171,14 @@ class MeteorologicalForecasts:
                 )
 
                 # ERA5
-                era5_ds = open_zarr(era5_path)
+                era5_ds = read_zarr(era5_path)
                 era5_mm_per_h: xarray.DataArray = (
                     era5_ds * 3600
                 )  # Convert from m/s to mm/h
                 era5_max_mm_per_h: xarray.DataArray = era5_mm_per_h.max(dim=["y", "x"])
 
                 # Load ensemble data (including control)
-                ens_ds = open_zarr(init_folder / pr_files[0].name)
+                ens_ds = read_zarr(init_folder / pr_files[0].name)
                 ens_time = ens_ds["time"].values
                 ens_mm_per_h: xarray.DataArray = (
                     ens_ds * 3600
@@ -292,12 +298,10 @@ class MeteorologicalForecasts:
 
             def format_time_axis(
                 ax: plt.Axes,
-                x_start: pd.Timestamp,
-                x_end: pd.Timestamp,
-                x_ticks: list[pd.Timestamp],
+                x_ticks: pd.DatetimeIndex,
             ) -> None:
                 """Format the time axis for the plots."""
-                ax.set_xlim(x_start, x_end)
+                ax.set_xlim(x_ticks[0], x_ticks[-1])
                 ax.set_xticks(x_ticks)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m-%Y"))
                 ax.tick_params(axis="x", rotation=45)
@@ -382,7 +386,7 @@ class MeteorologicalForecasts:
                 # Add moment of flooding line only if specified in configuration
                 if moment_of_flooding is not None:
                     ax.axvline(
-                        moment_of_flooding,
+                        moment_of_flooding,  # ty:ignore[invalid-argument-type]
                         color="red",
                         linestyle="--",
                         linewidth=2,
@@ -403,10 +407,10 @@ class MeteorologicalForecasts:
                 #    ax.set_yticks(range(0, 62, 5))  # For intensity mm/h values
 
                 # Use static x-axis bounds
-                x_ticks: list[pd.Timestamp] = pd.date_range(
-                    start=x_start, end=x_end, freq="24h"
+                x_ticks: pd.DatetimeIndex = pd.date_range(
+                    start=x_start, end=x_end, freq="12h"
                 )
-                format_time_axis(ax, x_start, x_end, x_ticks)
+                format_time_axis(ax, x_ticks)
 
                 if show_legend:
                     ax.legend(fontsize=14, loc="upper right")
@@ -544,7 +548,7 @@ class MeteorologicalForecasts:
 
             # Handle single subplot case
             if num_forecasts == 1:
-                axes = [axes]
+                axes = np.array([axes])
 
             for idx, init_time in enumerate(forecast_initialisations):
                 print(

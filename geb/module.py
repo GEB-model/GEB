@@ -5,6 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Callable
 
+from geb.store import Bucket
+
 if TYPE_CHECKING:
     from geb.model import GEBModel
 
@@ -28,14 +30,17 @@ class Module(ABC):
         """
         self.model: GEBModel = model
         if create_var:
-            self.var = self.model.store.create_bucket(
+            self.var: Bucket = self.model.store.create_bucket(
                 f"{self.name}.var", validator=var_validator
             )
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Return the name of the module. This method should be overridden by subclasses."""
+        """Return the name of the module. This method should be overridden by subclasses.
+
+        The name is used to save data from the variables to disk and to restore it. The name must be the same as the name that the instantiated module is assigned to in the model.
+        """
         pass
 
     @abstractmethod
@@ -44,7 +49,7 @@ class Module(ABC):
         pass
 
     @abstractmethod
-    def step(self) -> None:
+    def step(self, *args: Any, **kwargs: Any) -> Any:
         """Perform a single time step of the module. This method should be overridden by subclasses."""
         pass
 

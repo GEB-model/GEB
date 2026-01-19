@@ -9,10 +9,10 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from geb.geb_types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.store import DynamicArray
-from geb.types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 
-from ..hydrology.lakes_reservoirs import RESERVOIR
+from ..hydrology.waterbodies import RESERVOIR
 from .general import AgentBaseClass
 
 if TYPE_CHECKING:
@@ -24,6 +24,21 @@ FLOOD_RESERVOIR: int = 2
 RESERVOIR_MEMORY_YEARS: int = 20
 
 
+class ReservoirOperatorVariables:
+    """Variables for the ReservoirOperators agent."""
+
+    active_reservoirs: pd.DataFrame
+    reservoir_M_factor: DynamicArray
+    storage_year_start: ArrayFloat64
+    alpha: ArrayFloat32
+    reservoir_purpose: ArrayInt32
+    multi_year_monthly_total_inflow: npt.NDArray[np.float32]
+    multi_year_monthly_total_irrigation_demand_m3: ArrayFloat32
+    multi_year_monthly_usable_command_area_release_m3: ArrayFloat32
+    hydrological_year_counter: int
+    history_fill_index: int = RESERVOIR_MEMORY_YEARS
+
+
 class ReservoirOperators(AgentBaseClass):
     """This class is used to simulate the government.
 
@@ -31,6 +46,8 @@ class ReservoirOperators(AgentBaseClass):
         model: The GEB model.
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
+
+    var: ReservoirOperatorVariables
 
     def __init__(self, model: GEBModel, agents: Agents) -> None:
         """Initialize the ReservoirOperators agent.
@@ -63,18 +80,16 @@ class ReservoirOperators(AgentBaseClass):
 
     def spinup(self) -> None:
         """Initialize the reservoir operators during spinup."""
-        water_body_data: pd.DataFrame = (
-            self.model.hydrology.lakes_reservoirs.var.water_body_data[
-                self.model.hydrology.lakes_reservoirs.var.water_body_data[
-                    "waterbody_type"
-                ]
+        waterbody_data: pd.DataFrame = (
+            self.model.hydrology.waterbodies.var.waterbody_data[
+                self.model.hydrology.waterbodies.var.waterbody_data["waterbody_type"]
                 == 2
             ].copy()
         )
 
-        assert (water_body_data["volume_total"] > 0).all()
-        self.var.active_reservoirs = water_body_data[
-            water_body_data["waterbody_type"] == RESERVOIR
+        assert (waterbody_data["volume_total"] > 0).all()
+        self.var.active_reservoirs = waterbody_data[
+            waterbody_data["waterbody_type"] == RESERVOIR
         ]
 
         # Based on Shin et al. (2019)
@@ -129,7 +144,7 @@ class ReservoirOperators(AgentBaseClass):
         )
 
     def get_command_area_release(
-        self, gross_irrigation_demand_m3: ArrayFloat32
+        self, gross_irrigation_demand_m3: ArrayFloat64
     ) -> ArrayFloat64:
         """Get the command area release for the reservoirs.
 
@@ -193,9 +208,9 @@ class ReservoirOperators(AgentBaseClass):
 
     def get_maximum_abstraction_m3_by_farmer(
         self,
-        farmer_command_areas: npt.NDArray[np.float32],
-        gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32],
-    ) -> npt.NDArray[np.float32]:
+        farmer_command_areas: ArrayInt32,
+        gross_irrigation_demand_m3_per_farmer: ArrayFloat32,
+    ) -> ArrayFloat64:
         """Get the maximum abstraction from reservoirs for each farmer.
 
         If the configuration is set to equal abstraction, the maxmimum abstraction
@@ -210,17 +225,17 @@ class ReservoirOperators(AgentBaseClass):
         """
         if self.config["equal_abstraction"] is True:
             command_area_mask: ArrayBool = farmer_command_areas != -1
-            demand_per_command_area: ArrayFloat64 = np.bincount(
+            demand_per_command_area = np.bincount(
                 farmer_command_areas[command_area_mask],
                 weights=gross_irrigation_demand_m3_per_farmer[command_area_mask],
-                minlength=self.model.hydrology.lakes_reservoirs.n,
+                minlength=self.model.hydrology.waterbodies.n,
             )
             command_area_release_m3: ArrayFloat64 = np.full(
-                self.model.hydrology.lakes_reservoirs.n, np.nan, dtype=np.float64
+                self.model.hydrology.waterbodies.n, np.nan, dtype=np.float64
             )
-            command_area_release_m3[
-                self.model.hydrology.lakes_reservoirs.is_reservoir
-            ] = self.command_area_release_m3
+            command_area_release_m3[self.model.hydrology.waterbodies.is_reservoir] = (
+                self.command_area_release_m3
+            )
             correction_factor: ArrayFloat64 = (
                 command_area_release_m3 / demand_per_command_area
             )
@@ -230,7 +245,7 @@ class ReservoirOperators(AgentBaseClass):
             correction_factor_per_farmer[~command_area_mask] = np.nan
             return gross_irrigation_demand_m3_per_farmer * correction_factor_per_farmer
         else:
-            return np.full_like(farmer_command_areas, np.inf, dtype=np.float32)
+            return np.full_like(farmer_command_areas, np.inf, dtype=np.float64)
 
     def track_inflow(self, inflow_m3: npt.NDArray[np.float32]) -> None:
         """Track the inflow to the reservoirs. Is called from the routing module every time step.
@@ -247,7 +262,7 @@ class ReservoirOperators(AgentBaseClass):
 
     def release(
         self, daily_substeps: int, current_substep: int
-    ) -> tuple[ArrayFloat64, ArrayFloat64]:
+    ) -> tuple[ArrayFloat32, ArrayFloat32]:
         """Calculate and apply the release of water from reservoirs for a given substep.
 
         This method determines the release for the main channel and the command area
@@ -297,11 +312,13 @@ class ReservoirOperators(AgentBaseClass):
             atol=1e-7,
         )
 
-        return main_channel_release, command_area_release_substep
+        return main_channel_release.astype(
+            np.float32
+        ), command_area_release_substep.astype(np.float32)
 
     def _get_release(
         self,
-        irrigation_demand_m3: ArrayFloat32,
+        irrigation_demand_m3: ArrayFloat64,
         daily_substeps: int,
         enforce_minimum_usable_release_m3: bool,
     ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
@@ -688,15 +705,15 @@ class ReservoirOperators(AgentBaseClass):
         Returns:
             An array with the storage of each reservoir (m3).
         """
-        return self.model.hydrology.lakes_reservoirs.reservoir_storage
+        return self.model.hydrology.waterbodies.reservoir_storage
 
     @storage.setter
     def storage(self, value: ArrayFloat64) -> None:
-        self.model.hydrology.lakes_reservoirs.reservoir_storage = value
+        self.model.hydrology.waterbodies.reservoir_storage = value
 
     # @property
     # def evaporation_m3(self):
-    #     return self.model.hydrology.lakes_reservoirs.potential_evaporation_per_water_body_m3_reservoir
+    #     return self.model.hydrology.waterbodies.potential_evaporation_per_waterbody_m3_reservoir
 
     @property
     def capacity(self) -> ArrayFloat64:
@@ -705,7 +722,7 @@ class ReservoirOperators(AgentBaseClass):
         Returns:
             An array with the capacity of each reservoir (m3).
         """
-        return self.model.hydrology.lakes_reservoirs.reservoir_capacity
+        return self.model.hydrology.waterbodies.reservoir_capacity
 
     @capacity.setter
     def capacity(self, value: ArrayFloat64) -> None:
@@ -714,7 +731,7 @@ class ReservoirOperators(AgentBaseClass):
         Args:
             value: An array with the capacity of each reservoir (m3).
         """
-        self.model.hydrology.lakes_reservoirs.reservoir_capacity = value
+        self.model.hydrology.waterbodies.reservoir_capacity = value
 
     @property
     def fill_ratio(self) -> ArrayFloat64:
@@ -743,8 +760,8 @@ class ReservoirOperators(AgentBaseClass):
         Returns:
             An array with the waterbody IDs of the reservoirs.
         """
-        return self.model.hydrology.lakes_reservoirs.var.waterbody_ids_original[
-            self.model.hydrology.lakes_reservoirs.is_reservoir
+        return self.model.hydrology.waterbodies.var.waterbody_ids_original[
+            self.model.hydrology.waterbodies.is_reservoir
         ]
 
     @property

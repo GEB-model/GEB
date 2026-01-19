@@ -1,0 +1,134 @@
+site_name: GEB
+site_description: GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale.
+site_author: Jens de Bruijn
+repo_url: https://github.com/GEB-model/GEB
+repo_name: GEB-model/GEB
+site_url: https://docs.geb.sh/
+edit_uri: edit/main/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - scheme: default
+      primary: teal
+      accent: purple
+    - scheme: slate
+      primary: teal
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            extensions:
+              - griffe_pydantic
+  - bibtex:
+      bib_file: docs/references.bib
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        Home:
+          - index.md
+        Getting Started:
+          - getting_started/*.md
+        Model:
+          - model/*.md
+        Agents:
+          - agents/*.md
+          - agents/ODD/*.md
+        Hydrology:
+          - hydrology/*.md
+        Hazards:
+          - hazards/*.md
+        Advanced topics:
+          - advanced_topics/*.md
+        About:
+          - about/*.md
+
+markdown_extensions:
+  - footnotes
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: ["."]
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - pymdownx.arithmatex:
+      generic: true
+  - toc:
+      permalink: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting_started/installation.md
+    - Configuration: getting_started/configuration.md
+    - Building a model: getting_started/building_a_model.md
+    - Running the model: getting_started/running.md
+    - MCP server: getting_started/mcp_server.md
+    - Reporting: getting_started/reporting.md
+  - Model:
+    - Model: model/model.md
+    - Modules: model/modules.md
+    - Variables: model/variables.md
+  - Agents:
+    - Overview: agents/index.md
+    - Households: agents/households.md
+    - Crop farmers: agents/crop_farmers.md
+    - Livestock farmers: agents/livestock_farmers.md
+    - Reservoir operators: agents/reservoir_operators.md
+    - Government: agents/government.md
+    - Market: agents/market.md
+    - Industry: agents/industry.md
+    - ODD protocol: agents/ODD/protocol.md
+  - Hydrology:
+    - Overview: hydrology/index.md
+    - Evapotranspiration: hydrology/evapotranspiration.md
+    - Land Surface: hydrology/landsurface.md
+    - Interception: hydrology/interception.md
+    - Snow and Glaciers: hydrology/snow_glaciers.md
+    - Soil: hydrology/soil.md
+    - Water Demand: hydrology/water_demand.md
+    - Groundwater: hydrology/groundwater.md
+    - Runoff concentration: hydrology/runoff_concentration.md
+    - Routing: hydrology/routing.md
+    - Waterbodies: hydrology/waterbodies.md
+    - HRUs: hydrology/HRUs.md
+  - Hazards:
+    - Overview: hazards/index.md
+    - Floods: hazards/floods.md
+  - Advanced topics:
+    - Forecasts: advanced_topics/forecasts.md
+    - Calibration: advanced_topics/calibration.md
+    - PlantFATE: advanced_topics/plantFATE.md
+  - About:
+    - Developers: about/developers.md
+    - Contribution guide: about/contribution_guide.md
+    - Updates: about/updates.md
+    - License: about/license.md

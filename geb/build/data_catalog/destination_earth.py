@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
+import aiohttp
 import numpy as np
 import xarray as xr
 
 from geb.workflows.raster import convert_nodata, interpolate_na_along_time_dim
 
 from .base import Adapter
+
+N_CONNECTION_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 5
 
 
 class DestinationEarth(Adapter):
@@ -77,33 +82,58 @@ class DestinationEarth(Adapter):
 
         Returns:
             Downloaded ERA5 data as an xarray DataArray.
-        """
-        da: xr.DataArray = xr.open_dataset(
-            self.url,
-            storage_options={"headers": self.get_authentication_header()},
-            chunks={},
-            engine="zarr",
-        )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+        Raises:
+            ConnectionError: If unable to connect to the Destination Earth API after multiple attempts.
+        """
+        for attempt in range(N_CONNECTION_ATTEMPTS):
+            try:
+                da: xr.DataArray = xr.open_dataset(
+                    self.url,
+                    storage_options={"headers": self.get_authentication_header()},
+                    chunks={},
+                    engine="zarr",
+                )[variable].rename(
+                    {"valid_time": "time", "latitude": "y", "longitude": "x"}
+                )
+                break
+            except aiohttp.ClientResponseError:
+                print(
+                    f"Error connecting to Destination Earth API. This could be due to erroneous credentials or a temporary server issue. Retrying ({attempt}/{N_CONNECTION_ATTEMPTS})..."
+                )
+                time.sleep(RETRY_DELAY_SECONDS)
+        else:
+            raise ConnectionError(
+                "Failed to connect to Destination Earth API after 3 attempts."
+            )
+
+        da: xr.DataArray = da.drop_vars(
+            ["number", "surface", "depthBelowLandLayer"], errors="ignore"
+        )
 
         buffer: float = 0.5
+        buffered_bounds: tuple[float, float, float, float] = (
+            bounds[0] - buffer,
+            bounds[1] - buffer,
+            bounds[2] + buffer,
+            bounds[3] + buffer,
+        )
 
         # Check if region crosses the meridian (longitude=0)
         # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
-        if bounds[0] < 0 and bounds[2] > 0:
+        if buffered_bounds[0] < 0 and buffered_bounds[2] > 0:
             # Need to handle the split across the meridian
             # Get western hemisphere part (longitude < 0)
             west_da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(((bounds[0] - buffer) + 360) % 360, 360),
+                y=slice(buffered_bounds[3], buffered_bounds[1]),
+                x=slice(((buffered_bounds[0]) + 360) % 360, 360),
             )
             # Get eastern hemisphere part (longitude > 0)
             east_da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(0, ((bounds[2] + buffer) + 360) % 360),
+                y=slice(buffered_bounds[3], buffered_bounds[1]),
+                x=slice(0, ((buffered_bounds[2]) + 360) % 360),
             )
             # Combine the two parts
             da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
@@ -111,15 +141,19 @@ class DestinationEarth(Adapter):
             # Regular case - doesn't cross meridian
             da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                y=slice(buffered_bounds[3], buffered_bounds[1]),
                 x=slice(
-                    ((bounds[0] - buffer) + 360) % 360,
-                    ((bounds[2] + buffer) + 360) % 360,
+                    ((buffered_bounds[0]) + 360) % 360,
+                    ((buffered_bounds[2]) + 360) % 360,
                 ),
             )
 
         # Reorder x to be between -180 and 180 degrees
         da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
+
+        assert da.x.size > 0 and da.y.size > 0, (
+            "No data found for the specified bounds."
+        )
 
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
         da: xr.DataArray = convert_nodata(da, np.nan)
@@ -140,11 +174,9 @@ class DestinationEarth(Adapter):
 
         Args:
             variable: short name of the variable to process (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
-            folder: folder to store the downloaded data
             start_date: start date of the time period to process
             end_date: end date of the time period to process
             bounds:  bounding box in the format (min_lon, min_lat, max_lon, max_lat)
-            logger:  logger to use for logging
 
         Raises:
             NotImplementedError: If the step type of the data is not "accum" or "instant".

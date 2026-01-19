@@ -19,10 +19,11 @@ import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
 from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from scipy.stats import genpareto, kstest
-from shapely.geometry import LineString, Point
+from shapely import line_locate_point
+from shapely.geometry import GeometryCollection, LineString, Point
 from tqdm import tqdm
 
-from geb.types import ArrayFloat32, ArrayInt64
+from geb.geb_types import ArrayFloat32, ArrayInt64
 
 
 def export_rivers(
@@ -128,9 +129,11 @@ def read_flood_depth(
         else:
             raise ValueError(f"Unknown method: {method}")
         # read subgrid elevation
-        surface_elevation: xr.DataArray = xr.open_dataarray(
-            model_root / "subgrid" / "dep_subgrid.tif"
-        ).sel(band=1)
+        surface_elevation: xr.DataArray = (
+            xr.open_dataarray(model_root / "subgrid" / "dep_subgrid.tif")
+            .sel(band=1)
+            .drop_vars(["band"])
+        )
 
         flood_depth_m: xr.DataArray = utils.downscale_floodmap(
             zsmax=water_surface_elevation,
@@ -269,25 +272,25 @@ def run_sfincs_subprocess(
     """
     print(f"Running SFINCS with: {cmd}")
     with open(file=log_file, mode="w") as log:
-        process: subprocess.Popen[str] = subprocess.Popen(
+        with subprocess.Popen(
             args=cmd,
             cwd=working_directory,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-        )
+        ) as process:
+            stdout = process.stdout
+            stderr = process.stderr
+            assert stdout is not None
+            assert stderr is not None
 
-        # Continuously read lines from stdout and stderr
-        for line in iter(
-            lambda: process.stdout.readline() or process.stderr.readline(), ""
-        ):
-            print(line.rstrip())
-            log.write(line)
-            log.flush()
+            # Continuously read lines from stdout and stderr
+            for line in iter(lambda: stdout.readline() or stderr.readline(), ""):
+                print(line.rstrip())
+                log.write(line)
+                log.flush()
 
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
+            process.wait()
 
     return process.returncode
 
@@ -451,9 +454,10 @@ def run_sfincs_simulation(
 
         c = (
             int(
-                os.getenv("SLURM_CPUS_PER_TASK")
-                or os.getenv("SLURM_CPUS_ON_NODE")
-                or os.cpu_count()
+                os.getenv("SLURM_CPUS_PER_TASK", None)
+                or os.getenv("SLURM_CPUS_ON_NODE", None)
+                or os.cpu_count()  # returns none if cannot be determined
+                or 1
             )
             if ncpus == "auto"
             else int(ncpus)
@@ -644,8 +648,10 @@ def get_discharge_and_river_parameters_by_river(
 
     discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
     river_parameters: pd.DataFrame = pd.DataFrame(
-        index=river_IDs,
-        columns=["river_width_alpha", "river_width_beta"],
+        index=np.array(river_IDs),
+        columns=np.array(
+            ["river_width_alpha", "river_width_beta"],
+        ),
     )
 
     i: int = 0
@@ -963,7 +969,9 @@ def gpd_pot_ad_auto(
     diag_df = (
         pd.DataFrame(
             diagnostics,
-            columns=["u", "sigma", "xi", "n_exc", "p_ad", "ks_p", "mrl_err", "A_R2"],
+            columns=np.array(
+                ["u", "sigma", "xi", "n_exc", "p_ad", "ks_p", "mrl_err", "A_R2"]
+            ),
         )
         .sort_values("u")
         .reset_index(drop=True)
@@ -1152,3 +1160,45 @@ def assign_return_periods(
             rivers.loc[idx, f"{prefix}_{T}"] = discharge_value
 
     return rivers
+
+
+def select_most_downstream_point(
+    river: gpd.GeoDataFrame, outflow_points: GeometryCollection
+) -> Point:
+    """Select the most downstream point from a collection of outflow points.
+
+    Args:
+        river: GeoDataFrame containing the river geometry.
+        outflow_points: GeometryCollection of outflow points (can contain Points and LineStrings).
+
+    Returns:
+        The most downstream Point from the outflow_points.
+
+    Raises:
+        TypeError: If an unsupported geometry type is found in outflow_points.
+    """
+    points: list[Point] = []
+    for geom in outflow_points.geoms:
+        if isinstance(geom, Point):
+            points.append(geom)
+        elif isinstance(geom, LineString):
+            for coord in geom.coords:
+                points.append(Point(coord))
+        else:
+            raise TypeError(
+                f"Unsupported geometry type in outflow_points: {type(geom)}"
+            )
+
+    most_downstream_point: Point = points[0]
+    most_downstream_point_loc: float = line_locate_point(
+        river.geometry, most_downstream_point
+    )
+    for point in points[1:]:
+        loc = line_locate_point(river.geometry, point)
+        if loc > most_downstream_point_loc:
+            most_downstream_point = point
+            most_downstream_point_loc = loc
+
+    outflow_point: Point = most_downstream_point
+
+    return outflow_point

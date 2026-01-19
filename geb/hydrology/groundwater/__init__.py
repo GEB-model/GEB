@@ -32,11 +32,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat64
 from geb.module import Module
-from geb.types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
-from ..routing import get_channel_ratio
 from .model import ModFlowSimulation
 
 if TYPE_CHECKING:
@@ -102,11 +101,6 @@ class GroundWater(Module):
             == self.grid.var.specific_yield.shape
         )
 
-        self.grid.var.leakageriver_factor = 0.001  # in m/day
-        self.grid.var.leakagelake_factor = 0.001  # in m/day
-
-        self.initial_water_table_depth = 2
-
         def get_initial_head() -> npt.NDArray[np.float64]:
             heads = self.hydrology.grid.load(
                 self.model.files["grid"]["groundwater/heads"], layer=None
@@ -157,8 +151,8 @@ class GroundWater(Module):
     def step(
         self,
         groundwater_recharge_m: ArrayFloat32,
-        groundwater_abstraction_m3: ArrayFloat64,
-    ) -> ArrayFloat64:
+        groundwater_abstraction_m3: ArrayFloat32,
+    ) -> ArrayFloat32:
         """Perform a groundwater model step.
 
         Args:
@@ -176,7 +170,9 @@ class GroundWater(Module):
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
         self.modflow.set_recharge_m3(groundwater_recharge_m * self.grid.var.cell_area)
-        self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
+        self.modflow.set_groundwater_abstraction_m3(
+            groundwater_abstraction_m3.astype(np.float64)
+        )
         self.modflow.step()
 
         if __debug__:
@@ -197,20 +193,14 @@ class GroundWater(Module):
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
-        channel_ratio: npt.NDArray[np.float32] = get_channel_ratio(
-            river_length=self.grid.var.river_length,
-            river_width=np.where(
-                ~np.isnan(self.grid.var.average_river_width),
-                self.grid.var.average_river_width,
-                0,
-            ),
-            cell_area=self.grid.var.cell_area,
-        )
-        channel_ratio.fill(1)
+        # we assume that all the baseflow ends up in the river
+        channel_ratio = np.float32(1.0)
 
         # this is the capillary rise for the NEXT timestep
-        self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
-        baseflow = groundwater_drainage * channel_ratio
+        self.grid.var.capillar = (groundwater_drainage * (1 - channel_ratio)).astype(
+            np.float32
+        )
+        baseflow = (groundwater_drainage * channel_ratio).astype(np.float32)
 
         self.report(locals())
 
