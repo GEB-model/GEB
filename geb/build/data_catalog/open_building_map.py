@@ -43,24 +43,35 @@ class OpenBuildingMap(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def _quadkeys_for_box(self, bounds: tuple, zoom: int = 6) -> list[str]:
-        """Gets the open building dataset. First it finds the quadkeys of tile within the model domain. Then it downloads the data and clips it to gdl region included in the domain.
+    def _quadkeys_for_geom(
+        self, geom: geometry.polygon.Polygon, zoom: int = 6
+    ) -> list[str]:
+        """Gets the quadkeys of tiles that intersect with the polygon geometry.
 
         Args:
-            bounds: Bounds of the geom for which to get quadkeys that intersect.
+            geom: Polygon geometry for which to get intersecting quadkeys.
             zoom: Zoom level of the quadkeys. Zoomlevel 6 is used for open building map.
 
         Returns:
-            A list of quadkey strings intersecting the bounds.
+            A list of quadkey strings intersecting the polygon.
         """
         quadkeys: list[str] = []
 
-        west, south, east, north = bounds
+        west, south, east, north = geom.bounds
 
         # iterate over tiles intersecting the bbox
         for tile in mercantile.tiles(west, south, east, north, zooms=zoom):
             qk = quadkey.from_tile((tile.x, tile.y), level=zoom)
-            quadkeys.append(qk.key)
+
+            # Create a polygon for the tile bounds
+            tile_bounds = mercantile.bounds(tile)
+            tile_polygon = geometry.box(
+                tile_bounds.west, tile_bounds.south, tile_bounds.east, tile_bounds.north
+            )
+
+            # Only include tile if it intersects with the input geometry
+            if tile_polygon.intersects(geom):
+                quadkeys.append(qk.key)
 
         return quadkeys
 
@@ -82,6 +93,8 @@ class OpenBuildingMap(Adapter):
             mask=geom,
             columns=["id", "occupancy", "floorspace", "height", "geometry"],
         )
+        # mask buildings to region geom
+        buildings = buildings[buildings.intersects(geom)]
         if len(buildings) == 0:
             print("No buildings found in region geom")
             return
@@ -129,7 +142,11 @@ class OpenBuildingMap(Adapter):
         return Path(gpkg_filename)
 
     def fetch(
-        self, url: str, geom: geometry.polygon.Polygon, prefix: str
+        self,
+        url: str,
+        geom: geometry.polygon.Polygon,
+        prefix: str,
+        overwrite: bool = False,
     ) -> OpenBuildingMap:
         """Download OpenBuildingMap tiles intersecting a bbox.
 
@@ -137,6 +154,7 @@ class OpenBuildingMap(Adapter):
             url: Base URL of the OpenStreetMap server.
             geom: Polygon of the model region.
             prefix: Prefix for the local storage path.
+            overwrite: Whether to overwrite existing data.
 
         Returns:
             The OpenBuildingMap instance.
@@ -144,12 +162,12 @@ class OpenBuildingMap(Adapter):
         Raises:
             RuntimeError: If no buildings can be downloaded for the model region.
         """
-        if self.path.exists():
+        if self.path.exists() and not overwrite:
             return self
 
         # get bounds for geom
         bounds = geom.bounds
-        tiles: list = self._quadkeys_for_box(bounds)
+        tiles: list = self._quadkeys_for_geom(geom=geom)
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             list_of_buildings_in_geom: list[gpd.GeoDataFrame] = []

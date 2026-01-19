@@ -36,6 +36,8 @@ class HazardDriver(Module):
 
         self.model: GEBModel = model
         # extract the longest flood event in days
+        if "events" not in self.model.config["hazards"]["floods"]:
+            self.model.config["hazards"]["floods"]["events"] = []
         flood_events: list[dict[str, Any]] = self.model.config["hazards"]["floods"][
             "events"
         ]
