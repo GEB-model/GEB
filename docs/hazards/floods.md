@@ -20,6 +20,10 @@ Lorem ipsum
 
 Lorem ipsum
 
+#### Precipitation Forcing
+
+Lorem ipsum
+
 #### Coastal forcing
 
 Lorem ipsum
@@ -47,6 +51,27 @@ Lorem ipsum
 ### Return period maps
 
 Lorem ipsum
+
+## Model output
+
+SFINCS flood simulations produce both static outputs and time-varying dynamic outputs.
+
+Common outputs include:
+
+- **Maximum flood depth map**  
+  Stored as `.zarr` file representing the maximum water depth over the entire simulation time period.
+
+- **Time-varying dynamic output**  
+  Stored as NetCDF (`.nc`) file containing water level, velocity, and other variables at each timestep.
+
+- **Auxiliary outputs**  
+  Depending on configuration, additional outputs such as figures for diagnostics may be produced.
+
+## Performance metrics
+
+Metrics may include:
+- Comparison against observed flood extents
+- Event-based skill scores (binary class statistics)
 
 ## Code
 
