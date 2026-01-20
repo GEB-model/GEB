@@ -2279,7 +2279,7 @@ class Soil(Module):
             HRU_data=soil_layer_height_forest_HRU, fn="weightednanmean"
         )
 
-    if self.model.config["general"]["simulate_forest"]:
+        if self.model.config["general"]["simulate_forest"]:
             soil_moisture_forest_plantFATE_HRU = soil_moisture.copy()
             soil_moisture_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
             soil_moisture_forest_plantFATE_grid = self.hydrology.to_grid(
