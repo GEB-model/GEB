@@ -39,7 +39,7 @@ $$
 
 Utility is a function of household wealth $W_x$, the amenity value of the current household location, $A_x$, current household income $I_x$, expected damage $D$ per event $i$, and adaptation costs $C^{adapt}$.
 
-Discounting and risk aversion: A time discounting factor $r$ of 3.2% specific to France is applied over a time horizon $T$ of 15 years, representing the number of years a homeowner on average stays in his or her home. We assume a general utility function as a function of relative risk aversion. The model is run with slightly risk-averse households, for which the following function is used:
+Discounting and risk aversion: A time discounting factor $r$ of 3%[@tol2008climate] is applied over a time horizon $T$ of 15 years, representing the number of years a homeowner on average stays in his or her home. We assume a general utility function as a function of relative risk aversion. The model is run with slightly risk-averse households, for which the following function is used:
 
 $$
 U(x) = ln(x)
