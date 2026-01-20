@@ -18,7 +18,7 @@
 
 To support this version:
 
-- Re-run `setup_forcing` and `setup_spei`
+- The model must be rebuild from scratch
 
 # v1.0.0b9
 - Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
