@@ -1477,7 +1477,7 @@ class Soil(Module):
                 print("Cell ")
                 print(i)
                 print("latlong ")
-                print(self.plantFATE_forest_RUs[i].lonlat)
+                print(self.HRU.lonlat[i,:])
 
                 if self.model.in_spinup:
                     PFconfig_ini = Path(
