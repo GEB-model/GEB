@@ -71,6 +71,10 @@ The routing module integrates tightly with lakes and reservoirs (collectively "w
 2.  **Storage Update**: The total inflow (accumulated from all cells belonging to the water body) is passed to the water body module, which manages the storage volume. Note that evaporation from the water surface is handled by the water body module, not the routing module.
 3.  **Release**: Water leaves the water body based on specific rules (e.g., reservoir operating rules or a lake rating curve). This water body outflow is re-injected into the river network at a designated outflow cell for the water body. This outflow becomes the upstream boundary condition for the river segment immediately downstream of the water body.
 
+## Optional inflow
+
+Optionally inflow from outside the model area can be added to the model. This is simulated as additional sideflow into the channels. Currently no inflow can be added to waterbodies, but this may be supported in the future. Let us know if you are interested.
+
 ## Routing Algorithms
 
 GEB currently supports two routing algorithms. Kinematic wave is the best one for most purposes. The accuflux algorithm is mostly used for debugging purposes because it is easy to close the water balance.

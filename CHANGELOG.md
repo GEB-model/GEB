@@ -1,4 +1,5 @@
 # dev
+- Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
 - Add documentation for modules, variables and routing.
 - Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
 - Flood maps of varying spatial domains can now be merged into one return period map.
@@ -19,7 +20,7 @@
 
 To support this version:
 
-- Re-run `setup_forcing` and `setup_spei`
+- The model must be rebuild from scratch
 
 # v1.0.0b9
 - Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.

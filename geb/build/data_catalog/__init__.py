@@ -16,7 +16,7 @@ from .grdc import GRDC
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lowder import Lowder
-from .merit_basins import MeritBasinsRivers
+from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .open_building_map import OpenBuildingMap
@@ -415,6 +415,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "GADM",
             "version": "4.1",
             "license": "https://gadm.org/license.html",
+        },
+    },
+    "merit_basins_catchments": {
+        "adapter": MeritBasinsCatchments(
+            folder="merit_basins_catchments",
+            local_version=1,
+            filename="merit_basins_catchments.parquet",
+            cache="global",
+        ),
+        "url": "https://drive.google.com/uc?export=download&id={FILE_ID}",
+        "source": {
+            "name": "MERIT Basins",
+            "author": "Lin et al.",
+            "version": "v0.7",
+            "license": "CC BY-NC-SA 4.0",
         },
     },
     "merit_hydro_dir": {

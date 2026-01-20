@@ -730,10 +730,15 @@ def workflow(
     help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe). Defaults to Europe coverage.",
 )
 @click.option(
+    "--region-shapefile",
+    type=str,
+    help="Optional path to region shape file (in a format supported by geopandas and relative to the working directory). Defaults to geometry bounds if not specified.",
+)
+@click.option(
     "--target-area-km2",
-    default=34000.0,
+    default=817e3,
     type=float,
-    help="Target cumulative upstream area per cluster in km². Defaults to 34,000 km².",
+    help="Target cumulative upstream area per cluster in km². Defaults to 817,000 km².",
 )
 @click.option(
     "--area-tolerance",
@@ -770,6 +775,7 @@ def init_multiple(
     working_directory: Path,
     from_example: str,
     geometry_bounds: str,
+    region_shapefile: str | None,
     target_area_km2: float,
     area_tolerance: float,
     cluster_prefix: str,
@@ -795,6 +801,7 @@ def init_multiple(
         working_directory=working_directory,
         from_example=from_example,
         geometry_bounds=geometry_bounds,
+        region_shapefile=region_shapefile,
         target_area_km2=target_area_km2,
         area_tolerance=area_tolerance,
         cluster_prefix=cluster_prefix,
