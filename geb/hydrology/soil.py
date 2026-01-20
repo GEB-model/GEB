@@ -2257,17 +2257,39 @@ class Soil(Module):
             HRU_data=soil_moisture, fn="weightednanmean"
         )
 
+        soil_moisture_normalized = np.nan_to_num(self.HRU.var.w.sum(axis=0) / self.HRU.var.soil_layer_height.sum(axis=0))
+        soil_moisture_normalized_grid = self.hydrology.to_grid(
+            HRU_data=soil_moisture_normalized, fn="weightednanmean"
+        )
+
         soil_moisture_forest_HRU = soil_moisture.copy()
         soil_moisture_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
         soil_moisture_forest_grid = self.hydrology.to_grid(
             HRU_data=soil_moisture_forest_HRU, fn="weightednanmean"
         )
-        
-        if self.model.config["general"]["simulate_forest"]:
+
+        soil_moisture_normalized_forest_HRU = soil_moisture_normalized.copy()
+        soil_moisture_normalized_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
+        soil_moisture_normalized_forest_grid = self.hydrology.to_grid(
+            HRU_data=soil_moisture_normalized_forest_HRU, fn="weightednanmean"
+        )
+
+        soil_layer_height_forest_HRU = np.nan_to_num(self.HRU.var.soil_layer_height.sum(axis=0))
+        soil_layer_height_forest_grid = self.hydrology.to_grid(
+            HRU_data=soil_layer_height_forest_HRU, fn="weightednanmean"
+        )
+
+    if self.model.config["general"]["simulate_forest"]:
             soil_moisture_forest_plantFATE_HRU = soil_moisture.copy()
             soil_moisture_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
             soil_moisture_forest_plantFATE_grid = self.hydrology.to_grid(
                 HRU_data=soil_moisture_forest_plantFATE_HRU, fn="weightednanmean"
+            )
+
+            soil_moisture_normalized_forest_plantFATE_HRU = soil_moisture_normalized.copy()
+            soil_moisture_normalized_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
+            soil_moisture_normalized_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=soil_moisture_normalized_forest_plantFATE_HRU, fn="weightednanmean"
             )
 
 
