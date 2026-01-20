@@ -712,8 +712,6 @@ class HRUs(BaseVariables):
             threshold_m2=25_000_000,  # 25 km² to align with MERIT-Basins defintion of a river, https://www.reachhydro.org/home/params/merit-basins
         )
 
-        lonlat: TwoDArrayFloat32 = self.lonlat
-
     @property
     def lonlat(self) -> TwoDArrayFloat32:
         """For each HRU, get the longitude and latitude.
