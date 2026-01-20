@@ -314,6 +314,19 @@ class Grid(BaseVariables):
 
         BaseVariables.__init__(self)
 
+    @property
+    def lonlat(self) -> TwoDArrayFloat32:
+        """Get longitude and latitude for each grid cell.
+
+        Returns:
+            lonlat: 2D array of shape (n_cells, 2) with longitude and latitude.
+        """
+        lonlat: TwoDArrayFloat32 = np.empty((self.compressed_size, 2), dtype=np.float32)
+        lon_grid, lat_grid = np.meshgrid(self.lon, self.lat)
+        lonlat[:, 0] = self.compress(lon_grid)
+        lonlat[:, 1] = self.compress(lat_grid)
+        return lonlat
+
     def create_linear_mapping(self, mask: TwoDArrayBool) -> TwoDArrayInt32:
         """Create a linear mapping from uncompressed to compressed indices.
 
@@ -698,6 +711,18 @@ class HRUs(BaseVariables):
             mask=self.data.grid.mask,
             threshold_m2=25_000_000,  # 25 km² to align with MERIT-Basins defintion of a river, https://www.reachhydro.org/home/params/merit-basins
         )
+
+    @property
+    def lonlat(self) -> TwoDArrayFloat32:
+        """For each HRU, get the longitude and latitude.
+
+        Returns:
+            lonlat: 2D array of shape (n_HRUs, 2) with longitude and latitude of the grid cell the HRU is located in.
+        """
+        grid_lonlat: TwoDArrayFloat32 = self.data.grid.lonlat
+        lonlat: TwoDArrayFloat32 = grid_lonlat[self.var.HRU_to_grid]
+
+        return lonlat
 
     @property
     def linear_mapping(self) -> TwoDArrayInt32:
