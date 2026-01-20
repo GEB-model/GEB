@@ -1474,7 +1474,9 @@ class Soil(Module):
             ):
                 self.plantFATE_forest_RUs[i] = True
 
-                print("Cell " + i + "latlong ")
+                print("Cell ")
+                print(i)
+                print("latlong ")
                 print(self.plantFATE_forest_RUs[i].lonlat)
 
                 if self.model.in_spinup:
