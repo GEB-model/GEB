@@ -210,8 +210,20 @@ class Households(AgentBaseClass):
         income = read_array(self.model.files["array"]["agents/households/disp_income"])
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
-        # assign wealth based on income (dummy data, there are ratios available in literature)
-        self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
+        # assign wealth based on income  (based on DYNAMO-M data of France)
+        perc = np.array([0, 20, 40, 60, 80, 100])
+        ratio = np.array([0, 1.06, 4.14, 4.19, 5.24, 6])
+        income_wealth_ratio_function = interpolate.interp1d(
+            x=perc,
+            y=ratio,
+            kind="linear",
+            bounds_error=False,
+            fill_value=(ratio[0], ratio[-1]),
+        )
+        wealth_ratio = income_wealth_ratio_function(self.var.income_percentile.data)
+        self.var.wealth = DynamicArray(
+            self.var.income.data * wealth_ratio, max_n=self.max_n
+        )
 
     def update_building_attributes(self) -> None:
         """Update building attributes based on household data."""

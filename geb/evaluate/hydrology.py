@@ -530,6 +530,7 @@ class Hydrology:
                 plt.show()
                 plt.close()
 
+                include_yearly_plots = True
                 # Making yearly plots for every year in validation_df
                 # Get available years from validation_df (intersection of obs & sim time range)
                 if include_yearly_plots:
@@ -1419,8 +1420,8 @@ class Hydrology:
             Returns:
                 Tuple containing (forecast_init, member, event_start, event_end, event_name)
 
-            Raises:
-                ValueError: If the filename does not match the expected format.
+            # Raises:
+            #     ValueError: If the filename does not match the expected format.
 
             """
             # Remove .zarr extension
@@ -1450,9 +1451,10 @@ class Hydrology:
                 event_name = f"{event_start} - {event_end}"
 
             else:
-                raise ValueError(
+                print(
                     f"Filename '{filename}' does not match expected flood map format."
                 )
+                return
 
             return forecast_init, member, event_start, event_end, event_name
 
