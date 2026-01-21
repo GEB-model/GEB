@@ -581,3 +581,65 @@ def test_ga_extreme_rainfall_runoff() -> None:
         f"Infiltration rate {final_rate} too high relative to Ksat 10.0"
     )
     assert final_rate > 9.0, "Infiltration rate dropped below Ksat"
+
+
+def test_ga_saturation_excess_runoff() -> None:
+    """Test response when the soil column is fully saturated (Dunne runoff)."""
+    # Initialize with full saturation
+    n_layers = 3
+    layer_heights = np.array([0.1, 0.1, 0.1], dtype=np.float32)
+    porosity = np.float32(0.5)
+    ws = layer_heights * porosity
+    wres = ws * 0.1
+    w = ws.copy()  # Fully saturated
+
+    # Apply rainfall
+    rain_mm_hr = 10.0
+    rain_m = np.float32(rain_mm_hr / 1000.0)
+
+    # Dummy params
+    ksat = np.full(n_layers, 1.0, dtype=np.float32)
+    land_use = np.int32(NON_PADDY_IRRIGATED)
+    frozen = False
+    arno = np.float32(0.1)
+    bubbling = np.full(n_layers, 20.0, dtype=np.float32)
+    lam = np.full(n_layers, 0.25, dtype=np.float32)
+
+    wetting_front_depth = np.float32(0.0)
+    wetting_front_suction = np.float32(0.1)
+    wetting_front_deficit = np.float32(0.1)
+    green_ampt_active_layer_idx = 0
+
+    (
+        topwater_rem,
+        runoff,
+        gw_recharge,
+        infil,
+        wetting_front_depth,
+        wetting_front_suction,
+        wetting_front_deficit,
+        green_ampt_active_layer_idx,
+    ) = infiltration.py_func(
+        ws,
+        wres,
+        ksat,
+        land_use,
+        frozen,
+        w,
+        rain_m,
+        wetting_front_depth,
+        wetting_front_suction,
+        wetting_front_deficit,
+        green_ampt_active_layer_idx,
+        arno,
+        bubbling,
+        layer_heights,
+        lam,
+    )
+
+    # All rain should be runoff
+    assert abs(runoff - rain_m) < 1e-6, f"Runoff {runoff} should equal rain {rain_m}"
+    assert infil < 1e-6, f"Infiltration {infil} should be 0"
+
+    # Soil should remain saturated
+    assert np.allclose(w, ws), "Soil should remain saturated"
