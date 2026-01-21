@@ -610,6 +610,10 @@ class HRUVariables(Bucket):
     no_elements_harvested: ArrayFloat32
     soil_temperature_C: TwoDArrayFloat32
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
+    wetting_front_depth_m: ArrayFloat32
+    wetting_front_suction_head_m: ArrayFloat32
+    wetting_front_moisture_deficit: ArrayFloat32
+    green_ampt_active_layer_idx: ArrayInt32
 
 
 class HRUs(BaseVariables):

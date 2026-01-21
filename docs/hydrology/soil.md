@@ -1,41 +1,42 @@
 # Soil
 
-## Intiltration
+## Infiltration
 
-We implement a hybrid infiltration scheme that accounts for both saturation excess and infiltration excess runoff mechanisms by integrating the sub-grid heterogeneity logic of the Variable Infiltration Capacity (VIC) and Xinanjiang models with a physically based Green-Ampt rate constraint. Infiltration is calculated with sub-hourly timesteps of 10 minutes.
+We implement an infiltration scheme based on the Green-Ampt equation [@green1911studies], solving for infiltration capacity physically based on soil properties and moisture deficit.
 
-### Saturation excess
+### Infiltration Capacity (Green-Ampt)
 
-This component addresses storage-driven runoff generation, or Dunne runoff. Following the logic of the Xinanjiang model [@zhao1992xinanjiang] and VIC [@liang1994simple], the scheme assumes that the soil storage capacity varies spatially within a grid cell according to a power-law distribution. 
+The model determines the maximum infiltration capacity ($f_{cap}$) for the current timestep using the explicit Green-Ampt approximation derived by **Sadeghi et al. (2024)** [@sadeghi2024simple]. This avoids the need for iterative solutions or sub-stepping typically required for the implicit Green-Ampt formulation.
 
-As the mean soil moisture ($W$) increases, an increasing fraction of the cell area ($A_s$) becomes fully saturated. Any precipitation falling on these saturated fractions is immediately converted to runoff. The fraction of the basin area ($A_s$) with infiltration capacity less than or equal to $i$ is assumed to be:
+The cumulative infiltration $I(t)$ is calculated as:
 
-$$A_s = 1 - \left( 1 - \frac{i}{i_{max}} \right)^b$$
-
-Where:
-* $i$ is the point infiltration capacity.
-* $i_{max}$ is the maximum point infiltration capacity in the basin.
-* $b$ is the shape parameter of the distribution.
-
-### Infiltration excess
-
-While storage-based models often assume the soil can accept water at any rate until it is full, this scheme imposes a maximum infiltration capacity ($f_p$) based on the Green-Ampt equation [@green1911studies]. 
-
-The infiltration capacity is dynamically scaled using a suction ratio derived from the soil's bubbling pressure ($\psi_b$) and the layer depth ($D$). The capacity is calculated as:
-
-$$f_p = K_{sat} \left( 1 + \frac{\psi_f}{D} \frac{1 - S}{S} \right)$$
+$$ I(t) = K_{sat} t \left( 0.70635 + 0.32415 \sqrt{1 + 9.43456 \frac{S^2}{K_{sat}^2 t}} \right) $$
 
 Where:
-* $f_p$ is the infiltration capacity [$L/T$].
+* $I(t)$ is the cumulative infiltration [$L$].
 * $K_{sat}$ is the saturated hydraulic conductivity [$L/T$].
-* $\psi_f$ is the effective suction head at the wetting front [$L$].
-* $D$ is the soil layer depth [$L$].
-* $S$ is the relative saturation (current storage / maximum capacity) $[-]$.
+* $S^2 = 2 K_{sat} \psi_f \Delta \theta$ is the square of sorptivity [$L^2/T$].
+* $\psi_f$ is the wetting front suction head [$L$].
+* $\Delta \theta$ is the moisture deficit [$ - $].
+* $t$ is the time since the start of the infiltration event [$T$].
 
-When the soil is dry, the matric suction gradient is at its peak, significantly increasing the infiltration rate above $K_{sat}$. As relative saturation ($S$) increases, this suction term decays. If the rainfall intensity exceeds $f_p$, Hortonian runoff (infiltration excess) is generated, even if the total soil storage is not yet exhausted.
+The model tracks the wetting front depth ($L$) as a state variable. At the beginning of each timestep, the "effective time" ($t_{eff}$) corresponding to the current wetting front is calculated by inverting the standard Green-Ampt equation (exact analytical inversion). The potential cumulative infiltration at $t_{eff} + \Delta t$ is then calculated using the explicit formula above. The difference determines the maximum infiltration capacity for the timestep.
 
-### Runoff generation
+$$f_{cap} = I(t_{eff} + \Delta t) - I(t_{eff})$$
 
-The saturation excess and infiltration excess processes described above provide two independent constraints on potential infiltration. In this hybrid scheme, the actual infiltration is determined by the minimum of the two methods. Any precipitation that cannot infiltrate due to either the volumetric or flux limit is partitioned as surface runoff. This dual-constraint approach ensures the model remains robust across different soil moisture states and rainfall intensities.
+If the rainfall intensity exceeds this capacity, Hortonian (infiltration excess) runoff is generated.
+
+### Saturation Excess
+
+Infiltration is also limited by the available pore space in the soil column. The model calculates the available storage in the active soil layers (layers reached by the wetting front). If the soil becomes saturated (reaches $W_s$), no further infiltration can occur, and any additional water serves as saturation excess runoff (Dunne runoff).
+
+### Runoff Generation
+
+The actual infiltration for a timestep is determined by the minimum of:
+1. The available water on the surface (precipitation + accumulated topwater) [$L$].
+2. The Green-Ampt infiltration capacity ($f_{cap}$) [$L$].
+3. The available storage in the soil column (up to the wetting front depth or bottom of soil) [$L$].
+
+Any water that does not infiltrate contributes to surface runoff.
 
 ::: geb.hydrology.soil

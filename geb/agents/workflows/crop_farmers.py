@@ -13,9 +13,6 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hydrology.evapotranspiration import get_root_ratios
-from geb.hydrology.soil import (
-    get_infiltration_capacity,
-)
 
 
 @njit(cache=True, inline="always")
@@ -591,9 +588,7 @@ def get_potential_irrigation_consumption_m(
         else:
             potential_irrigation_consumption_m = np.float32(0)
 
-        infiltration_capacity = get_infiltration_capacity(
-            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_m_per_day,
-        )
+        infiltration_capacity = saturated_hydraulic_conductivity_m_per_day[0]
         potential_irrigation_consumption_m = np.minimum(
             potential_irrigation_consumption_m, infiltration_capacity
         )

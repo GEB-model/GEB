@@ -440,6 +440,10 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     frost_index = np.array([frost_index_data], dtype=flt)
     natural_crop_groups = np.array([natural_crop_groups_data], dtype=flt)
     arno_shape_parameter = np.array([0.0], dtype=flt)  # not used in this test
+    wetting_front_depth_m = np.array([0.0], dtype=flt)
+    wetting_front_suction_head_m = np.array([0.0], dtype=flt)
+    wetting_front_moisture_deficit = np.array([0.0], dtype=flt)
+    green_ampt_active_layer_idx = np.array([0], dtype=np.int32)
 
     # 2D arrays: add cell dimension and set dtype
     w = w_data.reshape(-1, 1).astype(flt)
@@ -516,12 +520,16 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         actual_irrigation_consumption_m=actual_irrigation_consumption_m,
         capillar_rise_m=capillar_rise_m,
         saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s,
+        wetting_front_depth_m=wetting_front_depth_m,
+        wetting_front_suction_head_m=wetting_front_suction_head_m,
+        wetting_front_moisture_deficit=wetting_front_moisture_deficit,
         lambda_pore_size_distribution=lambda_pore_size_distribution,
         bubbing_pressure_cm=bubbing_pressure_cm,
         frost_index=frost_index,
         natural_crop_groups=natural_crop_groups,
         crop_group_number_per_group=crop_group_number_per_group,
         minimum_effective_root_depth_m=minimum_effective_root_depth_m,
+        green_ampt_active_layer_idx=green_ampt_active_layer_idx,
     )
 
     # Unpack the results

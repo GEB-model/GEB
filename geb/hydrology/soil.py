@@ -206,6 +206,146 @@ def calculate_arno_runoff(
     return runoff_m, infiltration_amount_m
 
 
+@njit(cache=True)
+def calculate_green_ampt_time_from_infiltration(
+    cumulative_infiltration: np.float32,
+    saturated_hydraulic_conductivity_m_per_time_unit: np.float32,
+    wetting_front_suction_head_m: np.float32,
+    moisture_deficit: np.float32,
+) -> np.float32:
+    """Calculate the time required to infiltrate a given cumulative amount.
+
+    This implements the exact analytical inversion of the Green-Ampt equation.
+
+    The standard Green-Ampt rate equation is (Heber Green and Ampt, 1911):
+        f = K (1 + (psi * dtheta) / F)
+
+    Integrating this yields the cumulative infiltration equation (Chow et al., 1988; Eq 4.3.6):
+        K * t = F - (psi * dtheta) * ln(1 + F / (psi * dtheta))
+
+    Thus, given cumulative infiltration F, we can solve for time t:
+        t = (F - (psi * dtheta) * ln(1 + F / (psi * dtheta))) / K
+
+    References:
+        Heber Green, W. and Ampt, G.A. (1911) ‘Studies on Soil Phyics.’, The Journal of Agricultural Science, 4(1), pp. 1–24. doi:10.1017/S0021859600001441.
+        Chow, V. T., Maidment, D. R., & Mays, L. W. (1988). Applied Hydrology. McGraw-Hill.
+
+    Args:
+        cumulative_infiltration: Cumulative infiltration amount [L].
+        saturated_hydraulic_conductivity_m_per_time_unit: Saturated hydraulic conductivity [L/T].
+        wetting_front_suction_head_m: Wetting front suction head [L].
+        moisture_deficit: Moisture deficit [-].
+
+    Returns:
+        Time t corresponding to the infiltration amount.
+    """
+    if cumulative_infiltration <= np.float32(0.0):
+        return np.float32(0.0)
+
+    if saturated_hydraulic_conductivity_m_per_time_unit <= np.float32(0.0):
+        return np.float32(0.0)
+
+    wetting_front_suction_potential: np.float32 = (
+        wetting_front_suction_head_m * moisture_deficit
+    )
+
+    # Darcy limit: if there is no capillary suction effect (sf -> 0),
+    # then cumulative infiltration is I = K_s t.
+    if wetting_front_suction_potential <= np.float32(0.0):
+        return (
+            cumulative_infiltration / saturated_hydraulic_conductivity_m_per_time_unit
+        )
+
+    # np.log1p(x) computes log(1 + x) accurately for small x
+    term_log = np.log1p(cumulative_infiltration / wetting_front_suction_potential)
+    t = (
+        cumulative_infiltration - wetting_front_suction_potential * term_log
+    ) / saturated_hydraulic_conductivity_m_per_time_unit
+    return max(t, np.float32(0.0))
+
+
+@njit(cache=True)
+def calculate_green_ampt_cumulative_infiltration(
+    time: np.float32,
+    saturated_hydraulic_conductivity_m_per_time_unit: np.float32,
+    wetting_front_suction_head_m: np.float32,
+    moisture_deficit: np.float32,
+    adjust_for_coarse_soils: bool = False,
+) -> np.float32:
+    """Calculate cumulative infiltration using the Sadeghi et al. (2024) explicit Green-Ampt formula.
+
+    The reported maximum error of this formula is 0.3 percent across a wide range of conditions.
+
+    Based on:
+        Sadeghi, S. H., Loescher, H. W., Jacoby, P. W., & Sullivan, P. L. (2024).
+        A simple, accurate, and explicit form of the Green–Ampt model to estimate infiltration,
+        sorptivity, and hydraulic conductivity. Vadose Zone Journal,  23, e20341
+
+    Args:
+        time: Time since start of infiltration [T].
+        saturated_hydraulic_conductivity_m_per_time_unit: Saturated hydraulic conductivity [L/T].
+        wetting_front_suction_head_m: Wetting front suction head [L].
+        moisture_deficit: Moisture deficit [-].
+        adjust_for_coarse_soils: Whether to apply adjustment for coarse soils. For coarse soils,
+            and very long times, the Sageghi et al. formula can be slightly more off than the
+            0.3 percent error. Setting this to True applies an empirical adjustment to improve accuracy
+            in those situations.
+
+    Returns:
+        Cumulative infiltration amount [L].
+    """
+    if time <= np.float32(0.0):
+        return np.float32(0.0)
+
+    if saturated_hydraulic_conductivity_m_per_time_unit <= np.float32(0.0):
+        return np.float32(0.0)
+
+    # Darcy limit: if suction or the moisture deficit is zero, there is no
+    # capillarity-driven enhancement and Green-Ampt reduces to I = K_s t.
+    if wetting_front_suction_head_m <= np.float32(
+        0.0
+    ) or moisture_deficit <= np.float32(0.0):
+        return saturated_hydraulic_conductivity_m_per_time_unit * time
+
+    # Sorptivity follows the standard Green-Ampt early-time approximation:
+    # S^2 = 2 K_s (psi_f Δθ) where psi_f is suction head at the wetting front.
+    # Units: K_s [L/T], psi_f [L] -> S^2 [L^2/T].
+    sorptivity_squared = (
+        np.float32(2.0)
+        * saturated_hydraulic_conductivity_m_per_time_unit
+        * wetting_front_suction_head_m
+        * moisture_deficit
+    )
+
+    # Apply Sadeghi et al. (2024) explicit formula
+    hydraulic_conductivity_times_time = (
+        saturated_hydraulic_conductivity_m_per_time_unit * time
+    )
+
+    # term corresponds to S^2 / (Ks^2 * t)
+    sorptivity_time_ratio = sorptivity_squared / (
+        saturated_hydraulic_conductivity_m_per_time_unit
+        * hydraulic_conductivity_times_time
+    )
+    cumulative_infiltration = hydraulic_conductivity_times_time * (
+        np.float32(0.70635)
+        + np.float32(0.32415)
+        * np.sqrt(np.float32(1.0) + np.float32(9.43456) * sorptivity_time_ratio)
+    )
+
+    # Apply adjustment for coarse soils if necessary
+    if adjust_for_coarse_soils and (
+        hydraulic_conductivity_times_time / cumulative_infiltration
+    ) > np.float32(0.904):
+        cumulative_infiltration = np.float32(
+            0.9796
+        ) * cumulative_infiltration + np.float32(0.335) * (
+            sorptivity_squared / saturated_hydraulic_conductivity_m_per_time_unit
+        )
+
+    return np.float32(cumulative_infiltration)
+
+
 @njit(cache=True, inline="always")
 def rise_from_groundwater(
     w: ArrayFloat32,
@@ -247,128 +387,161 @@ def rise_from_groundwater(
 
 
 @njit(cache=True, inline="always")
-def get_infiltration_capacity(
-    saturated_hydraulic_conductivity: ArrayFloat32,
-) -> np.float32:
-    """Calculate the infiltration capacity for a single cell.
+def get_green_ampt_params(
+    wetting_front_depth_m: np.float32,
+    soil_layer_height_m: ArrayFloat32,
+    w: ArrayFloat32,
+    ws: ArrayFloat32,
+    wres: ArrayFloat32,
+    saturated_hydraulic_conductivity_m_per_timestep: ArrayFloat32,
+    bubbling_pressure_cm: ArrayFloat32,
+    lambda_pore_size_distribution: ArrayFloat32,
+) -> tuple[int, np.float32, np.float32]:
+    """Helper to determine active layer and Green-Ampt parameters at the wetting front depth.
 
-    TODO: This function is a placeholder for more complex logic should be added later.
-
-    Args:
-        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the cell.
-
-    Returns:
-        The infiltration capacity for the cell.
-    """
-    return saturated_hydraulic_conductivity[0]
-
-
-@njit(cache=True, inline="always")
-def get_suction_adjusted_infiltration_capacity(
-    saturated_hydraulic_conductivity: ArrayFloat32,
-    current_water_storage: np.float32,
-    saturated_water_storage: np.float32,
-    suction_ratio: np.float32,
-) -> np.float32:
-    """Calculate the infiltration capacity for a single cell, accounting for matric suction.
-
-    Ideally, we would like to apply the Green-Ampt infiltration model here. However,
-    because this is computationally expensive and requires tracking cumulative infiltration,
-    we use a simplified approach that captures the key effect of suction reducing
-    infiltration capacity as the soil wets up.
-
-    The Green-Ampt equation is:
-    f = Ksat * (1 + (Psi * dtheta) / F)
-
-    Where:
-    - f: infiltration rate (capacity) [L/T]
-    - Ksat: saturated hydraulic conductivity [L/T]
-    - Psi: suction head at the wetting front [L]
-    - dtheta: soil capacity (saturated_water_storage (i.e., porosity - initial moisture) [-]
-    - F: cumulative infiltration [L]
-
-    Note that cumulative infiltration here is the amount of water that has infiltrated,
-    not the depth of the wetting front, which is deeper than the infiltrated water depth due to
-    soil porosity.
-
-    Here, we adapt this for a fixed soil layer of depth D, using the current
-    relative saturation (S = w / ws) to approximate the wetting front terms.
-
-    Where S is the relative saturation (current_water_storage / saturated_water_storage).
-
-    1. dtheta is:
-        dtheta = porosity * (1 - S)
-
-    2. F is approximated by the current water storage depth (w).
-        F = porosity * S * D
-
-    3. Substitution:
-        Substituting these proxies into the Green-Ampt term (Psi * dtheta) / F:
-
-        Term = (Psi * [porosity * (1 - S)]) / (porosity * S * D])
-
-        The porosity cancels out:
-        Term = (Psi * (1 - S)) / (S * D)
-
-        Rearranging:
-        Term = (Psi / D) * ((1 - S) / S)
-
-    4. Thus, the infiltration capacity becomes:
-        f = Ksat * (1 + (Psi / D) * ((1 - S) / S))
-
-    The variable `suction_ratio` is pre-calculated as (Psi / D).
+    This function identifies which soil layer currently contains the wetting front and calculates
+    the effective hydraulic parameters (suction head, moisture deficit) needed for the Green-Ampt
+    infiltration equation. It accounts for soil layering by estimating the initial moisture content
+    ahead of the front based on mass balance and "piston flow" assumptions.
 
     Args:
-        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the cell.
-        current_water_storage: Current water storage in the top layer.
-        saturated_water_storage: Saturated water storage in the top layer.
-        suction_ratio: Ratio of wetting front suction head to layer depth (Psi_f / D).
+        wetting_front_depth_m: Current depth of the wetting front (meters).
+        soil_layer_height_m: Thickness of each soil layer (meters).
+        w: Current total water column in each soil layer (meters).
+        ws: Saturated water column capacity of each soil layer (meters).
+        wres: Residual water column of each soil layer (meters).
+        saturated_hydraulic_conductivity_m_per_timestep: Saturated hydraulic conductivity of each layer (m/timestep).
+        bubbling_pressure_cm: Bubbling pressure parameter for each layer (cm).
+        lambda_pore_size_distribution: Pore size distribution index (lambda) for each layer.
 
     Returns:
-        The infiltration capacity for the cell.
+        A tuple containing:
+            - idx (int): Index of the soil layer containing the wetting front.
+            - psi (float): Wetting front suction head (meters).
+            - delta_theta (float): Moisture deficit at the wetting front (dimensionless, m/m).
+
+    Notes:
+        - Assumes piston flow: Soil behind the wetting front is fully saturated.
+        - Calculates moisture ahead of the front by subtracting the saturated water volume behind the front
+          from the total layer water volume.
+        - Includes heuristics (theta_floor) to prevent numerical instability when layers interact.
     """
-    relative_saturation = current_water_storage / saturated_water_storage
+    current_depth = np.float32(0.0)
+    idx = 0
+    depth_in_layer = np.float32(0.0)
+    n_layers = len(soil_layer_height_m)
 
-    # prevent division by zero (max factor derived from min saturation)
-    relative_saturation = max(relative_saturation, np.float32(0.01))
+    # Find which layer the wetting front is currently in
+    for i in range(n_layers):
+        h = soil_layer_height_m[i]
+        # Use epsilon to handle boundaries
+        if wetting_front_depth_m < current_depth + h - np.float32(1e-4):
+            idx = i
+            depth_in_layer = max(np.float32(0.0), wetting_front_depth_m - current_depth)
+            break
+        current_depth += h
+    else:
+        # Front is below the bottom layer
+        idx = n_layers - 1
+        depth_in_layer = soil_layer_height_m[idx]
 
-    # Capacity cannot drop below Ksat even if supersaturated
-    relative_saturation = min(relative_saturation, np.float32(1.0))
+    layer_h = soil_layer_height_m[idx]
 
-    suction_term = (
-        suction_ratio * (np.float32(1.0) - relative_saturation) / relative_saturation
+    # Reconstruct initial moisture content ahead of the front.
+    # w[idx] is the total water column in the layer (meters).
+    # Since we assume piston flow, the part of the layer behind the front (depth_in_layer)
+    # is saturated using the Green-Ampt assumption.
+    theta_sat = ws[idx] / layer_h
+    remaining_height = layer_h - depth_in_layer
+
+    if remaining_height > np.float32(1e-4):
+        # Mass balance: Total Water = Water_Behind + Water_Ahead
+        water_behind = depth_in_layer * theta_sat
+        water_ahead = max(np.float32(0.0), w[idx] - water_behind)
+        theta_initial = water_ahead / remaining_height
+
+        # Clamp to physical limits
+        # use a small epsilon as floor
+        theta_floor = np.float32(1e-9)
+
+        theta_initial = max(theta_initial, theta_floor)
+        theta_initial = min(theta_initial, theta_sat - np.float32(1e-9))
+    else:
+        # Layer fully invaded; assume near saturation (small deficit)
+        theta_initial = theta_sat - np.float32(1e-3)
+
+    delta_theta = max(theta_sat - theta_initial, np.float32(1e-4))
+
+    # Calculate suction based on the initial moisture
+    # get_soil_water_flow_parameters expects water content in meters (w), not theta
+    w_initial_equiv = theta_initial * layer_h
+    psi, _ = get_soil_water_flow_parameters(
+        w=max(w_initial_equiv, wres[idx]),
+        wres=wres[idx],
+        ws=ws[idx],
+        lambda_pore_size_distribution=lambda_pore_size_distribution[idx],
+        saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_timestep[
+            idx
+        ],
+        bubbling_pressure_cm=bubbling_pressure_cm[idx],
     )
 
-    return saturated_hydraulic_conductivity[0] * (np.float32(1.0) + suction_term)
+    return idx, abs(psi), delta_theta
 
 
 @njit(cache=True, inline="always")
 def infiltration(
     ws: ArrayFloat32,
-    saturated_hydraulic_conductivity: ArrayFloat32,
+    wres: ArrayFloat32,
+    saturated_hydraulic_conductivity_m_per_timestep: ArrayFloat32,
     land_use_type: np.int32,
     soil_is_frozen: bool,
     w: ArrayFloat32,
     topwater_m: np.float32,
+    wetting_front_depth_m: np.float32,
+    wetting_front_suction_head_m: np.float32,
+    wetting_front_moisture_deficit: np.float32,
+    green_ampt_active_layer_idx: int,
     arno_shape_parameter: np.float32,
-    bubbling_pressure_cm: np.float32,
-    soil_layer_height_m: np.float32,
-) -> tuple[np.float32, np.float32, np.float32, np.float32]:
+    bubbling_pressure_cm: ArrayFloat32,
+    soil_layer_height_m: ArrayFloat32,
+    lambda_pore_size_distribution: ArrayFloat32,
+) -> tuple[
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    int,
+]:
     """Simulates vertical transport of water in the soil for a single cell.
 
-    Uses 6 substeps (10-minute intervals) to accurately capture the non-linear
-    decay of infiltration capacity due to suction as the soil wets up.
+    Uses an explicit Green-Ampt approximation (Salvucci, 1994) combined with the
+    Arno/Xinanjiang variable infiltration capacity curve.
+
+    The function uses `wetting_front_suction_head_m` which is a state variable
+    tracking the matric suction at the sharp wetting front. This should be
+    initialized at the beginning of an infiltration event based on the soil
+    moisture deficit.
 
     Args:
         ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
-        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the cell in m in this timestep.
+        wres: Residual soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
+        saturated_hydraulic_conductivity_m_per_timestep: Saturated hydraulic conductivity in each layer for the cell in m in this timestep, shape (N_SOIL_LAYERS,).
         land_use_type: Land use type for the cell.
         soil_is_frozen: Boolean indicating if the soil is frozen.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
+        wetting_front_depth_m: Depth of the wetting front in meters.
+        wetting_front_suction_head_m: Suction head at the wetting front in meters.
+        wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
+        green_ampt_active_layer_idx: The index of the active soil layer for Green-Ampt.
         arno_shape_parameter: Arno shape parameter for the cell.
-        bubbling_pressure_cm: Bubbling pressure for the top soil layer [cm].
-        soil_layer_height_m: Total height of the relevant soil layers for infiltration [m].
+        bubbling_pressure_cm: Bubbling pressure for each soil layer [cm], shape (N_SOIL_LAYERS,).
+        soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
+        lambda_pore_size_distribution: Van Genuchten parameter lambda for each soil layer, shape (N_SOIL_LAYERS,).
 
     Returns:
         A tuple containing:
@@ -376,71 +549,220 @@ def infiltration(
             - direct_runoff: Direct runoff from the cell in meters.
             - groundwater_recharge: Groundwater recharge from the cell in meters (currently set to 0.0).
             - infiltration: Infiltration into the soil for the cell in meters.
+            - wetting_front_depth_m: Updated wetting front depth in meters.
+            - wetting_front_suction_head_m: Updated wetting front suction head in meters.
+            - wetting_front_moisture_deficit: Updated wetting front moisture deficit [-].
+            - green_ampt_active_layer_idx: Updated active soil layer index.
     """
     if soil_is_frozen or land_use_type == SEALED or land_use_type == OPEN_WATER:
         # No infiltration allowed
         infiltration_amount: np.float32 = np.float32(0.0)
         direct_runoff: np.float32 = topwater_m
         topwater_m: np.float32 = np.float32(0.0)
-        return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
-    else:
-        # Calculate suction ratio from soil properties (Top layer)
-        # Psi_f approx bubbling_pressure (in meters)
-        # Ratio = Psi_f / Layer_Depth
-        suction_head_m = bubbling_pressure_cm / np.float32(100.0)
-        suction_ratio = suction_head_m / soil_layer_height_m
+        return (
+            topwater_m,
+            direct_runoff,
+            np.float32(0.0),  # groundwater_recharge
+            infiltration_amount,
+            wetting_front_depth_m,
+            wetting_front_suction_head_m,
+            wetting_front_moisture_deficit,
+            green_ampt_active_layer_idx,
+        )
 
-        suction_ratio = max(suction_ratio, np.float32(1.0))
+    # Redistribution: If there is no water available for infiltration,
+    # we assume the wetting front dissipates/redistributes.
+    if topwater_m == np.float32(0.0):
+        wetting_front_depth_m: np.float32 = np.float32(0.0)
+        green_ampt_active_layer_idx: int = 0
 
-        # Substepping parameters
-        n_substeps = 6  # 10-minute intervals for 1-hour timestep
-        topwater_step = topwater_m / np.float32(n_substeps)
-        # Use a copy of Ksat to avoid modifying original array, also scale for substep
-        ksat_step = saturated_hydraulic_conductivity / np.float32(n_substeps)
+    # Initialize accumulators for the timestep
+    total_infiltration_amount: np.float32 = np.float32(0.0)
+    total_direct_runoff: np.float32 = np.float32(0.0)
 
-        total_infiltration = np.float32(0.0)
-        total_runoff = np.float32(0.0)
+    n_substeps: int = 6
+    dt: np.float32 = np.float32(1.0) / np.float32(n_substeps)
+    topwater_per_step: np.float32 = topwater_m / np.float32(n_substeps)
 
-        for _ in range(n_substeps):
-            step_runoff, step_infiltration = calculate_arno_runoff(
-                current_soil_water_storage=w[0] + w[1],
-                max_soil_water_capacity=ws[0] + ws[1],
-                arno_shape_parameter=arno_shape_parameter,
-                topwater_m=topwater_step,
-                infiltration_capacity_m=get_suction_adjusted_infiltration_capacity(
-                    ksat_step, w[0] + w[1], ws[0] + ws[1], suction_ratio
-                ),
+    # If starting with a new wetting front, calculate initial parameters
+    if wetting_front_depth_m == np.float32(0.0):
+        (
+            green_ampt_active_layer_idx,
+            wetting_front_suction_head_m,
+            wetting_front_moisture_deficit,
+        ) = get_green_ampt_params(
+            wetting_front_depth_m,
+            soil_layer_height_m,
+            w,
+            ws,
+            wres,
+            saturated_hydraulic_conductivity_m_per_timestep,
+            bubbling_pressure_cm,
+            lambda_pore_size_distribution,
+        )
+
+    # Calculate depth limit for current layer
+    current_layer_depth_limit = np.float32(0.0)
+    # Ensure active_layer_idx is within bounds
+    green_ampt_active_layer_idx = max(
+        0, min(green_ampt_active_layer_idx, len(soil_layer_height_m) - 1)
+    )
+
+    for i in range(green_ampt_active_layer_idx + 1):
+        current_layer_depth_limit += soil_layer_height_m[i]
+
+    for _ in range(n_substeps):
+        # Check if the wetting front has moved into a new layer
+        # and if so, update Green-Ampt parameters. Otherwise, keep existing parameters.
+        if green_ampt_active_layer_idx < len(
+            soil_layer_height_m
+        ) - 1 and wetting_front_depth_m >= current_layer_depth_limit - np.float32(1e-4):
+            (
+                green_ampt_active_layer_idx,
+                wetting_front_suction_head_m,
+                wetting_front_moisture_deficit,
+            ) = get_green_ampt_params(
+                wetting_front_depth_m,
+                soil_layer_height_m,
+                w,
+                ws,
+                wres,
+                saturated_hydraulic_conductivity_m_per_timestep,
+                bubbling_pressure_cm,
+                lambda_pore_size_distribution,
+            )
+            # Update limit for the new layer
+            current_layer_depth_limit = np.float32(0.0)
+            for i in range(green_ampt_active_layer_idx + 1):
+                current_layer_depth_limit += soil_layer_height_m[i]
+
+        # Calculate current cumulative infiltration implied by the wetting front depth
+        current_cumulative_infiltration: np.float32 = (
+            wetting_front_depth_m * wetting_front_moisture_deficit
+        )
+
+        # Calculate effective time since start of infiltration event
+        # If wetting_front_depth is negligible, we start at t=0
+        if wetting_front_depth_m == np.float32(0.0):
+            effective_time_steps = np.float32(0.0)
+        else:
+            effective_time_steps = calculate_green_ampt_time_from_infiltration(
+                current_cumulative_infiltration,
+                saturated_hydraulic_conductivity_m_per_timestep[
+                    green_ampt_active_layer_idx
+                ],
+                wetting_front_suction_head_m,
+                wetting_front_moisture_deficit,
             )
 
-            # Update soil layers
-            toplayer_infiltration = min(step_infiltration, ws[0] - w[0])
-            second_layer_infiltration = step_infiltration - toplayer_infiltration
+        # Calculate potential cumulative infiltration at end of substep
+        # We advance time by dt (fraction of timestep)
+        new_time_steps = effective_time_steps + dt
 
-            w[0] += toplayer_infiltration
+        potential_cumulative_infiltration = (
+            calculate_green_ampt_cumulative_infiltration(
+                new_time_steps,
+                saturated_hydraulic_conductivity_m_per_timestep[
+                    green_ampt_active_layer_idx
+                ],
+                wetting_front_suction_head_m,
+                wetting_front_moisture_deficit,
+                adjust_for_coarse_soils=False,
+            )
+        )
+
+        # Determine infiltration capacity for this substep
+        infiltration_capacity_m_step = (
+            potential_cumulative_infiltration - current_cumulative_infiltration
+        )
+
+        # Partition topwater into runoff and infiltration using Arno/VIC scheme
+        # constrained by the calculated Green-Ampt capacity
+        # step_runoff, step_infiltration = calculate_arno_runoff(
+        #     current_soil_water_storage=w[0] + w[1],
+        #     max_soil_water_capacity=ws[0] + ws[1],
+        #     arno_shape_parameter=arno_shape_parameter,
+        #     topwater_m=topwater_per_step,
+        #     infiltration_capacity_m=infiltration_capacity_m_step,
+        # )
+
+        # Determine how deep we can infiltrate:
+        # Scan for the first layer with available space starting from active layer.
+        # This allows the wetting front to "jump" through saturated layers (where dL/dI -> inf)
+        # but prevents pre-wetting deep unsaturated layers which would break Green-Ampt physics.
+        end_layer_idx = min(len(w), green_ampt_active_layer_idx + 1)
+        for i in range(green_ampt_active_layer_idx, len(w)):
+            if (ws[i] - w[i]) > np.float32(1e-4):
+                end_layer_idx = i + 1
+                break
+            # If layer is full, we continue to look deeper
+            end_layer_idx = i + 1
+
+        # Calculate available space up to the target layer
+        space_available = np.float32(0.0)
+        for i in range(end_layer_idx):
+            space_available += max(np.float32(0.0), ws[i] - w[i])
+
+        # If the wetting front has reached the bottom of the soil column,
+        # we treat the entire column as "fillable" without the rate limit
+        # imposed by the Green-Ampt infiltration capacity.
+        total_soil_depth = np.sum(soil_layer_height_m)
+        if wetting_front_depth_m >= total_soil_depth - np.float32(1e-4):
+            step_infiltration = min(
+                topwater_per_step,
+                space_available,
+            )
+        else:
+            step_infiltration = min(
+                topwater_per_step,
+                max(np.float32(0.0), infiltration_capacity_m_step),
+                space_available,
+            )
+        step_runoff = topwater_per_step - step_infiltration
+
+        total_infiltration_amount += step_infiltration
+        total_direct_runoff += step_runoff
+
+        # Update wetting front depth
+        # L_new = L_old + Infiltration / DeltaTheta
+        if step_infiltration > np.float32(
+            0.0
+        ) and wetting_front_moisture_deficit > np.float32(0.0):
+            wetting_front_depth_m += step_infiltration / wetting_front_moisture_deficit
+
+        # Update soil layers sequentially from top to bottom
+        remaining_infiltration = step_infiltration
+        for i in range(end_layer_idx):
+            if remaining_infiltration <= np.float32(1e-9):
+                break
+
+            space_in_layer = max(np.float32(0.0), ws[i] - w[i])
+            infiltration_to_layer = min(remaining_infiltration, space_in_layer)
+
+            w[i] += infiltration_to_layer
             # Ensure we don't exceed saturation due to float errors
-            w[0] = min(w[0], ws[0])
+            w[i] = min(w[i], ws[i])
 
-            w[1] += second_layer_infiltration
-            # Ensure we don't exceed saturation due to float errors
-            w[1] = min(w[1], ws[1])
+            remaining_infiltration -= infiltration_to_layer
 
-            total_infiltration += step_infiltration
-            total_runoff += step_runoff
+    topwater_m: np.float32 = np.float32(0.0)
 
-        # Accumulated values become the result
-        infiltration_amount = total_infiltration
-        direct_runoff = total_runoff
+    if land_use_type == PADDY_IRRIGATED:
+        ponding_allowance: np.float32 = np.float32(0.05)
+        ponding = min(total_direct_runoff, ponding_allowance)
+        topwater_m += ponding
+        total_direct_runoff -= ponding
 
-        # In Arno scheme, all topwater is processed into runoff or infiltration
-        topwater_m: np.float32 = np.float32(0.0)
-
-        if land_use_type == PADDY_IRRIGATED:
-            ponding_allowance: np.float32 = np.float32(0.05)
-            ponding = min(direct_runoff, ponding_allowance)
-            topwater_m += ponding
-            direct_runoff -= ponding
-
-        return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
+    return (
+        topwater_m,
+        total_direct_runoff,
+        np.float32(0.0),
+        total_infiltration_amount,
+        wetting_front_depth_m,
+        wetting_front_suction_head_m,
+        wetting_front_moisture_deficit,
+        green_ampt_active_layer_idx,
+    )
 
 
 @njit(cache=True, inline="always")
@@ -449,7 +771,7 @@ def get_soil_water_flow_parameters(
     wres: np.float32,
     ws: np.float32,
     lambda_pore_size_distribution: np.float32,
-    saturated_hydraulic_conductivity: np.float32,
+    saturated_hydraulic_conductivity_m_per_timestep: np.float32,
     bubbling_pressure_cm: np.float32,
 ) -> tuple[np.float32, np.float32]:
     """Calculate the soil water potential and unsaturated hydraulic conductivity for a single soil layer.
@@ -463,7 +785,7 @@ def get_soil_water_flow_parameters(
         wres: Residual soil water content in the layer in meters.
         ws: Saturated soil water content in the layer in meters.
         lambda_pore_size_distribution: Van Genuchten parameter lambda for the layer.
-        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the layer in m/timestep
+        saturated_hydraulic_conductivity_m_per_timestep: Saturated hydraulic conductivity for the layer in m/timestep
         bubbling_pressure_cm: Bubbling pressure for the layer in cm.
 
     Returns:
@@ -485,7 +807,9 @@ def get_soil_water_flow_parameters(
     m = np.float32(1) - np.float32(1) / n
 
     # Compute unsaturated hydraulic conductivity
-    term1 = saturated_hydraulic_conductivity * np.sqrt(effective_saturation)
+    term1 = saturated_hydraulic_conductivity_m_per_timestep * np.sqrt(
+        effective_saturation
+    )
     term2 = (
         np.float32(1)
         - np.power(

@@ -12,6 +12,7 @@
 - Allow exporting of hourly values from reporter
 - Add initial soil temperature. Now still simplified but better than having no soil temperature.
 - Includes soil suction into the model using an approximation of the Green-Ampt equation.
+- Use Green-Ampt rather than VIC for infiltration.
 
 To support this version:
 
