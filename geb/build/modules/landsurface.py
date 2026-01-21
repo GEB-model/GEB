@@ -99,6 +99,7 @@ class LandSurface(BuildModelBase):
                 "name": "fabdem",
                 "zmin": 0.001,
                 "fill_depressions": True,
+                "nodata": np.nan,
             },
             {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
         ],
@@ -187,7 +188,9 @@ class LandSurface(BuildModelBase):
             )
 
             if "fill_depressions" in DEM and DEM["fill_depressions"]:
-                DEM_raster.values, d8 = fill_depressions(DEM_raster.values)
+                DEM_raster.values, d8 = fill_depressions(
+                    DEM_raster.values, nodata=DEM["nodata"]
+                )
 
             self.set_other(
                 DEM_raster,

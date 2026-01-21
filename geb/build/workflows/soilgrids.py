@@ -76,7 +76,7 @@ def load_soilgrids(
 
     # soilgrids uses conversion factors as specified here:
     # https://www.isric.org/explore/soilgrids/faq-soilgrids
-    ds["bdod"] = ds["bdod"] / 100  # cg/cm³ -> kg/dm³
+    ds["bdod"] = ds["bdod"] / 100  # cg/cm³ -> gr/cm³
     ds["clay"] = ds["clay"] / 10  # g/kg -> g/100g (%)
     ds["silt"] = ds["silt"] / 10  # g/kg -> g/100g (%)
     ds["soc"] = ds["soc"] / 100  # g/kg -> g/100g (%)

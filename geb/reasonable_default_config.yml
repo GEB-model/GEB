@@ -182,6 +182,7 @@ report:
     compression_level: 9  # 1 (min) to 22 (max)
     chunk_target_size_bytes: 100000000  # target chunk size in bytes
   _water_circle: false
+  _energy_balance: true
   _discharge_stations: true
   _outflow_points: true
 
