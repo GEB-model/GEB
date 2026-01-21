@@ -377,7 +377,7 @@ class Observations(BuildModelBase):
         region_mask = self.geom["mask"]
 
         # Load Q_obs dataset
-        Q_obs = self.new_data_catalog.fetch("GRDC").read()
+        Q_obs = self.data_catalog.fetch("GRDC").read()
 
         # create folders
         snapping_discharge_folder = (

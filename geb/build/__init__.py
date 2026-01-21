@@ -1533,7 +1533,7 @@ class GEBModel(
         self.root = root
         self.epsg = epsg
         self.data_provider = data_provider
-        self._new_data_catalog = NewDataCatalog()
+        self._data_catalog = NewDataCatalog()
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
@@ -1569,13 +1569,13 @@ class GEBModel(
         self._data_catalog = value
 
     @property
-    def new_data_catalog(self) -> NewDataCatalog:
+    def data_catalog(self) -> NewDataCatalog:
         """Get the new data catalog."""
-        return self._new_data_catalog
+        return self._data_catalog
 
-    @new_data_catalog.setter
-    def new_data_catalog(self, value: NewDataCatalog) -> None:
-        self._new_data_catalog = value
+    @data_catalog.setter
+    def data_catalog(self, value: NewDataCatalog) -> None:
+        self._data_catalog = value
 
     @property
     def grid(self) -> xr.Dataset:
@@ -1695,7 +1695,7 @@ class GEBModel(
         assert subgrid_factor >= 2
 
         self.logger.info("Loading river network.")
-        river_graph = get_river_graph(self.new_data_catalog)
+        river_graph = get_river_graph(self.data_catalog)
 
         self.logger.info("Finding sinks in river network of requested region.")
         if "subbasin" in region:
@@ -1706,16 +1706,16 @@ class GEBModel(
         elif "outflow" in region:
             lat, lon = region["outflow"]["lat"], region["outflow"]["lon"]
             sink_subbasin_ids = [
-                get_subbasin_id_from_coordinate(self.new_data_catalog, lon, lat)
+                get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
             ]
         elif "geom" in region:
-            regions = self.new_data_catalog.fetch(region["geom"]["source"]).read()
+            regions = self.data_catalog.fetch(region["geom"]["source"]).read()
             assert isinstance(regions, gpd.GeoDataFrame)
             regions = regions[
                 regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
             sink_subbasin_ids = get_sink_subbasin_id_for_geom(
-                self.new_data_catalog, regions, river_graph
+                self.data_catalog, regions, river_graph
             )
         else:
             raise ValueError(f"Region {region} not understood.")
@@ -1732,7 +1732,7 @@ class GEBModel(
         xmax += buffer
         ymax += buffer
 
-        ldd = self.new_data_catalog.fetch(
+        ldd = self.data_catalog.fetch(
             "merit_hydro_dir",
             xmin=xmin,
             xmax=xmax,
@@ -1837,7 +1837,7 @@ class GEBModel(
             ldd.attrs["_FillValue"],
         )
 
-        ldd_elevation = self.new_data_catalog.fetch(
+        ldd_elevation = self.data_catalog.fetch(
             "merit_hydro_elv",
             xmin=xmin,
             xmax=xmax,
@@ -1906,7 +1906,7 @@ class GEBModel(
         NEARBY_OUTFLOW: int = 2
 
         rivers = (
-            self.new_data_catalog.fetch(
+            self.data_catalog.fetch(
                 "merit_basins_rivers",
             )
             .read(
