@@ -1621,11 +1621,13 @@ class Agents(BuildModelBase):
             A dictionary with GDLcode as keys and GeoDataFrames of buildings with grid indices as values.
         """
         output = {}
-
+        # load region mask
+        mask = self.region.unary_union
         buildings = self.new_data_catalog.fetch(
             "open_building_map",
-            geom=GDL_regions.union_all(),
+            geom=mask,
             prefix="assets",
+            overwrite=True,
         ).read()
 
         self.set_geom(buildings, name="assets/open_building_map")
@@ -2551,7 +2553,7 @@ class Agents(BuildModelBase):
         all_features: dict[str, gpd.GeoDataFrame] = self.new_data_catalog.fetch(
             "open_street_map"
         ).read(
-            self.region.geometry[0],
+            self.region.unary_union,
             feature_types=feature_types,
         )
 

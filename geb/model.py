@@ -735,7 +735,7 @@ class GEBModel(Module):
 
         # ugly switch to determine whether model has coastal basins
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
-        if subbasins["is_coastal_basin"].any():
+        if subbasins["is_coastal"].any():
             generate_storm_surge_hydrographs(self)
 
         self.hazard_driver.floods.get_return_period_maps()

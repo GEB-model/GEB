@@ -57,7 +57,7 @@ def create_river_graph(
     Returns:
         A directed graph (networkx DiGraph) representing the river network.
     """
-    rivers_without_outflow_basin = rivers[~rivers["is_downstream_outflow_subbasin"]]
+    rivers_without_outflow_basin = rivers[~rivers["is_downstream_outflow"]]
 
     river_graph: nx.DiGraph = nx.DiGraph()
     rivers_in_network = set(rivers_without_outflow_basin.index)
@@ -511,7 +511,7 @@ class Floods(Module):
 
         # load the subbasin geometry for the model domain
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
-        coastal = subbasins["is_coastal_basin"].any()
+        coastal = subbasins["is_coastal"].any()
 
         rivers = self.model.hydrology.routing.rivers
 
@@ -537,16 +537,16 @@ class Floods(Module):
                 self.model.files["geom"]["coastal/land_polygons"],
             )
 
-            subbasins = subbasins[subbasins["is_coastal_basin"]]
+            coastal_subbasins = subbasins[subbasins["is_coastal"]]
 
             # merge region and lower elevation coastal zone mask in a single shapefile
-            region = subbasins.union_all().union(
+            coastal_region = coastal_subbasins.union_all().union(
                 low_elevation_coastal_zone_mask.union_all()
             )
 
             # domain to gpd.GeoDataFrame
-            region = gpd.GeoDataFrame(
-                geometry=[region], crs=low_elevation_coastal_zone_mask.crs
+            coastal_region = gpd.GeoDataFrame(
+                geometry=[coastal_region], crs=low_elevation_coastal_zone_mask.crs
             )
             model_name = "coastal_region"
 
@@ -565,9 +565,9 @@ class Floods(Module):
 
             sfincs_coastal_root_model: SFINCSRootModel = self.build(
                 name=model_name,
-                region=region,
+                region=coastal_region,
                 coastal=True,
-                rivers=rivers[rivers.intersects(region.union_all())],
+                rivers=rivers[rivers.intersects(coastal_region.union_all())],
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
                 initial_water_level=initial_water_level,
@@ -576,21 +576,24 @@ class Floods(Module):
         if not coastal_only:
             sfincs_inland_root_models: list[SFINCSRootModel] = []
 
+            # for each subbasin, build a separate sfincs model with its downstream basin
+            # when there is no downstream basin (ocean), only build for the subbasin itself
             for subbasin_id, subbasin in subbasins[
-                ~subbasins["is_downstream_outflow_subbasin"]
+                ~subbasins["is_downstream_outflow"]
             ].iterrows():
                 downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
 
                 region_subbasins = subbasins[
                     subbasins.index.isin([subbasin_id, downstream_basin])
                 ].copy()
-                region_subbasins.at[
-                    downstream_basin, "is_downstream_outflow_subbasin"
-                ] = True
                 region_rivers = rivers[rivers.index.isin(region_subbasins.index)]
-                region_rivers.at[downstream_basin, "is_downstream_outflow_subbasin"] = (
-                    True
-                )
+
+                # if there is a downstream basin, mark it as downstream outflow subbasin
+                if downstream_basin != -1:
+                    region_subbasins.at[downstream_basin, "is_downstream_outflow"] = (
+                        True
+                    )
+                    region_rivers.at[downstream_basin, "is_downstream_outflow"] = True
 
                 sfincs_inland_root_model = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
@@ -618,9 +621,7 @@ class Floods(Module):
             if not coastal_only:
                 for sfincs_inland_root_model in sfincs_inland_root_models:
                     inflow_nodes = sfincs_inland_root_model.rivers[
-                        ~sfincs_inland_root_model.rivers[
-                            "is_downstream_outflow_subbasin"
-                        ]
+                        ~sfincs_inland_root_model.rivers["is_downstream_outflow"]
                     ]
                     inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                         get_start_point
@@ -652,6 +653,7 @@ class Floods(Module):
                         nodes=inflow_nodes.to_crs(sfincs_inland_root_model.crs),
                         timeseries=Q,
                     )
+
                     simulations.append(sfincs_inland_simulation)
 
             simulation = MultipleSFINCSSimulations(simulations=simulations)
@@ -663,6 +665,14 @@ class Floods(Module):
             flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
                 self.config["minimum_flood_depth"]
             )
+
+            # mask floodplain with land polygons to remove inundation in the sea
+            if coastal and coastal_boundary_exclude_mask is not None:
+                flood_depth_return_period = flood_depth_return_period.rio.clip(
+                    coastal_boundary_exclude_mask.geometry,
+                    coastal_boundary_exclude_mask.crs,
+                    invert=False,
+                )
 
             write_zarr(
                 flood_depth_return_period,

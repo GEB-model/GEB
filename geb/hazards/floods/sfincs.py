@@ -212,10 +212,10 @@ class SFINCSRootModel:
             if hash_file.exists() and (self.path / "sfincs.inp").exists():
                 previous_hash = read_hash(hash_file)
                 if previous_hash == current_hash:
-                    print("Model and SFINCS code unchanged, reading existing model...")
+                    print("SFINCS model and code unchanged, reading existing model...")
                     return self.read()
                 else:
-                    print("Model or SFINCS code changed, rebuilding model...")
+                    print("SFINCS model or code changed, rebuilding model...")
             else:
                 print("No existing hash file, building model...")
 
@@ -334,6 +334,10 @@ class SFINCSRootModel:
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
         sf.setup_mask_active(flood_plain, reset_mask=True)
 
+        self.rivers["outflow_elevation"] = np.nan
+        self.rivers["outflow_point_xy"] = None
+        self.rivers["is_outflow_boundary"] = False
+
         if coastal:
             # set zsini based on the minimum elevation
             assert isinstance(sf.config, dict)
@@ -362,14 +366,13 @@ class SFINCSRootModel:
                 exclude_mask=coastal_boundary_exclude_mask,
                 all_touched=True,
             )
+        else:
+            self.calculate_river_outflow_conditions()
+            if setup_river_outflow_boundary:
+                # must be performed BEFORE burning rivers.
+                self.setup_river_outflow_boundary()
 
         self.plot_rivers()
-
-        self.calculate_river_outflow_conditions()
-
-        if setup_river_outflow_boundary:
-            # must be performed BEFORE burning rivers.
-            self.setup_river_outflow_boundary()
 
         river_representative_points = []
         for ID in self.rivers.index:
@@ -545,12 +548,8 @@ class SFINCSRootModel:
             outflow_gdf = gpd.GeoDataFrame({"geometry": [outflow_point]}, crs=self.crs)
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
-        self.rivers["outflow_elevation"] = np.nan
-        self.rivers["outflow_point_xy"] = None
-        self.rivers["is_outflow_boundary"] = False
-
         for river_idx, river in self.rivers[
-            self.rivers["is_downstream_outflow_subbasin"]
+            self.rivers["is_downstream_outflow"] | (self.rivers["downstream_ID"] == -1)
         ].iterrows():
             # outflow point is the intersection of the river geometry with the region boundary
             # this will be used as the central point of the outflow boundary condition
@@ -625,8 +624,7 @@ class SFINCSRootModel:
             ValueError: if no downstream-most rivers are found for outflow boundary setup.
         """
         downstream_most_rivers: gpd.GeoDataFrame = self.rivers.loc[
-            self.rivers["is_downstream_outflow_subbasin"]
-            | (self.rivers["downstream_ID"] == 0)
+            self.rivers["is_downstream_outflow"] | (self.rivers["downstream_ID"] == -1)
         ]
 
         if downstream_most_rivers.empty:
@@ -864,7 +862,7 @@ class SFINCSRootModel:
 
         # here we only select the rivers that have an upstream forcing point
         rivers_with_return_period: gpd.GeoDataFrame = self.rivers[
-            ~self.rivers["is_downstream_outflow_subbasin"]
+            ~self.rivers["is_downstream_outflow"]
         ]
 
         river_representative_points: list[list[tuple[int, int]]] = []
@@ -1008,7 +1006,7 @@ class SFINCSRootModel:
         """
         non_headwater_rivers: gpd.GeoDataFrame = self.rivers[self.rivers["maxup"] > 0]
         non_outflow_basins: gpd.GeoDataFrame = non_headwater_rivers[
-            ~non_headwater_rivers["is_downstream_outflow_subbasin"]
+            ~non_headwater_rivers["is_downstream_outflow"]
         ]
         upstream_branches_in_domain = np.unique(
             self.rivers["downstream_ID"], return_counts=True
@@ -1344,7 +1342,7 @@ class SFINCSSimulation:
             self.root_model.rivers["maxup"] > 0
         ]
         non_outflow_basins: gpd.GeoDataFrame = non_headwater_rivers[
-            ~non_headwater_rivers["is_downstream_outflow_subbasin"]
+            ~non_headwater_rivers["is_downstream_outflow"]
         ]
         upstream_branches_in_domain = np.unique(
             self.root_model.rivers["downstream_ID"], return_counts=True
