@@ -442,23 +442,7 @@ class Households(AgentBaseClass):
         # assign income and wealth attributes
         self.assign_household_wealth_and_income()
 
-        # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
-        self.var.property_value = DynamicArray(
-            (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
-        )
-        # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
-        adaptation_costs = (
-            np.maximum(self.var.property_value.data * 0.05, 10_800)
-        ).astype(np.int64)
-        self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
-
-        # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
-        amenity_premiums = np.random.uniform(0, 0.2, self.n)
-        self.var.amenity_value = DynamicArray(
-            amenity_premiums * self.var.wealth, max_n=self.max_n
-        )
-
-        # load household points (only in use for damagescanner, could be removed)
+        # load household points
         household_points = gpd.GeoDataFrame(
             geometry=gpd.points_from_xy(
                 self.var.locations.data[:, 0], self.var.locations.data[:, 1]
@@ -466,6 +450,81 @@ class Households(AgentBaseClass):
             crs="EPSG:4326",
         )
         self.var.household_points = household_points
+
+        # initiate array with adaptation costs for dry-proofing, eur 2024 values, article Aerts (2018)
+        # We need the circumference of each house for dry-proofing costs
+        buildings = self.buildings.copy()
+        buildings["id"].duplicated().sum()
+
+        household_points_copy = self.var.household_points.copy()
+        household_points_copy["building_id"] = self.var.building_id_of_household
+
+        # print(len(household_points_copy))
+
+        # print(household_points_copy["building_id"].value_counts().head())
+        # print(buildings["id"].value_counts().head())
+
+        household_points_copy = household_points_copy.merge(
+            buildings[["id", "geometry"]],
+            left_on="building_id",
+            right_on="id",
+            how="left",
+        )
+
+        # print(len(household_points_copy))
+
+        projected_crs = buildings.estimate_utm_crs()
+        household_points_copy = household_points_copy.set_geometry("geometry_y")
+        household_points_copy = household_points_copy.to_crs(projected_crs)
+
+        # Calculate circumference (perimeter) of each building polygon
+        household_points_copy["building_circumference"] = household_points_copy[
+            "geometry_y"
+        ].length
+
+        self.var.household_building_circumference = DynamicArray(
+            household_points_copy["building_circumference"].values.astype(np.float32),
+            max_n=self.max_n,
+        )
+
+        # Calculate area of each building polygon
+        household_points_copy["building_area"] = household_points_copy[
+            "geometry_y"
+        ].area
+
+        self.var.household_building_area = DynamicArray(
+            household_points_copy["building_area"].values.astype(np.float32),
+            max_n=self.max_n,
+        )
+
+        # initiate array with property values which equal the maximum flood damage
+        self.var.property_value = DynamicArray(
+            (
+                self.var.household_building_area.data
+                * self.var.max_dam_buildings_structure
+            ).astype(np.int64),
+            max_n=self.max_n,
+        )
+
+        # Dry floodproofing costs eur 2024 per meter of building circumference, article Aerts (2018)
+        adaptation_costs_dry_proofing = (
+            901 * self.var.household_building_circumference.data
+        ).astype(np.int64)  # dry floodproofing
+        self.var.adaptation_costs_dryproofing = DynamicArray(
+            adaptation_costs_dry_proofing, max_n=self.max_n
+        )
+
+        # initiate array with adaptation costs for wet-proofing, eur 2024 values, article Aerts (2018)
+        adaptation_costs_wet_proofing = 27384
+        # wet floodproofing
+        self.var.adaptation_costs_wetproofing = DynamicArray(
+            np.full(self.n, adaptation_costs_wet_proofing, np.int32), max_n=self.max_n
+        )
+
+        # initiate array with amenity value, set to 0 when no migration decisions are modeled
+        self.var.amenity_value = DynamicArray(
+            np.full(self.n, 0, np.int32), max_n=self.max_n
+        )
 
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
