@@ -234,7 +234,7 @@ class GridVariables(Bucket):
     layer_boundary_elevation: TwoDArrayFloat32
     elevation: ArrayFloat32
     specific_yield: TwoDArrayFloat32
-    hydraulic_conductivity: TwoDArrayFloat32
+    groundwater_hydraulic_conductivity: TwoDArrayFloat32
     upstream_area: ArrayFloat32
     upstream_area_n_cells: ArrayInt32
     river_mannings: ArrayFloat32
@@ -610,7 +610,7 @@ class HRUVariables(Bucket):
     potential_transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
     cell_length: ArrayFloat32
     water_depth_in_field: ArrayFloat32
-    slope: ArrayFloat32
+    slope_m_per_m: ArrayFloat32
     cover: ArrayFloat32
     plant_height: ArrayFloat32
     no_erosion: ArrayBool
@@ -627,6 +627,7 @@ class HRUVariables(Bucket):
     wetting_front_suction_head_m: ArrayFloat32
     wetting_front_moisture_deficit: ArrayFloat32
     green_ampt_active_layer_idx: ArrayInt32
+    hillslope_length_m: ArrayFloat32
 
 
 class HRUs(BaseVariables):

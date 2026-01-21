@@ -40,6 +40,7 @@ from .soil import (
     add_water_to_topwater_and_evaporate_open_water,
     get_bubbling_pressure,
     get_heat_capacity_solid_fraction,
+    get_interflow,
     get_pore_size_index_brakensiek,
     get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
@@ -58,6 +59,8 @@ if TYPE_CHECKING:
 @njit(parallel=True, cache=True)
 def land_surface_model(
     land_use_type: ArrayInt32,
+    slope_m_per_m: ArrayFloat32,
+    hillslope_length_m: ArrayFloat32,
     w: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     wres: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     wwp: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
@@ -88,6 +91,7 @@ def land_surface_model(
     crop_map: ArrayInt32,
     actual_irrigation_consumption_m: ArrayFloat32,
     capillar_rise_m: ArrayFloat32,
+    groundwater_toplayer_conductivity_m_per_day: ArrayFloat32,
     saturated_hydraulic_conductivity_m_per_s: ArrayFloat32,
     wetting_front_depth_m: ArrayFloat32,
     wetting_front_suction_head_m: ArrayFloat32,
@@ -99,6 +103,7 @@ def land_surface_model(
     natural_crop_groups: ArrayFloat32,
     crop_group_number_per_group: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
+    interflow_multiplier: np.float32,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -130,6 +135,8 @@ def land_surface_model(
 
     Args:
         land_use_type: Land use type of the hydrological response unit.
+        slope_m_per_m: Slope of the hydrological response unit in m/m.
+        hillslope_length_m: Hillslope length of the hydrological response unit in m.
         w: Current soil moisture content [m3/m3].
         wres: Soil moisture content at residual [m3/m3].
         wwp: Wilting point soil moisture content [m3/m3].
@@ -167,12 +174,14 @@ def land_surface_model(
         wetting_front_suction_head_m: Wetting front suction head [m].
         wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
         green_ampt_active_layer_idx: Index of the active soil layer for Green-Ampt infiltration.
+        groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/s.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
         bubbling_pressure_cm: Bubbling pressure in cm.
         frost_index: Frost index. TODO: Add unit and description.
         natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
         crop_group_number_per_group: Crop group numbers for each crop type.
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
+        interflow_multiplier: Calibration factor for interflow calculation.
 
     Returns:
         Tuple of:
@@ -199,6 +208,10 @@ def land_surface_model(
     saturated_hydraulic_conductivity_m_per_hour = (
         saturated_hydraulic_conductivity_m_per_s
     ) * np.float32(3600.0)
+
+    groundwater_toplayer_conductivity_m_per_hour = (
+        groundwater_toplayer_conductivity_m_per_day
+    ) / np.float32(24.0)
 
     runoff_m = np.zeros_like(pr_kg_per_m2_per_s)
     interflow_m = np.zeros_like(pr_kg_per_m2_per_s)
@@ -431,6 +444,10 @@ def land_surface_model(
             flux: np.float32 = unsaturated_hydraulic_conductivity_m_per_hour * (
                 capillar_rise_m[i] <= np.float32(0)
             )
+            # Limit flux by the saturated hydraulic conductivity of groundwater top layer
+            flux = min(flux, groundwater_toplayer_conductivity_m_per_hour[i])
+
+            # Limit flux by available water in the bottom layer
             available_water_source: np.float32 = (
                 w[bottom_layer, i] - wres[bottom_layer, i]
             )
@@ -438,6 +455,24 @@ def land_surface_model(
             w[bottom_layer, i] -= flux
             w[bottom_layer, i] = max(w[bottom_layer, i], wres[bottom_layer, i])
             groundwater_recharge_m[i] += flux
+
+            # Calculate interflow from bottom layer
+            interflow_cell_hour: np.float32 = get_interflow(
+                w=w[bottom_layer, i],
+                wfc=wfc[bottom_layer, i],
+                ws=ws[bottom_layer, i],
+                soil_layer_height_m=soil_layer_height[bottom_layer, i],
+                saturated_hydraulic_conductivity_m_per_hour=saturated_hydraulic_conductivity_m_per_hour[
+                    bottom_layer, i
+                ],
+                slope_m_per_m=slope_m_per_m[i],
+                hillslope_length_m=hillslope_length_m[i],
+                interflow_multiplier=interflow_multiplier,
+            )
+
+            interflow_m[hour, i] += interflow_cell_hour
+            w[bottom_layer, i] -= interflow_cell_hour
+            w[bottom_layer, i] = max(w[bottom_layer, i], wres[bottom_layer, i])
 
             psi_layer_below = psi
             unsaturated_hydraulic_conductivity_layer_below = (
@@ -530,6 +565,24 @@ def land_surface_model(
                     unsaturated_hydraulic_conductivity_m_per_hour
                 )
 
+                # Calculate interflow from this layer
+                interflow_cell_hour: np.float32 = get_interflow(
+                    w=w[layer, i],
+                    wfc=wfc[layer, i],
+                    ws=ws[layer, i],
+                    soil_layer_height_m=soil_layer_height[layer, i],
+                    saturated_hydraulic_conductivity_m_per_hour=saturated_hydraulic_conductivity_m_per_hour[
+                        layer, i
+                    ],
+                    slope_m_per_m=slope_m_per_m[i],
+                    hillslope_length_m=hillslope_length_m[i],
+                    interflow_multiplier=interflow_multiplier,
+                )
+
+                interflow_m[hour, i] += interflow_cell_hour
+                w[layer, i] -= interflow_cell_hour
+                w[layer, i] = max(w[layer, i], wres[layer, i])
+
             # soil moisture is updated in place
             transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
                 soil_is_frozen=soil_is_frozen,
@@ -571,6 +624,7 @@ def land_surface_model(
     # some of the above calculations for non-bio land use types will lead to NaNs
     # but these can be safely converted to zeros
     groundwater_recharge_m = np.nan_to_num(groundwater_recharge_m)
+    interflow_m = np.nan_to_num(interflow_m)
     bare_soil_evaporation = np.nan_to_num(bare_soil_evaporation)
     transpiration_m = np.nan_to_num(transpiration_m)
     potential_transpiration_m = np.nan_to_num(potential_transpiration_m)
@@ -672,6 +726,17 @@ class LandSurface(Module):
 
         self.HRU.var.arno_shape_parameter = self.HRU.full_compressed(
             0.0, dtype=np.float32
+        )
+
+        self.HRU.var.slope_m_per_m = self.hydrology.to_HRU(
+            data=self.hydrology.grid.load(
+                self.model.files["grid"]["landsurface/slope"]
+            ),
+            fn=None,
+        )
+
+        self.HRU.var.hillslope_length_m = self.hydrology.to_HRU(
+            data=self.grid.var.cell_area**0.5, fn=None
         )
 
         store = zarr.storage.LocalStore(
@@ -1090,6 +1155,9 @@ class LandSurface(Module):
             transpiration_m,
             potential_transpiration_m,
         ) = land_surface_model(
+            land_use_type=self.HRU.var.land_use_type,
+            slope_m_per_m=self.HRU.var.slope_m_per_m,
+            hillslope_length_m=self.HRU.var.hillslope_length_m,
             w=self.HRU.var.w,
             wres=self.HRU.var.wres,
             wwp=self.HRU.var.wwp,
@@ -1100,7 +1168,6 @@ class LandSurface(Module):
             delta_z=delta_z,
             soil_layer_height=self.HRU.var.soil_layer_height,
             root_depth_m=root_depth_m,
-            land_use_type=self.HRU.var.land_use_type,
             topwater_m=self.HRU.var.topwater_m,
             arno_shape_parameter=self.HRU.var.arno_shape_parameter,
             snow_water_equivalent_m=self.HRU.var.snow_water_equivalent_m,
@@ -1142,6 +1209,10 @@ class LandSurface(Module):
             wetting_front_suction_head_m=self.HRU.var.wetting_front_suction_head_m,
             wetting_front_moisture_deficit=self.HRU.var.wetting_front_moisture_deficit,
             green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
+            groundwater_toplayer_conductivity_m_per_day=self.hydrology.to_HRU(
+                data=self.grid.var.groundwater_hydraulic_conductivity[0],
+                fn=None,  # the top layer is the first groundwater layer
+            ),
             lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
             bubbing_pressure_cm=self.HRU.var.bubbling_pressure_cm,
             frost_index=self.HRU.var.frost_index,
@@ -1150,9 +1221,10 @@ class LandSurface(Module):
                 "crop_group_number"
             ].values.astype(np.float32),
             minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
+            interflow_multiplier=self.model.config["parameters"][
+                "interflow_multiplier"
+            ],
         )
-
-        assert interflow_m.sum() == 0.0, "Interflow is not implemented yet."
 
         if not balance_check(
             name="land surface 1",

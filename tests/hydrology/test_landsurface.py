@@ -130,7 +130,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         ],
         dtype=np.float32,
     )
-    bubbing_pressure_cm_data = np.array(
+    bubbling_pressure_cm_data = np.array(
         [
             17.230770111083984,
             18.913177490234375,
@@ -426,6 +426,9 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     flt = np.float64 if asfloat64 else np.float32
 
     root_depth_m = np.array([root_depth_m_data], dtype=flt)
+    slope_m_per_m = np.array([0.01], dtype=flt)
+    hillslope_length_m = np.array([100.0], dtype=flt)
+    groundwater_toplayer_conductivity_m_per_day = np.array([0.0001], dtype=flt)
     topwater_m = np.array([topwater_m_data], dtype=flt)
     snow_water_equivalent_m = np.array([snow_water_equivalent_m_data], dtype=flt)
     liquid_water_in_snow_m = np.array([liquid_water_in_snow_m_data], dtype=flt)
@@ -458,7 +461,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     lambda_pore_size_distribution = lambda_pore_size_distribution_data.reshape(
         -1, 1
     ).astype(flt)
-    bubbing_pressure_cm = bubbing_pressure_cm_data.reshape(-1, 1).astype(flt)
+    bubbling_pressure_cm = bubbling_pressure_cm_data.reshape(-1, 1).astype(flt)
     soil_layer_height = soil_layer_height_data.reshape(-1, 1).astype(flt)
 
     # Time series: add cell dimension and set dtype
@@ -474,6 +477,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     # Scalars by dtype
     CO2_ppm = flt(CO2_ppm_data)
     minimum_effective_root_depth_m = flt(minimum_effective_root_depth_m_data)
+    interflow_multiplier = flt(1.0)
     crop_group_number_per_group = crop_group_number_per_group_data.astype(flt)
 
     soil_temperature_C = np.full_like(w, -5.0)  # Assume frozen/cold
@@ -489,6 +493,8 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     # Call the land surface model
     results = land_surface_model(
         land_use_type=land_use_type,
+        slope_m_per_m=slope_m_per_m,
+        hillslope_length_m=hillslope_length_m,
         w=w,
         wres=wres,
         wwp=wwp,
@@ -519,17 +525,19 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         crop_map=crop_map,
         actual_irrigation_consumption_m=actual_irrigation_consumption_m,
         capillar_rise_m=capillar_rise_m,
+        groundwater_toplayer_conductivity_m_per_day=groundwater_toplayer_conductivity_m_per_day,
         saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s,
         wetting_front_depth_m=wetting_front_depth_m,
         wetting_front_suction_head_m=wetting_front_suction_head_m,
         wetting_front_moisture_deficit=wetting_front_moisture_deficit,
         lambda_pore_size_distribution=lambda_pore_size_distribution,
-        bubbing_pressure_cm=bubbing_pressure_cm,
+        bubbling_pressure_cm=bubbling_pressure_cm,
         frost_index=frost_index,
         natural_crop_groups=natural_crop_groups,
         crop_group_number_per_group=crop_group_number_per_group,
         minimum_effective_root_depth_m=minimum_effective_root_depth_m,
         green_ampt_active_layer_idx=green_ampt_active_layer_idx,
+        interflow_multiplier=interflow_multiplier,
     )
 
     # Unpack the results

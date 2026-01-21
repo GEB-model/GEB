@@ -17,6 +17,8 @@
 - Add initial soil temperature. Now still simplified but better than having no soil temperature.
 - Includes soil suction into the model using an approximation of the Green-Ampt equation.
 - Use Green-Ampt rather than VIC for infiltration.
+- Implement interflow
+- Limit drainage to groundwater to conductivity of groundwater top layer
 
 To support this version:
 
