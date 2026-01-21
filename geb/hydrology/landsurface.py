@@ -99,7 +99,6 @@ def land_surface_model(
     green_ampt_active_layer_idx: ArrayInt32,
     lambda_pore_size_distribution: ArrayFloat32,
     bubbling_pressure_cm: ArrayFloat32,
-    frost_index: ArrayFloat32,
     natural_crop_groups: ArrayFloat32,
     crop_group_number_per_group: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
@@ -177,7 +176,6 @@ def land_surface_model(
         groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
         bubbling_pressure_cm: Bubbling pressure in cm.
-        frost_index: Frost index. TODO: Add unit and description.
         natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
         crop_group_number_per_group: Crop group numbers for each crop type.
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
@@ -1129,10 +1127,6 @@ class LandSurface(Module):
                 "Capillary rise is not implemented in the land surface model yet."
             )
 
-        self.HRU.var.frost_index = np.full_like(
-            self.HRU.var.topwater_m, np.float32(0.0)
-        )
-
         # TODO: pre-compute this once only
         delta_z = (
             self.HRU.var.soil_layer_height[:-1, :]
@@ -1218,8 +1212,7 @@ class LandSurface(Module):
                 fn=None,  # the top layer is the first groundwater layer
             ),
             lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-            bubbing_pressure_cm=self.HRU.var.bubbling_pressure_cm,
-            frost_index=self.HRU.var.frost_index,
+            bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
             natural_crop_groups=self.HRU.var.natural_crop_groups,
             crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
                 "crop_group_number"
@@ -1300,7 +1293,6 @@ class LandSurface(Module):
                 saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
                 lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
                 bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
-                frost_index=self.HRU.var.frost_index,
                 natural_crop_groups=self.HRU.var.natural_crop_groups,
                 crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
                     "crop_group_number"
