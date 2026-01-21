@@ -144,6 +144,7 @@ class Households(AgentBaseClass):
             self.load_flood_maps()
             self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
             self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
+            self.adaptation_decisions = []  # Store adaptation decisions here
 
         self.load_objects()
         self.load_max_damage_values()
@@ -274,24 +275,41 @@ class Households(AgentBaseClass):
         self.buildings["flooded"].fillna(False, inplace=True)
 
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
-        """Update the floodproofing status of buildings based on adapting households."""
+        """Update the floodproofing status (building_unprotected, building_dryproofed or building_wetproofed) of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
-        building_id_of_household = pd.DataFrame(
-            np.unique(self.var.building_id_of_household.data[household_adapting])
-        ).dropna()
-        building_id_of_household = building_id_of_household.astype(int).astype(str)
-        building_id_of_household["flood_proofed"] = True
-        building_id_of_household = building_id_of_household.set_index(0)
-
-        # Add/Update the flood_proofed status in buildings based on OSM way IDs
-        self.buildings["flood_proofed"] = (
-            self.buildings["id"]
-            .astype(str)
-            .map(building_id_of_household["flood_proofed"])
+        households_building_decisions = pd.DataFrame(
+            {
+                "building_id": self.var.building_id_of_household.data,
+                "adaptation_decision": household_adapting,
+            }
         )
 
-        # Replace NaNs with False (i.e., buildings not in the adapting households list)
-        self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(False)
+        households_building_decisions["building_id"] = (
+            households_building_decisions["building_id"].astype(int).astype(str)
+        )
+
+        building_adaptation_status = households_building_decisions.groupby(
+            "building_id"
+        )["adaptation_decision"].max()
+        # TODO: random decision, if several households in this building made different choices, now taking the maximum (most protective). However, we need a better way to deal with this.
+
+        # Add/Update the flood_proofed status in buildings based on OSM way IDs
+        self.buildings["adaptation_type"] = (
+            self.buildings["id"]
+            .astype(str)
+            .map(building_adaptation_status)
+            .fillna(0)
+            .astype(int)
+        )
+
+        # Store detailed status in one column
+        self.buildings["flood_proofed"] = self.buildings["adaptation_type"].map(
+            {
+                0: "building_unprotected",
+                1: "building_dryproofed",
+                2: "building_wetproofed",
+            }
+        )
 
     def assign_household_attributes(self) -> None:
         """Household locations are already sampled from population map in GEBModel.setup_population().
@@ -358,6 +376,9 @@ class Households(AgentBaseClass):
 
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
+        self.var.adaptation_type = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )  # 0=not adapted, 1=dry-proofed, 2=wet-proofed
 
         # initiate array for warning state [0 = not warned, 1 = warned]
         self.var.warning_reached = DynamicArray(
@@ -477,6 +498,10 @@ class Households(AgentBaseClass):
         household_points_copy = household_points_copy.set_geometry("geometry_y")
         household_points_copy = household_points_copy.to_crs(projected_crs)
 
+        household_points_copy = household_points_copy[
+            :-2
+        ]  # TODO: temporary fix for error in array size
+
         # Calculate circumference (perimeter) of each building polygon
         household_points_copy["building_circumference"] = household_points_copy[
             "geometry_y"
@@ -509,7 +534,7 @@ class Households(AgentBaseClass):
         # Dry floodproofing costs eur 2024 per meter of building circumference, article Aerts (2018)
         adaptation_costs_dry_proofing = (
             901 * self.var.household_building_circumference.data
-        ).astype(np.int64)  # dry floodproofing
+        ).astype(np.int64)
         self.var.adaptation_costs_dryproofing = DynamicArray(
             adaptation_costs_dry_proofing, max_n=self.max_n
         )
@@ -1692,10 +1717,12 @@ class Households(AgentBaseClass):
         self.update_risk_perceptions()
 
         # calculate damages for adapting and not adapting households based on building footprints
-        damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
+        damages_do_not_adapt, damages_adapt_dryproofing, damages_adapt_wetproofing = (
+            self.calculate_building_flood_damages()
+        )
 
         # calculate expected utilities
-        EU_adapt = self.decision_module.calcEU_adapt_flood(
+        EU_adapt_dryproofing = self.decision_module.calcEU_adapt_flood(
             geom_id="NoID",
             n_agents=self.n,
             wealth=self.var.wealth.data,
@@ -1704,8 +1731,27 @@ class Households(AgentBaseClass):
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
-            expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data,
+            expected_damages_adapt=damages_adapt_dryproofing,
+            adaptation_costs=self.var.adaptation_costs_dryproofing.data,
+            time_adapted=self.var.time_adapted.data,
+            loan_duration=20,
+            p_floods=1 / self.return_periods,
+            T=35,
+            r=0.03,
+            sigma=1,
+        )
+
+        EU_adapt_wetproofing = self.decision_module.calcEU_adapt_flood(
+            geom_id="NoID",
+            n_agents=self.n,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
+            expendature_cap=1,
+            amenity_value=self.var.amenity_value.data,
+            amenity_weight=1,
+            risk_perception=self.var.risk_perception.data,
+            expected_damages_adapt=damages_adapt_wetproofing,
+            adaptation_costs=self.var.adaptation_costs_wetproofing.data,
             time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
@@ -1731,15 +1777,52 @@ class Households(AgentBaseClass):
         )
 
         # execute strategy
-        household_adapting = np.where(EU_adapt > EU_do_not_adapt)[0]
-        self.var.adapted[household_adapting] = 1
-        self.var.time_adapted[household_adapting] += 1
+        EU_all = (
+            np.vstack([EU_do_not_adapt, EU_adapt_dryproofing, EU_adapt_wetproofing]).T
+        )  # here we make an array that stores the EU of all three options per household
+
+        best_choice_per_household = np.argmax(
+            EU_all, axis=1
+        )  # get index of best choice per household (0 = no adaptation, 1 = dry proofing, 2 = wet proofing)
+
+        self.var.adapted[:] = (
+            0  # reset adapted status, because households may abandon adaptation measures
+        )
+
+        self.var.time_adapted[best_choice_per_household == 0] = (
+            0  # reset time adapted for those who choose not to adapt
+        )
+
+        self.var.time_adapted[best_choice_per_household != 0] += (
+            1  # increase time adapted for those who choose to adapt (either dry or wet proofing)
+        )
+
+        self.var.adapted[best_choice_per_household != 0] = (
+            1  # store adapted households (either dry or wet proofing)
+        )
+
+        self.var.adaptation_type[:] = (
+            best_choice_per_household  #  store which measure they took, 0 = no adaptation, 1 = dry proofing, 2 = wet proofing
+        )
 
         # update column in buildings
-        self.update_building_adaptation_status(household_adapting)
+        self.update_building_adaptation_status(self.var.adaptation_type)
 
-        # print percentage of households that adapted
-        print(f"N households that adapted: {len(household_adapting)}")
+        # print number of households per adaptation option
+        print(f"N households dryproofing: {np.sum(self.var.adaptation_type == 1)}")
+        print(f"N households wetproofing: {np.sum(self.var.adaptation_type == 2)}")
+        print(f"N households not adapting: {np.sum(self.var.adaptation_type == 0)}")
+
+        df = pd.DataFrame(
+            {
+                "time": [self.model.current_time] * len(self.var.household_points),
+                "x": self.var.household_points.geometry.x,
+                "y": self.var.household_points.geometry.y,
+                "adaptation_type": self.var.adaptation_type.data,
+            }
+        )
+
+        self.adaptation_decisions.append(df)
 
     def load_objects(self) -> None:
         """Load buildings, roads, and rail geometries from model files."""
@@ -1902,6 +1985,7 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "agriculture"}
         )
 
+        # Load normal building curves (for unprotected buildings)
         self.buildings_structure_curve = pd.read_parquet(
             self.model.files["table"][
                 "damage_parameters/flood/buildings/structure/curve"
@@ -1909,6 +1993,14 @@ class Households(AgentBaseClass):
         )
         self.buildings_structure_curve.set_index("severity", inplace=True)
         self.buildings_structure_curve = self.buildings_structure_curve.rename(
+            columns={"damage_ratio": "building_unprotected"}
+        )
+
+        self.buildings_content_curve = pd.read_parquet(
+            self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
+        )
+        self.buildings_content_curve.set_index("severity", inplace=True)
+        self.buildings_content_curve = self.buildings_content_curve.rename(
             columns={"damage_ratio": "building_unprotected"}
         )
 
@@ -1960,7 +2052,23 @@ class Households(AgentBaseClass):
             )
         )
 
-        # TODO: Need to adjust the vulnerability curves
+        # add dry and wet proofed curves to the main curves dataframe
+        self.buildings_structure_curve["building_dryproofed"] = (
+            self.buildings_structure_curve_dryproofed["building_dryproofed"]
+        )
+        self.buildings_structure_curve["building_wetproofed"] = (
+            self.buildings_structure_curve_wetproofed["building_wetproofed"]
+        )
+
+        self.buildings_content_curve["building_dryproofed"] = (
+            self.buildings_content_curve_dryproofed["building_dryproofed"]
+        )
+        self.buildings_content_curve["building_wetproofed"] = (
+            self.buildings_content_curve_wetproofed["building_wetproofed"]
+        )
+
+        # Create additional curves for different emergency adaptation measures
+        #  TODO: Need to adjust the vulnerability curves
         # create another column (curve) in the buildings structure curve for
         # protected buildings with sandbags
         self.buildings_structure_curve["building_with_sandbags"] = (
@@ -1984,14 +2092,6 @@ class Households(AgentBaseClass):
             self.buildings_structure_curve["building_unprotected"] * 0.85
         )
         self.buildings_structure_curve["building_flood_proofed"].loc[0:1] = 0.0
-
-        self.buildings_content_curve = pd.read_parquet(
-            self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
-        )
-        self.buildings_content_curve.set_index("severity", inplace=True)
-        self.buildings_content_curve = self.buildings_content_curve.rename(
-            columns={"damage_ratio": "building_unprotected"}
-        )
 
         # create another column (curve) in the buildings content curve for protected buildings
         self.buildings_content_curve["building_protected"] = (
@@ -2077,7 +2177,7 @@ class Households(AgentBaseClass):
             agent_df: Pandas dataframe that contains the open building map building id assigned to each agent.
             buildings_with_damages: Pandas dataframe constructed by the vector scanner that contains the damages for each building.
         Returns:
-            Tuple[np.ndarray, np.ndarray]: A tuple containing damage arrays for (unprotected buildings, flood-proofed buildings).
+            Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing damage arrays for (unprotected buildings, dryproofed buildings, wetproofed buildings).
         """
         merged = agent_df.merge(
             buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
@@ -2085,9 +2185,14 @@ class Households(AgentBaseClass):
             how="left",
         ).fillna(0)
         damages_do_not_adapt = merged["damages"].to_numpy()
-        damages_adapt = merged["damages_flood_proofed"].to_numpy()
+        damages_adapt_dryproofing = merged["damages_dryproofed"].to_numpy()
+        damages_adapt_wetproofing = merged["damages_wetproofed"].to_numpy()
 
-        return damages_do_not_adapt, damages_adapt
+        return (
+            damages_do_not_adapt,
+            damages_adapt_dryproofing,
+            damages_adapt_wetproofing,
+        )
 
     def calculate_building_flood_damages(
         self, verbose: bool = True, export_building_damages: bool = False
@@ -2104,7 +2209,12 @@ class Households(AgentBaseClass):
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
         """
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
-        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+        damages_adapt_dryproofing = np.zeros(
+            (self.return_periods.size, self.n), np.float32
+        )
+        damages_adapt_wetproofing = np.zeros(
+            (self.return_periods.size, self.n), np.float32
+        )
 
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
             self.flood_maps[self.return_periods[0]].rio.crs
@@ -2127,10 +2237,14 @@ class Households(AgentBaseClass):
             building_multicurve = buildings.copy()
             multi_curves = {
                 "damages": self.buildings_structure_curve["building_unprotected"],
-                "damages_flood_proofed": self.buildings_structure_curve[
-                    "building_flood_proofed"
+                "damages_dryproofed": self.buildings_structure_curve[
+                    "building_dryproofed"
+                ],
+                "damages_wetproofed": self.buildings_structure_curve[
+                    "building_wetproofed"
                 ],
             }
+
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
@@ -2151,10 +2265,14 @@ class Households(AgentBaseClass):
                     / f"building_damages_rp{return_period}_{self.model.current_time.year}.parquet"
                 )
             building_multicurve = building_multicurve[
-                ["id", "damages", "damages_flood_proofed"]
+                ["id", "damages", "damages_dryproofed", "damages_wetproofed"]
             ]
             # merged["damage"] is aligned with agents
-            damages_do_not_adapt[i], damages_adapt[i] = self.assign_damages_to_agents(
+            (
+                damages_do_not_adapt[i],
+                damages_adapt_dryproofing[i],
+                damages_adapt_wetproofing[i],
+            ) = self.assign_damages_to_agents(
                 agent_df,
                 building_multicurve,
             )
@@ -2163,9 +2281,16 @@ class Households(AgentBaseClass):
                     f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
                 )
                 print(
-                    f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
+                    f"Damages adapt dryproofing rp{return_period}: {round(damages_adapt_dryproofing[i].sum() / 1e6)} million"
                 )
-        return damages_do_not_adapt, damages_adapt
+                print(
+                    f"Damages adapt wetproofing rp{return_period}: {round(damages_adapt_wetproofing[i].sum() / 1e6)} million"
+                )
+        return (
+            damages_do_not_adapt,
+            damages_adapt_dryproofing,
+            damages_adapt_wetproofing,
+        )
 
     def update_households_geodataframe_w_warning_variables(
         self, date_time: datetime
@@ -2331,17 +2456,13 @@ class Households(AgentBaseClass):
 
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
-            buildings["object_type"] = np.where(
-                buildings["flood_proofed"],
-                "building_flood_proofed",
-                "building_unprotected",
-            )
+            buildings["object_type"] = buildings[
+                "flood_proofed"
+            ]  # object_type is equal to the flood proofed status (building_unprotected, building_dryproofed, building_wetproofed)
 
-            buildings_centroid["object_type"] = np.where(
-                buildings_centroid["flood_proofed"],
-                "building_protected",
-                "building_unprotected",
-            )
+            buildings_centroid["object_type"] = buildings_centroid[
+                "flood_proofed"
+            ]  # object_type is equal to the flood proofed status (building_unprotected, building_dryproofed, building_wetproofed)
 
         else:
             household_points["protect_building"] = False
@@ -2590,7 +2711,7 @@ class Households(AgentBaseClass):
                     )
 
                     out_path: Path = (
-                        Path(self.model.output_folder) / "risk_perceptions.gpkg"
+                        Path(self.model.output_folder) / "risk_perceptions_new.gpkg"
                     )
                     print(f"saved risk perception here: {out_path}")
                     gdf.to_file(out_path, layer="perceptions", driver="GPKG")
@@ -2599,10 +2720,19 @@ class Households(AgentBaseClass):
                         self.flood_risk_perceptions_statistics
                     )
                     out_path: Path = (
-                        Path(self.model.output_folder) / "risk_perception_stats.csv"
+                        Path(self.model.output_folder) / "risk_perception_stats_new.csv"
                     )
                     df_stats.to_csv(out_path, index=False)
                     print(f"Saved risk perception statistics to {out_path}")
+
+                    df_adaptation: pd.DataFrame = pd.DataFrame(
+                        self.adaptation_decisions
+                    )
+                    out_path: Path = (
+                        Path(self.model.output_folder) / "adaptation_decisions_new.csv"
+                    )
+                    df_adaptation.to_csv(out_path, index=False)
+                    print(f"Saved adaptation decisions to {out_path}")
 
             else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
                 if (
