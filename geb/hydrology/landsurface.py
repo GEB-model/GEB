@@ -174,7 +174,7 @@ def land_surface_model(
         wetting_front_suction_head_m: Wetting front suction head [m].
         wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
         green_ampt_active_layer_idx: Index of the active soil layer for Green-Ampt infiltration.
-        groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/s.
+        groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
         bubbling_pressure_cm: Bubbling pressure in cm.
         frost_index: Frost index. TODO: Add unit and description.
@@ -1214,7 +1214,7 @@ class LandSurface(Module):
             wetting_front_moisture_deficit=self.HRU.var.wetting_front_moisture_deficit,
             green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
             groundwater_toplayer_conductivity_m_per_day=self.hydrology.to_HRU(
-                data=self.grid.var.groundwater_hydraulic_conductivity[0],
+                data=self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0],
                 fn=None,  # the top layer is the first groundwater layer
             ),
             lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,

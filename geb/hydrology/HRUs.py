@@ -234,7 +234,7 @@ class GridVariables(Bucket):
     layer_boundary_elevation: TwoDArrayFloat32
     elevation: ArrayFloat32
     specific_yield: TwoDArrayFloat32
-    groundwater_hydraulic_conductivity: TwoDArrayFloat32
+    groundwater_hydraulic_conductivity_m_per_day: TwoDArrayFloat32
     upstream_area: ArrayFloat32
     upstream_area_n_cells: ArrayInt32
     river_mannings: ArrayFloat32
