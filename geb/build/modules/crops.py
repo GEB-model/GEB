@@ -705,17 +705,6 @@ class Crops(BuildModelBase):
         self.set_params(parsed_crop_prices, name="crops/cultivation_costs")
 
     @build_method(depends_on=[])
-    def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:
-        """This method is removed. You can remove it entirely.
-
-        Args:
-            resolution: Resolution tag for plotting/output naming.
-
-        Raises:
-            ValueError: This method is removed.
-        """
-        raise ValueError("This method is removed. You can remove it entirely.")
-
     def get_crop_area_fractions(
         self, resolution: str = "5-arcminute"
     ) -> tuple[xr.DataArray, xr.DataArray]:

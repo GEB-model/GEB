@@ -580,6 +580,7 @@ class Households(AgentBaseClass):
         self.var.actions_taken = DynamicArray(
             np.zeros((self.n, len(self.var.possible_measures)), dtype=bool),
             max_n=self.max_n,
+            extra_dims_names=["measure_type"],
         )
 
         # initiate array for warning level [0 = no warning, 1 = measures, 2 = evacuate]
@@ -590,7 +591,9 @@ class Households(AgentBaseClass):
         # initiate array for storing the trigger of the warning
         self.var.possible_warning_triggers = ["critical_infrastructure", "water_levels"]
         self.var.warning_trigger = DynamicArray(
-            np.zeros((self.n, len(self.var.possible_warning_triggers)), dtype=bool)
+            np.zeros((self.n, len(self.var.possible_warning_triggers)), dtype=bool),
+            extra_dims_names=["trigger_type"],
+            max_n=self.max_n,
         )
 
         # initiate array for response probability (between 0 and 1)
@@ -609,13 +612,19 @@ class Households(AgentBaseClass):
             "evacuate",
         ]
         self.var.recommended_measures = DynamicArray(
-            np.zeros((self.n, len(self.var.possible_measures_to_recommend)), dtype=bool)
+            np.zeros(
+                (self.n, len(self.var.possible_measures_to_recommend)), dtype=bool
+            ),
+            extra_dims_names=["measure_type"],
+            max_n=self.max_n,
         )
 
         # initiate array for storing the actions taken by the household
         self.var.possible_actions = ["elevate possessions", "evacuate"]
         self.var.actions_taken = DynamicArray(
-            np.zeros((self.n, len(self.var.possible_actions)), dtype=bool)
+            np.zeros((self.n, len(self.var.possible_actions)), dtype=bool),
+            extra_dims_names=["measure_type"],
+            max_n=self.max_n,
         )
 
         # initiate array with risk perception [dummy data for now]
@@ -3217,22 +3226,11 @@ class Households(AgentBaseClass):
                 "building_protected"
             )
 
-                buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-                buildings_centroid["object_type"] = buildings_centroid[
-                    "flood_proofed"
-                ].apply(lambda x: "building_protected" if x else "building_unprotected")
-                buildings_centroid["maximum_damage"] = (
-                    self.var.max_dam_buildings_content
-                )
-            else:
-                # Adaptation is disabled: all buildings are unprotected
-                buildings["object_type"] = "building_unprotected"
-
-                buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-                buildings_centroid["object_type"] = "building_unprotected"
-                buildings_centroid["maximum_damage"] = (
-                    self.var.max_dam_buildings_content
-                )
+            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+            buildings_centroid["object_type"] = buildings_centroid[
+                "protect_building"
+            ].apply(lambda x: "building_protected" if x else "building_unprotected")
+            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         # Create the folder to save damage maps if it doesn't exist
         damage_folder: Path = self.model.output_folder / "damage_maps"

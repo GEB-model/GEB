@@ -1227,7 +1227,6 @@ dependencies = [
     { name = "kaleido" },
     { name = "matplotlib" },
     { name = "mcp" },
-    { name = "matplotlib" },
     { name = "networkx" },
     { name = "numba" },
     { name = "numpy" },

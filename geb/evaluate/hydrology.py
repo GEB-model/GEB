@@ -1608,17 +1608,16 @@ class Hydrology:
                 extra_clip_region = extra_clip_region.to_crs(region.crs)
                 extra_clip_region_buffer = extra_clip_region.buffer(160)
 
-                sim_extra_clipped = sim_region.rio.clip(
+                sim_extra_clipped = sim_no_rivers.rio.clip(
                     extra_clip_region_buffer.geometry.values,
                     extra_clip_region_buffer.crs,
                 )
-                clipped_out = (sim_region > 0.15) & (sim_extra_clipped.isnull())
-                clipped_out_raster = sim_region.where(clipped_out)
+                clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
+                clipped_out_raster = sim_no_rivers.where(clipped_out)
             else:
                 # If no extra validation region, skip clipping
-                sim_extra_clipped = sim_region
-                clipped_out_raster = xr.full_like(sim_region, np.nan)
-
+                sim_extra_clipped = sim_no_rivers
+                clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
             # Mask water depth values and handle probability maps
             hmin: float = self.config["floods"]["minimum_flood_depth"]
 
@@ -2400,10 +2399,11 @@ class Hydrology:
                 flood_maps_folder = self.model.output_folder / "flood_maps"
                 map_type_description = "deterministic flood maps"
 
-            # Create event-specific folder
-            if not self.model.config["general"]["forecasts"]["use"]:
-                event_folder = eval_hydrodynamics_folders / event_name
-                event_folder.mkdir(parents=True, exist_ok=True)
+            # Create event-specific folder (default). If forecasts are used,
+            # forecast-specific subfolders will be created later. Ensure
+            # `event_folder` is always defined to avoid UnboundLocalError.
+            event_folder = eval_hydrodynamics_folders / event_name
+            event_folder.mkdir(parents=True, exist_ok=True)
 
             # check if flood map folder exists
             if not flood_maps_folder.exists():
@@ -2446,42 +2446,43 @@ class Hydrology:
             if not self.model.config["general"]["forecasts"]["use"]:
                 print(
                     "Forecasts use is set to false in the config, so no forecasts are included in the evaluation."
-            # Find all flood maps corresponding to the event
-            all_flood_map_files = list(flood_maps_folder.glob("*.zarr"))
+                )
+                # Find all flood maps corresponding to the event
+                all_flood_map_files = list(flood_maps_folder.glob("*.zarr"))
 
-            # Filter flood_map_files for the current event only
-            flood_map_files = []
-            for flood_map_path in all_flood_map_files:
-                parsed = parse_flood_forecast_initialisation(flood_map_path.name)
+                # Filter flood_map_files for the current event only
+                flood_map_files = []
+                for flood_map_path in all_flood_map_files:
+                    parsed = parse_flood_forecast_initialisation(flood_map_path.name)
 
-                # Skip files that do not match the expected format
-                if parsed is None:
-                    continue
+                    # Skip files that do not match the expected format
+                    if parsed is None:
+                        continue
 
-                file_forecast_init, _, _, _, parsed_event_name = parsed
-                # Check if file matches current event
-                if parsed_event_name == event_name:
-                    flood_map_files.append(flood_map_path)
+                    file_forecast_init, _, _, _, parsed_event_name = parsed
+                    # Check if file matches current event
+                    if parsed_event_name == event_name:
+                        flood_map_files.append(flood_map_path)
 
-            print(
-                f"Found {len(flood_map_files)} flood map files for event {event_name}"
-            )
-
-            if len(flood_map_files) == 1:
                 print(
-                    "Only one flood map found, assuming no forecasts were included in the simulation."
+                    f"Found {len(flood_map_files)} flood map files for event {event_name}"
                 )
-                flood_map_name = event_name + ".zarr"
-                flood_map_path = flood_maps_folder / flood_map_name
 
-                metrics = calculate_performance_metrics(
-                    observation=str(obs_file),
-                    flood_map_path=flood_map_path,
-                    output_folder=event_folder,
-                    probability_maps=False,
-                    visualization_type="OSM",
-                )
-                print(f"Successfully evaluated: {flood_map_path.name}")
+                if len(flood_map_files) == 1:
+                    print(
+                        "Only one flood map found, assuming no forecasts were included in the simulation."
+                    )
+                    flood_map_name = event_name + ".zarr"
+                    flood_map_path = flood_maps_folder / flood_map_name
+
+                    metrics = calculate_performance_metrics(
+                        observation=str(obs_file),
+                        flood_map_path=flood_map_path,
+                        output_folder=event_folder,
+                        probability_maps=False,
+                        visualization_type="OSM",
+                    )
+                    print(f"Successfully evaluated: {flood_map_path.name}")
 
             else:
                 print(f"Evaluating flood forecasts using {map_type_description}...")
@@ -2591,7 +2592,7 @@ class Hydrology:
                         event_folder.mkdir(parents=True, exist_ok=True)
 
                         metrics = calculate_performance_metrics(
-                            observation=self.config["floods"]["event_observation_file"],
+                            observation=str(obs_file),
                             flood_map_path=flood_map_path,
                             visualization_type="OSM",
                             output_folder=event_folder,
@@ -2645,9 +2646,7 @@ class Hydrology:
                             event_folder.mkdir(parents=True, exist_ok=True)
 
                             metrics = calculate_performance_metrics(
-                                observation=self.config["floods"][
-                                    "event_observation_file"
-                                ],
+                                observation=str(obs_file),
                                 flood_map_path=flood_map_path,
                                 visualization_type="OSM",
                                 output_folder=event_folder,

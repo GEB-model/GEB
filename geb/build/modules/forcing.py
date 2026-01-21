@@ -1318,7 +1318,7 @@ class Forcing(BuildModelBase):
         """
         xmin, ymin, xmax, ymax = forcing_grid.rio.bounds(recalc=True)
 
-        buffer: float = 0.5
+        buffer: float = 2
         xmin: float = xmin - buffer
         ymin: float = ymin - buffer
         xmax: float = xmax + buffer
