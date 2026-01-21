@@ -575,7 +575,6 @@ class HRUVariables(Bucket):
     liquid_water_in_snow_m: ArrayFloat32
     snow_water_equivalent_m: ArrayFloat32
     topwater_m: ArrayFloat32
-    frost_index: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
     land_use_type: ArrayInt32

@@ -41,7 +41,6 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     crop_map_data = np.int32(-1)
     actual_irrigation_consumption_m_data = np.float32(0.0)
     capillar_rise_m_data = np.float32(-0.0)
-    frost_index_data = np.float32(0.0)
     natural_crop_groups_data = np.float32(3.0)
     w_data = np.array(
         [
@@ -440,7 +439,6 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         [actual_irrigation_consumption_m_data], dtype=flt
     )
     capillar_rise_m = np.array([capillar_rise_m_data], dtype=flt)
-    frost_index = np.array([frost_index_data], dtype=flt)
     natural_crop_groups = np.array([natural_crop_groups_data], dtype=flt)
     arno_shape_parameter = np.array([0.0], dtype=flt)  # not used in this test
     wetting_front_depth_m = np.array([0.0], dtype=flt)
@@ -532,7 +530,6 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         wetting_front_moisture_deficit=wetting_front_moisture_deficit,
         lambda_pore_size_distribution=lambda_pore_size_distribution,
         bubbling_pressure_cm=bubbling_pressure_cm,
-        frost_index=frost_index,
         natural_crop_groups=natural_crop_groups,
         crop_group_number_per_group=crop_group_number_per_group,
         minimum_effective_root_depth_m=minimum_effective_root_depth_m,
