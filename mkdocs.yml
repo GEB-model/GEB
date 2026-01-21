@@ -91,6 +91,11 @@ nav:
     - Configuration: getting_started/configuration.md
     - Building a model: getting_started/building_a_model.md
     - Running the model: getting_started/running.md
+    - Evaluate the model:
+      - Overview: getting_started/evaluation/index.md
+      - Hydrology evaluation: getting_started/evaluation/hydrology.md
+      - Flood evaluation: getting_started/evaluation/flood.md
+    
     - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
   - Model:
