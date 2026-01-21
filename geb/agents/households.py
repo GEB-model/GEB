@@ -1912,6 +1912,54 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "building_unprotected"}
         )
 
+        # load curves for dryproofing
+        self.buildings_structure_curve_dryproofed = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/structure_dryproofing/curve"
+            ]
+        )
+        self.buildings_structure_curve_dryproofed.set_index("severity", inplace=True)
+        self.buildings_structure_curve_dryproofed = (
+            self.buildings_structure_curve_dryproofed.rename(
+                columns={"damage_ratio": "building_dryproofed"}
+            )
+        )
+        self.buildings_content_curve_dryproofed = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/content_dryproofing/curve"
+            ]
+        )
+        self.buildings_content_curve_dryproofed.set_index("severity", inplace=True)
+        self.buildings_content_curve_dryproofed = (
+            self.buildings_content_curve_dryproofed.rename(
+                columns={"damage_ratio": "building_dryproofed"}
+            )
+        )
+
+        # load curves for wetproofing
+        self.buildings_structure_curve_wetproofed = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/structure_wetproofing/curve"
+            ]
+        )
+        self.buildings_structure_curve_wetproofed.set_index("severity", inplace=True)
+        self.buildings_structure_curve_wetproofed = (
+            self.buildings_structure_curve_wetproofed.rename(
+                columns={"damage_ratio": "building_wetproofed"}
+            )
+        )
+        self.buildings_content_curve_wetproofed = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/content_wetproofing/curve"
+            ]
+        )
+        self.buildings_content_curve_wetproofed.set_index("severity", inplace=True)
+        self.buildings_content_curve_wetproofed = (
+            self.buildings_content_curve_wetproofed.rename(
+                columns={"damage_ratio": "building_wetproofed"}
+            )
+        )
+
         # TODO: Need to adjust the vulnerability curves
         # create another column (curve) in the buildings structure curve for
         # protected buildings with sandbags
