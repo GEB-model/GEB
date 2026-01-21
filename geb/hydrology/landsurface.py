@@ -500,6 +500,10 @@ def land_surface_model(
                 # because the Green-Ampt infiltration is handling the water movement in this
                 # region. We effectively "freeze" the redistribution here to let the piston
                 # flow dominate.
+
+                # Important: in the current implementation, this means that no redistribution
+                # occurs in the layer that is the wetting front layer. This is a simplification
+                # that could be improved in future versions.
                 if layer >= green_ampt_active_layer_idx[i]:
                     # Compute flux using Darcy's law. The -1 accounts for gravity.
                     # Positive flux is downwards; see minus sign in the equation, which negates

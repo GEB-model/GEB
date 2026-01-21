@@ -15,7 +15,7 @@ $$ I(t) = K_{sat} t \left( 0.70635 + 0.32415 \sqrt{1 + 9.43456 \frac{S^2}{K_{sat
 Where:
 * $I(t)$ is the cumulative infiltration [$L$].
 * $K_{sat}$ is the saturated hydraulic conductivity [$L/T$].
-* $S^2 = 2 K_{sat} \psi_f \Delta \theta$ is the square of sorptivity [$L^2/T$].
+* $S^2 = 2 K_{sat} \psi_f \Delta \theta$ is the square of sorptivity [$L^2/T$], following the approximation by **Philip (1969)** [@philip1969theory].
 * $\psi_f$ is the wetting front suction head [$L$].
 * $\Delta \theta$ is the moisture deficit [$ - $].
 * $t$ is the time since the start of the infiltration event [$T$].
@@ -38,6 +38,7 @@ The actual infiltration for a timestep is determined by the minimum of:
 3. The available storage in the soil column (up to the wetting front depth or bottom of soil) [$L$].
 
 Any water that does not infiltrate contributes to surface runoff.
+
 ## Interflow
 
 Interflow, or lateral subsurface flow, is the movement of water within the soil profile parallel to the land surface. In GEB, interflow is calculated for each soil layer when the soil moisture content exceeds the field capacity. This "free water" is available to move laterally driven by gravity and the slope of the terrain, and then added to the channel in each grid cell.

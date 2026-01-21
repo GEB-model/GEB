@@ -283,8 +283,8 @@ def calculate_green_ampt_cumulative_infiltration(
 
     Args:
         time: Time since start of infiltration [T].
-        saturated_hydraulic_conductivity_m_per_time_unit: Saturated hydraulic conductivity [L/T].
-        wetting_front_suction_head_m: Wetting front suction head [L].
+        saturated_hydraulic_conductivity_m_per_time_unit: Saturated hydraulic conductivity (K_s) [L/T].
+        wetting_front_suction_head_m: Wetting front suction head (Δθ) [L].
         moisture_deficit: Moisture deficit [-].
         adjust_for_coarse_soils: Whether to apply adjustment for coarse soils. For coarse soils,
             and very long times, the Sageghi et al. formula can be slightly more off than the
@@ -294,12 +294,6 @@ def calculate_green_ampt_cumulative_infiltration(
     Returns:
         Cumulative infiltration amount [L].
     """
-    if time <= np.float32(0.0):
-        return np.float32(0.0)
-
-    if saturated_hydraulic_conductivity_m_per_time_unit <= np.float32(0.0):
-        return np.float32(0.0)
-
     # Darcy limit: if suction or the moisture deficit is zero, there is no
     # capillarity-driven enhancement and Green-Ampt reduces to I = K_s t.
     if wetting_front_suction_head_m <= np.float32(
@@ -307,10 +301,11 @@ def calculate_green_ampt_cumulative_infiltration(
     ) or moisture_deficit <= np.float32(0.0):
         return saturated_hydraulic_conductivity_m_per_time_unit * time
 
-    # Sorptivity follows the standard Green-Ampt early-time approximation:
-    # S^2 = 2 K_s (psi_f Δθ) where psi_f is suction head at the wetting front.
-    # Units: K_s [L/T], psi_f [L] -> S^2 [L^2/T].
-    sorptivity_squared = (
+    # Sorptivity can be calculated as per Philip (1969):
+    # S^2 = 2 K_s * psi * dtheta
+    # Reference: Philip, J.R., 1969. Theory of infiltration. In Advances in hydroscience (Vol. 5, pp. 215-296). Elsevier.
+    # Since the Sadeghi formula uses S^2 directly, we do not need to take the square root.
+    sorptivity_squared: np.float32 = (
         np.float32(2.0)
         * saturated_hydraulic_conductivity_m_per_time_unit
         * wetting_front_suction_head_m
@@ -318,16 +313,16 @@ def calculate_green_ampt_cumulative_infiltration(
     )
 
     # Apply Sadeghi et al. (2024) explicit formula
-    hydraulic_conductivity_times_time = (
+    hydraulic_conductivity_times_time: np.float32 = (
         saturated_hydraulic_conductivity_m_per_time_unit * time
     )
 
-    # term corresponds to S^2 / (Ks^2 * t)
-    sorptivity_time_ratio = sorptivity_squared / (
+    # sorptivity_time_ratio corresponds to S^2 / (Ks^2 * t)
+    sorptivity_time_ratio: np.float32 = sorptivity_squared / (
         saturated_hydraulic_conductivity_m_per_time_unit
         * hydraulic_conductivity_times_time
     )
-    cumulative_infiltration = hydraulic_conductivity_times_time * (
+    cumulative_infiltration: np.float32 = hydraulic_conductivity_times_time * (
         np.float32(0.70635)
         + np.float32(0.32415)
         * np.sqrt(np.float32(1.0) + np.float32(9.43456) * sorptivity_time_ratio)
@@ -337,7 +332,7 @@ def calculate_green_ampt_cumulative_infiltration(
     if adjust_for_coarse_soils and (
         hydraulic_conductivity_times_time / cumulative_infiltration
     ) > np.float32(0.904):
-        cumulative_infiltration = np.float32(
+        cumulative_infiltration: np.float32 = np.float32(
             0.9796
         ) * cumulative_infiltration + np.float32(0.335) * (
             sorptivity_squared / saturated_hydraulic_conductivity_m_per_time_unit
@@ -614,6 +609,8 @@ def infiltration(
     for _ in range(n_substeps):
         # Check if the wetting front has moved into a new layer
         # and if so, update Green-Ampt parameters. Otherwise, keep existing parameters.
+        # note that this assumes that the suction remains stable
+        # as long as the front is within the same layer.
         if green_ampt_active_layer_idx < len(
             soil_layer_height_m
         ) - 1 and wetting_front_depth_m >= current_layer_depth_limit - np.float32(1e-4):
