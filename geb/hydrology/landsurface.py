@@ -1299,7 +1299,7 @@ class LandSurface(Module):
                 capillar_rise_m=capillar_rise_m,
                 saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
                 lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-                bubbing_pressure_cm=self.HRU.var.bubbling_pressure_cm,
+                bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
                 frost_index=self.HRU.var.frost_index,
                 natural_crop_groups=self.HRU.var.natural_crop_groups,
                 crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
