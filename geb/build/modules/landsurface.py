@@ -211,13 +211,16 @@ class LandSurface(BuildModelBase):
                 name=f"DEM/{DEM['name']}",
             )
             DEM["path"] = f"DEM/{DEM['name']}"
-        low_elevation_coastal_zone = DEM_raster < 10
-        low_elevation_coastal_zone.values = low_elevation_coastal_zone.values.astype(
-            np.float32
-        )
-        self.set_other(
-            low_elevation_coastal_zone, name="landsurface/low_elevation_coastal_zone"
-        )  # Maybe remove this
+
+        if DEM["name"] == "delta_dtm":
+            low_elevation_coastal_zone = DEM_raster < 10
+            low_elevation_coastal_zone.values = (
+                low_elevation_coastal_zone.values.astype(np.float32)
+            )
+            self.set_other(
+                low_elevation_coastal_zone,
+                name="landsurface/low_elevation_coastal_zone",
+            )  # Maybe remove this
         self.set_params(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])
