@@ -94,7 +94,7 @@ nav:
     - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
   - Model:
-    - Model: model/model.md
+    - Overview: model/index.md
     - Modules: model/modules.md
     - Variables: model/variables.md
   - Agents:
