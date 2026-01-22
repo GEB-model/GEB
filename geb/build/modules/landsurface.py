@@ -101,6 +101,7 @@ class LandSurface(BuildModelBase):
                 "fill_depressions": True,
                 "nodata": np.nan,
             },
+            {"name": "delta_dtm", "zmax": 30, "fill_depressions": False},
             {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
         ],
     ) -> None:
@@ -129,6 +130,16 @@ class LandSurface(BuildModelBase):
         ymin: float = bounds[1] - buffer
         xmax: float = bounds[2] + buffer
         ymax: float = bounds[3] + buffer
+        
+        deltadtm = self.new_data_catalog.fetch(
+            "delta_dtm", 
+            xmin=xmin,
+            xmax=xmax,
+            ymin=ymin,
+            ymax=ymax,
+        ).read()
+
+        
         fabdem: xr.DataArray = (
             self.new_data_catalog.fetch(
                 "fabdem",
@@ -154,6 +165,9 @@ class LandSurface(BuildModelBase):
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
             else:
+                if DEM["name"] == "delta_dtm":
+                    DEM_raster = self.new_data_catalog.fetch("delta_dtm").read()
+
                 if DEM["name"] == "gebco":
                     DEM_raster = self.new_data_catalog.fetch("gebco").read()
                 else:
