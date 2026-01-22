@@ -234,7 +234,7 @@ class GridVariables(Bucket):
     layer_boundary_elevation: TwoDArrayFloat32
     elevation: ArrayFloat32
     specific_yield: TwoDArrayFloat32
-    groundwater_hydraulic_conductivity: TwoDArrayFloat32
+    groundwater_hydraulic_conductivity_m_per_day: TwoDArrayFloat32
     upstream_area: ArrayFloat32
     upstream_area_n_cells: ArrayInt32
     river_mannings: ArrayFloat32
@@ -575,7 +575,6 @@ class HRUVariables(Bucket):
     liquid_water_in_snow_m: ArrayFloat32
     snow_water_equivalent_m: ArrayFloat32
     topwater_m: ArrayFloat32
-    frost_index: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
     land_use_type: ArrayInt32
@@ -623,6 +622,10 @@ class HRUVariables(Bucket):
     no_elements_harvested: ArrayFloat32
     soil_temperature_C: TwoDArrayFloat32
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
+    wetting_front_depth_m: ArrayFloat32
+    wetting_front_suction_head_m: ArrayFloat32
+    wetting_front_moisture_deficit: ArrayFloat32
+    green_ampt_active_layer_idx: ArrayInt32
     hillslope_length_m: ArrayFloat32
 
 

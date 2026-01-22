@@ -309,7 +309,7 @@ def donate_and_receive_crop_prices(
                 data_catalog,
                 global_countries,
                 countries_with_donor_data,
-                alternative_countries=regions.unique().tolist(),
+                alternative_countries=regions["ISO3"].unique().tolist(),
             )
             ISO3 = donor_countries.get(ISO3, None)
             print(

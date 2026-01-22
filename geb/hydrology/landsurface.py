@@ -93,9 +93,12 @@ def land_surface_model(
     capillar_rise_m: ArrayFloat32,
     groundwater_toplayer_conductivity_m_per_day: ArrayFloat32,
     saturated_hydraulic_conductivity_m_per_s: ArrayFloat32,
+    wetting_front_depth_m: ArrayFloat32,
+    wetting_front_suction_head_m: ArrayFloat32,
+    wetting_front_moisture_deficit: ArrayFloat32,
+    green_ampt_active_layer_idx: ArrayInt32,
     lambda_pore_size_distribution: ArrayFloat32,
-    bubbing_pressure_cm: ArrayFloat32,
-    frost_index: ArrayFloat32,
+    bubbling_pressure_cm: ArrayFloat32,
     natural_crop_groups: ArrayFloat32,
     crop_group_number_per_group: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
@@ -121,6 +124,13 @@ def land_surface_model(
     ArrayFloat32,
 ]:
     """The main land surface model of GEB.
+
+    This function coordinates the vertical water balance for each grid cell, including:
+    - Snow accumulation and melt
+    - Interception
+    - Infiltration (Green-Ampt with Arno/Xinanjiang runoff)
+    - Soil moisture redistribution (Richards equation / Darcy's Law)
+    - Evapotranspiration
 
     Args:
         land_use_type: Land use type of the hydrological response unit.
@@ -159,10 +169,13 @@ def land_surface_model(
         actual_irrigation_consumption_m: Actual irrigation consumption in meters.
         capillar_rise_m: Capillary rise in meters.
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity in m/s.
-        groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/s.
+        wetting_front_depth_m: Wetting front depth in meters.
+        wetting_front_suction_head_m: Wetting front suction head [m].
+        wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
+        green_ampt_active_layer_idx: Index of the active soil layer for Green-Ampt infiltration.
+        groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
-        bubbing_pressure_cm: Bubbling pressure in cm.
-        frost_index: Frost index. TODO: Add unit and description.
+        bubbling_pressure_cm: Bubbling pressure in cm.
         natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
         crop_group_number_per_group: Crop group numbers for each crop type.
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
@@ -375,16 +388,28 @@ def land_surface_model(
                 direct_runoff_m,
                 groundwater_recharge_from_infiltraton_m,
                 infiltration_amount,
+                wetting_front_depth_m[i],
+                wetting_front_suction_head_m[i],
+                wetting_front_moisture_deficit[i],
+                green_ampt_active_layer_idx[i],
             ) = infiltration(
                 ws=ws[:, i],
-                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_m_per_hour[
+                wres=wres[:, i],
+                saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
                     :, i
                 ],
                 land_use_type=land_use_type[i],
                 soil_is_frozen=soil_is_frozen,
                 w=w[:, i],
                 topwater_m=topwater_m[i],
+                wetting_front_depth_m=wetting_front_depth_m[i],
+                wetting_front_suction_head_m=wetting_front_suction_head_m[i],
+                wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
+                green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
                 arno_shape_parameter=arno_shape_parameter[i],
+                bubbling_pressure_cm=bubbling_pressure_cm[:, i],
+                soil_layer_height_m=soil_layer_height[:, i],
+                lambda_pore_size_distribution=lambda_pore_size_distribution[:, i],
             )
             runoff_m[hour, i] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
@@ -401,10 +426,10 @@ def land_surface_model(
                     lambda_pore_size_distribution=lambda_pore_size_distribution[
                         bottom_layer, i
                     ],
-                    saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_m_per_hour[
+                    saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
                         bottom_layer, i
                     ],
-                    bubbling_pressure_cm=bubbing_pressure_cm[bottom_layer, i],
+                    bubbling_pressure_cm=bubbling_pressure_cm[bottom_layer, i],
                 )
             )
 
@@ -462,71 +487,80 @@ def land_surface_model(
                         lambda_pore_size_distribution=lambda_pore_size_distribution[
                             layer, i
                         ],
-                        saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_m_per_hour[
+                        saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
                             layer, i
                         ],
-                        bubbling_pressure_cm=bubbing_pressure_cm[layer, i],
+                        bubbling_pressure_cm=bubbling_pressure_cm[layer, i],
                     )
                 )
 
-                # Compute flux using Darcy's law. The -1 accounts for gravity.
-                # Positive flux is downwards; see minus sign in the equation, which negates
-                # the -1 of gravity and other terms.
-                # We use upstream weighting for the hydraulic conductivity,
-                # which means that we use the hydraulic conductivity of the layer
-                # that the flux is coming from.
-                flux_gradient_term: np.float32 = -(
-                    (psi_layer_below - psi) / delta_z[layer, i] - np.float32(1.0)
-                )
+                # If the layer is above the wetting front, we skip Darcy flow calculations
+                # because the Green-Ampt infiltration is handling the water movement in this
+                # region. We effectively "freeze" the redistribution here to let the piston
+                # flow dominate.
 
-                # if the flux gradient term is positive, the flux is going downwards
-                # and we use the hydraulic conductivity of the current layer
-                if flux_gradient_term > 0:
-                    flux: np.float32 = (
-                        unsaturated_hydraulic_conductivity_m_per_hour
-                        * flux_gradient_term
+                # Important: in the current implementation, this means that no redistribution
+                # occurs in the layer that is the wetting front layer. This is a simplification
+                # that could be improved in future versions.
+                if layer >= green_ampt_active_layer_idx[i]:
+                    # Compute flux using Darcy's law. The -1 accounts for gravity.
+                    # Positive flux is downwards; see minus sign in the equation, which negates
+                    # the -1 of gravity and other terms.
+                    # We use upstream weighting for the hydraulic conductivity,
+                    # which means that we use the hydraulic conductivity of the layer
+                    # that the flux is coming from.
+                    flux_gradient_term: np.float32 = -(
+                        (psi_layer_below - psi) / delta_z[layer, i] - np.float32(1.0)
                     )
-                    flux_direction = 1  # 1 if flux >= 0, 0 if flux < 0
-                # if the flux gradient term is negative, the flux is going upwards
-                # thus we use the hydraulic conductivity of the layer below
-                else:
-                    flux: np.float32 = -(
-                        unsaturated_hydraulic_conductivity_layer_below
-                        * flux_gradient_term
+
+                    # if the flux gradient term is positive, the flux is going downwards
+                    # and we use the hydraulic conductivity of the current layer
+                    if flux_gradient_term > 0:
+                        flux: np.float32 = (
+                            unsaturated_hydraulic_conductivity_m_per_hour
+                            * flux_gradient_term
+                        )
+                        flux_direction = 1  # 1 if flux >= 0, 0 if flux < 0
+                    # if the flux gradient term is negative, the flux is going upwards
+                    # thus we use the hydraulic conductivity of the layer below
+                    else:
+                        flux: np.float32 = -(
+                            unsaturated_hydraulic_conductivity_layer_below
+                            * flux_gradient_term
+                        )
+                        flux_direction = 0  # 1 if flux >= 0, 0 if flux < 0
+
+                    # Limit flux by the minimum saturated hydraulic conductivity of the two layers
+                    min_saturated_hydraulic_conductivity_m_per_hour = min(
+                        saturated_hydraulic_conductivity_m_per_hour[layer, i],
+                        saturated_hydraulic_conductivity_m_per_hour[layer + 1, i],
                     )
-                    flux_direction = 0  # 1 if flux >= 0, 0 if flux < 0
+                    flux = min(flux, min_saturated_hydraulic_conductivity_m_per_hour)
 
-                # Limit flux by the minimum saturated hydraulic conductivity of the two layers
-                min_saturated_hydraulic_conductivity_m_per_hour = min(
-                    saturated_hydraulic_conductivity_m_per_hour[layer, i],
-                    saturated_hydraulic_conductivity_m_per_hour[layer + 1, i],
-                )
-                flux = min(flux, min_saturated_hydraulic_conductivity_m_per_hour)
+                    source: int = layer + (
+                        1 - flux_direction
+                    )  # layer if flux >= 0, layer + 1 if flux < 0
+                    sink: int = (
+                        layer + flux_direction
+                    )  # layer + 1 if flux >= 0, layer if flux < 0
 
-                source: int = layer + (
-                    1 - flux_direction
-                )  # layer if flux >= 0, layer + 1 if flux < 0
-                sink: int = (
-                    layer + flux_direction
-                )  # layer + 1 if flux >= 0, layer if flux < 0
+                    # Limit flux by available water in source and storage capacity of sink
+                    remaining_storage_capacity_sink = ws[sink, i] - w[sink, i]
+                    available_water_source = w[source, i] - wres[source, i]
 
-                # Limit flux by available water in source and storage capacity of sink
-                remaining_storage_capacity_sink = ws[sink, i] - w[sink, i]
-                available_water_source = w[source, i] - wres[source, i]
+                    flux = min(
+                        flux,
+                        remaining_storage_capacity_sink,
+                        available_water_source,
+                    )
 
-                flux = min(
-                    flux,
-                    remaining_storage_capacity_sink,
-                    available_water_source,
-                )
+                    # Update water content in source and sink layers
+                    w[source, i] -= flux
+                    w[sink, i] += flux
 
-                # Update water content in source and sink layers
-                w[source, i] -= flux
-                w[sink, i] += flux
-
-                # Ensure water content stays within physical bounds
-                w[sink, i] = min(w[sink, i], ws[sink, i])
-                w[source, i] = max(w[source, i], wres[source, i])
+                    # Ensure water content stays within physical bounds
+                    w[sink, i] = min(w[sink, i], ws[sink, i])
+                    w[source, i] = max(w[source, i], wres[source, i])
 
                 psi_layer_below = psi
                 unsaturated_hydraulic_conductivity_layer_below = (
@@ -634,6 +668,7 @@ class LandSurfaceVariables(Bucket):
     arno_shape_parameter: TwoDArrayFloat32
     crop_map: ArrayInt32
     minimum_effective_root_depth_m: np.float32
+    green_ampt_active_layer_idx: ArrayInt32
 
 
 class LandSurface(Module):
@@ -912,15 +947,24 @@ class LandSurface(Module):
             "parameters"
         ]["saturated_hydraulic_conductivity_multiplier"]  # calibration parameter
 
-        self.HRU.var.soil_temperature_C: TwoDArrayFloat32 = np.full_like(
+        self.HRU.var.wetting_front_depth_m = np.full_like(self.HRU.var.topwater, 0.0)
+        self.HRU.var.wetting_front_moisture_deficit = np.full_like(
+            self.HRU.var.topwater, 0.0
+        )
+        self.HRU.var.wetting_front_suction_head_m = np.full_like(
+            self.HRU.var.topwater, 0.0
+        )
+        self.HRU.var.green_ampt_active_layer_idx = np.full_like(
+            self.HRU.var.topwater, -1, dtype=np.int32
+        )
+
+        self.HRU.var.soil_temperature_C = np.full_like(
             self.HRU.var.soil_layer_height, 0.0, dtype=np.float32
         )
 
-        self.HRU.var.solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32 = (
-            get_heat_capacity_solid_fraction(
-                bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
-                layer_thickness_m=self.HRU.var.soil_layer_height,
-            )
+        self.HRU.var.solid_heat_capacity_J_per_m2_K = get_heat_capacity_solid_fraction(
+            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
+            layer_thickness_m=self.HRU.var.soil_layer_height,
         )
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
@@ -1083,10 +1127,6 @@ class LandSurface(Module):
                 "Capillary rise is not implemented in the land surface model yet."
             )
 
-        self.HRU.var.frost_index = np.full_like(
-            self.HRU.var.topwater_m, np.float32(0.0)
-        )
-
         # TODO: pre-compute this once only
         delta_z = (
             self.HRU.var.soil_layer_height[:-1, :]
@@ -1163,13 +1203,16 @@ class LandSurface(Module):
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             capillar_rise_m=capillar_rise_m,
             saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
+            wetting_front_depth_m=self.HRU.var.wetting_front_depth_m,
+            wetting_front_suction_head_m=self.HRU.var.wetting_front_suction_head_m,
+            wetting_front_moisture_deficit=self.HRU.var.wetting_front_moisture_deficit,
+            green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
             groundwater_toplayer_conductivity_m_per_day=self.hydrology.to_HRU(
-                data=self.grid.var.groundwater_hydraulic_conductivity[0],
+                data=self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0],
                 fn=None,  # the top layer is the first groundwater layer
             ),
             lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-            bubbing_pressure_cm=self.HRU.var.bubbling_pressure_cm,
-            frost_index=self.HRU.var.frost_index,
+            bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
             natural_crop_groups=self.HRU.var.natural_crop_groups,
             crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
                 "crop_group_number"
@@ -1249,8 +1292,7 @@ class LandSurface(Module):
                 capillar_rise_m=capillar_rise_m,
                 saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
                 lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-                bubbing_pressure_cm=self.HRU.var.bubbling_pressure_cm,
-                frost_index=self.HRU.var.frost_index,
+                bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
                 natural_crop_groups=self.HRU.var.natural_crop_groups,
                 crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
                     "crop_group_number"
