@@ -1730,7 +1730,16 @@ class CropFarmers(AgentBaseClass):
             maximum_abstraction_channel_m3_by_farmer=maximum_abstraction_channel_m3_by_farmer,
             maximum_abstraction_groundwater_m3_by_farmer=maximum_abstraction_groundwater_m3_by_farmer,
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
-            gross_irrigation_demand_m3_per_field_limit_adjusted=gross_irrigation_demand_m3_per_field_limit_adjusted,
+            # gross_irrigation_demand_m3_per_field_limit_adjusted=gross_irrigation_demand_m3_per_field_limit_adjusted,
+            gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir=(
+                gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir
+            ),
+            gross_irrigation_demand_m3_per_field_limit_adjusted_channel=(
+                gross_irrigation_demand_m3_per_field_limit_adjusted_channel
+            ),
+            gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater=(
+                gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater
+            ),
             # Add three water prices (calling end)
             unit_cost_channel=np.float32(self.var.water_costs_m3_channel),
             unit_cost_reservoir=np.float32(self.var.water_costs_m3_reservoir),
@@ -5654,8 +5663,8 @@ class CropFarmers(AgentBaseClass):
             + reservoir_water_cost_yuan
         )
 
-        # self.report(locals())
-        self.report(self, locals())
+        self.report(locals())
+        # self.report(self, locals())
 
     def remove_agents(
         self,

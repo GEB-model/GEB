@@ -821,7 +821,15 @@ def abstract_water(
     maximum_abstraction_channel_m3_by_farmer: npt.NDArray[np.float32],
     maximum_abstraction_groundwater_m3_by_farmer: npt.NDArray[np.float32],
     gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32],
-    gross_irrigation_demand_m3_per_field_limit_adjusted: npt.NDArray[np.float32],
+    gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir: npt.NDArray[
+        np.float32
+    ],
+    gross_irrigation_demand_m3_per_field_limit_adjusted_channel: npt.NDArray[
+        np.float32
+    ],
+    gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater: npt.NDArray[
+        np.float32
+    ],
     # NEW: per-farmer remaining irrigation budget (monetary units). NaN 表示“该农户不启用预算约束（仅按成本排序，不设总预算）”。
     remaining_irrigation_budget_monetary: npt.NDArray[np.float32],
     # NEW: unit costs (float32) for cost-priority allocation
@@ -984,13 +992,12 @@ def abstract_water(
                     # 在某个水源上用预算裁剪场块需水（按体积预算 → 转为水深上限）
                     def _apply_budget_limit(
                         demand_depth: float,
-                        demand_depth_limit: float,
                         unit_cost: float,
                     ):
                         if np.isnan(remaining_irrigation_budget_monetary[farmer]):
-                            return demand_depth, demand_depth_limit
+                            return demand_depth
                         if unit_cost <= 0.0:
-                            return demand_depth, demand_depth_limit
+                            return demand_depth
 
                         max_vol_by_budget = (
                             remaining_irrigation_budget_monetary[farmer] / unit_cost
@@ -1001,9 +1008,7 @@ def abstract_water(
                         max_depth = max_vol_by_budget / cell_area[field]
                         if demand_depth > max_depth:
                             demand_depth = max_depth
-                        if demand_depth_limit > max_depth:
-                            demand_depth_limit = max_depth
-                        return demand_depth, demand_depth_limit
+                        return demand_depth
 
                     # 根据 delta * unit_cost 扣减预算
                     def _deduct_budget_local(delta: float, unit_cost: float):
@@ -1034,6 +1039,20 @@ def abstract_water(
                         if not _has_src(src):
                             continue
 
+                        # Select the remaining_limit array for the current water source (3 Channels)
+                        if src == 0:
+                            remaining_irrigation_limit_for_src = (
+                                remaining_irrigation_limit_m3_channel
+                            )
+                        elif src == 1:
+                            remaining_irrigation_limit_for_src = (
+                                remaining_irrigation_limit_m3_reservoir
+                            )
+                        else:
+                            remaining_irrigation_limit_for_src = (
+                                remaining_irrigation_limit_m3_groundwater
+                            )
+
                         # 若预算已为 0，则不再尝试任何水源
                         if (
                             not np.isnan(remaining_irrigation_budget_monetary[farmer])
@@ -1041,38 +1060,32 @@ def abstract_water(
                         ):
                             break
 
-                        # 若该块需求已经为 0，也可以提前停止
                         if irrigation_water_demand_field_m <= 0.0:
                             break
-                        if remaining_irrigation_limit_m3[farmer] <= 0.0:
-                            break
+                        # if remaining_irrigation_limit_m3[farmer] <= 0.0:
+                        #     break
+                        if remaining_irrigation_limit_for_src[farmer] <= 0.0:
+                            remaining_irrigation_limit_for_src[farmer] = 0.0
+                            continue
 
                         if src == 1:
                             # ===== Reservoir (1) =====
                             # 抽水前：用预算裁剪需水
-                            (
+                            irrigation_water_demand_field_m = _apply_budget_limit(
                                 irrigation_water_demand_field_m,
-                                irrigation_water_demand_field_m_limit_adjusted,
-                            ) = _apply_budget_limit(
-                                irrigation_water_demand_field_m,
-                                irrigation_water_demand_field_m_limit_adjusted,
                                 unit_cost_reservoir,
                             )
 
                             before = reservoir_abstraction_m3_by_farmer[farmer]
-                            (
-                                irrigation_water_demand_field_m,
-                                irrigation_water_demand_field_m_limit_adjusted,
-                            ) = withdraw_reservoir(
+                            irrigation_water_demand_field_m = withdraw_reservoir(
                                 command_area=command_area_farmer,
                                 field=field,
                                 farmer=farmer,
                                 reservoir_abstraction_m3=reservoir_abstraction_m3,
                                 available_reservoir_storage_m3=available_reservoir_storage_m3,
                                 irrigation_water_demand_field_m=irrigation_water_demand_field_m,
-                                irrigation_water_demand_field_m_limit_adjusted=irrigation_water_demand_field_m_limit_adjusted,
                                 water_withdrawal_m=water_withdrawal_m,
-                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_reservoir,
                                 reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
                                 maximum_abstraction_reservoir_m3_field=maximum_abstraction_reservoir_m3_by_field[
                                     field_index
@@ -1087,9 +1100,8 @@ def abstract_water(
 
                         elif src == 0:
                             # ===== Channel (0) =====
-                            irrigation_water_demand_field_m, _ = _apply_budget_limit(
+                            irrigation_water_demand_field_m = _apply_budget_limit(
                                 irrigation_water_demand_field_m,
-                                irrigation_water_demand_field_m_limit_adjusted,
                                 unit_cost_channel,
                             )
 
@@ -1102,8 +1114,11 @@ def abstract_water(
                                 farmer=farmer,
                                 water_withdrawal_m=water_withdrawal_m,
                                 irrigation_water_demand_field_m=irrigation_water_demand_field_m,
-                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_channel,
                                 channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                                maximum_abstraction_channel_m3_field=maximum_abstraction_channel_m3_by_field[
+                                    field_index
+                                ],
                                 minimum_channel_storage_m3=np.float32(100.0),
                             )
                             after = channel_abstraction_m3_by_farmer[farmer]
@@ -1114,9 +1129,8 @@ def abstract_water(
 
                         else:
                             # ===== Groundwater (2) =====
-                            irrigation_water_demand_field_m, _ = _apply_budget_limit(
+                            irrigation_water_demand_field_m = _apply_budget_limit(
                                 irrigation_water_demand_field_m,
-                                irrigation_water_demand_field_m_limit_adjusted,
                                 unit_cost_groundwater,
                             )
 
@@ -1132,8 +1146,11 @@ def abstract_water(
                                 well_depth=well_depth,
                                 irrigation_water_demand_field_m=irrigation_water_demand_field_m,
                                 water_withdrawal_m=water_withdrawal_m,
-                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_groundwater,
                                 groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+                                maximum_abstraction_groundwater_m3_field=maximum_abstraction_groundwater_m3_by_field[
+                                    field_index
+                                ],
                             )
                             after = groundwater_abstraction_m3_by_farmer[farmer]
                             delta = after - before
@@ -1145,8 +1162,8 @@ def abstract_water(
                         if irrigation_water_demand_field_m <= 0.0:
                             irrigation_water_demand_field_m = 0.0
                             break
-                        if remaining_irrigation_limit_m3[farmer] <= 0.0:
-                            remaining_irrigation_limit_m3[farmer] = 0.0
+                        if remaining_irrigation_limit_for_src[farmer] <= 0.0:
+                            remaining_irrigation_limit_for_src[farmer] = 0.0
                             break
                         if (
                             not np.isnan(remaining_irrigation_budget_monetary[farmer])
@@ -1156,9 +1173,6 @@ def abstract_water(
                         # # Early exit if this field's demand is satisfied
                         # if irrigation_water_demand_field_m <= np.float32(0):
                         #     irrigation_water_demand_field_m = np.float32(0)
-                        #     irrigation_water_demand_field_m_limit_adjusted = np.maximum(
-                        #         irrigation_water_demand_field_m_limit_adjusted, np.float32(0)
-                        #     )
                         #     break
 
                 else:
@@ -1167,19 +1181,15 @@ def abstract_water(
                     if surface_irrigated[farmer]:
                         # command areas
                         if command_area_farmer != -1:  # -1 means no command area
-                            (
-                                irrigation_water_demand_field_m,
-                                irrigation_water_demand_field_m_limit_adjusted,
-                            ) = withdraw_reservoir(
+                            irrigation_water_demand_field_m = withdraw_reservoir(
                                 command_area=command_area_farmer,
                                 field=field,
                                 farmer=farmer,
                                 reservoir_abstraction_m3=reservoir_abstraction_m3,
                                 available_reservoir_storage_m3=available_reservoir_storage_m3,
                                 irrigation_water_demand_field_m=irrigation_water_demand_field_m,
-                                irrigation_water_demand_field_m_limit_adjusted=irrigation_water_demand_field_m_limit_adjusted,
                                 water_withdrawal_m=water_withdrawal_m,
-                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_reservoir,
                                 reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
                                 maximum_abstraction_reservoir_m3_field=maximum_abstraction_reservoir_m3_by_field[
                                     field_index
