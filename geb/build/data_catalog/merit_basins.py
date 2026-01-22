@@ -257,17 +257,17 @@ class MeritBasins(Adapter):
                 gdf: gpd.GeoDataFrame = gpd.read_file(shp_path)
                 gdfs.append(gdf)
 
-            merged: gpd.GeoDataFrame = pd.concat(gdfs, ignore_index=True)  # ty:ignore[invalid-assignment]
+            merged: gpd.GeoDataFrame = pd.concat(gdfs, ignore_index=True)
 
             # clean memory
             for gdf in gdfs:
                 del gdf
             del gdfs
 
-            merged = merged.set_crs("EPSG:4326")  # ty:ignore[invalid-assignment]
+            merged = merged.set_crs("EPSG:4326")
 
             ascending: bool = True
-            merged = merged.sort_values(by="COMID", ascending=ascending)  # ty:ignore[invalid-assignment]
+            merged = merged.sort_values(by="COMID", ascending=ascending)
 
             # Use a temporary file to avoid partial writes in case of errors
             with tempfile.NamedTemporaryFile(

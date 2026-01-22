@@ -117,10 +117,10 @@ def get_rivers_geometry(
         columns={
             "NextDownID": "downstream_ID",
         }
-    ).set_index("COMID")  # ty:ignore[invalid-assignment]
+    ).set_index("COMID")
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
     rivers["is_headwater_catchment"] = rivers["maxup"] == 0
-    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])  # ty:ignore[invalid-assignment]
+    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
 
     # reverse the river lines to have the downstream direction
@@ -377,12 +377,29 @@ class Hydrography(BuildModelBase):
         downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
         subbasin_ids.update(downstream_subbasins)
 
+        # later we want to include the downstream outflow basins. However, we don't want to include
+        # other branches that are upstream of those downstream basins, but are not part
+        # of the area that we are interested in. Therefore, we also include
+        # the immediately upstream basins of the downstream basins, so that we can stop the subbasin
+        # construction there.
+        upstream_basins_of_downstream_basins = set()
+        for downstream_subbasin in downstream_subbasins.keys():
+            for upstream_basin in river_graph.predecessors(downstream_subbasin):
+                if upstream_basin not in subbasin_ids:
+                    upstream_basins_of_downstream_basins.add(upstream_basin)
+
+        subbasin_ids.update(upstream_basins_of_downstream_basins)
+
         rivers: gpd.GeoDataFrame = get_rivers_geometry(
-            self.new_data_catalog, list(subbasin_ids)
+            self.data_catalog, list(subbasin_ids)
         )
 
         rivers["is_downstream_outflow"] = pd.Series(
             True, index=downstream_subbasins
+        ).reindex(rivers.index, fill_value=False)
+
+        rivers["is_upstream_of_downstream_basin"] = pd.Series(
+            True, index=upstream_basins_of_downstream_basins
         ).reindex(rivers.index, fill_value=False)
 
         return rivers
@@ -724,11 +741,11 @@ class Hydrography(BuildModelBase):
         self.set_grid(basin_ids, name="routing/basin_ids")
 
         SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lengths(
-            self.new_data_catalog, rivers
+            self.data_catalog, rivers
         )
 
         SWORD_river_widths: npt.NDArray[np.float64] = get_SWORD_river_widths(
-            self.new_data_catalog, SWORD_reach_IDs
+            self.data_catalog, SWORD_reach_IDs
         )
 
         rivers["width"] = np.nansum(
@@ -759,7 +776,7 @@ class Hydrography(BuildModelBase):
             )
             return
 
-        global_ocean_mdt_fn = self.data_catalog.get_source(
+        global_ocean_mdt_fn = self.old_data_catalog.get_source(
             "global_ocean_mean_dynamic_topography"
         ).path
 
@@ -854,7 +871,7 @@ class Hydrography(BuildModelBase):
             return
 
         # load the coastline from the data catalog
-        fp_coastlines = self.data_catalog.get_source("osm_coastlines").path
+        fp_coastlines = self.old_data_catalog.get_source("osm_coastlines").path
         coastlines = gpd.read_file(fp_coastlines)
 
         # clip the coastline to overlapping with mask
@@ -888,7 +905,7 @@ class Hydrography(BuildModelBase):
             return
 
         # load the land polygon from the data catalog
-        fp_land_polygons = self.data_catalog.get_source("osm_land_polygons").path
+        fp_land_polygons = self.old_data_catalog.get_source("osm_land_polygons").path
         land_polygons = gpd.read_file(fp_land_polygons)
         # select only the land polygons that intersect with the region
         land_polygons = land_polygons[land_polygons.intersects(self.region.union_all())]
@@ -1022,7 +1039,7 @@ class Hydrography(BuildModelBase):
             the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
             with any custom reservoir capacity data from the data catalog.
         """
-        waterbodies: gpd.GeoDataFrame = self.new_data_catalog.fetch("hydrolakes").read(
+        waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
             columns=[
                 "waterbody_id",
@@ -1073,7 +1090,7 @@ class Hydrography(BuildModelBase):
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         if command_areas:
-            command_areas = self.data_catalog.get_geodataframe(
+            command_areas = self.old_data_catalog.get_geodataframe(
                 command_areas, geom=self.region, predicate="intersects"
             )  # ty:ignore[invalid-assignment]
             assert isinstance(command_areas, gpd.GeoDataFrame)
@@ -1148,7 +1165,7 @@ class Hydrography(BuildModelBase):
             self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
 
         if custom_reservoir_capacity:
-            custom_reservoir_capacity = self.data_catalog.get_dataframe(
+            custom_reservoir_capacity = self.old_data_catalog.get_dataframe(
                 custom_reservoir_capacity
             )
             custom_reservoir_capacity = custom_reservoir_capacity[
@@ -1185,7 +1202,7 @@ class Hydrography(BuildModelBase):
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.data_catalog.get_source("GTSM").path.format(1979, "01")  # ty:ignore[possibly-missing-attribute]
+        ref_file = self.old_data_catalog.get_source("GTSM").path.format(1979, "01")  # ty:ignore[possibly-missing-attribute]
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
@@ -1212,7 +1229,7 @@ class Hydrography(BuildModelBase):
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM").path.format(  # ty:ignore[possibly-missing-attribute]
+                f = self.old_data_catalog.get_source("GTSM").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1253,7 +1270,9 @@ class Hydrography(BuildModelBase):
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.data_catalog.get_source("GTSM_surge").path.format(1979, "01")  # ty:ignore[possibly-missing-attribute]
+        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+            1979, "01"
+        )
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
@@ -1271,7 +1290,7 @@ class Hydrography(BuildModelBase):
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+                f = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1293,7 +1312,7 @@ class Hydrography(BuildModelBase):
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
 
-        fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
+        fp_coast_rp = self.old_data_catalog.get_source("COAST_RP").path
         coast_rp = pd.read_pickle(fp_coast_rp)
 
         # remove stations that are not in coast_rp index

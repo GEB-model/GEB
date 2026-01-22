@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import zarr
@@ -653,6 +653,60 @@ def land_surface_model(
     )
 
 
+class LandSurfaceInputs(NamedTuple):
+    """Container for `land_surface_model` inputs.
+
+    This keeps the model call and debug dumps in sync by using the same
+    ordered, named fields for both pathways.
+    """
+
+    land_use_type: ArrayInt32
+    slope_m_per_m: ArrayFloat32
+    hillslope_length_m: ArrayFloat32
+    w: TwoDArrayFloat32
+    wres: TwoDArrayFloat32
+    wwp: TwoDArrayFloat32
+    wfc: TwoDArrayFloat32
+    ws: TwoDArrayFloat32
+    soil_temperature_C: TwoDArrayFloat32
+    solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
+    delta_z: TwoDArrayFloat32
+    soil_layer_height: TwoDArrayFloat32
+    root_depth_m: ArrayFloat32
+    topwater_m: ArrayFloat32
+    arno_shape_parameter: ArrayFloat32
+    snow_water_equivalent_m: ArrayFloat32
+    liquid_water_in_snow_m: ArrayFloat32
+    snow_temperature_C: ArrayFloat32
+    interception_storage_m: ArrayFloat32
+    interception_capacity_m: ArrayFloat32
+    pr_kg_per_m2_per_s: TwoDArrayFloat32
+    tas_2m_K: TwoDArrayFloat32
+    dewpoint_tas_2m_K: TwoDArrayFloat32
+    ps_pascal: TwoDArrayFloat32
+    rlds_W_per_m2: TwoDArrayFloat32
+    rsds_W_per_m2: TwoDArrayFloat32
+    wind_u10m_m_per_s: TwoDArrayFloat32
+    wind_v10m_m_per_s: TwoDArrayFloat32
+    CO2_ppm: np.float32
+    crop_factor: ArrayFloat32
+    crop_map: ArrayInt32
+    actual_irrigation_consumption_m: ArrayFloat32
+    capillar_rise_m: ArrayFloat32
+    groundwater_toplayer_conductivity_m_per_day: ArrayFloat32
+    saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
+    wetting_front_depth_m: ArrayFloat32
+    wetting_front_suction_head_m: ArrayFloat32
+    wetting_front_moisture_deficit: ArrayFloat32
+    green_ampt_active_layer_idx: ArrayInt32
+    lambda_pore_size_distribution: TwoDArrayFloat32
+    bubbling_pressure_cm: TwoDArrayFloat32
+    natural_crop_groups: ArrayFloat32
+    crop_group_number_per_group: ArrayFloat32
+    minimum_effective_root_depth_m: np.float32
+    interflow_multiplier: np.float32
+
+
 class LandSurfaceVariables(Bucket):
     """Land surface variables for GEB."""
 
@@ -708,6 +762,164 @@ class LandSurface(Module):
         # set number of soil layers as global variable for numba
         global N_SOIL_LAYERS  # ty: ignore[unresolved-global]
         N_SOIL_LAYERS = self.HRU.var.soil_layer_height.shape[0]
+
+    def _build_land_surface_inputs(
+        self,
+        *,
+        root_depth_m: ArrayFloat32,
+        interception_capacity_m: ArrayFloat32,
+        pr_kg_per_m2_per_s: TwoDArrayFloat32,
+        crop_factor: ArrayFloat32,
+        actual_irrigation_consumption_m: ArrayFloat32,
+        capillar_rise_m: ArrayFloat32,
+        delta_z: TwoDArrayFloat32,
+    ) -> LandSurfaceInputs:
+        """Build the input bundle for `land_surface_model`.
+
+        Args:
+            root_depth_m: Root depth for each HRU (m).
+            interception_capacity_m: Interception capacity per HRU (m).
+            pr_kg_per_m2_per_s: Precipitation rate per hour (kg/m2/s).
+            crop_factor: Crop factor per HRU (-).
+            actual_irrigation_consumption_m: Actual irrigation consumption (m).
+            capillar_rise_m: Capillary rise (m).
+            delta_z: Layer interface thicknesses (m).
+
+        Returns:
+            Bundle of inputs for `land_surface_model`.
+        """
+        pr_kg_per_m2_per_s_for_model: TwoDArrayFloat32 = np.asfortranarray(
+            pr_kg_per_m2_per_s
+        )
+        tas_2m_K_for_model: TwoDArrayFloat32 = np.asfortranarray(self.HRU.tas_2m_K)
+        dewpoint_tas_2m_K_for_model: TwoDArrayFloat32 = np.asfortranarray(
+            self.HRU.dewpoint_tas_2m_K
+        )
+        ps_pascal_for_model: TwoDArrayFloat32 = np.asfortranarray(self.HRU.ps_pascal)
+        rlds_W_per_m2_for_model: TwoDArrayFloat32 = np.asfortranarray(
+            self.HRU.rlds_W_per_m2
+        )
+        rsds_W_per_m2_for_model: TwoDArrayFloat32 = np.asfortranarray(
+            self.HRU.rsds_W_per_m2
+        )
+        wind_u10m_m_per_s_for_model: TwoDArrayFloat32 = np.asfortranarray(
+            self.HRU.wind_u10m_m_per_s
+        )
+        wind_v10m_m_per_s_for_model: TwoDArrayFloat32 = np.asfortranarray(
+            self.HRU.wind_v10m_m_per_s
+        )
+        CO2_ppm: np.float32 = np.float32(self.model.forcing.load("CO2_ppm"))
+        groundwater_toplayer_conductivity_m_per_day: ArrayFloat32 = (
+            self.hydrology.to_HRU(
+                data=self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0],
+                fn=None,  # the top layer is the first groundwater layer
+            )
+        )
+        crop_group_number_per_group: ArrayFloat32 = (
+            self.model.agents.crop_farmers.var.crop_data[
+                "crop_group_number"
+            ].values.astype(np.float32)
+        )
+
+        return LandSurfaceInputs(
+            land_use_type=self.HRU.var.land_use_type,
+            slope_m_per_m=self.HRU.var.slope_m_per_m,
+            hillslope_length_m=self.HRU.var.hillslope_length_m,
+            w=self.HRU.var.w,
+            wres=self.HRU.var.wres,
+            wwp=self.HRU.var.wwp,
+            wfc=self.HRU.var.wfc,
+            ws=self.HRU.var.ws,
+            soil_temperature_C=self.HRU.var.soil_temperature_C,
+            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
+            delta_z=delta_z,
+            soil_layer_height=self.HRU.var.soil_layer_height,
+            root_depth_m=root_depth_m,
+            topwater_m=self.HRU.var.topwater_m,
+            arno_shape_parameter=self.HRU.var.arno_shape_parameter,
+            snow_water_equivalent_m=self.HRU.var.snow_water_equivalent_m,
+            liquid_water_in_snow_m=self.HRU.var.liquid_water_in_snow_m,
+            snow_temperature_C=self.HRU.var.snow_temperature_C,
+            interception_storage_m=self.HRU.var.interception_storage_m,
+            interception_capacity_m=interception_capacity_m,
+            pr_kg_per_m2_per_s=pr_kg_per_m2_per_s_for_model,
+            tas_2m_K=tas_2m_K_for_model,
+            dewpoint_tas_2m_K=dewpoint_tas_2m_K_for_model,
+            ps_pascal=ps_pascal_for_model,
+            rlds_W_per_m2=rlds_W_per_m2_for_model,
+            rsds_W_per_m2=rsds_W_per_m2_for_model,
+            wind_u10m_m_per_s=wind_u10m_m_per_s_for_model,
+            wind_v10m_m_per_s=wind_v10m_m_per_s_for_model,
+            CO2_ppm=CO2_ppm,
+            crop_factor=crop_factor,
+            crop_map=self.HRU.var.crop_map,
+            actual_irrigation_consumption_m=actual_irrigation_consumption_m,
+            capillar_rise_m=capillar_rise_m,
+            groundwater_toplayer_conductivity_m_per_day=groundwater_toplayer_conductivity_m_per_day,
+            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
+            wetting_front_depth_m=self.HRU.var.wetting_front_depth_m,
+            wetting_front_suction_head_m=self.HRU.var.wetting_front_suction_head_m,
+            wetting_front_moisture_deficit=self.HRU.var.wetting_front_moisture_deficit,
+            green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
+            lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
+            bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
+            natural_crop_groups=self.HRU.var.natural_crop_groups,
+            crop_group_number_per_group=crop_group_number_per_group,
+            minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
+            interflow_multiplier=self.model.config["parameters"][
+                "interflow_multiplier"
+            ],
+        )
+
+    def _snapshot_land_surface_inputs_for_error(
+        self,
+        *,
+        land_surface_inputs: LandSurfaceInputs,
+        w_prev: TwoDArrayFloat32,
+        topwater_m_prev: ArrayFloat32,
+        snow_water_equivalent_prev: ArrayFloat32,
+        liquid_water_in_snow_prev: ArrayFloat32,
+        snow_temperature_C_prev: ArrayFloat32,
+        interception_storage_prev: ArrayFloat32,
+        soil_temperature_C_prev: TwoDArrayFloat32,
+        wetting_front_depth_prev: ArrayFloat32,
+        wetting_front_suction_head_prev: ArrayFloat32,
+        wetting_front_moisture_deficit_prev: ArrayFloat32,
+        green_ampt_active_layer_idx_prev: ArrayInt32,
+    ) -> LandSurfaceInputs:
+        """Build a snapshot of land surface inputs for error reproduction.
+
+        Args:
+            land_surface_inputs: Inputs used for the normal model call.
+            w_prev: Pre-call soil water column (m).
+            topwater_m_prev: Pre-call topwater (m).
+            snow_water_equivalent_prev: Pre-call snow water equivalent (m).
+            liquid_water_in_snow_prev: Pre-call liquid water in snow (m).
+            snow_temperature_C_prev: Pre-call snow temperature (C).
+            interception_storage_prev: Pre-call interception storage (m).
+            soil_temperature_C_prev: Pre-call soil temperature (C).
+            wetting_front_depth_prev: Pre-call wetting front depth (m).
+            wetting_front_suction_head_prev: Pre-call wetting front suction head (m).
+            wetting_front_moisture_deficit_prev: Pre-call wetting front moisture deficit (-).
+            green_ampt_active_layer_idx_prev: Pre-call Green-Ampt active layer index (-).
+
+        Returns:
+            Snapshot of model inputs that reproduces the failure context.
+        """
+        error_inputs: LandSurfaceInputs = land_surface_inputs._replace(
+            w=w_prev,
+            topwater_m=topwater_m_prev,
+            snow_water_equivalent_m=snow_water_equivalent_prev,
+            liquid_water_in_snow_m=liquid_water_in_snow_prev,
+            snow_temperature_C=snow_temperature_C_prev,
+            interception_storage_m=interception_storage_prev,
+            soil_temperature_C=soil_temperature_C_prev,
+            wetting_front_depth_m=wetting_front_depth_prev,
+            wetting_front_suction_head_m=wetting_front_suction_head_prev,
+            wetting_front_moisture_deficit=wetting_front_moisture_deficit_prev,
+            green_ampt_active_layer_idx=green_ampt_active_layer_idx_prev,
+        )
+        return error_inputs
 
     def spinup(self) -> None:
         """Spinup function for the land surface module."""
@@ -1006,12 +1218,35 @@ class LandSurface(Module):
             AssertionError: If any of the debug assertions fail.
         """
         if __debug__:
-            snow_water_equivalent_prev = self.HRU.var.snow_water_equivalent_m.copy()
-            liquid_water_in_snow_prev = self.HRU.var.liquid_water_in_snow_m.copy()
-            interception_storage_prev = self.HRU.var.interception_storage_m.copy()
-            topwater_m_prev = self.HRU.var.topwater_m.copy()
-            snow_temperature_C_prev = self.HRU.var.snow_temperature_C.copy()
-            w_prev = self.HRU.var.w.copy()
+            snow_water_equivalent_prev: ArrayFloat32 = (
+                self.HRU.var.snow_water_equivalent_m.copy()
+            )
+            liquid_water_in_snow_prev: ArrayFloat32 = (
+                self.HRU.var.liquid_water_in_snow_m.copy()
+            )
+            interception_storage_prev: ArrayFloat32 = (
+                self.HRU.var.interception_storage_m.copy()
+            )
+            topwater_m_prev: ArrayFloat32 = self.HRU.var.topwater_m.copy()
+            snow_temperature_C_prev: ArrayFloat32 = (
+                self.HRU.var.snow_temperature_C.copy()
+            )
+            soil_temperature_C_prev: TwoDArrayFloat32 = (
+                self.HRU.var.soil_temperature_C.copy()
+            )
+            wetting_front_depth_prev: ArrayFloat32 = (
+                self.HRU.var.wetting_front_depth_m.copy()
+            )
+            wetting_front_suction_head_prev: ArrayFloat32 = (
+                self.HRU.var.wetting_front_suction_head_m.copy()
+            )
+            wetting_front_moisture_deficit_prev: ArrayFloat32 = (
+                self.HRU.var.wetting_front_moisture_deficit.copy()
+            )
+            green_ampt_active_layer_idx_prev: ArrayInt32 = (
+                self.HRU.var.green_ampt_active_layer_idx.copy()
+            )
+            w_prev: TwoDArrayFloat32 = self.HRU.var.w.copy()
 
         forest_crop_factor = self.hydrology.to_HRU(
             data=self.grid.compress(
@@ -1133,6 +1368,16 @@ class LandSurface(Module):
             + self.HRU.var.soil_layer_height[1:, :]
         ) / 2
 
+        land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(
+            root_depth_m=root_depth_m,
+            interception_capacity_m=interception_capacity_m,
+            pr_kg_per_m2_per_s=pr_kg_per_m2_per_s,
+            crop_factor=crop_factor,
+            actual_irrigation_consumption_m=actual_irrigation_consumption_m,
+            capillar_rise_m=capillar_rise_m,
+            delta_z=delta_z,
+        )
+
         (
             rain_m,
             snow_m,
@@ -1152,76 +1397,7 @@ class LandSurface(Module):
             bare_soil_evaporation_m,
             transpiration_m,
             potential_transpiration_m,
-        ) = land_surface_model(
-            land_use_type=self.HRU.var.land_use_type,
-            slope_m_per_m=self.HRU.var.slope_m_per_m,
-            hillslope_length_m=self.HRU.var.hillslope_length_m,
-            w=self.HRU.var.w,
-            wres=self.HRU.var.wres,
-            wwp=self.HRU.var.wwp,
-            wfc=self.HRU.var.wfc,
-            ws=self.HRU.var.ws,
-            soil_temperature_C=self.HRU.var.soil_temperature_C,
-            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
-            delta_z=delta_z,
-            soil_layer_height=self.HRU.var.soil_layer_height,
-            root_depth_m=root_depth_m,
-            topwater_m=self.HRU.var.topwater_m,
-            arno_shape_parameter=self.HRU.var.arno_shape_parameter,
-            snow_water_equivalent_m=self.HRU.var.snow_water_equivalent_m,
-            liquid_water_in_snow_m=self.HRU.var.liquid_water_in_snow_m,
-            snow_temperature_C=self.HRU.var.snow_temperature_C,
-            interception_storage_m=self.HRU.var.interception_storage_m,
-            interception_capacity_m=interception_capacity_m,
-            pr_kg_per_m2_per_s=np.asfortranarray(
-                pr_kg_per_m2_per_s
-            ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
-            tas_2m_K=np.asfortranarray(
-                self.HRU.tas_2m_K
-            ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
-            dewpoint_tas_2m_K=np.asfortranarray(
-                self.HRU.dewpoint_tas_2m_K
-            ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
-            ps_pascal=np.asfortranarray(
-                self.HRU.ps_pascal
-            ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
-            rlds_W_per_m2=np.asfortranarray(
-                self.HRU.rlds_W_per_m2
-            ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
-            rsds_W_per_m2=np.asfortranarray(
-                self.HRU.rsds_W_per_m2
-            ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
-            wind_u10m_m_per_s=np.asfortranarray(
-                self.HRU.wind_u10m_m_per_s
-            ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
-            wind_v10m_m_per_s=np.asfortranarray(
-                self.HRU.wind_v10m_m_per_s
-            ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
-            CO2_ppm=self.model.forcing.load("CO2_ppm"),
-            crop_factor=crop_factor,
-            crop_map=self.HRU.var.crop_map,
-            actual_irrigation_consumption_m=actual_irrigation_consumption_m,
-            capillar_rise_m=capillar_rise_m,
-            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
-            wetting_front_depth_m=self.HRU.var.wetting_front_depth_m,
-            wetting_front_suction_head_m=self.HRU.var.wetting_front_suction_head_m,
-            wetting_front_moisture_deficit=self.HRU.var.wetting_front_moisture_deficit,
-            green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
-            groundwater_toplayer_conductivity_m_per_day=self.hydrology.to_HRU(
-                data=self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0],
-                fn=None,  # the top layer is the first groundwater layer
-            ),
-            lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-            bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
-            natural_crop_groups=self.HRU.var.natural_crop_groups,
-            crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
-                "crop_group_number"
-            ].values.astype(np.float32),
-            minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
-            interflow_multiplier=self.model.config["parameters"][
-                "interflow_multiplier"
-            ],
-        )
+        ) = land_surface_model(**land_surface_inputs._asdict())
 
         if not balance_check(
             name="land surface 1",
@@ -1259,45 +1435,23 @@ class LandSurface(Module):
             tolerance=1e-5,
             raise_on_error=False,
         ):
+            error_inputs: LandSurfaceInputs = self._snapshot_land_surface_inputs_for_error(
+                land_surface_inputs=land_surface_inputs,
+                w_prev=w_prev,
+                topwater_m_prev=topwater_m_prev,
+                snow_water_equivalent_prev=snow_water_equivalent_prev,
+                liquid_water_in_snow_prev=liquid_water_in_snow_prev,
+                snow_temperature_C_prev=snow_temperature_C_prev,
+                interception_storage_prev=interception_storage_prev,
+                soil_temperature_C_prev=soil_temperature_C_prev,
+                wetting_front_depth_prev=wetting_front_depth_prev,
+                wetting_front_suction_head_prev=wetting_front_suction_head_prev,
+                wetting_front_moisture_deficit_prev=wetting_front_moisture_deficit_prev,
+                green_ampt_active_layer_idx_prev=green_ampt_active_layer_idx_prev,
+            )
             np.savez(
                 self.model.diagnostics_folder / "landsurface_model_error.npz",
-                land_use_type=self.HRU.var.land_use_type,
-                w=w_prev,
-                wres=self.HRU.var.wres,
-                wwp=self.HRU.var.wwp,
-                wfc=self.HRU.var.wfc,
-                ws=self.HRU.var.ws,
-                delta_z=delta_z,
-                soil_layer_height=self.HRU.var.soil_layer_height,
-                root_depth_m=root_depth_m,
-                topwater_m=topwater_m_prev,
-                arno_shape_parameter=self.HRU.var.arno_shape_parameter,
-                snow_water_equivalent_m=snow_water_equivalent_prev,
-                liquid_water_in_snow_m=liquid_water_in_snow_prev,
-                snow_temperature_C=snow_temperature_C_prev,
-                interception_storage_m=interception_storage_prev,
-                interception_capacity_m=interception_capacity_m,
-                pr_kg_per_m2_per_s=np.asfortranarray(pr_kg_per_m2_per_s),
-                tas_2m_K=np.asfortranarray(self.HRU.tas_2m_K),
-                dewpoint_tas_2m_K=np.asfortranarray(self.HRU.dewpoint_tas_2m_K),
-                ps_pascal=np.asfortranarray(self.HRU.ps_pascal),
-                rlds_W_per_m2=np.asfortranarray(self.HRU.rlds_W_per_m2),
-                rsds_W_per_m2=np.asfortranarray(self.HRU.rsds_W_per_m2),
-                wind_u10m_m_per_s=np.asfortranarray(self.HRU.wind_u10m_m_per_s),
-                wind_v10m_m_per_s=np.asfortranarray(self.HRU.wind_v10m_m_per_s),
-                CO2_ppm=self.model.forcing.load("CO2_ppm"),
-                crop_factor=crop_factor,
-                crop_map=self.HRU.var.crop_map,
-                actual_irrigation_consumption_m=actual_irrigation_consumption_m,
-                capillar_rise_m=capillar_rise_m,
-                saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
-                lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-                bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
-                natural_crop_groups=self.HRU.var.natural_crop_groups,
-                crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
-                    "crop_group_number"
-                ].values.astype(np.float32),
-                minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
+                **error_inputs._asdict(),
             )
             raise AssertionError("Land surface water balance check failed.")
 

@@ -609,7 +609,6 @@ def test_multiverse() -> None:
             },
         ]
         config["hazards"]["floods"]["events"] = events
-        config["hazards"]["floods"]["force_overwrite"] = False
 
         args["config"] = config
 

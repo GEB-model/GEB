@@ -449,7 +449,7 @@ class MeritHydro(Adapter):
                 try:
                     # Ensure urllib3 decodes any transfer-encoding for a clean tar stream
                     try:
-                        resp.raw.decode_content = True  # type: ignore[attr-defined]
+                        resp.raw.decode_content = True
                     except Exception:
                         pass
                     # Stream the tar and extract only needed members sequentially
