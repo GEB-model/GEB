@@ -47,7 +47,6 @@ $$
 
 To derive the utility of staying with and without implementing dry flood-proofing measures, we take the integral of the summed and time discounted utility under all possible events $i$. These events have a probability $p_i$ of (no) flooding (see section x for a description of the modeling of the return-period based flood maps). Each household is assigned a position in the income distribution as taken from a global synthetic population database [@ton2024global]. This procedure is further described under section X. Household income ($Inc$) for each household is sampled from a national lognormal distribution constructed using OECD income distribution data [@oecd_data_inequality]. We calculate the wealth $W$ of each agent at time $t$ using the income-to-wealth ratios per income quintile (???).
 
-
-
+## Code
 
 ::: geb.agents

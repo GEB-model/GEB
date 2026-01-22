@@ -47,10 +47,6 @@ def run_infiltration_simulation(
     n_layers = 6
     # Convert mm/hr to m/timestep (assuming 1 hr timestep)
     ksat_m = np.float32(ksat_mm_hr / 1000.0)
-
-    ws = (
-        np.full(n_layers, 0.45, dtype=np.float32) * 0.1
-    )  # Porosity * layer depth (approx)
     # Actually ws is water content in meters. Let's assume homogeneous layers of 10cm for simplicity in capacity
     # Layer depths: 0.05, 0.1, 0.15, 0.3, 0.4, 1.0 (from test_soil.py data)
     layer_heights = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.0], dtype=np.float32)
@@ -127,7 +123,6 @@ def run_infiltration_simulation(
         # Simple cascading bucket model for testing purposes
         # Flux = K_sat * (w/ws)^4 (approximate unsaturated flow)
 
-        flux_in = 0.0  # From layer above (starts 0 for top layer, but infiltration handles top input)
         # Note: infiltration function puts water into w[0] and w[1].
         # We need to drain w[1] -> w[2] -> ... -> w[n] -> drain out
 
@@ -328,7 +323,6 @@ def test_ga_full_column_saturation_processes() -> None:
     # Shallow soil for faster saturation in test
     layer_heights = np.array([0.1, 0.1, 0.1], dtype=np.float32)
     n_layers = len(layer_heights)
-    total_depth = np.sum(layer_heights)
     porosity = np.float32(0.4)
     ws = layer_heights * porosity
     wres = layer_heights * np.float32(0.05)
@@ -429,7 +423,6 @@ def test_ga_full_column_saturation_processes() -> None:
     late_stage_drain = results["drainage"][-10:]
 
     avg_infil = np.mean(late_stage_infil)
-    avg_drain = np.mean(late_stage_drain)
 
     # Infiltration must be feeding the drainage + ET
     # ET is fixed 1.0. Drainage is dynamic.
@@ -556,7 +549,6 @@ def test_ga_extreme_rainfall_runoff() -> None:
     )
 
     # Check that infiltration is much less than rain
-    rain_event_sum = np.sum(results.rain_mm_per_hr[5:15])
     infil_event_sum = np.sum(results.infiltration_mm_per_hr[5:15])
     runoff_event_sum = np.sum(results.runoff_mm_per_hr[5:15])
 
