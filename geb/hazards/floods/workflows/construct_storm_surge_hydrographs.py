@@ -378,8 +378,8 @@ def generate_surge_hydrograph(
         (
             np.zeros(247),
             np.hstack(
-                (df_before_peak.index.values, np.flipud(df_after_peak.index.values)[1:])
-            ),
+                (df_before_peak.index.values, np.flipud(df_after_peak.index.values)[1:])  # ty:ignore[no-matching-overload]
+            ),  # ty:ignore[no-matching-overload]
             np.zeros(246),
         )
     )
