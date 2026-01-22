@@ -1518,7 +1518,7 @@ class GEBModel(
             data_provider: Data provider to use for the data catalog. Default is "default".
         """
         self._logger = logger
-        self._data_catalog = DataCatalog(
+        self._old_data_catalog = DataCatalog(
             data_libs=[data_catalog], logger=self._logger, fallback_lib=None
         )
 
@@ -1560,13 +1560,13 @@ class GEBModel(
         self._logger = value
 
     @property
-    def data_catalog(self) -> DataCatalog:
+    def old_data_catalog(self) -> DataCatalog:
         """Get the data catalog."""
-        return self._data_catalog
+        return self._old_data_catalog
 
-    @data_catalog.setter
-    def data_catalog(self, value: DataCatalog) -> None:
-        self._data_catalog = value
+    @old_data_catalog.setter
+    def old_data_catalog(self, value: DataCatalog) -> None:
+        self._old_data_catalog: DataCatalog = value
 
     @property
     def data_catalog(self) -> NewDataCatalog:
@@ -1763,7 +1763,6 @@ class GEBModel(
             )
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
         elif "subbasin" in region or "geom" in region:
-            rivers = rivers[~rivers["is_downstream_outflow"]]
             outlet_lonlats = rivers.geometry.apply(
                 lambda geom: geom.coords[-2]
             ).tolist()
@@ -1774,6 +1773,20 @@ class GEBModel(
                 ),
                 ids=rivers.index,
             ).astype(np.int32)
+
+            # we want to remove the areas upstream of the downstream outflow basins
+            # that are not part of the study area.
+            is_upstream_of_downstream_basin = rivers["is_upstream_of_downstream_basin"]
+
+            # by setting these basins to 0 in the subbasins grid, they will be removed
+            subbasins_grid[
+                np.isin(subbasins_grid, rivers[is_upstream_of_downstream_basin].index)
+            ] = 0
+
+            # and we can now remove them from the rivers geodataframe as well. They have had
+            # their purpose now.
+            rivers = rivers[~is_upstream_of_downstream_basin]
+
             subbasins: list[tuple[dict[str, Any], float]] = list(
                 rasterio.features.shapes(
                     subbasins_grid,
@@ -1794,7 +1807,7 @@ class GEBModel(
                 )
                 .set_index("COMID")
                 .set_crs(4326)
-            )  # ty:ignore[invalid-assignment]
+            )
             subbasins["is_downstream_outflow"] = subbasins.index.isin(
                 rivers[rivers["is_downstream_outflow"]].index
             )
@@ -2248,7 +2261,7 @@ class GEBModel(
         Filters the dataset to include only stations within the model bounds,
         and ensures that the time dimension is consistent.
         """
-        water_levels = self.data_catalog.get_dataset("GTSM")
+        water_levels = self.old_data_catalog.get_dataset("GTSM")
         assert isinstance(water_levels, xr.DataArray)
         assert (
             water_levels.time.diff("time").astype(np.int64)
