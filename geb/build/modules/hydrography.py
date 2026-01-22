@@ -117,10 +117,10 @@ def get_rivers_geometry(
         columns={
             "NextDownID": "downstream_ID",
         }
-    ).set_index("COMID")  # ty:ignore[invalid-assignment]
+    ).set_index("COMID")
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
     rivers["is_headwater_catchment"] = rivers["maxup"] == 0
-    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])  # ty:ignore[invalid-assignment]
+    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
 
     # reverse the river lines to have the downstream direction
@@ -377,12 +377,29 @@ class Hydrography(BuildModelBase):
         downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
         subbasin_ids.update(downstream_subbasins)
 
+        # later we want to include the downstream outflow basins. However, we don't want to include
+        # other branches that are upstream of those downstream basins, but are not part
+        # of the area that we are interested in. Therefore, we also include
+        # the immediately upstream basins of the downstream basins, so that we can stop the subbasin
+        # construction there.
+        upstream_basins_of_downstream_basins = set()
+        for downstream_subbasin in downstream_subbasins.keys():
+            for upstream_basin in river_graph.predecessors(downstream_subbasin):
+                if upstream_basin not in subbasin_ids:
+                    upstream_basins_of_downstream_basins.add(upstream_basin)
+
+        subbasin_ids.update(upstream_basins_of_downstream_basins)
+
         rivers: gpd.GeoDataFrame = get_rivers_geometry(
             self.data_catalog, list(subbasin_ids)
         )
 
         rivers["is_downstream_outflow"] = pd.Series(
             True, index=downstream_subbasins
+        ).reindex(rivers.index, fill_value=False)
+
+        rivers["is_upstream_of_downstream_basin"] = pd.Series(
+            True, index=upstream_basins_of_downstream_basins
         ).reindex(rivers.index, fill_value=False)
 
         return rivers
@@ -1253,9 +1270,9 @@ class Hydrography(BuildModelBase):
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(
+        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
             1979, "01"
-        )  # ty:ignore[possibly-missing-attribute]
+        )
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
