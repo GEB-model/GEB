@@ -100,7 +100,7 @@ class DeltaDTM(Adapter):
         return tile_names, continents_to_download
 
     def download_deltadtm(self, continents_to_download: list[str]) -> None:
-        """Download and extract DeltaDTM tiles for the specified continents.
+        """Download DeltaDTM tiles for the specified continents.
 
         Args:
             continents_to_download (list[str]): List of continent ZIP filenames to download.
@@ -137,9 +137,7 @@ class DeltaDTM(Adapter):
             )
             da = self._merge_tiles(extracted_paths)
 
-        # da = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
         da = convert_nodata(da, np.nan)
-        # write_zarr(da, filepath, crs=da.rio.crs)
         return da
 
     def _merge_tiles(self, tile_paths: list[Path]) -> xr.Dataset:
