@@ -162,7 +162,7 @@ class LandSurface(BuildModelBase):
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
             elif DEM["name"] == "delta_dtm":
-                DEM_raster = self.new_data_catalog.fetch(
+                DEM_raster = self.data_catalog.fetch(
                     "delta_dtm",
                     xmin=xmin,
                     xmax=xmax,
@@ -170,7 +170,7 @@ class LandSurface(BuildModelBase):
                     ymax=ymax,
                 ).read()
             elif DEM["name"] == "gebco":
-                DEM_raster = self.new_data_catalog.fetch("gebco").read()
+                DEM_raster = self.data_catalog.fetch("gebco").read()
             elif DEM["name"] == "geul_dem":
                 DEM_raster = read_zarr(
                     self.data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
