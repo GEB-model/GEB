@@ -3,10 +3,10 @@
 from typing import Any
 
 from .base import Adapter
+from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
-from .deltadtm import DeltaDTM
 from .fabdem import Fabdem as Fabdem
 from .fao import GMIA
 from .gadm import GADM

@@ -14,23 +14,22 @@ Notes:
 
 from __future__ import annotations
 
+import os
 import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
 
+import geopandas as gpd
 import numpy as np
 import rioxarray as rxr
 import xarray as xr
 from rioxarray import merge
-import os
-import geopandas as gpd
-from tqdm import tqdm
-from geb.workflows.io import fetch_and_save, read_zarr, write_zarr
+
+from geb.workflows.io import fetch_and_save
 from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
-
 
 available_continents = {
     "Africa.zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/22ffa027-184b-4f67-9979-c182f3dfb1ab",
@@ -65,7 +64,21 @@ class DeltaDTM(Adapter):
 
     def get_tiles_in_model_bounds(
         self, xmin: float, xmax: float, ymin: float, ymax: float
-    ):
+    ) -> tuple[list[str], list[str]]:
+        """Get the DeltaDTM tiles that intersect with the model bounds. This function uses the DeltaDTM tiles geopackage.
+
+        Args:
+            xmin (float): Minimum x-coordinate (longitude) of the model bounds.
+            xmax (float): Maximum x-coordinate (longitude) of the model bounds.
+            ymin (float): Minimum y-coordinate (latitude) of the model bounds.
+            ymax (float): Maximum y-coordinate (latitude) of the model bounds.
+        Returns:
+            tuple[list[str], list[str]]: A tuple containing:
+                - A list of tile filenames that intersect with the model bounds.
+                - A list of continent ZIP filenames to download.
+        Raises:
+            RuntimeError: If the DeltaDTM tiles geopackage cannot be downloaded.
+        """
         # download the DeltaDTM tiles geopackage
         url_delta_dtm_tiles = "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/60a69899-2e67-4f9f-8761-3b57094acd12"
         os.makedirs(self.root, exist_ok=True)
@@ -86,13 +99,13 @@ class DeltaDTM(Adapter):
 
         return tile_names, continents_to_download
 
-    def download_deltadtm(self, continents_to_download: list[str]):
+    def download_deltadtm(self, continents_to_download: list[str]) -> None:
         """Download and extract DeltaDTM tiles for the specified continents.
 
         Args:
             continents_to_download (list[str]): List of continent ZIP filenames to download.
-        Returns:
-            dict: A dictionary mapping tile names to their extracted file paths.
+        Raises:
+            RuntimeError: If downloading any of the continent ZIP files fails.
         """
         for continent in continents_to_download:
             url = available_continents[continent]
@@ -109,7 +122,7 @@ class DeltaDTM(Adapter):
 
     def unpack_and_merge_tiles(
         self, continents_to_download: list[str], tile_names: list[str]
-    ):
+    ) -> xr.Dataset:
         """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
 
         Args:
@@ -118,7 +131,6 @@ class DeltaDTM(Adapter):
         Returns:
             xarray.Dataset: Merged dataset of the specified tiles.
         """
-
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             extracted_paths = self._unpack_tiles(
@@ -146,11 +158,13 @@ class DeltaDTM(Adapter):
 
     def _unpack_tiles(
         self, continents_to_download: list[str], tile_names: list[str], temp_dir: Path
-    ):
+    ) -> list[Path]:
         """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
 
         Args:
+            continents_to_download (list[str]): List of continent ZIP filenames to extract from.
             tile_names (list[str]): List of tile filenames to unpack and merge.
+            temp_dir (Path): Temporary directory to extract tiles into.
         Returns:
             xarray.Dataset: Merged dataset of the specified tiles.
         """
@@ -166,7 +180,18 @@ class DeltaDTM(Adapter):
 
     def fetch(
         self, xmin: float, xmax: float, ymin: float, ymax: float, url: str = None
-    ):
+    ) -> DeltaDTM:
+        """Fetch DeltaDTM tiles for the specified bounding box.
+
+        Args:
+            xmin (float): Minimum x-coordinate (longitude) of the bounding box.
+            xmax (float): Maximum x-coordinate (longitude) of the bounding box.
+            ymin (float): Minimum y-coordinate (latitude) of the bounding box.
+            ymax (float): Maximum y-coordinate (latitude) of the bounding box.
+            url (str, optional): URL to download DeltaDTM data from. Defaults to None.
+        Returns:
+            DeltaDTM: The DeltaDTM adapter instance with the downloaded data.
+        """
         tile_names, continents_to_download = self.get_tiles_in_model_bounds(
             xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax
         )
@@ -174,5 +199,10 @@ class DeltaDTM(Adapter):
         self.da = self.unpack_and_merge_tiles(continents_to_download, tile_names)
         return self
 
-    def read(self):
+    def read(self) -> xr.Dataset:
+        """Read the downloaded DeltaDTM data.
+
+        Returns:
+            xarray.Dataset: The downloaded DeltaDTM data.
+        """
         return self.da
