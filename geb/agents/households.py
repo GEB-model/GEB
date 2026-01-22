@@ -2694,46 +2694,6 @@ class Households(AgentBaseClass):
                     print(f"Thinking about adapting at {current_time}...")
                     self.decide_household_strategy()
 
-                end_time: datetime = datetime.combine(
-                    self.model.config["general"]["end_time"], datetime.min.time()
-                )
-
-                if self.model.current_time == end_time:
-                    print("end of sim reached")
-                    df_all: pd.DataFrame = pd.concat(
-                        self.flood_risk_perceptions, ignore_index=True
-                    )
-
-                    gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
-                        df_all,
-                        geometry=gpd.points_from_xy(df_all.x, df_all.y),
-                        crs=self.var.household_points.crs,
-                    )
-
-                    out_path: Path = (
-                        Path(self.model.output_folder) / "risk_perceptions_new.gpkg"
-                    )
-                    print(f"saved risk perception here: {out_path}")
-                    gdf.to_file(out_path, layer="perceptions", driver="GPKG")
-
-                    df_stats: pd.DataFrame = pd.DataFrame(
-                        self.flood_risk_perceptions_statistics
-                    )
-                    out_path: Path = (
-                        Path(self.model.output_folder) / "risk_perception_stats_new.csv"
-                    )
-                    df_stats.to_csv(out_path, index=False)
-                    print(f"Saved risk perception statistics to {out_path}")
-
-                    df_adaptation: pd.DataFrame = pd.DataFrame(
-                        self.adaptation_decisions
-                    )
-                    out_path: Path = (
-                        Path(self.model.output_folder) / "adaptation_decisions_new.csv"
-                    )
-                    df_adaptation.to_csv(out_path, index=False)
-                    print(f"Saved adaptation decisions to {out_path}")
-
             else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
                 if (
                     self.config["adapt"]
@@ -2744,6 +2704,47 @@ class Households(AgentBaseClass):
                         self.update_building_attributes()
                     print("Thinking about adapting...")
                     self.decide_household_strategy()
+
+            end_time: datetime = datetime.combine(
+                self.model.config["general"]["end_time"], datetime.min.time()
+            )
+
+            if self.model.current_time == end_time:
+                print("end of sim reached")
+                df_all: pd.DataFrame = pd.concat(
+                    self.flood_risk_perceptions, ignore_index=True
+                )
+
+                gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+                    df_all,
+                    geometry=gpd.points_from_xy(df_all.x, df_all.y),
+                    crs=self.var.household_points.crs,
+                )
+
+                out_path: Path = (
+                    Path(self.model.output_folder) / "risk_perceptions_new.gpkg"
+                )
+                print(f"saved risk perception here: {out_path}")
+                gdf.to_file(out_path, layer="perceptions", driver="GPKG")
+
+                df_stats: pd.DataFrame = pd.DataFrame(
+                    self.flood_risk_perceptions_statistics
+                )
+                out_path: Path = (
+                    Path(self.model.output_folder) / "risk_perception_stats_new.csv"
+                )
+                df_stats.to_csv(out_path, index=False)
+                print(f"Saved risk perception statistics to {out_path}")
+
+                df_adaptation = pd.concat(self.adaptation_decisions, ignore_index=True)
+
+                # Save to CSV
+                out_path = (
+                    Path(self.model.output_folder) / "adaptation_decisions_new.csv"
+                )
+                df_adaptation.to_csv(out_path, index=False)
+
+                print(f"Saved adaptation decisions to {out_path}")
 
         self.report(locals())
 
