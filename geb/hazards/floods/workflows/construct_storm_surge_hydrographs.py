@@ -518,7 +518,7 @@ def generate_storm_tide_hydrograph(
             "surge": surge,
             "twl": average_tide_signal + surge,
         },
-        index=pd.date_range(start="1/1/2000", periods=len(surge), freq="10T"),
+        index=pd.date_range(start="1/1/2000", periods=len(surge), freq="10min"),
     )
     surge_height_spring = rl - np.max(spring_tide_signal)
     surge_rise_spring = np.flip(
@@ -548,7 +548,7 @@ def generate_storm_tide_hydrograph(
             "surge": surge_spring,
             "twl": spring_tide_signal + surge_spring,
         },
-        index=pd.date_range(start="1/1/2000", periods=len(surge_spring), freq="10T"),
+        index=pd.date_range(start="1/1/2000", periods=len(surge_spring), freq="10min"),
     )
 
     # plot
