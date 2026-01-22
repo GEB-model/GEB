@@ -239,7 +239,9 @@ class SFINCSRootModel:
             "manning",
             "power_law",
         ], "Method should be 'manning' or 'power_law'"
-        rivers.to_file("input_rivers.gpkg", driver="GPKG")
+
+        region.to_file("input_region2.gpkg", driver="GPKG")
+        rivers.to_file("input_rivers2.gpkg", driver="GPKG")
         assert rivers.intersects(region.union_all()).all(), (
             "All rivers must intersect the model region"
         )
