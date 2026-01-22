@@ -2272,6 +2272,8 @@ class Households(AgentBaseClass):
         n_warned_households = 0
         if not hasattr(self.var, "triggered_wlrange"):
             self.var.triggered_wlrange = np.full(self.n, np.nan)
+        if not hasattr(self.var, "action_lead_time"):
+            self.var.action_lead_time = np.full(self.n, np.nan)
 
         for household_id in selected_households.index:
             # Skip al geëvacueerden voor daadwerkelijke warning
@@ -2512,6 +2514,10 @@ class Households(AgentBaseClass):
             self.var.actions_taken[household_id] = self.var.recommended_measures[
                 household_id
             ].copy()
+
+            # Store the lead_time when actions are taken for timing-based damage reduction
+            if np.any(self.var.actions_taken[household_id]):
+                self.var.action_lead_time[household_id] = lead_time
 
             # If evacuation is among the actions taken, mark household as evacuated
             if self.var.actions_taken[household_id, evac_idx]:
@@ -2859,6 +2865,22 @@ class Households(AgentBaseClass):
             self.buildings_content_curve["building_unprotected"] * 0.80
         )
 
+        # create timing-based damage curves for elevated possessions
+        # Early action (>48h lead time): 20% damage (80% reduction)
+        self.buildings_content_curve["building_elevated_possessions_early"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.20
+        )
+        
+        # Medium action (24-48h lead time): 80% damage (20% reduction)  
+        self.buildings_content_curve["building_elevated_possessions_medium"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.80
+        )
+        
+        # Late action (<24h lead time): 80% damage (20% reduction) - same as standard
+        self.buildings_content_curve["building_elevated_possessions_late"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.80
+        )
+
         # create another column (curve) in the buildings content curve for
         # protected buildings with both sandbags and elevated possessions
         self.buildings_content_curve["building_all_forecast_based"] = (
@@ -3034,6 +3056,7 @@ class Households(AgentBaseClass):
             "actions_taken",
             "triggered_wlrange",
             "action_per_range",
+            "action_lead_time",
         ]
 
         # make sure household points and global variables have the same length
@@ -3050,6 +3073,7 @@ class Households(AgentBaseClass):
             "response_probability",
             "evacuated",
             "triggered_wlrange",
+            "action_lead_time",
         ]:
             if hasattr(self.var, name):
                 household_points[name] = getattr(self.var, name)
@@ -3117,10 +3141,13 @@ class Households(AgentBaseClass):
             # household_points["sandbags"] = False
             household_points["elevated_possessions"] = False
 
-            # mark households that took protective actions
+            # mark households that took protective actions and add timing info
             household_points.loc[
                 np.asarray(self.var.actions_taken)[:, 0] == 1, "elevated_possessions"
             ] = True
+            
+            # Add lead_time information for timing-based damage reduction
+            household_points["action_lead_time"] = self.var.action_lead_time
             # DISABLED: Sandbags measure not being used
             # household_points.loc[
             #     np.asarray(self.var.actions_taken)[:, 1] == 1, "sandbags"
@@ -3131,11 +3158,23 @@ class Households(AgentBaseClass):
                 buildings, household_points, how="left", exclusive=True
             )
 
-            # Assign object types for buildings based on protective measures taken
+            # Assign object types for buildings based on protective measures taken and timing
             buildings["object_type"] = "building_unprotected"  # reset
-            buildings.loc[buildings["elevated_possessions"], "object_type"] = (
-                "building_elevated_possessions"
-            )
+            
+            # Timing-based object type assignment for elevated possessions
+            elevated_mask = buildings["elevated_possessions"] == True
+            
+            # Early action: >48 hours lead time
+            early_mask = elevated_mask & (buildings["action_lead_time"] > 48)
+            buildings.loc[early_mask, "object_type"] = "building_elevated_possessions_early"
+            
+            # Medium action: 24-48 hours lead time  
+            medium_mask = elevated_mask & (buildings["action_lead_time"] > 24) & (buildings["action_lead_time"] <= 48)
+            buildings.loc[medium_mask, "object_type"] = "building_elevated_possessions_medium"
+            
+            # Late action: <24 hours lead time
+            late_mask = elevated_mask & (buildings["action_lead_time"] <= 24)
+            buildings.loc[late_mask, "object_type"] = "building_elevated_possessions_late"
             # DISABLED: Sandbags measure not being used
             # buildings.loc[buildings["sandbags"], "object_type"] = (
             #     "building_with_sandbags"
@@ -3154,15 +3193,20 @@ class Households(AgentBaseClass):
                 action_maps_dir / "buildings_with_protective_measures.geoparquet"
             )
 
-            # Assign object types for buildings centroid based on protective measures taken
+            # Assign object types for buildings centroid based on protective measures taken and timing
             buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            # DISABLED: Sandbags measure not being used - simplified logic
+            
+            # Timing-based object type assignment for buildings_centroid
             buildings_centroid["object_type"] = np.select(
                 [
-                    buildings_centroid["elevated_possessions"],
+                    (buildings_centroid["elevated_possessions"]) & (buildings_centroid["action_lead_time"] > 48),
+                    (buildings_centroid["elevated_possessions"]) & (buildings_centroid["action_lead_time"] > 24) & (buildings_centroid["action_lead_time"] <= 48),
+                    (buildings_centroid["elevated_possessions"]) & (buildings_centroid["action_lead_time"] <= 24),
                 ],
                 [
-                    "building_elevated_possessions",
+                    "building_elevated_possessions_early",
+                    "building_elevated_possessions_medium", 
+                    "building_elevated_possessions_late",
                 ],
                 default="building_unprotected",
             )

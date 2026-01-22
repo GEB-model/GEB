@@ -326,9 +326,58 @@ class SFINCSRootModel:
         # Remove rivers that are not represented in the grid and have no upstream rivers
         # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
         # general than the MERIT-hydro specific 'maxup' attribute
+
+        # Before filtering, identify rivers that should be downstream outflow points
+        original_outflow_rivers = rivers[
+            rivers["is_downstream_outflow"] == True
+        ].index.tolist()
+
         self.rivers: gpd.GeoDataFrame = rivers[
-            (rivers["maxup"] > 0) | (rivers["represented_in_grid"])
+            (rivers["maxup"] > 0) & (rivers["represented_in_grid"])
         ].to_crs(self.crs)
+
+        # Check if any original outflow rivers were filtered out
+        remaining_outflow_rivers = self.rivers[
+            self.rivers["is_downstream_outflow"] == True
+        ].index.tolist()
+        filtered_out_outflow_rivers = set(original_outflow_rivers) - set(
+            remaining_outflow_rivers
+        )
+
+        if filtered_out_outflow_rivers:
+            print(
+                f"Warning: {len(filtered_out_outflow_rivers)} downstream outflow rivers were filtered out"
+            )
+            print(f"Filtered out river IDs: {list(filtered_out_outflow_rivers)}")
+
+            # For each filtered out outflow river, find its upstream rivers in the remaining dataset
+            for filtered_river_id in filtered_out_outflow_rivers:
+                # Find rivers that drain to the filtered out river
+                upstream_candidates = self.rivers[
+                    self.rivers["downstream_ID"] == filtered_river_id
+                ]
+
+                if not upstream_candidates.empty:
+                    # Select the upstream river that is represented in grid, or the first one if multiple
+                    if upstream_candidates["represented_in_grid"].any():
+                        selected_upstream = upstream_candidates[
+                            upstream_candidates["represented_in_grid"]
+                        ].index[0]
+                    else:
+                        selected_upstream = upstream_candidates.index[0]
+
+                    print(
+                        f"Setting upstream river {selected_upstream} as outflow point to replace filtered river {filtered_river_id}"
+                    )
+                    self.rivers.at[selected_upstream, "is_downstream_outflow"] = True
+                else:
+                    print(
+                        f"Warning: No upstream rivers found for filtered outflow river {filtered_river_id}"
+                    )
+
+        # Fill any null values in is_downstream_outflow with False
+        if self.rivers["is_downstream_outflow"].isnull().any():
+            raise ValueError("Null values found in is_downstream_outflow column")
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
@@ -551,11 +600,20 @@ class SFINCSRootModel:
         for river_idx, river in self.rivers[
             self.rivers["is_downstream_outflow"] | (self.rivers["downstream_ID"] == -1)
         ].iterrows():
+            print(f"Calculating outflow conditions for river ID {river_idx}...")
+
             # outflow point is the intersection of the river geometry with the region boundary
             # this will be used as the central point of the outflow boundary condition
             subbasin_boundary: gpd.GeoDataFrame = self.region[
                 self.region.index == river_idx
             ]
+            print("debug" + str(len(subbasin_boundary)))
+            fig, ax = plt.subplots(figsize=(10, 10))
+            self.region.boundary.plot(ax=ax, color="black")
+            self.rivers.loc[[river_idx]].plot(ax=ax, color="blue")
+            if len(subbasin_boundary) > 0:
+                subbasin_boundary.boundary.plot(ax=ax, color="red")
+            plt.savefig(self.path / f"debug_subbasin_boundary_{river_idx}.png")
             assert len(subbasin_boundary) == 1, (
                 "Subbasin boundary must be a single geometry"
             )
@@ -563,6 +621,8 @@ class SFINCSRootModel:
             outflow_point: Point | MultiPoint | GeometryCollection = (
                 river.geometry.intersection(subbasin_boundary.iloc[0].geometry.boundary)
             )
+            print("debug" + str(outflow_point))
+            print(type(outflow_point))
             if not isinstance(outflow_point, Point):
                 # if the intersection is not a single point, select the most downstream point
                 outflow_point: Point = select_most_downstream_point(
@@ -1146,7 +1206,7 @@ class SFINCSSimulation:
         simulation_name: str,
         start_time: datetime,
         end_time: datetime,
-        spinup_seconds: int = 86400,
+        spinup_seconds: int = 0,
         write_figures: bool = True,
         flood_map_output_interval_seconds: int | None = None,
     ) -> None:

@@ -32,7 +32,7 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
     os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/data_catalog/"
     os.environ["SFINCS_CONTAINER"] = os.getenv(
         "SFINCS_CONTAINER",
-        "/ada-software/containers/sfincs-cpu-v2.3.0-mt-Faber-Release.sif",
+        "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif",  # sfincs-cpu-v2.2.0-col-dEze-Release.sif/sfincs-cpu-v2.3.0-mt-Faber-Release.sif
     )
     os.environ["SFINCS_CONTAINER_GPU"] = os.getenv(
         "SFINCS_CONTAINER_GPU",
@@ -40,7 +40,8 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
     )
 else:
     os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
-        "SFINCS_SIF_CONTAINER", "deltares/sfincs-cpu:sfincs-v2.3.0-mt-Faber-Release"
+        "SFINCS_SIF_CONTAINER",
+        "deltares/sfincs-cpu:sfincs-v2.2.0-col-dEze-Release",  # sfincs-cpu:sfincs-v2.2.0-col-dEze-Release/sfincs-cpu:sfincs-v2.3.0-mt-Faber-Release
     )
     os.environ["SFINCS_SIF_CONTAINER_GPU"] = os.getenv(
         "SFINCS_SIF_CONTAINER_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
