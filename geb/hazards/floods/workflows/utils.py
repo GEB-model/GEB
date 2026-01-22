@@ -546,6 +546,9 @@ def get_representative_river_points(
     Returns:
         A list of tuples (x, y) representing the coordinates of the representative points.
         If no valid points are found, an empty list is returned.
+
+    Raises:
+        ValueError: If no valid xy coordinates are found for rivers.
     """
     river = rivers.loc[river_ID]
     if river["represented_in_grid"]:
@@ -553,10 +556,9 @@ def get_representative_river_points(
         if xy is not None:
             return [xy]
         else:
-            print(
-                f"Warning: No valid xy found for river {river_ID}. Skipping this river."
+            raise ValueError(
+                f"Error: No valid xy found for river {river_ID} which is represented in the grid."
             )
-            return []  # If no valid xy found, return empty list
 
     else:
         river_IDs = set([river_ID])
@@ -577,8 +579,8 @@ def get_representative_river_points(
             if xy is not None:
                 xys.append(xy)
             else:
-                print(
-                    f"Warning: No valid xy found for river {river_ID}. Skipping this river."
+                raise ValueError(
+                    f"Error: No valid xy found for river {river_ID} which is represented not in the grid. Likely because upstream rivers could not be found."
                 )
 
         return xys
@@ -613,12 +615,18 @@ def get_discharge_and_river_parameters_by_river(
         A tuple containing:
             - A pandas DataFrame with discharge time series for each river (columns are river IDs).
             - A pandas DataFrame with river parameters (index is river IDs, columns are 'river_width_alpha' and 'river_width_beta').
+
+    Raises:
+        ValueError: If no points are found for rivers or if discharge values contain NaNs.
     """
     xs: list[int] = []
     ys: list[int] = []
     for points in points_per_river:
         xs.extend([p[0] for p in points])
         ys.extend([p[1] for p in points])
+
+    if len(xs) == 0 or len(ys) == 0:
+        raise ValueError("No points found for rivers.")
 
     x_points: xr.DataArray = xr.DataArray(
         xs,
