@@ -97,13 +97,14 @@ class LandSurface(BuildModelBase):
         DEMs: list[dict[str, str | float]] = [
             {
                 "name": "fabdem",
-                "zmin": 0.001,
+                "zmin": 30,
                 "fill_depressions": True,
                 "nodata": np.nan,
             },
             {
                 "name": "delta_dtm",
                 "zmax": 30,
+                "zmin": 0.001,
                 "fill_depressions": True,
                 "nodata": np.nan,
             },
@@ -181,20 +182,20 @@ class LandSurface(BuildModelBase):
             if "bands" in DEM_raster.dims:
                 DEM_raster = DEM_raster.isel(band=0)
 
-                DEM_raster = DEM_raster.isel(
-                    get_window(
-                        DEM_raster.x,
-                        DEM_raster.y,
-                        tuple(
-                            self.geom["routing/subbasins"]
-                            .to_crs(DEM_raster.rio.crs)
-                            .total_bounds
-                        ),
-                        buffer=100,
-                        raise_on_out_of_bounds=False,
-                        raise_on_buffer_out_of_bounds=False,
+            DEM_raster = DEM_raster.isel(
+                get_window(
+                    DEM_raster.x,
+                    DEM_raster.y,
+                    tuple(
+                        self.geom["routing/subbasins"]
+                        .to_crs(DEM_raster.rio.crs)
+                        .total_bounds
                     ),
-                )
+                    buffer=100,
+                    raise_on_out_of_bounds=False,
+                    raise_on_buffer_out_of_bounds=False,
+                ),
+            )
 
             DEM_raster = convert_nodata(
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
