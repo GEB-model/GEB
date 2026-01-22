@@ -245,7 +245,7 @@ class Floods(Module):
         self,
         name: str,
         rivers: gpd.GeoDataFrame,
-        region: gpd.GeoDataFrame,
+        subbbasins: gpd.GeoDataFrame,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
@@ -259,7 +259,7 @@ class Floods(Module):
 
         Args:
             name: Name of the SFINCS model (used for the model root directory).
-            region: The region to build the SFINCS model for. If None, the entire model region is used.
+            subbbasins: The subbbasins to build the SFINCS model for. If None, the entire model subbbasins is used.
             rivers: The rivers to include in the SFINCS model.
             coastal: Whether to only include coastal areas in the model.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
@@ -276,7 +276,7 @@ class Floods(Module):
             ).to_dataset(name="elevtn")
 
         sfincs_model.build(
-            region=region,
+            subbbasins=subbbasins,
             DEMs=self.DEM_config,
             rivers=rivers,
             discharge=self.discharge_spinup_ds,
@@ -462,7 +462,7 @@ class Floods(Module):
             sfincs_root_model = self.build(
                 f"group_{group_id}",
                 rivers=rivers_group,
-                region=subbasins_group,
+                subbbasins=subbasins_group,
             )  # build or read the model
             sfincs_simulation = self.set_forcing(  # set the forcing
                 sfincs_root_model, start_time, end_time
@@ -497,7 +497,11 @@ class Floods(Module):
             self.model.agents.households.flood(flood_depth=flood_depth)
 
     def get_return_period_maps(self) -> None:
-        """Generates flood maps for specified return periods using the SFINCS model."""
+        """Generates flood maps for specified return periods using the SFINCS model.
+
+        Raises:
+            ValueError: If no hydrograph is found for a node and return period.
+        """
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
@@ -517,6 +521,13 @@ class Floods(Module):
             low_elevation_coastal_zone_mask = read_geom(
                 self.model.files["geom"]["coastal/low_elevation_coastal_zone_mask"]
             )
+            low_elevation_coastal_zone_mask = low_elevation_coastal_zone_mask[
+                ["initial_water_level", "geometry"]
+            ]
+
+            # use COMID as index and set unique index name for coastal region
+            low_elevation_coastal_zone_mask.index = [-1]
+            low_elevation_coastal_zone_mask.index.name = "COMID"
 
             # get initial_water_level for model domain
             initial_water_level = low_elevation_coastal_zone_mask[
@@ -533,17 +544,22 @@ class Floods(Module):
                 self.model.files["geom"]["coastal/land_polygons"],
             )
 
-            coastal_subbasins = subbasins[subbasins["is_coastal"]]
+            coastal_subbasins = subbasins[subbasins["is_coastal"]].copy()
 
-            # merge region and lower elevation coastal zone mask in a single shapefile
-            coastal_region = coastal_subbasins.union_all().union(
-                low_elevation_coastal_zone_mask.union_all()
+            # remove coastal subbasin from low elevation coastal zone mask
+            low_elevation_coastal_zone_mask = gpd.overlay(
+                low_elevation_coastal_zone_mask,
+                coastal_subbasins,
+                how="difference",
+            )
+            coastal_subbasins = pd.concat(
+                [coastal_subbasins, low_elevation_coastal_zone_mask],
+                ignore_index=False,
+            )
+            coastal_subbasins.to_file(
+                "temp_coastal_subbasins.geojson", driver="GeoJSON"
             )
 
-            # domain to gpd.GeoDataFrame
-            coastal_region = gpd.GeoDataFrame(
-                geometry=[coastal_region], crs=low_elevation_coastal_zone_mask.crs
-            )
             model_name = "coastal_region"
 
             # load location and offset for coastal water level forcing
@@ -561,9 +577,9 @@ class Floods(Module):
 
             sfincs_coastal_root_model: SFINCSRootModel = self.build(
                 name=model_name,
-                region=coastal_region,
+                subbbasins=coastal_subbasins,
                 coastal=True,
-                rivers=rivers[rivers.intersects(coastal_region.union_all())],
+                rivers=rivers[rivers.intersects(coastal_subbasins.union_all())],
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
                 initial_water_level=initial_water_level,
@@ -577,12 +593,17 @@ class Floods(Module):
             for subbasin_id, subbasin in subbasins[
                 ~subbasins["is_downstream_outflow"]
             ].iterrows():
+                river: pd.Series = rivers.loc[subbasin_id]
+                if not river["represented_in_grid"] and river["maxup"] == 0:
+                    # skip subbasins that are not represented in the grid and have no upstream area
+                    continue
+
                 downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
 
                 region_subbasins = subbasins[
                     subbasins.index.isin([subbasin_id, downstream_basin])
                 ].copy()
-                region_rivers = rivers[rivers.index.isin(region_subbasins.index)]
+                region_rivers = rivers.copy()
 
                 # if there is a downstream basin, mark it as downstream outflow subbasin
                 if downstream_basin != -1:
@@ -593,7 +614,7 @@ class Floods(Module):
 
                 sfincs_inland_root_model = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
-                    region=region_subbasins,
+                    subbbasins=region_subbasins,
                     rivers=region_rivers,
                     coastal=False,
                 )
@@ -616,8 +637,8 @@ class Floods(Module):
 
             if not coastal_only:
                 for sfincs_inland_root_model in sfincs_inland_root_models:
-                    inflow_nodes = sfincs_inland_root_model.rivers[
-                        ~sfincs_inland_root_model.rivers["is_downstream_outflow"]
+                    inflow_nodes = sfincs_inland_root_model.active_rivers[
+                        ~sfincs_inland_root_model.active_rivers["is_downstream_outflow"]
                     ]
                     inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                         get_start_point
@@ -627,6 +648,10 @@ class Floods(Module):
                     Q: list[pd.DataFrame] = []
                     for node_idx in inflow_nodes.index:
                         hydro = inflow_nodes.at[node_idx, f"hydrograph_{return_period}"]
+                        if hydro is None:
+                            raise ValueError(
+                                f"No hydrograph found for node {node_idx} and return period {return_period}."
+                            )
                         # hydro is expected to be dict-like {iso_timestamp: Q} — convert to DataFrame with column named node_idx
                         df = pd.DataFrame.from_dict(
                             hydro, orient="index", columns=np.array([node_idx])

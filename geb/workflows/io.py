@@ -404,7 +404,7 @@ def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     return da
 
 
-def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[unresolved-attribute]
+def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
     """Convert a CRS object (pyproj CRS, rasterio CRS or EPSG code) to a WKT string.
 
     Args:
@@ -420,7 +420,7 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[u
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
         return crs_obj.to_wkt()
-    elif isinstance(crs_obj, rasterio.crs.CRS):  # ty: ignore[unresolved-attribute]
+    elif isinstance(crs_obj, rasterio.crs.CRS):
         return CRS(crs_obj.to_wkt()).to_wkt()
     else:
         raise TypeError("Unsupported CRS type")

@@ -20,6 +20,9 @@
 - Use Green-Ampt rather than VIC for infiltration.
 - Implement interflow
 - Limit drainage to groundwater to conductivity of groundwater top layer
+- Fix for flood risk maps which could not be run if river was not included in grid but had upstream areas
+- Fix that downstream outflow area was not included with new subbasins
+- Renamed new_data_catalog to data_catalog and data_catalog to old_data_catalog
 
 To support this version:
 

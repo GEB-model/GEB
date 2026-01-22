@@ -64,21 +64,38 @@ def decompress_with_mask(
 
     Returns:
         array: Decompressed array.
+
+    Raises:
+        ValueError: If array is not 1D or 2D.
     """
     if fillvalue is None:
         if array.dtype in (np.float32, np.float64):
             fillvalue = np.nan
         else:
             fillvalue = 0
-    outmap = np.full(mask.size, fillvalue, dtype=array.dtype)
-    output_shape = mask.shape
-    if array.ndim == 2:
+    outmap_flat = np.full(mask.size, fillvalue, dtype=array.dtype)
+    if array.ndim == 1:
+        output_shape: tuple[int, int] = mask.shape
+        outmap_flat[~mask.ravel()] = array
+        outmap = outmap_flat.reshape(output_shape)
+
+    elif array.ndim == 2:
         array = cast(TwoDArrayWithScalar[Any], array)
         assert array.shape[1] == mask.size - mask.sum()
-        outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
-        output_shape = (array.shape[0], *output_shape)
-    outmap[..., ~mask.ravel()] = array
-    return outmap.reshape(output_shape)
+        outmap_flat = np.broadcast_to(
+            outmap_flat, (array.shape[0], outmap_flat.size)
+        ).copy()
+        output_shape: tuple[int, int, int] = (
+            array.shape[0],
+            mask.shape[0],
+            mask.shape[1],
+        )
+        outmap_flat[..., ~mask.ravel()] = array
+        outmap = outmap_flat.reshape(output_shape)
+    else:
+        raise ValueError("Array must be 1D or 2D")
+
+    return outmap
 
 
 @njit(cache=True)
@@ -786,7 +803,7 @@ def pad_xy(
             array_rio.x_dim: (x_before, x_after),
             array_rio.y_dim: (y_before, y_after),
         },
-        constant_values=constant_values,  # type: ignore
+        constant_values=constant_values,
     ).rio.set_spatial_dims(x_dim=array_rio.x_dim, y_dim=array_rio.y_dim, inplace=True)
     superset[array_rio.x_dim] = x_coord
     superset[array_rio.y_dim] = y_coord

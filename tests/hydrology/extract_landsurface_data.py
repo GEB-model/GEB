@@ -50,7 +50,6 @@ def extract_landsurface_error_data(npz_path: str, cell_idx: int) -> str:
         cell_idx
     ]
     capillar_rise_m_data = data["capillar_rise_m"][cell_idx]
-    frost_index_data = data["frost_index"][cell_idx]
     natural_crop_groups_data = data["natural_crop_groups"][cell_idx]
 
     # Extract arrays
@@ -118,7 +117,6 @@ def extract_landsurface_error_data(npz_path: str, cell_idx: int) -> str:
         f"actual_irrigation_consumption_m_data = np.float32({actual_irrigation_consumption_m_data})"
     )
     code_lines.append(f"capillar_rise_m_data = np.float32({capillar_rise_m_data})")
-    code_lines.append(f"frost_index_data = np.float32({frost_index_data})")
     code_lines.append(
         f"natural_crop_groups_data = np.float32({natural_crop_groups_data})"
     )
