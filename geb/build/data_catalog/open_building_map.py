@@ -186,7 +186,7 @@ class OpenBuildingMap(Adapter):
         # concatenate all buildings
         buildings_in_geom: gpd.GeoDataFrame = pd.concat(
             list_of_buildings_in_geom, ignore_index=True
-        )  # ty: ignore[invalid-assignment]
+        )
 
         # raise error if no buildings are found in model region
         if len(list_of_buildings_in_geom) == 0:
