@@ -137,8 +137,12 @@ class LandSurface(BuildModelBase):
             xmax=xmax,
             ymin=ymin,
             ymax=ymax,
-        ).read()
+        )
 
+        self.set_other(
+            deltadtm,
+            name="DEM/delta_dtm",
+        )
         
         fabdem: xr.DataArray = (
             self.new_data_catalog.fetch(

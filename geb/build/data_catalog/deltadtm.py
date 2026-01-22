@@ -81,11 +81,84 @@ class DeltaDTM(Adapter):
     
         return tile_names, continents_to_download
 
+    def download_deltadtm(self, continents_to_download: list[str]):
+        """Download and extract DeltaDTM tiles for the specified continents.
+
+        Args:
+            continents_to_download (list[str]): List of continent ZIP filenames to download.
+        Returns:
+            dict: A dictionary mapping tile names to their extracted file paths.
+        """
+        for continent in continents_to_download:
+            url = available_continents[continent]
+            zip_path = self.root / continent
+            success = fetch_and_save(
+                url = url,
+                file_path = zip_path,
+            )
+            if not success:
+                raise RuntimeError(f"Failed to download DeltaDTM continent ZIP: {continent}")
+            # extract the zip file
+
+    def unpack_and_merge_tiles(self, continents_to_download: list[str], tile_names: list[str]):
+        """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
+
+        Args:
+            continents_to_download (list[str]): List of continent ZIP filenames to extract from.
+            tile_names (list[str]): List of tile filenames to unpack and merge.
+        Returns:
+            xarray.Dataset: Merged dataset of the specified tiles.
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            temp_dir: Path = Path(temp_dir_str)
+            extracted_paths = self._unpack_tiles(continents_to_download, tile_names, temp_dir)
+            da = self._merge_tiles(extracted_paths)
+
+        # da = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
+        da = convert_nodata(da, np.nan)
+        # write_zarr(da, filepath, crs=da.rio.crs)
+        return da
+
+    def _merge_tiles(self, tile_paths: list[Path]) -> xr.Dataset:
+        """Merge extracted DeltaDTM tiles into a single xarray Dataset.
+
+        Args:
+            tile_paths (list[Path]): List of paths to the extracted tile files.
+        Returns:
+            xarray.Dataset: Merged dataset of the specified tiles.
+        """
+        das: list[xr.DataArray] = [rxr.open_rasterio(path) for path in tile_paths]  # ty: ignore[invalid-assignment]
+        das = [da.sel(band=1) for da in das]
+        da: xr.DataArray = merge.merge_arrays(das)
+        return da
+
+    def _unpack_tiles(self, continents_to_download: list[str], tile_names: list[str], temp_dir: Path):
+        """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
+
+        Args:
+            tile_names (list[str]): List of tile filenames to unpack and merge.
+        Returns:
+            xarray.Dataset: Merged dataset of the specified tiles.
+        """
+        extracted_paths: list[Path] = []           
+        for continent in continents_to_download:
+            zip_path = self.root / continent
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                for tile_name in tile_names:
+                    if tile_name in zip_ref.namelist():
+                        zip_ref.extract(tile_name, path=temp_dir)
+                        extracted_paths.append(temp_dir / tile_name)
+        return extracted_paths
+            
+
 
     def fetch(self, xmin: float, xmax: float, ymin: float, ymax: float, url: str = None):
         tile_names, continents_to_download = self.get_tiles_in_model_bounds(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax)
-        return self
+        self.download_deltadtm(continents_to_download)
+        da = self.unpack_and_merge_tiles(continents_to_download, tile_names)
+        return da
 
-    def read(self):
-        return None
+    # def read(self):
+    #     return None
 
