@@ -1340,6 +1340,12 @@ class Forcing(BuildModelBase):
         elevation_forcing: xr.DataArray = resample_like(
             elevation, target, method="bilinear"
         )
+
+        # ensure no NaN values are present
+        assert not np.isnan(elevation_forcing.values).any(), (
+            "elevation forcing contains NaN values"
+        )
+
         elevation_forcing: xr.DataArray = elevation_forcing.chunk({"x": -1, "y": -1})
         elevation_forcing: xr.DataArray = elevation_forcing.rio.write_crs(4326)
 
