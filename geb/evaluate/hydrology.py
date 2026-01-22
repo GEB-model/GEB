@@ -1527,11 +1527,7 @@ class Hydrology:
                 f"DEBUG obs value range: {float(obs.min().compute()):.2f} to {float(obs.max().compute()):.2f}"
             )
             rivers = gpd.read_parquet(
-                Path("simulation_root")
-                / run_name
-                / "SFINCS"
-                / "group_0"
-                / "rivers.geoparquet"
+                Path("simulation_root") / run_name / "group_0" / "rivers.geoparquet"
             ).to_crs(obs.rio.crs)
             region_path = Path(self.model.input_folder / "geom" / "mask.geoparquet")
             region = gpd.read_parquet(region_path).to_crs(obs.rio.crs)

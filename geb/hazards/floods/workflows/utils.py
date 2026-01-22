@@ -148,6 +148,10 @@ def read_flood_depth(
             flood_depth_m: xr.Dataset | xr.DataArray = model.results["hmax"].max(
                 dim="timemax"
             )
+            fig, ax = plt.subplots()
+            flood_depth_m.plot(ax=ax)
+            ax.set_title("Maximum Water Surface Elevation over all time steps")
+            fig.savefig(model_root / "maximum_water_surface_elevation.png")
             assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
             flood_depth_m_all_steps: xr.Dataset | xr.DataArray = model.results["h"]
@@ -437,14 +441,26 @@ def run_sfincs_simulation(
         else:
             print("No GPU detected, running SFINCS without GPU support.")
 
+    # Automatically set container environment variables if not already set
     if gpu:
         version: str | None = os.getenv(key="SFINCS_CONTAINER_GPU")
-        assert version is not None, (
-            "SFINCS_CONTAINER_GPU environment variable is not set"
-        )
+        if version is None:
+            # Auto-set GPU container if not explicitly configured
+            version = "deltares/sfincs-gpu:latest"
+            os.environ["SFINCS_CONTAINER_GPU"] = version
+            print(f"Auto-set SFINCS_CONTAINER_GPU to: {version}")
     else:
         version: str | None = os.getenv(key="SFINCS_CONTAINER")
-        assert version is not None, "SFINCS_CONTAINER environment variable is not set"
+        if version is None:
+            # Auto-set CPU container if not explicitly configured
+            version = "deltares/sfincs-cpu:latest"
+            os.environ["SFINCS_CONTAINER"] = version
+            print(f"Auto-set SFINCS_CONTAINER to: {version}")
+
+    # Verify we have a valid container version
+    assert version is not None and len(version) > 0, (
+        f"Container version not set. Expected SFINCS_CONTAINER{'_GPU' if gpu else ''} environment variable."
+    )
 
     if platform.system() == "Linux":
         # If not a apptainer image, add docker:// prefix
@@ -452,7 +468,7 @@ def run_sfincs_simulation(
         if not version.endswith(".sif"):
             version: str = "docker://" + version
 
-        c = (
+        c: int = (
             int(
                 os.getenv("SLURM_CPUS_PER_TASK", None)
                 or os.getenv("SLURM_CPUS_ON_NODE", None)
@@ -462,21 +478,36 @@ def run_sfincs_simulation(
             if ncpus == "auto"
             else int(ncpus)
         )
-        ncpus_str = "0" if c == 1 else f"0-{c - 1}"
 
-        cmd: list[str] = [
-            "taskset",
-            "-c",
-            ncpus_str,  # get user defined or automatically detected number of CPUs
-            "apptainer",
-            "run",
-            "-B",  ## Bind mount
-            f"{model_root.resolve()}:/data",
-            "--pwd",  ## Set working directory inside container
-            f"/data/{simulation_root.relative_to(model_root)}",
-            "--nv",
-            version,
-        ]
+        cmd: list[str] = []
+
+        # Use taskset only when GPU is not detected (CPU-only mode)
+        if not gpu:
+            ncpus_str: str = "0" if c == 1 else f"0-{c - 1}"
+            cmd.extend(
+                [
+                    "taskset",
+                    "-c",
+                    ncpus_str,  # get user defined or automatically detected number of CPUs
+                ]
+            )
+
+        cmd.extend(
+            [
+                "apptainer",
+                "run",
+                "-B",  ## Bind mount
+                f"{model_root.resolve()}:/data",
+                "--pwd",  ## Set working directory inside container
+                f"/data/{simulation_root.relative_to(model_root)}",
+            ]
+        )
+
+        # Only add GPU support if gpu=True and it's actually available
+        if gpu:
+            cmd.append("--nv")
+
+        cmd.append(version)
 
     else:
         assert check_docker_running(), "Docker is not running"
