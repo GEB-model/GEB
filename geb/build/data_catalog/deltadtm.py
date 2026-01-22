@@ -118,7 +118,6 @@ class DeltaDTM(Adapter):
                 raise RuntimeError(
                     f"Failed to download DeltaDTM continent ZIP: {continent}"
                 )
-            # extract the zip file
 
     def unpack_and_merge_tiles(
         self, continents_to_download: list[str], tile_names: list[str]
