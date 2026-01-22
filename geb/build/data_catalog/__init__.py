@@ -470,7 +470,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="delta_dtm.zarr",
             cache="global",
         ),
-        "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629", 
+        "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
         "source": {
             "name": "Delta DTM",
             "author": "Pronk et al. (2024)",
@@ -479,7 +479,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
             "paper_doi": "https://doi.org/10.1038/s41597-024-03091-9",
         },
-    },    
+    },
     "fabdem": {
         "adapter": Fabdem(
             folder="fabdem",

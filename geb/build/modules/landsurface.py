@@ -101,7 +101,12 @@ class LandSurface(BuildModelBase):
                 "fill_depressions": True,
                 "nodata": np.nan,
             },
-            {"name": "delta_dtm", "zmax": 30, "fill_depressions": False},
+            {
+                "name": "delta_dtm",
+                "zmax": 30,
+                "fill_depressions": True,
+                "nodata": np.nan,
+            },
             {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
         ],
     ) -> None:
@@ -130,20 +135,7 @@ class LandSurface(BuildModelBase):
         ymin: float = bounds[1] - buffer
         xmax: float = bounds[2] + buffer
         ymax: float = bounds[3] + buffer
-        
-        deltadtm = self.new_data_catalog.fetch(
-            "delta_dtm", 
-            xmin=xmin,
-            xmax=xmax,
-            ymin=ymin,
-            ymax=ymax,
-        )
 
-        self.set_other(
-            deltadtm,
-            name="DEM/delta_dtm",
-        )
-        
         fabdem: xr.DataArray = (
             self.new_data_catalog.fetch(
                 "fabdem",
@@ -168,23 +160,26 @@ class LandSurface(BuildModelBase):
         for DEM in DEMs:
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
+            elif DEM["name"] == "delta_dtm":
+                DEM_raster = self.new_data_catalog.fetch(
+                    "delta_dtm",
+                    xmin=xmin,
+                    xmax=xmax,
+                    ymin=ymin,
+                    ymax=ymax,
+                ).read()
+            elif DEM["name"] == "gebco":
+                DEM_raster = self.new_data_catalog.fetch("gebco").read()
+            elif DEM["name"] == "geul_dem":
+                DEM_raster = read_zarr(
+                    self.data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
+                )
             else:
-                if DEM["name"] == "delta_dtm":
-                    DEM_raster = self.new_data_catalog.fetch("delta_dtm").read()
-
-                if DEM["name"] == "gebco":
-                    DEM_raster = self.new_data_catalog.fetch("gebco").read()
-                else:
-                    if DEM["name"] == "geul_dem":
-                        DEM_raster = read_zarr(
-                            self.data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
-                        )
-                    else:
-                        DEM_raster = xr.open_dataarray(
-                            self.data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
-                        )
-                if "bands" in DEM_raster.dims:
-                    DEM_raster = DEM_raster.isel(band=0)
+                DEM_raster = xr.open_dataarray(
+                    self.data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
+                )
+            if "bands" in DEM_raster.dims:
+                DEM_raster = DEM_raster.isel(band=0)
 
                 DEM_raster = DEM_raster.isel(
                     get_window(

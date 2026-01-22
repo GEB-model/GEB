@@ -11,6 +11,7 @@ Notes:
     - Coverage spans the global land areas.
 
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -39,8 +40,9 @@ available_continents = {
     "North_America.zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/037664c6-1494-4889-9689-a56570728320",
     "Oceania.zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/de972de1-26bd-4303-afdf-21a90a232cff",
     "Seven_seas_(open_ocean).zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/fe986ba6-3db9-40e2-8a49-0fcdb341244a",
-    "South_America.zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/db980f00-63cd-4a07-a4df-55ab06510594", 
+    "South_America.zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/db980f00-63cd-4a07-a4df-55ab06510594",
 }
+
 
 class DeltaDTM(Adapter):
     """Downloader for DeltaDTM tiles.
@@ -51,6 +53,7 @@ class DeltaDTM(Adapter):
     Attributes:
         cache_dir (Path): Directory to cache downloaded tiles.
     """
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the adapter for DeltaDTM.
 
@@ -60,13 +63,15 @@ class DeltaDTM(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def get_tiles_in_model_bounds(self, xmin: float, xmax: float, ymin: float, ymax: float):
+    def get_tiles_in_model_bounds(
+        self, xmin: float, xmax: float, ymin: float, ymax: float
+    ):
         # download the DeltaDTM tiles geopackage
         url_delta_dtm_tiles = "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/60a69899-2e67-4f9f-8761-3b57094acd12"
         os.makedirs(self.root, exist_ok=True)
         success = fetch_and_save(
-            url = url_delta_dtm_tiles,
-            file_path = self.root / "delta_dtm_tiles.gpkg",
+            url=url_delta_dtm_tiles,
+            file_path=self.root / "delta_dtm_tiles.gpkg",
         )
         if not success:
             raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
@@ -78,7 +83,7 @@ class DeltaDTM(Adapter):
 
         # continents(s) to download tiles for
         continents_to_download = tiles_in_bounds["zipfile"].unique().tolist()
-    
+
         return tile_names, continents_to_download
 
     def download_deltadtm(self, continents_to_download: list[str]):
@@ -93,14 +98,18 @@ class DeltaDTM(Adapter):
             url = available_continents[continent]
             zip_path = self.root / continent
             success = fetch_and_save(
-                url = url,
-                file_path = zip_path,
+                url=url,
+                file_path=zip_path,
             )
             if not success:
-                raise RuntimeError(f"Failed to download DeltaDTM continent ZIP: {continent}")
+                raise RuntimeError(
+                    f"Failed to download DeltaDTM continent ZIP: {continent}"
+                )
             # extract the zip file
 
-    def unpack_and_merge_tiles(self, continents_to_download: list[str], tile_names: list[str]):
+    def unpack_and_merge_tiles(
+        self, continents_to_download: list[str], tile_names: list[str]
+    ):
         """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
 
         Args:
@@ -112,7 +121,9 @@ class DeltaDTM(Adapter):
 
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
-            extracted_paths = self._unpack_tiles(continents_to_download, tile_names, temp_dir)
+            extracted_paths = self._unpack_tiles(
+                continents_to_download, tile_names, temp_dir
+            )
             da = self._merge_tiles(extracted_paths)
 
         # da = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
@@ -133,7 +144,9 @@ class DeltaDTM(Adapter):
         da: xr.DataArray = merge.merge_arrays(das)
         return da
 
-    def _unpack_tiles(self, continents_to_download: list[str], tile_names: list[str], temp_dir: Path):
+    def _unpack_tiles(
+        self, continents_to_download: list[str], tile_names: list[str], temp_dir: Path
+    ):
         """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
 
         Args:
@@ -141,24 +154,25 @@ class DeltaDTM(Adapter):
         Returns:
             xarray.Dataset: Merged dataset of the specified tiles.
         """
-        extracted_paths: list[Path] = []           
+        extracted_paths: list[Path] = []
         for continent in continents_to_download:
             zip_path = self.root / continent
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 for tile_name in tile_names:
                     if tile_name in zip_ref.namelist():
                         zip_ref.extract(tile_name, path=temp_dir)
                         extracted_paths.append(temp_dir / tile_name)
         return extracted_paths
-            
 
-
-    def fetch(self, xmin: float, xmax: float, ymin: float, ymax: float, url: str = None):
-        tile_names, continents_to_download = self.get_tiles_in_model_bounds(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax)
+    def fetch(
+        self, xmin: float, xmax: float, ymin: float, ymax: float, url: str = None
+    ):
+        tile_names, continents_to_download = self.get_tiles_in_model_bounds(
+            xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax
+        )
         self.download_deltadtm(continents_to_download)
-        da = self.unpack_and_merge_tiles(continents_to_download, tile_names)
-        return da
+        self.da = self.unpack_and_merge_tiles(continents_to_download, tile_names)
+        return self
 
-    # def read(self):
-    #     return None
-
+    def read(self):
+        return self.da
