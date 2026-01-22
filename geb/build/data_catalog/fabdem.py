@@ -503,9 +503,6 @@ class Fabdem(Adapter):
         Returns:
             True if the TIF intersects with the bbox, False otherwise.
         """
-        # Check for tile N46W002_FABDEM_V1-2
-
-
         # Parse bounds from filename
         # FABDEM TIF filenames follow pattern like "N00E000.tif" for 1x1 degree cells
         base_name: str = tif_filename[:-4]  # Remove .tif extension
@@ -525,13 +522,14 @@ class Fabdem(Adapter):
         else:
             lat_min: int = lat_val
             lat_max: int = lat_val + 1
-            
+
         if ew_lon == "W":
             lon_min: int = -lon_val
             lon_max: int = -lon_val + 1
         else:
             lon_min: int = lon_val
             lon_max: int = lon_val + 1
+
         # Check for intersection
         return not (
             lon_max <= xmin or lon_min >= xmax or lat_max <= ymin or lat_min >= ymax
