@@ -6,7 +6,7 @@ We implement an infiltration scheme based on the Green-Ampt equation [@green1911
 
 ### Infiltration Capacity (Green-Ampt)
 
-The model determines the maximum infiltration capacity ($f_{cap}$) for the current timestep using the explicit Green-Ampt approximation derived by **Sadeghi et al. (2024)** [@sadeghi2024simple]. This avoids the need for iterative solutions or sub-stepping typically required for the implicit Green-Ampt formulation.
+The model determines the maximum infiltration capacity ($f_{cap}$) for the current timestep using the explicit Green-Ampt approximation[@sadeghi2024simple]. This avoids the need for iterative solutions or sub-stepping typically required for the implicit Green-Ampt formulation.
 
 The cumulative infiltration $I(t)$ is calculated as:
 
@@ -15,7 +15,7 @@ $$ I(t) = K_{sat} t \left( 0.70635 + 0.32415 \sqrt{1 + 9.43456 \frac{S^2}{K_{sat
 Where:
 * $I(t)$ is the cumulative infiltration [$L$].
 * $K_{sat}$ is the saturated hydraulic conductivity [$L/T$].
-* $S^2 = 2 K_{sat} \psi_f \Delta \theta$ is the square of sorptivity [$L^2/T$], following the approximation by **Philip (1969)** [@philip1969theory].
+* $S^2 = 2 K_{sat} \psi_f \Delta \theta$ is the square of sorptivity [$L^2/T$][@philip1969theory].
 * $\psi_f$ is the wetting front suction head [$L$].
 * $\Delta \theta$ is the moisture deficit [$ - $].
 * $t$ is the time since the start of the infiltration event [$T$].
