@@ -1,5 +1,7 @@
 """Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
 
+import warnings
+
 import geopandas as gpd
 import numpy as np
 import xarray as xr
@@ -11,6 +13,7 @@ from geb.workflows.raster import (
     bounds_are_within,
     calculate_cell_area,
     convert_nodata,
+    interpolate_na_2d,
     pad_xy,
     rasterize_like,
     reclassify,
@@ -525,6 +528,17 @@ class LandSurface(BuildModelBase):
 
     @build_method(depends_on=[])
     def setup_soil_parameters(self) -> None:
+        """Deprecated method for setting up soil parameters."""
+        # Warn that this method is deprecated and delegate to the replacement to preserve backwards compatibility.
+        warnings.warn(
+            "setup_soil_parameters is deprecated; use setup_soil instead. Calling setup_soil().",
+            DeprecationWarning,
+        )
+
+        self.setup_soil()
+
+    @build_method(depends_on=[])
+    def setup_soil(self) -> None:
         """Sets up the soil parameters for the model.
 
         Notes:
@@ -542,15 +556,52 @@ class LandSurface(BuildModelBase):
             form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
             with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
-        ds: xr.Dataset = load_soilgrids(
+        # Keep this commented code because we want to include differentiation between valley and hillslope soils later
+        # soil_depth = self.data_catalog.fetch("GlobalSoilRegolithSediment").read()
+        # assert isinstance(soil_depth, xr.Dataset)
+        # soil_depth = soil_depth.isel(
+        #     get_window(
+        #         soil_depth.x,
+        #         soil_depth.y,
+        #         self.bounds,
+        #         buffer=10,
+        #     ),
+        # )
+
+        soilgrids: xr.Dataset = load_soilgrids(
             self.data_catalog, self.subgrid["mask"], self.region
         )
+        self.set_subgrid(soilgrids["silt"], name="soil/silt_percentage")
+        self.set_subgrid(soilgrids["clay"], name="soil/clay_percentage")
+        self.set_subgrid(soilgrids["bdod"], name="soil/bulk_density_kg_per_dm3")
+        self.set_subgrid(soilgrids["soc"], name="soil/soil_organic_carbon_percentage")
+        self.set_subgrid(soilgrids["height"], name="soil/soil_layer_height_m")
 
-        self.set_subgrid(ds["silt"], name="soil/silt")
-        self.set_subgrid(ds["clay"], name="soil/clay")
-        self.set_subgrid(ds["bdod"], name="soil/bulk_density")
-        self.set_subgrid(ds["soc"], name="soil/soil_organic_carbon")
-        self.set_subgrid(ds["height"], name="soil/soil_layer_height")
+        depth_to_bedrock_cm = self.data_catalog.fetch("soilgridsv1").read(
+            variable="BDTICM_M_250m_ll"
+        )
+        assert isinstance(depth_to_bedrock_cm, xr.DataArray)
+        depth_to_bedrock_cm = (
+            depth_to_bedrock_cm.isel(
+                get_window(
+                    depth_to_bedrock_cm.x,
+                    depth_to_bedrock_cm.y,
+                    self.bounds,
+                    buffer=10,
+                ),
+            )
+            .astype(np.float32)
+            .compute()
+        )
+        depth_to_bedrock_cm: xr.DataArray = convert_nodata(depth_to_bedrock_cm, np.nan)
+        depth_to_bedrock_m: xr.DataArray = (
+            depth_to_bedrock_cm / 100
+        )  # convert from cm to m
+        depth_to_bedrock_m: xr.DataArray = interpolate_na_2d(depth_to_bedrock_m)
+        depth_to_bedrock_m: xr.DataArray = resample_like(
+            depth_to_bedrock_m, soilgrids["silt"]
+        )
+        self.set_subgrid(depth_to_bedrock_m, name="soil/depth_to_bedrock_m")
 
         crop_group = (
             xr.open_dataarray(

@@ -953,7 +953,7 @@ def test_pedotransfer_functions_consistency() -> None:
         sand = np.array([props["sand"]], dtype=np.float32)
         clay = np.array([props["clay"]], dtype=np.float32)
         silt = np.array([props["silt"]], dtype=np.float32)
-        bulk_density_gr_per_cm3 = np.array([props["bulk_density"]], dtype=np.float32)
+        bulk_density_kg_per_dm3 = np.array([props["bulk_density"]], dtype=np.float32)
         organic_carbon_percentage = np.array(
             [props["organic_carbon"]], dtype=np.float32
         )
@@ -963,7 +963,7 @@ def test_pedotransfer_functions_consistency() -> None:
         # Using Toth as a baseline for Brakensiek input
         thetas_val_toth = thetas_toth(
             organic_carbon_percentage=organic_carbon_percentage,
-            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
+            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
             is_top_soil=is_top_soil,
             clay=clay,
             silt=silt,
@@ -971,7 +971,7 @@ def test_pedotransfer_functions_consistency() -> None:
 
         thetas_val_wosten = thetas_wosten(
             clay=clay,
-            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
+            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
             silt=silt,
             organic_carbon_percentage=organic_carbon_percentage,
             is_topsoil=is_top_soil,
@@ -990,7 +990,7 @@ def test_pedotransfer_functions_consistency() -> None:
         kv_w = kv_wosten(
             silt=silt,
             clay=clay,
-            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
+            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
             organic_carbon_percentage=organic_carbon_percentage,
             is_topsoil=is_top_soil,
         )
@@ -1012,7 +1012,7 @@ def test_pedotransfer_functions_consistency() -> None:
             clay=clay,
             silt=silt,
             organic_carbon_percentage=organic_carbon_percentage,
-            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
+            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
             is_top_soil=is_top_soil,
         )
 

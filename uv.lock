@@ -1205,7 +1205,6 @@ dependencies = [
     { name = "osmnx" },
     { name = "pandas" },
     { name = "permetrics" },
-    { name = "planetary-computer" },
     { name = "plotly" },
     { name = "pyarrow" },
     { name = "pyflwdir" },
@@ -1302,7 +1301,6 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.0,<3.0.0" },
     { name = "permetrics", specifier = ">=2.0.0" },
     { name = "pgmpy", marker = "extra == 'fairstream'", specifier = "==0.1.26" },
-    { name = "planetary-computer", specifier = ">=1.0.0" },
     { name = "plotly", specifier = ">=6.2.0" },
     { name = "pyarrow", specifier = ">=17.0.0" },
     { name = "pybind11", marker = "extra == 'plantfate'", specifier = ">=2.13.6" },
@@ -3525,25 +3523,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5f/74/bc3f671997158aef171194c3c4041e549946f4784b8690baa0626a0a164b/pint-0.25.2.tar.gz", hash = "sha256:85a45d1da8fe9c9f7477fed8aef59ad2b939af3d6611507e1a9cbdacdcd3450a", size = 254467, upload-time = "2025-11-06T22:08:09.184Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ab/88/550d41e81e6d43335603a960cd9c75c1d88f9cf01bc9d4ee8e86290aba7d/pint-0.25.2-py3-none-any.whl", hash = "sha256:ca35ab1d8eeeb6f7d9942b3cb5f34ca42b61cdd5fb3eae79531553dcca04dda7", size = 306762, upload-time = "2025-11-06T22:08:07.745Z" },
-]
-
-[[package]]
-name = "planetary-computer"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "packaging" },
-    { name = "pydantic" },
-    { name = "pystac" },
-    { name = "pystac-client" },
-    { name = "python-dotenv" },
-    { name = "pytz" },
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9b/d3/ccfb0e823e9beb72b7e6b749f0985c4db1530d4e4a145b1b5d12f5de417e/planetary-computer-1.0.0.tar.gz", hash = "sha256:5958a8e1d8ba1aafc7ac45878df2d7d03405806ae31ed2e675333faebca960cc", size = 17076, upload-time = "2023-07-05T13:06:58.679Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/7a/3965a2b58d172e106c1064af19707d29f86a0142c28ff40185490a0a8cfe/planetary_computer-1.0.0-py3-none-any.whl", hash = "sha256:7af5839f9346c1d23d53fff4e80e955db18a2d81992877816e22dcbc2f90c40d", size = 14163, upload-time = "2023-07-05T13:06:57.06Z" },
 ]
 
 [[package]]
