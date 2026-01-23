@@ -907,7 +907,7 @@ def thetas_toth(
 
     Args:
         organic_carbon_percentage: soil organic carbon content [%].
-        bulk_density_kg_per_dm3: bulk density [g /cm3].
+        bulk_density_kg_per_dm3: bulk density [kg/dm3].
         clay: clay percentage [%].
         silt: fsilt percentage [%].
         is_top_soil: top soil flag.
@@ -1113,7 +1113,7 @@ def get_pore_size_index_wosten(
         clay: clay percentage [%].
         silt: silt percentage [%].
         organic_carbon_percentage: soil organic carbon content [%].
-        bulk_density_kg_per_dm3: bulk density [g /cm3].
+        bulk_density_kg_per_dm3: bulk density [kg/dm3].
         is_top_soil: top soil flag.
 
     Returns:
@@ -1256,7 +1256,7 @@ def get_heat_capacity_solid_fraction(
     This calculates the total heat capacity per unit area for the solid part of the soil layer.
 
     Args:
-        bulk_density_kg_per_dm3: Soil bulk density [g/cm3].
+        bulk_density_kg_per_dm3: Soil bulk density [kg/dm3].
         layer_thickness_m: Thickness of the soil layer [m].
 
     Returns:
