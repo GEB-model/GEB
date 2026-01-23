@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -72,10 +73,9 @@ class OpenStreetMap(Adapter):
         minx, miny, maxx, maxy = geom.bounds
 
         urls: list[str] = []
-        for x in range(int(minx), int(maxx) + 1):
-            # Movisda seems to switch the W and E for the x coordinate
-            EW_code = f"E{-x:03d}" if x < 0 else f"W{x:03d}"
-            for y in range(int(miny), int(maxy) + 1):
+        for x in range(math.floor(minx), math.ceil(maxx)):
+            EW_code = f"E{-x:03d}" if x <= 0 else f"W{x:03d}"
+            for y in range(math.floor(miny), math.ceil(maxy)):
                 NS_code = f"N{y:02d}" if y >= 0 else f"S{-y:02d}"
                 # Create a polygon for the tile's bounding box (1x1 degree)
                 tile_poly = Polygon([(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)])
@@ -159,6 +159,6 @@ class OpenStreetMap(Adapter):
         for feature_type in feature_types:
             all_features[feature_type] = pd.concat(
                 all_features_list[feature_type], ignore_index=True
-            )  # ty:ignore[invalid-assignment]
+            )
 
         return all_features

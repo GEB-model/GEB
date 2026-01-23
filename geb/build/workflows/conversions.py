@@ -60,15 +60,16 @@ def setup_donor_countries(
         # calculate the HDI of the target country
         if country not in dev_index.index:  # if the country does not have HDI data
             # take the closest country with HDI data (HDI donor)
-            region_countries_geometries = global_countries.loc[
+            region_countries_with_hdi = global_countries.loc[
                 global_countries.index.isin(region_countries)
+                & global_countries.index.isin(dev_index.index)
             ]
             current_country_geometry = global_countries.loc[country].geometry
-            distances = region_countries_geometries.distance(current_country_geometry)
+            distances = region_countries_with_hdi.distance(current_country_geometry)
             distances = distances[
                 distances > 0
             ]  # remove zero distances (self-distance)
-            closest_country = region_countries_geometries.loc[distances.idxmin()].name
+            closest_country = region_countries_with_hdi.loc[distances.idxmin()].name
 
             print(
                 f"Country {country} does not have HDI data available, as it is not an official UN country. Taking HDI from the closest country with HDI data: {closest_country}."

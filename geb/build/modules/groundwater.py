@@ -52,7 +52,7 @@ class GroundWater(BuildModelBase):
         )
 
         # load total thickness
-        total_thickness = self.new_data_catalog.fetch(
+        total_thickness = self.data_catalog.fetch(
             "total_groundwater_thickness_globgm"
         ).read()
         total_thickness = total_thickness.isel(
@@ -65,7 +65,7 @@ class GroundWater(BuildModelBase):
             maximum_thickness_confined_layer,
         )
 
-        confining_layer = self.new_data_catalog.fetch(
+        confining_layer = self.data_catalog.fetch(
             "thickness_confining_layer_globgm"
         ).read()
         confining_layer = confining_layer.isel(
@@ -135,7 +135,7 @@ class GroundWater(BuildModelBase):
         )
 
         # load hydraulic conductivity
-        hydraulic_conductivity = self.new_data_catalog.fetch(
+        hydraulic_conductivity = self.data_catalog.fetch(
             "hydraulic_conductivity_globgm"
         ).read()
         hydraulic_conductivity = hydraulic_conductivity.isel(
@@ -168,9 +168,7 @@ class GroundWater(BuildModelBase):
         self.set_grid(hydraulic_conductivity, name="groundwater/hydraulic_conductivity")
 
         # load specific yield
-        specific_yield = self.new_data_catalog.fetch(
-            "specific_yield_aquifer_globgm"
-        ).read()
+        specific_yield = self.data_catalog.fetch("specific_yield_aquifer_globgm").read()
         specific_yield = specific_yield.isel(
             get_window(specific_yield.x, specific_yield.y, self.bounds, buffer=2)
         )
@@ -191,7 +189,7 @@ class GroundWater(BuildModelBase):
             specific_yield = specific_yield.expand_dims(layer=["upper"])
         self.set_grid(specific_yield, name="groundwater/specific_yield")
 
-        why_map: gpd.GeoDataFrame = self.new_data_catalog.fetch("why_map").read()
+        why_map: gpd.GeoDataFrame = self.data_catalog.fetch("why_map").read()
         why_map: gpd.GeoDataFrame = why_map[
             why_map["HYGEO2"] != 88
         ]  # remove areas under continuous ice cover
@@ -212,11 +210,11 @@ class GroundWater(BuildModelBase):
         if intial_heads_source == "GLOBGM":
             # the GLOBGM DEM has a slight offset, which we fix here before loading it
 
-            reference_globgm_map = self.new_data_catalog.fetch(
+            reference_globgm_map = self.data_catalog.fetch(
                 "head_upper_layer_globgm"
             ).read()
 
-            dem_globgm = self.new_data_catalog.fetch("dem_globgm").read()
+            dem_globgm = self.data_catalog.fetch("dem_globgm").read()
 
             dem_globgm = dem_globgm.assign_coords(
                 x=reference_globgm_map.x.values,
@@ -229,9 +227,7 @@ class GroundWater(BuildModelBase):
             dem = convert_nodata(self.grid["landsurface/elevation"], new_nodata=np.nan)
 
             # heads
-            head_upper_layer = self.new_data_catalog.fetch(
-                "head_upper_layer_globgm"
-            ).read()
+            head_upper_layer = self.data_catalog.fetch("head_upper_layer_globgm").read()
             head_upper_layer = head_upper_layer.isel(
                 get_window(
                     head_upper_layer.x, head_upper_layer.y, self.bounds, buffer=2
@@ -248,9 +244,7 @@ class GroundWater(BuildModelBase):
 
             head_upper_layer = dem + relative_head_upper_layer
 
-            head_lower_layer = self.new_data_catalog.fetch(
-                "head_lower_layer_globgm"
-            ).read()
+            head_lower_layer = self.data_catalog.fetch("head_lower_layer_globgm").read()
             head_lower_layer = head_lower_layer.isel(
                 get_window(
                     head_lower_layer.x, head_lower_layer.y, self.bounds, buffer=2
@@ -300,7 +294,7 @@ class GroundWater(BuildModelBase):
                 region_continent = region_continent[0]
 
             initial_depth = xr.open_dataarray(
-                self.data_catalog.get_source(
+                self.old_data_catalog.get_source(
                     f"initial_groundwater_depth_{region_continent}"
                 ).path
             ).rename({"lon": "x", "lat": "y"})
