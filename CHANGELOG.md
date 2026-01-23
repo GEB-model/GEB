@@ -1,4 +1,5 @@
 # dev
+- DeltaDTM is now also setup for the model region in setup_elevation. 
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 

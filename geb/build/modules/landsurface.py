@@ -97,6 +97,13 @@ class LandSurface(BuildModelBase):
         DEMs: list[dict[str, str | float]] = [
             {
                 "name": "fabdem",
+                "zmin": 30,
+                "fill_depressions": True,
+                "nodata": np.nan,
+            },
+            {
+                "name": "delta_dtm",
+                "zmax": 30,
                 "zmin": 0.001,
                 "fill_depressions": True,
                 "nodata": np.nan,
@@ -129,6 +136,7 @@ class LandSurface(BuildModelBase):
         ymin: float = bounds[1] - buffer
         xmax: float = bounds[2] + buffer
         ymax: float = bounds[3] + buffer
+
         fabdem: xr.DataArray = (
             self.data_catalog.fetch(
                 "fabdem",
@@ -153,35 +161,52 @@ class LandSurface(BuildModelBase):
         for DEM in DEMs:
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
-            else:
-                if DEM["name"] == "gebco":
-                    DEM_raster = self.data_catalog.fetch("gebco").read()
-                else:
-                    if DEM["name"] == "geul_dem":
-                        DEM_raster = read_zarr(
-                            self.old_data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
-                        )
-                    else:
-                        DEM_raster = xr.open_dataarray(
-                            self.old_data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
-                        )
-                if "bands" in DEM_raster.dims:
-                    DEM_raster = DEM_raster.isel(band=0)
+            elif DEM["name"] == "delta_dtm":
+                DEM_raster = self.data_catalog.fetch(
+                    "delta_dtm",
+                    xmin=xmin,
+                    xmax=xmax,
+                    ymin=ymin,
+                    ymax=ymax,
+                ).read()
 
-                DEM_raster = DEM_raster.isel(
-                    get_window(
-                        DEM_raster.x,
-                        DEM_raster.y,
-                        tuple(
-                            self.geom["routing/subbasins"]
-                            .to_crs(DEM_raster.rio.crs)
-                            .total_bounds
-                        ),
-                        buffer=100,
-                        raise_on_out_of_bounds=False,
-                        raise_on_buffer_out_of_bounds=False,
-                    ),
+                # Create low elevation coastal zone mask based on DeltaDTM
+                low_elevation_coastal_zone = DEM_raster < 10
+                low_elevation_coastal_zone.values = (
+                    low_elevation_coastal_zone.values.astype(np.float32)
                 )
+                self.set_other(
+                    low_elevation_coastal_zone,
+                    name="landsurface/low_elevation_coastal_zone",
+                )  # Maybe remove this
+
+            elif DEM["name"] == "gebco":
+                DEM_raster = self.data_catalog.fetch("gebco").read()
+            elif DEM["name"] == "geul_dem":
+                DEM_raster = read_zarr(
+                    self.data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
+                )
+            else:
+                DEM_raster = xr.open_dataarray(
+                    self.data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
+                )
+            if "bands" in DEM_raster.dims:
+                DEM_raster = DEM_raster.isel(band=0)
+
+            DEM_raster = DEM_raster.isel(
+                get_window(
+                    DEM_raster.x,
+                    DEM_raster.y,
+                    tuple(
+                        self.geom["routing/subbasins"]
+                        .to_crs(DEM_raster.rio.crs)
+                        .total_bounds
+                    ),
+                    buffer=100,
+                    raise_on_out_of_bounds=False,
+                    raise_on_buffer_out_of_bounds=False,
+                ),
+            )
 
             DEM_raster = convert_nodata(
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
@@ -197,13 +222,7 @@ class LandSurface(BuildModelBase):
                 name=f"DEM/{DEM['name']}",
             )
             DEM["path"] = f"DEM/{DEM['name']}"
-        low_elevation_coastal_zone = DEM_raster < 10
-        low_elevation_coastal_zone.values = low_elevation_coastal_zone.values.astype(
-            np.float32
-        )
-        self.set_other(
-            low_elevation_coastal_zone, name="landsurface/low_elevation_coastal_zone"
-        )  # Maybe remove this
+
         self.set_params(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])
