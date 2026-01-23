@@ -465,7 +465,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     "fabdem": {
         "adapter": Fabdem(
             folder="fabdem",
-            local_version=1,
+            local_version=2,
             filename="fabdem.zarr",
             cache="local",
         ),

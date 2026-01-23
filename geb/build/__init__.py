@@ -1750,8 +1750,6 @@ class GEBModel(
 
         rivers: gpd.GeoDataFrame = extend_rivers_into_ocean(rivers, ldd_network)
 
-        self.set_geom(rivers, name="routing/rivers")
-
         self.logger.info("Preparing 2D grid.")
         if "outflow" in region:
             # get basin geometry
@@ -1762,6 +1760,7 @@ class GEBModel(
                 dtype=bool,
             )
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
+            rivers = rivers[~rivers["is_upstream_of_downstream_basin"]]
         elif "subbasin" in region or "geom" in region:
             outlet_lonlats = rivers.geometry.apply(
                 lambda geom: geom.coords[-2]
@@ -1832,6 +1831,7 @@ class GEBModel(
         else:
             raise ValueError(f"Region {region} not understood.")
 
+        self.set_geom(rivers, name="routing/rivers")
         self.set_geom(subbasins, name="routing/subbasins")
 
         if include_coastal_area and subbasins["is_coastal"].any():
