@@ -1,4 +1,7 @@
 # dev
+- DeltaDTM is now also setup for the model region in setup_elevation. 
+
+# v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
 - Add documentation for modules, variables and routing.
 - Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
@@ -15,6 +18,13 @@
 - Enable return period maps for subbasins that discharge into the ocean, including several bugfixes for this.
 - Allow exporting of hourly values from reporter
 - Add initial soil temperature. Now still simplified but better than having no soil temperature.
+- Includes soil suction into the model using an approximation of the Green-Ampt equation.
+- Use Green-Ampt rather than VIC for infiltration.
+- Implement interflow
+- Limit drainage to groundwater to conductivity of groundwater top layer
+- Fix for flood risk maps which could not be run if river was not included in grid but had upstream areas
+- Fix that downstream outflow area was not included with new subbasins
+- Renamed new_data_catalog to data_catalog and data_catalog to old_data_catalog
 
 To support this version:
 

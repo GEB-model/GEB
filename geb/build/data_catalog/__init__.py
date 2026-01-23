@@ -3,6 +3,7 @@
 from typing import Any
 
 from .base import Adapter
+from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
@@ -462,10 +463,27 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 4.0 or ODbL 1.0",
         },
     },
+    "delta_dtm": {
+        "adapter": DeltaDTM(
+            folder="delta_dtm",
+            local_version=1,
+            filename="{}.zip",
+            cache="global",
+        ),
+        "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
+        "source": {
+            "name": "Delta DTM",
+            "author": "Pronk et al. (2024)",
+            "version": "1-1",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
+            "paper_doi": "https://doi.org/10.1038/s41597-024-03091-9",
+        },
+    },
     "fabdem": {
         "adapter": Fabdem(
             folder="fabdem",
-            local_version=1,
+            local_version=2,
             filename="fabdem.zarr",
             cache="local",
         ),

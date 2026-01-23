@@ -12,4 +12,6 @@ While soil processes are simulated in the HRUs (e.g., percolation, capillary ris
 
 ![image](../images/aggregate_HRUs.svg)
 
+## Code
+
 ::: geb.hydrology.HRUs

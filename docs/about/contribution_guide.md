@@ -41,8 +41,9 @@ To create a release of GEB, and creating a package on PyPi, take the following s
 
 1. Bump the version of GEB using `uv version --bump xxxx`. Replacing xxxx with major, minor, patch, stable, alpha, beta, rc, post or dev.
 2. Update the [changelog](https://github.com/GEB-model/GEB/blob/main/CHANGELOG.md), moving the updates to the appropriate version (keeping the dev header for the next version).
-3. Create a [new release](https://github.com/GEB-model/GEB/releases). Both the tag and the title should match the new version number. In the release notes, paste the relevant updates from the [changelog](https://github.com/GEB-model/GEB/blob/main/CHANGELOG.md).
-4. Now, a [GitHub action](https://github.com/GEB-model/GEB/actions/workflows/publish.yml) should automatically start and upload the new version to PyPi. Confirm the release is indeed available [here](https://pypi.org/project/geb/). 
+3. Ensure that the GitHub repo is updated with these changes.
+4. Create a [new release](https://github.com/GEB-model/GEB/releases). Both the tag and the title should match the new version number. In the release notes, paste the relevant updates from the [changelog](https://github.com/GEB-model/GEB/blob/main/CHANGELOG.md).
+5. Now, a [GitHub action](https://github.com/GEB-model/GEB/actions/workflows/publish.yml) should automatically start and upload the new version to PyPi. Confirm the release is indeed available [here](https://pypi.org/project/geb/). 
 
 ## Rules and recommendations
 

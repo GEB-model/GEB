@@ -1018,7 +1018,7 @@ class Forcing(BuildModelBase):
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
-        era5_store: Adapter = self.new_data_catalog.fetch("era5")
+        era5_store: Adapter = self.data_catalog.fetch("era5")
         era5_loader: partial = partial(
             era5_store.read,
             start_date=self.start_date - relativedelta(years=1),
@@ -1325,7 +1325,7 @@ class Forcing(BuildModelBase):
         ymax: float = ymax + buffer
 
         elevation: xr.DataArray = (
-            self.new_data_catalog.fetch(
+            self.data_catalog.fetch(
                 "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="forcing"
             )
             .read(prefix="forcing")
@@ -1340,6 +1340,12 @@ class Forcing(BuildModelBase):
         elevation_forcing: xr.DataArray = resample_like(
             elevation, target, method="bilinear"
         )
+
+        # ensure no NaN values are present
+        assert not np.isnan(elevation_forcing.values).any(), (
+            "elevation forcing contains NaN values"
+        )
+
         elevation_forcing: xr.DataArray = elevation_forcing.chunk({"x": -1, "y": -1})
         elevation_forcing: xr.DataArray = elevation_forcing.rio.write_crs(4326)
 
@@ -1348,7 +1354,7 @@ class Forcing(BuildModelBase):
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_CO2_concentration(self) -> None:
         """Aquires the CO2 concentration data for the specified SSP in ppm."""
-        df: pd.DataFrame = self.new_data_catalog.fetch("isimip_co2").read(
+        df: pd.DataFrame = self.data_catalog.fetch("isimip_co2").read(
             scenario=self.ISIMIP_ssp
         )
         df: pd.DataFrame = df[
@@ -1433,7 +1439,7 @@ class Forcing(BuildModelBase):
 
         self.logger.info(f"Processing {forecast_model} ECMWF forecasts...")
 
-        ECMWF_forecasts_store = self.new_data_catalog.fetch(
+        ECMWF_forecasts_store = self.data_catalog.fetch(
             "ecmwf_forecasts",
             forecast_variables=list(MARS_codes.values()),
             bounds=self.bounds,

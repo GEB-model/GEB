@@ -151,7 +151,7 @@ class Crops(BuildModelBase):
         if crop_specifier is None:
             crop_data = {
                 "data": (
-                    self.data_catalog.get_dataframe("MIRCA2000_crop_data")
+                    self.old_data_catalog.get_dataframe("MIRCA2000_crop_data")
                     .set_index("id")
                     .to_dict(orient="index")
                 ),
@@ -160,7 +160,7 @@ class Crops(BuildModelBase):
         else:
             crop_data = {
                 "data": (
-                    self.data_catalog.get_dataframe(
+                    self.old_data_catalog.get_dataframe(
                         f"MIRCA2000_crop_data_{crop_specifier}"
                     )
                     .set_index("id")
@@ -199,7 +199,7 @@ class Crops(BuildModelBase):
             4. Formats the processed data into a nested dictionary structure.
         """
         if crop_prices == "FAO_stat":
-            crop_data = self.data_catalog.get_dataframe(
+            crop_data = self.old_data_catalog.get_dataframe(
                 "FAO_crop_price",
                 variables=["Area Code (M49)", "year", "crop", "price_per_kg"],
             )
@@ -221,7 +221,7 @@ class Crops(BuildModelBase):
             all_years.sort()
             all_crops = crop_data["crop"].unique()
 
-            GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions_37")
+            GLOBIOM_regions = self.old_data_catalog.get_dataframe("GLOBIOM_regions_37")
             GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
                 GLOBIOM_NAME_TO_ISO3
             )
@@ -300,7 +300,7 @@ class Crops(BuildModelBase):
                 donor_data,
                 unique_regions,
                 GLOBIOM_regions,
-                self.data_catalog,
+                self.old_data_catalog,
                 self.geom["global_countries"],
                 self.geom["regions"],
             )
@@ -772,7 +772,7 @@ class Crops(BuildModelBase):
                     dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
                     crop_map = xr.open_dataarray(
-                        self.data_catalog.get_source(dataset_name).path
+                        self.old_data_catalog.get_source(dataset_name).path
                     )
                     crop_map = crop_map.isel(
                         {
@@ -885,7 +885,7 @@ class Crops(BuildModelBase):
             irrigating_farmers: A boolean array indicating which farmers are irrigating.
             year: The year for which to set up the irrigation source.
         """
-        fraction_sw_irrigation_data = self.new_data_catalog.fetch(
+        fraction_sw_irrigation_data = self.data_catalog.fetch(
             "global_irrigation_area_surface_water"
         ).read()
         fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
@@ -902,7 +902,7 @@ class Crops(BuildModelBase):
             fraction_sw_irrigation_data
         )
 
-        fraction_gw_irrigation_data = self.new_data_catalog.fetch(
+        fraction_gw_irrigation_data = self.data_catalog.fetch(
             "global_irrigation_area_groundwater"
         ).read()
         fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
@@ -1062,7 +1062,7 @@ class Crops(BuildModelBase):
         n_farmers = self.array["agents/farmers/id"].size
 
         MIRCA_unit_grid = xr.open_dataarray(
-            self.data_catalog.get_source("MIRCA2000_unit_grid").path
+            self.old_data_catalog.get_source("MIRCA2000_unit_grid").path
         )
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
@@ -1076,7 +1076,7 @@ class Crops(BuildModelBase):
 
         crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = (
             parse_MIRCA2000_crop_calendar(
-                self.data_catalog,
+                self.old_data_catalog,
                 MIRCA_units=np.unique(MIRCA_unit_grid.values).tolist(),
             )
         )
