@@ -1,5 +1,7 @@
 # dev
 - DeltaDTM is now also setup for the model region in setup_elevation. 
+
+# v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
 - Add documentation for modules, variables and routing.
 - Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
