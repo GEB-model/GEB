@@ -532,18 +532,33 @@ class Households(AgentBaseClass):
         )
 
         # Dry floodproofing costs eur 2024 per meter of building circumference, article Aerts (2018)
-        adaptation_costs_dry_proofing = (
+        total_adaptation_costs_dry_proofing = (
             901 * self.var.household_building_circumference.data
         ).astype(np.int64)
+
+        r_loan = 0.04  # 4% interest rate #TODO: values based on paper Lars France
+        loan_duration = 16  # years #TODO: values based on paper Lars France
+        annual_adaptation_costs_dryproofing = total_adaptation_costs_dry_proofing * (
+            r_loan * (1 + r_loan) ** loan_duration / ((1 + r_loan) ** loan_duration - 1)
+        )
+
+        print(annual_adaptation_costs_dryproofing.min)
+        print(annual_adaptation_costs_dryproofing.max)
+        print(annual_adaptation_costs_dryproofing.mean)
+
         self.var.adaptation_costs_dryproofing = DynamicArray(
-            adaptation_costs_dry_proofing, max_n=self.max_n
+            annual_adaptation_costs_dryproofing, max_n=self.max_n
         )
 
         # initiate array with adaptation costs for wet-proofing, eur 2024 values, article Aerts (2018)
-        adaptation_costs_wet_proofing = 27384
+        total_adaptation_costs_wet_proofing = 27384
+        annual_adaptation_costs_wetproofing = total_adaptation_costs_wet_proofing * (
+            r_loan * (1 + r_loan) ** loan_duration / ((1 + r_loan) ** loan_duration - 1)
+        )
         # wet floodproofing
         self.var.adaptation_costs_wetproofing = DynamicArray(
-            np.full(self.n, adaptation_costs_wet_proofing, np.int32), max_n=self.max_n
+            np.full(self.n, annual_adaptation_costs_wetproofing, np.int32),
+            max_n=self.max_n,
         )
 
         # initiate array with amenity value, set to 0 when no migration decisions are modeled
@@ -1734,10 +1749,10 @@ class Households(AgentBaseClass):
             expected_damages_adapt=damages_adapt_dryproofing,
             adaptation_costs=self.var.adaptation_costs_dryproofing.data,
             time_adapted=self.var.time_adapted.data,
-            loan_duration=20,
+            loan_duration=16,
             p_floods=1 / self.return_periods,
             T=35,
-            r=0.03,
+            r=0.04,
             sigma=1,
         )
 
@@ -1753,10 +1768,10 @@ class Households(AgentBaseClass):
             expected_damages_adapt=damages_adapt_wetproofing,
             adaptation_costs=self.var.adaptation_costs_wetproofing.data,
             time_adapted=self.var.time_adapted.data,
-            loan_duration=20,
+            loan_duration=16,
             p_floods=1 / self.return_periods,
             T=35,
-            r=0.03,
+            r=0.04,
             sigma=1,
         )
 
@@ -1772,7 +1787,7 @@ class Households(AgentBaseClass):
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
             T=35,
-            r=0.03,
+            r=0.04,
             sigma=1,
         )
 

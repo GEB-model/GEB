@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from multiprocessing.util import debug
 from typing import Any
 
 import numpy as np
@@ -521,6 +522,54 @@ class DecisionModule:
 
         # subtract from NPV array
         NPV_summed -= time_discounted_adaptation_cost
+
+        debugging = True
+
+        if debugging:
+            # Sanity checks
+            assert NPV_summed.ndim == 2, "NPV_summed must be 2D (events x agents)"
+            assert NPV_summed.shape[1] == n_agents, "Agent dimension mismatch"
+
+            # Identify agents with at least one negative event NPV
+            negative_any_event = (NPV_summed < 0).any(axis=0)
+            negative_indices = np.where(negative_any_event)[0]
+
+            if negative_indices.size > 0:
+                if not hasattr(self, "negative_NPV_log"):
+                    self.negative_NPV_log = []
+
+                # Aggregate to agent-level NPV (decision metric)
+                NPV_agent = NPV_summed.sum(axis=0)
+
+                for idx in negative_indices[:10]:
+                    self.negative_NPV_log.append(
+                        {
+                            "geom_id": geom_id,
+                            "agent_id": int(idx),
+                            # Agent-level decision metric
+                            "NPV_agent_sum": float(NPV_agent[idx]),
+                            # Event-level diagnostics
+                            "NPV_events": NPV_summed[:, idx].copy(),
+                            "NPV_min_event": float(NPV_summed[:, idx].min()),
+                            "NPV_max_event": float(NPV_summed[:, idx].max()),
+                            # Cost diagnostics
+                            "adaptation_costs": float(adaptation_costs[idx]),
+                            "loan_left": int(loan_left[idx]),
+                            "time_discounted_adaptation_cost": float(
+                                time_discounted_adaptation_cost[idx]
+                            ),
+                            # Economic state
+                            "wealth": float(wealth[idx]),
+                            "income": float(income[idx]),
+                            "risk_perception": float(risk_perception[idx]),
+                        }
+                    )
+
+                import pandas as pd
+
+                pd.DataFrame(self.negative_NPV_log).to_csv(
+                    "negative_NPV_log.csv", index=False
+                )
 
         # Filter out negative NPVs
         NPV_summed = np.maximum(1, NPV_summed)
