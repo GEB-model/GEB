@@ -169,6 +169,17 @@ class LandSurface(BuildModelBase):
                     ymin=ymin,
                     ymax=ymax,
                 ).read()
+
+                # Create low elevation coastal zone mask based on DeltaDTM
+                low_elevation_coastal_zone = DEM_raster < 10
+                low_elevation_coastal_zone.values = (
+                    low_elevation_coastal_zone.values.astype(np.float32)
+                )
+                self.set_other(
+                    low_elevation_coastal_zone,
+                    name="landsurface/low_elevation_coastal_zone",
+                )  # Maybe remove this
+
             elif DEM["name"] == "gebco":
                 DEM_raster = self.data_catalog.fetch("gebco").read()
             elif DEM["name"] == "geul_dem":
@@ -212,15 +223,6 @@ class LandSurface(BuildModelBase):
             )
             DEM["path"] = f"DEM/{DEM['name']}"
 
-        if DEM["name"] == "delta_dtm":
-            low_elevation_coastal_zone = DEM_raster < 10
-            low_elevation_coastal_zone.values = (
-                low_elevation_coastal_zone.values.astype(np.float32)
-            )
-            self.set_other(
-                low_elevation_coastal_zone,
-                name="landsurface/low_elevation_coastal_zone",
-            )  # Maybe remove this
         self.set_params(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])
