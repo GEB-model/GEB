@@ -82,14 +82,17 @@ class DeltaDTM(Adapter):
         # download the DeltaDTM tiles geopackage
         url_delta_dtm_tiles = "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/60a69899-2e67-4f9f-8761-3b57094acd12"
         os.makedirs(self.root, exist_ok=True)
-        success = fetch_and_save(
-            url=url_delta_dtm_tiles,
-            file_path=self.root / "delta_dtm_tiles.gpkg",
-        )
-        if not success:
-            raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
-        # load the geopackage
-        gdf_tiles = gpd.read_file(self.root / "delta_dtm_tiles.gpkg")
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            temp_dir: Path = Path(temp_dir_str)
+            filepath = temp_dir / "delta_dtm_tiles.gpkg"
+            success = fetch_and_save(
+                url=url_delta_dtm_tiles,
+                file_path=filepath,
+            )
+            if not success:
+                raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
+            # load the geopackage
+            gdf_tiles = gpd.read_file(filepath)
         # get the tiles that intersect with the model bounds
         tiles_in_bounds = gdf_tiles.cx[xmin:xmax, ymin:ymax]
         tile_names = tiles_in_bounds["tile"].tolist()
@@ -109,7 +112,7 @@ class DeltaDTM(Adapter):
         """
         for continent in continents_to_download:
             url = available_continents[continent]
-            zip_path = self.root / continent
+            zip_path = self._construct_filepath(continent[:-4])
             success = fetch_and_save(
                 url=url,
                 file_path=zip_path,
@@ -167,13 +170,24 @@ class DeltaDTM(Adapter):
         """
         extracted_paths: list[Path] = []
         for continent in continents_to_download:
-            zip_path = self.root / continent
+            zip_path = self._construct_filepath(continent[:-4])
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 for tile_name in tile_names:
                     if tile_name in zip_ref.namelist():
                         zip_ref.extract(tile_name, path=temp_dir)
                         extracted_paths.append(temp_dir / tile_name)
         return extracted_paths
+
+    def _construct_filepath(self, continent: str) -> Path:
+        """Construct the file path for a given continent ZIP file.
+
+        Args:
+            continent (str): The continent ZIP filename.
+        Returns:
+            Path: The constructed file path for the continent ZIP file.
+
+        """
+        return Path(str(self.path).format(continent))
 
     def fetch(
         self, xmin: float, xmax: float, ymin: float, ymax: float, url: str = None
@@ -189,17 +203,17 @@ class DeltaDTM(Adapter):
         Returns:
             DeltaDTM: The DeltaDTM adapter instance with the downloaded data.
         """
-        tile_names, continents_to_download = self.get_tiles_in_model_bounds(
+        self.tile_names, self.continents_to_download = self.get_tiles_in_model_bounds(
             xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax
         )
-        self.download_deltadtm(continents_to_download)
-        self.da = self.unpack_and_merge_tiles(continents_to_download, tile_names)
+        self.download_deltadtm(self.continents_to_download)
         return self
 
     def read(self) -> xr.Dataset:
-        """Read the downloaded DeltaDTM data.
+        """Read and unpack the downloaded DeltaDTM data.
 
         Returns:
             xarray.Dataset: The downloaded DeltaDTM data.
         """
-        return self.da
+        da = self.unpack_and_merge_tiles(self.continents_to_download, self.tile_names)
+        return da

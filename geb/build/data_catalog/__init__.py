@@ -467,7 +467,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": DeltaDTM(
             folder="delta_dtm",
             local_version=1,
-            filename="delta_dtm.zarr",
+            filename="{}.zip",
             cache="global",
         ),
         "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
