@@ -42,7 +42,7 @@ class GlobalSoilRegolithSediment(Adapter):
             FileNotFoundError: If the expected files are not found after extraction.
         """
         if not self.is_ready:
-            zip_filename = "global_soil_regolith_sediment_1304.zip"
+            zip_filename = "Global_Soil_Regolith_Sediment_1304.zip"
             download_path = self.root / zip_filename
 
             while not download_path.exists():
@@ -92,13 +92,11 @@ class GlobalSoilRegolithSediment(Adapter):
                 assert isinstance(da, xr.DataArray)
                 da = da.sel(band=1, drop=True)
                 da.name = var_name
-                # Ensure correct type for storage if needed, but float32 is common for TIFs
                 data_arrays.append(da)
 
             ds = xr.merge(data_arrays)
 
             print("Saving to Zarr...")
-            # Using basic to_zarr as write_zarr only supports DataArray and specific use cases
             ds.to_zarr(self.path, mode="w", consolidated=False)
 
             print("Cleaning up...")
@@ -106,12 +104,7 @@ class GlobalSoilRegolithSediment(Adapter):
 
             # Attempt to clean up extracted folder if it exists as expected
             extracted_folder = self.root / "Global_Soil_Regolith_Sediment_1304"
-            if extracted_folder.exists() and extracted_folder.is_dir():
-                shutil.rmtree(extracted_folder)
-            else:
-                # Fallback: delete the found files individually
-                for fpath in found_files.values():
-                    fpath.unlink()
+            shutil.rmtree(extracted_folder, ignore_errors=True)
 
         return self
 
