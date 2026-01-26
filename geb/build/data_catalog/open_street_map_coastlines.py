@@ -7,28 +7,14 @@ from osmdata.openstreetmap.de and stored to a local file in the GEB data catalog
 
 from __future__ import annotations
 
-import os
-import tarfile
-import time
-from pathlib import Path
-from typing import IO, Any, Iterable
-
 import tempfile
 import zipfile
+from pathlib import Path
+from typing import Any
 
-
-import numpy as np
-import requests
-import rioxarray as rxr
-import xarray as xr
-from requests.auth import HTTPBasicAuth
-from rioxarray import merge
-from tqdm import tqdm
-from geb.workflows.io import fetch_and_save
 import geopandas as gpd
 
-from geb.workflows.io import write_zarr
-from geb.workflows.raster import convert_nodata
+from geb.workflows.io import fetch_and_save
 
 from .base import Adapter
 
@@ -61,7 +47,6 @@ class OpenStreetMapCoastlines(Adapter):
         Returns:
             The path to the downloaded OSM coastlines data file.
         """
-
         with tempfile.TemporaryDirectory() as tmpdir:
             with zipfile.ZipFile(self.path, "r") as zip_ref:
                 zip_ref.extractall(tmpdir)
