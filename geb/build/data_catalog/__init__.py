@@ -23,6 +23,7 @@ from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
+from .open_street_map_coastlines import OpenStreetMapCoastlines
 from .soilgrids import SoilGridsV1, SoilGridsV2
 from .sword import Sword
 from .why_map import WhyMap
@@ -594,6 +595,21 @@ data_catalog: dict[str, dict[str, Any]] = {
         "url": "https://osm.download.movisda.io",
         "source": {
             "name": "OpenStreetMap",
+            "author": "OpenStreetMap contributors",
+            "license": "ODbL 1.0",
+            "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "open_street_map_coastlines": {
+        "adapter": OpenStreetMapCoastlines(
+            folder="open_street_map_coastlines",
+            local_version=1,
+            filename="open_street_map_coastlines.zip",
+            cache="global",
+        ),
+        "url": "https://osmdata.openstreetmap.de/download/coastlines-split-4326.zip",
+        "source": {
+            "name": "OpenStreetMap Coastlines",
             "author": "OpenStreetMap contributors",
             "license": "ODbL 1.0",
             "url": "https://www.openstreetmap.org/copyright",
