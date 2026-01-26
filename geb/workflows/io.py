@@ -517,6 +517,10 @@ def write_zarr(
     Returns:
         The xarray DataArray saved to disk.
 
+    Raises:
+        ValueError: If the DataArray has invalid dimensions or attributes.
+        ValueError: If the DataArray dtype is float64.
+
     """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
@@ -526,7 +530,8 @@ def write_zarr(
         assert da.dims[-2] == "y", "y should be the second last dimension"
         assert da.dims[-1] == "x", "x should be the last dimension"
 
-    assert da.dtype != np.float64, "should be float32"
+    if da.dtype == np.float64:
+        raise ValueError("DataArray dtype should be float32, not float64")
 
     assert "_FillValue" in da.attrs, "Fill value must be set"
     if da.dtype == bool:

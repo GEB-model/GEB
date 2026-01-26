@@ -552,6 +552,8 @@ class Floods(Module):
                 coastal_subbasins,
                 how="difference",
             )
+            low_elevation_coastal_zone_mask["is_downstream_outflow"] = False
+            low_elevation_coastal_zone_mask["COMID"] = 0  # 0 is not used. -1 is nan
             coastal_subbasins = pd.concat(
                 [coastal_subbasins, low_elevation_coastal_zone_mask],
                 ignore_index=False,

@@ -28,10 +28,11 @@ from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
+from pyproj import CRS
 from rioxarray.merge import merge_arrays
-from scipy.ndimage import value_indices
+from scipy.ndimage import binary_dilation, value_indices
 from shapely import line_locate_point
-from shapely.geometry import GeometryCollection, MultiPoint, Point
+from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point
 
 from geb.geb_types import (
     ArrayInt64,
@@ -43,16 +44,20 @@ from geb.geb_types import (
 from geb.hydrology.routing import get_river_width
 from geb.workflows.io import (
     create_hash_from_parameters,
+    get_window,
     read_geom,
     read_hash,
+    read_zarr,
     write_geom,
     write_hash,
     write_zarr,
 )
+from geb.workflows.methods import get_utm_zone
 from geb.workflows.raster import (
     calculate_cell_area,
     clip_region,
     coord_to_pixel,
+    pad_to_grid_alignment,
     pad_xy,
     rasterize_like,
 )
@@ -135,18 +140,19 @@ class SFINCSRootModel:
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
         self.sfincs_model.read()
+
         self.rivers: gpd.GeoDataFrame = read_geom(self.path / "rivers.geoparquet")
-        self.subbbasins: gpd.GeoDataFrame = read_geom(
-            self.path / "subbbasins.geoparquet"
-        )
+        self.subbasins: gpd.GeoDataFrame = read_geom(self.path / "subbasins.geoparquet")
+
+        self.area_of_interest = read_zarr(self.path / "area_of_interest.zarr")
 
         self.is_build_from_scratch = False
         return self
 
     def build(
         self,
-        DEMs: list[dict[str, str | Path | xr.DataArray]],
-        subbbasins: gpd.GeoDataFrame,
+        DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]],
+        subbasins: gpd.GeoDataFrame,
         rivers: gpd.GeoDataFrame,
         discharge: xr.DataArray,
         river_width_alpha: npt.NDArray[np.float32],
@@ -160,6 +166,7 @@ class SFINCSRootModel:
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_river_outflow_boundary: bool = True,
+        outflow_boundary_width_m: float = 500.0,
         initial_water_level: float | None = 0.0,
         custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
         overwrite: bool | Literal["auto"] = True,
@@ -168,7 +175,7 @@ class SFINCSRootModel:
 
         Args:
             DEMs: List of DEM datasets to use for the model. Should be a list of dictionaries with 'path' and 'name' keys.
-            subbbasins: A GeoDataFrame defining the subbbasins of interest.
+            subbasins: A GeoDataFrame defining the subbasins of interest.
             rivers: A GeoDataFrame containing river segments.
             discharge: An xarray DataArray containing discharge values for the rivers in m^3/s.
             river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
@@ -185,6 +192,7 @@ class SFINCSRootModel:
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
             setup_river_outflow_boundary: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
+            outflow_boundary_width_m: The width of the outflow boundary condition in meters. Defaults to 500 m.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
             custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
                 dataframe must contain 'width' and 'depth' columns.
@@ -242,6 +250,14 @@ class SFINCSRootModel:
             "power_law",
         ], "Method should be 'manning' or 'power_law'"
 
+        self.outflow_boundary_width_m = outflow_boundary_width_m
+
+        mask: xr.DataArray = self.create_mask(
+            DEMs=DEMs,
+            subbasins=subbasins,
+            grid_size_multiplier=grid_size_multiplier,
+        )
+
         print("Starting SFINCS model build...")
 
         # build base model
@@ -254,79 +270,54 @@ class SFINCSRootModel:
         for handler in sf.logger.handlers:
             handler.setLevel(logging.DEBUG)
 
-        mask_ds = DEMs[0]["elevtn"]
-        assert isinstance(mask_ds, xr.Dataset)
-        mask: xr.DataArray = mask_ds["elevtn"]
-        self.subbbasins: gpd.GeoDataFrame = subbbasins.to_crs(mask.rio.crs)
-        del subbbasins
+        # we need this later to exclude these subbasins from the area of interest
+        downstream_outflow_subbasins = subbasins[
+            subbasins["is_downstream_outflow"]
+        ].index.tolist()
 
-        # in case the first DEM does not fully cover the subbbasins, we pad it. Because
-        # of the alignment, the padding must increase with the grid_size_multiplier
-        minx, miny, maxx, maxy = self.subbbasins.total_bounds
-        mask: xr.DataArray = pad_xy(
-            mask,
-            minx=minx - abs(mask.rio.resolution()[0]) * grid_size_multiplier,
-            miny=miny - abs(mask.rio.resolution()[1]) * grid_size_multiplier,
-            maxx=maxx + abs(mask.rio.resolution()[0]) * grid_size_multiplier,
-            maxy=maxy + abs(mask.rio.resolution()[1]) * grid_size_multiplier,
-            return_slice=False,
+        self.subbasins, subbasins_burned = self.burn_and_align_subbasins(
+            subbasins=subbasins, mask=mask
         )
+        self.subbasins.to_parquet(self.path / "subbasins_processed.geoparquet")
 
-        subbasins_burned: xr.DataArray = rasterize_like(
-            gdf=self.subbbasins,
-            burn_value=1,
-            raster=mask,
-            dtype=np.int32,
-            nodata=0,
-            all_touched=True,
-        ).astype(bool)
-        assert isinstance(mask, xr.DataArray)
+        # delete mask and subbasins to ensure we don't accidentally use them later
+        del mask
+        del subbasins
 
-        resolution: tuple[float, float] = mask.rio.resolution()
+        resolution: tuple[float, float] = subbasins_burned.rio.resolution()
         if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-8:
             raise ValueError("DEM resolution must be square pixels")
 
-        mask: xr.DataArray = clip_region(
-            subbasins_burned, align=abs(resolution[0]) * grid_size_multiplier
-        )[0]
-
-        # if y axis is descending (usually for geographical grids), flip it
-        if mask.y[-1] < mask.y[0]:
-            mask: xr.DataArray = mask.isel(y=slice(None, None, -1))
-
-        geotransformation = mask.rio.transform(recalc=True)
-        crs = mask.rio.crs
+        geotransformation = subbasins_burned.rio.transform(recalc=True)
+        crs = subbasins_burned.rio.crs
         if not crs.is_epsg_code:
             raise ValueError("CRS must be an EPSG code")
 
         sf.setup_grid(
             x0=geotransformation.c,
             y0=geotransformation.f,
-            dx=geotransformation.a * grid_size_multiplier,
-            dy=geotransformation.e * grid_size_multiplier,
-            mmax=mask.rio.width // grid_size_multiplier + 1,
-            nmax=mask.rio.height // grid_size_multiplier + 1,
+            dx=geotransformation.a,
+            dy=geotransformation.e,
+            mmax=subbasins_burned.rio.width,
+            nmax=subbasins_burned.rio.height,
             rotation=0.0,
             epsg=crs.to_epsg(),
         )
         if crs.is_geographic:
             sf.setup_config(crsgeo=1)
 
-        DEMs: list[dict[str, str | Path | xr.DataArray | int]] = [
-            {
-                **{
-                    k: v
-                    for k, v in DEM.items()
-                    if k not in ["name", "path", "fill_depressions"]
-                },
-                **{"reproj_method": "bilinear"},
-            }
-            for DEM in DEMs
+        # Copy DEMs to avoid modifying input
+        DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = [
+            DEM.copy() for DEM in DEMs
         ]
 
-        # HydroMT-SFINCS only accepts datasets with an 'elevtn' variable. Therefore, the following
-        # is a bit convoluted. We first open the dataarray, then convert it to a dataset,
-        # and set the name as elevtn.
+        # Remove unnecessary keys (to avoid warnings) and set reproj_method to bilinear for all DEMs
+        for DEM in DEMs:
+            DEM.pop("name", None)
+            DEM.pop("path", None)
+            DEM.pop("fill_depressions", None)
+            DEM["reproj_method"] = "bilinear"
+
         sf.setup_dep(datasets_dep=DEMs)
 
         # Remove rivers that are not represented in the grid and have no upstream rivers
@@ -373,80 +364,145 @@ class SFINCSRootModel:
                 all_touched=True,
             )
         else:
-            self.calculate_river_outflow_conditions()
+            self.calculate_outflow_conditions(area=flood_plain)
             if setup_river_outflow_boundary:
+                outflow_points = self.rivers[self.rivers["is_outflow_boundary"]][
+                    "outflow_point_xy"
+                ]
+                outflow_points = gpd.GeoDataFrame(
+                    geometry=gpd.points_from_xy(
+                        outflow_points.apply(lambda xy: xy[0]),
+                        outflow_points.apply(lambda xy: xy[1]),
+                    ),
+                    crs=self.crs,
+                )
+                outflow_points = outflow_points.to_crs(self.utm_zone)
+                outflow_points.geometry = outflow_points.buffer(
+                    (self.outflow_boundary_width_m / 2) * 1.1
+                ).to_crs(self.crs)
+
+                sf.setup_mask_active(
+                    include_mask=outflow_points,
+                    all_touched=False,
+                    reset_mask=False,
+                )
+
+                # create polygon from mask
+                area = list(
+                    rasterio.features.shapes(
+                        self.mask,
+                        transform=self.mask.rio.transform(),
+                        connectivity=8,
+                        mask=self.mask,
+                    )
+                )
+                area = gpd.GeoDataFrame.from_features(
+                    [
+                        {"geometry": geom, "properties": {"value": int(value)}}
+                        for geom, value in area
+                    ],
+                    crs=self.mask.rio.crs,
+                )
+                assert len(area) == 1
+
+                self.calculate_outflow_conditions(area=area)
+
                 # must be performed BEFORE burning rivers.
                 self.setup_river_outflow_boundary()
 
+        # We are not interested in the flood conditions in the downstream outflow subbasins,
+        # so we exclude these from the area of interest.
+        self.area_of_interest: xr.DataArray = (self.mask > 0).copy()
+        self.area_of_interest.values[
+            np.isin(subbasins_burned, downstream_outflow_subbasins)
+        ] = False
+
+        # In many cases due to the coarse subbasin resolution compared to the DEM resolution,
+        # the area of interest does not align perfectly with the shape of the subbasins at the
+        # DEM resoltion, ultimiately leading to small gaps in the flood maps. We now temporarily
+        # fix this by dilating the area of interest mask. A better solution should be found.
+        # TODO: Find a better solution for the area of interest alignment issue.
+        self.area_of_interest.values = binary_dilation(
+            self.area_of_interest.values, iterations=10
+        )
+        self.area_of_interest.attrs["_FillValue"] = None
+
         self.plot_rivers()
 
-        river_representative_points = []
-        for ID in self.active_rivers.index:
-            river_representative_points.append(
-                get_representative_river_points(ID, self.rivers)
+        # do the river burning only if there are active rivers in the model
+        # or if custom rivers to burn are provided
+        if not self.active_rivers.empty or (
+            custom_rivers_to_burn is not None and not custom_rivers_to_burn.empty
+        ):
+            river_representative_points = []
+            for ID in self.active_rivers.index:
+                river_representative_points.append(
+                    get_representative_river_points(ID, self.rivers)
+                )
+
+            discharge_by_river, river_parameters = (
+                get_discharge_and_river_parameters_by_river(
+                    self.active_rivers.index.tolist(),
+                    river_representative_points,
+                    discharge=discharge,
+                    river_width_alpha=river_width_alpha,
+                    river_width_beta=river_width_beta,
+                )
             )
 
-        discharge_by_river, river_parameters = (
-            get_discharge_and_river_parameters_by_river(
-                self.active_rivers.index.tolist(),
-                river_representative_points,
-                discharge=discharge,
-                river_width_alpha=river_width_alpha,
-                river_width_beta=river_width_beta,
-            )
-        )
+            if custom_rivers_to_burn is not None:
+                rivers_to_burn = custom_rivers_to_burn.to_crs(sf.crs)
+                if "width" not in rivers_to_burn.columns:
+                    raise ValueError(
+                        "Custom rivers to burn must have a 'width' column when using custom rivers"
+                    )
+                if "depth" not in rivers_to_burn.columns:
+                    raise ValueError(
+                        "Custom rivers to burn must have a 'depth' column when using custom rivers"
+                    )
+            else:
+                rivers_to_burn = assign_return_periods(
+                    self.active_rivers, discharge_by_river, return_periods=[2]
+                )
 
-        if custom_rivers_to_burn is not None:
-            rivers_to_burn = custom_rivers_to_burn.to_crs(sf.crs)
-            if "width" not in rivers_to_burn.columns:
-                raise ValueError(
-                    "Custom rivers to burn must have a 'width' column when using custom rivers"
+                river_width_unknown_mask = rivers_to_burn["width"].isnull()
+
+                rivers_to_burn.loc[river_width_unknown_mask, "width"] = get_river_width(
+                    river_parameters["river_width_alpha"][river_width_unknown_mask],
+                    river_parameters["river_width_beta"][river_width_unknown_mask],
+                    rivers_to_burn.loc[river_width_unknown_mask, "Q_2"],
+                ).astype(np.float64)
+
+                rivers_to_burn["depth"] = get_river_depth(
+                    rivers_to_burn,
+                    method=depth_calculation_method,
+                    parameters=depth_calculation_parameters,
+                    bankfull_column="Q_2",
                 )
-            if "depth" not in rivers_to_burn.columns:
-                raise ValueError(
-                    "Custom rivers to burn must have a 'depth' column when using custom rivers"
-                )
+
+            rivers_to_burn["manning"] = get_river_manning(rivers_to_burn)
+
+            rivers_to_burn.to_parquet(
+                self.path / "rivers_with_widths_and_depths.geoparquet"
+            )
+
+            # Because hydromt-sfincs does a lot of filling default values when data
+            # is missing, we need to be extra sure that the required columns are
+            # present and contain valid data.
+            assert rivers_to_burn["width"].notnull().all(), "River width cannot be null"
+            assert rivers_to_burn["depth"].notnull().all(), "River depth cannot be null"
+            assert rivers_to_burn["manning"].notnull().all(), (
+                "River Manning's n cannot be null"
+            )
+
+            # only burn rivers that are wider than the grid size
+            rivers_to_burn: gpd.GeoDataFrame = rivers_to_burn[
+                rivers_to_burn["width"] > self.estimated_cell_size_m
+            ]
+
+            rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
         else:
-            rivers_to_burn = assign_return_periods(
-                self.active_rivers, discharge_by_river, return_periods=[2]
-            )
-
-            river_width_unknown_mask = rivers_to_burn["width"].isnull()
-
-            rivers_to_burn.loc[river_width_unknown_mask, "width"] = get_river_width(
-                river_parameters["river_width_alpha"][river_width_unknown_mask],
-                river_parameters["river_width_beta"][river_width_unknown_mask],
-                rivers_to_burn.loc[river_width_unknown_mask, "Q_2"],
-            ).astype(np.float64)
-
-            rivers_to_burn["depth"] = get_river_depth(
-                rivers_to_burn,
-                method=depth_calculation_method,
-                parameters=depth_calculation_parameters,
-                bankfull_column="Q_2",
-            )
-
-        rivers_to_burn["manning"] = get_river_manning(rivers_to_burn)
-
-        rivers_to_burn.to_parquet(
-            self.path / "rivers_with_widths_and_depths.geoparquet"
-        )
-
-        # Because hydromt-sfincs does a lot of filling default values when data
-        # is missing, we need to be extra sure that the required columns are
-        # present and contain valid data.
-        assert rivers_to_burn["width"].notnull().all(), "River width cannot be null"
-        assert rivers_to_burn["depth"].notnull().all(), "River depth cannot be null"
-        assert rivers_to_burn["manning"].notnull().all(), (
-            "River Manning's n cannot be null"
-        )
-
-        # only burn rivers that are wider than the grid size
-        rivers_to_burn: gpd.GeoDataFrame = rivers_to_burn[
-            rivers_to_burn["width"] > self.estimated_cell_size_m
-        ]
-
-        rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
+            rivers_to_burn = None
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
@@ -469,7 +525,9 @@ class SFINCSRootModel:
                             columns={"width": "rivwth", "depth": "rivdph"}
                         )
                     }
-                ],
+                ]
+                if rivers_to_burn is not None
+                else [],
                 write_dep_tif=True,
                 write_man_tif=True,
                 nr_subgrid_pixels=grid_size_multiplier,
@@ -491,20 +549,22 @@ class SFINCSRootModel:
                     }
                 ]
             )
-            # retrieve the elevation and mannings grids
-            # burn the rivers into these grids
-            elevation, mannings = burn_river_rect(
-                da_elv=sf.grid.dep,
-                gdf_riv=rivers_to_burn,
-                da_man=sf.grid.manning,
-                rivwth_name="width",
-                rivdph_name="depth",
-                manning_name="manning",
-                segment_length=90.0,
-            )
-            # set the modified grids back to the model
-            sf.set_grid(elevation, name="dep")
-            sf.set_grid(mannings, name="manning")
+
+            if rivers_to_burn is not None:
+                # retrieve the elevation and mannings grids
+                # burn the rivers into these grids
+                elevation, mannings = burn_river_rect(
+                    da_elv=sf.grid.dep,
+                    gdf_riv=rivers_to_burn,
+                    da_man=sf.grid.manning,
+                    rivwth_name="width",
+                    rivdph_name="depth",
+                    manning_name="manning",
+                    segment_length=90.0,
+                )
+                # set the modified grids back to the model
+                sf.set_grid(elevation, name="dep")
+                sf.set_grid(mannings, name="manning")
 
         # write all components, except forcing which must be done after the model building
         sf.write_grid()
@@ -513,29 +573,177 @@ class SFINCSRootModel:
         sf.write_states()
         sf.write_config()
 
-        self.subbbasins.to_parquet(self.path / "subbbasins.geoparquet")
+        self.subbasins.to_parquet(self.path / "subbasins.geoparquet")
         self.rivers.to_parquet(self.path / "rivers.geoparquet")
 
-        sf.plot_basemap(fn_out="basemap.png")
+        sf.plot_basemap(
+            fn_out="basemap.png",
+            vmin=math.floor(self.elevation.min()),
+            vmax=max(
+                math.ceil(self.elevation.max()), 1
+            ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
+        )
 
         self.is_build_from_scratch = True
 
         return self
 
-    def plot_rivers(self) -> None:
-        """Plots the rivers and subbbasins boundary and saves to file."""
-        fig, ax = plt.subplots(figsize=(10, 10))
-        self.subbbasins.boundary.plot(ax=ax, color="black")
+    def create_mask(
+        self,
+        DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]],
+        subbasins: gpd.GeoDataFrame,
+        grid_size_multiplier: int,
+    ) -> xr.DataArray:
+        """Creates the model mask based on the provided DEMs and subbasins.
 
-        self.active_rivers.plot(ax=ax, color="blue")
+        The mask is created by taking the first DEM dataset and setting all cells
+        within the subbasins to True. If grid_size_multiplier is greater than 1,
+        the mask is aggregated accordingly.
+
+        It is automatically aligned to DEM grid, and padded in such a way that the
+        grid cells the corners are multiples of grid_size_multiplier and the resolution.
+
+        Args:
+            DEMs: List of DEM datasets to use for the model. Should be a list of dictionaries with 'path' and 'name' keys.
+            subbasins: A GeoDataFrame defining the subbasins of interest.
+            grid_size_multiplier: The number of grid cells to combine when setting up the model grid.
+                if 1, no combining is done.
+
+        Returns:
+            The created model mask as an xarray DataArray.
+        """
+        mask_ds = DEMs[0]["elevtn"]
+        assert isinstance(mask_ds, xr.Dataset)
+
+        mask: xr.DataArray = mask_ds["elevtn"].astype(bool)
+        mask.attrs["_FillValue"] = None  # ensure no fill value
+        mask.name = "mask"
+
+        # for in case the first DEM does not cover the entire area, we first pad the mask to the subbasins bounds
+        minx, miny, maxx, maxy = subbasins.total_bounds
+        mask = pad_xy(
+            mask,
+            minx=minx,
+            miny=miny,
+            maxx=maxx,
+            maxy=maxy,
+            constant_values=True,
+            return_slice=False,
+        )
+
+        # then, for when the DEM is (at places) larger than the subbasins, we clip to the subbasins bounds
+        mask: xr.DataArray = mask.isel(
+            get_window(
+                mask.x,
+                mask.y,
+                subbasins.total_bounds,
+                buffer=100,
+                raise_on_buffer_out_of_bounds=False,
+            )
+        )
+
+        # set all values to True
+        mask.values[:] = True
+
+        # if the grid size multiplier is greater than 1, we need to aggregate the mask
+        # accordingly. We first pad the mask to aligning it to the grid size multiplier,
+        # resolution and origin, then coarsen it by the grid size multiplier
+        if grid_size_multiplier > 1:
+            mask = pad_to_grid_alignment(
+                mask,
+                grid_size_multiplier=grid_size_multiplier,
+                constant_values=False,
+            )
+            mask = mask.coarsen(
+                x=grid_size_multiplier,
+                y=grid_size_multiplier,
+                boundary="exact",
+                coord_func="mean",
+            ).reduce(np.max)
+            mask.rio.write_transform(inplace=True)  # force recalculation of transform
+
+        return mask
+
+    def burn_and_align_subbasins(
+        self, subbasins: gpd.GeoDataFrame, mask: xr.DataArray
+    ) -> tuple[gpd.GeoDataFrame, xr.DataArray]:
+        """Burns the subbasins into a raster aligned with the model mask.
+
+        To ensure alignment with the model grid, the subbasins are first
+        rasterized like the model mask, then vectorized back to polygons.
+
+        Args:
+            subbasins: A GeoDataFrame defining the subbasins of interest.
+            mask: The model mask as an xarray DataArray.
+
+        Returns:
+            A tuple containing:
+            - The burned subbasins as a GeoDataFrame.
+            - The burned subbasins raster as an xarray DataArray aligned with the model mask.
+        """
+        subbasins.to_parquet(self.path / "subbasins_input.geoparquet")
+        subbasins: gpd.GeoDataFrame = subbasins.to_crs(mask.rio.crs)
+        subbasins_burned: xr.DataArray = rasterize_like(
+            gdf=subbasins.reset_index(),  # ty:ignore[invalid-argument-type]
+            column="COMID",
+            raster=mask,
+            dtype=np.int32,
+            nodata=-1,
+            all_touched=True,
+        )
+        assert isinstance(mask, xr.DataArray)
+
+        subbasin_shapes = list(
+            rasterio.features.shapes(
+                subbasins_burned.values,
+                transform=mask.rio.transform(),
+                connectivity=8,
+                mask=(subbasins_burned.values != -1),
+            )
+        )
+
+        subbasin_features: list[dict[str, Any]] = [
+            {"geometry": geom, "properties": {"COMID": int(value)}}
+            for geom, value in subbasin_shapes
+        ]
+        subbasins: gpd.GeoDataFrame = gpd.GeoDataFrame.from_features(
+            subbasin_features,
+            crs=mask.rio.crs,
+        ).set_index("COMID")  # ty:ignore[invalid-assignment]
+
+        # combine subbasins with the same COMID
+        subbasins = subbasins.dissolve(by=subbasins.index)  # ty:ignore[invalid-argument-type]
+
+        subbasins_burned: xr.DataArray = clip_region(subbasins_burned, align=None)[0]
+
+        # if y axis is descending (usually for geographical grids), flip it
+        if subbasins_burned.y[-1] < subbasins_burned.y[0]:
+            subbasins_burned: xr.DataArray = subbasins_burned.isel(
+                y=slice(None, None, -1)
+            )
+
+        return subbasins, subbasins_burned
+
+    def plot_rivers(self) -> None:
+        """Plots the rivers and subbasins boundary and saves to file."""
+        fig, ax = plt.subplots(figsize=(10, 10))
+        self.subbasins.boundary.plot(ax=ax, color="black")
+
+        # in coastal areas, there may be no active rivers
+        if not self.active_rivers.empty:
+            self.active_rivers.plot(ax=ax, color="blue")
         plt.savefig(self.path / "gis" / "rivers.png")
 
-    def calculate_river_outflow_conditions(self) -> None:
+    def calculate_outflow_conditions(self, area: gpd.GeoDataFrame) -> None:
         """Calculates outflow elevation and coordinates for all rivers.
 
-        Determines the outflow point for each river (intersection with subbbasins boundary
+        Determines the outflow point for each river (intersection with subbasins boundary
         for downstream-most rivers, or downstream endpoint for internal rivers)
         and retrieves the elevation at that point from the DEM.
+
+        Args:
+            area: A GeoDataFrame defining the area to consider for outflow point calculation.
+                Typically the subbasins or model area boundary.
 
         Raises:
             ValueError: if the calculated outflow point is not a single point.
@@ -549,51 +757,41 @@ class SFINCSRootModel:
                 crs=self.mask.rio.crs,
             )
             write_geom(self.rivers, self.path / "debug_rivers.geoparquet")
-            write_geom(self.subbbasins, self.path / "debug_region.geoparquet")
+            write_geom(self.subbasins, self.path / "debug_region.geoparquet")
 
             outflow_gdf = gpd.GeoDataFrame({"geometry": [outflow_point]}, crs=self.crs)
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
+        boundary = area.unary_union.boundary
+
         for river_idx, river in self.active_rivers[
-            self.active_rivers["is_downstream_outflow"]
-            | (self.active_rivers["downstream_ID"] == -1)
+            self.active_rivers["is_downstream_outflow"]  # any outflow river
+            | (
+                self.active_rivers["downstream_ID"] == -1
+            )  # or river that flows into ocean
         ].iterrows():
-            # outflow point is the intersection of the river geometry with the region boundary
-            # this will be used as the central point of the outflow boundary condition
-            subbasin_boundary: gpd.GeoDataFrame = self.subbbasins[
-                self.subbbasins.index == river_idx
-            ]
-            assert len(subbasin_boundary) == 1, (
-                "Subbasin boundary must be a single geometry"
-            )
-
-            outflow_point: Point | MultiPoint | GeometryCollection = (
-                river.geometry.intersection(subbasin_boundary.iloc[0].geometry.boundary)
-            )
-            if not isinstance(outflow_point, Point):
-                # if the intersection is not a single point, select the most downstream point
-                outflow_point: Point = select_most_downstream_point(
-                    river, outflow_point
-                )
-
-            outflow_col, outflow_row = coord_to_pixel(
-                (outflow_point.x, outflow_point.y),
-                self.mask.rio.transform().to_gdal(),
-            )
-
-            # due to floating point precision, the intersection point
-            # may be just outside the model grid. We therefore check if the
-            # point is outside the grid, and if so, move it 1 m upstream along the river
-            if not self.mask.values[outflow_row, outflow_col]:
-                # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
-                outflow_point: Point | MultiPoint | GeometryCollection = (
-                    river.geometry.interpolate(
-                        line_locate_point(river.geometry, outflow_point) - 0.000008983
-                        if self.is_geographic
-                        else 1.0
+            downstream_river_idx = river["downstream_ID"]
+            if downstream_river_idx == -1:
+                print("Skipping coastal river")
+            else:
+                river = river.geometry
+                assert isinstance(river, LineString)
+                # extend the river geometry to include all downstream segments
+                # up to coastal outflow
+                while downstream_river_idx != -1:
+                    downstream_river = self.rivers.loc[downstream_river_idx]
+                    # combine the geometries to ensure intersection is found
+                    river = LineString(
+                        river.coords[:] + downstream_river.geometry.coords[:]
                     )
+                    assert isinstance(river, LineString)
+                    downstream_river_idx = downstream_river["downstream_ID"]
+
+                outflow_point: Point | MultiPoint | GeometryCollection = (
+                    river.intersection(boundary)
                 )
                 if not isinstance(outflow_point, Point):
+                    export_diagnostics(outflow_point)
                     # if the intersection is not a single point, select the most downstream point
                     outflow_point: Point = select_most_downstream_point(
                         river, outflow_point
@@ -604,20 +802,45 @@ class SFINCSRootModel:
                     self.mask.rio.transform().to_gdal(),
                 )
 
-                # if still outside the grid, raise error for boundary rivers
+                # due to floating point precision, the intersection point
+                # may be just outside the model grid. We therefore check if the
+                # point is outside the grid, and if so, move it 1 m upstream along the river
                 if not self.mask.values[outflow_row, outflow_col]:
-                    export_diagnostics(outflow_point)
-                    raise ValueError(
-                        "Calculated outflow point is outside of the model grid. Please check the river geometries and subbbasins boundary."
+                    # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
+                    outflow_point: Point | MultiPoint | GeometryCollection = (
+                        river.interpolate(
+                            line_locate_point(river, outflow_point) - 0.000008983
+                            if self.is_geographic
+                            else 1.0
+                        )
+                    )
+                    if not isinstance(outflow_point, Point):
+                        # if the intersection is not a single point, select the most downstream point
+                        outflow_point: Point = select_most_downstream_point(
+                            river, outflow_point
+                        )
+
+                    outflow_col, outflow_row = coord_to_pixel(
+                        (outflow_point.x, outflow_point.y),
+                        self.mask.rio.transform().to_gdal(),
                     )
 
-            outflow_elevation: float = self.elevation[outflow_row, outflow_col].item()
-            self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation
-            self.rivers.at[river_idx, "outflow_point_xy"] = (
-                outflow_point.x,
-                outflow_point.y,
-            )
-            self.rivers.at[river_idx, "is_outflow_boundary"] = True
+                    # if still outside the grid, raise error for boundary rivers
+                    if not self.mask.values[outflow_row, outflow_col]:
+                        export_diagnostics(outflow_point)
+                        raise ValueError(
+                            "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
+                        )
+
+                outflow_elevation: float = self.elevation[
+                    outflow_row, outflow_col
+                ].item()
+                self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation
+                self.rivers.at[river_idx, "outflow_point_xy"] = (
+                    outflow_point.x,
+                    outflow_point.y,
+                )
+                self.rivers.at[river_idx, "is_outflow_boundary"] = True
 
     def setup_river_outflow_boundary(
         self,
@@ -626,21 +849,10 @@ class SFINCSRootModel:
 
         Uses pre-calculated outflow points to set up boundary conditions for
         downstream-most rivers.
-
-        Raises:
-            ValueError: if no downstream-most rivers are found for outflow boundary setup.
         """
-        downstream_most_rivers: gpd.GeoDataFrame = self.active_rivers.loc[
-            self.active_rivers["is_downstream_outflow"]
-            | (self.active_rivers["downstream_ID"] == -1)
-        ]
+        rivers_with_outflow_boundary = self.rivers[self.rivers["is_outflow_boundary"]]
 
-        if downstream_most_rivers.empty:
-            raise ValueError(
-                "No downstream-most rivers found for outflow boundary setup"
-            )
-
-        for river_idx, river in downstream_most_rivers.iterrows():
+        for river_idx, river in rivers_with_outflow_boundary.iterrows():
             outflow_point_xy = river["outflow_point_xy"]
 
             outflow_col, outflow_row = coord_to_pixel(
@@ -648,16 +860,16 @@ class SFINCSRootModel:
                 self.mask.rio.transform().to_gdal(),
             )
 
-            self.rivers.at[river_idx, "is_outflow_boundary"] = True
-            outflow_boundary_width_m = 500
-
             outflow_mask: TwoDArrayBool = create_outflow_in_mask(
                 self.mask.values,
                 row=outflow_row,
                 col=outflow_col,
                 width_cells=(
                     math.ceil(
-                        ((outflow_boundary_width_m / self.estimated_cell_size_m) - 1)
+                        (
+                            (self.outflow_boundary_width_m / self.estimated_cell_size_m)
+                            - 1
+                        )
                         / 2
                     )
                     * 2
@@ -671,6 +883,12 @@ class SFINCSRootModel:
     def get_flood_plain(self, maximum_hand: float = 30.0) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
 
+        Uses a two-stage approach:
+        1. Calculate the Height Above Nearest Drainage (HAND) using the elevation
+           grid and the river network and classify all cells with HAND less than
+              maximum_hand as flood plain.
+        2. Adds a buffer of minimum distance around rivers.
+
         Args:
             maximum_hand: The maximum Height Above Nearest Drainage (HAND) value to consider as flood plain, in meters. Default is 30.0 m.
 
@@ -678,7 +896,7 @@ class SFINCSRootModel:
             The flood plain as a GeoDataFrame.
         """
         subbasin_raster = rasterize_like(
-            gdf=self.subbbasins,
+            gdf=self.subbasins,
             raster=self.elevation,
             dtype=np.uint8,
             nodata=0,
@@ -689,19 +907,20 @@ class SFINCSRootModel:
         # get a raster of all drainage cells (i.e., 0 HAND). We do so
         # by burning the rivers into a raster
         drainage_cells = rasterize_like(
-            gdf=self.rivers.to_crs(self.elevation.rio.crs),
+            gdf=self.active_rivers.to_crs(self.elevation.rio.crs),
             raster=self.elevation,
             dtype=np.uint8,
             nodata=0,
             burn_value=1,
             all_touched=True,
         ).astype(bool)
+        drainage_cells.attrs["_FillValue"] = None
 
-        # obtain the elevation grid. Some cells on the outside of the subbbasins
-        # drain to a location outside the subbbasins. In the HAND calculation,
+        # obtain the elevation grid. Some cells on the outside of the subbasins
+        # drain to a location outside the subbasins. In the HAND calculation,
         # these cells are given a very low HAND, and thus would also be part of
-        # the floodplain. To avoid this, we set the cells outside the subbbasins
-        # to a very low elevation, so that cells that drain outside the subbbasins
+        # the floodplain. To avoid this, we set the cells outside the subbasins
+        # to a very low elevation, so that cells that drain outside the subbasins
         # get an extremly high HAND value, and thus will not be part of the
         # flood plain.
         elevation = self.elevation.values.copy()
@@ -749,11 +968,27 @@ class SFINCSRootModel:
                 transform=flood_plain.rio.transform(recalc=True),
             ),
         )
+        assert len(flood_plain_geom) > 0, "No flood plain geometries found"
+
         flood_plain_geom = gpd.GeoDataFrame.from_features(
             [{"geometry": geom[0], "properties": {}} for geom in flood_plain_geom],
             crs=flood_plain.rio.crs,
         )
 
+        # add buffer around rivers to ensure connectivity
+        river_buffer: gpd.GeoDataFrame = self.active_rivers.to_crs(self.utm_zone)
+        river_buffer.geometry = river_buffer.geometry.buffer(
+            self.outflow_boundary_width_m
+        )
+        river_buffer = river_buffer.to_crs(flood_plain_geom.crs).dissolve()
+
+        flood_plain_geom: gpd.GeoDataFrame = pd.concat(
+            [
+                flood_plain_geom,
+                river_buffer,
+            ],
+            ignore_index=True,
+        )
         return flood_plain_geom
 
     @property
@@ -1003,7 +1238,7 @@ class SFINCSRootModel:
         Returns:
             A GeoDataFrame of active rivers.
         """
-        active_subbasin_ids = self.subbbasins.index.tolist()
+        active_subbasin_ids = self.subbasins.index.tolist()
         return self.rivers[self.rivers.index.isin(active_subbasin_ids)]
 
     @property
@@ -1069,6 +1304,16 @@ class SFINCSRootModel:
             True if the model has inflow rivers, False otherwise.
         """
         return not self.inflow_rivers.empty
+
+    @property
+    def utm_zone(self) -> CRS:
+        """Returns the UTM zone of the SFINCS model.
+
+        Returns:
+            The UTM zone as an integer.
+        """
+        centroid = self.subbasins.to_crs("EPSG:4326").unary_union.centroid
+        return get_utm_zone(centroid.y, centroid.x)
 
     @property
     def is_build_from_scratch(self) -> bool:
@@ -1263,7 +1508,13 @@ class SFINCSSimulation:
 
         if self.write_figures:
             self.sfincs_model.plot_forcing(fn_out="forcing.png")
-            self.sfincs_model.plot_basemap(fn_out="basemap.png")
+            self.sfincs_model.plot_basemap(
+                fn_out="basemap.png",
+                vmin=math.floor(self.root_model.elevation.min()),
+                vmax=max(
+                    math.ceil(self.root_model.elevation.max()), 1
+                ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324)
+            )
 
     def set_forcing_from_grid(
         self, nodes: gpd.GeoDataFrame, discharge_grid: xr.DataArray
@@ -1421,7 +1672,7 @@ class SFINCSSimulation:
                 The columns should match the index of the nodes GeoDataFrame.
 
         Raises:
-            ValueError: If forcing locations are outside the model subbbasins.
+            ValueError: If forcing locations are outside the model subbasins.
         """
         assert set(timeseries.columns) == set(nodes.index)
 
@@ -1434,7 +1685,7 @@ class SFINCSSimulation:
             self.sfincs_model.region.union_all()
             .contains(nodes.geometry.to_crs(self.sfincs_model.crs))
             .all()
-        ), "All forcing locations must be within the model subbbasins"
+        ), "All forcing locations must be within the model subbasins"
 
         reprojected_nodes = nodes.to_crs(self.sfincs_model.grid["msk"].rio.crs)
         x_points: xr.DataArray = xr.DataArray(
@@ -1477,7 +1728,10 @@ class SFINCSSimulation:
         if self.write_figures:
             self.sfincs_model.plot_basemap(
                 fn_out="src_points_check.png",
-                vmax=max(int(self.root_model.elevation.max()), 1),
+                vmin=math.floor(self.root_model.elevation.min()),
+                vmax=max(
+                    math.ceil(self.root_model.elevation.max()), 1
+                ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
             )
             self.sfincs_model.plot_forcing(fn_out="forcing.png")
 
@@ -1730,6 +1984,7 @@ class SFINCSSimulation:
             method="max",
             minimum_flood_depth=minimum_flood_depth,
             end_time=self.end_time,
+            mask=self.root_model.area_of_interest,
         )
         return flood_map
 

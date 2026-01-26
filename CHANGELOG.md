@@ -2,6 +2,8 @@
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
 - Add download and processing for soil thickness data.
 - DeltaDTM is now also setup for the model region in setup_elevation. 
+- Align SFINCS mask padding to the coarse grid so left and bottom edges snap to grid-size multiples.
+- Improve inflow, outflow, flood plains and some other things to improve flood risk maps.
 
 To support this version:
 
