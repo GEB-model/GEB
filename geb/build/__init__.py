@@ -445,7 +445,7 @@ def cluster_subbasins_by_area_and_proximity(
         logger.info("Filtering coastal basins to ocean outlets only...")
         # Load coastlines
         coastlines = data_catalog.fetch("open_street_map_coastlines").read()
-        # clip coastalines to the bounding box of the subbasins for performance
+        # clip coastlines to the bounding box of the subbasins for performance
         coastlines = coastlines.cx[
             subbasins.total_bounds[0] : subbasins.total_bounds[2],
             subbasins.total_bounds[1] : subbasins.total_bounds[3],
