@@ -130,7 +130,7 @@ class LandSurface(BuildModelBase):
         assert isinstance(DEMs, list)
 
         if not self.geom["routing/subbasins"]["is_coastal"].any():
-            # remove DetaDTM and GEBCO if no coastal subbasins are present
+            # remove DeltaDTM and GEBCO if no coastal subbasins are present
             DEMs = [DEM for DEM in DEMs if DEM["name"] not in ("delta_dtm", "gebco")]
             # and remove zmin from fabdem if present
             for DEM in DEMs:
