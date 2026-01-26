@@ -454,7 +454,7 @@ def cluster_subbasins_by_area_and_proximity(
         # Only select candidate basins first
         candidates = subbasins.loc[coastal_basin_ids]
 
-        # Buffer once, vectorized
+        # Buffer once, vectorized. Buffering by 0.1 degrees (~11km) to account for minor misalignments
         buffered = candidates.geometry.buffer(0.1)
 
         # Vectorized intersects
