@@ -377,6 +377,12 @@ class Hydrography(BuildModelBase):
         downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
         subbasin_ids.update(downstream_subbasins)
 
+        another_level_of_downstream_subbasins = get_downstream_subbasins(
+            river_graph, list(downstream_subbasins.keys())
+        )
+        subbasin_ids.update(another_level_of_downstream_subbasins)
+        downstream_subbasins.update(another_level_of_downstream_subbasins)
+
         # later we want to include the downstream outflow basins. However, we don't want to include
         # other branches that are upstream of those downstream basins, but are not part
         # of the area that we are interested in. Therefore, we also include
