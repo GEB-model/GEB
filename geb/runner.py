@@ -844,6 +844,7 @@ def init_multiple_fn(
     overwrite: bool,
     save_geoparquet: Path | None,
     save_map: str | Path | None,
+    ocean_outlets_only=False,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -951,6 +952,7 @@ def init_multiple_fn(
         downstream_subbasins,
         target_area_km2=target_area_km2,
         area_tolerance=area_tolerance,
+        ocean_outlets_only=ocean_outlets_only,
         logger=logger,
     )
 
