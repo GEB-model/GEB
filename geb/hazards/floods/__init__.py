@@ -444,8 +444,9 @@ class Floods(Module):
         """
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         rivers = self.model.hydrology.routing.rivers
+        simulation_rivers = rivers[~rivers["is_further_downstream_outflow"]]
 
-        river_graph = create_river_graph(rivers, subbasins)
+        river_graph = create_river_graph(simulation_rivers, subbasins)
         grouped_subbasins = group_subbasins(
             river_graph=river_graph,
             max_area_m2=1e20,  # very large to force single group only
@@ -454,14 +455,15 @@ class Floods(Module):
         assert len(grouped_subbasins) == 1, "currently only single group supported"
         for group_id, group in grouped_subbasins.items():
             group = set(group) | set(
-                rivers.loc[rivers.index.isin(group)]["downstream_ID"]
+                simulation_rivers.loc[simulation_rivers.index.isin(group)][
+                    "downstream_ID"
+                ]
             )
             subbasins_group = subbasins[subbasins.index.isin(group)]
-            rivers_group = rivers[rivers.index.isin(group)]
 
             sfincs_root_model = self.build(
                 f"group_{group_id}",
-                rivers=rivers_group,
+                rivers=rivers,
                 subbasins=subbasins_group,
             )  # build or read the model
             sfincs_simulation = self.set_forcing(  # set the forcing
