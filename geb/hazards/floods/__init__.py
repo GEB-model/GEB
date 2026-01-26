@@ -245,7 +245,7 @@ class Floods(Module):
         self,
         name: str,
         rivers: gpd.GeoDataFrame,
-        subbbasins: gpd.GeoDataFrame,
+        subbasins: gpd.GeoDataFrame,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
@@ -259,7 +259,7 @@ class Floods(Module):
 
         Args:
             name: Name of the SFINCS model (used for the model root directory).
-            subbbasins: The subbbasins to build the SFINCS model for. If None, the entire model subbbasins is used.
+            subbasins: The subbasins to build the SFINCS model for. If None, the entire model subbasins is used.
             rivers: The rivers to include in the SFINCS model.
             coastal: Whether to only include coastal areas in the model.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
@@ -276,7 +276,7 @@ class Floods(Module):
             ).to_dataset(name="elevtn")
 
         sfincs_model.build(
-            subbbasins=subbbasins,
+            subbasins=subbasins,
             DEMs=self.DEM_config,
             rivers=rivers,
             discharge=self.discharge_spinup_ds,
@@ -462,7 +462,7 @@ class Floods(Module):
             sfincs_root_model = self.build(
                 f"group_{group_id}",
                 rivers=rivers_group,
-                subbbasins=subbasins_group,
+                subbasins=subbasins_group,
             )  # build or read the model
             sfincs_simulation = self.set_forcing(  # set the forcing
                 sfincs_root_model, start_time, end_time
@@ -577,7 +577,7 @@ class Floods(Module):
 
             sfincs_coastal_root_model: SFINCSRootModel = self.build(
                 name=model_name,
-                subbbasins=coastal_subbasins,
+                subbasins=coastal_subbasins,
                 coastal=True,
                 rivers=rivers[rivers.intersects(coastal_subbasins.union_all())],
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
@@ -614,7 +614,7 @@ class Floods(Module):
 
                 sfincs_inland_root_model = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
-                    subbbasins=region_subbasins,
+                    subbasins=region_subbasins,
                     rivers=region_rivers,
                     coastal=False,
                 )
@@ -754,7 +754,8 @@ class Floods(Module):
             / "spinup"
             / "hydrology.routing"
             / "discharge_daily.zarr"
-        )
+        ).isel(time=slice(0, 4 * 365))
+        return da
 
         start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)
         da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))
