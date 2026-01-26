@@ -11,6 +11,7 @@ To support this version:
 
 - Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
 - Re-run `setup_soil`: `geb update -b build.yml::setup_soil`
+- Models for inland regions need to be rebuild if floods need to be run
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
