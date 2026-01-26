@@ -39,8 +39,8 @@ class OpenStreetMapCoastlines(Adapter):
             RuntimeError: If the data download fails.
         """
         self.url = url
-        succes = fetch_and_save(self.url, self.path)
-        if not succes:
+        success = fetch_and_save(self.url, self.path)
+        if not success:
             raise RuntimeError("Failed to download OSM coastlines data.")
         return self
 
