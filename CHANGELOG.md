@@ -1,5 +1,13 @@
 # dev
-- DeltaDTM is now also setup for the model region in setup_elevation. 
+- `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
+- Add download and processing for soil thickness data.
+- DeltaDTM is now also setup for the model region in setup_elevation.
+- Remove DeltaDTM and GEBCO for non-coastal regions.
+
+To support this version:
+
+- Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
+- Re-run `setup_soil`: `geb update -b build.yml::setup_soil`
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 

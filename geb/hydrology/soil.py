@@ -893,7 +893,7 @@ def clip_brakensiek(
 
 def thetas_toth(
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
@@ -907,7 +907,7 @@ def thetas_toth(
 
     Args:
         organic_carbon_percentage: soil organic carbon content [%].
-        bulk_density_gr_per_cm3: bulk density [g /cm3].
+        bulk_density_kg_per_dm3: bulk density [kg/dm3].
         clay: clay percentage [%].
         silt: fsilt percentage [%].
         is_top_soil: top soil flag.
@@ -919,24 +919,24 @@ def thetas_toth(
     return (
         np.float32(0.6819)
         - np.float32(0.06480) * (1 / (organic_carbon_percentage + 1))
-        - np.float32(0.11900) * bulk_density_gr_per_cm3**2
+        - np.float32(0.11900) * bulk_density_kg_per_dm3**2
         - np.float32(0.02668) * is_top_soil
         + np.float32(0.001489) * clay
         + np.float32(0.0008031) * silt
         + np.float32(0.02321)
         * (1 / (organic_carbon_percentage + 1))
-        * bulk_density_gr_per_cm3**2
-        + np.float32(0.01908) * bulk_density_gr_per_cm3**2 * is_top_soil
+        * bulk_density_kg_per_dm3**2
+        + np.float32(0.01908) * bulk_density_kg_per_dm3**2 * is_top_soil
         - np.float32(0.0011090) * clay * is_top_soil
         - np.float32(0.00002315) * silt * clay
-        - np.float32(0.0001197) * silt * bulk_density_gr_per_cm3**2
-        - np.float32(0.0001068) * clay * bulk_density_gr_per_cm3**2
+        - np.float32(0.0001197) * silt * bulk_density_kg_per_dm3**2
+        - np.float32(0.0001068) * clay * bulk_density_kg_per_dm3**2
     )
 
 
 def thetas_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
@@ -947,7 +947,7 @@ def thetas_wosten(
 
     Args:
         clay: Clay percentage (C).
-        bulk_density_gr_per_cm3: Bulk density (D).
+        bulk_density_kg_per_dm3: Bulk density (D).
         silt: Silt percentage (S).
         organic_carbon_percentage: Organic matter percentage (OM).
         is_topsoil: 1 for topsoil, 0 for subsoil.
@@ -958,15 +958,15 @@ def thetas_wosten(
     theta_s = (
         0.7919
         + 0.00169 * clay
-        - 0.29619 * bulk_density_gr_per_cm3
+        - 0.29619 * bulk_density_kg_per_dm3
         - 0.000001491 * silt**2
         + 0.0000821 * organic_carbon_percentage**2
         + 0.02427 * (1 / clay)
         + 0.01113 * (1 / silt)
         + 0.01472 * np.log(silt)
         - 0.0000733 * organic_carbon_percentage * clay
-        - 0.000619 * bulk_density_gr_per_cm3 * clay
-        - 0.001183 * bulk_density_gr_per_cm3 * organic_carbon_percentage
+        - 0.000619 * bulk_density_kg_per_dm3 * clay
+        - 0.001183 * bulk_density_kg_per_dm3 * organic_carbon_percentage
         - 0.0001664 * is_topsoil * silt
     )
 
@@ -1102,7 +1102,7 @@ def get_pore_size_index_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine Brooks-Corey pore size distribution index [-].
@@ -1113,7 +1113,7 @@ def get_pore_size_index_wosten(
         clay: clay percentage [%].
         silt: silt percentage [%].
         organic_carbon_percentage: soil organic carbon content [%].
-        bulk_density_gr_per_cm3: bulk density [g /cm3].
+        bulk_density_kg_per_dm3: bulk density [kg/dm3].
         is_top_soil: top soil flag.
 
     Returns:
@@ -1124,18 +1124,18 @@ def get_pore_size_index_wosten(
         - 0.02195 * clay
         + 0.0074 * silt
         - 0.1940 * organic_carbon_percentage
-        + 45.5 * bulk_density_gr_per_cm3
-        - 7.24 * bulk_density_gr_per_cm3**2
+        + 45.5 * bulk_density_kg_per_dm3
+        - 7.24 * bulk_density_kg_per_dm3**2
         + 0.0003658 * clay**2
         + 0.002855 * organic_carbon_percentage**2
-        - 12.81 * bulk_density_gr_per_cm3**-1
+        - 12.81 * bulk_density_kg_per_dm3**-1
         - 0.1524 * silt**-1
         - 0.01958 * organic_carbon_percentage**-1
         - 0.2876 * np.log(silt)
         - 0.0709 * np.log(organic_carbon_percentage)
-        - 44.6 * np.log(bulk_density_gr_per_cm3)
-        - 0.02264 * bulk_density_gr_per_cm3 * clay
-        + 0.0896 * bulk_density_gr_per_cm3 * organic_carbon_percentage
+        - 44.6 * np.log(bulk_density_kg_per_dm3)
+        - 0.02264 * bulk_density_kg_per_dm3 * clay
+        + 0.0896 * bulk_density_kg_per_dm3 * organic_carbon_percentage
         + 0.00718 * is_top_soil * clay
     )
 
@@ -1184,7 +1184,7 @@ def kv_brakensiek(
 def kv_wosten(
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
-    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
@@ -1195,7 +1195,7 @@ def kv_wosten(
     Args:
         silt: Silt percentage (S).
         is_topsoil: 1 for topsoil, 0 for subsoil.
-        bulk_density_gr_per_cm3: Bulk density (D).
+        bulk_density_kg_per_dm3: Bulk density (D).
         clay: Clay percentage (C).
         organic_carbon_percentage: Organic matter percentage (OM).
 
@@ -1206,14 +1206,14 @@ def kv_wosten(
         7.755
         + 0.0352 * silt
         + np.float32(0.93) * is_topsoil
-        - 0.967 * bulk_density_gr_per_cm3**2
+        - 0.967 * bulk_density_kg_per_dm3**2
         - 0.000484 * clay**2
         - 0.000322 * silt**2
         + 0.001 * (1 / silt)
         - 0.0748 * (1 / organic_carbon_percentage)
         - 0.643 * np.log(silt)
-        - 0.01398 * bulk_density_gr_per_cm3 * clay
-        - 0.1673 * bulk_density_gr_per_cm3 * organic_carbon_percentage
+        - 0.01398 * bulk_density_kg_per_dm3 * clay
+        - 0.1673 * bulk_density_kg_per_dm3 * organic_carbon_percentage
         + 0.02986 * np.float32(is_topsoil) * clay
         - 0.03305 * np.float32(is_topsoil) * silt
     ) / (100 * 86400)  # convert to m/s
@@ -1248,7 +1248,7 @@ def kv_cosby(
 
 
 def get_heat_capacity_solid_fraction(
-    bulk_density_gr_per_cm3: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     layer_thickness_m: np.ndarray[Shape, np.dtype[np.float32]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculate the heat capacity of the solid fraction of the soil layer [J/(m2·K)].
@@ -1256,7 +1256,7 @@ def get_heat_capacity_solid_fraction(
     This calculates the total heat capacity per unit area for the solid part of the soil layer.
 
     Args:
-        bulk_density_gr_per_cm3: Soil bulk density [g/cm3].
+        bulk_density_kg_per_dm3: Soil bulk density [kg/dm3].
         layer_thickness_m: Thickness of the soil layer [m].
 
     Returns:
@@ -1270,7 +1270,7 @@ def get_heat_capacity_solid_fraction(
 
     # Calculate total volume fraction of solids from bulk density
     # Convert bulk density from g/cm3 to kg/m3 (factor 1000)
-    phi_s = (bulk_density_gr_per_cm3 * 1000.0) / RHO_MINERAL
+    phi_s = (bulk_density_kg_per_dm3 * 1000.0) / RHO_MINERAL
 
     # Calculate volumetric heat capacity [J/(m3·K)]
     volumetric_heat_capacity_solid = phi_s * C_MINERAL

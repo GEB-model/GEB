@@ -29,7 +29,7 @@ setup_mannings:
   
 setup_economic_data:
 
-setup_soil_parameters:
+setup_soil:
 
 setup_land_use_parameters:
 

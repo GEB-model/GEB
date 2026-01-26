@@ -89,7 +89,9 @@ nav:
   - Getting Started:
     - Installation: getting_started/installation.md
     - Configuration: getting_started/configuration.md
-    - Building a model: getting_started/building_a_model.md
+    - Building a model:
+      - Overview: getting_started/build/index.md
+      - Data catalog: getting_started/build/data_catalog.md
     - Running the model: getting_started/running.md
     - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
