@@ -127,6 +127,8 @@ class LandSurface(BuildModelBase):
         if not DEMs:
             DEMs = []
 
+        assert isinstance(DEMs, list)
+
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             # remove DetaDTM and GEBCO if no coastal subbasins are present
             DEMs = [DEM for DEM in DEMs if DEM["name"] not in ("delta_dtm", "gebco")]
@@ -139,7 +141,6 @@ class LandSurface(BuildModelBase):
                 "No coastal subbasins present; removing DeltaDTM and GEBCO from DEM configuration."
             )
 
-        assert isinstance(DEMs, list)
         # here we use the bounds of all subbasins, which may include downstream
         # subbasins that are not part of the study area
         bounds: tuple[float, float, float, float] = tuple(
