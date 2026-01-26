@@ -576,6 +576,12 @@ class SFINCSRootModel:
         self.subbasins.to_parquet(self.path / "subbasins.geoparquet")
         self.rivers.to_parquet(self.path / "rivers.geoparquet")
 
+        write_zarr(
+            self.area_of_interest,
+            self.path / "area_of_interest.zarr",
+            crs=self.mask.rio.crs,
+        )
+
         sf.plot_basemap(
             fn_out="basemap.png",
             vmin=math.floor(self.elevation.min()),
