@@ -44,11 +44,11 @@ class OpenStreetMapCoastlines(Adapter):
             raise RuntimeError("Failed to download OSM coastlines data.")
         return self
 
-    def read(self) -> Path:
+    def read(self) -> gpd.GeoDataFrame:
         """Reads the OSM coastlines data.
 
         Returns:
-            The path to the downloaded OSM coastlines data file.
+            A GeoDataFrame containing the OSM coastlines geometries.
 
         Raises:
             RuntimeError: If reading the data fails.
