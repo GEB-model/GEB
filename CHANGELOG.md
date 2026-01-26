@@ -4,6 +4,7 @@
 - DeltaDTM is now also setup for the model region in setup_elevation.
 - Remove DeltaDTM and GEBCO for non-coastal regions.
 - Re-indexing of OBM buildings and creating one houshold agent per building (per default).
+- Filter clusters in geb init-multiple based on intersection with coastline if parsed as argument.
 
 To support this version:
 
