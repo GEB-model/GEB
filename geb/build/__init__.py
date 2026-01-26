@@ -410,6 +410,7 @@ def cluster_subbasins_by_area_and_proximity(
         subbasin_ids: List of downstream COMID values to cluster.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        ocean_outlets_only: If True, only consider coastal basins that intersect with coastlines.
         logger: Logger for progress tracking.
 
     Returns:
@@ -445,7 +446,10 @@ def cluster_subbasins_by_area_and_proximity(
         # Load coastlines
         coastlines = data_catalog.fetch("open_street_map_coastlines").read()
         # clip coastalines to the bounding box of the subbasins for performance
-        coastlines = coastlines.cx[subbasins.total_bounds[0] : subbasins.total_bounds[2], subbasins.total_bounds[1] : subbasins.total_bounds[3]]
+        coastlines = coastlines.cx[
+            subbasins.total_bounds[0] : subbasins.total_bounds[2],
+            subbasins.total_bounds[1] : subbasins.total_bounds[3],
+        ]
         # check whether coastal basins intersect with coastlines
         # Only select candidate basins first
         candidates = subbasins.loc[coastal_basin_ids]

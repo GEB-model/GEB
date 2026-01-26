@@ -844,7 +844,7 @@ def init_multiple_fn(
     overwrite: bool,
     save_geoparquet: Path | None,
     save_map: str | Path | None,
-    ocean_outlets_only=False,
+    ocean_outlets_only: bool = False,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -862,6 +862,7 @@ def init_multiple_fn(
         overwrite: If True, overwrite existing directories and files.
         save_geoparquet: Path to save clusters as geoparquet file. If None, no file is saved.
         save_map: Path to save visualization map as PNG file. If None, no map is created.
+        ocean_outlets_only: If True, only consider subbasins that outlet to the ocean when clustering.
 
     Raises:
         FileExistsError: If directories already exist and overwrite is False.

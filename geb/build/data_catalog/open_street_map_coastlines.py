@@ -34,6 +34,9 @@ class OpenStreetMapCoastlines(Adapter):
 
         Returns:
             The OpenStreetMapCoastlines adapter instance.
+
+        Raises:
+            RuntimeError: If the data download fails.
         """
         self.url = url
         succes = fetch_and_save(self.url, self.path)
@@ -46,6 +49,9 @@ class OpenStreetMapCoastlines(Adapter):
 
         Returns:
             The path to the downloaded OSM coastlines data file.
+
+        Raises:
+            RuntimeError: If reading the data fails.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             with zipfile.ZipFile(self.path, "r") as zip_ref:
