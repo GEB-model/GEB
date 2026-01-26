@@ -1,7 +1,8 @@
 # dev
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
 - Add download and processing for soil thickness data.
-- DeltaDTM is now also setup for the model region in setup_elevation. 
+- DeltaDTM is now also setup for the model region in setup_elevation.
+- Remove DeltaDTM and GEBCO for non-coastal regions.
 
 To support this version:
 
