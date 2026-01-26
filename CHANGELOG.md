@@ -4,6 +4,8 @@
 - DeltaDTM is now also setup for the model region in setup_elevation. 
 - Align SFINCS mask padding to the coarse grid so left and bottom edges snap to grid-size multiples.
 - Improve inflow, outflow, flood plains and some other things to improve flood risk maps.
+- Remove DeltaDTM and GEBCO for non-coastal regions.
+- Re-indexing of OBM buildings and creating one houshold agent per building (per default).
 
 To support this version:
 
