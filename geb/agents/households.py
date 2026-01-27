@@ -1608,7 +1608,7 @@ class Households(AgentBaseClass):
             sigma=1,
         )
 
-        EU_do_nothing = self.decision_module.calcEU_do_nothing_multirisk(
+        EU_do_nothing, _, _, _ = self.decision_module.calcEU_do_nothing_multirisk(
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
@@ -1623,11 +1623,11 @@ class Households(AgentBaseClass):
             T=35,
             r=0.03,
             sigma=1,
-            public_share=0.5,
+            public_reinsurer=0.5,
         )
 
         EU_multirisk_insurance, premium, premium_private, premium_public = (
-            self.decision_module.calcEU_insure_multirisk(
+            self.decision_module.calcEU_insure_multirisk_residual_CATNAT(
                 geom_id="NoID",
                 n_agents=self.n,
                 wealth=self.var.wealth.data,
@@ -1637,7 +1637,9 @@ class Households(AgentBaseClass):
                 amenity_weight=1,
                 risk_perception=self.var.risk_perception.data,
                 expected_damages_flood=damages_do_not_adapt,
+                expected_damages_floodadapted=damages_adapt,
                 expected_damages_wind=damages_unprotected_w,
+                expected_damages_windadapted=damages_adapt_w,
                 p_flood=1 / self.return_periods,  # dummy, should be multirisk damages
                 p_wind=1
                 / self.windstorm_return_periods,  # dummy, should be multirisk return period
@@ -1647,8 +1649,8 @@ class Households(AgentBaseClass):
                 r=0.03,  # needs to be adapted for insurance
                 sigma=1,
                 deductible=0.1,
-                loading_factor=0.3,  # needs to be discussed for insurance
-                public_share=0.5,
+                operating_insurer=0.3,  # needs to be discussed for insurance
+                public_reinsurer=0.5,
                 adapted_floodproofing=self.var.adapted.data == 1,
                 adapted_windshutters=self.var.adapted_shutters.data == 1,
             )
@@ -1689,6 +1691,9 @@ class Households(AgentBaseClass):
         #     "C:/Users/nxu279/GitHub/GEB_try/models/etaple/base/output/flood_maps/coastal_0500.zarr"
         # )
         # ds.rio.to_raster("C:/Users/nxu279/GitHub/Data/coastal_0500.tif")
+
+        n_households = self.n
+        print(f"Total N households: {n_households}")
 
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting_flood)}")
