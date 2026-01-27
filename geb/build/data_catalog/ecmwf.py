@@ -308,13 +308,12 @@ class ECMWFForecasts(Adapter):
         forecast_horizon: int,
         forecast_timestep_hours: int,
         reproject_like: xr.DataArray,
-    ) -> None | xr.Dataset:
+    ) -> xr.Dataset:
         """Process downloaded ECMWF forecast data.
 
         We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
 
         Args:
-            preprocessing_folder: Path to the folder containing the downloaded ECMWF forecast data.
             bounds: The bounding box in the format (min_lon, min_lat, max_lon,
                     max_lat).
             forecast_issue_date: The forecast initialization time.
@@ -557,7 +556,7 @@ class ECMWFForecasts(Adapter):
             x=((ds.x + 180) % 360 - 180)
         )  # Convert longitude coordinates to -180 to 180 format
         ds.attrs["_FillValue"] = np.nan  # Set fill value attribute for missing data
-        ds: xr.DataArray = convert_nodata(ds, np.nan)
+        ds: xr.Dataset = convert_nodata(ds, np.nan)
 
         # assert that time is monotonically increasing with a constant step size
         assert (

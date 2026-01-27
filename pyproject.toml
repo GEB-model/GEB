@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b8"
+version = "1.0.0b10"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -31,11 +31,12 @@ dependencies = [
     "geopandas>=1.0.1",
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.2.0",
+    "mcp",
     "networkx",
-    "numba==0.62.1",
+    "numba>=0.63.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
-    "pandas>=2.3.0",
+    "pandas>=2.3.0,<3.0.0",  # we get some errors with pandas 3.0
     "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
     "pyflwdir>=0.5.9",
@@ -44,7 +45,7 @@ dependencies = [
     "pytest",
     "python-dotenv>=1.0.1",
     "pyyaml>=6.0.2",
-    "rasterio>=1.3.10",
+    "rasterio==1.4.3",  # there are issues loading stac data with 1.4.4
     "rasterstats>=0.20.0",
     "rioxarray>=0.17.0",
     "s3fs>=2023.6.0",
@@ -72,7 +73,9 @@ dependencies = [
     "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
     "pyquadkey2>=0.3.2",
-    "osmnx>=2.0.6"
+    "osmnx>=2.0.6",
+    "joblib>=1.5.2",
+    "matplotlib>=3.10.7"
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
@@ -94,14 +97,17 @@ required-environments = [
 
 [dependency-groups]
 dev = [
-    "myst-parser>=4.0.1",
-    "pypandoc>=1.15",
-    "sphinx<8",
-    "sphinx-autodoc-typehints>=2.3.0",
-    "sphinx-rtd-theme>=3.0.2",
-    "sphinxcontrib-autoprogram>=0.1.9",
-    "sphinxcontrib-autoyaml>=1.1.3",
-    "sphinxcontrib-bibtex>=2.6.3",
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.24.0",
+    "mkdocs-bibtex>=2.11.0",
+    "mkdocs-click>=0.8.0",
+    "mkdocs-jupyter>=0.24.0",
+    "mkdocs-gen-files>=0.5.0",
+    "mkdocs-literate-nav>=0.6.0",
+    "mkdocs-macros-plugin>=1.0.0",
+    "mkdocs-llmstxt>=0.2.0",
+    "griffe-pydantic>=1.1.8",
 ]
 
 [project.scripts]
@@ -129,6 +135,7 @@ select = [
     "ANN204",
     "ANN205",
     "ANN206",
+    "DOC102",
     "DOC201",
     "DOC202",
     "DOC402",
@@ -194,10 +201,6 @@ norecursedirs = [".venv", "build", "dist", "tmp*"]
 testpaths = ["tests"]
 addopts = "--ignore=.venv"
 
-[tool.ty.environment]
-python-version = "3.13"
-
 [tool.ty.rules]
-possibly-missing-attribute = "ignore"
-unresolved-attribute = "ignore"
+unresolved-attribute = "warn"
 

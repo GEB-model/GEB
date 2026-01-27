@@ -4,10 +4,8 @@
         "astral-sh.ty",
         "github.copilot-chat",
         "github.copilot",
-        "github.vscode-github-actions",
         "ms-python.debugpy",
-        "ms-python.python",
-        "ms-python.vscode-pylance",
+        "ms-python.vscode-python-envs",
         "njpwerner.autodocstring",
         "tonybaloney.vscode-pets",
     ]

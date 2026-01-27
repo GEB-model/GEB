@@ -11,7 +11,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
-from geb.types import ThreeDArrayFloat32
+from geb.geb_types import ArrayFloat32, ArrayFloat64, ThreeDArrayFloat32
 from geb.workflows.io import read_grid
 
 from .module import Module
@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 
 
 def generate_bilinear_interpolation_weights(
-    src_x: npt.NDArray[np.float32],
-    src_y: npt.NDArray[np.float32],
-    tgt_x: npt.NDArray[np.float32],
-    tgt_y: npt.NDArray[np.float32],
-) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32]]:
+    src_x: ArrayFloat64,
+    src_y: ArrayFloat64,
+    tgt_x: ArrayFloat64,
+    tgt_y: ArrayFloat64,
+) -> tuple[ArrayFloat32, ArrayFloat32]:
     """
     Generates indices and weights for bilinear interpolation.
 
@@ -243,6 +243,10 @@ class ForcingLoader(ABC):
             self.forecast_issue_datetime is not None
             and dt + self.model.timestep_length >= self.forecast_issue_datetime
         ):
+            if self.ds_forecast is None:
+                raise ValueError(
+                    "Forecast data array is not set, but loader is in forecast mode."
+                )
             # find how many substeps to load from the normal data source
             substeps_to_forecast: int = int(
                 (self.forecast_issue_datetime - dt).total_seconds()
@@ -393,7 +397,7 @@ class Precipitation(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all() and (v_non_masked < 500 / 3600).all()
+        return ((v_non_masked >= 0).all() and (v_non_masked < 500 / 3600).all()).item()
 
 
 class Temperature(ForcingLoader):
@@ -441,7 +445,7 @@ class Temperature(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked > 170).all() and (v_non_masked < 370).all()
+        return ((v_non_masked > 170).all() and (v_non_masked < 370).all()).item()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -504,7 +508,7 @@ class Wind(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= -150).all() and (v_non_masked < 150).all()
+        return ((v_non_masked >= -150).all() and (v_non_masked < 150).all()).item()
 
 
 class Pressure(ForcingLoader):
@@ -553,7 +557,7 @@ class Pressure(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked > 30_000).all() and (v_non_masked < 120_000).all()
+        return ((v_non_masked > 30_000).all() and (v_non_masked < 120_000).all()).item()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -617,7 +621,7 @@ class RSDS(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all()
+        return (v_non_masked >= 0).all().item()
 
 
 class RLDS(ForcingLoader):
@@ -643,7 +647,7 @@ class RLDS(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all()
+        return (v_non_masked >= 0).all().item()
 
 
 class SPEI(ForcingLoader):
@@ -774,7 +778,7 @@ class Forcing(Module):
         )
 
         # Initialize all loaders
-        self._loaders: dict[str, ForcingLoader | CO2] = {
+        self._loaders: dict[str, CO2 | ForcingLoader] = {
             "pr_kg_per_m2_per_s": Precipitation(self.model, grid_mask=grid_mask),
             "tas_2m_K": Temperature(
                 self.model,
@@ -812,6 +816,12 @@ class Forcing(Module):
             The name of the module.
         """
         return "forcing"
+
+    @overload
+    def __getitem__(self, name: Literal["CO2_ppm"]) -> CO2: ...
+
+    @overload
+    def __getitem__(self, name: str) -> ForcingLoader: ...
 
     def __getitem__(self, name: str) -> ForcingLoader | CO2:
         """Get the forcing loader for a given name.
@@ -854,13 +864,22 @@ class Forcing(Module):
         return self[name].load(dt)
 
     @property
-    def loaders(self) -> dict[str, ForcingLoader | CO2]:
+    def loaders(self) -> dict[str, CO2 | ForcingLoader]:
         """Get all forcing loaders.
 
         Returns:
             A dictionary of all forcing loaders.
         """
         return self._loaders
+
+    @property
+    def forcing_loaders(self) -> dict[str, ForcingLoader]:
+        """Get all forcing loaders except CO2.
+
+        Returns:
+            A dictionary of all forcing loaders except CO2.
+        """
+        return {k: v for k, v in self._loaders.items() if isinstance(v, ForcingLoader)}
 
     def spinup(self) -> None:
         """Prepare the forcing module for the simulation.

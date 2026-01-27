@@ -32,11 +32,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat64
 from geb.module import Module
-from geb.types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
-from ..routing import get_channel_ratio
 from .model import ModFlowSimulation
 
 if TYPE_CHECKING:
@@ -74,9 +73,11 @@ class GroundWater(Module):
     def spinup(self) -> None:
         """Initialize groundwater model parameters and state variables."""
         # load hydraulic conductivity (md-1)
-        self.grid.var.hydraulic_conductivity = self.hydrology.grid.load(
-            self.model.files["grid"]["groundwater/hydraulic_conductivity"],
-            layer=None,
+        self.grid.var.groundwater_hydraulic_conductivity_m_per_day = (
+            self.hydrology.grid.load(
+                self.model.files["grid"]["groundwater/hydraulic_conductivity"],
+                layer=None,
+            )
         )
 
         self.grid.var.specific_yield = self.hydrology.grid.load(
@@ -98,14 +99,9 @@ class GroundWater(Module):
         )
 
         assert (
-            self.grid.var.hydraulic_conductivity.shape
+            self.grid.var.groundwater_hydraulic_conductivity_m_per_day.shape
             == self.grid.var.specific_yield.shape
         )
-
-        self.grid.var.leakageriver_factor = 0.001  # in m/day
-        self.grid.var.leakagelake_factor = 0.001  # in m/day
-
-        self.initial_water_table_depth = 2
 
         def get_initial_head() -> npt.NDArray[np.float64]:
             heads = self.hydrology.grid.load(
@@ -149,7 +145,7 @@ class GroundWater(Module):
             layer_boundary_elevation=self.grid.var.layer_boundary_elevation,
             basin_mask=self.model.hydrology.grid.mask,
             heads=self.grid.var.heads,
-            hydraulic_conductivity=self.grid.var.hydraulic_conductivity,
+            hydraulic_conductivity=self.grid.var.groundwater_hydraulic_conductivity_m_per_day,
             verbose=False,
             heads_update_callback=self.heads_update_callback,
         )
@@ -157,8 +153,8 @@ class GroundWater(Module):
     def step(
         self,
         groundwater_recharge_m: ArrayFloat32,
-        groundwater_abstraction_m3: ArrayFloat64,
-    ) -> ArrayFloat64:
+        groundwater_abstraction_m3: ArrayFloat32,
+    ) -> ArrayFloat32:
         """Perform a groundwater model step.
 
         Args:
@@ -176,7 +172,9 @@ class GroundWater(Module):
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
         self.modflow.set_recharge_m3(groundwater_recharge_m * self.grid.var.cell_area)
-        self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
+        self.modflow.set_groundwater_abstraction_m3(
+            groundwater_abstraction_m3.astype(np.float64)
+        )
         self.modflow.step()
 
         if __debug__:
@@ -197,20 +195,14 @@ class GroundWater(Module):
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
-        channel_ratio: npt.NDArray[np.float32] = get_channel_ratio(
-            river_length=self.grid.var.river_length,
-            river_width=np.where(
-                ~np.isnan(self.grid.var.average_river_width),
-                self.grid.var.average_river_width,
-                0,
-            ),
-            cell_area=self.grid.var.cell_area,
-        )
-        channel_ratio.fill(1)
+        # we assume that all the baseflow ends up in the river
+        channel_ratio = np.float32(1.0)
 
         # this is the capillary rise for the NEXT timestep
-        self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
-        baseflow = groundwater_drainage * channel_ratio
+        self.grid.var.capillar = (groundwater_drainage * (1 - channel_ratio)).astype(
+            np.float32
+        )
+        baseflow = (groundwater_drainage * channel_ratio).astype(np.float32)
 
         self.report(locals())
 

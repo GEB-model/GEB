@@ -12,6 +12,8 @@ Notes:
 
 """
 
+from __future__ import annotations
+
 import bz2
 import tempfile
 from pathlib import Path
@@ -24,7 +26,7 @@ from pyquadkey2 import quadkey
 from shapely import geometry
 from tqdm import tqdm
 
-from geb.workflows.io import fetch_and_save
+from geb.workflows.io import fetch_and_save, write_geom
 
 from .base import Adapter
 
@@ -41,26 +43,42 @@ class OpenBuildingMap(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def _quadkeys_for_box(self, bounds: tuple, zoom: int = 6) -> None:
-        """Gets the open building dataset. First it finds the quadkeys of tile within the model domain. Then it downloads the data and clips it to gdl region included in the domain.
+    def _quadkeys_for_geom(
+        self, geom: geometry.polygon.Polygon, zoom: int = 6
+    ) -> list[str]:
+        """Gets the quadkeys of tiles that intersect with the polygon geometry.
 
         Args:
-            bounds: Bounds of the geom for which to get quadkeys that intersect.
+            geom: Polygon geometry for which to get intersecting quadkeys.
             zoom: Zoom level of the quadkeys. Zoomlevel 6 is used for open building map.
+
+        Returns:
+            A list of quadkey strings intersecting the polygon.
         """
-        quadkeys = []
+        quadkeys: list[str] = []
+
+        west, south, east, north = geom.bounds
 
         # iterate over tiles intersecting the bbox
-        for tile in mercantile.tiles(*bounds, zoom):
+        for tile in mercantile.tiles(west, south, east, north, zooms=zoom):
             qk = quadkey.from_tile((tile.x, tile.y), level=zoom)
-            quadkeys.append(qk.key)
+
+            # Create a polygon for the tile bounds
+            tile_bounds = mercantile.bounds(tile)
+            tile_polygon = geometry.box(
+                tile_bounds.west, tile_bounds.south, tile_bounds.east, tile_bounds.north
+            )
+
+            # Only include tile if it intersects with the input geometry
+            if tile_polygon.intersects(geom):
+                quadkeys.append(qk.key)
 
         return quadkeys
 
     def _extract_buildings_in_geom(
         self, gpkg_filename: Path, geom: geometry.polygon.Polygon
-    ) -> gpd.GeoDataFrame:
-        """This function reads the downloaded geopackage containing the buildings. It the extracts only the buildings that lie within the geom.
+    ) -> gpd.GeoDataFrame | None:
+        """This function reads the downloaded geopackage containing the buildings. It then extracts only the buildings that lie within the geom.
 
         Args:
             gpkg_filename: filename of the dowloaded geopackage.
@@ -75,7 +93,7 @@ class OpenBuildingMap(Adapter):
             mask=geom,
             columns=["id", "occupancy", "floorspace", "height", "geometry"],
         )
-        # only keep buildings that intersect with the geom (to be sure, maybe can be removed)
+        # mask buildings to region geom
         buildings = buildings[buildings.intersects(geom)]
         if len(buildings) == 0:
             print("No buildings found in region geom")
@@ -124,8 +142,11 @@ class OpenBuildingMap(Adapter):
         return Path(gpkg_filename)
 
     def fetch(
-        self, url: str, geom: geometry.polygon.Polygon, prefix: str
-    ) -> "OpenBuildingMap":
+        self,
+        url: str,
+        geom: geometry.polygon.Polygon,
+        prefix: str,
+    ) -> OpenBuildingMap:
         """Download OpenBuildingMap tiles intersecting a bbox.
 
         Args:
@@ -143,8 +164,7 @@ class OpenBuildingMap(Adapter):
             return self
 
         # get bounds for geom
-        bounds = geom.bounds
-        tiles: list = self._quadkeys_for_box(bounds)
+        tiles: list = self._quadkeys_for_geom(geom=geom)
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             list_of_buildings_in_geom: list[gpd.GeoDataFrame] = []
@@ -161,14 +181,16 @@ class OpenBuildingMap(Adapter):
                 if buildings is not None:
                     list_of_buildings_in_geom.append(buildings)
         # concatenate all buildings
-        buildings_in_geom = pd.concat(list_of_buildings_in_geom, ignore_index=True)
+        buildings_in_geom: gpd.GeoDataFrame = pd.concat(
+            list_of_buildings_in_geom, ignore_index=True
+        )  # ty:ignore[invalid-assignment]
 
         # raise error if no buildings are found in model region
         if len(list_of_buildings_in_geom) == 0:
             raise RuntimeError("No OpenBuildingMap features were found in model domain")
         # write to file
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        buildings_in_geom.to_parquet(self.path)
+        write_geom(buildings_in_geom, self.path)
 
         return self
 

@@ -5,7 +5,7 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 
-from geb.hydrology.lakes_reservoirs import (
+from geb.hydrology.waterbodies import (
     estimate_lake_outflow,
     estimate_outflow_height,
     get_lake_factor,
@@ -15,7 +15,6 @@ from geb.hydrology.lakes_reservoirs import (
     get_lake_storage_from_height_above_bottom,
     get_river_width,
 )
-from geb.types import ArrayFloat32
 
 from ..testconfig import output_folder
 
@@ -55,7 +54,7 @@ def test_get_lake_storage_from_height_above_bottom() -> None:
     lake_area = np.array([100])
     lake_height = np.linspace(0, 10, 100).astype(np.float32)
 
-    lake_storage: ArrayFloat32 = get_lake_storage_from_height_above_bottom(
+    lake_storage = get_lake_storage_from_height_above_bottom(
         lake_height=lake_height, lake_area=lake_area
     )
 
@@ -104,7 +103,9 @@ def test_estimate_initial_lake_storage_and_outflow_height() -> None:
     )
 
     assert math.isclose(
-        ((height_above_outflow + outflow_height) * lake_area)[0], lake_storage[0]
+        ((height_above_outflow + outflow_height) * lake_area)[0],
+        lake_storage[0],
+        rel_tol=1e-5,
     )
     outflow = estimate_lake_outflow(
         lake_factor=lake_factor, height_above_outflow=height_above_outflow

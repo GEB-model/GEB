@@ -50,22 +50,6 @@ class Government(AgentBaseClass):
         """This function is called during model spinup."""
         pass
 
-    def provide_subsidies(self) -> None:
-        """Provide subsidies to farmers if configured to do so.
-
-        In practice, this halves the cost of borewells for a certain percentage of farmers.
-        """
-        if "subsidies" not in self.config:
-            return
-        if self.model.current_timestep == 1:
-            for region in self.agents.crop_farmers.borewell_cost_1[1].keys():
-                self.agents.crop_farmers.borewell_cost_1[1][region] = [
-                    0.5 * x for x in self.agents.crop_farmers.borewell_cost_1[1][region]
-                ]
-                self.agents.crop_farmers.borewell_cost_2[1][region] = [
-                    0.5 * x for x in self.agents.crop_farmers.borewell_cost_2[1][region]
-                ]
-
     def set_irrigation_limit(self) -> None:
         """Set the irrigation limit for crop farmers based on the configuration.
 
@@ -87,16 +71,16 @@ class Government(AgentBaseClass):
             farmer_command_area = self.agents.crop_farmers.command_area
             farmers_per_command_area = np.bincount(
                 farmer_command_area[farmer_command_area != -1],
-                minlength=self.model.hydrology.lakes_reservoirs.n,
+                minlength=self.model.hydrology.waterbodies.n,
             )
 
             # get yearly usable release m3. We do not use the current year, as it
             # may not be complete yet, and we only use up to the history fill index
             yearly_usable_release_m3_per_command_area = np.full(
-                self.model.hydrology.lakes_reservoirs.n, np.nan, dtype=np.float32
+                self.model.hydrology.waterbodies.n, np.nan, dtype=np.float32
             )
             yearly_usable_release_m3_per_command_area[
-                self.model.hydrology.lakes_reservoirs.is_reservoir
+                self.model.hydrology.waterbodies.is_reservoir
             ] = (self.agents.reservoir_operators.yearly_usuable_release_m3).mean(axis=1)
 
             irritation_limit_per_command_area = (
@@ -123,12 +107,12 @@ class Government(AgentBaseClass):
                 "Only 'capita' and 'area' are implemented for irrigation limit"
             )
         if "min" in irrigation_limit:
-            self.agents.crop_farmers.irrigation_limit_m3[
-                self.agents.crop_farmers.irrigation_limit_m3 < irrigation_limit["min"]
+            self.agents.crop_farmers.var.irrigation_limit_m3[
+                self.agents.crop_farmers.var.irrigation_limit_m3
+                < irrigation_limit["min"]
             ] = irrigation_limit["min"]
 
     def step(self) -> None:
         """This function is run each timestep."""
         self.set_irrigation_limit()
-        self.provide_subsidies()
         self.report(locals())

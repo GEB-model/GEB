@@ -2,15 +2,20 @@
 
 import base64
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
+import aiohttp
 import numpy as np
 import xarray as xr
 
 from geb.workflows.raster import convert_nodata, interpolate_na_along_time_dim
 
 from .base import Adapter
+
+N_CONNECTION_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 5
 
 
 class DestinationEarth(Adapter):
@@ -75,15 +80,34 @@ class DestinationEarth(Adapter):
 
         Returns:
             Downloaded ERA5 data as an xarray DataArray.
-        """
-        da: xr.DataArray = xr.open_dataset(
-            self.url,
-            storage_options={"headers": self.get_authentication_header()},
-            chunks={},
-            engine="zarr",
-        )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+        Raises:
+            ConnectionError: If unable to connect to the Destination Earth API after multiple attempts.
+        """
+        for attempt in range(N_CONNECTION_ATTEMPTS):
+            try:
+                da: xr.DataArray = xr.open_dataset(
+                    self.url,
+                    storage_options={"headers": self.get_authentication_header()},
+                    chunks={},
+                    engine="zarr",
+                )[variable].rename(
+                    {"valid_time": "time", "latitude": "y", "longitude": "x"}
+                )
+                break
+            except aiohttp.ClientResponseError:
+                print(
+                    f"Error connecting to Destination Earth API. This could be due to erroneous credentials or a temporary server issue. Retrying ({attempt}/{N_CONNECTION_ATTEMPTS})..."
+                )
+                time.sleep(RETRY_DELAY_SECONDS)
+        else:
+            raise ConnectionError(
+                "Failed to connect to Destination Earth API after 3 attempts."
+            )
+
+        da: xr.DataArray = da.drop_vars(
+            ["number", "surface", "depthBelowLandLayer"], errors="ignore"
+        )
 
         buffer: float = 0.5
         buffered_bounds: tuple[float, float, float, float] = (
@@ -148,11 +172,9 @@ class DestinationEarth(Adapter):
 
         Args:
             variable: short name of the variable to process (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
-            folder: folder to store the downloaded data
             start_date: start date of the time period to process
             end_date: end date of the time period to process
             bounds:  bounding box in the format (min_lon, min_lat, max_lon, max_lat)
-            logger:  logger to use for logging
 
         Raises:
             NotImplementedError: If the step type of the data is not "accum" or "instant".
