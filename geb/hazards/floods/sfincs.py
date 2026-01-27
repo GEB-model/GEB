@@ -271,8 +271,8 @@ class SFINCSRootModel:
             handler.setLevel(logging.DEBUG)
 
         # we need this later to exclude these subbasins from the area of interest
-        downstream_outflow_subbasins = subbasins[
-            subbasins["is_downstream_outflow"]
+        subbasins_of_interest = subbasins[
+            (~subbasins["is_downstream_outflow"])
         ].index.tolist()
 
         self.subbasins, subbasins_burned = self.burn_and_align_subbasins(
@@ -410,12 +410,13 @@ class SFINCSRootModel:
                 # must be performed BEFORE burning rivers.
                 self.setup_river_outflow_boundary()
 
-        # We are not interested in the flood conditions in the downstream outflow subbasins,
-        # so we exclude these from the area of interest.
-        self.area_of_interest: xr.DataArray = (self.mask > 0).copy()
+        # We are only interested in flooding within the subbasins of interest.
+        # This area of interest mask is used later to filter the flood maps.
+        self.area_of_interest: xr.DataArray = self.mask.astype(bool)
+        self.area_of_interest.values[:] = False
         self.area_of_interest.values[
-            np.isin(subbasins_burned, downstream_outflow_subbasins)
-        ] = False
+            np.isin(subbasins_burned, subbasins_of_interest)
+        ] = True
 
         # In many cases due to the coarse subbasin resolution compared to the DEM resolution,
         # the area of interest does not align perfectly with the shape of the subbasins at the
