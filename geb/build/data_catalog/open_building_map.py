@@ -146,7 +146,6 @@ class OpenBuildingMap(Adapter):
         url: str,
         geom: geometry.polygon.Polygon,
         prefix: str,
-        overwrite: bool = False,
     ) -> OpenBuildingMap:
         """Download OpenBuildingMap tiles intersecting a bbox.
 
@@ -154,7 +153,6 @@ class OpenBuildingMap(Adapter):
             url: Base URL of the OpenStreetMap server.
             geom: Polygon of the model region.
             prefix: Prefix for the local storage path.
-            overwrite: Whether to overwrite existing data.
 
         Returns:
             The OpenBuildingMap instance.
@@ -162,11 +160,10 @@ class OpenBuildingMap(Adapter):
         Raises:
             RuntimeError: If no buildings can be downloaded for the model region.
         """
-        if self.path.exists() and not overwrite:
+        if self.path.exists():
             return self
 
         # get bounds for geom
-        bounds = geom.bounds
         tiles: list = self._quadkeys_for_geom(geom=geom)
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
@@ -186,7 +183,7 @@ class OpenBuildingMap(Adapter):
         # concatenate all buildings
         buildings_in_geom: gpd.GeoDataFrame = pd.concat(
             list_of_buildings_in_geom, ignore_index=True
-        )
+        )  # ty:ignore[invalid-assignment]
 
         # raise error if no buildings are found in model region
         if len(list_of_buildings_in_geom) == 0:

@@ -589,7 +589,7 @@ class HRUVariables(Bucket):
     transpiration_crop_life: ArrayFloat32
     crop_map: ArrayInt32
     topwater: ArrayFloat32
-    soil_layer_height: TwoDArrayFloat32
+    soil_layer_height_m: TwoDArrayFloat32
     wfc: TwoDArrayFloat32
     w: TwoDArrayFloat32
     ws: TwoDArrayFloat32

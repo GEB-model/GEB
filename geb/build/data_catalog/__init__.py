@@ -3,7 +3,9 @@
 from typing import Any
 
 from .base import Adapter
+from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
+from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
@@ -21,7 +23,7 @@ from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
-from .soilgrids import SoilGrids
+from .soilgrids import SoilGridsV1, SoilGridsV2
 from .sword import Sword
 from .why_map import WhyMap
 from .world_bank import WorldBankData
@@ -61,11 +63,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://www.ecmwf.int/en/forecasts/accessing-forecasts/licences-available",
         },
     },
-    "soilgrids": {
-        "adapter": SoilGrids(),
+    "soilgridsv1": {
+        "adapter": SoilGridsV1(),
+        "url": "https://files.isric.org/soilgrids/former/2017-03-10/data/{variable}.tif",
+        "source": {
+            "name": "SoilGrids V1",
+            "author": "ISRIC - World Soil Information",
+            "license": "CC BY 4.0",
+            "url": "https://soilgrids.org",
+            "version": "2017",
+            "paper_doi": "10.1371/journal.pone.0169748",
+        },
+    },
+    "soilgridsv2": {
+        "adapter": SoilGridsV2(),
         "url": "https://files.isric.org/soilgrids/latest/data/{variable}/{variable}_{depth}_mean.vrt",
         "source": {
-            "name": "SoilGrids",
+            "name": "SoilGrids V2",
             "author": "ISRIC - World Soil Information",
             "license": "CC BY 4.0",
             "url": "https://soilgrids.org",
@@ -362,7 +376,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "esa_worldcover_2021": {
         "adapter": ESAWorldCover(),
-        "url": "https://planetarycomputer.microsoft.com/api/stac/v1",
+        "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
         "source": {
             "name": "ESA WorldCover",
             "author": "European Space Agency (ESA)",
@@ -417,6 +431,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://gadm.org/license.html",
         },
     },
+    "GlobalSoilRegolithSediment": {
+        "adapter": GlobalSoilRegolithSediment(
+            folder="global_soil_regolith_sediment",
+            local_version=1,
+            filename="global_soil_regolith_sediment.zarr",
+            cache="global",
+        ),
+        "url": "https://cmr.earthdata.nasa.gov/search/concepts/C2216864025-ORNL_CLOUD.html",
+        "source": {
+            "name": "Global 1-km Gridded Thickness of Soil, Regolith, and Sedimentary Deposit Layers",
+            "author": "Pelletier et al. (2015)",
+            "version": "1",
+            "license": "CC0",
+            "url": "https://doi.org/10.5194/essd-13-4389-2021",
+            "paper_doi": "10.1002/2015MS000526",
+        },
+    },
     "merit_basins_catchments": {
         "adapter": MeritBasinsCatchments(
             folder="merit_basins_catchments",
@@ -460,6 +491,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Yamazaki et al.",
             "version": "2019",
             "license": "CC BY 4.0 or ODbL 1.0",
+        },
+    },
+    "delta_dtm": {
+        "adapter": DeltaDTM(
+            folder="delta_dtm",
+            local_version=1,
+            filename="{}.zip",
+            cache="global",
+        ),
+        "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
+        "source": {
+            "name": "Delta DTM",
+            "author": "Pronk et al. (2024)",
+            "version": "1-1",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
+            "paper_doi": "https://doi.org/10.1038/s41597-024-03091-9",
         },
     },
     "fabdem": {
@@ -527,7 +575,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     "open_building_map": {
         "adapter": OpenBuildingMap(
             folder="open_building_map",
-            local_version=1,
+            local_version=2,
             filename="open_building_map.parquet",
             cache="local",
         ),

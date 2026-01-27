@@ -93,7 +93,7 @@ def create_discharge_timeseries(
 def build_sfincs(
     geb_model: GEBModel,
     subgrid: bool,
-    region: gpd.GeoDataFrame,
+    subbbasins: gpd.GeoDataFrame,
     name: str,
     rivers: gpd.GeoDataFrame,
 ) -> SFINCSRootModel:
@@ -102,7 +102,7 @@ def build_sfincs(
     Args:
         geb_model: A GEB model instance with SFINCS configured.
         subgrid: Whether to use subgrid pixels in the SFINCS model.
-        region: A GeoDataFrame defining the region to build the SFINCS model for.
+        subbbasins: A GeoDataFrame defining the subbbasins to build the SFINCS model for.
         name: The name of the SFINCS model. Used for the folder name.
         rivers: A GeoDataFrame with the river network.
 
@@ -120,7 +120,7 @@ def build_sfincs(
             ).to_dataset(name="elevtn")
 
     sfincs_model.build(
-        region=region,
+        subbbasins=subbbasins,
         DEMs=DEM_config,
         rivers=rivers,
         discharge=geb_model.hazard_driver.floods.discharge_spinup_ds,
@@ -208,7 +208,7 @@ def create_sfincs_models(
             sfincs_model: SFINCSRootModel = build_sfincs(
                 geb_model,
                 subgrid=subgrid,
-                region=subbasins_group,
+                subbbasins=subbasins_group,
                 name=f"test_group_{group_id}",
                 rivers=rivers[rivers.index.isin(group)],
             )
@@ -219,7 +219,7 @@ def create_sfincs_models(
             build_sfincs(
                 geb_model,
                 subgrid=subgrid,
-                region=subbasins,
+                subbbasins=subbasins,
                 name=TEST_MODEL_NAME,
                 rivers=rivers,
             )
@@ -379,7 +379,7 @@ def test_accumulated_runoff(
             basin_id_grid = read_grid(geb_model.files["grid"]["routing/basin_ids"])
 
             valid_cells = np.isin(basin_id_grid, sfincs_model.rivers.index)
-            region = sfincs_model.region.to_crs(runoff_m.rio.crs)
+            region = sfincs_model.subbbasins.to_crs(runoff_m.rio.crs)
             region_mask = rasterize_like(
                 region,
                 burn_value=1,
@@ -454,7 +454,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         sfincs_model = build_sfincs(
             geb_model,
             subgrid=False,
-            region=region,
+            subbbasins=region,
             name=TEST_MODEL_NAME,
             rivers=geb_model.hydrology.routing.rivers,
         )
@@ -591,25 +591,25 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         geb_model: A GEB model instance with SFINCS configured.
     """
     with WorkingDirectory(working_directory):
-        region = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        subbbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         sfincs_model = build_sfincs(
             geb_model,
             subgrid=False,
-            region=region,
+            subbbasins=subbbasins,
             name=TEST_MODEL_NAME,
             rivers=geb_model.hydrology.routing.rivers,
         )
 
         # create vertical dam, halfway along the x-axis of the region
-        minx, miny, maxx, maxy = region.total_bounds
+        minx, miny, maxx, maxy = subbbasins.total_bounds
         mid_x = (minx + maxx) / 2
         vertical_line = gpd.GeoSeries([LineString([(mid_x, miny), (mid_x, maxy)])])
-        vertical_dam = gpd.GeoDataFrame(geometry=vertical_line, crs=region.crs)
+        vertical_dam = gpd.GeoDataFrame(geometry=vertical_line, crs=subbbasins.crs)
 
         # create another dam, horizontal this time
         mid_y = (miny + maxy) / 2
         horizontal_line = gpd.GeoSeries([LineString([(minx, mid_y), (maxx, mid_y)])])
-        horizontal_dam = gpd.GeoDataFrame(geometry=horizontal_line, crs=region.crs)
+        horizontal_dam = gpd.GeoDataFrame(geometry=horizontal_line, crs=subbbasins.crs)
 
         # combine both dams into one GeoDataFrame
         multiple_dams = pd.concat([vertical_dam, horizontal_dam], ignore_index=True)
@@ -707,11 +707,11 @@ def test_read(geb_model: GEBModel) -> None:
         geb_model: A GEB model instance with SFINCS configured.
     """
     with WorkingDirectory(working_directory):
-        region = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        subbbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         sfincs_model_build = build_sfincs(
             geb_model,
             subgrid=False,
-            region=region,
+            subbbasins=subbbasins,
             name=TEST_MODEL_NAME,
             rivers=geb_model.hydrology.routing.rivers,
         )
@@ -731,7 +731,7 @@ def test_read(geb_model: GEBModel) -> None:
             assert (sfincs_model_build.cell_area == sfincs_model_read.cell_area).all()
         assert sfincs_model_build.path == sfincs_model_read.path
         assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
-        assert sfincs_model_build.region.equals(sfincs_model_read.region)
+        assert sfincs_model_build.subbbasins.equals(sfincs_model_read.subbbasins)
 
         for key in sfincs_model_build.sfincs_model.config:
             assert (

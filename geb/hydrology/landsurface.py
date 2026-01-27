@@ -761,7 +761,7 @@ class LandSurface(Module):
         """
         # set number of soil layers as global variable for numba
         global N_SOIL_LAYERS  # ty: ignore[unresolved-global]
-        N_SOIL_LAYERS = self.HRU.var.soil_layer_height.shape[0]
+        N_SOIL_LAYERS = self.HRU.var.soil_layer_height_m.shape[0]
 
     def _build_land_surface_inputs(
         self,
@@ -833,7 +833,7 @@ class LandSurface(Module):
             soil_temperature_C=self.HRU.var.soil_temperature_C,
             solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
             delta_z=delta_z,
-            soil_layer_height=self.HRU.var.soil_layer_height,
+            soil_layer_height=self.HRU.var.soil_layer_height_m,
             root_depth_m=root_depth_m,
             topwater_m=self.HRU.var.topwater_m,
             arno_shape_parameter=self.HRU.var.arno_shape_parameter,
@@ -1025,26 +1025,34 @@ class LandSurface(Module):
     def setup_soil_properties(self) -> None:
         """Setup soil properties for the land surface module."""
         # Soil properties
-        self.HRU.var.soil_layer_height: TwoDArrayFloat32 = (
+        self.HRU.var.soil_layer_height_m: TwoDArrayFloat32 = (
             self.HRU.convert_subgrid_to_HRU(
                 read_grid(
-                    self.model.files["subgrid"]["soil/soil_layer_height"],
+                    self.model.files["subgrid"]["soil/soil_layer_height_m"],
                     layer=None,
                 ),
                 method="mean",
             )
         )
 
-        organic_carbon_percentage: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
+        self.HRU.var.depth_to_bedrock_m: ArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
-                self.model.files["subgrid"]["soil/soil_organic_carbon"],
+                self.model.files["subgrid"]["soil/depth_to_bedrock_m"],
                 layer=None,
             ),
             method="mean",
         )
-        bulk_density_gr_per_cm3: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
+
+        organic_carbon_percentage: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
-                self.model.files["subgrid"]["soil/bulk_density"],
+                self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
+                layer=None,
+            ),
+            method="mean",
+        )
+        bulk_density_kg_per_dm3: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
+            read_grid(
+                self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"],
                 layer=None,
             ),
             method="mean",
@@ -1052,7 +1060,7 @@ class LandSurface(Module):
         self.HRU.var.silt_percentage: TwoDArrayFloat32 = (
             self.HRU.convert_subgrid_to_HRU(
                 read_grid(
-                    self.model.files["subgrid"]["soil/silt"],
+                    self.model.files["subgrid"]["soil/silt_percentage"],
                     layer=None,
                 ),
                 method="mean",
@@ -1061,7 +1069,7 @@ class LandSurface(Module):
         self.HRU.var.clay_percentage: TwoDArrayFloat32 = (
             self.HRU.convert_subgrid_to_HRU(
                 read_grid(
-                    self.model.files["subgrid"]["soil/clay"],
+                    self.model.files["subgrid"]["soil/clay_percentage"],
                     layer=None,
                 ),
                 method="mean",
@@ -1081,7 +1089,7 @@ class LandSurface(Module):
 
         thetas: TwoDArrayFloat32 = thetas_toth(
             organic_carbon_percentage=organic_carbon_percentage,
-            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
+            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
             is_top_soil=is_top_soil,
             clay=self.HRU.var.clay_percentage,
             silt=self.HRU.var.silt_percentage,
@@ -1120,10 +1128,10 @@ class LandSurface(Module):
             self.HRU.var.lambda_pore_size_distribution,
         )
 
-        self.HRU.var.ws: TwoDArrayFloat32 = thetas * self.HRU.var.soil_layer_height
-        self.HRU.var.wfc: TwoDArrayFloat32 = thetafc * self.HRU.var.soil_layer_height
-        self.HRU.var.wwp: TwoDArrayFloat32 = thetawp * self.HRU.var.soil_layer_height
-        self.HRU.var.wres: TwoDArrayFloat32 = thetar * self.HRU.var.soil_layer_height
+        self.HRU.var.ws: TwoDArrayFloat32 = thetas * self.HRU.var.soil_layer_height_m
+        self.HRU.var.wfc: TwoDArrayFloat32 = thetafc * self.HRU.var.soil_layer_height_m
+        self.HRU.var.wwp: TwoDArrayFloat32 = thetawp * self.HRU.var.soil_layer_height_m
+        self.HRU.var.wres: TwoDArrayFloat32 = thetar * self.HRU.var.soil_layer_height_m
 
         # initial soil water storage between field capacity and wilting point
         # set soil moisture to nan where land use is not bioarea
@@ -1149,7 +1157,7 @@ class LandSurface(Module):
             kv_wosten(
                 silt=self.HRU.var.silt_percentage,
                 clay=self.HRU.var.clay_percentage,
-                bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
+                bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
                 organic_carbon_percentage=organic_carbon_percentage,
                 is_topsoil=is_top_soil,
             )
@@ -1171,12 +1179,12 @@ class LandSurface(Module):
         )
 
         self.HRU.var.soil_temperature_C = np.full_like(
-            self.HRU.var.soil_layer_height, 0.0, dtype=np.float32
+            self.HRU.var.soil_layer_height_m, 0.0, dtype=np.float32
         )
 
         self.HRU.var.solid_heat_capacity_J_per_m2_K = get_heat_capacity_solid_fraction(
-            bulk_density_gr_per_cm3=bulk_density_gr_per_cm3,
-            layer_thickness_m=self.HRU.var.soil_layer_height,
+            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+            layer_thickness_m=self.HRU.var.soil_layer_height_m,
         )
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
@@ -1364,8 +1372,8 @@ class LandSurface(Module):
 
         # TODO: pre-compute this once only
         delta_z = (
-            self.HRU.var.soil_layer_height[:-1, :]
-            + self.HRU.var.soil_layer_height[1:, :]
+            self.HRU.var.soil_layer_height_m[:-1, :]
+            + self.HRU.var.soil_layer_height_m[1:, :]
         ) / 2
 
         land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(

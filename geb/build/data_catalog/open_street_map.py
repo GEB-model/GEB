@@ -159,6 +159,6 @@ class OpenStreetMap(Adapter):
         for feature_type in feature_types:
             all_features[feature_type] = pd.concat(
                 all_features_list[feature_type], ignore_index=True
-            )
+            )  # ty:ignore[invalid-assignment]
 
         return all_features

@@ -1629,11 +1629,12 @@ class Agents(BuildModelBase):
             "open_building_map",
             geom=mask,
             prefix="assets",
-            overwrite=True,
         ).read()
 
-        # overwrite building IDs to ensure uniqueness
+        # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
+
+        # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
 
         # Vectorized centroid extraction
@@ -1670,13 +1671,17 @@ class Agents(BuildModelBase):
 
     @build_method(depends_on="setup_assets")
     def setup_household_characteristics(
-        self, maximum_age: int = 85, skip_countries_ISO3: list[str] = []
+        self,
+        maximum_age: int = 85,
+        skip_countries_ISO3: list[str] = [],
+        single_household_per_building: bool = False,
     ) -> None:
         """Sets up household characteristics for agents using GLOPOP-S data.
 
         Args:
             maximum_age: The maximum age for the head of household. Default is 85.
             skip_countries_ISO3: A list of ISO3 country codes to skip when setting up household characteristics.
+            single_household_per_building: If True, only one household will be allocated per building. Default is False.
 
         Raises:
             ValueError: If any household could not be allocated to a building.
@@ -1882,6 +1887,8 @@ class Agents(BuildModelBase):
                         n_agents_in_cell >= n_buildings_in_cell
                         and n_buildings_in_cell > 0
                     ):
+                        if single_household_per_building:
+                            n_agents_in_cell = n_buildings_in_cell
                         # first put a household in each building
                         households_to_put_in_building = np.random.choice(
                             np.arange(n_buildings_in_cell),
