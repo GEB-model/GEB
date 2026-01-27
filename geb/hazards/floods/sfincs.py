@@ -258,8 +258,10 @@ class SFINCSRootModel:
             grid_size_multiplier=grid_size_multiplier,
         )
 
-        print("Starting SFINCS model build...")
+        subbasins: gpd.GeoDataFrame = subbasins.to_crs(mask.rio.crs)
+        rivers: gpd.GeoDataFrame = rivers.to_crs(mask.rio.crs)
 
+        print("Starting SFINCS model build...")
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
         self.sfincs_model = sf
@@ -627,7 +629,7 @@ class SFINCSRootModel:
         mask.name = "mask"
 
         # for in case the first DEM does not cover the entire area, we first pad the mask to the subbasins bounds
-        minx, miny, maxx, maxy = subbasins.total_bounds
+        minx, miny, maxx, maxy = subbasins.to_crs(mask.rio.crs).total_bounds
         mask = pad_xy(
             mask,
             minx=minx,
@@ -643,7 +645,7 @@ class SFINCSRootModel:
             get_window(
                 mask.x,
                 mask.y,
-                subbasins.total_bounds,
+                subbasins.to_crs(mask.rio.crs).total_bounds,
                 buffer=100,
                 raise_on_buffer_out_of_bounds=False,
             )
@@ -1266,7 +1268,8 @@ class SFINCSRootModel:
         """
         non_headwater_rivers: gpd.GeoDataFrame = self.rivers[self.rivers["maxup"] > 0]
         non_outflow_basins: gpd.GeoDataFrame = non_headwater_rivers[
-            ~non_headwater_rivers["is_downstream_outflow"]
+            (~non_headwater_rivers["is_downstream_outflow"])
+            & (~non_headwater_rivers["is_further_downstream_outflow"])
         ]
         upstream_branches_in_domain = np.unique(
             self.rivers["downstream_ID"], return_counts=True
@@ -1687,6 +1690,9 @@ class SFINCSSimulation:
             assert not np.isin(
                 nodes.index, self.sfincs_model.forcing["dis"].index
             ).any(), "This forcing would overwrite existing discharge forcing points"
+
+        nodes.to_file("src_points.geojson", driver="GeoJSON")
+        self.sfincs_model.region.to_file("model_region.geojson", driver="GeoJSON")
 
         assert (
             self.sfincs_model.region.union_all()

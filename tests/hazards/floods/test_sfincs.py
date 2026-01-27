@@ -78,7 +78,7 @@ def create_discharge_timeseries(
     Returns:
         A tuple with the nodes and the timeseries.
     """
-    nodes: gpd.GeoDataFrame = geb_model.hydrology.routing.rivers
+    nodes: gpd.GeoDataFrame = geb_model.hydrology.routing.active_rivers.copy()
     nodes["geometry"] = nodes["geometry"].apply(get_start_point)
     nodes.index = list(np.arange(1, len(nodes) + 1))
     timeseries: pd.DataFrame = pd.DataFrame(
@@ -182,7 +182,9 @@ def create_sfincs_models(
         A list of SFINCSRootModel instances.
     """
     if split:
-        river_graph = create_river_graph(rivers, subbasins)
+        river_graph = create_river_graph(
+            geb_model.hydrology.routing.active_rivers, subbasins
+        )
 
         # 2e8 nicely splits the test area into 2 parts. If changing the test area, this value
         # may need to be adjusted.

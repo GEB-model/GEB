@@ -1624,3 +1624,17 @@ class Routing(Module):
             ~rivers["downstream_ID"].isin(rivers.index)
         ]
         return outflow_rivers
+
+    @property
+    def active_rivers(self) -> gpd.GeoDataFrame:
+        """Get the active rivers (rivers that are not water bodies).
+
+        Returns:
+            A GeoDataFrame containing the active rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        active_rivers = rivers[
+            (~rivers["is_downstream_outflow"])
+            & (~rivers["is_further_downstream_outflow"])
+        ]
+        return active_rivers
