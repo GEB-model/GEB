@@ -24,6 +24,7 @@ import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
+from networkx.classes import nodes
 from rasterio.env import defenv
 from shapely.geometry import Point, shape
 
@@ -1218,12 +1219,16 @@ def get_touching_subbasins(
 
 
 def get_coastline_nodes(
-    coastline_graph: networkx.Graph, STUDY_AREA_OUTFLOW: int, NEARBY_OUTFLOW: int
+    coastline_graph: networkx.Graph,
+    riverine_mask: xr.DataArray,
+    STUDY_AREA_OUTFLOW: int,
+    NEARBY_OUTFLOW: int,
 ) -> set:
     """Get all coastline nodes that are part of the coastline for the study area.
 
     Args:
         coastline_graph: The graph containing all coastline nodes.
+        riverine_mask: A DataArray containing the riverine mask.
         STUDY_AREA_OUTFLOW: The outflow type value for outflows within the study area.
         NEARBY_OUTFLOW: The outflow type value for outflows outside the study area, but close enough to influence the coastline.
 
@@ -1322,7 +1327,27 @@ def get_coastline_nodes(
             # we divide the segment in a part that is closer to the study area outflow
             # and a part that is not
             if study_area_nodes and nearby_nodes:
-                assert len(study_area_nodes) == 1
+                if len(study_area_nodes) != 1:
+                    nodes_grid: xr.DataArray = riverine_mask.copy().astype(np.int32)
+                    nodes_grid.attrs["_FillValue"] = 0
+                    nodes_grid.values[:] = 0
+                    for node, node_attributes in coastal_segment.nodes(data=True):
+                        node_y, node_x = node_attributes["yx"]
+                        if node_attributes["neighbor_of_nearby_outflow"] is True:
+                            nodes_grid.values[node_y, node_x] = NEARBY_OUTFLOW
+                        elif node_attributes["neighbor_of_study_area_outflow"] is True:
+                            nodes_grid.values[node_y, node_x] = STUDY_AREA_OUTFLOW
+                        else:
+                            nodes_grid.values[node_y, node_x] = -1
+
+                    write_zarr(
+                        nodes_grid,
+                        Path("debug_coastal_segment.zarr"),
+                        crs=nodes_grid.rio.crs,
+                    )
+                    raise AssertionError(
+                        "There should only be one study area outflow node per coastal segment."
+                    )
                 study_area_node = study_area_nodes[0]
 
                 assert len(nearby_nodes) == 1
@@ -2006,6 +2031,7 @@ class GEBModel(
         )
         coastline_nodes = get_coastline_nodes(
             coastline_graph,
+            riverine_mask,
             STUDY_AREA_OUTFLOW=STUDY_AREA_OUTFLOW,
             NEARBY_OUTFLOW=NEARBY_OUTFLOW,
         )
