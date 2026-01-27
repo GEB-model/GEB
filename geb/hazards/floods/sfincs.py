@@ -888,6 +888,25 @@ class SFINCSRootModel:
             rivers_with_return_period, discharge_by_river, return_periods=return_periods
         )
 
+        q_columns = [f"Q_{rp}" for rp in return_periods]
+
+        peak_discharge_gdf = rivers_with_return_period[q_columns + ["geometry"]].copy()
+
+        peak_discharge_gdf.index.name = "river_id"
+        peak_discharge_gdf.reset_index(inplace=True)
+
+        peak_discharge_gdf = gpd.GeoDataFrame(
+            peak_discharge_gdf,
+            geometry="geometry",
+            crs=rivers_with_return_period.crs,
+        )
+
+        peak_discharge_gdf.to_file(
+            self.path / "peak_discharge_return_periods.gpkg",
+            layer="peak_discharge",
+            driver="GPKG",
+        )
+
         for return_period in return_periods:
             self.rivers[f"hydrograph_{return_period}"] = None
 

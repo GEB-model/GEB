@@ -618,8 +618,16 @@ class Floods(Module):
                     rivers=region_rivers,
                     coastal=False,
                 )
+
+                discharge_run: xr.DataArray = read_zarr(
+                    self.model.output_folder
+                    / "report"
+                    / "default"
+                    / "hydrology.routing"
+                    / "discharge_daily.zarr"
+                )
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge=self.discharge_spinup_ds,
+                    discharge=discharge_run,
                     return_periods=self.config["return_periods"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)

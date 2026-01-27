@@ -475,15 +475,17 @@ class Households(AgentBaseClass):
         # initiate array with adaptation costs for dry-proofing, eur 2024 values, article Aerts (2018)
         # We need the circumference of each house for dry-proofing costs
         buildings = self.buildings.copy()
-        buildings["id"].duplicated().sum()
+        # buildings["id"].duplicated().sum()
+        buildings.to_file("buildings.gpkg", driver="GPKG")
 
         household_points_copy = self.var.household_points.copy()
         household_points_copy["building_id"] = self.var.building_id_of_household
 
         # print(len(household_points_copy))
 
-        # print(household_points_copy["building_id"].value_counts().head())
-        # print(buildings["id"].value_counts().head())
+        print(household_points_copy["building_id"].value_counts().head())
+        print(buildings["id"].value_counts().head())
+        household_points_copy.to_file("household_points.gpkg", driver="GPKG")
 
         household_points_copy = household_points_copy.merge(
             buildings[["id", "geometry"]],
@@ -497,10 +499,9 @@ class Households(AgentBaseClass):
         projected_crs = buildings.estimate_utm_crs()
         household_points_copy = household_points_copy.set_geometry("geometry_y")
         household_points_copy = household_points_copy.to_crs(projected_crs)
-
-        household_points_copy = household_points_copy[
-            :-2
-        ]  # TODO: temporary fix for error in array size
+        # household_points_copy = household_points_copy[
+        #     :-2
+        # ]  # TODO: temporary fix for error in array size
 
         # Calculate circumference (perimeter) of each building polygon
         household_points_copy["building_circumference"] = household_points_copy[
@@ -536,28 +537,35 @@ class Households(AgentBaseClass):
             901 * self.var.household_building_circumference.data
         ).astype(np.int64)
 
-        r_loan = 0.04  # 4% interest rate #TODO: values based on paper Lars France
-        loan_duration = 16  # years #TODO: values based on paper Lars France
-        annual_adaptation_costs_dryproofing = total_adaptation_costs_dry_proofing * (
-            r_loan * (1 + r_loan) ** loan_duration / ((1 + r_loan) ** loan_duration - 1)
+        r_loan: float = (
+            0.04  # 4% interest rate #TODO: values based on paper Lars France
         )
-
-        print(annual_adaptation_costs_dryproofing.min)
-        print(annual_adaptation_costs_dryproofing.max)
-        print(annual_adaptation_costs_dryproofing.mean)
-
+        loan_duration: int = 16  # years #TODO: values based on paper Lars France
+        annual_adaptation_costs_dryproofing: float = (
+            total_adaptation_costs_dry_proofing
+            * (
+                r_loan
+                * (1 + r_loan) ** loan_duration
+                / ((1 + r_loan) ** loan_duration - 1)
+            )
+        )
         self.var.adaptation_costs_dryproofing = DynamicArray(
             annual_adaptation_costs_dryproofing, max_n=self.max_n
         )
 
         # initiate array with adaptation costs for wet-proofing, eur 2024 values, article Aerts (2018)
-        total_adaptation_costs_wet_proofing = 27384
-        annual_adaptation_costs_wetproofing = total_adaptation_costs_wet_proofing * (
-            r_loan * (1 + r_loan) ** loan_duration / ((1 + r_loan) ** loan_duration - 1)
+        total_adaptation_costs_wet_proofing: int = 27384
+        annual_adaptation_costs_wetproofing: float = (
+            total_adaptation_costs_wet_proofing
+            * (
+                r_loan
+                * (1 + r_loan) ** loan_duration
+                / ((1 + r_loan) ** loan_duration - 1)
+            )
         )
         # wet floodproofing
         self.var.adaptation_costs_wetproofing = DynamicArray(
-            np.full(self.n, annual_adaptation_costs_wetproofing, np.int32),
+            np.full(self.n, annual_adaptation_costs_wetproofing, np.float32),
             max_n=self.max_n,
         )
 
@@ -2074,7 +2082,7 @@ class Households(AgentBaseClass):
         self.buildings_structure_curve["building_wetproofed"] = (
             self.buildings_structure_curve_wetproofed["building_wetproofed"]
         )
-
+        print(self.buildings_structure_curve)
         self.buildings_content_curve["building_dryproofed"] = (
             self.buildings_content_curve_dryproofed["building_dryproofed"]
         )
@@ -2248,7 +2256,9 @@ class Households(AgentBaseClass):
 
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
-
+            # print(
+            #     self.buildings_structure_curve["building_dryproofed"],
+            # )
             building_multicurve = buildings.copy()
             multi_curves = {
                 "damages": self.buildings_structure_curve["building_unprotected"],
@@ -2259,6 +2269,7 @@ class Households(AgentBaseClass):
                     "building_wetproofed"
                 ],
             }
+            # print(multi_curves)
 
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
@@ -2270,7 +2281,7 @@ class Households(AgentBaseClass):
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
             )
-
+            export_building_damages = True
             if export_building_damages:
                 fn_for_export = self.model.output_folder / "building_damages"
                 fn_for_export.mkdir(parents=True, exist_ok=True)

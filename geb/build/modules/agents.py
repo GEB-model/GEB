@@ -1632,6 +1632,8 @@ class Agents(BuildModelBase):
             overwrite=True,
         ).read()
 
+        # overwrite building IDs to ensure uniqueness
+        buildings["id"] = np.arange(len(buildings))
         self.set_geom(buildings, name="assets/open_building_map")
 
         # Vectorized centroid extraction
@@ -1909,39 +1911,39 @@ class Agents(BuildModelBase):
                         n_agents_allocated += len(agents_allocated_to_building)
 
                         # now allocate the rest of the households to buildings
-                        indices_to_allocate = np.setdiff1d(
-                            np.arange(n_agents_in_cell),
-                            households_to_put_in_building,
-                        )
-                        if len(indices_to_allocate) > 0:
-                            building_idx = np.random.choice(
-                                np.arange(n_buildings_in_cell),
-                                len(indices_to_allocate),
-                                replace=True,
-                            )
-                            agents_allocated_to_building = agents_in_grid_cell.iloc[
-                                indices_to_allocate
-                            ]
-                            lat_agents = np.array(buildings_grid_cell["lat"])[
-                                building_idx
-                            ]
-                            lon_agents = np.array(buildings_grid_cell["lon"])[
-                                building_idx
-                            ]
-                            agents_allocated_to_building["coord_Y"] = lat_agents
-                            agents_allocated_to_building["coord_X"] = lon_agents
-                            agents_allocated_to_building["building_id_of_household"] = (
-                                np.array(buildings_grid_cell["id"])[building_idx]
-                            )
+                        # indices_to_allocate = np.setdiff1d(
+                        #     np.arange(n_agents_in_cell),
+                        #     households_to_put_in_building,
+                        # )
+                        # if len(indices_to_allocate) > 0:
+                        #     building_idx = np.random.choice(
+                        #         np.arange(n_buildings_in_cell),
+                        #         len(indices_to_allocate),
+                        #         replace=True,
+                        #     )
+                        #     agents_allocated_to_building = agents_in_grid_cell.iloc[
+                        #         indices_to_allocate
+                        #     ]
+                        #     lat_agents = np.array(buildings_grid_cell["lat"])[
+                        #         building_idx
+                        #     ]
+                        #     lon_agents = np.array(buildings_grid_cell["lon"])[
+                        #         building_idx
+                        #     ]
+                        #     agents_allocated_to_building["coord_Y"] = lat_agents
+                        #     agents_allocated_to_building["coord_X"] = lon_agents
+                        #     agents_allocated_to_building["building_id_of_household"] = (
+                        #         np.array(buildings_grid_cell["id"])[building_idx]
+                        #     )
 
-                            allocated_agents = pd.concat(
-                                [allocated_agents, agents_allocated_to_building]
-                            )
-                            n_agents_allocated += len(agents_allocated_to_building)
-                        else:
-                            agents_allocated_to_building = pd.DataFrame()
-                            n_agents_allocated += len(agents_allocated_to_building)
-                            households_not_allocated += n_agents_in_cell
+                        #     allocated_agents = pd.concat(
+                        #         [allocated_agents, agents_allocated_to_building]
+                        #     )
+                        #     n_agents_allocated += len(agents_allocated_to_building)
+                        # else:
+                        # agents_allocated_to_building = pd.DataFrame()
+                        # n_agents_allocated += len(agents_allocated_to_building)
+                        # households_not_allocated += n_agents_in_cell
 
                     elif n_buildings_in_cell == 0:
                         agents_allocated_to_building = pd.DataFrame()
