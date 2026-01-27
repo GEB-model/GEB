@@ -1762,9 +1762,7 @@ class GEBModel(
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
             rivers = rivers[~rivers["is_upstream_of_downstream_basin"]]
         elif "subbasin" in region or "geom" in region:
-            rivers_outlets_for_basins = rivers[
-                ~rivers["further_downstream_outflow_basin"]
-            ]
+            rivers_outlets_for_basins = rivers[~rivers["further_downstream_outflow"]]
             outlet_lonlats = rivers_outlets_for_basins.geometry.apply(
                 lambda geom: geom.coords[-2]
             ).tolist()
