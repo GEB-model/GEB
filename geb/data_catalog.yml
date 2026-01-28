@@ -184,7 +184,7 @@ GLOPOP-S:
 GLOPOP-SG:
   data_type: RasterDataset
   driver: raster
-  path: population/GLOPOP-SG/GLOPOP_SG_V2.zip
+  path: population/GLOPOP-SG/GLOPOP_SG_V3.zip
   meta:
     source_license: Creative Commons Attribution 4.0 International
     source_url: https://zenodo.org/records/15680747
