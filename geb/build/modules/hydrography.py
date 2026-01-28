@@ -907,8 +907,7 @@ class Hydrography(BuildModelBase):
             return
 
         # load the coastline from the data catalog
-        fp_coastlines = self.old_data_catalog.get_source("osm_coastlines").path
-        coastlines = gpd.read_file(fp_coastlines)
+        coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
 
         # clip the coastline to overlapping with mask
         coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")

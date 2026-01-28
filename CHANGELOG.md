@@ -6,6 +6,7 @@
 - Improve inflow, outflow, flood plains and some other things to improve flood risk maps.
 - Remove DeltaDTM and GEBCO for non-coastal regions.
 - Re-indexing of OBM buildings and creating one houshold agent per building (per default).
+- Filter clusters in geb init-multiple based on intersection with coastline if parsed as argument.
 - Updated the GLOPOP version (from GLOPOP_SG_V2 to GLOPOP_SG_V3) to resolve missing data in some GDL regions
   
 To support this version:
