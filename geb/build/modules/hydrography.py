@@ -172,7 +172,7 @@ def extend_rivers_into_ocean(
     resolution = abs(flow_raster.transform.a)
     for river_id, river in rivers.iterrows():
         # only select rivers that have no downstream river (i.e., end in ocean)
-        if river["downstream_ID"] == -1:
+        if river["downstream_ID"] == -1 and not river["is_further_downstream_outflow"]:
             river_end_point = river.geometry.coords[-1]
             lon, lat = river_end_point
 
