@@ -1674,7 +1674,7 @@ class Agents(BuildModelBase):
         self,
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
-        single_household_per_building: bool = True,
+        single_household_per_building: bool = False,
     ) -> None:
         """Sets up household characteristics for agents using GLOPOP-S data.
 

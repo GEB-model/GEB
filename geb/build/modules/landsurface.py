@@ -200,11 +200,11 @@ class LandSurface(BuildModelBase):
                 DEM_raster = self.data_catalog.fetch("gebco").read()
             elif DEM["name"] == "geul_dem":
                 DEM_raster = read_zarr(
-                    self.data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
+                    self.old_data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
                 )
             else:
                 DEM_raster = xr.open_dataarray(
-                    self.data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
+                    self.old_data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
                 )
             if "bands" in DEM_raster.dims:
                 DEM_raster = DEM_raster.isel(band=0)

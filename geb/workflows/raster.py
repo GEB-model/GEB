@@ -637,6 +637,20 @@ def snap_to_grid(
     return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
 
 
+@overload
+def clip_with_grid(
+    ds: xr.Dataset,
+    mask: xr.DataArray,
+) -> tuple[xr.Dataset, dict[str, slice]]: ...
+
+
+@overload
+def clip_with_grid(
+    ds: xr.DataArray,
+    mask: xr.DataArray,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
+
+
 def clip_with_grid(
     ds: xr.Dataset | xr.DataArray, mask: xr.DataArray
 ) -> tuple[xr.Dataset | xr.DataArray, dict[str, slice]]:
@@ -688,6 +702,102 @@ def bounds_are_within(
     )
 
 
+def pad_to_grid_alignment(
+    da: xr.DataArray,
+    grid_size_multiplier: int,
+    constant_values: float | int | bool | None = None,
+) -> xr.DataArray:
+    """Pad a raster so the left and bottom edges align to a coarse grid.
+
+    The coarse grid is defined by the base resolution multiplied by
+    ``grid_size_multiplier``. The function pads the input so the left and
+    bottom edges align to multiples of the coarse grid size, and the padded
+    width/height become multiples of ``grid_size_multiplier``.
+
+    Args:
+        da: The input DataArray to pad.
+        grid_size_multiplier: The grid size multiplier for the coarse grid.
+        constant_values: The value used for padding. If None, nodata will be used
+            if it is set, and np.nan otherwise.
+
+    Returns:
+        The padded DataArray with updated coordinates and transform.
+
+    Raises:
+        ValueError: If ``grid_size_multiplier`` is not a positive integer.
+    """
+    if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
+        raise ValueError("grid_size_multiplier must be a positive integer")
+
+    array_rio = da.rio
+    x_dim: str = array_rio.x_dim
+    y_dim: str = array_rio.y_dim
+
+    x_coord: np.ndarray = da[x_dim].values
+    y_coord: np.ndarray = da[y_dim].values
+
+    if x_coord.size == 1:
+        x_step: float = array_rio.resolution()[0]
+    else:
+        x_step = float(x_coord[1] - x_coord[0])
+
+    if y_coord.size == 1:
+        y_step: float = array_rio.resolution()[1]
+    else:
+        y_step = float(y_coord[1] - y_coord[0])
+
+    abs_x_step: float = abs(x_step)
+    abs_y_step: float = abs(y_step)
+
+    left_edge: float = float(x_coord[0] - x_step / 2)
+    bottom_edge: float = float(y_coord[-1] + y_step / 2)
+
+    coarse_x_step: float = abs_x_step * grid_size_multiplier
+    coarse_y_step: float = abs_y_step * grid_size_multiplier
+
+    left_aligned: float = math.floor(left_edge / coarse_x_step) * coarse_x_step
+    bottom_aligned: float = math.floor(bottom_edge / coarse_y_step) * coarse_y_step
+
+    pad_left: int = int(round((left_edge - left_aligned) / abs_x_step))
+    pad_bottom: int = int(round((bottom_edge - bottom_aligned) / abs_y_step))
+
+    width_cells: int = array_rio.width + pad_left
+    height_cells: int = array_rio.height + pad_bottom
+
+    pad_right: int = (-width_cells) % grid_size_multiplier
+    pad_top: int = (-height_cells) % grid_size_multiplier
+
+    if constant_values is None:
+        constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
+
+    padded = da.pad(
+        pad_width={
+            x_dim: (pad_left, pad_right),
+            y_dim: (pad_top, pad_bottom),
+        },
+        constant_values=constant_values,
+    ).rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
+
+    if pad_left > 0:
+        new_left_coords = x_coord[0] + x_step * np.arange(-pad_left, 0)
+        x_coord = np.concatenate([new_left_coords, x_coord])
+    if pad_right > 0:
+        new_right_coords = x_coord[-1] + x_step * np.arange(1, pad_right + 1)
+        x_coord = np.concatenate([x_coord, new_right_coords])
+
+    if pad_top > 0:
+        new_top_coords = y_coord[0] + y_step * np.arange(-pad_top, 0)
+        y_coord = np.concatenate([new_top_coords, y_coord])
+    if pad_bottom > 0:
+        new_bottom_coords = y_coord[-1] + y_step * np.arange(1, pad_bottom + 1)
+        y_coord = np.concatenate([y_coord, new_bottom_coords])
+
+    padded[x_dim] = x_coord
+    padded[y_dim] = y_coord
+    padded.rio.write_transform(inplace=True)
+    return padded
+
+
 @overload
 def pad_xy(
     da: xr.DataArray,
@@ -696,6 +806,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -711,6 +822,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -725,6 +837,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -1124,7 +1237,7 @@ def calculate_cell_area(
 
 
 def clip_region(
-    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
+    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int | None
 ) -> tuple[xr.DataArray, ...]:
     """Use the given mask to clip the mask itself and the given data arrays.
 
@@ -1138,7 +1251,7 @@ def clip_region(
         *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
         align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
             the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
-            be aligned to 0.5 intervals.
+            be aligned to 0.5 intervals. If None, no alignment is done.
 
     Returns:
         A tuple containing the clipped mask and the clipped data arrays.
@@ -1159,20 +1272,26 @@ def clip_region(
 
     xres, yres = mask.rio.resolution()
 
-    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
-    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
-    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
-    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
+    if align is None:
+        mincol_aligned = mincol
+        maxcol_aligned = maxcol
+        minrow_aligned = minrow
+        maxrow_aligned = maxrow
+    else:
+        mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
+        maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
+        minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
+        maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
 
-    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
-    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
+        assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
+        assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
+        assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
+        assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
 
-    assert mincol_aligned <= mincol
-    assert maxcol_aligned >= maxcol
-    assert minrow_aligned <= minrow
-    assert maxrow_aligned >= maxrow
+        assert mincol_aligned <= mincol
+        assert maxcol_aligned >= maxcol
+        assert minrow_aligned <= minrow
+        assert maxrow_aligned >= maxrow
 
     clipped_mask = mask.isel(
         y=slice(minrow_aligned, maxrow_aligned),

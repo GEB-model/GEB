@@ -58,6 +58,7 @@ def read_flood_depth(
     method: str,
     minimum_flood_depth: float,
     end_time: datetime,
+    mask: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Read the maximum flood depth from the SFINCS model results.
 
@@ -78,6 +79,7 @@ def read_flood_depth(
         method: The method to use for calculating flood depth. Options are 'max' for maximum flood depth
             and 'final' for flood depth at the final time step.
         end_time: The end time of the simulation.
+        mask: Optional xarray DataArray mask to apply to the flood depth. Defaults to None.
 
     Returns:
         The maximum flood depth downscaled to subgrid resolution.
@@ -128,6 +130,11 @@ def read_flood_depth(
             assert isinstance(water_surface_elevation, xr.DataArray)
         else:
             raise ValueError(f"Unknown method: {method}")
+
+        if mask is not None:
+            mask = mask.compute()
+            water_surface_elevation = water_surface_elevation.compute()
+            water_surface_elevation = water_surface_elevation.where(mask, np.nan)
         # read subgrid elevation
         surface_elevation: xr.DataArray = (
             xr.open_dataarray(model_root / "subgrid" / "dep_subgrid.tif")
@@ -167,6 +174,9 @@ def read_flood_depth(
         flood_depth_m: xr.DataArray = xr.where(
             flood_depth_m >= minimum_flood_depth, flood_depth_m, np.nan, keep_attrs=True
         )
+        if mask is not None:
+            flood_depth_m = flood_depth_m.where(mask.values, np.nan)
+
         flood_depth_m.attrs["_FillValue"] = np.nan
 
     print(
@@ -1171,12 +1181,12 @@ def assign_return_periods(
 
 
 def select_most_downstream_point(
-    river: gpd.GeoDataFrame, outflow_points: GeometryCollection
+    river: LineString, outflow_points: GeometryCollection
 ) -> Point:
     """Select the most downstream point from a collection of outflow points.
 
     Args:
-        river: GeoDataFrame containing the river geometry.
+        river: LineString of the river geometry.
         outflow_points: GeometryCollection of outflow points (can contain Points and LineStrings).
 
     Returns:
@@ -1198,11 +1208,9 @@ def select_most_downstream_point(
             )
 
     most_downstream_point: Point = points[0]
-    most_downstream_point_loc: float = line_locate_point(
-        river.geometry, most_downstream_point
-    )
+    most_downstream_point_loc: float = line_locate_point(river, most_downstream_point)
     for point in points[1:]:
-        loc = line_locate_point(river.geometry, point)
+        loc = line_locate_point(river, point)
         if loc > most_downstream_point_loc:
             most_downstream_point = point
             most_downstream_point_loc = loc
