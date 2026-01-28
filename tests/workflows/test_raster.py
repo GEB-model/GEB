@@ -18,6 +18,7 @@ from geb.workflows.raster import (
     full_like,
     interpolate_na_2d,
     interpolate_na_along_time_dim,
+    pad_to_grid_alignment,
     pad_xy,
     pixel_to_coord,
     pixels_to_coords,
@@ -599,6 +600,66 @@ def test_pad_xy_geographical(pad_bounds: tuple[int, int, int, int]) -> None:
     mask = np.zeros(padded_da.shape, dtype=bool)
     mask[returned_slice["y"], returned_slice["x"]] = True
     assert np.allclose(padded_da.values[~mask], constant_values)
+
+
+def _edge_from_centers(values: np.ndarray) -> float:
+    step = float(values[1] - values[0]) if values.size > 1 else 0.0
+    return float(values[0] - step / 2)
+
+
+def _bottom_edge_from_centers(values: np.ndarray) -> float:
+    step = float(values[1] - values[0]) if values.size > 1 else 0.0
+    return float(values[-1] + step / 2)
+
+
+def test_pad_to_grid_alignment_projected() -> None:
+    """Test grid-aligned padding for a projected raster."""
+    da = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={
+            "y": np.arange(1.875, 0.875, -0.25),
+            "x": np.arange(0.375, 1.375, 0.25),
+        },
+    )
+    da.rio.write_crs("EPSG:28992", inplace=True)
+    da.rio.write_transform(from_bounds(0.25, 0.75, 1.25, 1.75, 4, 4), inplace=True)
+
+    padded = pad_to_grid_alignment(da, grid_size_multiplier=5, constant_values=0)
+
+    coarse_step = 0.25 * 5
+    left_edge = _edge_from_centers(padded.x.values)
+    bottom_edge = _bottom_edge_from_centers(padded.y.values)
+
+    assert np.isclose(left_edge % coarse_step, 0.0)
+    assert np.isclose(bottom_edge % coarse_step, 0.0)
+    assert padded.sizes["x"] % 5 == 0
+    assert padded.sizes["y"] % 5 == 0
+
+
+def test_pad_to_grid_alignment_geographic() -> None:
+    """Test grid-aligned padding for geographic rasters with descending y."""
+    da = xr.DataArray(
+        np.ones((6, 7)),
+        dims=["y", "x"],
+        coords={
+            "y": np.arange(50.875, 49.375, -0.25),
+            "x": np.arange(0.125, 1.875, 0.25),
+        },
+    )
+    da.rio.write_crs("EPSG:4326", inplace=True)
+    da.rio.write_transform(from_bounds(0.0, 49.25, 1.75, 51.0, 7, 6), inplace=True)
+
+    padded = pad_to_grid_alignment(da, grid_size_multiplier=4, constant_values=-1)
+
+    coarse_step = 0.25 * 4
+    left_edge = _edge_from_centers(padded.x.values)
+    bottom_edge = _bottom_edge_from_centers(padded.y.values)
+
+    assert np.isclose(left_edge % coarse_step, 0.0)
+    assert np.isclose(bottom_edge % coarse_step, 0.0)
+    assert padded.sizes["x"] % 4 == 0
+    assert padded.sizes["y"] % 4 == 0
 
 
 def test_resample_chunked() -> None:

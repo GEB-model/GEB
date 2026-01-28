@@ -50,7 +50,25 @@ def get_all_upstream_subbasin_ids(
     return ancenstors
 
 
-def get_downstream_subbasins(
+def get_all_downstream_subbasin_ids(
+    river_graph: nx.DiGraph, subbasin_ids: list[int]
+) -> set[int]:
+    """Get all downstream subbasin IDs for the given subbasin IDs.
+
+    Args:
+        river_graph: The river graph to use for determining downstream subbasins.
+        subbasin_ids: The subbasin IDs to get the downstream subbasins for.
+
+    Returns:
+        A set of all downstream subbasin IDs.
+    """
+    descendants = set()
+    for subbasin_id in subbasin_ids:
+        descendants |= nx.descendants(river_graph, subbasin_id)
+    return descendants
+
+
+def get_immediate_downstream_subbasins(
     river_graph: nx.DiGraph, sink_subbasin_ids: list[int]
 ) -> dict[int, list[int]]:
     """Get the immediately downstream subbasins for the given sink subbasin IDs.
@@ -154,7 +172,7 @@ def extend_rivers_into_ocean(
     resolution = abs(flow_raster.transform.a)
     for river_id, river in rivers.iterrows():
         # only select rivers that have no downstream river (i.e., end in ocean)
-        if river["downstream_ID"] == -1:
+        if river["downstream_ID"] == -1 and not river["is_further_downstream_outflow"]:
             river_end_point = river.geometry.coords[-1]
             lon, lat = river_end_point
 
@@ -374,8 +392,20 @@ class Hydrography(BuildModelBase):
         )
         subbasin_ids.update(sink_subbasin_ids)
 
-        downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
+        downstream_subbasins = get_immediate_downstream_subbasins(
+            river_graph, sink_subbasin_ids
+        )
         subbasin_ids.update(downstream_subbasins)
+
+        is_further_downstream_outflow: set[int] = set()
+
+        is_further_downstream_outflow.update(
+            get_all_downstream_subbasin_ids(
+                river_graph, list(downstream_subbasins.keys())
+            )
+        )
+
+        subbasin_ids.update(is_further_downstream_outflow)
 
         # later we want to include the downstream outflow basins. However, we don't want to include
         # other branches that are upstream of those downstream basins, but are not part
@@ -400,6 +430,10 @@ class Hydrography(BuildModelBase):
 
         rivers["is_upstream_of_downstream_basin"] = pd.Series(
             True, index=upstream_basins_of_downstream_basins
+        ).reindex(rivers.index, fill_value=False)
+
+        rivers["is_further_downstream_outflow"] = pd.Series(
+            True, index=is_further_downstream_outflow
         ).reindex(rivers.index, fill_value=False)
 
         return rivers
@@ -622,7 +656,9 @@ class Hydrography(BuildModelBase):
 
         assert (
             rivers[
-                (~rivers["represented_in_grid"]) & (~rivers["is_downstream_outflow"])
+                (~rivers["represented_in_grid"])
+                & (~rivers["is_downstream_outflow"])
+                & (~rivers["is_further_downstream_outflow"])
             ]["lengthkm"]
             < 5
         ).all(), (

@@ -1814,7 +1814,8 @@ class GEBModel(
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
             rivers = rivers[~rivers["is_upstream_of_downstream_basin"]]
         elif "subbasin" in region or "geom" in region:
-            outlet_lonlats = rivers.geometry.apply(
+            rivers_outlets_for_basins = rivers[~rivers["is_further_downstream_outflow"]]
+            outlet_lonlats = rivers_outlets_for_basins.geometry.apply(
                 lambda geom: geom.coords[-2]
             ).tolist()
             subbasins_grid = ldd_network.basins(
@@ -1822,7 +1823,7 @@ class GEBModel(
                     [lon for lon, lat in outlet_lonlats],
                     [lat for lon, lat in outlet_lonlats],
                 ),
-                ids=rivers.index,
+                ids=rivers_outlets_for_basins.index,
             ).astype(np.int32)
 
             # we want to remove the areas upstream of the downstream outflow basins
@@ -1872,7 +1873,7 @@ class GEBModel(
                 crs=subbasins.crs,
             )
             # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
-            # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+            # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
                 f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
