@@ -1376,49 +1376,111 @@ class Hydrography(BuildModelBase):
 
     @build_method
     def setup_inflow(
-        self, lon: float, lat: float, inflow_m3_per_s: float | int
+        self,
+        locations: str,
+        inflow_m3_per_s: str,
+        interpolate: bool = False,
+        extrapolate: bool = False,
     ) -> None:
-        """Sets up a inflow hydrograph at a specified location.
-
-        Currently only a single constant inflow location at a single point is supported.
+        """Sets up a inflow hydrograph for the model.
 
         Args:
-            lon: The longitude of the inflow location.
-            lat: The latitude of the inflow location.
-            inflow_m3_per_s: The inflow in cubic meters per second.
+            locations: A vector file that can be read by geopandas containing the inflow location,
+                with columns ID (str) and a point geometry.
+            inflow_m3_per_s: A CSV file containing the inflow hydrograph in m3/s with a datetime index (date),
+                and a columns for each inflow location ID matching the IDs (str) in the locations file.
+            interpolate: Whether to interpolate missing values in the inflow hydrograph.
+            extrapolate: Whether to extrapolate missing values in the inflow hydrograph.
 
         Raises:
             ValueError: If the inflow location is outside of the model grid or study area.
         """
-        mask = self.grid["mask"]
+        mask = self.grid["mask"].compute()
         transform = mask.rio.transform()
 
-        y, x = rasterio.transform.rowcol(transform, lon, lat)
+        inflow_locations = gpd.read_file(locations)
 
-        inflow_locations = gpd.GeoDataFrame(
-            geometry=[Point(lon, lat)],
-            crs="EPSG:4326",
-            columns=["y", "x"],
-            data=[[y, x]],
-            index=[0],
+        if inflow_locations.crs is None:
+            raise ValueError("Locations file must have a defined CRS.")
+        inflow_locations = inflow_locations.to_crs(mask.rio.crs)
+
+        if "ID" not in inflow_locations.columns:
+            raise ValueError("Locations file must have an 'ID' column.")
+
+        for ID in inflow_locations["ID"]:
+            if not isinstance(ID, str):
+                raise ValueError("Locations 'ID' column must be of type string.")
+
+        y, x = rasterio.transform.rowcol(
+            transform, inflow_locations.geometry.x, inflow_locations.geometry.y
         )
+
+        inflow_locations["y"] = y
+        inflow_locations["x"] = x
+
         self.set_geom(inflow_locations, name="routing/inflow_locations")
 
-        if y < 0 or y >= mask.shape[0] or x < 0 or x >= mask.shape[1]:
+        if (
+            (inflow_locations["y"] < 0)
+            | (inflow_locations["y"] >= mask.shape[0])
+            | (inflow_locations["x"] < 0)
+            | (inflow_locations["x"] >= mask.shape[1])
+        ).any():
             raise ValueError("Inflow location is outside of the model grid.")
 
-        if mask.values[y, x]:
+        # check if any of the locations is outside of the study area (mask is True outside the study area)
+        if (mask.values[inflow_locations["y"], inflow_locations["x"]]).any():
             raise ValueError("Inflow location is outside of the study area.")
 
-        inflow_df_m3_per_s = pd.DataFrame(
-            index=pd.date_range(
-                self.start_date,
-                end=self.end_date + timedelta(hours=23),
-                freq="H",
-                inclusive="both",
-            ),
-            columns=np.array([0]),
-            data=inflow_m3_per_s,
+        inflow_df_m3_per_s = pd.read_csv(inflow_m3_per_s, index_col=0, parse_dates=True)
+        # ensure index is datetime
+        if not np.issubdtype(inflow_df_m3_per_s.index.dtype, np.datetime64):  # ty:ignore[invalid-argument-type]
+            raise ValueError("Inflow hydrograph index must be datetime.")
+
+        # ensure columns are strings
+        if not all(isinstance(col, str) for col in inflow_df_m3_per_s.columns):
+            raise ValueError("Inflow hydrograph columns must be of type string.")
+
+        # check if all IDs in locations are in the inflow file
+        missing_ids: set[str] = set(inflow_locations["ID"]) - set(
+            inflow_df_m3_per_s.columns
         )
+        if missing_ids:
+            raise ValueError(
+                f"Missing inflow data for location IDs: {missing_ids}. "
+                "Ensure column names in CSV match location IDs."
+            )
+
+        # subset to only include the locations that are in the locations file
+        inflow_df_m3_per_s = inflow_df_m3_per_s[inflow_locations["ID"]]
+
+        # align to model time step
+        model_time_step = pd.date_range(
+            self.start_date,
+            end=self.end_date + timedelta(hours=23),
+            freq="H",
+            inclusive="both",
+        )
+
+        inflow_df_m3_per_s: pd.DataFrame = inflow_df_m3_per_s.reindex(model_time_step)
+
+        if interpolate:
+            # interpolate missing values by first interpolating in time
+            inflow_df_m3_per_s: pd.DataFrame = inflow_df_m3_per_s.interpolate(
+                method="time"
+            )
+        if extrapolate:
+            # extrapolate missing values by forward and backward filling
+            inflow_df_m3_per_s: pd.DataFrame = inflow_df_m3_per_s.ffill().bfill()
+
+        if inflow_df_m3_per_s.isnull().any().any():
+            raise ValueError(
+                "Inflow hydrograph contains missing values. "
+                "Set interpolate=True to interpolate missing values."
+                "or fill missing values in the inflow hydrograph."
+                "model start and end date: "
+                f"{self.start_date} to {self.end_date}"
+                "with hourly frequency."
+            )
 
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")

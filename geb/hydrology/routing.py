@@ -1047,20 +1047,26 @@ class Routing(Module):
             inflow_per_location: pd.DataFrame = read_table(
                 self.model.files["table"]["routing/inflow_m3_per_s"]
             )
+            # select the right time steps from the inflow data
+            expected_time_steps = pd.date_range(
+                start=self.model.simulation_start,
+                end=self.model.simulation_end + self.model.timestep_length,
+                freq="H",
+            )
+            inflow_per_location = inflow_per_location.loc[expected_time_steps]
+
             inflow_locations: gpd.GeoDataFrame = read_geom(
                 self.model.files["geom"]["routing/inflow_locations"]
-            )
+            ).set_index("ID")  # ty:ignore[invalid-assignment]
             for inflow_id, inflow in inflow_per_location.items():
                 location: pd.Series = inflow_locations.loc[inflow_id]
                 y: int = location["y"]
                 x: int = location["x"]
                 self.inflow[(y, x)] = inflow.to_numpy(dtype=np.float32)
 
-            # find the index for the current time step
-            # and store it for later use. Should be incremented each time step
-            time_index = np.where(inflow.index == self.model.current_time)[0]
-            assert time_index.size == 1
-            self.inflow_idx = time_index[0]
+            assert self.model.current_time == inflow_per_location.index[0]
+            # initialize inflow index
+            self.inflow_idx = 0
 
         if self.model.in_spinup:
             self.spinup()

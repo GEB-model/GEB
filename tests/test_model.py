@@ -9,10 +9,12 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from shapely.geometry import Point
 
 from geb.build.methods import build_method
 from geb.cli import (
@@ -491,6 +493,82 @@ def test_land_use_change() -> None:
 
         geb.step_to_end()
         geb.reporter.finalize()
+
+
+def test_setup_inflow() -> None:
+    """Test setup of inflow hydrograph.
+
+    Verifies that the model can set up an inflow hydrograph
+    from specified locations and inflow data files.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        config = parse_config(CONFIG_DEFAULT)
+        config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=10
+        )
+        args["config"] = config
+
+        model: GEBModel = run_model_with_method(
+            method=None,
+            close_after_run=False,
+            **args,
+        )
+        model.run(initialize_only=True)
+        data_folder: Path = Path("data")
+        data_folder.mkdir(parents=True, exist_ok=True)
+
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers
+        rivers: gpd.GeoDataFrame = rivers[["geometry"]]
+        rivers.geometry = rivers.geometry.apply(lambda geom: Point(geom.coords[0]))
+        rivers.index.name = "ID"
+        rivers.index = rivers.index.astype(str)
+        rivers.reset_index().to_file(
+            data_folder / "inflow_locations.geojson", driver="GeoJSON"
+        )
+
+        start_time = model.spinup_start
+        end_time = model.run_end + model.timestep_length
+
+        data = {
+            "time": pd.date_range(start=start_time, end=end_time, freq="YS"),
+        }
+        for ID in rivers.index:
+            data[ID] = np.round(np.random.rand(len(data["time"])) * 100, 1)
+
+        inflow = pd.DataFrame(data)
+        inflow.to_csv(data_folder / "inflow_hydrograph.csv", index=False)
+
+        model.close()
+
+        build_args = DEFAULT_BUILD_ARGS.copy()
+        del build_args["continue_"]
+
+        build_config: dict[str, dict[str, str | bool]] = {}
+        build_config["setup_inflow"] = {
+            "locations": str(Path("data") / "inflow_locations.geojson"),
+            "inflow_m3_per_s": str(Path("data") / "inflow_hydrograph.csv"),
+        }
+        build_args["build_config"] = build_config
+        with pytest.raises(ValueError):
+            update_fn(**build_args)
+
+        build_args["build_config"]["setup_inflow"]["interpolate"] = True
+        build_args["build_config"]["setup_inflow"]["extrapolate"] = True
+
+        # copy the original input file
+        shutil.copy(Path("input") / "files.yml", Path("input") / "files.yml.bak")
+
+        update_fn(**build_args)
+        run_model_with_method(method="run", **args)
+
+        # remove inflow data files
+        os.remove(data_folder / "inflow_hydrograph.csv")
+        os.remove(data_folder / "inflow_locations.geojson")
+
+        # restore original input file
+        shutil.copy(Path("input") / "files.yml.bak", Path("input") / "files.yml")
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
