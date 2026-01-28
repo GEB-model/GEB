@@ -24,7 +24,6 @@ import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
-from networkx.classes import nodes
 from rasterio.env import defenv
 from shapely.geometry import Point, shape
 
@@ -37,7 +36,7 @@ from geb.workflows.io import (
     write_params,
     write_table,
 )
-from geb.workflows.raster import clip_region, full_like, repeat_grid
+from geb.workflows.raster import clip_region, clip_with_grid, full_like, repeat_grid
 
 from ..workflows.io import (
     read_zarr,
@@ -1327,7 +1326,12 @@ def get_coastline_nodes(
             # we divide the segment in a part that is closer to the study area outflow
             # and a part that is not
             if study_area_nodes and nearby_nodes:
-                if len(study_area_nodes) != 1:
+                if len(study_area_nodes) != 1 or len(nearby_nodes) != 1:
+                    # create a diagnostic visualization grid that marks, for this coastal
+                    # segment, which cells neighbor the study area outflow, which neighbor
+                    # the nearby outflow, and which belong to neither. This is written to
+                    # disk to help debug cases where there is not exactly one study area
+                    # outflow and one nearby outflow per coastal segment.
                     nodes_grid: xr.DataArray = riverine_mask.copy().astype(np.int32)
                     nodes_grid.attrs["_FillValue"] = 0
                     nodes_grid.values[:] = 0
@@ -1340,17 +1344,22 @@ def get_coastline_nodes(
                         else:
                             nodes_grid.values[node_y, node_x] = -1
 
+                    # clip to area of interest for smaller output
+                    nodes_grid, _ = clip_with_grid(nodes_grid, mask=nodes_grid != -1)
+
+                    debug_file = Path("debug_coastal_segment.zarr")
                     write_zarr(
                         nodes_grid,
-                        Path("debug_coastal_segment.zarr"),
+                        debug_file,
                         crs=nodes_grid.rio.crs,
                     )
                     raise AssertionError(
-                        "There should only be one study area outflow node per coastal segment."
+                        f"There should only be one study area outflow and one nearby outflow per coastal segment, "
+                        f"found {len(study_area_nodes)} study area outflows and {len(nearby_nodes)} nearby outflows. "
+                        f"Debug output written to {debug_file}."
                     )
-                study_area_node = study_area_nodes[0]
 
-                assert len(nearby_nodes) == 1
+                study_area_node = study_area_nodes[0]
                 nearby_node = nearby_nodes[0]
 
                 for node in coastal_segment.nodes:
