@@ -6,6 +6,8 @@
 - Improve inflow, outflow, flood plains and some other things to improve flood risk maps.
 - Remove DeltaDTM and GEBCO for non-coastal regions.
 - Re-indexing of OBM buildings and creating one houshold agent per building (per default).
+- Support multipe inflow locations.
+- (Deep) copy model config on initializing model avoiding reference issues
 
 To support this version:
 

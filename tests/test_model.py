@@ -542,43 +542,33 @@ def test_setup_inflow() -> None:
 
         model.close()
 
-        try:
-            build_args = DEFAULT_BUILD_ARGS.copy()
-            del build_args["continue_"]
+        build_args = DEFAULT_BUILD_ARGS.copy()
+        del build_args["continue_"]
 
-            build_config: dict[str, dict[str, str | bool]] = {}
-            build_config["setup_inflow"] = {
-                "locations": str(Path("data") / "inflow_locations.geojson"),
-                "inflow_m3_per_s": str(Path("data") / "inflow_hydrograph.csv"),
-            }
-            build_args["build_config"] = build_config
-
-            # should raise an error because neither interpolate nor extrapolate is set
-            with pytest.raises(ValueError):
-                update_fn(**build_args)
-
-            build_args["build_config"]["setup_inflow"]["interpolate"] = True
-            build_args["build_config"]["setup_inflow"]["extrapolate"] = True
-
-            # copy the original input file
-            shutil.copy(Path("input") / "files.yml", Path("input") / "files.yml.bak")
-
+        build_config: dict[str, dict[str, str | bool]] = {}
+        build_config["setup_inflow"] = {
+            "locations": str(Path("data") / "inflow_locations.geojson"),
+            "inflow_m3_per_s": str(Path("data") / "inflow_hydrograph.csv"),
+        }
+        build_args["build_config"] = build_config
+        with pytest.raises(ValueError):
             update_fn(**build_args)
-            run_model_with_method(method="run", **args)
 
-        finally:
-            # remove inflow data files
-            if (data_folder / "inflow_hydrograph.csv").exists():
-                os.remove(data_folder / "inflow_hydrograph.csv")
-            if (data_folder / "inflow_locations.geojson").exists():
-                os.remove(data_folder / "inflow_locations.geojson")
+        build_args["build_config"]["setup_inflow"]["interpolate"] = True
+        build_args["build_config"]["setup_inflow"]["extrapolate"] = True
 
-            # restore original input file
-            if (Path("input") / "files.yml.bak").exists():
-                shutil.copy(
-                    Path("input") / "files.yml.bak", Path("input") / "files.yml"
-                )
-                os.remove(Path("input") / "files.yml.bak")
+        # copy the original input file
+        shutil.copy(Path("input") / "files.yml", Path("input") / "files.yml.bak")
+
+        update_fn(**build_args)
+        run_model_with_method(method="run", **args)
+
+        # remove inflow data files
+        os.remove(data_folder / "inflow_hydrograph.csv")
+        os.remove(data_folder / "inflow_locations.geojson")
+
+        # restore original input file
+        shutil.copy(Path("input") / "files.yml.bak", Path("input") / "files.yml")
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
