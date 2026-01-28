@@ -12,7 +12,7 @@ import time
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
 
 import contextily as ctx
 import geopandas as gpd
@@ -29,6 +29,7 @@ import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
+from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
 from shapely.ops import unary_union
 
@@ -41,7 +42,7 @@ from geb.workflows.io import (
     write_params,
     write_table,
 )
-from geb.workflows.raster import clip_region, full_like, repeat_grid
+from geb.workflows.raster import clip_region, clip_with_grid, full_like, repeat_grid
 
 from ..workflows.io import (
     read_zarr,
@@ -1774,17 +1775,24 @@ def get_touching_subbasins(
 
 
 def get_coastline_nodes(
-    coastline_graph: networkx.Graph, STUDY_AREA_OUTFLOW: int, NEARBY_OUTFLOW: int
+    coastline_graph: networkx.Graph,
+    riverine_mask: xr.DataArray,
+    STUDY_AREA_OUTFLOW: int,
+    NEARBY_OUTFLOW: int,
 ) -> set:
     """Get all coastline nodes that are part of the coastline for the study area.
 
     Args:
         coastline_graph: The graph containing all coastline nodes.
+        riverine_mask: A DataArray containing the riverine mask.
         STUDY_AREA_OUTFLOW: The outflow type value for outflows within the study area.
         NEARBY_OUTFLOW: The outflow type value for outflows outside the study area, but close enough to influence the coastline.
 
     Returns:
         A set of all coastline nodes that are part of the coastline for the study area.
+
+    Raises:
+        AssertionError: If a coastal segment has both a study area outflow and a nearby outflow, but not exactly one of each.
     """
     coastline_nodes = set()
 
@@ -1878,10 +1886,40 @@ def get_coastline_nodes(
             # we divide the segment in a part that is closer to the study area outflow
             # and a part that is not
             if study_area_nodes and nearby_nodes:
-                assert len(study_area_nodes) == 1
-                study_area_node = study_area_nodes[0]
+                if len(study_area_nodes) != 1 or len(nearby_nodes) != 1:
+                    # create a diagnostic visualization grid that marks, for this coastal
+                    # segment, which cells neighbor the study area outflow, which neighbor
+                    # the nearby outflow, and which belong to neither. This is written to
+                    # disk to help debug cases where there is not exactly one study area
+                    # outflow and one nearby outflow per coastal segment.
+                    nodes_grid: xr.DataArray = riverine_mask.copy().astype(np.int32)
+                    nodes_grid.attrs["_FillValue"] = 0
+                    nodes_grid.values[:] = 0
+                    for node, node_attributes in coastal_segment.nodes(data=True):
+                        node_y, node_x = node_attributes["yx"]
+                        if node_attributes["neighbor_of_nearby_outflow"] is True:
+                            nodes_grid.values[node_y, node_x] = NEARBY_OUTFLOW
+                        elif node_attributes["neighbor_of_study_area_outflow"] is True:
+                            nodes_grid.values[node_y, node_x] = STUDY_AREA_OUTFLOW
+                        else:
+                            nodes_grid.values[node_y, node_x] = -1
 
-                assert len(nearby_nodes) == 1
+                    # clip to area of interest for smaller output
+                    nodes_grid, _ = clip_with_grid(nodes_grid, mask=nodes_grid != 0)
+
+                    debug_file = Path("debug_coastal_segment.zarr")
+                    write_zarr(
+                        nodes_grid,
+                        debug_file,
+                        crs=nodes_grid.rio.crs,
+                    )
+                    raise AssertionError(
+                        f"There should only be one study area outflow and one nearby outflow per coastal segment, "
+                        f"found {len(study_area_nodes)} study area outflows and {len(nearby_nodes)} nearby outflows. "
+                        f"Debug output written to {debug_file}."
+                    )
+
+                study_area_node = study_area_nodes[0]
                 nearby_node = nearby_nodes[0]
 
                 for node in coastal_segment.nodes:
@@ -2288,14 +2326,28 @@ class GEBModel(
         xmax += buffer
         ymax += buffer
 
-        ldd = self.data_catalog.fetch(
-            "merit_hydro_dir",
-            xmin=xmin,
-            xmax=xmax,
-            ymin=ymin,
-            ymax=ymax,
-        ).read()
+        ldd = (
+            self.data_catalog.fetch(
+                "merit_hydro_dir",
+                xmin=xmin,
+                xmax=xmax,
+                ymin=ymin,
+                ymax=ymax,
+            )
+            .read()
+            .compute()
+        )
         assert isinstance(ldd, xr.DataArray), "Expected ldd to be an xarray DataArray."
+
+        # We remove all pits that are not directly adjacent to valid flow directions
+        # Identify cells with flow directions
+        cells_with_flow_directions = (ldd.values > 0) & (ldd.values != 247)
+        # grow valid values mask by one cell
+        valid_values_and_coastline = binary_dilation(
+            cells_with_flow_directions, structure=np.ones((3, 3))
+        )
+        # and use said mask which includes valid values and its neighbors to set ldd to no data
+        ldd.values[~valid_values_and_coastline] = 247
 
         ldd_network = pyflwdir.from_array(
             ldd.values,
@@ -2472,8 +2524,8 @@ class GEBModel(
             # hydrography is specified in latlon
         )
 
-        STUDY_AREA_OUTFLOW: int = 1
-        NEARBY_OUTFLOW: int = 2
+        STUDY_AREA_OUTFLOW: Literal[1] = 1
+        NEARBY_OUTFLOW: Literal[2] = 2
 
         rivers = (
             self.data_catalog.fetch(
@@ -2563,6 +2615,7 @@ class GEBModel(
         )
         coastline_nodes = get_coastline_nodes(
             coastline_graph,
+            riverine_mask,
             STUDY_AREA_OUTFLOW=STUDY_AREA_OUTFLOW,
             NEARBY_OUTFLOW=NEARBY_OUTFLOW,
         )

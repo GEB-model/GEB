@@ -637,6 +637,20 @@ def snap_to_grid(
     return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
 
 
+@overload
+def clip_with_grid(
+    ds: xr.Dataset,
+    mask: xr.DataArray,
+) -> tuple[xr.Dataset, dict[str, slice]]: ...
+
+
+@overload
+def clip_with_grid(
+    ds: xr.DataArray,
+    mask: xr.DataArray,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
+
+
 def clip_with_grid(
     ds: xr.Dataset | xr.DataArray, mask: xr.DataArray
 ) -> tuple[xr.Dataset | xr.DataArray, dict[str, slice]]:
