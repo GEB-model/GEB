@@ -51,7 +51,7 @@ def get_basin_area_km2(cluster_name):
         return 30000.0  # Default area
 
 def get_resources(cluster_name, phase="build"):
-    """Get both memory allocation and SLURM partition based on basin size and strategic assignment."""
+    """Get both memory allocation and SLURM partition based on basin size and balanced distribution."""
     area_km2 = get_basin_area_km2(cluster_name)
     
     # Memory allocation based on basin size
@@ -60,24 +60,31 @@ def get_resources(cluster_name, phase="build"):
     else:  # Larger basins
         memory_mb = 300000  # 300GB
     
-    # Strategic partition assignment to balance load and limit jobs per partition
-    # Assign clusters to partitions based on size and index to ensure balanced distribution
+    # Get cluster index for balanced distribution
     try:
         cluster_index = CLUSTER_NAMES.index(cluster_name)
     except ValueError:
         cluster_index = 0
     
-    # Strategic assignment: prioritize largest basins for ivm-fat, then distribute others
-    if area_km2 >= 650000:  # Largest basins (>650k km²) go to ivm-fat
-        partition_index = 2  # ivm-fat
-    elif area_km2 >= 500000:  # Very large basins (500k-650k km²) go to defq only
-        partition_index = 0  # defq
-    elif area_km2 >= 200000:  # Medium basins (200k-500k km²) alternate between defq and ivm-fat
-        # Alternate between defq and ivm-fat for medium basins
+    # IMPROVED BALANCED DISTRIBUTION STRATEGY:
+    # Distribute jobs more evenly across partitions to avoid bottlenecks
+    # Priority: spread large jobs across defq and ivm-fat, minimize ivm usage
+    
+    if area_km2 >= 650000:  # Largest basins (>650k km²) - split between defq and ivm-fat
+        # Alternate the biggest basins between defq and ivm-fat to spread load
         partition_index = 0 if (cluster_index % 2 == 0) else 2
-    else:  # Small basins (<200k km²) go to ivm or defq
-        # Small basins alternate between defq and ivm (ivm only gets small basins)
+    elif area_km2 >= 400000:  # Large basins (400k-650k km²) - favor defq with some ivm-fat
+        # Most go to defq (has good capacity), some to ivm-fat
+        if cluster_index % 3 == 0:
+            partition_index = 2  # ivm-fat
+        else:
+            partition_index = 0  # defq
+    elif area_km2 >= 200000:  # Medium basins (200k-400k km²) - defq and ivm
+        # Alternate between defq and ivm (avoid overloading ivm-fat)
         partition_index = 0 if (cluster_index % 2 == 0) else 1
+    else:  # Small basins (<200k km²) - mainly ivm with some defq
+        # Small jobs can go to ivm (less resource contention) with some defq
+        partition_index = 1 if (cluster_index % 3 != 0) else 0
     
     if partition_index == 0:
         partition = "defq"

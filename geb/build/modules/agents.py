@@ -390,7 +390,7 @@ class Agents(BuildModelBase):
         cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         oecd_idd = oecd_idd[cols_to_keep]
         # get GDL regions to use their iso_code for consistent country mapping
-        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
             geom=self.region.union_all()
         )
 
