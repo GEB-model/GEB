@@ -52,6 +52,7 @@ def test_fill_discharge_gaps() -> None:
                 [24, 25, 26, 27],  # river with all nans
                 [4],  # single cell river with no nans
             ],
+            "is_further_downstream": [False, False, False, False, False, False, False],
         },
     )
     Q_filled: ArrayFloat32 = fill_discharge_gaps(
@@ -106,6 +107,7 @@ def test_fill_discharge_gaps_with_waterbodies() -> None:
                 [24, 25, 26, 27],  # river with all nans
                 [4],  # single cell river with no nans
             ],
+            "is_further_downstream": [False, False, False, False, False, False, False],
         },
     )
     waterbody_ids: ArrayInt32 = np.array(
