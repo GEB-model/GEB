@@ -452,11 +452,11 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         start_time: datetime = datetime(2000, 1, 1, 0)
         end_time: datetime = datetime(2000, 1, 8, 0)
 
-        subbbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         sfincs_model = build_sfincs(
             geb_model,
             subgrid=False,
-            subbasins=subbbasins,
+            subbasins=subbasins,
             name=TEST_MODEL_NAME,
             rivers=geb_model.hydrology.routing.rivers,
         )

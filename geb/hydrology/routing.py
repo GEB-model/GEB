@@ -711,8 +711,7 @@ def fill_discharge_gaps(
     """
     filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
     for river_id, river in rivers.iterrows():
-        # TODO: Remove the first check '"is_further_downstream" in river' in March 2026
-        if "is_further_downstream" in river and river["is_further_downstream"]:
+        if river["is_further_downstream"]:
             continue  # skip rivers that are further downstream
         # iterate from upstream to downstream
         valid_discharge: np.float32 = np.float32(np.nan)

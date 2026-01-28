@@ -758,8 +758,7 @@ class Floods(Module):
             / "spinup"
             / "hydrology.routing"
             / "discharge_daily.zarr"
-        ).isel(time=slice(0, 4 * 365))
-        return da
+        )
 
         start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)
         da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))

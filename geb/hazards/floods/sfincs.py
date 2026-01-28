@@ -422,7 +422,7 @@ class SFINCSRootModel:
 
         # In many cases due to the coarse subbasin resolution compared to the DEM resolution,
         # the area of interest does not align perfectly with the shape of the subbasins at the
-        # DEM resoltion, ultimiately leading to small gaps in the flood maps. We now temporarily
+        # DEM resolution, ultimately leading to small gaps in the flood maps. We now temporarily
         # fix this by dilating the area of interest mask. A better solution should be found.
         # TODO: Find a better solution for the area of interest alignment issue.
         self.area_of_interest.values = binary_dilation(
@@ -1690,9 +1690,6 @@ class SFINCSSimulation:
             assert not np.isin(
                 nodes.index, self.sfincs_model.forcing["dis"].index
             ).any(), "This forcing would overwrite existing discharge forcing points"
-
-        nodes.to_file("src_points.geojson", driver="GeoJSON")
-        self.sfincs_model.region.to_file("model_region.geojson", driver="GeoJSON")
 
         assert (
             self.sfincs_model.region.union_all()
