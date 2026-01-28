@@ -1723,26 +1723,6 @@ class Households(AgentBaseClass):
             # adapted_shutters=self.var.adapted_shutters.data == 1,
         )
 
-        EU_adapt_shutters = self.decision_module.calcEU_shutters_windstorm(
-            geom_id="NoID",
-            n_agents=self.n,
-            wealth=self.var.wealth.data,
-            income=self.var.income.data,
-            expendature_cap=1,
-            amenity_value=self.var.amenity_value.data,
-            amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,  # + 10,
-            expected_damages_adapt=damages_adapt_w,
-            adaptation_costs=self.var.adaptation_costs_shutters,  # * 0
-            time_adapted=self.var.time_adapted_shutters.data,
-            loan_duration=0,
-            p_windstorm=1 / self.windstorm_return_periods,
-            T=35,
-            r=0.03,
-            sigma=1,
-            # adapted_shutters=self.var.adapted_shutters.data == 1,
-        )
-
         EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
             geom_id="NoID",
             n_agents=self.n,
@@ -1776,7 +1756,7 @@ class Households(AgentBaseClass):
             sigma=1,
         )
 
-        EU_do_nothing, _, _, _ = self.decision_module.calcEU_do_nothing_multirisk(
+        EU_do_nothing = self.decision_module.calcEU_no_insure(
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,

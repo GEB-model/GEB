@@ -551,11 +551,22 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
+        report_cfg = self.model.config.get("report")
+        if report_cfg is None:
+            report_cfg = {}
+            self.model.config["report"] = report_cfg
+
         if "_config" not in self.model.config["report"]:
             self.config: dict[str, int] = {}
         else:
             self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
             del self.model.config["report"]["_config"]
+
+        # #MY ADDITION
+        # report_cfg = self.model.config.get("report")
+        # if report_cfg is None:
+        #     report_cfg = {}
+        #     self.model.config["report"] = report_cfg
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
