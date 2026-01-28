@@ -6,11 +6,12 @@
 - Improve inflow, outflow, flood plains and some other things to improve flood risk maps.
 - Remove DeltaDTM and GEBCO for non-coastal regions.
 - Re-indexing of OBM buildings and creating one houshold agent per building (per default).
-
+- Updated the GLOPOP version (from GLOPOP_SG_V2 to GLOPOP_SG_V3) to resolve missing data in some GDL regions
+  
 To support this version:
 
 - Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
-- Re-run `setup_soil`: `geb update -b build.yml::setup_soil`
+- Re-run `setup_soil`: `geb update -b build.yml::setup_soil` and `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics`
 - Models for inland regions need to be rebuild if floods need to be run
 
 # v1.0.0b10
