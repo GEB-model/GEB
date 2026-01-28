@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
 
 import geopandas as gpd
 import networkx
@@ -25,6 +25,7 @@ import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
+from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
 
 from geb import GEB_PACKAGE_DIR
@@ -1348,7 +1349,7 @@ def get_coastline_nodes(
                             nodes_grid.values[node_y, node_x] = -1
 
                     # clip to area of interest for smaller output
-                    nodes_grid, _ = clip_with_grid(nodes_grid, mask=nodes_grid != -1)
+                    nodes_grid, _ = clip_with_grid(nodes_grid, mask=nodes_grid != 0)
 
                     debug_file = Path("debug_coastal_segment.zarr")
                     write_zarr(
@@ -1769,14 +1770,28 @@ class GEBModel(
         xmax += buffer
         ymax += buffer
 
-        ldd = self.data_catalog.fetch(
-            "merit_hydro_dir",
-            xmin=xmin,
-            xmax=xmax,
-            ymin=ymin,
-            ymax=ymax,
-        ).read()
+        ldd = (
+            self.data_catalog.fetch(
+                "merit_hydro_dir",
+                xmin=xmin,
+                xmax=xmax,
+                ymin=ymin,
+                ymax=ymax,
+            )
+            .read()
+            .compute()
+        )
         assert isinstance(ldd, xr.DataArray), "Expected ldd to be an xarray DataArray."
+
+        # We remove all pits that are not directly adjacent to valid flow directions
+        # Identify cells with flow directions
+        cells_with_flow_directions = (ldd.values > 0) & (ldd.values != 247)
+        # grow valid values mask by one cell
+        valid_values_and_coastline = binary_dilation(
+            cells_with_flow_directions, structure=np.ones((3, 3))
+        )
+        # and use said mask which includes valid values and its neighbors to set ldd to no data
+        ldd.values[~valid_values_and_coastline] = 247
 
         ldd_network = pyflwdir.from_array(
             ldd.values,
@@ -1952,8 +1967,8 @@ class GEBModel(
             latlon=True,
         )
 
-        STUDY_AREA_OUTFLOW: int = 1
-        NEARBY_OUTFLOW: int = 2
+        STUDY_AREA_OUTFLOW: Literal[1] = 1
+        NEARBY_OUTFLOW: Literal[2] = 2
 
         rivers = (
             self.data_catalog.fetch(

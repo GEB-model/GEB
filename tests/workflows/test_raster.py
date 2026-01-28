@@ -10,6 +10,7 @@ from scipy.interpolate import RegularGridInterpolator
 from shapely.geometry import Polygon
 
 from geb.workflows.raster import (
+    clip_with_grid,
     compress,
     convert_nodata,
     coord_to_pixel,
@@ -663,3 +664,50 @@ def test_resample_chunked() -> None:
     assert resampled.rio.crs == source.rio.crs
     assert resampled.dims == target.dims
     assert resampled.shape == target.shape
+
+
+@pytest.mark.parametrize("y_step", [-1, 1])
+@pytest.mark.parametrize("grid_size", [10, 100])
+def test_clip_with_grid(y_step: int, grid_size: int) -> None:
+    """Test clip_with_grid with positive and negative y steps and different grid sizes."""
+    # Create grid
+    ny, nx = grid_size, grid_size
+
+    # Coordinates
+    if y_step < 0:
+        ys = np.arange(ny)[::-1]  # decreasing coordinates
+    else:
+        ys = np.arange(ny)  # increasing coordinates
+
+    xs = np.arange(nx)
+
+    data = np.random.rand(ny, nx)
+    da = xr.DataArray(data, coords={"y": ys, "x": xs}, dims=("y", "x"))
+
+    # Create a mask that selects a subset
+    # For size 10: 3:7 (size 4)
+    # For size 100: 30:70 (size 40)
+    start_idx = int(0.3 * grid_size)
+    end_idx = int(0.7 * grid_size)
+
+    mask_data = np.zeros((ny, nx), dtype=bool)
+    mask_data[start_idx:end_idx, start_idx:end_idx] = True
+    mask = xr.DataArray(mask_data, coords={"y": ys, "x": xs}, dims=("y", "x"))
+
+    clipped_ds, bounds = clip_with_grid(da, mask)
+
+    # Expected bounds indices
+    assert bounds["y"] == slice(start_idx, end_idx)
+    assert bounds["x"] == slice(start_idx, end_idx)
+
+    assert clipped_ds.shape == (end_idx - start_idx, end_idx - start_idx)
+    np.testing.assert_array_equal(
+        clipped_ds.values, data[start_idx:end_idx, start_idx:end_idx]
+    )
+
+    # Check coordinates of clipped result
+    np.testing.assert_array_equal(clipped_ds.y.values, ys[start_idx:end_idx])
+    np.testing.assert_array_equal(clipped_ds.x.values, xs[start_idx:end_idx])
+
+    # Check that sum is preserved (since mask is rectangular and matches bounds)
+    assert np.isclose(clipped_ds.sum(), da.where(mask).sum())
