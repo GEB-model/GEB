@@ -1233,6 +1233,9 @@ def get_coastline_nodes(
 
     Returns:
         A set of all coastline nodes that are part of the coastline for the study area.
+
+    Raises:
+        AssertionError: If a coastal segment has both a study area outflow and a nearby outflow, but not exactly one of each.
     """
     coastline_nodes = set()
 
