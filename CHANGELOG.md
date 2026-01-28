@@ -9,10 +9,13 @@
 - Support multipe inflow locations.
 - (Deep) copy model config on initializing model avoiding reference issues
 
+- Filter clusters in geb init-multiple based on intersection with coastline if parsed as argument.
+- Updated the GLOPOP version (from GLOPOP_SG_V2 to GLOPOP_SG_V3) to resolve missing data in some GDL regions
+  
 To support this version:
 
 - Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
-- Re-run `setup_soil`: `geb update -b build.yml::setup_soil`
+- Re-run `setup_soil`: `geb update -b build.yml::setup_soil` and `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics`
 - Models for inland regions need to be rebuild if floods need to be run
 
 # v1.0.0b10
