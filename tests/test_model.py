@@ -495,6 +495,7 @@ def test_land_use_change() -> None:
         geb.reporter.finalize()
 
 
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_setup_inflow() -> None:
     """Test setup of inflow hydrograph.
 
@@ -519,7 +520,13 @@ def test_setup_inflow() -> None:
         data_folder: Path = Path("data")
         data_folder.mkdir(parents=True, exist_ok=True)
 
-        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers.copy()
+
+        start_time = model.spinup_start
+        end_time = model.run_end + model.timestep_length
+
+        model.close()
+
         rivers: gpd.GeoDataFrame = rivers[["geometry"]]
         rivers.geometry = rivers.geometry.apply(lambda geom: Point(geom.coords[0]))
         rivers.index.name = "ID"
@@ -527,9 +534,6 @@ def test_setup_inflow() -> None:
         rivers.reset_index().to_file(
             data_folder / "inflow_locations.geojson", driver="GeoJSON"
         )
-
-        start_time = model.spinup_start
-        end_time = model.run_end + model.timestep_length
 
         data = {
             "time": pd.date_range(start=start_time, end=end_time, freq="YS"),
@@ -540,35 +544,41 @@ def test_setup_inflow() -> None:
         inflow = pd.DataFrame(data)
         inflow.to_csv(data_folder / "inflow_hydrograph.csv", index=False)
 
-        model.close()
+        try:
+            build_args = DEFAULT_BUILD_ARGS.copy()
+            del build_args["continue_"]
 
-        build_args = DEFAULT_BUILD_ARGS.copy()
-        del build_args["continue_"]
+            build_config: dict[str, dict[str, str | bool]] = {}
+            build_config["setup_inflow"] = {
+                "locations": str(Path("data") / "inflow_locations.geojson"),
+                "inflow_m3_per_s": str(Path("data") / "inflow_hydrograph.csv"),
+            }
+            build_args["build_config"] = build_config
+            with pytest.raises(ValueError):
+                update_fn(**build_args)
 
-        build_config: dict[str, dict[str, str | bool]] = {}
-        build_config["setup_inflow"] = {
-            "locations": str(Path("data") / "inflow_locations.geojson"),
-            "inflow_m3_per_s": str(Path("data") / "inflow_hydrograph.csv"),
-        }
-        build_args["build_config"] = build_config
-        with pytest.raises(ValueError):
+            build_args["build_config"]["setup_inflow"]["interpolate"] = True
+            build_args["build_config"]["setup_inflow"]["extrapolate"] = True
+
+            # copy the original input file
+            shutil.copy(Path("input") / "files.yml", Path("input") / "files.yml.bak")
+
             update_fn(**build_args)
+            run_model_with_method(method="run", **args)
 
-        build_args["build_config"]["setup_inflow"]["interpolate"] = True
-        build_args["build_config"]["setup_inflow"]["extrapolate"] = True
+        finally:
+            # remove inflow data files
+            if (data_folder / "inflow_hydrograph.csv").exists():
+                os.remove(data_folder / "inflow_hydrograph.csv")
+            if (data_folder / "inflow_locations.geojson").exists():
+                os.remove(data_folder / "inflow_locations.geojson")
 
-        # copy the original input file
-        shutil.copy(Path("input") / "files.yml", Path("input") / "files.yml.bak")
-
-        update_fn(**build_args)
-        run_model_with_method(method="run", **args)
-
-        # remove inflow data files
-        os.remove(data_folder / "inflow_hydrograph.csv")
-        os.remove(data_folder / "inflow_locations.geojson")
-
-        # restore original input file
-        shutil.copy(Path("input") / "files.yml.bak", Path("input") / "files.yml")
+            # restore original input file
+            if (Path("input") / "files.yml.bak").exists():
+                shutil.copy(
+                    Path("input") / "files.yml.bak", Path("input") / "files.yml"
+                )
+                os.remove(Path("input") / "files.yml.bak")
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
