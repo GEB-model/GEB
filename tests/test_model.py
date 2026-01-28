@@ -237,7 +237,7 @@ def test_update_with_dict() -> None:
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "method",
-    ["setup_hydrography"],
+    ["setup_hydrography", "setup_soil_parameters"],
 )
 def test_update_with_method(method: str) -> None:
     """Test updating model configuration using different methods.
@@ -609,7 +609,6 @@ def test_multiverse() -> None:
             },
         ]
         config["hazards"]["floods"]["events"] = events
-        config["hazards"]["floods"]["force_overwrite"] = False
 
         args["config"] = config
 

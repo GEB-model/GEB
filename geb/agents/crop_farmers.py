@@ -1507,7 +1507,7 @@ class CropFarmers(AgentBaseClass):
             crop_map=self.HRU.var.crop_map,
             topwater=self.HRU.var.topwater,
             root_depth_m=root_depth_m,
-            soil_layer_height=self.HRU.var.soil_layer_height,
+            soil_layer_height=self.HRU.var.soil_layer_height_m,
             field_capacity=self.HRU.var.wfc,
             wilting_point=self.HRU.var.wwp,
             w=self.HRU.var.w,

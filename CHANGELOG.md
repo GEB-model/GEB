@@ -1,4 +1,20 @@
 # dev
+- `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
+- Add download and processing for soil thickness data.
+- DeltaDTM is now also setup for the model region in setup_elevation. 
+- Align SFINCS mask padding to the coarse grid so left and bottom edges snap to grid-size multiples.
+- Improve inflow, outflow, flood plains and some other things to improve flood risk maps.
+- Remove DeltaDTM and GEBCO for non-coastal regions.
+- Re-indexing of OBM buildings and creating one houshold agent per building (per default).
+
+To support this version:
+
+- Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
+- Re-run `setup_soil`: `geb update -b build.yml::setup_soil`
+- Models for inland regions need to be rebuild if floods need to be run
+
+# v1.0.0b10
+- Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
 - Add documentation for modules, variables and routing.
 - Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
 - Flood maps of varying spatial domains can now be merged into one return period map.
@@ -9,12 +25,22 @@
 - Write documentation for spinning up and running models
 - Fix rare out of bounds values in ERA5 data that led to undefined behaviour due to compression and decompression roundtrip
 - Require extra_dims_names to be set in DynamicArray and update model in places where it was not set
+- Fill holes in subbasin maps by deriving subbasin maps directly from rivers ourselves. This also makes the original subbasins dataset not needed anymore.
+- Extend rivers to end up exactly in the ocean rather than the cell just before
+- Enable return period maps for subbasins that discharge into the ocean, including several bugfixes for this.
 - Allow exporting of hourly values from reporter
 - Add initial soil temperature. Now still simplified but better than having no soil temperature.
+- Includes soil suction into the model using an approximation of the Green-Ampt equation.
+- Use Green-Ampt rather than VIC for infiltration.
+- Implement interflow
+- Limit drainage to groundwater to conductivity of groundwater top layer
+- Fix for flood risk maps which could not be run if river was not included in grid but had upstream areas
+- Fix that downstream outflow area was not included with new subbasins
+- Renamed new_data_catalog to data_catalog and data_catalog to old_data_catalog
 
 To support this version:
 
-- Re-run `setup_forcing` and `setup_spei`
+- The model must be rebuild from scratch
 
 # v1.0.0b9
 - Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.

@@ -404,7 +404,7 @@ def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     return da
 
 
-def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[unresolved-attribute]
+def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
     """Convert a CRS object (pyproj CRS, rasterio CRS or EPSG code) to a WKT string.
 
     Args:
@@ -420,7 +420,7 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[u
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
         return crs_obj.to_wkt()
-    elif isinstance(crs_obj, rasterio.crs.CRS):  # ty: ignore[unresolved-attribute]
+    elif isinstance(crs_obj, rasterio.crs.CRS):
         return CRS(crs_obj.to_wkt()).to_wkt()
     else:
         raise TypeError("Unsupported CRS type")
@@ -517,6 +517,10 @@ def write_zarr(
     Returns:
         The xarray DataArray saved to disk.
 
+    Raises:
+        ValueError: If the DataArray has invalid dimensions or attributes.
+        ValueError: If the DataArray dtype is float64.
+
     """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
@@ -526,7 +530,8 @@ def write_zarr(
         assert da.dims[-2] == "y", "y should be the second last dimension"
         assert da.dims[-1] == "x", "x should be the last dimension"
 
-    assert da.dtype != np.float64, "should be float32"
+    if da.dtype == np.float64:
+        raise ValueError("DataArray dtype should be float32, not float64")
 
     assert "_FillValue" in da.attrs, "Fill value must be set"
     if da.dtype == bool:

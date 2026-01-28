@@ -1,5 +1,7 @@
 """Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
 
+import warnings
+
 import geopandas as gpd
 import numpy as np
 import xarray as xr
@@ -11,6 +13,7 @@ from geb.workflows.raster import (
     bounds_are_within,
     calculate_cell_area,
     convert_nodata,
+    interpolate_na_2d,
     pad_xy,
     rasterize_like,
     reclassify,
@@ -97,8 +100,16 @@ class LandSurface(BuildModelBase):
         DEMs: list[dict[str, str | float]] = [
             {
                 "name": "fabdem",
+                "zmin": 30,
+                "fill_depressions": True,
+                "nodata": np.nan,
+            },
+            {
+                "name": "delta_dtm",
+                "zmax": 30,
                 "zmin": 0.001,
                 "fill_depressions": True,
+                "nodata": np.nan,
             },
             {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
         ],
@@ -117,6 +128,19 @@ class LandSurface(BuildModelBase):
             DEMs = []
 
         assert isinstance(DEMs, list)
+
+        if not self.geom["routing/subbasins"]["is_coastal"].any():
+            # remove DeltaDTM and GEBCO if no coastal subbasins are present
+            DEMs = [DEM for DEM in DEMs if DEM["name"] not in ("delta_dtm", "gebco")]
+            # and remove zmin from fabdem if present
+            for DEM in DEMs:
+                if DEM["name"] == "fabdem" and "zmin" in DEM:
+                    del DEM["zmin"]
+            # warn the user
+            self.logger.info(
+                "No coastal subbasins present; removing DeltaDTM and GEBCO from DEM configuration."
+            )
+
         # here we use the bounds of all subbasins, which may include downstream
         # subbasins that are not part of the study area
         bounds: tuple[float, float, float, float] = tuple(
@@ -128,8 +152,9 @@ class LandSurface(BuildModelBase):
         ymin: float = bounds[1] - buffer
         xmax: float = bounds[2] + buffer
         ymax: float = bounds[3] + buffer
+
         fabdem: xr.DataArray = (
-            self.new_data_catalog.fetch(
+            self.data_catalog.fetch(
                 "fabdem",
                 xmin=xmin,
                 xmax=xmax,
@@ -152,55 +177,68 @@ class LandSurface(BuildModelBase):
         for DEM in DEMs:
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
-            else:
-                if DEM["name"] == "gebco":
-                    DEM_raster = self.new_data_catalog.fetch("gebco").read()
-                else:
-                    if DEM["name"] == "geul_dem":
-                        DEM_raster = read_zarr(
-                            self.data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
-                        )
-                    else:
-                        DEM_raster = xr.open_dataarray(
-                            self.data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
-                        )
-                if "bands" in DEM_raster.dims:
-                    DEM_raster = DEM_raster.isel(band=0)
+            elif DEM["name"] == "delta_dtm":
+                DEM_raster = self.data_catalog.fetch(
+                    "delta_dtm",
+                    xmin=xmin,
+                    xmax=xmax,
+                    ymin=ymin,
+                    ymax=ymax,
+                ).read()
 
-                DEM_raster = DEM_raster.isel(
-                    get_window(
-                        DEM_raster.x,
-                        DEM_raster.y,
-                        tuple(
-                            self.geom["routing/subbasins"]
-                            .to_crs(DEM_raster.rio.crs)
-                            .total_bounds
-                        ),
-                        buffer=100,
-                        raise_on_out_of_bounds=False,
-                        raise_on_buffer_out_of_bounds=False,
-                    ),
+                # Create low elevation coastal zone mask based on DeltaDTM
+                low_elevation_coastal_zone = DEM_raster < 10
+                low_elevation_coastal_zone.values = (
+                    low_elevation_coastal_zone.values.astype(np.float32)
                 )
+                self.set_other(
+                    low_elevation_coastal_zone,
+                    name="landsurface/low_elevation_coastal_zone",
+                )  # Maybe remove this
+
+            elif DEM["name"] == "gebco":
+                DEM_raster = self.data_catalog.fetch("gebco").read()
+            elif DEM["name"] == "geul_dem":
+                DEM_raster = read_zarr(
+                    self.old_data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
+                )
+            else:
+                DEM_raster = xr.open_dataarray(
+                    self.old_data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
+                )
+            if "bands" in DEM_raster.dims:
+                DEM_raster = DEM_raster.isel(band=0)
+
+            DEM_raster = DEM_raster.isel(
+                get_window(
+                    DEM_raster.x,
+                    DEM_raster.y,
+                    tuple(
+                        self.geom["routing/subbasins"]
+                        .to_crs(DEM_raster.rio.crs)
+                        .total_bounds
+                    ),
+                    buffer=100,
+                    raise_on_out_of_bounds=False,
+                    raise_on_buffer_out_of_bounds=False,
+                ),
+            )
 
             DEM_raster = convert_nodata(
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
             )
 
             if "fill_depressions" in DEM and DEM["fill_depressions"]:
-                DEM_raster.values, d8 = fill_depressions(DEM_raster.values)
+                DEM_raster.values, d8 = fill_depressions(
+                    DEM_raster.values, nodata=DEM["nodata"]
+                )
 
             self.set_other(
                 DEM_raster,
                 name=f"DEM/{DEM['name']}",
             )
             DEM["path"] = f"DEM/{DEM['name']}"
-        low_elevation_coastal_zone = DEM_raster < 10
-        low_elevation_coastal_zone.values = low_elevation_coastal_zone.values.astype(
-            np.float32
-        )
-        self.set_other(
-            low_elevation_coastal_zone, name="landsurface/low_elevation_coastal_zone"
-        )  # Maybe remove this
+
         self.set_params(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])
@@ -234,13 +272,13 @@ class LandSurface(BuildModelBase):
             identified and set as a grid in the model.
         """
         regions: gpd.GeoDataFrame = (
-            self.new_data_catalog.fetch(region_database)
+            self.data_catalog.fetch(region_database)
             .read(geom=self.region.union_all())
             .rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
         )
 
         global_countries: gpd.GeoDataFrame = (
-            self.new_data_catalog.fetch("GADM_level0")
+            self.data_catalog.fetch("GADM_level0")
             .read()
             .rename(columns={"GID_0": "ISO3"})
         )
@@ -251,7 +289,7 @@ class LandSurface(BuildModelBase):
         self.set_geom(global_countries, name="global_countries")
 
         assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
-            f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
+            f"Region database must contain unique region IDs ({self.old_data_catalog[region_database].path})"
         )
 
         # allow some tolerance, especially for regions that coincide with coastlines, in which
@@ -271,7 +309,7 @@ class LandSurface(BuildModelBase):
         self.set_params(region_id_mapping, name="region_id_mapping")
 
         assert "ISO3" in regions.columns, (
-            f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
+            f"Region database must contain ISO3 column ({self.old_data_catalog[region_database].path})"
         )
 
         self.set_geom(regions, name="regions")
@@ -312,7 +350,7 @@ class LandSurface(BuildModelBase):
         ymax: float = bounds[3] + 0.1
 
         land_use: xr.DataArray = (
-            self.new_data_catalog.fetch(land_cover)
+            self.data_catalog.fetch(land_cover)
             .read(xmin, ymin, xmax, ymax)
             .chunk({"x": 1000, "y": 1000})
         )
@@ -424,7 +462,7 @@ class LandSurface(BuildModelBase):
         xmax = bounds[2] + buffer
         ymax = bounds[3] + buffer
 
-        landcover_classification: xr.DataArray = self.new_data_catalog.fetch(
+        landcover_classification: xr.DataArray = self.data_catalog.fetch(
             land_cover
         ).read(xmin, ymin, xmax, ymax)
 
@@ -437,7 +475,7 @@ class LandSurface(BuildModelBase):
 
         forest_kc = (
             xr.open_dataarray(
-                self.data_catalog.get_source("cwatm_forest_5min").path.format(  # ty:ignore[possibly-missing-attribute]
+                self.old_data_catalog.get_source("cwatm_forest_5min").path.format(  # ty:ignore[possibly-missing-attribute]
                     variable="cropCoefficientForest_10days"
                 ),
             )
@@ -471,7 +509,7 @@ class LandSurface(BuildModelBase):
             parameter = f"interceptCap{land_use_type.title()}_10days"
             interception_capacity = (
                 xr.open_dataarray(
-                    self.data_catalog.get_source(
+                    self.old_data_catalog.get_source(
                         f"cwatm_{land_use_type}_5min"
                     ).path.format(variable=parameter),  # ty:ignore[possibly-missing-attribute]
                 )
@@ -503,6 +541,17 @@ class LandSurface(BuildModelBase):
 
     @build_method(depends_on=[])
     def setup_soil_parameters(self) -> None:
+        """Deprecated method for setting up soil parameters."""
+        # Warn that this method is deprecated and delegate to the replacement to preserve backwards compatibility.
+        warnings.warn(
+            "setup_soil_parameters is deprecated; use setup_soil instead. Calling setup_soil().",
+            DeprecationWarning,
+        )
+
+        self.setup_soil()
+
+    @build_method(depends_on=[])
+    def setup_soil(self) -> None:
         """Sets up the soil parameters for the model.
 
         Notes:
@@ -520,19 +569,56 @@ class LandSurface(BuildModelBase):
             form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
             with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
-        ds: xr.Dataset = load_soilgrids(
-            self.new_data_catalog, self.subgrid["mask"], self.region
-        )
+        # Keep this commented code because we want to include differentiation between valley and hillslope soils later
+        # soil_depth = self.data_catalog.fetch("GlobalSoilRegolithSediment").read()
+        # assert isinstance(soil_depth, xr.Dataset)
+        # soil_depth = soil_depth.isel(
+        #     get_window(
+        #         soil_depth.x,
+        #         soil_depth.y,
+        #         self.bounds,
+        #         buffer=10,
+        #     ),
+        # )
 
-        self.set_subgrid(ds["silt"], name="soil/silt")
-        self.set_subgrid(ds["clay"], name="soil/clay")
-        self.set_subgrid(ds["bdod"], name="soil/bulk_density")
-        self.set_subgrid(ds["soc"], name="soil/soil_organic_carbon")
-        self.set_subgrid(ds["height"], name="soil/soil_layer_height")
+        soilgrids: xr.Dataset = load_soilgrids(
+            self.data_catalog, self.subgrid["mask"], self.region
+        )
+        self.set_subgrid(soilgrids["silt"], name="soil/silt_percentage")
+        self.set_subgrid(soilgrids["clay"], name="soil/clay_percentage")
+        self.set_subgrid(soilgrids["bdod"], name="soil/bulk_density_kg_per_dm3")
+        self.set_subgrid(soilgrids["soc"], name="soil/soil_organic_carbon_percentage")
+        self.set_subgrid(soilgrids["height"], name="soil/soil_layer_height_m")
+
+        depth_to_bedrock_cm = self.data_catalog.fetch("soilgridsv1").read(
+            variable="BDTICM_M_250m_ll"
+        )
+        assert isinstance(depth_to_bedrock_cm, xr.DataArray)
+        depth_to_bedrock_cm = (
+            depth_to_bedrock_cm.isel(
+                get_window(
+                    depth_to_bedrock_cm.x,
+                    depth_to_bedrock_cm.y,
+                    self.bounds,
+                    buffer=10,
+                ),
+            )
+            .astype(np.float32)
+            .compute()
+        )
+        depth_to_bedrock_cm: xr.DataArray = convert_nodata(depth_to_bedrock_cm, np.nan)
+        depth_to_bedrock_m: xr.DataArray = (
+            depth_to_bedrock_cm / 100
+        )  # convert from cm to m
+        depth_to_bedrock_m: xr.DataArray = interpolate_na_2d(depth_to_bedrock_m)
+        depth_to_bedrock_m: xr.DataArray = resample_like(
+            depth_to_bedrock_m, soilgrids["silt"]
+        )
+        self.set_subgrid(depth_to_bedrock_m, name="soil/depth_to_bedrock_m")
 
         crop_group = (
             xr.open_dataarray(
-                self.data_catalog.get_source("cwatm_soil_5min").path.format(  # ty:ignore[possibly-missing-attribute]
+                self.old_data_catalog.get_source("cwatm_soil_5min").path.format(  # ty:ignore[possibly-missing-attribute]
                     variable="cropgrp"
                 ),
             )

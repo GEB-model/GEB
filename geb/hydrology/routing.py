@@ -711,6 +711,8 @@ def fill_discharge_gaps(
     """
     filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
     for river_id, river in rivers.iterrows():
+        if river["is_further_downstream_outflow"]:
+            continue  # skip rivers that are further downstream
         # iterate from upstream to downstream
         valid_discharge: np.float32 = np.float32(np.nan)
         for idx in river["hydrography_linear"]:
@@ -1611,8 +1613,27 @@ class Routing(Module):
             A GeoDataFrame containing the outflow rivers.
         """
         rivers: gpd.GeoDataFrame = self.rivers
-        rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        rivers = rivers[~rivers["is_downstream_outflow"]]
+
+        # TODO: Remove the if statement in March 2026. The part selection behind the statement
+        # should always be done when it is removed.
+        if "is_further_downstream_outflow" in rivers.columns:
+            rivers = rivers[~rivers["is_further_downstream_outflow"]]
         outflow_rivers: gpd.GeoDataFrame = rivers[
             ~rivers["downstream_ID"].isin(rivers.index)
         ]
         return outflow_rivers
+
+    @property
+    def active_rivers(self) -> gpd.GeoDataFrame:
+        """Get the active rivers (rivers that are not water bodies).
+
+        Returns:
+            A GeoDataFrame containing the active rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        active_rivers = rivers[
+            (~rivers["is_downstream_outflow"])
+            & (~rivers["is_further_downstream_outflow"])
+        ]
+        return active_rivers
