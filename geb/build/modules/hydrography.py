@@ -964,7 +964,7 @@ class Hydrography(BuildModelBase):
 
         # add small buffer to ensure connection of 'islands' with coastlines
         low_elevation_coastal_zone_mask.geometry = (
-            low_elevation_coastal_zone_mask.geometry.buffer(0)
+            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
         )
 
         # sample the minimum elevation present in the lecz mask
