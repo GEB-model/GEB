@@ -11,11 +11,14 @@
 - Filter clusters in geb init-multiple based on intersection with coastline if parsed as argument.
 - Updated the GLOPOP version (from GLOPOP_SG_V2 to GLOPOP_SG_V3) to resolve missing data in some GDL regions
 - Add option for variable runoff in infiltration  
+- Simplify coastal model setup. No longer create multiple shapes of connected low elevation coastal zones.
 
 To support this version:
 
 - Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
-- Re-run `setup_soil`: `geb update -b build.yml::setup_soil` and `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics`
+- Re-run `setup_soil`: `geb update -b build.yml::setup_soil` and `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics` 
+- Re-run `setup_coastal_sfincs_model_regions`: `geb update -b build.yml::setup_coastal_sfincs_model_regions`
+- Remove setup_low_elevation_coastal_zone_mask from you build.yml
 - Models for inland regions need to be rebuild if floods need to be run
 
 # v1.0.0b10
