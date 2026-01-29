@@ -1202,6 +1202,8 @@ class RemoteFile:
         )
 
         if not range_supported:
+            # Close the HEAD response before overwriting
+            resp.close()
             # Fallback to GET with Range if HEAD fails or doesn't confirm support
             resp = self._request_with_retry(
                 "GET",
@@ -1211,18 +1213,23 @@ class RemoteFile:
                 allow_redirects=True,
             )
             if resp.status_code != 206:
+                resp.close()
                 raise OSError(
                     f"Server does not support HTTP Range requests (Expected 206, got {resp.status_code})"
                 )
 
-        if resp.url is None:
-            raise OSError("Failed to resolve URL: response URL is None")
-        self.url: str = resp.url
+        try:
+            if resp.url is None:
+                raise OSError("Failed to resolve URL: response URL is None")
+            self.url: str = resp.url
 
-        if "Content-Range" in resp.headers:
-            self.size = int(resp.headers["Content-Range"].split("/")[-1])
-        else:
-            self.size = int(resp.headers.get("Content-Length", 0))
+            if "Content-Range" in resp.headers:
+                self.size = int(resp.headers["Content-Range"].split("/")[-1])
+            else:
+                self.size = int(resp.headers.get("Content-Length", 0))
+        finally:
+            # Ensure connection is closed
+            resp.close()
 
         self.pos = 0
 
@@ -1306,6 +1313,9 @@ class RemoteFile:
         Raises:
             OSError: If reading from the URL fails.
         """
+        if size == 0:
+            return b""
+
         if size == -1:
             range_header = f"bytes={self.pos}-"
         else:
@@ -1317,6 +1327,21 @@ class RemoteFile:
             resp = self._request_with_retry("GET", self.url, headers=headers)
         except OSError as e:
             raise OSError(f"Failed to read from {self.url}: {e}")
+
+        # If we asked for a range but got 200, it means the server sent the whole file.
+        # This is only okay if we requested from the beginning (pos=0) and wanted everything (size=-1)
+        # or the whole file matches the requested size.
+        # However, for simplicity and safety in random access:
+        # If we expect a partial response (which we always do here with Range header),
+        # we should require 206 Partial Content unless we happen to request the exact full content
+        # effectively making 200 OK valid. But typically 206 is strict for Range.
+        is_partial_request = self.pos > 0 or (size != -1 and size < self.size)
+
+        if is_partial_request and resp.status_code == 200:
+            # Server ignored Range header and sent full file - this is bad for seek/partial read
+            raise OSError(
+                f"Server returned 200 OK but 206 Partial Content was expected for range {range_header}"
+            )
 
         if resp.status_code not in [200, 206]:
             raise OSError(f"Failed to read from {self.url}: {resp.status_code}")

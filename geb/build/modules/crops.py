@@ -247,17 +247,6 @@ class Crops(BuildModelBase):
                     region_faostat[col] = region_faostat[col].astype(np.float64)
 
                 region_faostat["ISO3"] = ISO3
-
-                # region_crop_data = crop_data[crop_data["ISO3"] == ISO3]
-                # region_pivot = region_crop_data.pivot_table(
-                #     index="year",
-                #     columns="crop",
-                #     values="price_per_kg",
-                #     aggfunc="first",
-                # ).reindex(index=all_years, columns=all_crops)
-
-                # region_pivot["ISO3"] = ISO3
-                # # Store pivoted data in dictionary with region_id as key
                 donor_data[ISO3] = region_faostat
 
             # Concatenate all regional data into a single DataFrame with MultiIndex
