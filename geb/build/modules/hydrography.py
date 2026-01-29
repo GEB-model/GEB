@@ -1386,9 +1386,9 @@ class Hydrography(BuildModelBase):
 
         Args:
             locations: A vector file that can be read by geopandas containing the inflow location,
-                with columns ID (str) and a point geometry.
+                with column ID (str) and a point geometry.
             inflow_m3_per_s: A CSV file containing the inflow hydrograph in m3/s with a datetime index (date),
-                and a columns for each inflow location ID matching the IDs (str) in the locations file.
+                and a column for each inflow location ID matching the IDs (str) in the locations file.
             interpolate: Whether to interpolate missing values in the inflow hydrograph.
             extrapolate: Whether to extrapolate missing values in the inflow hydrograph.
 
@@ -1476,10 +1476,10 @@ class Hydrography(BuildModelBase):
         if inflow_df_m3_per_s.isnull().any().any():
             raise ValueError(
                 "Inflow hydrograph contains missing values. "
-                "Set interpolate=True to interpolate missing values."
-                "or fill missing values in the inflow hydrograph."
+                "Set interpolate=True to interpolate missing values. "
+                "or fill missing values in the inflow hydrograph. "
                 "model start and end date: "
-                f"{self.start_date} to {self.end_date}"
+                f"{self.start_date} to {self.end_date} "
                 "with hourly frequency."
             )
 
