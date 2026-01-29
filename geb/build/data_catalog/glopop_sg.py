@@ -169,7 +169,4 @@ class GLOPOP_SG(Adapter):
 
         df = df.merge(grid_coords, on="GRID_CELL", how="left")
 
-        if df["GRID_Y"].isna().any():
-            df = df[~df.GRID_Y.isna()]
-
         return df, GLOPOP_grid
