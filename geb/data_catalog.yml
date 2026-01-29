@@ -174,14 +174,6 @@ gcam_electricity_rates:
   path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
-GLOPOP-SG:
-  data_type: RasterDataset
-  driver: raster
-  path: population/GLOPOP-SG/GLOPOP_SG_V3.zip
-  meta:
-    source_license: Creative Commons Attribution 4.0 International
-    source_url: https://zenodo.org/records/15680747
-    source_version: N/A
 AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
@@ -233,36 +225,6 @@ cwatm_industry_water_demand_{scenario}_year:
     source_url: https://doi.org/10.5194/gmd-9-175-2016
   placeholders:
     scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
-FAO_crop_price:
-  path: crops/FAOSTAT_data_en_9-27-2024.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
-    category: crops
-    source_author: FAO
-    source_license: CC-BY-4.0
-    source_url: https://www.fao.org/faostat/en/#data/PP
-    source_version: Producer price in USD per tonne 
-  rename:
-    Year: year
-    Value: price_per_kg
-    Item: crop
-  unit_mult:
-    price_per_kg: 0.001  # tonne to kg
-fan_initial_groundwater_depth_{continent}:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  meta:
-    category: groundwater
-    paper_doi: 10.1126/science.1229881
-    paper_ref: Fan et al. (2013, 2020) 
-    source_url: http://thredds-gfnl.usc.es/thredds/catalog/GLOBALWTDFTP/catalog.html
-    source_license: cant find
-  path: groundwater/groundwater_depth/{continent}.nc
-  nodata: 2
-  placeholders:
-    continent: ['Eurasia', 'Africa', 'North_America', 'Oceania', 'South_America']
 GLOBIOM_regions_37:
   data_type: DataFrame
   driver: excel

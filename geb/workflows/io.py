@@ -1171,6 +1171,165 @@ class WorkingDirectory:
         os.chdir(self._original_path)
 
 
+class RemoteFile:
+    """A file-like object that reads from a remote URL using HTTP Range headers.
+
+    This class mimics a file object (seek, read) but fetches data on-demand
+    using HTTP Range requests. It includes retry logic for robust downloads.
+    """
+
+    def __init__(self, url: str, max_retries: int = 5, base_delay: float = 1.0) -> None:
+        """Initialize the RemoteFile.
+
+        Args:
+            url: The URL of the remote file.
+            max_retries: Maximum number of retries for HTTP requests.
+            base_delay: Base delay in seconds for exponential backoff.
+
+        Raises:
+            OSError: If the URL cannot be accessed.
+        """
+        self.url_original = url
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+
+        # Resolve redirects and get size
+        resp = self._request_with_retry("HEAD", url, allow_redirects=True)
+
+        # Confirm range support
+        range_supported = (
+            resp.status_code == 200 and resp.headers.get("Accept-Ranges") == "bytes"
+        )
+
+        if not range_supported:
+            # Fallback to GET with Range if HEAD fails or doesn't confirm support
+            resp = self._request_with_retry(
+                "GET",
+                url,
+                headers={"Range": "bytes=0-0"},
+                stream=True,
+                allow_redirects=True,
+            )
+            if resp.status_code != 206:
+                raise OSError(
+                    f"Server does not support HTTP Range requests (Expected 206, got {resp.status_code})"
+                )
+
+        if resp.url is None:
+            raise OSError("Failed to resolve URL: response URL is None")
+        self.url: str = resp.url
+
+        if "Content-Range" in resp.headers:
+            self.size = int(resp.headers["Content-Range"].split("/")[-1])
+        else:
+            self.size = int(resp.headers.get("Content-Length", 0))
+
+        self.pos = 0
+
+    def _request_with_retry(
+        self, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        """Execute HTTP request with exponential backoff retry.
+
+        Args:
+            method: HTTP method (e.g. "GET").
+            url: The URL to request.
+            **kwargs: Additional arguments for requests.request.
+
+        Returns:
+            The response object.
+
+        Raises:
+            OSError: If the request fails after maximum retries.
+        """
+        last_error: str | None = None
+        resp: requests.Response | None = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = requests.request(method, url, timeout=30, **kwargs)
+                if resp.status_code in [200, 206]:
+                    return resp
+                if resp.status_code in [429, 500, 502, 503, 504]:
+                    last_error = f"HTTP {resp.status_code}"
+                    # Transient error, continue to retry
+                else:
+                    # Likely a permanent error (404, 403, etc)
+                    # Return response so caller can handle the status code
+                    return resp
+            except requests.RequestException as e:
+                last_error = str(e)
+
+            if attempt < self.max_retries:
+                sleep_time = self.base_delay * (2**attempt)
+                time.sleep(sleep_time)
+
+        if resp is not None:
+            # Return the last failed response
+            return resp
+
+        raise OSError(
+            f"Failed to request {url} after {self.max_retries} retries: {last_error}"
+        )
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        """Move to a new file position.
+
+        Args:
+            offset: The offset.
+            whence: The reference point (0=start, 1=current, 2=end).
+
+        Returns:
+            The new file position.
+        """
+        if whence == 0:
+            self.pos = offset
+        elif whence == 1:
+            self.pos += offset
+        elif whence == 2:
+            self.pos = self.size + offset
+        return self.pos
+
+    def tell(self) -> int:
+        """Return the current file position."""
+        return self.pos
+
+    def read(self, size: int = -1) -> bytes:
+        """Read bytes from the remote file.
+
+        Args:
+            size: Number of bytes to read. -1 means read until end.
+
+        Returns:
+            The read bytes.
+
+        Raises:
+            OSError: If reading from the URL fails.
+        """
+        if size == -1:
+            range_header = f"bytes={self.pos}-"
+        else:
+            end = self.pos + size - 1
+            range_header = f"bytes={self.pos}-{end}"
+
+        headers = {"Range": range_header}
+        try:
+            resp = self._request_with_retry("GET", self.url, headers=headers)
+        except OSError as e:
+            raise OSError(f"Failed to read from {self.url}: {e}")
+
+        if resp.status_code not in [200, 206]:
+            raise OSError(f"Failed to read from {self.url}: {resp.status_code}")
+
+        data = resp.content
+        self.pos += len(data)
+        return data
+
+    def seekable(self) -> bool:
+        """Return True if the file is seekable."""
+        return True
+
+
 def fetch_and_save(
     url: str,
     file_path: Path,
