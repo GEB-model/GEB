@@ -174,13 +174,6 @@ gcam_electricity_rates:
   path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
-GLOPOP-S:
-  data_type: Dataset
-  path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz
-  meta:
-    source_license: Creative Commons Attribution 4.0 International
-    source_url: https://zenodo.org/records/15680747
-    source_version: N/A
 GLOPOP-SG:
   data_type: RasterDataset
   driver: raster

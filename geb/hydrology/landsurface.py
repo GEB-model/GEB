@@ -72,7 +72,7 @@ def land_surface_model(
     soil_layer_height: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     root_depth_m: ArrayFloat32,
     topwater_m: ArrayFloat32,
-    arno_shape_parameter: ArrayFloat32,
+    variable_runoff_shape_beta: ArrayFloat32,
     snow_water_equivalent_m: ArrayFloat32,
     liquid_water_in_snow_m: ArrayFloat32,
     snow_temperature_C: ArrayFloat32,
@@ -128,7 +128,7 @@ def land_surface_model(
     This function coordinates the vertical water balance for each grid cell, including:
     - Snow accumulation and melt
     - Interception
-    - Infiltration (Green-Ampt with Arno/Xinanjiang runoff)
+    - Infiltration (Green-Ampt with variable infiltration capacity runoff)
     - Soil moisture redistribution (Richards equation / Darcy's Law)
     - Evapotranspiration
 
@@ -149,7 +149,7 @@ def land_surface_model(
         topwater_m: Topwater in meters, which is >=0 for paddy and 0 for non-paddy. Within
             this function topwater is used to add water from natural infiltration and
             irrigation and to calculate open water evaporation.
-        arno_shape_parameter: Arno runoff model shape parameter for the cell.
+        variable_runoff_shape_beta: Variable infiltration capacity runoff model shape parameter for the cell.
         snow_water_equivalent_m: Snow water equivalent in meters.
         liquid_water_in_snow_m: Liquid water in snow in meters.
         snow_temperature_C: Snow temperature in Celsius.
@@ -398,15 +398,19 @@ def land_surface_model(
                 saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
                     :, i
                 ],
+                groundwater_toplayer_conductivity_m_per_timestep=groundwater_toplayer_conductivity_m_per_hour[
+                    i
+                ],
                 land_use_type=land_use_type[i],
                 soil_is_frozen=soil_is_frozen,
                 w=w[:, i],
                 topwater_m=topwater_m[i],
+                capillary_rise_from_groundwater_m=capillar_rise_m[i],
                 wetting_front_depth_m=wetting_front_depth_m[i],
                 wetting_front_suction_head_m=wetting_front_suction_head_m[i],
                 wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
                 green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
-                arno_shape_parameter=arno_shape_parameter[i],
+                variable_runoff_shape_beta=variable_runoff_shape_beta[i],
                 bubbling_pressure_cm=bubbling_pressure_cm[:, i],
                 soil_layer_height_m=soil_layer_height[:, i],
                 lambda_pore_size_distribution=lambda_pore_size_distribution[:, i],
@@ -433,26 +437,30 @@ def land_surface_model(
                 )
             )
 
-            # We assume that the bottom layer is draining under gravity
-            # i.e., assuming homogeneous soil water potential below
-            # bottom layer all the way to groundwater
-            # Assume draining under gravity. If there is capillary rise from groundwater, there will be no
-            # percolation to the groundwater. A potential capillary rise from
-            # the groundwater is already accounted for in rise_from_groundwater
-            flux: np.float32 = unsaturated_hydraulic_conductivity_m_per_hour * (
-                capillar_rise_m[i] <= np.float32(0)
-            )
-            # Limit flux by the saturated hydraulic conductivity of groundwater top layer
-            flux = min(flux, groundwater_toplayer_conductivity_m_per_hour[i])
+            # Percolation from bottom soil layer to groundwater.
+            # This is the original bottom-layer drainage implementation. It is turned off
+            # when the Green-Ampt infiltration routine already produced groundwater recharge
+            # for this hour to avoid double counting.
+            if groundwater_recharge_from_infiltraton_m <= np.float32(0.0):
+                # We assume that the bottom layer is draining under gravity
+                # i.e., assuming homogeneous soil water potential below
+                # bottom layer all the way to groundwater.
+                # If there is capillary rise from groundwater, we assume no simultaneous
+                # percolation to groundwater.
+                flux: np.float32 = unsaturated_hydraulic_conductivity_m_per_hour * (
+                    capillar_rise_m[i] <= np.float32(0)
+                )
+                # Limit flux by the saturated hydraulic conductivity of groundwater top layer
+                flux = min(flux, groundwater_toplayer_conductivity_m_per_hour[i])
 
-            # Limit flux by available water in the bottom layer
-            available_water_source: np.float32 = (
-                w[bottom_layer, i] - wres[bottom_layer, i]
-            )
-            flux = min(flux, available_water_source)
-            w[bottom_layer, i] -= flux
-            w[bottom_layer, i] = max(w[bottom_layer, i], wres[bottom_layer, i])
-            groundwater_recharge_m[i] += flux
+                # Limit flux by available water in the bottom layer
+                available_water_source: np.float32 = (
+                    w[bottom_layer, i] - wres[bottom_layer, i]
+                )
+                flux = min(flux, available_water_source)
+                w[bottom_layer, i] -= flux
+                w[bottom_layer, i] = max(w[bottom_layer, i], wres[bottom_layer, i])
+                groundwater_recharge_m[i] += flux
 
             # Calculate interflow from bottom layer
             interflow_cell_hour: np.float32 = get_interflow(
@@ -674,7 +682,7 @@ class LandSurfaceInputs(NamedTuple):
     soil_layer_height: TwoDArrayFloat32
     root_depth_m: ArrayFloat32
     topwater_m: ArrayFloat32
-    arno_shape_parameter: ArrayFloat32
+    variable_runoff_shape_beta: ArrayFloat32
     snow_water_equivalent_m: ArrayFloat32
     liquid_water_in_snow_m: ArrayFloat32
     snow_temperature_C: ArrayFloat32
@@ -719,7 +727,7 @@ class LandSurfaceVariables(Bucket):
     liquid_water_in_snow_m: ArrayFloat32
     snow_temperature_C: ArrayFloat32
     interception_storage_m: ArrayFloat32
-    arno_shape_parameter: TwoDArrayFloat32
+    variable_runoff_shape_beta: TwoDArrayFloat32
     crop_map: ArrayInt32
     minimum_effective_root_depth_m: np.float32
     green_ampt_active_layer_idx: ArrayInt32
@@ -836,7 +844,7 @@ class LandSurface(Module):
             soil_layer_height=self.HRU.var.soil_layer_height_m,
             root_depth_m=root_depth_m,
             topwater_m=self.HRU.var.topwater_m,
-            arno_shape_parameter=self.HRU.var.arno_shape_parameter,
+            variable_runoff_shape_beta=self.HRU.var.variable_runoff_shape_beta,
             snow_water_equivalent_m=self.HRU.var.snow_water_equivalent_m,
             liquid_water_in_snow_m=self.HRU.var.liquid_water_in_snow_m,
             snow_temperature_C=self.HRU.var.snow_temperature_C,
@@ -938,7 +946,7 @@ class LandSurface(Module):
             0.0, dtype=np.float32
         )
 
-        self.HRU.var.arno_shape_parameter = self.HRU.full_compressed(
+        self.HRU.var.variable_runoff_shape_beta = self.HRU.full_compressed(
             0.0, dtype=np.float32
         )
 

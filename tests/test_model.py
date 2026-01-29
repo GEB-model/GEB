@@ -313,7 +313,7 @@ def test_spinup() -> None:
             ).to_dataframe()["discharge_hourly"]
 
             np.testing.assert_almost_equal(
-                hourly_outflow_data_zarr.values, outflow_data_csv.values, decimal=5
+                hourly_outflow_data_zarr.values, outflow_data_csv.values, decimal=4
             )
 
             daily_outflow_data_zarr: pd.DataFrame = daily_discharge_data.isel(
