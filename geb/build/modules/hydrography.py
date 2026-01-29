@@ -854,8 +854,12 @@ class Hydrography(BuildModelBase):
             name="coastal/global_ocean_mean_dynamic_topography",
         )
 
-    def create_low_elevation_coastal_zone_mask(self) -> None:
-        """creates up the low elevation coastal zone (LECZ) mask for sfincs models."""
+    def create_low_elevation_coastal_zone_mask(self) -> gpd.GeoDataFrame:
+        """creates the low elevation coastal zone (LECZ) mask for sfincs models.
+
+        Returns:
+            A GeoDataFrame containing the low elevation coastal zone mask.
+        """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
                 "No coastal basins found, skipping setup_low_elevation_coastal_zone_mask"
