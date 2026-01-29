@@ -10,7 +10,8 @@
 - (Deep) copy model config on initializing model avoiding reference issues.
 - Filter clusters in geb init-multiple based on intersection with coastline if parsed as argument.
 - Updated the GLOPOP version (from GLOPOP_SG_V2 to GLOPOP_SG_V3) to resolve missing data in some GDL regions
-  
+- Add option for variable runoff in infiltration  
+
 To support this version:
 
 - Rename `setup_soil_parameters` to `setup_soil` in `build.yml`

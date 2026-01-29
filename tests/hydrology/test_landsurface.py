@@ -440,7 +440,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     )
     capillar_rise_m = np.array([capillar_rise_m_data], dtype=flt)
     natural_crop_groups = np.array([natural_crop_groups_data], dtype=flt)
-    arno_shape_parameter = np.array([0.0], dtype=flt)  # not used in this test
+    variable_runoff_shape_beta = np.array([0.0], dtype=flt)  # not used in this test
     wetting_front_depth_m = np.array([0.0], dtype=flt)
     wetting_front_suction_head_m = np.array([0.0], dtype=flt)
     wetting_front_moisture_deficit = np.array([0.0], dtype=flt)
@@ -504,7 +504,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         soil_layer_height=soil_layer_height,
         root_depth_m=root_depth_m,
         topwater_m=topwater_m,
-        arno_shape_parameter=arno_shape_parameter,
+        variable_runoff_shape_beta=variable_runoff_shape_beta,
         snow_water_equivalent_m=snow_water_equivalent_m,
         liquid_water_in_snow_m=liquid_water_in_snow_m,
         snow_temperature_C=snow_temperature_C,

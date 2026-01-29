@@ -75,7 +75,8 @@ dependencies = [
     "pyquadkey2>=0.3.2",
     "osmnx>=2.0.6",
     "joblib>=1.5.2",
-    "matplotlib>=3.10.7"
+    "matplotlib>=3.10.7",
+    "seaborn>=0.13.2",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
