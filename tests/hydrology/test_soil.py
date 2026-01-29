@@ -1394,7 +1394,7 @@ def test_plot_spatial_infiltration_curve() -> None:
     precip_values = np.linspace(0, 30, 100).astype(np.float32)
 
     sns.set_style("whitegrid")
-    fig = plt.figure(figsize=(6, 6))
+    plt.figure(figsize=(6, 6))
 
     for beta in betas:
         infils = []
