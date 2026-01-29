@@ -146,7 +146,6 @@ class FAOSTAT(Adapter):
 
         for year in year_columns:
             df[year] = df[year] / 1000.0  # Convert from USD/tonne to USD/kg
-            # set dtype to float32
             df[year] = df[year].astype(np.float64)
 
         df = df.rename(
