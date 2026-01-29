@@ -854,9 +854,12 @@ class Hydrography(BuildModelBase):
             name="coastal/global_ocean_mean_dynamic_topography",
         )
 
-    @build_method
-    def setup_low_elevation_coastal_zone_mask(self) -> None:
-        """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
+    def create_low_elevation_coastal_zone_mask(self) -> gpd.GeoDataFrame:
+        """creates the low elevation coastal zone (LECZ) mask for sfincs models.
+
+        Returns:
+            A GeoDataFrame containing the low elevation coastal zone mask.
+        """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
                 "No coastal basins found, skipping setup_low_elevation_coastal_zone_mask"
@@ -894,10 +897,7 @@ class Hydrography(BuildModelBase):
             geometry=[low_elevation_coastal_zone_mask.union_all()],
             crs=gdf.crs,
         )
-        self.set_geom(
-            low_elevation_coastal_zone_mask,
-            name="coastal/low_elevation_coastal_zone_mask",
-        )
+        return low_elevation_coastal_zone_mask
 
     @build_method
     def setup_coastlines(self) -> None:
@@ -952,12 +952,8 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(
-        depends_on=["setup_low_elevation_coastal_zone_mask", "setup_coastlines"]
-    )
-    def setup_coastal_sfincs_model_regions(
-        self, minimum_coastal_area_deg2: float = 0.0006449015308288645
-    ) -> None:
+    @build_method(depends_on=["setup_coastlines"])
+    def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
@@ -968,83 +964,26 @@ class Hydrography(BuildModelBase):
         # load elevation data
         elevation = self.other["DEM/fabdem"]
         # load the lecz mask
-        low_elevation_coastal_zone_mask = self.geom[
-            "coastal/low_elevation_coastal_zone_mask"
-        ]
+        low_elevation_coastal_zone_mask = self.create_low_elevation_coastal_zone_mask()
+
         # add small buffer to ensure connection of 'islands' with coastlines
         low_elevation_coastal_zone_mask.geometry = (
             low_elevation_coastal_zone_mask.geometry.buffer(0.001)
         )
-        # split the low elevation coastal zone mask into individual polygons of contiguous areas
-        low_elevation_coastal_zone_polygons = low_elevation_coastal_zone_mask.explode(
-            index_parts=False
-        ).reset_index(drop=True)
 
-        # add area column
-        low_elevation_coastal_zone_polygons["area"] = (
-            low_elevation_coastal_zone_polygons.geometry.area
+        # sample the minimum elevation present in the lecz mask
+        mask = elevation.rio.clip(
+            low_elevation_coastal_zone_mask.geometry,
+            low_elevation_coastal_zone_mask.crs,
+            all_touched=True,
+            drop=False,
         )
 
-        # load the coastlines
-        coastlines = self.geom["coastal/coastlines"]
-        sfincs_regions = []
-        low_elevation_coastal_zone_regions = []
-        initial_water_levels = []
-        for (
-            _,
-            low_elevation_coastal_zone_polygon,
-        ) in low_elevation_coastal_zone_polygons.iterrows():
-            # check if the low elevation coastal zone polygon intersects with the coastline
-            if (
-                coastlines.intersects(low_elevation_coastal_zone_polygon.geometry).any()
-                and low_elevation_coastal_zone_polygon["area"]
-                > minimum_coastal_area_deg2  # approx 1 km2 at equator
-            ):
-                # if it does, create a sfincs region
-                # get the minimum elevation within the low elevation coastal zone polygon
-                mask = elevation.rio.clip_box(
-                    *low_elevation_coastal_zone_polygon.geometry.bounds
-                ).where(
-                    elevation.rio.clip(
-                        [low_elevation_coastal_zone_polygon.geometry], drop=False
-                    ).notnull(),
-                    drop=False,
-                )
-                initial_water_levels.append(float(mask.min().values))
+        initial_water_levels = float(np.nanmin(mask.values))
 
-                # create a bounding box around the low elevation coastal zone polygon
-                low_elevation_coastal_zone_polygon_gpd = gpd.GeoDataFrame(
-                    geometry=[low_elevation_coastal_zone_polygon.geometry],
-                    crs=low_elevation_coastal_zone_mask.crs,
-                )
-                bbox = low_elevation_coastal_zone_polygon_gpd.minimum_rotated_rectangle().iloc[
-                    0
-                ]
-                # add a small buffer to ensure connection with coastlines
-                bbox = bbox.buffer(0.04, join_style=2)
-
-                sfincs_regions.append(bbox)
-                low_elevation_coastal_zone_regions.append(
-                    low_elevation_coastal_zone_polygon[0]
-                )
-        bbox_gdf = gpd.GeoDataFrame(
-            geometry=sfincs_regions, crs=low_elevation_coastal_zone_mask.crs
-        )
-        low_elevation_coastal_zone_gdf = gpd.GeoDataFrame(
-            geometry=low_elevation_coastal_zone_regions,
-            crs=low_elevation_coastal_zone_mask.crs,
-        )
-
-        # add idx
-        bbox_gdf["idx"] = bbox_gdf.index
-        low_elevation_coastal_zone_gdf["idx"] = low_elevation_coastal_zone_gdf.index
-        low_elevation_coastal_zone_gdf["area"] = (
-            low_elevation_coastal_zone_gdf.geometry.area
-        )
-        low_elevation_coastal_zone_gdf["initial_water_level"] = initial_water_levels
-        self.set_geom(bbox_gdf, name="coastal/model_regions")
+        low_elevation_coastal_zone_mask["initial_water_level"] = initial_water_levels
         self.set_geom(
-            low_elevation_coastal_zone_gdf,
+            low_elevation_coastal_zone_mask,
             name="coastal/low_elevation_coastal_zone_mask",
         )
 
