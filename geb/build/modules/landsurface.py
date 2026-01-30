@@ -123,7 +123,7 @@ class LandSurface(BuildModelBase):
     ) -> None:
         """Sets up the elevation data for the model.
 
-        Configuration paramters:
+        Configuration parameters:
             name: The name of the DEM to use. Supported names are 'fabdem', 'delta_dtm', 'gebco'. If it is not supported,
                 the path must be set.
             path: The path to the DEM file. Only required if the name is not supported.
@@ -155,9 +155,7 @@ class LandSurface(BuildModelBase):
         if not DEMs:
             raise ValueError("At least one DEM must be provided.")
 
-        if not isinstance(DEMs, list) and not all(
-            isinstance(DEM, dict) for DEM in DEMs
-        ):
+        if not isinstance(DEMs, list) or not all(isinstance(DEM, dict) for DEM in DEMs):
             raise ValueError("DEMs must be provided as a list of dictionaries.")
 
         if self.geom["routing/subbasins"]["is_coastal"].any():
