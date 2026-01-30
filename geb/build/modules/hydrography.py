@@ -1012,6 +1012,9 @@ class Hydrography(BuildModelBase):
             databases. The relative area of each command area within the model region is calculated and set as a column in
             the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
             with any custom reservoir capacity data from the data catalog.
+
+        Raises:
+            ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
         """
         waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
