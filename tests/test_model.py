@@ -124,7 +124,6 @@ def test_init_coastal(clean_working_directory: bool) -> None:
                 "setup_hydrography",
                 "setup_elevation",
                 "setup_global_ocean_mean_dynamic_topography",
-                "setup_low_elevation_coastal_zone_mask",
                 "setup_coastlines",
                 "setup_osm_land_polygons",
                 "setup_coastal_sfincs_model_regions",
@@ -493,6 +492,40 @@ def test_land_use_change() -> None:
 
         geb.step_to_end()
         geb.reporter.finalize()
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_custom_DEM() -> None:
+    """Test model build with a custom DEM."""
+    with WorkingDirectory(working_directory):
+        build_args = DEFAULT_BUILD_ARGS.copy()
+        del build_args["continue_"]
+
+        build_config: dict[str, dict[str, list[dict]]] = {}
+        build_config["setup_elevation"] = {
+            "DEMs": [{"name": "geul_dem", "nodata": np.nan}]
+        }
+        build_args["build_config"] = build_config
+
+        # Path is not set, so should raise an error
+        with pytest.raises(ValueError):
+            update_fn(**build_args)
+
+        # Test with zarr
+        build_config["setup_elevation"]["DEMs"][0]["path"] = str(
+            Path("data") / "geul_dem.zarr"
+        )
+
+        # Test setting CRS
+        build_config["setup_elevation"]["DEMs"][0]["crs"] = 28992
+        update_fn(**build_args)
+
+        # Test with tif
+        build_config["setup_elevation"]["DEMs"][0]["path"] = str(
+            Path("data") / "Geul_Filled_DEM_EPSG28992.tif"
+        )
+
+        update_fn(**build_args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

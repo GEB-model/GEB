@@ -12,6 +12,7 @@
 - Updated the GLOPOP version (from GLOPOP_SG_V2 to GLOPOP_SG_V3) to resolve missing data in some GDL regions
 - Add option for variable runoff in infiltration  
 - Simplify coastal model setup. No longer create multiple shapes of connected low elevation coastal zones.
+- Support custom DEMs
 
 To support this version:
 
