@@ -40,7 +40,7 @@ Use `zmin_coastal` and `zmax_coastal` when you want different cutoffs for coasta
 If you provide a custom DEM:
 
 - You **must** set `path`.
-- The dataset **must** have a valid CRS (for `.zarr`, CRS is parsed and attached automatically), or you must provide `crs`.
+- The dataset **must** have a valid CRS, or you must provide `crs`.
 - The dataset **must** define nodata, or you must provide `nodata` in the config.
 
 ## Examples
