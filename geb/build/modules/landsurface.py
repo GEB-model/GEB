@@ -133,6 +133,7 @@ class LandSurface(BuildModelBase):
             zmax_coastal: The maximum elevation where to use the DEM for coastal subbasins. Elevations above this value will be set to NaN.
             fill_depressions: Whether to fill depressions in the DEM.
             nodata: The nodata value in the DEM. Optional, only required if the DEM does not have a nodata value defined.
+            crs: The CRS to set for custom DEMs when the file does not define one (EPSG code or CRS string).
             coastal_only: DEMs with this value set to True will be skipped if there are no coastal subbasins in the model.
                 Default is False.
 
@@ -147,6 +148,7 @@ class LandSurface(BuildModelBase):
             ValueError: If CRS is missing or invalid in a custom DEM.
             ValueError: If nodata value is missing in a custom DEM.
             ValueError: If DeltaDTM DEM is not provided when coastal subbasins are present.
+            ValueError: If a custom DEM CRS is not a valid EPSG code or CRS string.
         """
         DEMs = copy.deepcopy(DEMs)
 
@@ -250,6 +252,14 @@ class LandSurface(BuildModelBase):
                 # Zarrs need special handling to set the CRS
                 if ".zarr" in DEM["path"]:
                     DEM_raster = parse_and_set_zarr_CRS(DEM_raster)
+
+                if "crs" in DEM:
+                    crs_value = DEM["crs"]
+                    if not isinstance(crs_value, (int, str)):
+                        raise ValueError(
+                            "Custom DEM CRS must be an EPSG code (int) or CRS string."
+                        )
+                    DEM_raster = DEM_raster.rio.write_crs(crs_value)
 
                 if DEM_raster.rio.crs is None:
                     raise ValueError(

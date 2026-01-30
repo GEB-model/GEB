@@ -515,6 +515,9 @@ def test_custom_DEM() -> None:
         build_config["setup_elevation"]["DEMs"][0]["path"] = str(
             Path("data") / "geul_dem.zarr"
         )
+
+        # Test setting CRS
+        build_config["setup_elevation"]["DEMs"][0]["crs"] = 28992
         update_fn(**build_args)
 
         # Test with tif

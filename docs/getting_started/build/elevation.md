@@ -30,6 +30,7 @@ You can override the defaults in your build configuration. Each DEM entry accept
 | `zmax_coastal` | no | Maximum elevation to keep for coastal cells (values above become `NaN`). |
 | `fill_depressions` | no | Whether to fill depressions before storing the DEM. |
 | `nodata` | no | Nodata value if the file does not define one. |
+| `crs` | no | CRS to set for custom DEMs when the file does not define one (EPSG code or CRS string). |
 | `coastal_only` | no | Skip this DEM when there are no coastal subbasins. |
 
 Use `zmin_coastal` and `zmax_coastal` when you want different cutoffs for coastal cells than for inland cells. If you do not set them, `zmin`/`zmax` are used everywhere.
@@ -39,7 +40,7 @@ Use `zmin_coastal` and `zmax_coastal` when you want different cutoffs for coasta
 If you provide a custom DEM:
 
 - You **must** set `path`.
-- The dataset **must** have a valid CRS (for `.zarr`, CRS is parsed and attached automatically).
+- The dataset **must** have a valid CRS (for `.zarr`, CRS is parsed and attached automatically), or you must provide `crs`.
 - The dataset **must** define nodata, or you must provide `nodata` in the config.
 
 ## Examples
@@ -59,6 +60,7 @@ build:
 		DEMs:
 			- name: my_local_dem
 				path: /path/to/dem.tif
+				crs: 28992
 				nodata: -9999
 				fill_depressions: false
 			- name: fabdem
