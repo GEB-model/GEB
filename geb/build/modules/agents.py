@@ -29,7 +29,6 @@ from ..workflows.conversions import (
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution
-from ..workflows.population import load_GLOPOP_S
 from .base import BuildModelBase
 
 
@@ -1643,9 +1642,9 @@ class Agents(BuildModelBase):
         buildings["lat"] = centroids.y
 
         for _, GDL_region in GDL_regions.iterrows():
-            _, GLOPOP_GRID_region = load_GLOPOP_S(
-                self.old_data_catalog, GDL_region["GDLcode"]
-            )
+            _, GLOPOP_GRID_region = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_region["GDLcode"]
+            ).read(GDL_region["GDLcode"])
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
             # subset buildings to those within the GLOPOP_GRID_region
@@ -1762,9 +1761,9 @@ class Agents(BuildModelBase):
             # load building database with grid idx
             buildings = residential_buildings_model_region[GDL_code]
 
-            GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
-                self.old_data_catalog, GDL_code
-            )
+            GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_code
+            ).read(GDL_code)
 
             GLOPOP_S_region = GLOPOP_S_region.rename(columns=rename)
 
@@ -2115,7 +2114,9 @@ class Agents(BuildModelBase):
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            GLOPOP_S_region, _ = load_GLOPOP_S(self.old_data_catalog, GDL_region)
+            GLOPOP_S_region, _ = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_region
+            ).read(GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(

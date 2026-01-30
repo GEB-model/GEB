@@ -9,11 +9,12 @@ from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
-from .fao import GMIA
+from .fao import FAOSTAT, GMIA
 from .gadm import GADM
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .globgm import GlobGM, GlobGMDEM
+from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
@@ -193,6 +194,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "CC BY 4.0",
+        },
+    },
+    "faostat_prices": {
+        "adapter": FAOSTAT(
+            folder="faostat_prices",
+            local_version=1,
+            filename="faostat_prices.parquet",
+            cache="local",
+        ),
+        "url": "https://bulks-faostat.fao.org/production/Prices_E_All_Data.zip",
+        "source": {
+            "name": "FAOSTAT (Producer Prices)",
+            "author": "FAO",
+            "url": "https://www.fao.org/faostat/en/#data/PP",
             "license": "CC BY 4.0",
         },
     },
@@ -613,6 +629,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "OpenStreetMap contributors",
             "license": "ODbL 1.0",
             "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "glopop-sg": {
+        "adapter": GLOPOP_SG(
+            folder="glopop_sg",
+            local_version=1,
+            filename="placeholder",
+            cache="local",
+        ),
+        "url": "https://zenodo.org/records/15680747/files/GLOPOP_SG%20(1).zip?download=1",
+        "source": {
+            "name": "GLOPOP-SG",
+            "author": "M.J. Ton et al. (2025)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.15680747",
+            "paper_doi": "10.5281/zenodo.15680747",
         },
     },
 }
