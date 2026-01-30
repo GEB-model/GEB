@@ -355,6 +355,26 @@ def calculate_scaling(
     return scaling_factor, in_dtype, out_dtype
 
 
+def parse_and_set_zarr_CRS(da: xr.DataArray) -> xr.DataArray:
+    """Parse the _CRS attribute of an xarray DataArray and set it as the CRS using rioxarray.
+
+    The _CRS attribute is expected to be a dictionary with a "wkt" key containing the WKT string.
+
+    Args:
+        da: The xarray DataArray to parse and set the CRS for.
+
+    Returns:
+        The xarray DataArray with the CRS set.
+    """
+    if "_CRS" in da.attrs:
+        crs_attr = da.attrs["_CRS"]
+        if isinstance(crs_attr, dict) and "wkt" in crs_attr:
+            wkt: str = crs_attr["wkt"]
+            da.rio.write_crs(pyproj.CRS(wkt), inplace=True)
+            del da.attrs["_CRS"]
+    return da
+
+
 def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     """Open a zarr file as an xarray DataArray.
 
@@ -397,9 +417,7 @@ def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
 
-    if "_CRS" in da.attrs:
-        da.rio.write_crs(pyproj.CRS(da.attrs["_CRS"]["wkt"]), inplace=True)
-        del da.attrs["_CRS"]
+    da = parse_and_set_zarr_CRS(da)
 
     return da
 

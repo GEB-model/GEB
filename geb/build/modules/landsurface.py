@@ -1,6 +1,8 @@
 """Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
 
+import copy
 import warnings
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
@@ -8,7 +10,7 @@ import xarray as xr
 from pyflwdir.dem import fill_depressions
 
 from geb.build.methods import build_method
-from geb.workflows.io import get_window, read_zarr
+from geb.workflows.io import get_window, parse_and_set_zarr_CRS
 from geb.workflows.raster import (
     bounds_are_within,
     calculate_cell_area,
@@ -100,46 +102,77 @@ class LandSurface(BuildModelBase):
         DEMs: list[dict[str, str | float]] = [
             {
                 "name": "fabdem",
-                "zmin": 30,
+                "zmin": 0.001,
+                "coastal_zmin": 30.0,
                 "fill_depressions": True,
-                "nodata": np.nan,
             },
             {
                 "name": "delta_dtm",
                 "zmax": 30,
                 "zmin": 0.001,
                 "fill_depressions": True,
-                "nodata": np.nan,
+                "coastal_only": True,
             },
-            {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
+            {
+                "name": "gebco",
+                "zmax": 0.0,
+                "fill_depressions": False,
+                "coastal_only": True,
+            },
         ],
     ) -> None:
         """Sets up the elevation data for the model.
 
-        For configuration of DEMs parameters, see
-        https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html.
+        Configuration parameters:
+            name: The name of the DEM to use. Supported names are 'fabdem', 'delta_dtm', 'gebco'. If it is not supported,
+                the path must be set.
+            path: The path to the DEM file. Only required if the name is not supported.
+            zmin: The minimum elevation where to use the DEM. Elevations below this value will be set to NaN.
+            zmin_coastal: The minimum elevation where to use the DEM for coastal subbasins. Elevations below this value will be set to NaN.
+            zmax: The maximum elevation where to use the DEM. Elevations above this value will be set to NaN.
+            zmax_coastal: The maximum elevation where to use the DEM for coastal subbasins. Elevations above this value will be set to NaN.
+            fill_depressions: Whether to fill depressions in the DEM.
+            nodata: The nodata value in the DEM. Optional, only required if the DEM does not have a nodata value defined.
+            crs: The CRS to set for custom DEMs when the file does not define one (EPSG code or CRS string).
+            coastal_only: DEMs with this value set to True will be skipped if there are no coastal subbasins in the model.
+                Default is False.
+
 
         Args:
-            DEMs: A list of dictionaries containing the names and parameters of the DEMs to use. Each dictionary should have a 'name' key
-                with the name of the DEM, and optionally other keys such as 'zmin' for minimum elevation.
+            DEMs: A list of dictionaries containing the names and parameters of the DEMs to use. Each dictionary should
+                be configured as described above.
 
+        Raises:
+            ValueError: If no DEMs are provided.
+            ValueError: If the DEMs are not provided as a list of dictionaries.
+            ValueError: If CRS is missing or invalid in a custom DEM.
+            ValueError: If nodata value is missing in a custom DEM.
+            ValueError: If DeltaDTM DEM is not provided when coastal subbasins are present.
+            ValueError: If a custom DEM CRS is not a valid EPSG code or CRS string.
         """
+        DEMs = copy.deepcopy(DEMs)
+
         if not DEMs:
-            DEMs = []
+            raise ValueError("At least one DEM must be provided.")
 
-        assert isinstance(DEMs, list)
+        if not isinstance(DEMs, list) or not all(isinstance(DEM, dict) for DEM in DEMs):
+            raise ValueError("DEMs must be provided as a list of dictionaries.")
 
-        if not self.geom["routing/subbasins"]["is_coastal"].any():
-            # remove DeltaDTM and GEBCO if no coastal subbasins are present
-            DEMs = [DEM for DEM in DEMs if DEM["name"] not in ("delta_dtm", "gebco")]
-            # and remove zmin from fabdem if present
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            # deltaDTM must be present if coastal DEMs are used
+            if not any(DEM.get("name", "") == "delta_dtm" for DEM in DEMs):
+                raise ValueError(
+                    "DeltaDTM DEM must be provided when coastal DEMs are used."
+                )
+
             for DEM in DEMs:
-                if DEM["name"] == "fabdem" and "zmin" in DEM:
-                    del DEM["zmin"]
-            # warn the user
-            self.logger.info(
-                "No coastal subbasins present; removing DeltaDTM and GEBCO from DEM configuration."
-            )
+                if "coastal_zmin" in DEM:
+                    DEM["zmin"] = DEM["coastal_zmin"]
+                if "coastal_zmax" in DEM:
+                    DEM["zmax"] = DEM["coastal_zmax"]
+        else:
+            # Remove coastal DEMs if no coastal subbasins are present
+            DEMs = [DEM for DEM in DEMs if not DEM.get("coastal_only", False)]
 
         # here we use the bounds of all subbasins, which may include downstream
         # subbasins that are not part of the study area
@@ -174,11 +207,14 @@ class LandSurface(BuildModelBase):
             name="landsurface/elevation",
         )
 
+        DEM_raster: xr.DataArray
         for DEM in DEMs:
+            # FABDEM is already handled above, so we just use it from there
             if DEM["name"] == "fabdem":
-                DEM_raster = fabdem
+                DEM_raster: xr.DataArray = fabdem
+
             elif DEM["name"] == "delta_dtm":
-                DEM_raster = self.data_catalog.fetch(
+                DEM_raster: xr.DataArray = self.data_catalog.fetch(
                     "delta_dtm",
                     xmin=xmin,
                     xmax=xmax,
@@ -197,19 +233,50 @@ class LandSurface(BuildModelBase):
                 )  # Maybe remove this
 
             elif DEM["name"] == "gebco":
-                DEM_raster = self.data_catalog.fetch("gebco").read()
-            elif DEM["name"] == "geul_dem":
-                DEM_raster = read_zarr(
-                    self.old_data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
-                )
-            else:
-                DEM_raster = xr.open_dataarray(
-                    self.old_data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
-                )
-            if "bands" in DEM_raster.dims:
-                DEM_raster = DEM_raster.isel(band=0)
+                DEM_raster: xr.DataArray = self.data_catalog.fetch("gebco").read()
 
-            DEM_raster = DEM_raster.isel(
+            else:
+                # custom DEMs must have a path
+                if "path" not in DEM:
+                    raise ValueError(
+                        f"DEM name '{DEM['name']}' is not supported by default. Please provide a valid path."
+                    )
+                if not isinstance(DEM["path"], str):
+                    raise ValueError("DEM path must be a string.")
+
+                DEM_raster: xr.DataArray = xr.open_dataarray(Path(DEM["path"]))
+
+                # Handle CRS for custom DEMs
+                # Zarrs need special handling to set the CRS
+                if DEM["path"].endswith(".zarr") or DEM["path"].endswith(".zarr.zip"):
+                    DEM_raster = parse_and_set_zarr_CRS(DEM_raster)
+
+                if "crs" in DEM:
+                    crs_value = DEM["crs"]
+                    if not isinstance(crs_value, (int, str)):
+                        raise ValueError(
+                            "Custom DEM CRS must be an EPSG code (int) or CRS string."
+                        )
+                    DEM_raster = DEM_raster.rio.write_crs(crs_value)
+
+                if DEM_raster.rio.crs is None:
+                    raise ValueError(
+                        f"DEM at path '{DEM['path']}' does not have a valid CRS."
+                    )
+
+                # Handle nodata for custom DEMs
+                if "nodata" in DEM:
+                    DEM_raster.attrs["_FillValue"] = DEM["nodata"]
+                else:
+                    if "_FillValue" not in DEM_raster.attrs:
+                        raise ValueError(
+                            f"DEM at path '{DEM['path']}' does not have a nodata value defined."
+                        )
+
+            if "bands" in DEM_raster.dims:
+                DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
+
+            DEM_raster: xr.DataArray = DEM_raster.isel(
                 get_window(
                     DEM_raster.x,
                     DEM_raster.y,
@@ -228,9 +295,9 @@ class LandSurface(BuildModelBase):
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
             )
 
-            if "fill_depressions" in DEM and DEM["fill_depressions"]:
+            if DEM.get("fill_depressions", False):
                 DEM_raster.values, d8 = fill_depressions(
-                    DEM_raster.values, nodata=DEM["nodata"]
+                    DEM_raster.values, nodata=DEM_raster.attrs["_FillValue"]
                 )
 
             self.set_other(

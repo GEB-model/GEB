@@ -15,6 +15,8 @@
 - Moves to new data catalog
  - FAOSTAT
  - GLOPOP-SG
+- Support custom DEMs
+- Read custom reservoirs and waterbodies from files instead of old data catalog.
 
 To support this version:
 
