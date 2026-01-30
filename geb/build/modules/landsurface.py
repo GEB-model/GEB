@@ -250,7 +250,7 @@ class LandSurface(BuildModelBase):
 
                 # Handle CRS for custom DEMs
                 # Zarrs need special handling to set the CRS
-                if ".zarr" in DEM["path"]:
+                if DEM["path"].endswith(".zarr") or DEM["path"].endswith(".zarr.zip"):
                     DEM_raster = parse_and_set_zarr_CRS(DEM_raster)
 
                 if "crs" in DEM:
