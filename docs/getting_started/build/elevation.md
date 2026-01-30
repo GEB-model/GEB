@@ -48,22 +48,20 @@ If you provide a custom DEM:
 ### Use the defaults (no changes)
 
 ```yaml
-build:
-    setup_elevation:
+setup_elevation:
 ```
 
 ### Add a custom DEM
 
 ```yaml
-build:
-    setup_elevation:
-        DEMs:
-            - name: my_local_dem
-              path: /path/to/dem.tif
-              crs: 28992
-              nodata: -9999
-              fill_depressions: false
-            - name: fabdem
-              zmin: 0.001
-              fill_depressions: true
+setup_elevation:
+    DEMs:
+        - name: my_local_dem
+          path: /path/to/dem.tif
+          crs: 28992
+          nodata: -9999
+          fill_depressions: false
+        - name: fabdem
+          zmin: 0.001
+          fill_depressions: true
 ```
