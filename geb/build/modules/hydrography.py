@@ -1065,7 +1065,7 @@ class Hydrography(BuildModelBase):
 
         if command_areas:
             command_areas: gpd.GeoDataFrame = gpd.read_file(
-                command_areas, geom=self.region
+                command_areas, mask=self.region
             )
             assert isinstance(command_areas, gpd.GeoDataFrame)
             command_areas = command_areas[
@@ -1139,9 +1139,18 @@ class Hydrography(BuildModelBase):
             self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
 
         if custom_reservoir_capacity:
-            custom_reservoir_capacity: gpd.GeoDataFrame = gpd.read_file(
-                custom_reservoir_capacity
-            )
+            if custom_reservoir_capacity.endswith(".xlsx"):
+                custom_reservoir_capacity: pd.DataFrame = pd.read_excel(
+                    custom_reservoir_capacity
+                )
+            elif custom_reservoir_capacity.endswith(".csv"):
+                custom_reservoir_capacity: pd.DataFrame = pd.read_csv(
+                    custom_reservoir_capacity
+                )
+            else:
+                raise ValueError(
+                    "custom_reservoir_capacity must be a .csv or .xlsx file"
+                )
 
             custom_reservoir_capacity = custom_reservoir_capacity[
                 custom_reservoir_capacity.index != -1

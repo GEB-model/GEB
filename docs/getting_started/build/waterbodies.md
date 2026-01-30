@@ -46,7 +46,7 @@ Command areas that do not match any reservoir in the current region are removed.
 
 ### Custom reservoir capacity
 
-`custom_reservoir_capacity` should be a path to a file readable by GeoPandas.
+`custom_reservoir_capacity` should be an excel-file ('.xlsx') or csv-file ('.csv').
 
 If you provide `custom_reservoir_capacity`, GEB will override reservoir capacity by matching on `waterbody_id`.
 
