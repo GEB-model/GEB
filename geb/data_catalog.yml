@@ -118,26 +118,6 @@ cwatm_grassland_5min:
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/grassland/{variable}.nc
-reservoir_command_areas_krishna:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: project_data/fairstream/command_areas/command_areas_with_ids.gpkg
-  rename:
-    Hylak_id: waterbody_id
-custom_reservoir_capacity_krishna:
-  data_type: DataFrame
-  driver: excel
-  path: project_data/fairstream/reservoir_capacity.xlsx
-  rename:
-    Hylak_id: waterbody_id
-    Capacity_FLR_BCM: volume_flood
-    Gross_capacity_BCM: volume_total
-    Flood_cushion_BCM: flood_cushion
-  unit_mult:
-    volume_flood: 1_000_000_000
-    volume_total: 1_000_000_000
-    flood_cushion: 1_000_000_000
 UN_dev_index:
   meta:
     category: economics

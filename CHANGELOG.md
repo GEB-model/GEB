@@ -13,6 +13,7 @@
 - Add option for variable runoff in infiltration  
 - Simplify coastal model setup. No longer create multiple shapes of connected low elevation coastal zones.
 - Support custom DEMs
+- Read custom reservoirs and waterbodies from files instead of old data catalog.
 
 To support this version:
 
