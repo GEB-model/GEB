@@ -77,9 +77,6 @@ class FAOSTAT(Adapter):
 
         Returns:
             The FAOSTAT adapter instance.
-
-        Raises:
-            ValueError: If the expected files are not found in the zip.
         """
         if not self.is_ready:
             download_path = self.path.with_suffix(".zip")
@@ -88,19 +85,7 @@ class FAOSTAT(Adapter):
             # unzip the file
             with zipfile.ZipFile(download_path, "r") as zip_ref:
                 file = "Prices_E_All_Data.csv"
-                try:
-                    zip_ref.extract(file, self.root)
-                except KeyError:
-                    # sometimes the file has a different name (e.g. including Normalized)
-                    # try to find a csv file
-                    files = [f for f in zip_ref.namelist() if f.endswith(".csv")]
-                    if len(files) == 1:
-                        file = files[0]
-                        zip_ref.extract(file, self.root)
-                    else:
-                        raise ValueError(
-                            f"Could not find {file} in zip, and ambiguous csvs found: {files}"
-                        )
+                zip_ref.extract(file, self.root)
 
             extracted_file_path = self.root / file
 
@@ -125,18 +110,22 @@ class FAOSTAT(Adapter):
         Returns:
             The dataset as a pandas DataFrame.
         """
-        df = pd.read_parquet(self.path)
-        year_columns = [
+        df: pd.DataFrame = pd.read_parquet(self.path)
+
+        year_columns: list[str] = [
             col for col in df.columns if col.startswith("Y") and col[1:].isdigit()
         ]
         df = df[["Area Code (M49)", "Item", *year_columns]]
 
         df = df.rename(columns={col: int(col[1:]) for col in year_columns})
-        year_columns = [int(col[1:]) for col in year_columns]
+        year_columns: list[int] = [int(col[1:]) for col in year_columns]
 
+        # M49 codes are FAO's area codes
         df["Area Code (M49)"] = df["Area Code (M49)"].apply(
             lambda x: int(x[1:]) if x.startswith("'") else int(x)
         )
+
+        # drop regions that do not have ISO3 codes
         df = df[~df["Area Code (M49)"].isin([58, 200, 230, 891, 736])]
         df["ISO3"] = df["Area Code (M49)"].map(M49_to_ISO3)
         assert df["ISO3"].isnull().sum() == 0, (

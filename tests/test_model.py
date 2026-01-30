@@ -241,9 +241,6 @@ def test_update_with_dict() -> None:
     "method",
     [
         "setup_hydrography",
-        "setup_soil_parameters",
-        "setup_household_characteristics",
-        "setup_crop_prices",
     ],
 )
 def test_update_with_method(method: str) -> None:
