@@ -1292,7 +1292,6 @@ class Hydrography(BuildModelBase):
         self.set_table(gtsm_data_region_pd, name="gtsm/surge")
         self.logger.info("GTSM station waterlevels and geometries set")
 
-    @build_method
     def setup_gtsm_sea_level_rise(self) -> None:
         """Sets up the GTSM sea level rise data for the model."""
         self.logger.info("Setting up GTSM sea level rise data")
@@ -1397,10 +1396,11 @@ class Hydrography(BuildModelBase):
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
 
-        # Continue with GTSM hydrographs setup
+        # Continue with GTSM setup
         temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
         self.setup_gtsm_water_levels(temporal_range)
         self.setup_gtsm_surge_levels(temporal_range)
+        self.setup_gtsm_sea_level_rise()
         self.setup_coast_rp()
 
     @build_method
