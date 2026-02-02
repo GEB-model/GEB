@@ -1293,7 +1293,12 @@ class Hydrography(BuildModelBase):
         self.logger.info("GTSM station waterlevels and geometries set")
 
     def setup_gtsm_sea_level_rise(self) -> None:
-        """Sets up the GTSM sea level rise data for the model."""
+        """Sets up the GTSM sea level rise data for the model.
+
+        Raises:
+            ValueError: If the extrapolated sea level rise data is not monotonically increasing
+                or exceeds 2 meters by 2100 for any station.
+        """
         self.logger.info("Setting up GTSM sea level rise data")
         # get the model bounds and buffer by ~2km
         model_bounds = self.bounds
