@@ -22,6 +22,7 @@ from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
+from .mirca2000 import MIRCA2000
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
 from .open_street_map_coastlines import OpenStreetMapCoastlines
@@ -134,6 +135,60 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use",
             "url": "https://www.gebco.net/",
             "paper_doi": "10.5285/a29c5465-b138-234d-e053-6c86abc040b9",
+        },
+    },
+    "mirca2000_unit_grid": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="unit_code.asc",
+            cache="global",
+            target_member_suffix="unit_code.asc.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/unit_code_grid.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Unit Code Grid",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
+        },
+    },
+    "mirca2000_cropping_calendar_rainfed": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="cropping_calendar_rainfed.txt",
+            cache="global",
+            target_member_suffix="cropping_calendar_rainfed.txt.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/condensed_cropping_calendars.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Condensed Cropping Calendars (Rainfed)",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
+        },
+    },
+    "mirca2000_cropping_calendar_irrigated": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="cropping_calendar_irrigated.txt",
+            cache="global",
+            target_member_suffix="cropping_calendar_irrigated.txt.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/condensed_cropping_calendars.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Condensed Cropping Calendars (Irrigated)",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
         },
     },
     "GRDC": {

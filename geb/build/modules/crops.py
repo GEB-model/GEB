@@ -1050,9 +1050,8 @@ class Crops(BuildModelBase):
         """
         n_farmers = self.array["agents/farmers/id"].size
 
-        MIRCA_unit_grid = xr.open_dataarray(
-            self.old_data_catalog.get_source("MIRCA2000_unit_grid").path
-        )
+        MIRCA_unit_grid = self.data_catalog.fetch("mirca2000_unit_grid").read()
+        assert isinstance(MIRCA_unit_grid, xr.DataArray)
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
             {
@@ -1065,7 +1064,7 @@ class Crops(BuildModelBase):
 
         crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = (
             parse_MIRCA2000_crop_calendar(
-                self.old_data_catalog,
+                self.data_catalog,
                 MIRCA_units=np.unique(MIRCA_unit_grid.values).tolist(),
             )
         )
