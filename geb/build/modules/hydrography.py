@@ -1327,19 +1327,19 @@ class Hydrography(BuildModelBase):
         # calculate the increment in mean sea level in the time series
         sea_level_rise_df = mean_sea_level_df - mean_sea_level_df.iloc[0]
 
-        # extrapolate to 2100 using linear trend per station
+        # extrapolate to 2100 using linear trend  between 2047-2050 per station
         last_year = sea_level_rise_df.index.year.max()
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}
         for station in sea_level_rise_df.columns:
             series = sea_level_rise_df[station]
-            # fit linear trend of last 3 years
-            recent_series = series[series.index.year > (last_year - 3)]
+            # fit linear trend all years
+            recent_series = series  # [series.index.year > (last_year - 3)]
             coeffs = np.polyfit(
                 recent_series.index.year,
                 recent_series.values,
-                deg=1,
+                deg=2,
             )
             trend = np.poly1d(coeffs)
             future_values = trend(future_years)
@@ -1350,6 +1350,18 @@ class Hydrography(BuildModelBase):
         )
         # append future data to sea_level_rise_df
         sea_level_rise_df = pd.concat([sea_level_rise_df, future_df], axis=0)
+
+        # do some check on the extrapolated data
+        for station in sea_level_rise_df.columns:
+            series = sea_level_rise_df[station]
+            # check that the values are monotonically increasing
+            assert series.is_monotonic_increasing, (
+                f"Sea level rise data for station {station} is not monotonically increasing after extrapolation."
+            )
+            # check that the values are reasonable (less than 2 meters by 2100)
+            assert series.iloc[-1] < 2, (
+                f"Sea level rise data for station {station} exceeds 2 meters by 2100."
+            )
 
         # set table for model
         self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise")
