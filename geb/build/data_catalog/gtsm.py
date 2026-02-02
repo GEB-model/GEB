@@ -113,6 +113,7 @@ class GTSM(Adapter):
             & (merged_data.station_y_coordinate <= bounds[3])
         )
 
-        merged_data = merged_data.sel(stations=mask)
+        # use boolean indexing along the 'stations' dimension
+        merged_data = merged_data.isel(stations=mask)
 
         return merged_data
