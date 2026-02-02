@@ -1188,7 +1188,12 @@ class SFINCSRootModel:
         )
 
     def create_coastal_return_period_simulation(
-        self, return_period: int, locations: gpd.GeoDataFrame, offset: xr.DataArray
+        self,
+        return_period: int,
+        locations: gpd.GeoDataFrame,
+        offset: xr.DataArray,
+        sea_level_rise: pd.DataFrame | None = None,
+        year: int | None = None,
     ) -> SFINCSSimulation:
         """
         Creates a SFINCS simulation with coastal water level forcing for a specified return period.
@@ -1199,6 +1204,8 @@ class SFINCSRootModel:
             return_period: The return period for which to create the coastal simulation.
             locations: A GeoDataFrame containing the locations of GTSM forcing stations.
             offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
+            sea_level_rise: A DataFrame containing sea level rise data.
+            year: The year for which to apply sea level rise adjustments.
         Returns:
             An instance of SFINCSSimulation configured with coastal water level forcing.
         """
@@ -1210,6 +1217,20 @@ class SFINCSRootModel:
             index_col=0,
         )
 
+        # apply sea level rise adjustment if provided
+        if sea_level_rise is not None and year is not None:
+            # get sea level rise adjustment for the specified year
+            sea_level_rise.index = sea_level_rise.index.year
+            sea_level_adjustment = sea_level_rise.loc[year]
+            # add the adjustment to the timeseries
+            for station_id in timeseries.columns:
+                if int(station_id) in sea_level_adjustment.index:
+                    adjustment_value = sea_level_adjustment.loc[int(station_id)]
+                    timeseries[station_id] += adjustment_value
+                else:
+                    raise ValueError(
+                        f"Station ID {station_id} not found in sea level rise data for year {year}."
+                    )
         # convert index to int
         # make a copy to avoid overwriting the original locations
         locations_copy = locations.copy()
