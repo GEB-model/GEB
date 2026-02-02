@@ -1,6 +1,5 @@
 """Module containing build methods for the agents for GEB."""
 
-import difflib
 import math
 from datetime import datetime
 from typing import Any
