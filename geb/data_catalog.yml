@@ -6,25 +6,6 @@ MIRCA2000_crop_data:
     paper_doi: 10.1016/j.jhydrol.2009.07.031
     paper_ref: Siebert et al. (2010)
     source_license:  Creative Commons Attribution 4.0 International 
-MIRCA2000_crop_data_variants:
-  data_type: DataFrame
-  driver: excel
-  path: MIRCA2000/crop_data_variants.xlsx
-  meta:
-    paper_doi: adjusted from 10.1016/j.jhydrol.2009.07.031
-    paper_ref: Siebert et al. (2010)
-    source_license:  Creative Commons Attribution 4.0 International 
-MIRCA-OS_cropping_calendar_{irrigated_or_rainfed}_{year}:
-  data_type: Dataset
-  path: agriculture/MIRCA-OS/Crop Calendar/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
-  meta:
-    paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
-    paper_ref: Kebede et al. (2024) (preprint)
-    source_license: CC BY 4.0
-    source_url: https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/
-  placeholders:
-    irrigated_or_rainfed: [irrigated, rainfed]
-    year: ['2000', '2005', '2010', '2015']
 MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
   data_type: RasterDataset
   driver: raster

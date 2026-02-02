@@ -115,7 +115,7 @@ class Crops(BuildModelBase):
                     crop_values["rd_rain"] >= crop_values["rd_irr"]
                 )  # root depth rainfed crops should be larger than irrigated crops
 
-                if type == "GAEZ":
+                if source_type == "GAEZ":
                     crop_values["l_ini"] = crop_values["d1"]
                     crop_values["l_dev"] = crop_values["d2a"] + crop_values["d2b"]
                     crop_values["l_mid"] = crop_values["d3a"] + crop_values["d3b"]
@@ -129,7 +129,7 @@ class Crops(BuildModelBase):
                     assert "Ky3b" in crop_values
                     assert "Ky4" in crop_values
 
-                elif type == "MIRCA2000":
+                elif source_type == "MIRCA2000":
                     assert "a" in crop_values
                     assert "b" in crop_values
                     assert "P0" in crop_values

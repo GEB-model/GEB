@@ -504,7 +504,7 @@ def get_crop_factors_and_root_depths(
             root_depth[i] = 2.0  # forest root depth is set to 2m
             # crop sub stage remains -1
             crop_factor[i] = get_crop_factor_from_lai(
-                np.float32(0.2), np.float32(1.6), leaf_area_index_forest[i]
+                np.float32(0.2), np.float32(1.2), leaf_area_index_forest[i]
             )
 
         elif land_use == GRASSLAND_LIKE:

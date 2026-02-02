@@ -481,7 +481,8 @@ def test_calculate_transpiration() -> None:
     land_use_type = NON_PADDY_IRRIGATED
     root_depth = np.float32(0.3)
     crop_map = 0  # Some crop
-    natural_crop_groups = np.float32(3.0)
+    crop_group_forest = np.float32(3.0)
+    crop_group_grassland_like = np.float32(4.0)
     potential_transpiration = np.float32(0.002)
     reference_evapotranspiration_grass_m_hour = np.float32(0.003)
     frost_index = np.float32(0.0)
@@ -501,7 +502,8 @@ def test_calculate_transpiration() -> None:
         land_use_type=land_use_type,
         root_depth_m=root_depth,
         crop_map=crop_map,
-        natural_crop_groups=natural_crop_groups,
+        crop_group_forest=crop_group_forest,
+        crop_group_grassland_like=crop_group_grassland_like,
         potential_transpiration_m=potential_transpiration,
         reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour,
         crop_group_number_per_group=crop_group_number_per_group,
@@ -608,7 +610,8 @@ def test_calculate_transpiration_frozen_soil() -> None:
         land_use_type=1,
         root_depth_m=0.3,
         crop_map=0,
-        natural_crop_groups=3.0,
+        crop_group_forest=3.0,
+        crop_group_grassland_like=3.0,
         potential_transpiration_m=0.002,
         reference_evapotranspiration_grass_m_hour=0.003,
         crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),
@@ -640,7 +643,8 @@ def test_calculate_transpiration_paddy_irrigation() -> None:
         land_use_type=PADDY_IRRIGATED,
         root_depth_m=0.3,
         crop_map=0,
-        natural_crop_groups=3.0,
+        crop_group_forest=3.0,
+        crop_group_grassland_like=3.0,
         potential_transpiration_m=0.002,
         reference_evapotranspiration_grass_m_hour=0.003,
         crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),

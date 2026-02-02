@@ -41,9 +41,6 @@ class LISFLOOD(Adapter):
         """Read a vegetation properties NetCDF file as a DataArray.
 
         Args:
-            data_variable: Optional data variable name to extract. If not
-                provided, the method expects exactly one data variable besides
-                the CRS metadata and uses it.
             **kwargs: Additional keyword arguments forwarded to xarray.
 
         Returns:
