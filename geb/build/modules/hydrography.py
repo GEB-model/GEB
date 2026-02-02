@@ -1292,6 +1292,44 @@ class Hydrography(BuildModelBase):
         self.set_table(gtsm_data_region_pd, name="gtsm/surge")
         self.logger.info("GTSM station waterlevels and geometries set")
 
+    @build_method
+    def setup_gtsm_sea_level_rise(self) -> None:
+        """Sets up the GTSM sea level rise data for the model."""
+        self.logger.info("Setting up GTSM sea level rise data")
+        # get the model bounds and buffer by ~2km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+
+        gtsm_sea_level_rise = self.data_catalog.fetch("gtsm").read(bounds=model_bounds)
+
+        # extract data arrays
+        mean_sea_level = gtsm_sea_level_rise.mean_sea_level.data
+        time = gtsm_sea_level_rise.time.data
+        stations = gtsm_sea_level_rise.stations.data
+
+        # create dataframe
+        mean_sea_level_df = pd.DataFrame(
+            data=mean_sea_level.T,
+            index=pd.to_datetime(time),
+            columns=stations,
+        )
+        # sort by datetime index
+        mean_sea_level_df = mean_sea_level_df.sort_index()
+
+        # set table for model
+        self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
+
+        # calculate the increment in mean sea level in the time series
+        sea_level_rise_df = mean_sea_level_df - mean_sea_level_df.iloc[0]
+
+        # set table for model
+        self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise")
+
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")

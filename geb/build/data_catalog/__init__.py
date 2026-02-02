@@ -16,6 +16,7 @@ from .global_data_lab import GlobalDataLabShapefile
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
+from .gtsm import GTSM
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lowder import Lowder
@@ -542,6 +543,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY-NC-SA 4.0",
             "url": "https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7",
             "paper_doi": "10.1088/1748-9326/ac4d4f",
+        },
+    },
+    "gtsm": {
+        "adapter": GTSM(
+            folder="gtsm",
+            local_version=1,
+            filename="gtsm.zarr",
+            cache="local",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
+        "source": {
+            "name": "Global Tide and Storm Surge Model (GTSM)",
+            "author": "Muis et al. (2022)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.24381/cds.a6d42d60",
+            "paper_doi": "10.5281/zenodo.8314503",
         },
     },
     "merit_basins_rivers": {
