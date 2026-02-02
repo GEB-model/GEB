@@ -1364,7 +1364,7 @@ class Hydrography(BuildModelBase):
             )
 
         # set table for model
-        self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise")
+        self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise_rcp8p5")
 
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
