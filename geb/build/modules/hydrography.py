@@ -1336,8 +1336,8 @@ class Hydrography(BuildModelBase):
         future_data = {}
         for station in sea_level_rise_df.columns:
             series = sea_level_rise_df[station]
-            # fit linear trend all years
-            recent_series = series  # [series.index.year > (last_year - 3)]
+            # fit nonlinear trend all years
+            recent_series = series
             coeffs = np.polyfit(
                 recent_series.index.year,
                 recent_series.values,
