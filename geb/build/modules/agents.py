@@ -1624,18 +1624,13 @@ class Agents(BuildModelBase):
         Raises:
             ValueError: If a region in GADM level 1 is not found in the global exposure model.
         """
-        # convert table to deal with name changes since GADM 2016
-        convert_table = {
-            "Hauts-de-France": "Nord-Pas-de-Calais",
-            "Veracruz": "Veracruz de Ignacio de la Llave",
-        }
-
-        gadm_level1 = self.new_data_catalog.fetch("GADM_level1").read(
+        # load GADM level 1 within model domain (older version for compatibility with global exposure model)
+        gadm_level1 = self.data_catalog.fetch("gadm_28").read(
             geom=self.region.union_all(),
         )
-        countries_in_model = gadm_level1["COUNTRY"].unique().tolist()
+        countries_in_model = gadm_level1["NAME_0"].unique().tolist()
 
-        global_exposure_model = self.new_data_catalog.fetch(
+        global_exposure_model = self.data_catalog.fetch(
             "global_exposure_model",
             countries=countries_in_model,
         ).read()
@@ -1650,31 +1645,11 @@ class Agents(BuildModelBase):
 
         for name_1 in gadm_level1["NAME_1"]:
             # clean name_1
-
-            if name_1 in convert_table:
-                self.logger.warning(
-                    f"Region {name_1} not found in global exposure model. Taking {convert_table[name_1]}."
+            if name_1 not in global_exposure_model:
+                raise ValueError(
+                    f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
                 )
-                name_1_converted = convert_table[name_1]
-                exposure_model_region = global_exposure_model[name_1_converted]
-            else:
-                if name_1 not in global_exposure_model:
-                    similar_names = difflib.get_close_matches(
-                        name_1,
-                        global_exposure_model.keys(),
-                        n=1,
-                        cutoff=0.4,
-                    )
-                    if similar_names:
-                        self.logger.warning(
-                            f"Region {name_1} not found in global exposure model. Taking {similar_names[0]}."
-                        )
-                        name_1 = similar_names[0]
-                    else:
-                        raise ValueError(
-                            f"Region {name_1} not found in global exposure model."
-                        )
-                exposure_model_region = global_exposure_model[name_1]
+            exposure_model_region = global_exposure_model[name_1]
             for reconstruction_type in exposure_model_region:
                 buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
                     float(exposure_model_region[reconstruction_type])
@@ -1693,7 +1668,7 @@ class Agents(BuildModelBase):
         """
         output = {}
         # load region mask
-        mask = self.region.unary_union
+        mask = self.region.union_all()
         buildings = self.data_catalog.fetch(
             "open_building_map",
             geom=mask,
