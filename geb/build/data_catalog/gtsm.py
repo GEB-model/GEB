@@ -100,10 +100,13 @@ class GTSM(Adapter):
                 for file in os.listdir(extract_path):
                     if file.endswith(".nc"):
                         file_path = os.path.join(extract_path, file)
-                        # process the netcdf file as needed
+                        # Open datasets lazily; they will be concatenated and loaded in-memory
                         gtsm_data.append(xr.open_dataset(file_path))
-        # merge all datasets into a single xarray DataArray
-        merged_data = xr.concat(gtsm_data, dim="time")
+                # Merge all datasets into a single in-memory xarray object before temp dir cleanup
+                merged_data = xr.concat(gtsm_data, dim="time").load()
+                # Explicitly close underlying datasets to release file handles
+                for ds in gtsm_data:
+                    ds.close()
 
         # clip to model bounds
         mask = (
