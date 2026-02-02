@@ -1221,9 +1221,15 @@ class SFINCSRootModel:
 
         # apply sea level rise adjustment if provided
         if sea_level_rise is not None and year is not None:
-            # get sea level rise adjustment for the specified year
-            sea_level_rise.index = sea_level_rise.index.year
-            sea_level_adjustment = sea_level_rise.loc[year]
+            # get sea level rise adjustment for the specified year without mutating
+            # the original index (which may be reused elsewhere as a DatetimeIndex)
+            year_mask = sea_level_rise.index.year == year
+            if not year_mask.any():
+                raise ValueError(
+                    f"No sea level rise data found for year {year}."
+                )
+            # select the first matching row; this results in a Series indexed by station ID
+            sea_level_adjustment = sea_level_rise.loc[year_mask].iloc[0]
             # add the adjustment to the timeseries
             for station_id in timeseries.columns:
                 if int(station_id) in sea_level_adjustment.index:
