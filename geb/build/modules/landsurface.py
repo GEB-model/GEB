@@ -1,7 +1,6 @@
 """Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
 
 import copy
-import warnings
 from pathlib import Path
 
 import geopandas as gpd
@@ -36,7 +35,7 @@ class LandSurface(BuildModelBase):
         """Initialize the LandSurface class."""
         pass
 
-    @build_method(depends_on=["setup_regions_and_land_use"])
+    @build_method(depends_on=["setup_regions_and_land_use"], required=True)
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
 
@@ -96,7 +95,7 @@ class LandSurface(BuildModelBase):
             name="cell_area",
         )
 
-    @build_method(depends_on=["setup_hydrography"])
+    @build_method(depends_on=["setup_hydrography"], required=True)
     def setup_elevation(
         self,
         DEMs: list[dict[str, str | float]] = [
@@ -308,7 +307,7 @@ class LandSurface(BuildModelBase):
 
         self.set_params(DEMs, name="hydrodynamics/DEM_config")
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=True)
     def setup_regions_and_land_use(
         self,
         region_database: str = "GADM_level1",
@@ -487,7 +486,7 @@ class LandSurface(BuildModelBase):
         cultivated_land = snap_to_grid(cultivated_land, self.subgrid)
         self.set_subgrid(cultivated_land, name="landsurface/cultivated_land")
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=True)
     def setup_land_use_parameters(
         self,
         land_cover: str = "esa_worldcover_2021",
@@ -606,18 +605,18 @@ class LandSurface(BuildModelBase):
                 name=f"landcover/{land_use_type}/interception_capacity",
             )
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=False)
     def setup_soil_parameters(self) -> None:
-        """Deprecated method for setting up soil parameters."""
-        # Warn that this method is deprecated and delegate to the replacement to preserve backwards compatibility.
-        warnings.warn(
-            "setup_soil_parameters is deprecated; use setup_soil instead. Calling setup_soil().",
-            DeprecationWarning,
+        """Deprecated method for setting up soil parameters.
+
+        Raises:
+            NotImplementedError: This method is removed; use setup_soil instead.
+        """
+        raise NotImplementedError(
+            "setup_soil_parameters is removed; use setup_soil instead."
         )
 
-        self.setup_soil()
-
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=True)
     def setup_soil(self) -> None:
         """Sets up the soil parameters for the model.
 

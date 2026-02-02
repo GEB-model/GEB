@@ -1067,7 +1067,7 @@ class Forcing(BuildModelBase):
             name="climate/elevation_forcing",
         )
 
-    @build_method(depends_on=["set_ssp", "set_time_range"])
+    @build_method(depends_on=["set_ssp", "set_time_range"], required=True)
     def setup_forcing(
         self,
         forcing: str = "ERA5",
@@ -1094,7 +1094,7 @@ class Forcing(BuildModelBase):
         else:
             raise ValueError(f"Unknown data source: {forcing}, supported are 'ERA5'")
 
-    @build_method(depends_on=["setup_forcing"])
+    @build_method(depends_on=["setup_forcing"], required=True)
     def setup_SPEI(
         self,
         calibration_period_start: date = date(1981, 1, 1),
@@ -1275,7 +1275,7 @@ class Forcing(BuildModelBase):
                     name="climate/gev_scale",
                 )
 
-    @build_method(depends_on=["setup_forcing"])
+    @build_method(depends_on=["setup_forcing"], required=True)
     def setup_pr_GEV(self) -> None:
         """Sets up the Generalized Extreme Value (GEV) parameters for the precipitation data.
 
@@ -1351,7 +1351,7 @@ class Forcing(BuildModelBase):
 
         return elevation_forcing
 
-    @build_method(depends_on=["set_ssp", "set_time_range"])
+    @build_method(depends_on=["set_ssp", "set_time_range"], required=True)
     def setup_CO2_concentration(self) -> None:
         """Aquires the CO2 concentration data for the specified SSP in ppm."""
         df: pd.DataFrame = self.data_catalog.fetch("isimip_co2").read(
@@ -1362,7 +1362,7 @@ class Forcing(BuildModelBase):
         ]
         self.set_table(df, name="climate/CO2_ppm")
 
-    @build_method(depends_on=["set_ssp", "set_time_range"])
+    @build_method(depends_on=["set_ssp", "set_time_range"], required=False)
     def setup_forecasts(
         self,
         forecast_start: date | datetime,

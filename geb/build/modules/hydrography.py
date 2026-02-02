@@ -337,7 +337,7 @@ class Hydrography(BuildModelBase):
         """Initializes the Hydrography class."""
         pass
 
-    @build_method(depends_on=["setup_hydrography", "setup_cell_area"])
+    @build_method(depends_on=["setup_hydrography", "setup_cell_area"], required=True)
     def setup_mannings(self) -> None:
         """Sets up the Manning's coefficient for the model.
 
@@ -438,7 +438,7 @@ class Hydrography(BuildModelBase):
 
         return rivers
 
-    @build_method
+    @build_method(required=True)
     def setup_hydrography(
         self,
         custom_rivers: str | None = None,
@@ -803,7 +803,7 @@ class Hydrography(BuildModelBase):
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
 
-    @build_method
+    @build_method(required=True)
     def setup_global_ocean_mean_dynamic_topography(self) -> None:
         """Sets up the global ocean mean dynamic topography for the model."""
         if not self.geom["routing/subbasins"]["is_coastal"].any():
@@ -899,7 +899,7 @@ class Hydrography(BuildModelBase):
         )
         return low_elevation_coastal_zone_mask
 
-    @build_method
+    @build_method(required=True)
     def setup_coastlines(self) -> None:
         """Sets up the coastlines for the model."""
         if not self.geom["routing/subbasins"]["is_coastal"].any():
@@ -928,7 +928,7 @@ class Hydrography(BuildModelBase):
             )  # buffer by 0.04 degree
             self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
 
-    @build_method
+    @build_method(required=True)
     def setup_osm_land_polygons(
         self,
     ) -> None:
@@ -952,7 +952,7 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(depends_on=["setup_coastlines"])
+    @build_method(depends_on=["setup_coastlines"], required=True)
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         if not self.geom["routing/subbasins"]["is_coastal"].any():
@@ -987,7 +987,7 @@ class Hydrography(BuildModelBase):
             name="coastal/low_elevation_coastal_zone_mask",
         )
 
-    @build_method
+    @build_method(required=True)
     def setup_waterbodies(
         self,
         command_areas: None | str = None,
@@ -1313,7 +1313,7 @@ class Hydrography(BuildModelBase):
         # also set stations (only those that are in coast_rp)
         self.set_geom(stations, "gtsm/stations_coast_rp")
 
-    @build_method
+    @build_method(required=True)
     def setup_gtsm_station_data(self) -> None:
         """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
         if not self.geom["routing/subbasins"]["is_coastal"].any():
@@ -1326,7 +1326,7 @@ class Hydrography(BuildModelBase):
         self.setup_gtsm_surge_levels(temporal_range)
         self.setup_coast_rp()
 
-    @build_method
+    @build_method(required=False)
     def setup_inflow(
         self,
         locations: str,

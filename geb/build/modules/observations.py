@@ -346,7 +346,7 @@ class Observations(BuildModelBase):
         """Initialize the Observations class."""
         pass
 
-    @build_method(depends_on=["setup_hydrography"])
+    @build_method(depends_on=["setup_hydrography"], required=False)
     def setup_discharge_observations(
         self,
         max_uparea_difference_ratio: float = 0.3,

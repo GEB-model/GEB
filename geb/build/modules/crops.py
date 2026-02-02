@@ -46,11 +46,11 @@ class Crops(BuildModelBase):
         """Initialize the Crops module."""
         pass
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=True)
     def setup_crops(
         self,
-        crop_data: dict,
-        type: str = "MIRCA2000",
+        crop_data: dict | None = None,
+        source_type: str = "MIRCA2000",
     ) -> None:
         """Validate and set crop data used by the model.
 
@@ -75,79 +75,16 @@ class Crops(BuildModelBase):
 
         Args:
             crop_data: Dictionary keyed by crop id with metadata for each crop.
-            type: Source/type of crop parameters ('MIRCA2000' or 'GAEZ').
+            source_type: Source/type of crop parameters ('MIRCA2000' or 'GAEZ').
 
+        Raises:
+            ValueError: If source_type is not recognized or required fields are missing.
         """
-        assert type in ("MIRCA2000", "GAEZ")
-        for crop_id, crop_values in crop_data.items():
-            assert "name" in crop_values
-            assert "reference_yield_kg_m2" in crop_values
-            assert "is_paddy" in crop_values
-            assert "rd_rain" in crop_values  # root depth rainfed crops
-            assert "rd_irr" in crop_values  # root depth irrigated crops
-            assert (
-                "crop_group_number" in crop_values
-            )  # adaptation level to drought (see WOFOST: https://wofost.readthedocs.io/en/7.2/)
-            assert 5 >= crop_values["crop_group_number"] >= 0
-            assert (
-                crop_values["rd_rain"] >= crop_values["rd_irr"]
-            )  # root depth rainfed crops should be larger than irrigated crops
-
-            if type == "GAEZ":
-                crop_values["l_ini"] = crop_values["d1"]
-                crop_values["l_dev"] = crop_values["d2a"] + crop_values["d2b"]
-                crop_values["l_mid"] = crop_values["d3a"] + crop_values["d3b"]
-                crop_values["l_late"] = crop_values["d4"]
-
-                assert "KyT" in crop_values
-                assert "Ky1" in crop_values
-                assert "Ky2a" in crop_values
-                assert "Ky2b" in crop_values
-                assert "Ky3a" in crop_values
-                assert "Ky3b" in crop_values
-                assert "Ky4" in crop_values
-
-            elif type == "MIRCA2000":
-                assert "a" in crop_values
-                assert "b" in crop_values
-                assert "P0" in crop_values
-                assert "P1" in crop_values
-                assert "l_ini" in crop_values
-                assert "l_dev" in crop_values
-                assert "l_mid" in crop_values
-                assert "l_late" in crop_values
-                assert "kc_initial" in crop_values
-                assert "kc_mid" in crop_values
-                assert "kc_end" in crop_values
-
-            assert (
-                crop_values["l_ini"]
-                + crop_values["l_dev"]
-                + crop_values["l_mid"]
-                + crop_values["l_late"]
-                == 100
-            ), "Sum of l_ini, l_dev, l_mid, and l_late must be 100[%]"
-
-        crop_data = {
-            "data": crop_data,
-            "type": type,
-        }
-
-        self.set_params(crop_data, name="crops/crop_data")
-
-    @build_method(depends_on=[])
-    def setup_crops_from_source(
-        self,
-        source: str | None = "MIRCA2000",
-        crop_specifier: str | None = None,
-    ) -> None:
-        """Sets up the crops data for the model."""
-        self.logger.info("Preparing crops data")
-
-        assert source in ("MIRCA2000",), (
-            f"crop_variables_source {source} not understood, must be 'MIRCA2000'"
-        )
-        if crop_specifier is None:
+        if crop_data is None:
+            if source_type != "MIRCA2000":
+                raise ValueError(
+                    f"crop_variables_source {source_type} not understood, must be 'MIRCA2000'"
+                )
             crop_data = {
                 "data": (
                     self.old_data_catalog.get_dataframe("MIRCA2000_crop_data")
@@ -156,19 +93,81 @@ class Crops(BuildModelBase):
                 ),
                 "type": "MIRCA2000",
             }
+
+            self.set_params(crop_data, name="crops/crop_data")
+
         else:
+            if source_type not in ["MIRCA2000", "GAEZ"]:
+                raise ValueError(
+                    f"crop_variables_source {source_type} not understood, must be 'MIRCA2000' or 'GAEZ'"
+                )
+            for crop_id, crop_values in crop_data.items():
+                assert "name" in crop_values
+                assert "reference_yield_kg_m2" in crop_values
+                assert "is_paddy" in crop_values
+                assert "rd_rain" in crop_values  # root depth rainfed crops
+                assert "rd_irr" in crop_values  # root depth irrigated crops
+                assert (
+                    "crop_group_number" in crop_values
+                )  # adaptation level to drought (see WOFOST: https://wofost.readthedocs.io/en/7.2/)
+                assert 5 >= crop_values["crop_group_number"] >= 0
+                assert (
+                    crop_values["rd_rain"] >= crop_values["rd_irr"]
+                )  # root depth rainfed crops should be larger than irrigated crops
+
+                if type == "GAEZ":
+                    crop_values["l_ini"] = crop_values["d1"]
+                    crop_values["l_dev"] = crop_values["d2a"] + crop_values["d2b"]
+                    crop_values["l_mid"] = crop_values["d3a"] + crop_values["d3b"]
+                    crop_values["l_late"] = crop_values["d4"]
+
+                    assert "KyT" in crop_values
+                    assert "Ky1" in crop_values
+                    assert "Ky2a" in crop_values
+                    assert "Ky2b" in crop_values
+                    assert "Ky3a" in crop_values
+                    assert "Ky3b" in crop_values
+                    assert "Ky4" in crop_values
+
+                elif type == "MIRCA2000":
+                    assert "a" in crop_values
+                    assert "b" in crop_values
+                    assert "P0" in crop_values
+                    assert "P1" in crop_values
+                    assert "l_ini" in crop_values
+                    assert "l_dev" in crop_values
+                    assert "l_mid" in crop_values
+                    assert "l_late" in crop_values
+                    assert "kc_initial" in crop_values
+                    assert "kc_mid" in crop_values
+                    assert "kc_end" in crop_values
+
+                assert (
+                    crop_values["l_ini"]
+                    + crop_values["l_dev"]
+                    + crop_values["l_mid"]
+                    + crop_values["l_late"]
+                    == 100
+                ), "Sum of l_ini, l_dev, l_mid, and l_late must be 100[%]"
+
             crop_data = {
-                "data": (
-                    self.old_data_catalog.get_dataframe(
-                        f"MIRCA2000_crop_data_{crop_specifier}"
-                    )
-                    .set_index("id")
-                    .to_dict(orient="index")
-                ),
-                "type": "MIRCA2000",
+                "data": crop_data,
+                "type": source_type,
             }
 
-        self.set_params(crop_data, name="crops/crop_data")
+            self.set_params(crop_data, name="crops/crop_data")
+
+    @build_method(depends_on=[], required=False)
+    def setup_crops_from_source(
+        self,
+        source: str | None = "MIRCA2000",
+    ) -> None:
+        """Sets up the crops data for the model."""
+        self.logger.info("Preparing crops data")
+
+        raise NotImplementedError(
+            "setup_crops_from_source is removed, use setup_crops instead."
+        )
 
     def process_crop_data(
         self,
@@ -642,7 +641,7 @@ class Crops(BuildModelBase):
 
         return data
 
-    @build_method(depends_on=["set_time_range"])
+    @build_method(depends_on=["set_time_range"], required=False)
     def setup_cultivation_costs(
         self,
         cultivation_costs: str | int | float = 0,
@@ -668,9 +667,10 @@ class Crops(BuildModelBase):
             "set_time_range",
             "setup_regions_and_land_use",
             "setup_economic_data",
-            "setup_crops_from_source",
+            "setup_crops",
             "setup_farmer_crop_calendar",
-        ]
+        ],
+        required=True,
     )
     def setup_crop_prices(
         self,
@@ -693,7 +693,7 @@ class Crops(BuildModelBase):
         self.set_params(parsed_crop_prices, name="crops/crop_prices")
         self.set_params(parsed_crop_prices, name="crops/cultivation_costs")
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=False)
     def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:
         """This method is removed. You can remove it entirely.
 
@@ -848,7 +848,7 @@ class Crops(BuildModelBase):
 
         return all_years_fraction_da, all_years_irrigated_fraction_da
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=False)
     def setup_farmer_crop_calendar_multirun(
         self,
         reduce_crops: bool = False,
@@ -1027,7 +1027,7 @@ class Crops(BuildModelBase):
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
-    @build_method(depends_on=["setup_create_farms"])
+    @build_method(depends_on=["setup_create_farms"], required=True)
     def setup_farmer_crop_calendar(
         self,
         year: int = 2000,

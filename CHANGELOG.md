@@ -17,6 +17,8 @@
  - GLOPOP-SG
 - Support custom DEMs
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
+- Add required = True/False to all build_methods allowing checking of build methods at build start rather than erroring when finally running the model.
+- Combine setup_crops and setup_crops_from_source.
 
 To support this version:
 
@@ -25,6 +27,7 @@ To support this version:
 - Re-run `setup_coastal_sfincs_model_regions`: `geb update -b build.yml::setup_coastal_sfincs_model_regions`
 - Remove setup_low_elevation_coastal_zone_mask from you build.yml
 - Models for inland regions need to be rebuild if floods need to be run
+- Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
