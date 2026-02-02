@@ -1327,8 +1327,8 @@ class Hydrography(BuildModelBase):
         # calculate the increment in mean sea level in the time series  based on a reference year
         reference_year = 2020
         sea_level_rise_df = mean_sea_level_df.subtract(
-            mean_sea_level_df.loc[f"{reference_year}-01-01"], axis=1)
-        # sea_level_rise_df = mean_sea_level_df - mean_sea_level_df.iloc[0]
+            mean_sea_level_df.loc[f"{reference_year}-01-01"], axis=1
+        )
 
         # extrapolate to 2100 using linear trend  between 2047-2050 per station
         last_year = sea_level_rise_df.index.year.max()
