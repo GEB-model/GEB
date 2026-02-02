@@ -537,74 +537,6 @@ class LandSurface(BuildModelBase):
             name="landcover/classification",
         )
 
-        target = self.grid["mask"]
-
-        forest_kc = (
-            xr.open_dataarray(
-                self.old_data_catalog.get_source("cwatm_forest_5min").path.format(  # ty:ignore[possibly-missing-attribute]
-                    variable="cropCoefficientForest_10days"
-                ),
-            )
-            .rename({"lat": "y", "lon": "x"})
-            .rio.write_crs(4326)
-        )
-        forest_kc.attrs["_FillValue"] = np.nan
-        forest_kc: xr.DataArray = forest_kc.isel(
-            get_window(
-                forest_kc.x,
-                forest_kc.y,
-                self.bounds,
-                buffer=3,
-            ),
-        )
-        forest_kc: xr.DataArray = resample_like(forest_kc, target, method="nearest")
-
-        forest_kc.attrs = {
-            key: attr
-            for key, attr in forest_kc.attrs.items()
-            if not key.startswith("NETCDF_") and key != "units"
-        }
-        self.set_grid(
-            forest_kc,
-            name="landcover/forest/crop_coefficient",
-        )
-
-        for land_use_type in ("forest", "grassland"):
-            self.logger.info(f"Setting up land use parameters for {land_use_type}")
-
-            parameter = f"interceptCap{land_use_type.title()}_10days"
-            interception_capacity = (
-                xr.open_dataarray(
-                    self.old_data_catalog.get_source(
-                        f"cwatm_{land_use_type}_5min"
-                    ).path.format(variable=parameter),  # ty:ignore[possibly-missing-attribute]
-                )
-                .rename({"lat": "y", "lon": "x"})
-                .rio.write_crs(4326)
-            )
-            interception_capacity.attrs["_FillValue"] = np.nan
-            interception_capacity: xr.DataArray = interception_capacity.isel(
-                get_window(
-                    interception_capacity.x,
-                    interception_capacity.y,
-                    self.bounds,
-                    buffer=3,
-                ),
-            )
-            interception_capacity: xr.DataArray = resample_like(
-                interception_capacity, target, method="nearest"
-            )
-
-            interception_capacity.attrs = {
-                key: attr
-                for key, attr in interception_capacity.attrs.items()
-                if not key.startswith("NETCDF_") and key != "units"
-            }
-            self.set_grid(
-                interception_capacity,
-                name=f"landcover/{land_use_type}/interception_capacity",
-            )
-
     @build_method(depends_on=[], required=False)
     def setup_soil_parameters(self) -> None:
         """Deprecated method for setting up soil parameters.
@@ -682,33 +614,55 @@ class LandSurface(BuildModelBase):
         )
         self.set_subgrid(depth_to_bedrock_m, name="soil/depth_to_bedrock_m")
 
-        crop_group = (
-            xr.open_dataarray(
-                self.old_data_catalog.get_source("cwatm_soil_5min").path.format(  # ty:ignore[possibly-missing-attribute]
-                    variable="cropgrp"
+    @build_method(depends_on=[], required=True)
+    def setup_vegetation(
+        self,
+    ) -> None:
+        """Sets up the vegetation parameters for the model."""
+        for vegetation_type in ("forest", "grassland_like"):
+            crop_group_number: xr.DataArray = self.data_catalog.fetch(
+                f"lisflood_crop_group_number_{vegetation_type}"
+            ).read()
+            crop_group_number = crop_group_number.isel(
+                get_window(
+                    crop_group_number.x,
+                    crop_group_number.y,
+                    self.bounds,
+                    buffer=10,
                 ),
             )
-            .rename({"lat": "y", "lon": "x"})
-            .rio.write_crs(4326)
-        )
-        crop_group = crop_group.isel(
-            get_window(
-                crop_group.x,
-                crop_group.y,
-                self.bounds,
-                buffer=10,
-            ),
-        )
-        crop_group.attrs["_FillValue"] = crop_group.attrs["__FillValue"]
-        del crop_group.attrs["__FillValue"]
 
-        crop_group: xr.DataArray = crop_group.astype(np.float32)
-        crop_group: xr.DataArray = convert_nodata(crop_group, np.nan)
+            crop_group_number = crop_group_number.astype(np.float32)
+            crop_group_number = convert_nodata(crop_group_number, np.nan)
+            crop_group_number = resample_like(
+                crop_group_number,
+                self.grid["mask"],
+                method="nearest",
+            )
+            self.set_grid(
+                crop_group_number,
+                name=f"vegetation/crop_group_number_{vegetation_type}",
+            )
 
-        crop_group = resample_like(
-            crop_group,
-            self.grid["mask"],
-            method="nearest",
-        )
+            leaf_area_index: xr.DataArray = self.data_catalog.fetch(
+                f"lisflood_leaf_area_index_{vegetation_type}"
+            ).read()
+            leaf_area_index = leaf_area_index.isel(
+                get_window(
+                    leaf_area_index.x,
+                    leaf_area_index.y,
+                    self.bounds,
+                    buffer=10,
+                ),
+            )
 
-        self.set_grid(crop_group, name="soil/crop_group")
+            leaf_area_index = leaf_area_index.astype(np.float32)
+            leaf_area_index = convert_nodata(leaf_area_index, np.nan)
+            leaf_area_index = resample_like(
+                leaf_area_index,
+                self.grid["mask"],
+                method="nearest",
+            ).compute()
+            self.set_other(
+                leaf_area_index, name=f"vegetation/leaf_area_index_{vegetation_type}"
+            )

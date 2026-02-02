@@ -33,6 +33,8 @@ setup_soil:
 
 setup_land_use_parameters:
 
+setup_vegetation:
+
 setup_waterbodies:
   command_areas: null
   custom_reservoir_capacity: null

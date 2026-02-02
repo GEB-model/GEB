@@ -97,27 +97,6 @@ COAST_RP:
     category: extreme water levels
     paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
     paper_ref: Dullaart et al. (2023)
-cwatm_soil_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: cwatm_input_5min/soil/{variable}.nc
-  meta:
-    source_license: GNU General Public License V3
-    source_url: https://cwatm.iiasa.ac.at/license.html
-cwatm_forest_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: cwatm_input_5min/landcover/forest/{variable}.nc
-  meta:
-    source_license: GNU General Public License V3
-    source_url: https://cwatm.iiasa.ac.at/license.html
-cwatm_grassland_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: cwatm_input_5min/landcover/grassland/{variable}.nc
 UN_dev_index:
   meta:
     category: economics
