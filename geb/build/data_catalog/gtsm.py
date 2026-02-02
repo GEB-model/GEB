@@ -80,7 +80,7 @@ class GTSM(Adapter):
         self.download_data(request, str(self.output_path))
         return self
 
-    def read(self, bounds: tuple[float, float, float, float]) -> xr.DataArray:
+    def read(self, bounds: tuple[float, float, float, float]) -> xr.Dataset:
         """Read GTSM data from the cached files.
 
         Args:
