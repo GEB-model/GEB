@@ -226,8 +226,8 @@ def parse_MIRCA2000_crop_calendar(
     if not isinstance(rainfed_source, list) or not isinstance(irrigated_source, list):
         raise TypeError("Expected MIRCA2000 calendar lines as a list of strings.")
 
-    rainfed_lines: list[str] = [str(line) for line in rainfed_source]
-    irrigated_lines: list[str] = [str(line) for line in irrigated_source]
+    rainfed_lines: list[str] = rainfed_source
+    irrigated_lines: list[str] = irrigated_source
 
     mirca2000_data: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
 
