@@ -23,7 +23,7 @@ class GTSM(Adapter):
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize the adapter for DeltaDTM.
+        """Initialize the adapter for GTSM.
 
         Args:
             *args: Additional positional arguments passed to the base Adapter class.
