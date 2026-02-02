@@ -18,6 +18,7 @@
 - Support custom DEMs
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
 - Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
+- Add MIRCA2000 unit grid and crop calendar entries to the new data catalog and use them in crop calendar setup.
 
 To support this version:
 
