@@ -81,3 +81,38 @@ class GADM(Adapter):
             gdf["GID_0"] != "NA"
         ]  # Remove entries with invalid ISO3 code
         return gdf
+
+
+class GADM28(Adapter):
+    """Class for GADM version 2.8 data adapter."""
+
+    def __init__(self, level: int, *args: Any, **kwargs: Any) -> None:
+        """Initialize the GADM adapter.
+
+        Args:
+            level: The administrative level to download (0 for countries, 1 for first-level subdivisions, etc.).
+            *args: Positional arguments to pass to the Adapter constructor.
+            **kwargs: Keyword arguments to pass to the Adapter constructor.
+        """
+        super().__init__(*args, **kwargs)
+        self.level = level
+
+    def fetch(self, url: str) -> GADM28:
+        """Process GADM Level 1 zip file to extract and convert to parquet.
+
+        Args:
+            url: The URL to download the GADM zip file from.
+        Returns:
+            The instance of the Adapter after processing.
+        """
+        pass
+
+    def read(self, **kwargs: Any) -> gpd.GeoDataFrame:
+        """Read the GADM data as a GeoDataFrame.
+
+        Args:
+            **kwargs: Additional keyword arguments to pass to gpd.read_parquet.
+        Returns:
+            A GeoDataFrame with the GADM data.
+        """
+        pass

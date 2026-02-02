@@ -10,7 +10,7 @@ from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
-from .gadm import GADM
+from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
@@ -136,6 +136,38 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use",
             "url": "https://www.gebco.net/",
             "paper_doi": "10.5285/a29c5465-b138-234d-e053-6c86abc040b9",
+        },
+    },
+    "global_exposure_model": {
+        "adapter": GlobalExposureModel(
+            folder="global_exposure_model",
+            local_version=1,
+            filename="global_exposure_model.json",
+            cache="local",
+        ),
+        "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
+        "source": {
+            "name": "OpenBuildingMap",
+            "author": "Oostwegel et al. (2025)",
+            "version": "1",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://dataservices.gfz-potsdam.de/panmetaworks/showshort.php?id=45829b80-e892-11ef-914a-f12b0080820d",
+            "paper_doi": "https://doi.org/10.5880/GFZ.LKUT.2025.002",
+        },
+    },
+    "gadm_28": {
+        "adapter": GADM28(
+            folder="gadm_28",
+            local_version=1,
+            filename="gadm_28.parquet",
+            cache="global",
+        ),
+        "url": "https://geodata.ucdavis.edu/gadm/gadm2.8/gadm28_levels.shp.zip",
+        "source": {
+            "name": "GADM version 2.8",
+            "author": "GADM",
+            "version": "2.8",
+            "license": "https://gadm.org/license.html",
         },
     },
     "mirca2000_unit_grid": {
