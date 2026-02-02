@@ -1626,7 +1626,7 @@ class Agents(BuildModelBase):
         """
         # load GADM level 1 within model domain (older version for compatibility with global exposure model)
         gadm_level1 = self.data_catalog.fetch("gadm_28").read(
-            geom=self.region.union_all(),
+            geom=self.region.union_all().buffer(0.1),
         )
         countries_in_model = gadm_level1["NAME_0"].unique().tolist()
 
@@ -1642,6 +1642,20 @@ class Agents(BuildModelBase):
             how="left",
             predicate="within",
         )["NAME_1"].values
+
+        # assert each building has a NAME_1 value
+        if buildings["NAME_1"].isnull().any():
+            # iterate over buildings without NAME_1 and match to closest GADM level 1 region
+            # sometimes buildings are just outside the GADM level 1 polygons (e.g., near coastlines),
+            # so we assign them to the closest region
+            buildings_no_name1 = buildings[buildings["NAME_1"].isnull()]
+            for idx, building in buildings_no_name1.iterrows():
+                building_centroid = building.geometry.centroid
+                distances = gadm_level1.geometry.distance(building_centroid)
+                closest_region_idx = distances.idxmin()
+                buildings.at[idx, "NAME_1"] = gadm_level1.at[
+                    closest_region_idx, "NAME_1"
+                ]
 
         for name_1 in gadm_level1["NAME_1"]:
             # clean name_1
