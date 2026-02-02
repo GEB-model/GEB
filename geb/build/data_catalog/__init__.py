@@ -634,17 +634,17 @@ data_catalog: dict[str, dict[str, Any]] = {
     "glopop-sg": {
         "adapter": GLOPOP_SG(
             folder="glopop_sg",
-            local_version=1,
+            local_version=3,
             filename="placeholder",
             cache="local",
         ),
-        "url": "https://zenodo.org/records/15680747/files/GLOPOP_SG%20(1).zip?download=1",
+        "url": "https://zenodo.org/records/17076088/files/GLOPOP-SG(update).zip?download=1",
         "source": {
             "name": "GLOPOP-SG",
             "author": "M.J. Ton et al. (2025)",
             "license": "CC BY 4.0",
-            "url": "https://doi.org/10.5281/zenodo.15680747",
-            "paper_doi": "10.5281/zenodo.15680747",
+            "url": "https://doi.org/10.5281/zenodo.17076088",
+            "paper_doi": "10.5281/zenodo.17076088",
         },
     },
 }
