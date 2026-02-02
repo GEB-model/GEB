@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+import tempfile
+import zipfile
 from typing import Any
 
 import cdsapi
-import zipfile
-import tempfile
 import xarray as xr
+
 from .base import Adapter
 
 
@@ -61,7 +62,13 @@ class GTSM(Adapter):
         )
 
     def fetch(self, url: str | None = None) -> None:
-        """Fetch GTSM data and save it to the cache directory."""
+        """Fetch GTSM data and save it to the cache directory.
+
+        Args:
+            url: Not used for GTSM, included for compatibility with base class.
+        Returns:
+            The current instance of the GTSM adapter.
+        """
         self.output_path = os.path.join(self.cache, "gtsm_data.zip")
         if os.path.exists(self.output_path):
             return self
@@ -71,8 +78,14 @@ class GTSM(Adapter):
         self.download_data(request, str(self.output_path))
         return self
 
-    def read(self, bounds):
-        """Read GTSM data from the cached files."""
+    def read(self, bounds: tuple[float, float, float, float]) -> xr.DataArray:
+        """Read GTSM data from the cached files.
+
+        Args:
+            bounds: A tuple of four floats representing the bounding box (min_x, min_y, max_x, max_y).
+        Returns:
+            An xarray DataArray containing the GTSM data clipped to the specified bounds.
+        """
         zip_path = self.output_path
         with tempfile.TemporaryDirectory() as temp_dir:
             extract_path = temp_dir
@@ -99,6 +112,5 @@ class GTSM(Adapter):
         )
 
         merged_data = merged_data.sel(stations=mask)
-
 
         return merged_data
