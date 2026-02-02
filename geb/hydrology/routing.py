@@ -28,7 +28,7 @@ from geb.geb_types import (
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows import balance_check
-from geb.workflows.io import read_geom
+from geb.workflows.io import read_geom, read_table
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -711,6 +711,8 @@ def fill_discharge_gaps(
     """
     filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
     for river_id, river in rivers.iterrows():
+        if river["is_further_downstream_outflow"]:
+            continue  # skip rivers that are further downstream
         # iterate from upstream to downstream
         valid_discharge: np.float32 = np.float32(np.nan)
         for idx in river["hydrography_linear"]:
@@ -995,6 +997,7 @@ class Routing(Module):
     """
 
     var: RoutingVariables
+    inflow: dict[tuple[int, int], ArrayFloat32]
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the Routing module.
@@ -1037,6 +1040,33 @@ class Routing(Module):
         self.river_ids = self.grid.load(
             self.model.files["grid"]["routing/river_ids"],
         )
+
+        self.inflow = {}
+        self.inflow_idx: int = -1  # index for the current time step in the inflow data
+        if "routing/inflow_m3_per_s" in self.model.files["table"]:
+            inflow_per_location: pd.DataFrame = read_table(
+                self.model.files["table"]["routing/inflow_m3_per_s"]
+            )
+            # select the right time steps from the inflow data
+            expected_time_steps = pd.date_range(
+                start=self.model.simulation_start,
+                end=self.model.simulation_end + self.model.timestep_length,
+                freq="H",
+            )
+            inflow_per_location = inflow_per_location.loc[expected_time_steps]
+
+            inflow_locations: gpd.GeoDataFrame = read_geom(
+                self.model.files["geom"]["routing/inflow_locations"]
+            ).set_index("ID")  # ty:ignore[invalid-assignment]
+            for inflow_id, inflow in inflow_per_location.items():
+                location: pd.Series = inflow_locations.loc[inflow_id]
+                y: int = location["y"]
+                x: int = location["x"]
+                self.inflow[(y, x)] = inflow.to_numpy(dtype=np.float32)
+
+            assert self.model.current_time == inflow_per_location.index[0]
+            # initialize inflow index
+            self.inflow_idx = 0
 
         if self.model.in_spinup:
             self.spinup()
@@ -1251,6 +1281,7 @@ class Routing(Module):
     ) -> tuple[
         np.float64,
         np.float64,
+        np.float64,
     ]:
         """Perform a daily routing step with multiple substeps.
 
@@ -1268,6 +1299,8 @@ class Routing(Module):
                 Otherwise, it indicates the amount of abstraction that could not be met and indicates an error
                 in the model.
 
+        Raises:
+            ValueError: If inflow is added to waterbody cells.
         """
         if __debug__:
             pre_storage: np.ndarray = self.hydrology.waterbodies.var.storage.copy()
@@ -1307,6 +1340,7 @@ class Routing(Module):
             )
             outflow_at_pits_m3 = np.float32(0)
             command_area_release_m3 = np.float32(0)
+            total_inflow_m3: np.float64 = np.float64(0)
 
         over_abstraction_m3: ArrayFloat32 = self.grid.full_compressed(
             0, dtype=np.float32
@@ -1379,6 +1413,21 @@ class Routing(Module):
             assert (
                 side_flow_channel_m3_per_hour[self.grid.var.waterBodyID != -1] == 0
             ).all()
+
+            for (y, x), inflow in self.inflow.items():
+                cell_index: int = self.grid.linear_mapping[y, x]
+                if self.grid.var.waterBodyID[cell_index] != -1:
+                    raise ValueError("Inflow cannot be added to waterbody cells.")
+
+                inflow_m3 = inflow[self.inflow_idx] * np.float32(3600)
+
+                side_flow_channel_m3_per_hour[cell_index] += inflow_m3
+
+                if __debug__:
+                    total_inflow_m3 += inflow_m3
+
+            # increment inflow index for next hour
+            self.inflow_idx += 1
 
             if self.model.in_spinup:
                 (
@@ -1497,6 +1546,7 @@ class Routing(Module):
                     total_runoff_m.sum(axis=0) * self.grid.var.cell_area,
                     return_flow * self.grid.var.cell_area,
                     over_abstraction_m3,
+                    total_inflow_m3,
                 ],
                 outfluxes=[
                     channel_abstraction_m3,
@@ -1542,6 +1592,7 @@ class Routing(Module):
         # outside debug, we return NaN for routing loss
         else:
             routing_loss: np.float64 = np.float64(np.nan)
+            total_inflow_m3 = np.float64(np.nan)
 
         self.report(locals())
 
@@ -1553,7 +1604,7 @@ class Routing(Module):
                 f"Total over-abstraction in routing step is {total_over_abstraction_m3:.2f} m³"
             )
 
-        return routing_loss, total_over_abstraction_m3
+        return total_inflow_m3, routing_loss, total_over_abstraction_m3
 
     @property
     def name(self) -> str:
@@ -1568,8 +1619,27 @@ class Routing(Module):
             A GeoDataFrame containing the outflow rivers.
         """
         rivers: gpd.GeoDataFrame = self.rivers
-        rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        rivers = rivers[~rivers["is_downstream_outflow"]]
+
+        # TODO: Remove the if statement in March 2026. The part selection behind the statement
+        # should always be done when it is removed.
+        if "is_further_downstream_outflow" in rivers.columns:
+            rivers = rivers[~rivers["is_further_downstream_outflow"]]
         outflow_rivers: gpd.GeoDataFrame = rivers[
             ~rivers["downstream_ID"].isin(rivers.index)
         ]
         return outflow_rivers
+
+    @property
+    def active_rivers(self) -> gpd.GeoDataFrame:
+        """Get the active rivers (rivers that are not water bodies).
+
+        Returns:
+            A GeoDataFrame containing the active rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        active_rivers = rivers[
+            (~rivers["is_downstream_outflow"])
+            & (~rivers["is_further_downstream_outflow"])
+        ]
+        return active_rivers

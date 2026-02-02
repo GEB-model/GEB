@@ -414,13 +414,6 @@ class HillSlopeErosion(Module):
             "Check if slope is correctly implemented here. There seems to be some uncertainty whether slope should be in radians or m/m (or perhaps something else entirely)"
         )
 
-        self.HRU.var.slope = self.hydrology.to_HRU(
-            data=self.hydrology.grid.load(
-                self.model.files["grid"]["landsurface/slope"]
-            ),
-            fn=None,
-        )
-
         # Is correct? -> Does not seem to be correct. Should be "length" of the element. But what is that?
         raise ValueError(
             "Check if cell_length is correctly implemented here. Looking at the original code, cell length seems to implictly assume one hillslope element per cell. Which would have some implications for the dynamic cell size that we have in GEB"
@@ -507,7 +500,9 @@ class HillSlopeErosion(Module):
 
         mannings_field = (mannings_soil**2 + mannings_vegated_field**2) ** 0.5
         flow_velocity_field = get_flow_velocity(
-            mannings_field, self.HRU.var.water_depth_in_field, self.HRU.var.slope
+            mannings_field,
+            self.HRU.var.water_depth_in_field,
+            self.HRU.var.slope_m_per_m,
         )
 
         mannings_vegated_field_harvested = get_mannings_vegatation(
@@ -523,7 +518,7 @@ class HillSlopeErosion(Module):
         flow_velocity_field_harvested = get_flow_velocity(
             mannings_field_harvested,
             self.HRU.var.water_depth_in_field,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
         )
 
         # all cells without a crop (-1), but with a land owner (not -1) can be considered harvested
@@ -548,7 +543,7 @@ class HillSlopeErosion(Module):
             24.0 * 3600.0
         )  # kg/m²/s to mm/day (assuming water density = 1000 kg/m³)
         effective_rainfall_mm_day = pr_mm_day * np.cos(
-            self.HRU.var.slope
+            self.HRU.var.slope_m_per_m
         )  # slope-corrected rainfall (mm/day)
 
         leaf_drainage = effective_rainfall_mm_day * self.HRU.var.canopy_cover
@@ -609,7 +604,7 @@ class HillSlopeErosion(Module):
             self.HRU.var.clay_percentage[0]
             / np.float32(100.0),  # only consider top layer
             overland_runoff_m * 1000.0,  # convert m to mm
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
         )
@@ -619,7 +614,7 @@ class HillSlopeErosion(Module):
             self.HRU.var.silt_percentage[0]
             / np.float32(100.0),  # only consider top layer
             overland_runoff_m * 1000.0,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
         )
@@ -629,7 +624,7 @@ class HillSlopeErosion(Module):
             self.HRU.var.sand_percentage[0]
             / np.float32(100.0),  # only consider top layer
             overland_runoff_m * 1000.0,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
         )
@@ -649,7 +644,7 @@ class HillSlopeErosion(Module):
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.cell_length,
         )
 
@@ -660,7 +655,7 @@ class HillSlopeErosion(Module):
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.cell_length,
         )
 
@@ -671,7 +666,7 @@ class HillSlopeErosion(Module):
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.cell_length,
         )
 

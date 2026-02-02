@@ -29,7 +29,7 @@ setup_mannings:
   
 setup_economic_data:
 
-setup_soil_parameters:
+setup_soil:
 
 setup_land_use_parameters:
 
@@ -374,8 +374,6 @@ setup_discharge_observations:
 setup_CO2_concentration:
 
 setup_global_ocean_mean_dynamic_topography:
-
-setup_low_elevation_coastal_zone_mask:
 
 setup_coastlines:
 

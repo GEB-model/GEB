@@ -103,12 +103,14 @@ class Adapter:
                 catalog_root: Path = Path.home() / ".geb_cache"
 
             root = catalog_root / self.folder / f"v{self.local_version}"
-            root.mkdir(parents=True, exist_ok=True)
-            return root
         elif self.cache == "local":
-            return Path("cache") / self.folder / f"v{self.local_version}"
+            root = Path("cache") / self.folder / f"v{self.local_version}"
         else:
             raise ValueError("Cache must be either 'global' or 'local'")
+
+        # create the root directory if it doesn't exist
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     @property
     def is_ready(self) -> bool:

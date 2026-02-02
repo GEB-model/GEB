@@ -225,7 +225,7 @@ class Hydrology(Data, Module):
         timer.finish_split("GW")
 
         total_runoff_m = self.runoff_concentrator.step(
-            interflow=interflow_m, baseflow=baseflow_m, runoff=overland_runoff_m
+            interflow_m=interflow_m, baseflow_m=baseflow_m, runoff_m=overland_runoff_m
         ).astype(np.float32)
 
         if __debug__:
@@ -250,7 +250,7 @@ class Hydrology(Data, Module):
 
         timer.finish_split("Runoff concentration")
 
-        routing_loss_m3, over_abstraction_m3 = self.routing.step(
+        total_inflow_m3, routing_loss_m3, over_abstraction_m3 = self.routing.step(
             total_runoff_m,
             channel_abstraction_m3,
             return_flow_m,
@@ -266,6 +266,7 @@ class Hydrology(Data, Module):
 
         if __debug__:
             influx += over_abstraction_m3
+            influx += total_inflow_m3
 
             outflux_m3 += routing_loss_m3
             invented_water += (

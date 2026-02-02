@@ -234,7 +234,7 @@ class GridVariables(Bucket):
     layer_boundary_elevation: TwoDArrayFloat32
     elevation: ArrayFloat32
     specific_yield: TwoDArrayFloat32
-    hydraulic_conductivity: TwoDArrayFloat32
+    groundwater_hydraulic_conductivity_m_per_day: TwoDArrayFloat32
     upstream_area: ArrayFloat32
     upstream_area_n_cells: ArrayInt32
     river_mannings: ArrayFloat32
@@ -313,6 +313,19 @@ class Grid(BaseVariables):
         self.linear_mapping: TwoDArrayInt32 = self.create_linear_mapping(self.mask)
 
         BaseVariables.__init__(self)
+
+    @property
+    def lonlat(self) -> TwoDArrayFloat32:
+        """Get longitude and latitude for each grid cell.
+
+        Returns:
+            lonlat: 2D array of shape (n_cells, 2) with longitude and latitude.
+        """
+        lonlat: TwoDArrayFloat32 = np.empty((self.compressed_size, 2), dtype=np.float32)
+        lon_grid, lat_grid = np.meshgrid(self.lon, self.lat)
+        lonlat[:, 0] = self.compress(lon_grid)
+        lonlat[:, 1] = self.compress(lat_grid)
+        return lonlat
 
     def create_linear_mapping(self, mask: TwoDArrayBool) -> TwoDArrayInt32:
         """Create a linear mapping from uncompressed to compressed indices.
@@ -556,13 +569,12 @@ class Grid(BaseVariables):
 class HRUVariables(Bucket):
     """This class contains functions to handle variables on the HRU scale."""
 
-    arno_shape_parameter: ArrayFloat32
+    variable_runoff_shape_beta: ArrayFloat32
     interception_storage_m: ArrayFloat32
     snow_temperature_C: ArrayFloat32
     liquid_water_in_snow_m: ArrayFloat32
     snow_water_equivalent_m: ArrayFloat32
     topwater_m: ArrayFloat32
-    frost_index: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
     land_use_type: ArrayInt32
@@ -577,7 +589,7 @@ class HRUVariables(Bucket):
     transpiration_crop_life: ArrayFloat32
     crop_map: ArrayInt32
     topwater: ArrayFloat32
-    soil_layer_height: TwoDArrayFloat32
+    soil_layer_height_m: TwoDArrayFloat32
     wfc: TwoDArrayFloat32
     w: TwoDArrayFloat32
     ws: TwoDArrayFloat32
@@ -597,7 +609,7 @@ class HRUVariables(Bucket):
     potential_transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
     cell_length: ArrayFloat32
     water_depth_in_field: ArrayFloat32
-    slope: ArrayFloat32
+    slope_m_per_m: ArrayFloat32
     cover: ArrayFloat32
     plant_height: ArrayFloat32
     no_erosion: ArrayBool
@@ -610,6 +622,11 @@ class HRUVariables(Bucket):
     no_elements_harvested: ArrayFloat32
     soil_temperature_C: TwoDArrayFloat32
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
+    wetting_front_depth_m: ArrayFloat32
+    wetting_front_suction_head_m: ArrayFloat32
+    wetting_front_moisture_deficit: ArrayFloat32
+    green_ampt_active_layer_idx: ArrayInt32
+    hillslope_length_m: ArrayFloat32
 
 
 class HRUs(BaseVariables):
@@ -698,6 +715,18 @@ class HRUs(BaseVariables):
             mask=self.data.grid.mask,
             threshold_m2=25_000_000,  # 25 km² to align with MERIT-Basins defintion of a river, https://www.reachhydro.org/home/params/merit-basins
         )
+
+    @property
+    def lonlat(self) -> TwoDArrayFloat32:
+        """For each HRU, get the longitude and latitude.
+
+        Returns:
+            lonlat: 2D array of shape (n_HRUs, 2) with longitude and latitude of the grid cell the HRU is located in.
+        """
+        grid_lonlat: TwoDArrayFloat32 = self.data.grid.lonlat
+        lonlat: TwoDArrayFloat32 = grid_lonlat[self.var.HRU_to_grid]
+
+        return lonlat
 
     @property
     def linear_mapping(self) -> TwoDArrayInt32:

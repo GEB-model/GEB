@@ -37,7 +37,7 @@ def load_soilgrids(
     for variable_name in variables:
         variable_layers: list[xr.DataArray] = []
         for i, layer in enumerate(layers, start=1):
-            da = data_catalog.fetch("soilgrids").read(
+            da = data_catalog.fetch("soilgridsv2").read(
                 variable=variable_name, depth=layer
             )
             assert isinstance(da, xr.DataArray)
@@ -73,20 +73,15 @@ def load_soilgrids(
         ds.append(ds_variable)
 
     ds: xr.Dataset = xr.merge(ds, join="exact").transpose("soil_layer", "y", "x")
+    ds = ds.compute()
 
     # soilgrids uses conversion factors as specified here:
     # https://www.isric.org/explore/soilgrids/faq-soilgrids
-    ds["bdod"] = ds["bdod"] / 100  # cg/cm³ -> kg/dm³
+    ds["bdod"] = ds["bdod"] / 100  # cg/cm³ -> gr/cm³
     ds["clay"] = ds["clay"] / 10  # g/kg -> g/100g (%)
     ds["silt"] = ds["silt"] / 10  # g/kg -> g/100g (%)
-    ds["soc"] = ds["soc"] / 100  # g/kg -> g/100g (%)
+    ds["soc"] = ds["soc"] / 100  # dg/kg -> g/100g (%)
 
-    # depth_to_bedrock = data_catalog.get_rasterdataset(
-    #     "soilgrids_2017_BDTICM", geom=region
-    # )
-    # depth_to_bedrock = convert_nodata(depth_to_bedrock, np.nan)
-    # depth_to_bedrock = resample_like(depth_to_bedrock, subgrid, method="bilinear")
-    # depth_to_bedrock = interpolate_na_2d(depth_to_bedrock)
     soil_layer_height: xr.DataArray = xr.full_like(
         ds["silt"], fill_value=0.0, dtype=np.float32
     )

@@ -36,7 +36,7 @@ dependencies = [
     "numba>=0.63.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
-    "pandas>=2.3.0",
+    "pandas>=2.3.0,<3.0.0",  # we get some errors with pandas 3.0
     "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
     "pyflwdir>=0.5.9",
@@ -61,7 +61,7 @@ dependencies = [
     "zarr>=3.1.5",
     "plotly>=6.2.0",
     "kaleido>=1.0.0",
-    "ty>=0.0.1a25",
+    "ty==0.0.13",
     "pystac>=1.14.1",
     "xpystac>=0.4.0",
     "odc-stac>=0.4.0",
@@ -76,8 +76,7 @@ dependencies = [
     "osmnx>=2.0.6",
     "joblib>=1.5.2",
     "matplotlib>=3.10.7",
-    "zensical>=0.0.13",
-    "planetary-computer>=1.0.0"
+    "seaborn>=0.13.2",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"

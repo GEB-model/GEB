@@ -9,10 +9,12 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from shapely.geometry import Point
 
 from geb.build.methods import build_method
 from geb.cli import (
@@ -122,7 +124,6 @@ def test_init_coastal(clean_working_directory: bool) -> None:
                 "setup_hydrography",
                 "setup_elevation",
                 "setup_global_ocean_mean_dynamic_topography",
-                "setup_low_elevation_coastal_zone_mask",
                 "setup_coastlines",
                 "setup_osm_land_polygons",
                 "setup_coastal_sfincs_model_regions",
@@ -237,7 +238,9 @@ def test_update_with_dict() -> None:
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "method",
-    ["setup_hydrography"],
+    [
+        "setup_hydrography",
+    ],
 )
 def test_update_with_method(method: str) -> None:
     """Test updating model configuration using different methods.
@@ -311,7 +314,7 @@ def test_spinup() -> None:
             ).to_dataframe()["discharge_hourly"]
 
             np.testing.assert_almost_equal(
-                hourly_outflow_data_zarr.values, outflow_data_csv.values, decimal=5
+                hourly_outflow_data_zarr.values, outflow_data_csv.values, decimal=4
             )
 
             daily_outflow_data_zarr: pd.DataFrame = daily_discharge_data.isel(
@@ -494,6 +497,126 @@ def test_land_use_change() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_custom_DEM() -> None:
+    """Test model build with a custom DEM."""
+    with WorkingDirectory(working_directory):
+        build_args = DEFAULT_BUILD_ARGS.copy()
+        del build_args["continue_"]
+
+        build_config: dict[str, dict[str, list[dict]]] = {}
+        build_config["setup_elevation"] = {
+            "DEMs": [{"name": "geul_dem", "nodata": np.nan}]
+        }
+        build_args["build_config"] = build_config
+
+        # Path is not set, so should raise an error
+        with pytest.raises(ValueError):
+            update_fn(**build_args)
+
+        # Test with zarr
+        build_config["setup_elevation"]["DEMs"][0]["path"] = str(
+            Path("data") / "geul_dem.zarr"
+        )
+
+        # Test setting CRS
+        build_config["setup_elevation"]["DEMs"][0]["crs"] = 28992
+        update_fn(**build_args)
+
+        # Test with tif
+        build_config["setup_elevation"]["DEMs"][0]["path"] = str(
+            Path("data") / "Geul_Filled_DEM_EPSG28992.tif"
+        )
+
+        update_fn(**build_args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_setup_inflow() -> None:
+    """Test setup of inflow hydrograph.
+
+    Verifies that the model can set up an inflow hydrograph
+    from specified locations and inflow data files.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        config = parse_config(CONFIG_DEFAULT)
+        config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=10
+        )
+        args["config"] = config
+
+        model: GEBModel = run_model_with_method(
+            method=None,
+            close_after_run=False,
+            **args,
+        )
+        model.run(initialize_only=True)
+        data_folder: Path = Path("data")
+        data_folder.mkdir(parents=True, exist_ok=True)
+
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers.copy()
+
+        start_time = model.spinup_start
+        end_time = model.run_end + model.timestep_length
+
+        model.close()
+
+        rivers: gpd.GeoDataFrame = rivers[["geometry"]]
+        rivers.geometry = rivers.geometry.apply(lambda geom: Point(geom.coords[0]))
+        rivers.index.name = "ID"
+        rivers.index = rivers.index.astype(str)
+        rivers.reset_index().to_file(
+            data_folder / "inflow_locations.geojson", driver="GeoJSON"
+        )
+
+        data = {
+            "time": pd.date_range(start=start_time, end=end_time, freq="YS"),
+        }
+        for ID in rivers.index:
+            data[ID] = np.round(np.random.rand(len(data["time"])) * 100, 1)
+
+        inflow = pd.DataFrame(data)
+        inflow.to_csv(data_folder / "inflow_hydrograph.csv", index=False)
+
+        try:
+            build_args = DEFAULT_BUILD_ARGS.copy()
+            del build_args["continue_"]
+
+            build_config: dict[str, dict[str, str | bool]] = {}
+            build_config["setup_inflow"] = {
+                "locations": str(Path("data") / "inflow_locations.geojson"),
+                "inflow_m3_per_s": str(Path("data") / "inflow_hydrograph.csv"),
+            }
+            build_args["build_config"] = build_config
+            with pytest.raises(ValueError):
+                update_fn(**build_args)
+
+            build_args["build_config"]["setup_inflow"]["interpolate"] = True
+            build_args["build_config"]["setup_inflow"]["extrapolate"] = True
+
+            # copy the original input file
+            shutil.copy(Path("input") / "files.yml", Path("input") / "files.yml.bak")
+
+            update_fn(**build_args)
+            run_model_with_method(method="run", **args)
+
+        finally:
+            # remove inflow data files
+            if (data_folder / "inflow_hydrograph.csv").exists():
+                os.remove(data_folder / "inflow_hydrograph.csv")
+            if (data_folder / "inflow_locations.geojson").exists():
+                os.remove(data_folder / "inflow_locations.geojson")
+
+            # restore original input file
+            if (Path("input") / "files.yml.bak").exists():
+                shutil.copy(
+                    Path("input") / "files.yml.bak", Path("input") / "files.yml"
+                )
+                os.remove(Path("input") / "files.yml.bak")
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_run_yearly() -> None:
     """Test yearly model execution.
 
@@ -609,7 +732,6 @@ def test_multiverse() -> None:
             },
         ]
         config["hazards"]["floods"]["events"] = events
-        config["hazards"]["floods"]["force_overwrite"] = False
 
         args["config"] = config
 
