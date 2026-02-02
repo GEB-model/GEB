@@ -6,7 +6,7 @@ import os
 import tempfile
 import zipfile
 from typing import Any
-
+from pathlib import Path
 import cdsapi
 import xarray as xr
 
@@ -69,11 +69,12 @@ class GTSM(Adapter):
         Returns:
             The current instance of the GTSM adapter.
         """
-        self.output_path = os.path.join(self.cache, "gtsm_data.zip")
-        if os.path.exists(self.output_path):
+        self.output_path: Path = self.root / self.filename
+
+        if self.output_path.exists():
             return self
         # make directory if it doesn't exist
-        os.makedirs(self.cache, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True)
         request = self.construct_request()
         self.download_data(request, str(self.output_path))
         return self
