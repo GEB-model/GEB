@@ -61,7 +61,7 @@ dependencies = [
     "zarr>=3.1.5",
     "plotly>=6.2.0",
     "kaleido>=1.0.0",
-    "ty>=0.0.1a25",
+    "ty==0.0.13",
     "pystac>=1.14.1",
     "xpystac>=0.4.0",
     "odc-stac>=0.4.0",
@@ -79,7 +79,8 @@ dependencies = [
     "pyquadkey2>=0.3.2",
     "osmnx>=2.0.6",
     "joblib>=1.5.2",
-    "matplotlib>=3.10.7"
+    "matplotlib>=3.10.7",
+    "seaborn>=0.13.2",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"

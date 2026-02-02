@@ -384,6 +384,114 @@ def get_subbasin_upstream_areas(
     return upstream_areas
 
 
+def cluster_subbasins_by_area_and_proximity(
+    data_catalog: NewDataCatalog,
+    subbasin_ids: list[int],
+    target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
+    area_tolerance: float,
+    ocean_outlets_only: bool,
+    logger: logging.Logger,
+) -> list[list[int]]:
+    """Cluster subbasins by following the coastline with performance optimizations.
+
+    This function creates clusters of subbasins that:
+    1. Starts from coastal basins and follow the coastline
+    2. Adds nearby subbasins along the coast
+    3. Uses distance thresholds for cluster growth but allow jumps between clusters (100km threshold)
+    4. Moves to the globally closest unused basin when current cluster is complete
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        subbasin_ids: List of downstream COMID values to cluster.
+        target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
+        area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        ocean_outlets_only: If True, only consider coastal basins that intersect with coastlines.
+        logger: Logger for progress tracking.
+
+    """
+    logger.info(f"Clustering {len(subbasin_ids)} subbasins along the coastline...")
+
+    # Load subbasin geometries and river graph to identify coastal basins
+    subbasins = gpd.read_parquet(
+        data_catalog.fetch("merit_basins_catchments").path,
+        filters=[("COMID", "in", subbasin_ids)],
+    ).set_index("COMID")
+
+    # Get river graph to identify coastal basins
+    river_graph = get_river_graph(data_catalog)
+
+    # Identify coastal basins (no downstream neighbors)
+    coastal_basin_ids = []
+    inland_basin_ids = []
+
+    for subbasin_id in subbasin_ids:
+        if len(list(river_graph.neighbors(subbasin_id))) == 0:
+            coastal_basin_ids.append(subbasin_id)
+        else:
+            inland_basin_ids.append(subbasin_id)
+
+    logger.info(
+        f"Found {len(coastal_basin_ids)} coastal basins and {len(inland_basin_ids)} inland basins"
+    )
+
+    if ocean_outlets_only:
+        logger.info("Filtering coastal basins to ocean outlets only...")
+        # Load coastlines
+        coastlines = data_catalog.fetch("open_street_map_coastlines").read()
+        # clip coastlines to the bounding box of the subbasins for performance
+        coastlines = coastlines.cx[
+            subbasins.total_bounds[0] : subbasins.total_bounds[2],
+            subbasins.total_bounds[1] : subbasins.total_bounds[3],
+        ]
+        # check whether coastal basins intersect with coastlines
+        # Only select candidate basins first
+        candidates = subbasins.loc[coastal_basin_ids]
+
+        # Buffer once, vectorized. Buffering by 0.1 degrees (~11km) to account for minor misalignments
+        buffered = candidates.geometry.buffer(0.1)
+
+        # Vectorized intersects
+        mask = buffered.intersects(coastlines.union_all())
+
+        # Get verified IDs
+        coastal_basin_ids = candidates.index[mask].tolist()
+
+        # remove any coastal basins that do not intersect with coastlines from subbasins
+        subbasins = subbasins.loc[coastal_basin_ids + inland_basin_ids]
+        subbasin_ids = subbasins.index.tolist()
+
+    logger.info("Getting upstream areas...")
+    upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasin_ids)
+
+    logger.info("Pre-computing spatial relationships...")
+
+    # Pre-compute centroids for distance calculations (much faster than geometry operations)
+    logger.info("Computing centroids...")
+    centroids = {}
+    centroid_coords = {}  # Store as (x, y) tuples for faster distance calculations
+
+    # Create numpy arrays for vectorized distance calculations
+
+    subbasin_list = list(subbasin_ids)
+    coords_array = np.zeros((len(subbasin_list), 2))
+    subbasin_to_idx = {}
+
+    for i, subbasin_id in enumerate(subbasin_list):
+        centroid = subbasins.loc[subbasin_id].geometry.centroid
+        centroids[subbasin_id] = centroid
+        centroid_coords[subbasin_id] = (centroid.x, centroid.y)
+        coords_array[i] = [centroid.x, centroid.y]
+        subbasin_to_idx[subbasin_id] = i
+
+    # Build spatial index for fast neighbor finding
+    subbasins_sindex = subbasins.sindex
+    subbasin_ids_set = set(subbasin_ids)  # Convert to set for O(1) lookups
+
+    # Lazy adjacency computation - compute touching relationships on-demand and cache
+    logger.info("Setting up lazy adjacency computation...")
+    adjacency_cache = {}
+
+
 # Fast distance lookup using numpy
 def fast_distance(
     subbasin1: int,
@@ -2370,7 +2478,8 @@ class GEBModel(
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
             rivers = rivers[~rivers["is_upstream_of_downstream_basin"]]
         elif "subbasin" in region or "geom" in region:
-            outlet_lonlats = rivers.geometry.apply(
+            rivers_outlets_for_basins = rivers[~rivers["is_further_downstream_outflow"]]
+            outlet_lonlats = rivers_outlets_for_basins.geometry.apply(
                 lambda geom: geom.coords[-2]
             ).tolist()
             subbasins_grid = ldd_network.basins(
@@ -2378,7 +2487,7 @@ class GEBModel(
                     [lon for lon, lat in outlet_lonlats],
                     [lat for lon, lat in outlet_lonlats],
                 ),
-                ids=rivers.index,
+                ids=rivers_outlets_for_basins.index,
             ).astype(np.int32)
 
             # we want to remove the areas upstream of the downstream outflow basins
@@ -2428,7 +2537,7 @@ class GEBModel(
                 crs=subbasins.crs,
             )
             # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
-            # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+            # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
                 f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"

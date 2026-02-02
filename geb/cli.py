@@ -939,6 +939,12 @@ def init_multiple_fn(
     type=float,
     help="Minimum bbox efficiency (0-1) for cluster merging. Higher values create more compact/square clusters. Default: 0.97 (97% land fill ratio, allows only ~3% wasted land). Use 0.85 for slightly less compact (85%), 0.70 for moderate compactness, or 0.60 for more elongated shapes.",
 )
+@click.option(
+    "--ocean-outlets-only",
+    is_flag=True,
+    default=False,
+    help="If set, only include clusters that flow to the ocean (exclude endorheic basins).",
+)
 @working_directory_option
 def init_multiple(
     config: str,
@@ -953,6 +959,7 @@ def init_multiple(
     skip_merged_geometries: bool,
     skip_visualization: bool,
     min_bbox_efficiency: float,
+    ocean_outlets_only: bool,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
 
@@ -993,7 +1000,16 @@ def init_multiple(
         skip_merged_geometries=skip_merged_geometries,
         skip_visualization=skip_visualization,
         min_bbox_efficiency=min_bbox_efficiency,
+        ocean_outlets_only=ocean_outlets_only,
     )
+
+
+@cli.command()
+def server() -> None:
+    """Run the GEB MCP server."""
+    from geb.mcp_server import mcp
+
+    mcp.run()
 
 
 @cli.command()

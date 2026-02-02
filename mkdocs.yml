@@ -92,6 +92,8 @@ nav:
     - Building a model:
       - Overview: getting_started/build/index.md
       - Data catalog: getting_started/build/data_catalog.md
+      - Elevation: getting_started/build/elevation.md
+      - Waterbodies: getting_started/build/waterbodies.md
     - Running the model: getting_started/running.md
     - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
