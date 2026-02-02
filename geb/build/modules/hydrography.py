@@ -1357,13 +1357,15 @@ class Hydrography(BuildModelBase):
         for station in sea_level_rise_df.columns:
             series = sea_level_rise_df[station]
             # check that the values are monotonically increasing
-            assert series.is_monotonic_increasing, (
-                f"Sea level rise data for station {station} is not monotonically increasing after extrapolation."
-            )
+            if not series.is_monotonic_increasing:
+                raise ValueError(
+                    f"Sea level rise data for station {station} is not monotonically increasing after extrapolation."
+                )
             # check that the values are reasonable (less than 2 meters by 2100)
-            assert series.iloc[-1] < 2, (
-                f"Sea level rise data for station {station} exceeds 2 meters by 2100."
-            )
+            if series.iloc[-1] >= 2:
+                raise ValueError(
+                    f"Sea level rise data for station {station} exceeds 2 meters by 2100."
+                )
 
         # set table for model
         self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise_rcp8p5")
