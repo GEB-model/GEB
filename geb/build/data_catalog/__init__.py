@@ -145,9 +145,6 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="global_exposure_model.json",
             cache="local",
         ),
-        # The GlobalExposureModel adapter fetches data from the GEM GitHub repository;
-        # the URL and source metadata are set accordingly to avoid confusion with
-        # the separate OpenBuildingMap dataset.
         "url": "https://github.com/gem/global_exposure_model",
         "source": {
             "name": "GEM Global Exposure Model",
