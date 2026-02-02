@@ -1208,6 +1208,8 @@ class SFINCSRootModel:
             year: The year for which to apply sea level rise adjustments.
         Returns:
             An instance of SFINCSSimulation configured with coastal water level forcing.
+        Raises:
+            ValueError: If sea level rise data is provided but the station is not found in the data for the specified year.
         """
         # prepare coastal timeseries and locations
         timeseries = pd.read_csv(

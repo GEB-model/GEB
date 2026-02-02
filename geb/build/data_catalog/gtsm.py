@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import tempfile
 import zipfile
-from typing import Any
 from pathlib import Path
+from typing import Any
+
 import cdsapi
 import xarray as xr
 
