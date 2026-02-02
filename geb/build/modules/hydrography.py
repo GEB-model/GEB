@@ -1327,6 +1327,30 @@ class Hydrography(BuildModelBase):
         # calculate the increment in mean sea level in the time series
         sea_level_rise_df = mean_sea_level_df - mean_sea_level_df.iloc[0]
 
+        # extrapolate to 2100 using linear trend per station
+        last_year = sea_level_rise_df.index.year.max()
+        future_years = np.arange(last_year + 1, 2101)
+        future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
+        future_data = {}
+        for station in sea_level_rise_df.columns:
+            series = sea_level_rise_df[station]
+            # fit linear trend of last 3 years
+            recent_series = series[series.index.year > (last_year - 3)]
+            coeffs = np.polyfit(
+                recent_series.index.year,
+                recent_series.values,
+                deg=1,
+            )
+            trend = np.poly1d(coeffs)
+            future_values = trend(future_years)
+            future_data[station] = future_values
+        future_df = pd.DataFrame(
+            data=future_data,
+            index=future_dates,
+        )
+        # append future data to sea_level_rise_df
+        sea_level_rise_df = pd.concat([sea_level_rise_df, future_df], axis=0)
+
         # set table for model
         self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise")
 
