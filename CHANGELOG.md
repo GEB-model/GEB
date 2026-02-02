@@ -26,6 +26,7 @@ To support this version:
 - Re-run `setup_coastal_sfincs_model_regions`: `geb update -b build.yml::setup_coastal_sfincs_model_regions`
 - Remove setup_low_elevation_coastal_zone_mask from you build.yml
 - Models for inland regions need to be rebuild if floods need to be run
+- Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data` to regenerate `gtsm/sea_level_rise_rcp8p5` using the new GTSM station data.
 - Re-run `setup_gtsm_water_levels`: `geb update -b build.yml::setup_gtsm_water_levels`
 - Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 
