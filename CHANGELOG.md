@@ -21,6 +21,7 @@
 - Add required = True/False to all build_methods allowing checking of build methods at build start rather than erroring when finally running the model.
 - Combine setup_crops and setup_crops_from_source.
 - Use LAI to set interception and compute crop factors for forest and grassland.
+- Add MIRCA2000 unit grid and crop calendar entries to the new data catalog and use them in crop calendar setup.
 
 To support this version:
 

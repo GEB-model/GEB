@@ -14,28 +14,6 @@ MIRCA2000_crop_data_variants:
     paper_doi: adjusted from 10.1016/j.jhydrol.2009.07.031
     paper_ref: Siebert et al. (2010)
     source_license:  Creative Commons Attribution 4.0 International 
-MIRCA2000_unit_grid:
-  data_type: RasterDataset
-  driver: raster
-  path: agriculture/MIRCA2000/unit_code_grid/unit_code.asc
-  crs: 4326
-  meta:
-    paper_doi: 10.1029/2008GB003435
-    paper_ref: Portmann et al. (2010)
-    source_license: CC BY 4.0
-    source_url: https://www.uni-frankfurt.de/45218031/Data_download_center_for_MIRCA2000
-    source_version: 1.1
-MIRCA2000_cropping_calendar_{irrigated_or_rainfed}:
-  data_type: Dataset
-  path: agriculture/MIRCA2000/condensed_cropping_calendars/cropping_calendar_{irrigated_or_rainfed}.txt
-  meta:
-    paper_doi: 10.1029/2008GB003435
-    paper_ref: Portmann et al. (2010)
-    source_license: CC BY 4.0
-    source_url: https://www.uni-frankfurt.de/45218031/Data_download_center_for_MIRCA2000
-    source_version: 1.1
-  placeholders:
-    irrigated_or_rainfed: [irrigated, rainfed]
 MIRCA-OS_cropping_calendar_{irrigated_or_rainfed}_{year}:
   data_type: Dataset
   path: agriculture/MIRCA-OS/Crop Calendar/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv

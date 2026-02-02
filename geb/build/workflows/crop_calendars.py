@@ -2,7 +2,6 @@
 
 import calendar
 from datetime import date
-from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
@@ -11,6 +10,8 @@ from hydromt.data_catalog import DataCatalog
 
 from geb.build.workflows.conversions import setup_donor_countries
 from geb.geb_types import TwoDArrayInt32
+
+from ..data_catalog import NewDataCatalog
 
 
 def get_day_index(date: date) -> int:
@@ -49,7 +50,7 @@ def get_growing_season_length(start_day_index: int, end_day_index: int) -> int:
 
 def parse_MIRCA_file(
     parsed_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
-    crop_calendar: Path,
+    crop_calendar_lines: list[str],
     MIRCA_units: list[int],
     is_irrigated: bool,
 ) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
@@ -57,164 +58,153 @@ def parse_MIRCA_file(
 
     Args:
         parsed_calendar: The dictionary to store the parsed calendar in.
-        crop_calendar: The path to the MIRCA2000 crop calendar file.
+        crop_calendar_lines: Lines from the MIRCA2000 crop calendar file.
         MIRCA_units: The list of MIRCA unit codes to parse.
         is_irrigated: Whether the calendar is for irrigated crops.
 
     Returns:
         The updated parsed_calendar dictionary.
     """
-    with open(crop_calendar, "r") as f:
-        lines = f.readlines()
-        # remove all empty lines
-        lines = [line.strip() for line in lines if line.strip()]
-        # skip header
-        lines = lines[4:]
-        for line in lines:
-            line = line.replace("  ", " ").split(" ")
-            unit_code = int(line[0])
-            if unit_code not in MIRCA_units:
+    lines: list[str] = [line.strip() for line in crop_calendar_lines if line.strip()]
+    lines = lines[4:]
+
+    for raw_line in lines:
+        values: list[str] = raw_line.replace("  ", " ").split(" ")
+        unit_code: int = int(values[0])
+        if unit_code not in MIRCA_units:
+            continue
+        if unit_code not in parsed_calendar:
+            parsed_calendar[unit_code] = []
+        crop_class: int = int(values[1]) - 1  # minus one to make it zero based
+        number_of_rotations: int = int(values[2])
+        if number_of_rotations == 0:
+            continue
+        crops: list[str] = values[3:]
+        crop_rotations: list[tuple[int, int, float]] = []
+        for rotation in range(number_of_rotations):
+            area: float = float(crops[rotation * 3])
+            if area == 0:
                 continue
-            if unit_code not in parsed_calendar:
-                parsed_calendar[unit_code] = []
-            crop_class = int(line[1]) - 1  # minus one to make it zero based
-            number_of_rotations = int(line[2])
-            if number_of_rotations == 0:
-                continue
-            crops = line[3:]
-            crop_rotations = []
-            for rotation in range(number_of_rotations):
-                area = float(crops[rotation * 3])
-                if area == 0:
-                    continue
-                start_month = int(crops[rotation * 3 + 1])
-                end_month = int(crops[rotation * 3 + 2])
-                start_day_index = get_day_index(date(2000, start_month, 1))
-                end_day_index = get_day_index(
-                    date(2000, end_month, calendar.monthrange(2000, end_month)[1])
-                )
-                growth_length = get_growing_season_length(
-                    start_day_index, end_day_index
-                )
-                crop_rotations.append((start_day_index, growth_length, area))
+            start_month: int = int(crops[rotation * 3 + 1])
+            end_month: int = int(crops[rotation * 3 + 2])
+            start_day_index: int = get_day_index(date(2000, start_month, 1))
+            end_day_index: int = get_day_index(
+                date(2000, end_month, calendar.monthrange(2000, end_month)[1])
+            )
+            growth_length: int = get_growing_season_length(
+                start_day_index, end_day_index
+            )
+            crop_rotations.append((start_day_index, growth_length, area))
 
-            del start_month
-            del end_month
-            del start_day_index
-            del end_day_index
-            del growth_length
+        # discard crop rotations with zero area
+        crop_rotations = [
+            crop_rotation for crop_rotation in crop_rotations if crop_rotation[2] > 0
+        ]
 
-            # discard crop rotations with zero area
-            crop_rotations = [
-                crop_rotation
-                for crop_rotation in crop_rotations
-                if crop_rotation[2] > 0
-            ]
+        crop_rotations = sorted(crop_rotations, key=lambda x: x[2])  # sort by area
+        if len(crop_rotations) > 2:
+            crop_rotations = crop_rotations[-2:]
+            import warnings
 
-            crop_rotations = sorted(crop_rotations, key=lambda x: x[2])  # sort by area
-            if len(crop_rotations) > 2:
-                crop_rotations = crop_rotations[-2:]
-                import warnings
-
-                warnings.warn(
-                    "More than 2 crop rotations found, discarding the one with the lowest area. This should be fixed later."
-                )
-            if len(crop_rotations) == 1:
-                start_day_index, growth_length, area = crop_rotations[0]
-                crop_rotation = (
-                    area,
-                    np.array(
+            warnings.warn(
+                "More than 2 crop rotations found, discarding the one with the lowest area. This should be fixed later."
+            )
+        if len(crop_rotations) == 1:
+            start_day_index, growth_length, area = crop_rotations[0]
+            crop_rotation: tuple[float, TwoDArrayInt32] = (
+                area,
+                np.array(
+                    (
                         (
-                            (
-                                crop_class,
-                                is_irrigated,
-                                start_day_index,
-                                growth_length,
-                                0,
-                            ),
-                            (-1, -1, -1, -1, -1),
-                            (-1, -1, -1, -1, -1),
-                        )
-                    ),
-                )  # -1 means no crop
-                parsed_calendar[unit_code].append(crop_rotation)
-            elif len(crop_rotations) == 2:
-                # if crop rotations start on the same day, they cannot be implemented
-                # by the same farmer, so we split them
-                # TODO: Ensure that this only happens when the crop rotations cannot overlap.
-                if crop_rotations[0][0] == crop_rotations[1][0]:
-                    for crop_rotation in crop_rotations:
-                        start_day_index, growth_length, area = crop_rotation
-                        crop_rotation = (
-                            area,
-                            np.array(
-                                (
-                                    (
-                                        crop_class,
-                                        is_irrigated,
-                                        start_day_index,
-                                        growth_length,
-                                        0,
-                                    ),
-                                    (-1, -1, -1, -1, -1),
-                                    (-1, -1, -1, -1, -1),
-                                ),
-                                dtype=np.int32,
-                            ),
-                        )
-                        parsed_calendar[unit_code].append(crop_rotation)
-                # if the crop rotations are consecutive, we assume multi-cropping.
-                else:
-                    crop_rotation = (
-                        crop_rotations[1][2] - crop_rotations[0][2],
-                        np.array(
-                            (
-                                (
-                                    crop_class,
-                                    is_irrigated,
-                                    crop_rotations[1][0],
-                                    crop_rotations[1][1],
-                                    0,
-                                ),
-                                (-1, -1, -1, -1, -1),
-                                (-1, -1, -1, -1, -1),
-                            ),
-                            dtype=np.int32,
-                        ),  # -1 means no crop
+                            crop_class,
+                            is_irrigated,
+                            start_day_index,
+                            growth_length,
+                            0,
+                        ),
+                        (-1, -1, -1, -1, -1),
+                        (-1, -1, -1, -1, -1),
                     )
-                    parsed_calendar[unit_code].append(crop_rotation)
-                    crop_rotation = (
-                        crop_rotations[0][2],
+                ),
+            )  # -1 means no crop
+            parsed_calendar[unit_code].append(crop_rotation)
+        elif len(crop_rotations) == 2:
+            # if crop rotations start on the same day, they cannot be implemented
+            # by the same farmer, so we split them
+            # TODO: Ensure that this only happens when the crop rotations cannot overlap.
+            if crop_rotations[0][0] == crop_rotations[1][0]:
+                for crop_rotation in crop_rotations:
+                    start_day_index, growth_length, area = crop_rotation
+                    crop_rotation_entry: tuple[float, TwoDArrayInt32] = (
+                        area,
                         np.array(
                             (
                                 (
                                     crop_class,
                                     is_irrigated,
-                                    crop_rotations[0][0],
-                                    crop_rotations[0][1],
+                                    start_day_index,
+                                    growth_length,
                                     0,
                                 ),
-                                (
-                                    crop_class,
-                                    is_irrigated,
-                                    crop_rotations[1][0],
-                                    crop_rotations[1][1],
-                                    0,
-                                ),
+                                (-1, -1, -1, -1, -1),
                                 (-1, -1, -1, -1, -1),
                             ),
                             dtype=np.int32,
                         ),
                     )
-                parsed_calendar[unit_code].append(crop_rotation)
-                assert crop_rotation[1][0][2] != crop_rotation[1][1][2]
+                    parsed_calendar[unit_code].append(crop_rotation_entry)
+            # if the crop rotations are consecutive, we assume multi-cropping.
             else:
-                raise NotImplementedError
-        return parsed_calendar
+                crop_rotation_entry = (
+                    crop_rotations[1][2] - crop_rotations[0][2],
+                    np.array(
+                        (
+                            (
+                                crop_class,
+                                is_irrigated,
+                                crop_rotations[1][0],
+                                crop_rotations[1][1],
+                                0,
+                            ),
+                            (-1, -1, -1, -1, -1),
+                            (-1, -1, -1, -1, -1),
+                        ),
+                        dtype=np.int32,
+                    ),  # -1 means no crop
+                )
+                parsed_calendar[unit_code].append(crop_rotation_entry)
+                crop_rotation_entry = (
+                    crop_rotations[0][2],
+                    np.array(
+                        (
+                            (
+                                crop_class,
+                                is_irrigated,
+                                crop_rotations[0][0],
+                                crop_rotations[0][1],
+                                0,
+                            ),
+                            (
+                                crop_class,
+                                is_irrigated,
+                                crop_rotations[1][0],
+                                crop_rotations[1][1],
+                                0,
+                            ),
+                            (-1, -1, -1, -1, -1),
+                        ),
+                        dtype=np.int32,
+                    ),
+                )
+            parsed_calendar[unit_code].append(crop_rotation_entry)
+            assert crop_rotation_entry[1][0][2] != crop_rotation_entry[1][1][2]
+        else:
+            raise NotImplementedError
+    return parsed_calendar
 
 
 def parse_MIRCA2000_crop_calendar(
-    data_catalog: DataCatalog, MIRCA_units: list[int]
+    data_catalog: NewDataCatalog, MIRCA_units: list[int]
 ) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
     """Parse MIRCA2000 crop calendars for given MIRCA units.
 
@@ -224,30 +214,37 @@ def parse_MIRCA2000_crop_calendar(
 
     Returns:
         A dictionary containing the parsed crop calendars.
+
+    Raises:
+        TypeError: If the calendar data is not provided as a list of strings.
     """
-    rainfed_crop_calendar_fp = Path(
-        data_catalog.get_source("MIRCA2000_cropping_calendar_rainfed").path
-    )
-    irrigated_crop_calendar_fp = Path(
-        data_catalog.get_source("MIRCA2000_cropping_calendar_irrigated").path
-    )
+    rainfed_source = data_catalog.fetch("mirca2000_cropping_calendar_rainfed").read()
+    irrigated_source = data_catalog.fetch(
+        "mirca2000_cropping_calendar_irrigated"
+    ).read()
 
-    MIRCA2000_data = {}
+    if not isinstance(rainfed_source, list) or not isinstance(irrigated_source, list):
+        raise TypeError("Expected MIRCA2000 calendar lines as a list of strings.")
 
-    MIRCA2000_data = parse_MIRCA_file(
-        MIRCA2000_data,
-        rainfed_crop_calendar_fp,
+    rainfed_lines: list[str] = rainfed_source
+    irrigated_lines: list[str] = irrigated_source
+
+    mirca2000_data: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
+
+    mirca2000_data = parse_MIRCA_file(
+        mirca2000_data,
+        rainfed_lines,
         MIRCA_units,
         is_irrigated=False,
     )
-    MIRCA2000_data = parse_MIRCA_file(
-        MIRCA2000_data,
-        irrigated_crop_calendar_fp,
+    mirca2000_data = parse_MIRCA_file(
+        mirca2000_data,
+        irrigated_lines,
         MIRCA_units,
         is_irrigated=True,
     )
 
-    return MIRCA2000_data
+    return mirca2000_data
 
 
 def donate_and_receive_crop_prices(
