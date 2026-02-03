@@ -1292,6 +1292,89 @@ class Hydrography(BuildModelBase):
         self.set_table(gtsm_data_region_pd, name="gtsm/surge")
         self.logger.info("GTSM station waterlevels and geometries set")
 
+    def setup_gtsm_sea_level_rise(self) -> None:
+        """Sets up the GTSM sea level rise data for the model.
+
+        Raises:
+            ValueError: If the extrapolated sea level rise data is not monotonically increasing
+                or exceeds 2 meters by 2100 for any station.
+        """
+        self.logger.info("Setting up GTSM sea level rise data")
+        # get the model bounds and buffer by ~2km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+
+        gtsm_sea_level_rise = self.data_catalog.fetch("gtsm").read(bounds=model_bounds)
+
+        # extract data arrays
+        mean_sea_level = gtsm_sea_level_rise.mean_sea_level.data
+        time = gtsm_sea_level_rise.time.data
+        stations = gtsm_sea_level_rise.stations.data
+
+        # create dataframe
+        mean_sea_level_df = pd.DataFrame(
+            data=mean_sea_level.T,
+            index=pd.to_datetime(time),
+            columns=stations,
+        )
+        # sort by datetime index
+        mean_sea_level_df = mean_sea_level_df.sort_index()
+
+        # set table for model
+        self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
+
+        # calculate the increment in mean sea level in the time series  based on a reference year
+        reference_year = 2020
+        sea_level_rise_df = mean_sea_level_df.subtract(
+            mean_sea_level_df.loc[f"{reference_year}-01-01"], axis=1
+        )
+
+        # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
+        last_year = sea_level_rise_df.index.year.max()
+        future_years = np.arange(last_year + 1, 2101)
+        future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
+        future_data = {}
+        for station in sea_level_rise_df.columns:
+            series = sea_level_rise_df[station]
+            # fit nonlinear trend all years
+            recent_series = series
+            coeffs = np.polyfit(
+                recent_series.index.year,
+                recent_series.values,
+                deg=2,
+            )
+            trend = np.poly1d(coeffs)
+            future_values = trend(future_years)
+            future_data[station] = future_values
+        future_df = pd.DataFrame(
+            data=future_data,
+            index=future_dates,
+        )
+        # append future data to sea_level_rise_df
+        sea_level_rise_df = pd.concat([sea_level_rise_df, future_df], axis=0)
+
+        # do some check on the extrapolated data
+        for station in sea_level_rise_df.columns:
+            series = sea_level_rise_df[station]
+            # check that the values are monotonically increasing
+            if not series.is_monotonic_increasing:
+                raise ValueError(
+                    f"Sea level rise data for station {station} is not monotonically increasing after extrapolation."
+                )
+            # check that the values are reasonable (less than 2 meters by 2100)
+            if series.iloc[-1] >= 2:
+                raise ValueError(
+                    f"Sea level rise data for station {station} exceeds 2 meters by 2100."
+                )
+
+        # set table for model
+        self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise_rcp8p5")
+
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
@@ -1320,10 +1403,11 @@ class Hydrography(BuildModelBase):
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
 
-        # Continue with GTSM hydrographs setup
+        # Continue with GTSM setup
         temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
         self.setup_gtsm_water_levels(temporal_range)
         self.setup_gtsm_surge_levels(temporal_range)
+        self.setup_gtsm_sea_level_rise()
         self.setup_coast_rp()
 
     @build_method

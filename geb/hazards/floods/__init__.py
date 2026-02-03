@@ -22,7 +22,7 @@ from geb.geb_types import (
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.module import Module
 from geb.store import Bucket
-from geb.workflows.io import read_geom
+from geb.workflows.io import read_geom, read_table
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
 from ...workflows.io import (
@@ -579,6 +579,11 @@ class Floods(Module):
                 ]
             ).rio.write_crs("EPSG:4326")
 
+            # load sea level rise data
+            sea_level_rise_rcp8p5: pd.DataFrame = read_table(
+                self.model.files["table"]["gtsm/sea_level_rise_rcp8p5"]
+            )
+
             sfincs_coastal_root_model: SFINCSRootModel = self.build(
                 name=model_name,
                 subbasins=coastal_subbasins,
@@ -634,7 +639,11 @@ class Floods(Module):
             if coastal:
                 sfincs_coastal_simulation: SFINCSSimulation = (
                     sfincs_coastal_root_model.create_coastal_return_period_simulation(
-                        return_period, coastal_forcing_locations, offset=coastal_offset
+                        return_period,
+                        coastal_forcing_locations,
+                        offset=coastal_offset,
+                        sea_level_rise=sea_level_rise_rcp8p5,
+                        year=self.model.current_time.year,
                     )
                 )
                 simulations.append(sfincs_coastal_simulation)

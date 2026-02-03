@@ -36,7 +36,7 @@ dependencies = [
     "numba>=0.63.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
-    "pandas>=2.3.0,<3.0.0",  # we get some errors with pandas 3.0
+    "pandas>=2.3.0,<3.0.0", # we get some errors with pandas 3.0
     "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
     "pyflwdir>=0.5.9",
@@ -45,7 +45,7 @@ dependencies = [
     "pytest",
     "python-dotenv>=1.0.1",
     "pyyaml>=6.0.2",
-    "rasterio==1.4.3",  # there are issues loading stac data with 1.4.4
+    "rasterio==1.4.3", # there are issues loading stac data with 1.4.4
     "rasterstats>=0.20.0",
     "rioxarray>=0.17.0",
     "s3fs>=2023.6.0",
@@ -77,6 +77,7 @@ dependencies = [
     "joblib>=1.5.2",
     "matplotlib>=3.10.7",
     "seaborn>=0.13.2",
+    "cdsapi>=0.7.7",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
