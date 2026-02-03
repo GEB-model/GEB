@@ -17,6 +17,8 @@
  - GLOPOP-SG
 - Support custom DEMs
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
 
 To support this version:
 
