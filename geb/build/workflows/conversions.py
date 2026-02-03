@@ -9,12 +9,16 @@ Contains several dictionaries to convert between different country coding system
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import geopandas as gpd
-from hydromt.data_catalog import DataCatalog
+
+if TYPE_CHECKING:
+    from ..data_catalog import NewDataCatalog
 
 
 def setup_donor_countries(
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     global_countries: gpd.GeoDataFrame,
     countries_with_data: list[str],
     alternative_countries: list[str],
@@ -33,7 +37,8 @@ def setup_donor_countries(
         A dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
     """
     # load HDI index
-    dev_index = data_catalog.get_dataframe("UN_dev_index")  # Human Development Index
+    dev_index = data_catalog.fetch("un_hdi").read()
+
     dev_index.rename(columns={"Human Development Index": "HDI"}, inplace=True)
     dev_index = (
         dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")

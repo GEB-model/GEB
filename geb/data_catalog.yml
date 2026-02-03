@@ -96,17 +96,6 @@ cwatm_grassland_5min:
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/grassland/{variable}.nc
-UN_dev_index:
-  meta:
-    category: economics
-    source_author: UNDP
-    source_url: https://hdr.undp.org/  
-    source_license: Creative Commons Attribution 3.0 IGO
-  path: socioeconomic/UN_HDI/human-development-index.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    index_col: 'Year'
 oecd_idd:
   meta:
     category: economics
