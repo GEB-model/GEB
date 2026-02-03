@@ -61,7 +61,7 @@ For each subbasin in the routing network, GEB constructs a SFINCS model domain t
 
 <figure markdown="span">
   ![Paired subbasins and forcing points](../images/paired_basins.svg)
-  <figcaption>The paired subbasin approach. For each segment, the local SFINCS model includes the focus subbasin and its immediate downstream neighbor. Design hydrographs are applied as discharge forcing at inflow nodes.</figcaption>
+  <figcaption>**The paired subbasin approach.** For each segment, the local SFINCS model includes the focus subbasin and its immediate downstream neighbor. Design hydrographs are applied as discharge forcing at inflow nodes.</figcaption>
 </figure>
 
 #### Forcing and Simulation
@@ -76,7 +76,7 @@ The return period mapping process follows these steps:
 
 <figure markdown="span">
   ![Flood map mosaicking](../images/paired_basins_floods.svg)
-  <figcaption>Flood map mosaicking. Individual localized flood depth maps are merged into a continuous mosaicked output.</figcaption>
+  <figcaption>**Flood map mosaicking.** Individual localized flood depth maps are merged into a continuous mosaicked output.</figcaption>
 </figure>
 
 ## Model output
