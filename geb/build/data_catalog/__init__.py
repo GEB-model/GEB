@@ -28,6 +28,7 @@ from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
 from .open_street_map_coastlines import OpenStreetMapCoastlines
 from .soilgrids import SoilGridsV1, SoilGridsV2
+from .superwell import GCAMElectricityRates
 from .sword import Sword
 from .why_map import WhyMap
 from .world_bank import WorldBankData
@@ -266,6 +267,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "FAO",
             "url": "https://www.fao.org/faostat/en/#data/PP",
             "license": "CC BY 4.0",
+        },
+    },
+    "gcam_electricity_rates": {
+        "adapter": GCAMElectricityRates(
+            folder="socioeconomic/electricity_rates",
+            local_version=1,
+            filename="GCAM_Electricity_Rates.csv",
+            cache="global",
+        ),
+        "url": "https://raw.githubusercontent.com/JGCRI/superwell/main/inputs/GCAM_Electricity_Rates.csv",
+        "source": {
+            "name": "GCAM Electricity Rates",
+            "author": "JGCRI",
+            "url": "https://github.com/JGCRI/superwell",
+            "license": "MIT",
         },
     },
     "specific_yield_aquifer_globgm": {

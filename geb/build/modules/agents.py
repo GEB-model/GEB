@@ -25,7 +25,6 @@ from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
     COUNTRY_NAME_TO_ISO3,
     GLOBIOM_NAME_TO_ISO3,
-    SUPERWELL_NAME_TO_ISO3,
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution
@@ -905,13 +904,7 @@ class Agents(BuildModelBase):
             # Set the calculated prices in the appropriate dictionary
             self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
-        electricity_rates = self.old_data_catalog.get_dataframe(
-            "gcam_electricity_rates"
-        )
-        electricity_rates["ISO3"] = electricity_rates["Country"].map(
-            SUPERWELL_NAME_TO_ISO3
-        )
-        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
+        electricity_rates = self.data_catalog.fetch("gcam_electricity_rates").read()
 
         electricity_rates_dict = {
             "time": list(range(start_year, end_year + 1)),
