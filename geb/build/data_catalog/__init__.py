@@ -29,6 +29,7 @@ from .open_street_map import OpenStreetMap
 from .open_street_map_coastlines import OpenStreetMapCoastlines
 from .soilgrids import SoilGridsV1, SoilGridsV2
 from .sword import Sword
+from .undp import HumanDevelopmentIndex
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
@@ -445,6 +446,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "The World Bank",
             "license": "CC BY 4.0",
             "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
+        },
+    },
+    "un_hdi": {
+        "adapter": HumanDevelopmentIndex(
+            folder="un_hdi",
+            local_version=1,
+            filename="un_hdi.csv",
+            cache="global",
+        ),
+        "url": "https://ourworldindata.org/grapher/human-development-index.csv?v=1&csvType=full&useColumnShortNames=true",
+        "source": {
+            "name": "Human Development Index",
+            "author": "UNDP / Our World In Data",
+            "license": "CC BY 3.0 IGO",
+            "url": "https://ourworldindata.org/grapher/human-development-index",
+            "original_source_url": "https://hdr.undp.org",
         },
     },
     "esa_worldcover_2021": {

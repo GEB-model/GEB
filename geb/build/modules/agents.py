@@ -110,7 +110,7 @@ class Agents(BuildModelBase):
                 if ISO3 not in municipal_water_demand.index:
                     countries_with_data = municipal_water_demand.index.unique().tolist()
                     donor_countries = setup_donor_countries(
-                        self.old_data_catalog,
+                        self.data_catalog,
                         self.geom["global_countries"],
                         countries_with_data,
                         alternative_countries=self.geom["regions"]["ISO3"]
@@ -156,7 +156,7 @@ class Agents(BuildModelBase):
                 )
 
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_water_withdrawal_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -204,7 +204,7 @@ class Agents(BuildModelBase):
 
                 # fill the municipal water withdrawal data for missing years from donor countries
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -394,7 +394,7 @@ class Agents(BuildModelBase):
         )
         # setup donor countries for country missing in oecd data
         donor_countries = setup_donor_countries(
-            self.old_data_catalog,
+            self.data_catalog,
             self.geom["global_countries"],
             oecd_idd["REF_AREA"],
             alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
@@ -589,7 +589,7 @@ class Agents(BuildModelBase):
 
                 ## get all the donor countries for countries in the dataset
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -635,7 +635,7 @@ class Agents(BuildModelBase):
                     .tolist()
                 )
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_price_ratio_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -667,7 +667,7 @@ class Agents(BuildModelBase):
                     .tolist()
                 )
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_lcu_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -927,7 +927,7 @@ class Agents(BuildModelBase):
             if country not in electricity_rates:
                 countries_with_data = list(electricity_rates.keys())
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -1210,7 +1210,7 @@ class Agents(BuildModelBase):
 
             farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
             farm_size_donor_country = setup_donor_countries(
-                self.old_data_catalog,
+                self.data_catalog,
                 self.geom["global_countries"],
                 farm_countries_list,
                 alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
@@ -2403,7 +2403,7 @@ class Agents(BuildModelBase):
                     preferences_global["ISO3"].unique().tolist()
                 )
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_preferences_data,
                     ISO3_codes_GLOBIOM_region.to_list(),
@@ -2453,7 +2453,7 @@ class Agents(BuildModelBase):
             donor_data,
             unique_regions,
             GLOBIOM_regions,
-            self.old_data_catalog,
+            self.data_catalog,
             self.geom["global_countries"],
             self.geom["regions"],
         )
