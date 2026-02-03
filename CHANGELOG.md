@@ -19,6 +19,8 @@
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
 - Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
 - Add MIRCA2000 unit grid and crop calendar entries to the new data catalog and use them in crop calendar setup.
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
 
 To support this version:
 
