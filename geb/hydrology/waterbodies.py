@@ -703,6 +703,12 @@ class WaterBodies(Module):
             command_area_release_m3[self.is_reservoir],
         ) = self.routing_reservoirs(n_routing_substeps, current_substep)
 
+        # Clamp outflow to not exceed storage to handle numerical precision issues
+        # between float32 outflow and float64 storage
+        outflow_to_drainage_network_m3 = np.minimum(
+            outflow_to_drainage_network_m3, self.var.storage
+        )
+
         assert (outflow_to_drainage_network_m3 <= self.var.storage).all()
 
         if __debug__:
