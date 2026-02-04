@@ -260,11 +260,29 @@ class _build_method:
 
         Returns:
             A list of methods that have been completed.
+
+        Raises:
+            ValueError: If duplicate methods are found in the progress file.
         """
         if not progress_path.exists():
             return []
         with open(progress_path, "r") as f:
             completed_methods: list[str] = f.read().splitlines()
+
+        # Check for duplicates
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for method in completed_methods:
+            if method in seen:
+                duplicates.append(method)
+            seen.add(method)
+
+        if duplicates:
+            raise ValueError(
+                f"Progress file corrupted with duplicates: {duplicates}. Possibly you run two concurrent builds at the same time? "
+                f"Remove duplicates from the progress.txt and restart build with --continue."
+            )
+
         return completed_methods
 
     def log_time_taken(self) -> None:
