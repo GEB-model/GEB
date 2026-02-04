@@ -105,15 +105,6 @@ oecd_idd:
     socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
   driver: csv
   data_type: DataFrame
-gcam_electricity_rates:
-  meta:
-    category: economics
-    source_url: https://github.com/JGCRI/superwell
-    source_version: 1.0
-    unit: USD (2016)
-  path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
-  driver: csv
-  data_type: DataFrame
 AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
