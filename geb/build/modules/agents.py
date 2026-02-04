@@ -2378,21 +2378,9 @@ class Agents(BuildModelBase):
             if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
         }
 
-        missing_ISO3_in_trade_regions: set[str] = (
-            ISO3_codes_region - all_ISO3_across_relevant_regions
-        )
-        if len(missing_ISO3_in_trade_regions) > 0:
-            self.logger.info(
-                f"Regions in the model not present in trade_regions: {list(missing_ISO3_in_trade_regions)}"
-            )
-
-        self.logger.info(
-            f" missing ISO3 codes in GLOBIOM regions: {missing_ISO3_in_trade_regions}"
-        )
-
         # determine the donors: donors are all the countries in the trade regions that are within our
         # model domain(self.geoms["regions"]).
-        # Therefore, this can be a region OUTSIDE of the model domain, but within a GLOBIOM region in the model domain.
+        # Therefore, this can be a region OUTSIDE of the model domain, but within a trade region in the model domain.
         donor_data = {}
         for ISO3 in all_ISO3_across_relevant_regions:
             region_risk_aversion_data = preferences_global[

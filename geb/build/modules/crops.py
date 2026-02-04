@@ -218,19 +218,6 @@ class Crops(BuildModelBase):
                 if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
             }
 
-            missing_ISO3_in_trade_regions: set[str] = (
-                ISO3_codes_region - all_ISO3_across_relevant_regions
-            )
-            if len(missing_ISO3_in_trade_regions) > 0:
-                self.logger.info(
-                    f"Regions in the model not present in trade_regions: {list(missing_ISO3_in_trade_regions)}"
-                )
-            for region in missing_ISO3_in_trade_regions:
-                if not faostat[faostat["ISO3"] == region].empty:
-                    raise ValueError(
-                        f"Region {region} is not present in trade_regions, but it has crop data. This situation gives problems in the donate_and_receive_crop_prices function, because it will substitute the region's data for donor data."
-                    )
-
             # Setup dataFrame for further data corrections
             donor_data: dict[str, pd.DataFrame] = {}
             for ISO3 in all_ISO3_across_relevant_regions:

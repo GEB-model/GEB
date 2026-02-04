@@ -213,7 +213,7 @@ def setup_donor_countries(
         data_catalog: The data catalog instance.
         global_countries: GeoDataFrame with global countries geometries.
         countries_with_data: Countries (ISO3 codes) that have data available.
-        alternative_countries: Alternative countries to consider as donors, e.g. GLOBIOM regions inside the model domain.
+        alternative_countries: Alternative countries to consider as donors, e.g. trade regions inside the model domain.
 
     Returns:
         A dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
