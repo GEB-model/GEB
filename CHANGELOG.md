@@ -15,11 +15,16 @@
 - Moves to new data catalog
  - FAOSTAT
  - GLOPOP-SG
+ - UNDP Human Development Index
+ - OSM open_street_map_land_polygons
 - Support custom DEMs
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
 - Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
 - Add MIRCA2000 unit grid and crop calendar entries to the new data catalog and use them in crop calendar setup.
-- Uses building damages for admin 1 regions from the global exposure model. 
+- Move superwell data to new data catalog.
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
+- move osm land polygons to new data catalog
 
 To support this version:
 

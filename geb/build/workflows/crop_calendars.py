@@ -6,7 +6,6 @@ from datetime import date
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from hydromt.data_catalog import DataCatalog
 
 from geb.build.workflows.conversions import setup_donor_countries
 from geb.geb_types import TwoDArrayInt32
@@ -251,7 +250,7 @@ def donate_and_receive_crop_prices(
     donor_data: pd.DataFrame,
     recipient_regions: pd.DataFrame,
     GLOBIOM_regions: pd.DataFrame,
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     global_countries: gpd.GeoDataFrame,
     regions: gpd.GeoDataFrame,
 ) -> pd.DataFrame:

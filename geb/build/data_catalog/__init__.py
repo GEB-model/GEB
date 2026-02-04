@@ -27,9 +27,11 @@ from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
-from .open_street_map_coastlines import OpenStreetMapCoastlines
+from .osm_data import OpenStreetMapCoastlines, OpenStreetMapLandPolygons
 from .soilgrids import SoilGridsV1, SoilGridsV2
+from .superwell import GCAMElectricityRates
 from .sword import Sword
+from .undp import HumanDevelopmentIndex
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
@@ -298,6 +300,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 4.0",
         },
     },
+    "gcam_electricity_rates": {
+        "adapter": GCAMElectricityRates(
+            folder="socioeconomic/electricity_rates",
+            local_version=1,
+            filename="GCAM_Electricity_Rates.csv",
+            cache="global",
+        ),
+        "url": "https://raw.githubusercontent.com/JGCRI/superwell/main/inputs/GCAM_Electricity_Rates.csv",
+        "source": {
+            "name": "GCAM Electricity Rates",
+            "author": "JGCRI",
+            "url": "https://github.com/JGCRI/superwell",
+            "license": "MIT",
+        },
+    },
     "specific_yield_aquifer_globgm": {
         "adapter": GlobGM(
             folder="specific_yield_aquifer_globgm",
@@ -477,6 +494,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
         },
     },
+    "un_hdi": {
+        "adapter": HumanDevelopmentIndex(
+            folder="un_hdi",
+            local_version=1,
+            filename="un_hdi.csv",
+            cache="global",
+        ),
+        "url": "https://ourworldindata.org/grapher/human-development-index.csv?v=1&csvType=full&useColumnShortNames=true",
+        "source": {
+            "name": "Human Development Index",
+            "author": "UNDP / Our World In Data",
+            "license": "CC BY 3.0 IGO",
+            "url": "https://ourworldindata.org/grapher/human-development-index",
+            "original_source_url": "https://hdr.undp.org",
+        },
+    },
     "esa_worldcover_2021": {
         "adapter": ESAWorldCover(),
         "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
@@ -570,8 +603,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroDir(
             folder="merit_hydro_dir",
             local_version=1,
-            filename="merit_hydro_dir.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {
@@ -585,8 +618,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroElv(
             folder="merit_hydro_elv",
             local_version=1,
-            filename="merit_hydro_elv.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {
@@ -728,6 +761,21 @@ data_catalog: dict[str, dict[str, Any]] = {
         "url": "https://osmdata.openstreetmap.de/download/coastlines-split-4326.zip",
         "source": {
             "name": "OpenStreetMap Coastlines",
+            "author": "OpenStreetMap contributors",
+            "license": "ODbL 1.0",
+            "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "open_street_map_land_polygons": {
+        "adapter": OpenStreetMapLandPolygons(
+            folder="open_street_map_land_polygons",
+            local_version=1,
+            filename="open_street_map_land_polygons.zip",
+            cache="global",
+        ),
+        "url": "https://osmdata.openstreetmap.de/download/land-polygons-split-4326.zip",
+        "source": {
+            "name": "OpenStreetMap Land Polygons",
             "author": "OpenStreetMap contributors",
             "license": "ODbL 1.0",
             "url": "https://www.openstreetmap.org/copyright",
