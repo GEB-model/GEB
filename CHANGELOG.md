@@ -16,6 +16,7 @@
  - FAOSTAT
  - GLOPOP-SG
  - UNDP Human Development Index
+ - OSM open_street_map_land_polygons
 - Support custom DEMs
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
 - Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
