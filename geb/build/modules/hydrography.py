@@ -940,8 +940,7 @@ class Hydrography(BuildModelBase):
             return
 
         # load the land polygon from the data catalog
-        fp_land_polygons = self.old_data_catalog.get_source("osm_land_polygons").path
-        land_polygons = gpd.read_file(fp_land_polygons)
+        land_polygons = self.data_catalog.fetch("open_street_map_land_polygons").read()
         # select only the land polygons that intersect with the region
         land_polygons = land_polygons[land_polygons.intersects(self.region.union_all())]
         # merge all land polygons into a single polygon

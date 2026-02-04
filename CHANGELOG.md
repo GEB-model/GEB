@@ -16,6 +16,7 @@
  - FAOSTAT
  - GLOPOP-SG
  - UNDP Human Development Index
+ - OSM open_street_map_land_polygons
 - Support custom DEMs
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
 - Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
@@ -24,6 +25,7 @@
 - Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
 - Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
 - Make trade regions inspired by globiom regions and load from file rather than data catalog.
+- move osm land polygons to new data catalog
 
 To support this version:
 

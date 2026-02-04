@@ -26,7 +26,7 @@ from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
-from .open_street_map_coastlines import OpenStreetMapCoastlines
+from .osm_data import OpenStreetMapCoastlines, OpenStreetMapLandPolygons
 from .soilgrids import SoilGridsV1, SoilGridsV2
 from .superwell import GCAMElectricityRates
 from .sword import Sword
@@ -731,6 +731,21 @@ data_catalog: dict[str, dict[str, Any]] = {
         "url": "https://osmdata.openstreetmap.de/download/coastlines-split-4326.zip",
         "source": {
             "name": "OpenStreetMap Coastlines",
+            "author": "OpenStreetMap contributors",
+            "license": "ODbL 1.0",
+            "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "open_street_map_land_polygons": {
+        "adapter": OpenStreetMapLandPolygons(
+            folder="open_street_map_land_polygons",
+            local_version=1,
+            filename="open_street_map_land_polygons.zip",
+            cache="global",
+        ),
+        "url": "https://osmdata.openstreetmap.de/download/land-polygons-split-4326.zip",
+        "source": {
+            "name": "OpenStreetMap Land Polygons",
             "author": "OpenStreetMap contributors",
             "license": "ODbL 1.0",
             "url": "https://www.openstreetmap.org/copyright",

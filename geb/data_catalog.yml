@@ -156,23 +156,3 @@ cwatm_industry_water_demand_{scenario}_year:
     source_url: https://doi.org/10.5194/gmd-9-175-2016
   placeholders:
     scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
-osm_land_polygons:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/land-polygons-split-4326/land_polygons.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/land-polygons.html
-    source_license: Data Commons Open Database License (ODbL)   
-osm_coastlines:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/coastlines-split-4326/lines.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/coastlines.html
-    source_license: Data Commons Open Database License (ODbL)
