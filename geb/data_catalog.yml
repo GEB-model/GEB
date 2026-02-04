@@ -156,12 +156,3 @@ cwatm_industry_water_demand_{scenario}_year:
     source_url: https://doi.org/10.5194/gmd-9-175-2016
   placeholders:
     scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
-GLOBIOM_regions_37:
-  data_type: DataFrame
-  driver: excel
-  path: GLOBIOM/Region_Country_Mapping.xlsx
-  meta:
-    source_url: https://iiasa.ac.at/models-tools-data/globiom
-    source_license: Creative Commons Attribution-NonCommercial 4.0 International
-  driver_kwargs:
-    sheet_name: Region37
