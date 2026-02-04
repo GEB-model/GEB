@@ -55,8 +55,8 @@ The name of a dataset specified in the `data_catalog.yml` (e.g., GADM_level0) or
 
 ``` yaml
 general:
-  region:
-    geom: GADM_level0
+  geom: 
+    source: GADM_level0
     column: GID_0
     key: FRA
 ```
