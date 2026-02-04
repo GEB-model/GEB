@@ -557,8 +557,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroDir(
             folder="merit_hydro_dir",
             local_version=1,
-            filename="merit_hydro_dir.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {
@@ -572,8 +572,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroElv(
             folder="merit_hydro_elv",
             local_version=1,
-            filename="merit_hydro_elv.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {

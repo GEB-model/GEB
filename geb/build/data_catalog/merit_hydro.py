@@ -33,7 +33,6 @@ from requests.auth import HTTPBasicAuth
 from rioxarray import merge
 from tqdm import tqdm
 
-from geb.workflows.io import write_zarr
 from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
@@ -83,7 +82,26 @@ class MeritHydro(Adapter):
             **kwargs: Additional keyword arguments passed to the base Adapter class.
         """
         self.variable = variable
+        self._xmin: float | None = None
+        self._xmax: float | None = None
+        self._ymin: float | None = None
+        self._ymax: float | None = None
+        self._source_nodata: int | float | bool | None = None
+        self._target_nodata: int | float | bool | None = None
         super().__init__(*args, **kwargs)
+
+    @property
+    def is_ready(self) -> bool:
+        """Check if the data is already downloaded and processed.
+
+        For MERIT Hydro, we always return False because readiness depends
+        on the required tiles for a specific bounding box, which are checked
+        during fetch().
+
+        Returns:
+            Always False to ensure fetch() is called.
+        """
+        return False
 
     def _get_latitude_hemisphere_and_degrees(self, lat_deg: int) -> tuple[str, int]:
         """Return hemisphere letter and absolute degrees for latitude.
@@ -272,6 +290,19 @@ class MeritHydro(Adapter):
         da: xr.DataArray = merge.merge_arrays(das)
         return da
 
+    def _missing_marker_path(self, tile_name: str) -> Path:
+        """Construct path for a missing tile marker file.
+
+        Args:
+            tile_name: Name of the tile.
+
+        Returns:
+            Path to the marker file.
+        """
+        root = self.root
+        assert root is not None
+        return root / f"{tile_name}.missing.txt"
+
     def fetch(
         self,
         *,
@@ -286,10 +317,12 @@ class MeritHydro(Adapter):
         request_timeout_s: float = 60.0,
         attempts: int = 3,
     ) -> MeritHydro:
-        """Download MERIT Hydro tiles intersecting a bbox by streaming tars.
+        """Ensure MERIT Hydro tiles intersecting a bbox are available locally.
 
-        The function downloads only the GeoTIFFs needed for a single MERIT variable
-        by streaming the remote 30x30-degree tar packages, without saving the tars.
+        The function first checks for pre-staged 5x5-degree tiles in
+        ``{cache_root}/{variable}/`` or ``{cache_root}/``. If tiles are
+        missing, it downloads only the required GeoTIFFs for a single MERIT variable
+        by streaming the remote 30x30-degree tar packages without saving the tars.
         If a package does not exist (HTTP 404), it is silently skipped. If a needed
         tile is not present inside an existing package (commonly ocean), it is also
         silently skipped. Any other error is retried up to ``attempts`` times and
@@ -320,8 +353,12 @@ class MeritHydro(Adapter):
             requests.RequestException: If repeated HTTP errors occur.
             tarfile.ReadError: If tar parsing repeatedly fails.
         """
-        if self.is_ready:
-            return self
+        self._xmin = xmin
+        self._xmax = xmax
+        self._ymin = ymin
+        self._ymax = ymax
+        self._source_nodata = source_nodata
+        self._target_nodata = target_nodata
 
         username = os.getenv("MERIT_USERNAME")
         password = os.getenv("MERIT_PASSWORD")
@@ -330,13 +367,21 @@ class MeritHydro(Adapter):
                 "Authentication required: set MERIT_USERNAME and MERIT_PASSWORD in environment."
             )
 
-        tiles = self._tiles_for_bbox(xmin, xmax, ymin, ymax)
+        tiles: list[tuple[int, int]] = self._tiles_for_bbox(xmin, xmax, ymin, ymax)
 
-        # Helper to get missing marker path for a tile name
-        def missing_marker_path(tile_name: str) -> Path:
-            root = self.root
-            assert root is not None
-            return root / f"{tile_name}.missing.txt"
+        local_tile_dir: Path = self.root / self.variable
+        missing_names: set[str] = set()
+        for lat_ll, lon_ll in tiles:
+            tile_name: str = self._compose_tile_filename(lat_ll, lon_ll)
+            if (
+                not (self.root / tile_name).exists()
+                and not (local_tile_dir / tile_name).exists()
+            ):
+                if not self._missing_marker_path(tile_name).exists():
+                    missing_names.add(tile_name)
+
+        if not missing_names:
+            return self
 
         # Prepare HTTP session
         if session is None:
@@ -347,28 +392,18 @@ class MeritHydro(Adapter):
             session = requests.Session()
         auth = HTTPBasicAuth(username, password)
 
-        groups = self._group_tiles_by_package(tiles)
-        results: list[Path] = []
-        missing_markers: list[Path] = []
+        missing_coords = []
+        for lat_ll, lon_ll in tiles:
+            if self._compose_tile_filename(lat_ll, lon_ll) in missing_names:
+                missing_coords.append((lat_ll, lon_ll))
+
+        groups = self._group_tiles_by_package(missing_coords)
+
         for package_name, coords in groups.items():
             package_url = self._package_url(package_name, base_url=url)
-
-            # Determine which tiles in this package still need action
-            needed_names: set[str] = set()
-            for lat_ll, lon_ll in coords:
-                tname = self._compose_tile_filename(lat_ll, lon_ll)
-                tif_path = self.root / tname
-                if tif_path.exists():
-                    results.append(tif_path)
-                    continue
-                if missing_marker_path(tname).exists():
-                    # Previously confirmed missing; skip re-checking
-                    continue
-                needed_names.add(tname)
-
-            # If nothing to do for this package, skip any network I/O
-            if not needed_names:
-                continue
+            needed_names = {
+                self._compose_tile_filename(lat, lon) for lat, lon in coords
+            }
 
             # HEAD to detect ocean/no-data packages (404) → skip silently
             try:
@@ -378,8 +413,7 @@ class MeritHydro(Adapter):
                     allow_redirects=True,
                     timeout=request_timeout_s,
                 )
-            except Exception as exc:
-                # Retry transient head issues
+            except Exception:
                 if attempts <= 1:
                     raise
                 retried = 1
@@ -387,7 +421,7 @@ class MeritHydro(Adapter):
                     time.sleep(min(2.0 * retried, 5.0))
                     try:
                         head_resp = session.head(
-                            url,
+                            package_url,
                             auth=auth,
                             allow_redirects=True,
                             timeout=request_timeout_s,
@@ -399,15 +433,13 @@ class MeritHydro(Adapter):
                     raise
 
             if head_resp.status_code == 404:
-                # Mark all remaining needed tiles in this package as missing
                 for tname in needed_names:
-                    mm = missing_marker_path(tname)
+                    mm = self._missing_marker_path(tname)
                     mm.write_text(
                         "MERIT Hydro: tile not provided (ocean/no-data).\n",
                         encoding="utf-8",
                     )
-                    missing_markers.append(mm)
-                continue  # package does not exist (ocean)
+                continue
             if head_resp.status_code in (401, 403):
                 raise requests.RequestException(
                     f"Unauthorized: HTTP {head_resp.status_code} for {package_url}"
@@ -418,25 +450,18 @@ class MeritHydro(Adapter):
                 )
 
             content_length = int(head_resp.headers.get("Content-Length", 0))
-
-            # Attempt to stream the tar and extract required tiles
             found_names: set[str] = set()
             for attempt in range(1, attempts + 1):
                 try:
                     resp = session.get(
                         package_url, auth=auth, stream=True, timeout=request_timeout_s
                     )
-                except Exception as exc:
+                except Exception:
                     if attempt >= attempts:
                         raise
                     time.sleep(min(2.0 * attempt, 5.0))
                     continue
 
-                if resp.status_code in (401, 403):
-                    resp.close()
-                    raise requests.RequestException(
-                        f"Unauthorized: HTTP {resp.status_code} for {package_url}"
-                    )
                 if resp.status_code >= 400:
                     resp.close()
                     if attempt >= attempts:
@@ -447,17 +472,8 @@ class MeritHydro(Adapter):
                     continue
 
                 try:
-                    # Ensure urllib3 decodes any transfer-encoding for a clean tar stream
-                    try:
-                        resp.raw.decode_content = True
-                    except Exception:
-                        pass
-                    # Stream the tar and extract only needed members sequentially
-                    print(
-                        "Downloading and extracting from:",
-                        package_url,
-                        "may take a while.. Don't worry, the files are cached for next time.",
-                    )
+                    resp.raw.decode_content = True
+                    print(f"Downloading and extracting from: {package_url}")
                     with tqdm(
                         total=content_length if content_length > 0 else None,
                         desc=f"Downloading {package_name}",
@@ -475,7 +491,6 @@ class MeritHydro(Adapter):
                                     if ex is None:
                                         continue
                                     out_file = self.root / mname
-                                    out_file.parent.mkdir(parents=True, exist_ok=True)
                                     with out_file.open("wb") as fout:
                                         while True:
                                             chunk = ex.read(1024 * 1024)
@@ -483,11 +498,7 @@ class MeritHydro(Adapter):
                                                 break
                                             fout.write(chunk)
                                     found_names.add(mname)
-                                    results.append(out_file)
                                     if found_names == needed_names:
-                                        print(
-                                            f"All {len(needed_names)} needed tiles extracted from {package_name}. Stopping download early."
-                                        )
                                         break
                 except tarfile.ReadError:
                     if attempt >= attempts:
@@ -495,51 +506,72 @@ class MeritHydro(Adapter):
                     time.sleep(min(2.0 * attempt, 5.0))
                     continue
                 finally:
-                    try:
-                        resp.close()
-                    except Exception:
-                        pass
-
-                # If we reach here without raising, either all found or some tiles were not present.
-                # Both are acceptable; we do not retry just for missing tiles.
+                    resp.close()
                 break
 
-            # Create missing markers for tiles that were not found in an existing package
             for tname in needed_names - found_names:
-                mm = missing_marker_path(tname)
+                mm = self._missing_marker_path(tname)
                 mm.write_text(
                     "MERIT Hydro: tile not present in package (likely ocean).\n",
                     encoding="utf-8",
                 )
-                missing_markers.append(mm)
+
+        return self
+
+    def read(self, **kwargs: Any) -> xr.DataArray:
+        """Read and merge the MERIT Hydro tiles into a single DataArray.
+
+        This method should be called after fetch(). It finds all available tiles
+        for the stored bounding box, merges them, crops to the exact bbox,
+        and applies nodata conversion.
+
+        Args:
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            Merged and cropped xarray DataArray.
+
+        Raises:
+            ValueError: If fetch() has not been called.
+        """
+        if self._xmin is None:
+            raise ValueError(
+                "fetch() must be called before read() to set the bounding box."
+            )
+
+        tiles: list[tuple[int, int]] = self._tiles_for_bbox(
+            self._xmin, self._xmax, self._ymin, self._ymax
+        )
+        local_tile_dir: Path = self.root / self.variable
+        results: list[Path] = []
+        for lat_ll, lon_ll in tiles:
+            tname = self._compose_tile_filename(lat_ll, lon_ll)
+            tif_path = self.root / tname
+            if tif_path.exists():
+                results.append(tif_path)
+                continue
+            local_path = local_tile_dir / tname
+            if local_path.exists():
+                results.append(local_path)
+                continue
 
         if not results:
             raise ValueError(
-                "No MERIT Hydro tiles were found or downloaded for the requested bbox and variable."
+                f"No MERIT Hydro tiles found for bbox ({self._xmin}, {self._ymin}, {self._xmax}, {self._ymax})."
             )
 
         da: xr.DataArray = self._merge_merit_tiles(results)
 
         if "_FillValue" in da.attrs:
-            assert da.attrs["_FillValue"] == source_nodata, (
-                f"Expected source _FillValue {source_nodata}, got {da.attrs['_FillValue']}"
+            assert da.attrs["_FillValue"] == self._source_nodata, (
+                f"Expected source _FillValue {self._source_nodata}, got {da.attrs['_FillValue']}"
             )
         else:
-            da.attrs["_FillValue"] = source_nodata
+            da.attrs["_FillValue"] = self._source_nodata
 
-        da: xr.DataArray = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
-        da: xr.DataArray = convert_nodata(da, target_nodata)
-
-        write_zarr(da, self.path, crs=da.rio.crs)
-
-        # Clean up individual tile files and missing markers
-        for result in results:
-            result.unlink()
-
-        for mm in missing_markers:
-            mm.unlink()
-
-        return self
+        da = da.sel(x=slice(self._xmin, self._xmax), y=slice(self._ymax, self._ymin))
+        da = convert_nodata(da, self._target_nodata)
+        return da
 
 
 class MeritHydroDir(MeritHydro):
