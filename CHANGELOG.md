@@ -15,8 +15,17 @@
 - Moves to new data catalog
  - FAOSTAT
  - GLOPOP-SG
+ - UNDP Human Development Index
+ - OSM open_street_map_land_polygons
 - Support custom DEMs
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
+- Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
+- Add MIRCA2000 unit grid and crop calendar entries to the new data catalog and use them in crop calendar setup.
+- Move superwell data to new data catalog.
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
+- Make trade regions inspired by globiom regions and load from file rather than data catalog.
+- move osm land polygons to new data catalog
 - Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
 - Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
 
@@ -27,6 +36,9 @@ To support this version:
 - Re-run `setup_coastal_sfincs_model_regions`: `geb update -b build.yml::setup_coastal_sfincs_model_regions`
 - Remove setup_low_elevation_coastal_zone_mask from you build.yml
 - Models for inland regions need to be rebuild if floods need to be run
+- Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data` to regenerate `gtsm/sea_level_rise_rcp8p5` using the new GTSM station data.
+- Re-run `setup_gtsm_water_levels`: `geb update -b build.yml::setup_gtsm_water_levels`
+- Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
