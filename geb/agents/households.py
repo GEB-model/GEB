@@ -2007,18 +2007,38 @@ class Households(AgentBaseClass):
 
             building_multicurve = buildings.copy()
             multi_curves = {
-                "damages": self.buildings_structure_curve["building_unprotected"],
-                "damages_flood_proofed": self.buildings_structure_curve[
+                "damages_structure": self.buildings_structure_curve[
+                    "building_unprotected"
+                ],
+                "damages_content": self.buildings_content_curve["building_unprotected"],
+                "damages_structure_flood_proofed": self.buildings_structure_curve[
                     "building_flood_proofed"
+                ],
+                "damages_content_flood_proofed": self.buildings_content_curve_adapted[
+                    "building_protected"
                 ],
             }
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
-                    columns={"TOTAL_REPL_COST_USD_SQM": "maximum_damage"}
+                    columns={
+                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
+                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
+                    }
                 ),
                 hazard=flood_map,
                 multi_curves=multi_curves,
             )
+
+            # sum structure and content damages
+            damage_buildings["damages"] = (
+                damage_buildings["damages_structure"]
+                + damage_buildings["damages_content"]
+            )
+            damage_buildings["damages_flood_proofed"] = (
+                damage_buildings["damages_structure_flood_proofed"]
+                + damage_buildings["damages_content_flood_proofed"]
+            )
+            # concatenate damages to building_multicurve
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
             )

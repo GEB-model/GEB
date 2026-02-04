@@ -137,44 +137,85 @@ def VectorScannerMultiCurves(
     inundation_parts = np.fromiter(vals, dtype=np.float64)
     coverage_parts = np.fromiter(covs, dtype=np.float64) * cell_area_m2
 
+    # Clip hazard values for stable searchsorted
+    inundation_parts = np.clip(inundation_parts, curve_x[0], curve_x[-2])
+
     # Maximum damage per building-part (broadcasted)
-    max_damage_arr = np.fromiter(
+    max_damage_arr_structure = np.fromiter(
         (
             dmg
-            for len_v, dmg in zip(filtered["len_values"], filtered["maximum_damage"])
+            for len_v, dmg in zip(
+                filtered["len_values"], filtered["maximum_damage_structure"]
+            )
             for _ in range(len_v)
         ),
         dtype=np.float64,
     )
 
-    # Clip hazard values for stable searchsorted
-    inundation_parts = np.clip(inundation_parts, curve_x[0], curve_x[-2])
-
-    # Compute damages for every part
-    damage_matrix = compute_all_numba(
-        inundation_parts,
-        coverage_parts,
-        max_damage_arr,
-        curve_x,
-        curve_y,
-        curve_slopes,
+    max_damage_arr_content = np.fromiter(
+        (
+            dmg
+            for len_v, dmg in zip(
+                filtered["len_values"], filtered["maximum_damage_content"]
+            )
+            for _ in range(len_v)
+        ),
+        dtype=np.float64,
     )
 
-    # Aggregate per building (vectorized)
+    # Initiate aggregate per building (vectorized)
     lengths = filtered["len_values"].to_numpy()
     starts = np.r_[0, lengths.cumsum()[:-1]]
 
-    damage_matrix_final = np.add.reduceat(damage_matrix, starts, axis=0)
+    # Compute damages for every part
+    # only select curves relevant for structure
+    curve_structure = curve_y[(0, 2), :]
+    damage_matrix_structure = compute_all_numba(
+        inundation_parts,
+        coverage_parts,
+        max_damage_arr_structure,
+        curve_x,
+        curve_structure,
+        curve_slopes,
+    )
 
+    damage_matrix_structure_final = np.add.reduceat(
+        damage_matrix_structure, starts, axis=0
+    )
     # Return as DataFrame
-    df_damage = pd.DataFrame(
-        damage_matrix_final,
-        columns=np.array(curve_names),
+    df_damage_structure = pd.DataFrame(
+        damage_matrix_structure_final,
+        columns=np.array(curve_names)[[0, 2]],
         index=filtered.index,
     )
     # fill missing buildings with zero damage
-    df_damage = df_damage.reindex(features.index, fill_value=0.0)
-    return df_damage
+    df_damage_structure = df_damage_structure.reindex(features.index, fill_value=0.0)
+
+    # only select curves relevant for content
+    curve_content = curve_y[(1, 3), :]
+    damage_matrix_content = compute_all_numba(
+        inundation_parts,
+        coverage_parts,
+        max_damage_arr_content,
+        curve_x,
+        curve_content,
+        curve_slopes,
+    )
+
+    damage_matrix_content_final = np.add.reduceat(damage_matrix_content, starts, axis=0)
+
+    # Return as DataFrame
+    df_damage_content = pd.DataFrame(
+        damage_matrix_content_final,
+        columns=np.array(curve_names)[[1, 3]],
+        index=filtered.index,
+    )
+    # fill missing buildings with zero damage
+    df_damage_content = df_damage_content.reindex(features.index, fill_value=0.0)
+
+    # concat both dataframes
+    df_damage_combined = pd.concat([df_damage_structure, df_damage_content], axis=1)
+    return df_damage_combined
 
 
 def VectorScanner(
