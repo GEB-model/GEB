@@ -375,8 +375,6 @@ setup_CO2_concentration:
 
 setup_global_ocean_mean_dynamic_topography:
 
-setup_low_elevation_coastal_zone_mask:
-
 setup_coastlines:
 
 setup_osm_land_polygons:

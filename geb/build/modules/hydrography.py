@@ -50,7 +50,25 @@ def get_all_upstream_subbasin_ids(
     return ancenstors
 
 
-def get_downstream_subbasins(
+def get_all_downstream_subbasin_ids(
+    river_graph: nx.DiGraph, subbasin_ids: list[int]
+) -> set[int]:
+    """Get all downstream subbasin IDs for the given subbasin IDs.
+
+    Args:
+        river_graph: The river graph to use for determining downstream subbasins.
+        subbasin_ids: The subbasin IDs to get the downstream subbasins for.
+
+    Returns:
+        A set of all downstream subbasin IDs.
+    """
+    descendants = set()
+    for subbasin_id in subbasin_ids:
+        descendants |= nx.descendants(river_graph, subbasin_id)
+    return descendants
+
+
+def get_immediate_downstream_subbasins(
     river_graph: nx.DiGraph, sink_subbasin_ids: list[int]
 ) -> dict[int, list[int]]:
     """Get the immediately downstream subbasins for the given sink subbasin IDs.
@@ -154,7 +172,7 @@ def extend_rivers_into_ocean(
     resolution = abs(flow_raster.transform.a)
     for river_id, river in rivers.iterrows():
         # only select rivers that have no downstream river (i.e., end in ocean)
-        if river["downstream_ID"] == -1:
+        if river["downstream_ID"] == -1 and not river["is_further_downstream_outflow"]:
             river_end_point = river.geometry.coords[-1]
             lon, lat = river_end_point
 
@@ -374,8 +392,20 @@ class Hydrography(BuildModelBase):
         )
         subbasin_ids.update(sink_subbasin_ids)
 
-        downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
+        downstream_subbasins = get_immediate_downstream_subbasins(
+            river_graph, sink_subbasin_ids
+        )
         subbasin_ids.update(downstream_subbasins)
+
+        is_further_downstream_outflow: set[int] = set()
+
+        is_further_downstream_outflow.update(
+            get_all_downstream_subbasin_ids(
+                river_graph, list(downstream_subbasins.keys())
+            )
+        )
+
+        subbasin_ids.update(is_further_downstream_outflow)
 
         # later we want to include the downstream outflow basins. However, we don't want to include
         # other branches that are upstream of those downstream basins, but are not part
@@ -400,6 +430,10 @@ class Hydrography(BuildModelBase):
 
         rivers["is_upstream_of_downstream_basin"] = pd.Series(
             True, index=upstream_basins_of_downstream_basins
+        ).reindex(rivers.index, fill_value=False)
+
+        rivers["is_further_downstream_outflow"] = pd.Series(
+            True, index=is_further_downstream_outflow
         ).reindex(rivers.index, fill_value=False)
 
         return rivers
@@ -622,7 +656,9 @@ class Hydrography(BuildModelBase):
 
         assert (
             rivers[
-                (~rivers["represented_in_grid"]) & (~rivers["is_downstream_outflow"])
+                (~rivers["represented_in_grid"])
+                & (~rivers["is_downstream_outflow"])
+                & (~rivers["is_further_downstream_outflow"])
             ]["lengthkm"]
             < 5
         ).all(), (
@@ -818,9 +854,12 @@ class Hydrography(BuildModelBase):
             name="coastal/global_ocean_mean_dynamic_topography",
         )
 
-    @build_method
-    def setup_low_elevation_coastal_zone_mask(self) -> None:
-        """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
+    def create_low_elevation_coastal_zone_mask(self) -> gpd.GeoDataFrame | None:
+        """creates the low elevation coastal zone (LECZ) mask for sfincs models.
+
+        Returns:
+            A GeoDataFrame containing the low elevation coastal zone mask.
+        """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
                 "No coastal basins found, skipping setup_low_elevation_coastal_zone_mask"
@@ -858,10 +897,7 @@ class Hydrography(BuildModelBase):
             geometry=[low_elevation_coastal_zone_mask.union_all()],
             crs=gdf.crs,
         )
-        self.set_geom(
-            low_elevation_coastal_zone_mask,
-            name="coastal/low_elevation_coastal_zone_mask",
-        )
+        return low_elevation_coastal_zone_mask
 
     @build_method
     def setup_coastlines(self) -> None:
@@ -871,8 +907,7 @@ class Hydrography(BuildModelBase):
             return
 
         # load the coastline from the data catalog
-        fp_coastlines = self.old_data_catalog.get_source("osm_coastlines").path
-        coastlines = gpd.read_file(fp_coastlines)
+        coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
 
         # clip the coastline to overlapping with mask
         coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
@@ -905,8 +940,7 @@ class Hydrography(BuildModelBase):
             return
 
         # load the land polygon from the data catalog
-        fp_land_polygons = self.old_data_catalog.get_source("osm_land_polygons").path
-        land_polygons = gpd.read_file(fp_land_polygons)
+        land_polygons = self.data_catalog.fetch("open_street_map_land_polygons").read()
         # select only the land polygons that intersect with the region
         land_polygons = land_polygons[land_polygons.intersects(self.region.union_all())]
         # merge all land polygons into a single polygon
@@ -917,12 +951,8 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(
-        depends_on=["setup_low_elevation_coastal_zone_mask", "setup_coastlines"]
-    )
-    def setup_coastal_sfincs_model_regions(
-        self, minimum_coastal_area_deg2: float = 0.0006449015308288645
-    ) -> None:
+    @build_method(depends_on=["setup_coastlines"])
+    def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
@@ -933,83 +963,26 @@ class Hydrography(BuildModelBase):
         # load elevation data
         elevation = self.other["DEM/fabdem"]
         # load the lecz mask
-        low_elevation_coastal_zone_mask = self.geom[
-            "coastal/low_elevation_coastal_zone_mask"
-        ]
+        low_elevation_coastal_zone_mask = self.create_low_elevation_coastal_zone_mask()
+
         # add small buffer to ensure connection of 'islands' with coastlines
         low_elevation_coastal_zone_mask.geometry = (
             low_elevation_coastal_zone_mask.geometry.buffer(0.001)
         )
-        # split the low elevation coastal zone mask into individual polygons of contiguous areas
-        low_elevation_coastal_zone_polygons = low_elevation_coastal_zone_mask.explode(
-            index_parts=False
-        ).reset_index(drop=True)
 
-        # add area column
-        low_elevation_coastal_zone_polygons["area"] = (
-            low_elevation_coastal_zone_polygons.geometry.area
+        # sample the minimum elevation present in the lecz mask
+        mask = elevation.rio.clip(
+            low_elevation_coastal_zone_mask.geometry,
+            low_elevation_coastal_zone_mask.crs,
+            all_touched=True,
+            drop=False,
         )
 
-        # load the coastlines
-        coastlines = self.geom["coastal/coastlines"]
-        sfincs_regions = []
-        low_elevation_coastal_zone_regions = []
-        initial_water_levels = []
-        for (
-            _,
-            low_elevation_coastal_zone_polygon,
-        ) in low_elevation_coastal_zone_polygons.iterrows():
-            # check if the low elevation coastal zone polygon intersects with the coastline
-            if (
-                coastlines.intersects(low_elevation_coastal_zone_polygon.geometry).any()
-                and low_elevation_coastal_zone_polygon["area"]
-                > minimum_coastal_area_deg2  # approx 1 km2 at equator
-            ):
-                # if it does, create a sfincs region
-                # get the minimum elevation within the low elevation coastal zone polygon
-                mask = elevation.rio.clip_box(
-                    *low_elevation_coastal_zone_polygon.geometry.bounds
-                ).where(
-                    elevation.rio.clip(
-                        [low_elevation_coastal_zone_polygon.geometry], drop=False
-                    ).notnull(),
-                    drop=False,
-                )
-                initial_water_levels.append(float(mask.min().values))
+        initial_water_levels = float(np.nanmin(mask.values))
 
-                # create a bounding box around the low elevation coastal zone polygon
-                low_elevation_coastal_zone_polygon_gpd = gpd.GeoDataFrame(
-                    geometry=[low_elevation_coastal_zone_polygon.geometry],
-                    crs=low_elevation_coastal_zone_mask.crs,
-                )
-                bbox = low_elevation_coastal_zone_polygon_gpd.minimum_rotated_rectangle().iloc[
-                    0
-                ]
-                # add a small buffer to ensure connection with coastlines
-                bbox = bbox.buffer(0.04, join_style=2)
-
-                sfincs_regions.append(bbox)
-                low_elevation_coastal_zone_regions.append(
-                    low_elevation_coastal_zone_polygon[0]
-                )
-        bbox_gdf = gpd.GeoDataFrame(
-            geometry=sfincs_regions, crs=low_elevation_coastal_zone_mask.crs
-        )
-        low_elevation_coastal_zone_gdf = gpd.GeoDataFrame(
-            geometry=low_elevation_coastal_zone_regions,
-            crs=low_elevation_coastal_zone_mask.crs,
-        )
-
-        # add idx
-        bbox_gdf["idx"] = bbox_gdf.index
-        low_elevation_coastal_zone_gdf["idx"] = low_elevation_coastal_zone_gdf.index
-        low_elevation_coastal_zone_gdf["area"] = (
-            low_elevation_coastal_zone_gdf.geometry.area
-        )
-        low_elevation_coastal_zone_gdf["initial_water_level"] = initial_water_levels
-        self.set_geom(bbox_gdf, name="coastal/model_regions")
+        low_elevation_coastal_zone_mask["initial_water_level"] = initial_water_levels
         self.set_geom(
-            low_elevation_coastal_zone_gdf,
+            low_elevation_coastal_zone_mask,
             name="coastal/low_elevation_coastal_zone_mask",
         )
 
@@ -1038,6 +1011,9 @@ class Hydrography(BuildModelBase):
             databases. The relative area of each command area within the model region is calculated and set as a column in
             the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
             with any custom reservoir capacity data from the data catalog.
+
+        Raises:
+            ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
         """
         waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
@@ -1090,9 +1066,9 @@ class Hydrography(BuildModelBase):
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         if command_areas:
-            command_areas = self.old_data_catalog.get_geodataframe(
-                command_areas, geom=self.region, predicate="intersects"
-            )  # ty:ignore[invalid-assignment]
+            command_areas: gpd.GeoDataFrame = gpd.read_file(
+                command_areas, mask=self.region
+            )
             assert isinstance(command_areas, gpd.GeoDataFrame)
             command_areas = command_areas[
                 ~command_areas["waterbody_id"].isnull()
@@ -1165,9 +1141,19 @@ class Hydrography(BuildModelBase):
             self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
 
         if custom_reservoir_capacity:
-            custom_reservoir_capacity = self.old_data_catalog.get_dataframe(
-                custom_reservoir_capacity
-            )
+            if custom_reservoir_capacity.endswith(".xlsx"):
+                custom_reservoir_capacity: pd.DataFrame = pd.read_excel(
+                    custom_reservoir_capacity
+                )
+            elif custom_reservoir_capacity.endswith(".csv"):
+                custom_reservoir_capacity: pd.DataFrame = pd.read_csv(
+                    custom_reservoir_capacity
+                )
+            else:
+                raise ValueError(
+                    "custom_reservoir_capacity must be a .csv or .xlsx file"
+                )
+
             custom_reservoir_capacity = custom_reservoir_capacity[
                 custom_reservoir_capacity.index != -1
             ]
@@ -1305,6 +1291,89 @@ class Hydrography(BuildModelBase):
         self.set_table(gtsm_data_region_pd, name="gtsm/surge")
         self.logger.info("GTSM station waterlevels and geometries set")
 
+    def setup_gtsm_sea_level_rise(self) -> None:
+        """Sets up the GTSM sea level rise data for the model.
+
+        Raises:
+            ValueError: If the extrapolated sea level rise data is not monotonically increasing
+                or exceeds 2 meters by 2100 for any station.
+        """
+        self.logger.info("Setting up GTSM sea level rise data")
+        # get the model bounds and buffer by ~2km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+
+        gtsm_sea_level_rise = self.data_catalog.fetch("gtsm").read(bounds=model_bounds)
+
+        # extract data arrays
+        mean_sea_level = gtsm_sea_level_rise.mean_sea_level.data
+        time = gtsm_sea_level_rise.time.data
+        stations = gtsm_sea_level_rise.stations.data
+
+        # create dataframe
+        mean_sea_level_df = pd.DataFrame(
+            data=mean_sea_level.T,
+            index=pd.to_datetime(time),
+            columns=stations,
+        )
+        # sort by datetime index
+        mean_sea_level_df = mean_sea_level_df.sort_index()
+
+        # set table for model
+        self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
+
+        # calculate the increment in mean sea level in the time series  based on a reference year
+        reference_year = 2020
+        sea_level_rise_df = mean_sea_level_df.subtract(
+            mean_sea_level_df.loc[f"{reference_year}-01-01"], axis=1
+        )
+
+        # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
+        last_year = sea_level_rise_df.index.year.max()
+        future_years = np.arange(last_year + 1, 2101)
+        future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
+        future_data = {}
+        for station in sea_level_rise_df.columns:
+            series = sea_level_rise_df[station]
+            # fit nonlinear trend all years
+            recent_series = series
+            coeffs = np.polyfit(
+                recent_series.index.year,
+                recent_series.values,
+                deg=2,
+            )
+            trend = np.poly1d(coeffs)
+            future_values = trend(future_years)
+            future_data[station] = future_values
+        future_df = pd.DataFrame(
+            data=future_data,
+            index=future_dates,
+        )
+        # append future data to sea_level_rise_df
+        sea_level_rise_df = pd.concat([sea_level_rise_df, future_df], axis=0)
+
+        # do some check on the extrapolated data
+        for station in sea_level_rise_df.columns:
+            series = sea_level_rise_df[station]
+            # check that the values are monotonically increasing
+            if not series.is_monotonic_increasing:
+                raise ValueError(
+                    f"Sea level rise data for station {station} is not monotonically increasing after extrapolation."
+                )
+            # check that the values are reasonable (less than 2 meters by 2100)
+            if series.iloc[-1] >= 2:
+                raise ValueError(
+                    f"Sea level rise data for station {station} exceeds 2 meters by 2100."
+                )
+
+        # set table for model
+        self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise_rcp8p5")
+
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
@@ -1333,57 +1402,120 @@ class Hydrography(BuildModelBase):
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
 
-        # Continue with GTSM hydrographs setup
+        # Continue with GTSM setup
         temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
         self.setup_gtsm_water_levels(temporal_range)
         self.setup_gtsm_surge_levels(temporal_range)
+        self.setup_gtsm_sea_level_rise()
         self.setup_coast_rp()
 
     @build_method
     def setup_inflow(
-        self, lon: float, lat: float, inflow_m3_per_s: float | int
+        self,
+        locations: str,
+        inflow_m3_per_s: str,
+        interpolate: bool = False,
+        extrapolate: bool = False,
     ) -> None:
-        """Sets up a inflow hydrograph at a specified location.
-
-        Currently only a single constant inflow location at a single point is supported.
+        """Sets up a inflow hydrograph for the model.
 
         Args:
-            lon: The longitude of the inflow location.
-            lat: The latitude of the inflow location.
-            inflow_m3_per_s: The inflow in cubic meters per second.
+            locations: A vector file that can be read by geopandas containing the inflow location,
+                with column ID (str) and a point geometry.
+            inflow_m3_per_s: A CSV file containing the inflow hydrograph in m3/s with a datetime index (date),
+                and a column for each inflow location ID matching the IDs (str) in the locations file.
+            interpolate: Whether to interpolate missing values in the inflow hydrograph.
+            extrapolate: Whether to extrapolate missing values in the inflow hydrograph.
 
         Raises:
             ValueError: If the inflow location is outside of the model grid or study area.
         """
-        mask = self.grid["mask"]
+        mask = self.grid["mask"].compute()
         transform = mask.rio.transform()
 
-        y, x = rasterio.transform.rowcol(transform, lon, lat)
+        inflow_locations = gpd.read_file(locations)
 
-        inflow_locations = gpd.GeoDataFrame(
-            geometry=[Point(lon, lat)],
-            crs="EPSG:4326",
-            columns=["y", "x"],
-            data=[[y, x]],
-            index=[0],
+        if inflow_locations.crs is None:
+            raise ValueError("Locations file must have a defined CRS.")
+        inflow_locations = inflow_locations.to_crs(mask.rio.crs)
+
+        if "ID" not in inflow_locations.columns:
+            raise ValueError("Locations file must have an 'ID' column.")
+
+        for ID in inflow_locations["ID"]:
+            if not isinstance(ID, str):
+                raise ValueError("Locations 'ID' column must be of type string.")
+
+        y, x = rasterio.transform.rowcol(
+            transform, inflow_locations.geometry.x, inflow_locations.geometry.y
         )
+
+        inflow_locations["y"] = y
+        inflow_locations["x"] = x
+
         self.set_geom(inflow_locations, name="routing/inflow_locations")
 
-        if y < 0 or y >= mask.shape[0] or x < 0 or x >= mask.shape[1]:
+        if (
+            (inflow_locations["y"] < 0)
+            | (inflow_locations["y"] >= mask.shape[0])
+            | (inflow_locations["x"] < 0)
+            | (inflow_locations["x"] >= mask.shape[1])
+        ).any():
             raise ValueError("Inflow location is outside of the model grid.")
 
-        if mask.values[y, x]:
+        # check if any of the locations is outside of the study area (mask is True outside the study area)
+        if (mask.values[inflow_locations["y"], inflow_locations["x"]]).any():
             raise ValueError("Inflow location is outside of the study area.")
 
-        inflow_df_m3_per_s = pd.DataFrame(
-            index=pd.date_range(
-                self.start_date,
-                end=self.end_date + timedelta(hours=23),
-                freq="H",
-                inclusive="both",
-            ),
-            columns=np.array([0]),
-            data=inflow_m3_per_s,
+        inflow_df_m3_per_s = pd.read_csv(inflow_m3_per_s, index_col=0, parse_dates=True)
+        # ensure index is datetime
+        if not np.issubdtype(inflow_df_m3_per_s.index.dtype, np.datetime64):  # ty:ignore[invalid-argument-type]
+            raise ValueError("Inflow hydrograph index must be datetime.")
+
+        # ensure columns are strings
+        if not all(isinstance(col, str) for col in inflow_df_m3_per_s.columns):
+            raise ValueError("Inflow hydrograph columns must be of type string.")
+
+        # check if all IDs in locations are in the inflow file
+        missing_ids: set[str] = set(inflow_locations["ID"]) - set(
+            inflow_df_m3_per_s.columns
         )
+        if missing_ids:
+            raise ValueError(
+                f"Missing inflow data for location IDs: {missing_ids}. "
+                "Ensure column names in CSV match location IDs."
+            )
+
+        # subset to only include the locations that are in the locations file
+        inflow_df_m3_per_s = inflow_df_m3_per_s[inflow_locations["ID"]]
+
+        # align to model time step
+        model_time_step = pd.date_range(
+            self.start_date,
+            end=self.end_date + timedelta(hours=23),
+            freq="H",
+            inclusive="both",
+        )
+
+        inflow_df_m3_per_s: pd.DataFrame = inflow_df_m3_per_s.reindex(model_time_step)
+
+        if interpolate:
+            # interpolate missing values by first interpolating in time
+            inflow_df_m3_per_s: pd.DataFrame = inflow_df_m3_per_s.interpolate(
+                method="time"
+            )
+        if extrapolate:
+            # extrapolate missing values by forward and backward filling
+            inflow_df_m3_per_s: pd.DataFrame = inflow_df_m3_per_s.ffill().bfill()
+
+        if inflow_df_m3_per_s.isnull().any().any():
+            raise ValueError(
+                "Inflow hydrograph contains missing values. "
+                "Set interpolate=True to interpolate missing values. "
+                "or fill missing values in the inflow hydrograph. "
+                "model start and end date: "
+                f"{self.start_date} to {self.end_date} "
+                "with hourly frequency."
+            )
 
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")

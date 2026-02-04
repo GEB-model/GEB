@@ -1,14 +1,42 @@
 # dev
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
 - Add download and processing for soil thickness data.
-- DeltaDTM is now also setup for the model region in setup_elevation.
+- DeltaDTM is now also setup for the model region in setup_elevation. 
+- Align SFINCS mask padding to the coarse grid so left and bottom edges snap to grid-size multiples.
+- Improve inflow, outflow, flood plains and some other things to improve flood risk maps.
 - Remove DeltaDTM and GEBCO for non-coastal regions.
-- Re-indexing of OBM buildings and creating one houshold agent per building (per default).
+- Re-indexing of OBM buildings and creating one household agent per building (per default).
+- Support multiple inflow locations.
+- (Deep) copy model config on initializing model avoiding reference issues.
+- Filter clusters in geb init-multiple based on intersection with coastline if parsed as argument.
+- Updated the GLOPOP version (from GLOPOP_SG_V2 to GLOPOP_SG_V3) to resolve missing data in some GDL regions
+- Add option for variable runoff in infiltration  
+- Simplify coastal model setup. No longer create multiple shapes of connected low elevation coastal zones.
+- Moves to new data catalog
+ - FAOSTAT
+ - GLOPOP-SG
+ - UNDP Human Development Index
+ - OSM open_street_map_land_polygons
+- Support custom DEMs
+- Read custom reservoirs and waterbodies from files instead of old data catalog.
+- Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
+- Add MIRCA2000 unit grid and crop calendar entries to the new data catalog and use them in crop calendar setup.
+- Move superwell data to new data catalog.
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
+- Make trade regions inspired by globiom regions and load from file rather than data catalog.
+- move osm land polygons to new data catalog
 
 To support this version:
 
 - Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
-- Re-run `setup_soil`: `geb update -b build.yml::setup_soil`
+- Re-run `setup_soil`: `geb update -b build.yml::setup_soil` and `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics` 
+- Re-run `setup_coastal_sfincs_model_regions`: `geb update -b build.yml::setup_coastal_sfincs_model_regions`
+- Remove setup_low_elevation_coastal_zone_mask from you build.yml
+- Models for inland regions need to be rebuild if floods need to be run
+- Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data` to regenerate `gtsm/sea_level_rise_rcp8p5` using the new GTSM station data.
+- Re-run `setup_gtsm_water_levels`: `geb update -b build.yml::setup_gtsm_water_levels`
+- Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 

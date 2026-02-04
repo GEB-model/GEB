@@ -69,7 +69,7 @@ class GEBModel(Module):
         Raises:
             ValueError: If the mode is not 'r' or 'w'.
         """
-        self.config: dict[str, Any] = config  # model configuration
+        self.config: dict[str, Any] = copy.deepcopy(config)  # model configuration
         self.logger: logging.Logger = self.create_logger()
 
         self.timing = timing  # whether to log timing of modules

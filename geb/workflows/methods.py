@@ -1,8 +1,10 @@
 """General utility methods for workflows in GEB."""
 
+import math
 from typing import Any
 
 import numpy as np
+from pyproj import CRS
 
 
 def multi_level_merge(dict1: dict, dict2: dict) -> dict:
@@ -49,3 +51,27 @@ def multi_set(dict_obj: dict, value: Any, *attrs: str) -> None:
         value = value.item()
 
     d[attrs[-1]] = value
+
+
+def get_utm_zone(lat: float, lon: float) -> CRS:
+    """Get the UTM zone CRS for a given latitude and longitude.
+
+    Args:
+        lat: Latitude in decimal degrees.
+        lon: Longitude in decimal degrees.
+
+    Returns:
+        CRS: The corresponding UTM zone CRS.
+    """
+    # Calculate zone number
+    zone_number = math.floor((lon + 180) / 6) + 1
+
+    # Determine hemisphere
+    hemisphere = "north" if lat >= 0 else "south"
+
+    # Create CRS object (WGS84)
+    # EPSG for UTM is 32600 + zone (North) or 32700 + zone (South)
+    base_epsg = 32600 if hemisphere == "north" else 32700
+    epsg_code = base_epsg + zone_number
+
+    return CRS.from_epsg(epsg_code)

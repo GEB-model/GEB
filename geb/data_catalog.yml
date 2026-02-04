@@ -1,10 +1,3 @@
-geul_dem:
-  data_type: RasterDataset
-  driver: raster
-  crs: 28992
-  meta:
-    category: topography
-  path: project_data/geul/geul_dem.zarr
 MIRCA2000_crop_data:
   data_type: DataFrame
   driver: excel
@@ -21,28 +14,6 @@ MIRCA2000_crop_data_variants:
     paper_doi: adjusted from 10.1016/j.jhydrol.2009.07.031
     paper_ref: Siebert et al. (2010)
     source_license:  Creative Commons Attribution 4.0 International 
-MIRCA2000_unit_grid:
-  data_type: RasterDataset
-  driver: raster
-  path: agriculture/MIRCA2000/unit_code_grid/unit_code.asc
-  crs: 4326
-  meta:
-    paper_doi: 10.1029/2008GB003435
-    paper_ref: Portmann et al. (2010)
-    source_license: CC BY 4.0
-    source_url: https://www.uni-frankfurt.de/45218031/Data_download_center_for_MIRCA2000
-    source_version: 1.1
-MIRCA2000_cropping_calendar_{irrigated_or_rainfed}:
-  data_type: Dataset
-  path: agriculture/MIRCA2000/condensed_cropping_calendars/cropping_calendar_{irrigated_or_rainfed}.txt
-  meta:
-    paper_doi: 10.1029/2008GB003435
-    paper_ref: Portmann et al. (2010)
-    source_license: CC BY 4.0
-    source_url: https://www.uni-frankfurt.de/45218031/Data_download_center_for_MIRCA2000
-    source_version: 1.1
-  placeholders:
-    irrigated_or_rainfed: [irrigated, rainfed]
 MIRCA-OS_cropping_calendar_{irrigated_or_rainfed}_{year}:
   data_type: Dataset
   path: agriculture/MIRCA-OS/Crop Calendar/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
@@ -125,37 +96,6 @@ cwatm_grassland_5min:
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/grassland/{variable}.nc
-reservoir_command_areas_krishna:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: project_data/fairstream/command_areas/command_areas_with_ids.gpkg
-  rename:
-    Hylak_id: waterbody_id
-custom_reservoir_capacity_krishna:
-  data_type: DataFrame
-  driver: excel
-  path: project_data/fairstream/reservoir_capacity.xlsx
-  rename:
-    Hylak_id: waterbody_id
-    Capacity_FLR_BCM: volume_flood
-    Gross_capacity_BCM: volume_total
-    Flood_cushion_BCM: flood_cushion
-  unit_mult:
-    volume_flood: 1_000_000_000
-    volume_total: 1_000_000_000
-    flood_cushion: 1_000_000_000
-UN_dev_index:
-  meta:
-    category: economics
-    source_author: UNDP
-    source_url: https://hdr.undp.org/  
-    source_license: Creative Commons Attribution 3.0 IGO
-  path: socioeconomic/UN_HDI/human-development-index.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    index_col: 'Year'
 oecd_idd:
   meta:
     category: economics
@@ -165,30 +105,6 @@ oecd_idd:
     socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
   driver: csv
   data_type: DataFrame
-gcam_electricity_rates:
-  meta:
-    category: economics
-    source_url: https://github.com/JGCRI/superwell
-    source_version: 1.0
-    unit: USD (2016)
-  path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
-  driver: csv
-  data_type: DataFrame
-GLOPOP-S:
-  data_type: Dataset
-  path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz
-  meta:
-    source_license: Creative Commons Attribution 4.0 International
-    source_url: https://zenodo.org/records/15680747
-    source_version: N/A
-GLOPOP-SG:
-  data_type: RasterDataset
-  driver: raster
-  path: population/GLOPOP-SG/GLOPOP_SG_V2.zip
-  meta:
-    source_license: Creative Commons Attribution 4.0 International
-    source_url: https://zenodo.org/records/15680747
-    source_version: N/A
 AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
@@ -240,62 +156,3 @@ cwatm_industry_water_demand_{scenario}_year:
     source_url: https://doi.org/10.5194/gmd-9-175-2016
   placeholders:
     scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
-FAO_crop_price:
-  path: crops/FAOSTAT_data_en_9-27-2024.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
-    category: crops
-    source_author: FAO
-    source_license: CC-BY-4.0
-    source_url: https://www.fao.org/faostat/en/#data/PP
-    source_version: Producer price in USD per tonne 
-  rename:
-    Year: year
-    Value: price_per_kg
-    Item: crop
-  unit_mult:
-    price_per_kg: 0.001  # tonne to kg
-fan_initial_groundwater_depth_{continent}:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  meta:
-    category: groundwater
-    paper_doi: 10.1126/science.1229881
-    paper_ref: Fan et al. (2013, 2020) 
-    source_url: http://thredds-gfnl.usc.es/thredds/catalog/GLOBALWTDFTP/catalog.html
-    source_license: cant find
-  path: groundwater/groundwater_depth/{continent}.nc
-  nodata: 2
-  placeholders:
-    continent: ['Eurasia', 'Africa', 'North_America', 'Oceania', 'South_America']
-GLOBIOM_regions_37:
-  data_type: DataFrame
-  driver: excel
-  path: GLOBIOM/Region_Country_Mapping.xlsx
-  meta:
-    source_url: https://iiasa.ac.at/models-tools-data/globiom
-    source_license: Creative Commons Attribution-NonCommercial 4.0 International
-  driver_kwargs:
-    sheet_name: Region37
-osm_land_polygons:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/land-polygons-split-4326/land_polygons.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/land-polygons.html
-    source_license: Data Commons Open Database License (ODbL)   
-osm_coastlines:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/coastlines-split-4326/lines.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/coastlines.html
-    source_license: Data Commons Open Database License (ODbL)

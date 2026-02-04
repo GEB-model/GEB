@@ -395,6 +395,7 @@ def cluster_subbasins_by_area_and_proximity(
     subbasin_ids: list[int],
     target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
     area_tolerance: float,
+    ocean_outlets_only: bool,
     logger: logging.Logger,
 ) -> list[list[int]]:
     """Cluster subbasins by following the coastline with performance optimizations.
@@ -410,6 +411,7 @@ def cluster_subbasins_by_area_and_proximity(
         subbasin_ids: List of downstream COMID values to cluster.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        ocean_outlets_only: If True, only consider coastal basins that intersect with coastlines.
         logger: Logger for progress tracking.
 
     Returns:
@@ -439,6 +441,32 @@ def cluster_subbasins_by_area_and_proximity(
     logger.info(
         f"Found {len(coastal_basin_ids)} coastal basins and {len(inland_basin_ids)} inland basins"
     )
+
+    if ocean_outlets_only:
+        logger.info("Filtering coastal basins to ocean outlets only...")
+        # Load coastlines
+        coastlines = data_catalog.fetch("open_street_map_coastlines").read()
+        # clip coastlines to the bounding box of the subbasins for performance
+        coastlines = coastlines.cx[
+            subbasins.total_bounds[0] : subbasins.total_bounds[2],
+            subbasins.total_bounds[1] : subbasins.total_bounds[3],
+        ]
+        # check whether coastal basins intersect with coastlines
+        # Only select candidate basins first
+        candidates = subbasins.loc[coastal_basin_ids]
+
+        # Buffer once, vectorized. Buffering by 0.1 degrees (~11km) to account for minor misalignments
+        buffered = candidates.geometry.buffer(0.1)
+
+        # Vectorized intersects
+        mask = buffered.intersects(coastlines.union_all())
+
+        # Get verified IDs
+        coastal_basin_ids = candidates.index[mask].tolist()
+
+        # remove any coastal basins that do not intersect with coastlines from subbasins
+        subbasins = subbasins.loc[coastal_basin_ids + inland_basin_ids]
+        subbasin_ids = subbasins.index.tolist()
 
     logger.info("Getting upstream areas...")
     upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasin_ids)
@@ -1814,7 +1842,8 @@ class GEBModel(
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
             rivers = rivers[~rivers["is_upstream_of_downstream_basin"]]
         elif "subbasin" in region or "geom" in region:
-            outlet_lonlats = rivers.geometry.apply(
+            rivers_outlets_for_basins = rivers[~rivers["is_further_downstream_outflow"]]
+            outlet_lonlats = rivers_outlets_for_basins.geometry.apply(
                 lambda geom: geom.coords[-2]
             ).tolist()
             subbasins_grid = ldd_network.basins(
@@ -1822,7 +1851,7 @@ class GEBModel(
                     [lon for lon, lat in outlet_lonlats],
                     [lat for lon, lat in outlet_lonlats],
                 ),
-                ids=rivers.index,
+                ids=rivers_outlets_for_basins.index,
             ).astype(np.int32)
 
             # we want to remove the areas upstream of the downstream outflow basins
@@ -1872,7 +1901,7 @@ class GEBModel(
                 crs=subbasins.crs,
             )
             # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
-            # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+            # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
                 f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"

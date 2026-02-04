@@ -62,148 +62,59 @@ def add_water_to_topwater_and_evaporate_open_water(
 
 
 @njit(cache=True, inline="always")
-def calculate_arno_runoff(
-    current_soil_water_storage: np.float32,
-    max_soil_water_capacity: np.float32,
-    arno_shape_parameter: np.float32,
-    topwater_m: np.float32,
-    infiltration_capacity_m: np.float32,
+def calculate_spatial_infiltration_excess(
+    infiltration_capacity_mean: np.float32,
+    available_water: np.float32,
+    shape_parameter_beta: np.float32,
 ) -> tuple[np.float32, np.float32]:
-    """Calculate runoff and infiltration using the Arno/Xinanjiang scheme.
+    """Calculate effective infiltration and runoff using spatial variability of infiltration capacity.
 
-    This implementation uses the analytical solution for the Xinanjiang model,
-    calculating the change in storage by moving along the capacity distribution curve.
-
-    Derivation:
-        The model assumes a spatial distribution of point infiltration capacities across the basin.
-        This distribution is described by a probability density function, where the fraction of the basin
-        with a capacity less than or equal to a value 'i' is given by a power law.
-
-        Definitions:
-        - i: Point infiltration capacity (or local storage capacity) at a specific fraction of the basin.
-        - i_max: The maximum point infiltration capacity in the basin.
-        - b: The shape parameter of the distribution.
-        - ws: The maximum total water storage capacity of the basin (average of i over the basin).
-        - w: The current total water storage of the basin.
-
-        1. Distribution of Capacities:
-        The fraction of the basin area (As) with infiltration capacity less than or equal to i is assumed to be:
-            As = 1 - (1 - i / i_max)^b
-        This implies that a small portion of the basin has very low capacity, while most has higher capacity, controlled by 'b'.
-
-        2. Total Basin Capacity (ws):
-        The maximum storage capacity of the basin (ws) is the integral of the capacity 'i' over the entire area (from As=0 to As=1).
-        First, express i as a function of As by inverting the distribution equation:
-            i(As) = i_max * [1 - (1 - As)^(1/b)]
-        Then, integrate i(As) from 0 to 1:
-            ws = ∫₀¹ { i_max * [1 - (1 - As)^(1/b)] } dAs
-            ws = i_max * [ 1 - b / (b + 1) ]
-            ws = i_max / (b + 1)
-        Rearranging gives:
-            i_max = ws * (b + 1)
-
-        3. Current Basin Storage (w):
-        The current storage 'w' is the integral of the capacity curve up to the current saturation point 'i'.
-        It is derived by calculating the storage deficit (empty space) and subtracting it from the total capacity 'ws'.
-        The deficit is the integral of remaining capacity (i(As) - i) over the unsaturated area (from As to 1).
-        Here, i(As) is the local capacity at fraction As (as defined in step 2).
-            Deficit = ∫_As^1 (i(As) - i) dAs
-        Substituting i(As) = i_max * [1 - (1 - As)^(1/b)] and letting u = 1 - As:
-            Deficit = ∫_0^(1-As) (i_max * [1 - u^(1/b)] - i) du
-        Solving this integral and using the relation (1 - As) = (1 - i / i_max)^b yields:
-            Deficit = ws * (1 - i / i_max)^(b + 1)
-        Thus, the current storage is:
-            w = ws - Deficit = ws * [1 - (1 - i / i_max)^(b + 1)]
-
-        4. Inverting for Relative Saturation:
-        To find the current position on the capacity curve based on the current storage, we invert the equation:
-            1 - i / i_max = (1 - w / ws)^(1 / (b + 1))
-
-        5. Adding Precipitation:
-        The model assumes that precipitation 'p' is added uniformly to the soil water storage across the basin.
-        Conceptually, 'i' represents the current "filled depth" or tension water level in the soil column.
-        Since 'i' is measured in depth units (e.g., mm), adding precipitation 'p' directly increases this level.
-        This assumes that infiltration happens uniformly until local capacity is reached.
-        Therefore, the state of the basin moves along the capacity curve from 'i' to 'i + p':
-            i_new = i_current + p
-
-        6. Calculating New Storage:
-        Substituting 'i_new' back into the storage equation gives the new total storage 'w_new'.
-        We replace (1 - i_current / i_max) with the term derived in step 4.
-            w_new = ws * [1 - ( (1 - w / ws)^(1 / (b + 1)) - p / i_max )^(b + 1) ]
-
-    References:
-    - Zhao Ren-Jun (1992). The Xinanjiang model applied in China. Journal of hydrology, 135(1-4), 371-381.
-    - Todini, E. (1996). The ARNO rainfall—runoff model. Journal of hydrology, 175(1-4), 339-382.
+    This function implements a Hortonian runoff generation mechanism assuming that the
+    Green-Ampt infiltration capacity within the cell follows a Reflected Power distribution.
 
     Args:
-        current_soil_water_storage: Current soil water content (m).
-        max_soil_water_capacity: Maximum soil water capacity (m).
-        arno_shape_parameter: Arno shape parameter.
-        topwater_m: Incoming water (precipitation) (m).
-        infiltration_capacity_m: Maximum infiltration capacity (m).
+        infiltration_capacity_mean: The mean infiltration capacity (Green-Ampt capacity) in the cell [L/T].
+        available_water: The amount of water available for infiltration (e.g. precipitation) [L/T].
+        shape_parameter_beta: The shape parameter `b` of the Reflected Power distribution.
 
     Returns:
         A tuple containing:
-            - Runoff (m)
-            - Infiltration (m)
+            - infiltration: Effective infiltration amount [L/T].
+            - runoff: Runoff amount due to infiltration excess [L/T].
     """
-    # If precipitation is 0, no runoff
-    if topwater_m <= np.float32(0.0):
+    if available_water <= np.float32(0.0):
         return np.float32(0.0), np.float32(0.0)
 
-    # Relative saturation
-    relative_saturation = current_soil_water_storage / max_soil_water_capacity
-    if relative_saturation >= np.float32(1.0):
-        # Already saturated, all P becomes runoff
-        return topwater_m, np.float32(0.0)
+    if infiltration_capacity_mean <= np.float32(0.0):
+        return np.float32(0.0), available_water
 
-    # Calculate the term (1 - w/ws)^(1/(b+1))
-    # This corresponds to (1 - i / i_max)
-    # where i_max = ws * (b + 1)
-    # Step 4: Inverting for Relative Saturation (finding position on capacity curve)
-    term_current = (np.float32(1.0) - relative_saturation) ** (
-        np.float32(1.0) / (arno_shape_parameter + np.float32(1.0))
+    # Calculate max capacity: f_max = f_GA * (b + 1)
+    max_infiltration_capacity = infiltration_capacity_mean * (
+        shape_parameter_beta + np.float32(1.0)
     )
 
-    # Calculate the new term after adding precipitation 'p'
-    # We are filling the capacity, so we move up the capacity curve (increasing i)
-    # The amount of "capacity depth" filled is 'p'.
-    # Step 2 & 3: Total Basin Capacity (i_max)
-    max_infiltration_capacity = max_soil_water_capacity * (
-        arno_shape_parameter + np.float32(1.0)
-    )
-
-    # The new term corresponds to (1 - i_new / i_max)
-    # i_new = i + p
-    # (1 - i_new/i_max) = (1 - i/i_max) - p/i_max
-    # Step 5: Adding Precipitation (moving along the capacity curve)
-    term_new = term_current - topwater_m / max_infiltration_capacity
-
-    if term_new <= np.float32(0.0):
-        # Saturated
-        new_soil_water_storage = max_soil_water_capacity
+    if available_water >= max_infiltration_capacity:
+        # If precipitation exceeds max capacity, infiltration is limited by the mean capacity
+        infiltration = infiltration_capacity_mean
     else:
-        # Calculate new storage w_new
-        # w_new = ws * (1 - term_new^(b+1))
-        # Step 6: Calculating New Storage
-        new_soil_water_storage = max_soil_water_capacity * (
-            np.float32(1.0) - term_new ** (arno_shape_parameter + np.float32(1.0))
+        # Integration of infiltration capacity < available water portion
+        # f_avg = f_GA * [1 - (1 - P/f_max)^(b+1)]
+        ratio = available_water / max_infiltration_capacity
+        power = shape_parameter_beta + np.float32(1.0)
+
+        infiltration = infiltration_capacity_mean * (
+            np.float32(1.0) - (np.float32(1.0) - ratio) ** power
         )
 
-    infiltration_amount_m: np.float32 = (
-        new_soil_water_storage - current_soil_water_storage
-    )
-    infiltration_amount_m = max(infiltration_amount_m, np.float32(0.0))
-    infiltration_amount_m = min(infiltration_amount_m, topwater_m)
+    # Clamp infiltration to available water to prevent precision errors
+    if infiltration > available_water:
+        infiltration = available_water
 
-    # Limit infiltration by infiltration capacity
-    if infiltration_amount_m > infiltration_capacity_m:
-        infiltration_amount_m = infiltration_capacity_m
+    runoff: np.float32 = available_water - infiltration
+    # Prevent negative runoff due to float precision
+    runoff: np.float32 = max(runoff, np.float32(0.0))
 
-    runoff_m: np.float32 = topwater_m - infiltration_amount_m
-
-    return runoff_m, infiltration_amount_m
+    return infiltration, runoff
 
 
 @njit(cache=True)
@@ -489,15 +400,17 @@ def infiltration(
     ws: ArrayFloat32,
     wres: ArrayFloat32,
     saturated_hydraulic_conductivity_m_per_timestep: ArrayFloat32,
+    groundwater_toplayer_conductivity_m_per_timestep: np.float32,
     land_use_type: np.int32,
     soil_is_frozen: bool,
     w: ArrayFloat32,
     topwater_m: np.float32,
+    capillary_rise_from_groundwater_m: np.float32,
     wetting_front_depth_m: np.float32,
     wetting_front_suction_head_m: np.float32,
     wetting_front_moisture_deficit: np.float32,
     green_ampt_active_layer_idx: int,
-    arno_shape_parameter: np.float32,
+    variable_runoff_shape_beta: np.float32,
     bubbling_pressure_cm: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
     lambda_pore_size_distribution: ArrayFloat32,
@@ -514,7 +427,7 @@ def infiltration(
     """Simulates vertical transport of water in the soil for a single cell.
 
     Uses an explicit Green-Ampt approximation (Salvucci, 1994) combined with the
-    Arno/Xinanjiang variable infiltration capacity curve.
+    PDM variable infiltration capacity curve.
 
     The function uses `wetting_front_suction_head_m` which is a state variable
     tracking the matric suction at the sharp wetting front. This should be
@@ -525,15 +438,17 @@ def infiltration(
         ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
         wres: Residual soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
         saturated_hydraulic_conductivity_m_per_timestep: Saturated hydraulic conductivity in each layer for the cell in m in this timestep, shape (N_SOIL_LAYERS,).
+        groundwater_toplayer_conductivity_m_per_timestep: Groundwater top layer conductivity limiting recharge (m/timestep).
         land_use_type: Land use type for the cell.
         soil_is_frozen: Boolean indicating if the soil is frozen.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
+        capillary_rise_from_groundwater_m: Capillary rise from groundwater for the cell (m/timestep). If >0, percolation to groundwater is suppressed.
         wetting_front_depth_m: Depth of the wetting front in meters.
         wetting_front_suction_head_m: Suction head at the wetting front in meters.
         wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
         green_ampt_active_layer_idx: The index of the active soil layer for Green-Ampt.
-        arno_shape_parameter: Arno shape parameter for the cell.
+        variable_runoff_shape_beta: Shape parameter `b` for the PDM distribution.
         bubbling_pressure_cm: Bubbling pressure for each soil layer [cm], shape (N_SOIL_LAYERS,).
         soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
         lambda_pore_size_distribution: Van Genuchten parameter lambda for each soil layer, shape (N_SOIL_LAYERS,).
@@ -542,7 +457,7 @@ def infiltration(
         A tuple containing:
             - topwater_m: Updated topwater in meters.
             - direct_runoff: Direct runoff from the cell in meters.
-            - groundwater_recharge: Groundwater recharge from the cell in meters (currently set to 0.0).
+            - groundwater_recharge: Recharge to groundwater from the soil column (m/timestep).
             - infiltration: Infiltration into the soil for the cell in meters.
             - wetting_front_depth_m: Updated wetting front depth in meters.
             - wetting_front_suction_head_m: Updated wetting front suction head in meters.
@@ -574,6 +489,7 @@ def infiltration(
     # Initialize accumulators for the timestep
     total_infiltration_amount: np.float32 = np.float32(0.0)
     total_direct_runoff: np.float32 = np.float32(0.0)
+    groundwater_recharge_m: np.float32 = np.float32(0.0)
 
     n_substeps: int = 6
     dt: np.float32 = np.float32(1.0) / np.float32(n_substeps)
@@ -673,15 +589,17 @@ def infiltration(
             potential_cumulative_infiltration - current_cumulative_infiltration
         )
 
-        # Partition topwater into runoff and infiltration using Arno/VIC scheme
-        # constrained by the calculated Green-Ampt capacity
-        # step_runoff, step_infiltration = calculate_arno_runoff(
-        #     current_soil_water_storage=w[0] + w[1],
-        #     max_soil_water_capacity=ws[0] + ws[1],
-        #     arno_shape_parameter=arno_shape_parameter,
-        #     topwater_m=topwater_per_step,
-        #     infiltration_capacity_m=infiltration_capacity_m_step,
-        # )
+        # Calculate potential infiltration considering spatial variability of infiltration capacity
+        (
+            potential_topwater_that_can_infiltrate,
+            step_runoff,
+        ) = calculate_spatial_infiltration_excess(
+            infiltration_capacity_mean=max(
+                np.float32(0.0), infiltration_capacity_m_step
+            ),
+            available_water=topwater_per_step,
+            shape_parameter_beta=variable_runoff_shape_beta,
+        )
 
         # Determine how deep we can infiltrate:
         # Scan for the first layer with available space starting from active layer.
@@ -700,22 +618,45 @@ def infiltration(
         for i in range(end_layer_idx):
             space_available += max(np.float32(0.0), ws[i] - w[i])
 
-        # If the wetting front has reached the bottom of the soil column,
-        # we treat the entire column as "fillable" without the rate limit
-        # imposed by the Green-Ampt infiltration capacity.
+        # If the wetting front has reached the bottom of the soil column, we treat
+        # the profile as a pass-through system:
+        # - fill remaining storage if any
+        # - route remaining water to groundwater recharge, capped by the conductivity
+        #   of the groundwater top layer (m/timestep)
+        # - any remaining water becomes direct runoff
         total_soil_depth = np.sum(soil_layer_height_m)
-        if wetting_front_depth_m >= total_soil_depth - np.float32(1e-4):
+        wetting_front_at_bottom = (
+            wetting_front_depth_m >= total_soil_depth - np.float32(1e-4)
+        )
+
+        if wetting_front_at_bottom:
             step_infiltration = min(
-                topwater_per_step,
-                space_available,
+                potential_topwater_that_can_infiltrate, space_available
             )
+            potential_recharge_m = (
+                potential_topwater_that_can_infiltrate - step_infiltration
+            )
+
+            recharge_capacity_m_step = (
+                max(np.float32(0.0), groundwater_toplayer_conductivity_m_per_timestep)
+                * dt
+            )
+
+            step_groundwater_recharge_m = min(
+                potential_recharge_m, recharge_capacity_m_step
+            )
+            step_groundwater_recharge_m *= (
+                capillary_rise_from_groundwater_m <= np.float32(0.0)
+            )
+            groundwater_recharge_m += step_groundwater_recharge_m
+
+            step_runoff += potential_recharge_m - step_groundwater_recharge_m
         else:
             step_infiltration = min(
-                topwater_per_step,
-                max(np.float32(0.0), infiltration_capacity_m_step),
+                potential_topwater_that_can_infiltrate,
                 space_available,
             )
-        step_runoff = topwater_per_step - step_infiltration
+            step_runoff += potential_topwater_that_can_infiltrate - step_infiltration
 
         total_infiltration_amount += step_infiltration
         total_direct_runoff += step_runoff
@@ -753,7 +694,7 @@ def infiltration(
     return (
         topwater_m,
         total_direct_runoff,
-        np.float32(0.0),
+        groundwater_recharge_m,
         total_infiltration_amount,
         wetting_front_depth_m,
         wetting_front_suction_head_m,
