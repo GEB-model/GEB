@@ -30,6 +30,7 @@ from .open_street_map_coastlines import OpenStreetMapCoastlines
 from .soilgrids import SoilGridsV1, SoilGridsV2
 from .superwell import GCAMElectricityRates
 from .sword import Sword
+from .undp import HumanDevelopmentIndex
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
@@ -463,6 +464,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
         },
     },
+    "un_hdi": {
+        "adapter": HumanDevelopmentIndex(
+            folder="un_hdi",
+            local_version=1,
+            filename="un_hdi.csv",
+            cache="global",
+        ),
+        "url": "https://ourworldindata.org/grapher/human-development-index.csv?v=1&csvType=full&useColumnShortNames=true",
+        "source": {
+            "name": "Human Development Index",
+            "author": "UNDP / Our World In Data",
+            "license": "CC BY 3.0 IGO",
+            "url": "https://ourworldindata.org/grapher/human-development-index",
+            "original_source_url": "https://hdr.undp.org",
+        },
+    },
     "esa_worldcover_2021": {
         "adapter": ESAWorldCover(),
         "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
@@ -556,8 +573,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroDir(
             folder="merit_hydro_dir",
             local_version=1,
-            filename="merit_hydro_dir.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {
@@ -571,8 +588,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroElv(
             folder="merit_hydro_elv",
             local_version=1,
-            filename="merit_hydro_elv.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {

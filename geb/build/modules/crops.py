@@ -286,7 +286,7 @@ class Crops(BuildModelBase):
                 donor_data,
                 unique_regions,
                 GLOBIOM_regions,
-                self.old_data_catalog,
+                self.data_catalog,
                 self.geom["global_countries"],
                 self.geom["regions"],
             )
