@@ -23,6 +23,7 @@
 - Move superwell data to new data catalog.
 - Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
 - Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
+- Make trade regions inspired by globiom regions and load from file rather than data catalog.
 
 To support this version:
 

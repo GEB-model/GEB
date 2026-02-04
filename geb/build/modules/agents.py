@@ -24,7 +24,7 @@ from geb.workflows.raster import (
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
     COUNTRY_NAME_TO_ISO3,
-    GLOBIOM_NAME_TO_ISO3,
+    TRADE_REGIONS,
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution
@@ -2365,29 +2365,36 @@ class Agents(BuildModelBase):
             inplace=True,
         )
 
-        GLOBIOM_regions = self.old_data_catalog.get_dataframe("GLOBIOM_regions_37")
-        GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(GLOBIOM_NAME_TO_ISO3)
-        # For my personal branch
-        GLOBIOM_regions.loc[GLOBIOM_regions["Country"] == "Switzerland", "Region37"] = (
-            "EU_MidWest"
+        ISO3_codes_region: set[str] = set(self.geom["regions"]["ISO3"].unique())
+        relevant_trade_regions: dict[str, str] = {
+            ISO3: TRADE_REGIONS[ISO3]
+            for ISO3 in ISO3_codes_region
+            if ISO3 in TRADE_REGIONS
+        }
+
+        all_ISO3_across_relevant_regions: set[str] = {
+            ISO3
+            for ISO3 in ISO3_codes_region
+            if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
+        }
+
+        missing_ISO3_in_trade_regions: set[str] = (
+            ISO3_codes_region - all_ISO3_across_relevant_regions
         )
-        assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
-
-        ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
-        GLOBIOM_regions_region = GLOBIOM_regions[
-            GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
-        ]["Region37"].unique()
-
-        ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
-            GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
-        ]["ISO3"]
+        if len(missing_ISO3_in_trade_regions) > 0:
+            self.logger.info(
+                f"Regions in the model not present in trade_regions: {list(missing_ISO3_in_trade_regions)}"
+            )
 
         self.logger.info(
-            f" missing ISO3 codes in GLOBIOM regions: {set(ISO3_codes_region) - set(ISO3_codes_GLOBIOM_region)}"
+            f" missing ISO3 codes in GLOBIOM regions: {missing_ISO3_in_trade_regions}"
         )
 
-        donor_data = {}  # determine the donors: donors are all the countries in the GLOBIOM regions that are within our model domain(self.geoms["regions"]). Therefore, this can be a region OUTSIDE of the model domain, but within a GLOBIOM region in the model domain.
-        for ISO3 in ISO3_codes_GLOBIOM_region:
+        # determine the donors: donors are all the countries in the trade regions that are within our
+        # model domain(self.geoms["regions"]).
+        # Therefore, this can be a region OUTSIDE of the model domain, but within a GLOBIOM region in the model domain.
+        donor_data = {}
+        for ISO3 in all_ISO3_across_relevant_regions:
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
@@ -2399,7 +2406,7 @@ class Agents(BuildModelBase):
                     self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_preferences_data,
-                    ISO3_codes_GLOBIOM_region.to_list(),
+                    list(all_ISO3_across_relevant_regions),
                 )
 
                 donor_country = donor_countries.get(ISO3, None)
@@ -2445,7 +2452,7 @@ class Agents(BuildModelBase):
         data = donate_and_receive_crop_prices(
             donor_data,
             unique_regions,
-            GLOBIOM_regions,
+            TRADE_REGIONS,
             self.data_catalog,
             self.geom["global_countries"],
             self.geom["regions"],
