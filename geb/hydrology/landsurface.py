@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
@@ -54,6 +55,9 @@ from .soil import (
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
+
+
+logger = logging.getLogger(__name__)
 
 
 @njit(parallel=True, cache=True)
@@ -1043,9 +1047,33 @@ class LandSurface(Module):
             )
         )
 
+        # Load soil organic carbon and bulk density with logging
+        soc_path = self.model.files["subgrid"]["soil/soil_organic_carbon"]
+        bd_path = self.model.files["subgrid"]["soil/bulk_density"]
+
+        logger.info("\n" + "=" * 80)
+        logger.info("LOADING SOIL DATA IN HYDROLOGY MODULE")
+        logger.info("=" * 80)
+        logger.info(f"Loading SOC from: {soc_path}")
+        logger.info(f"Loading bulk density from: {bd_path}")
+
+        if "forest_modified" in str(soc_path) or "forest_modified" in str(bd_path):
+            logger.info("Using MODIFIED soil maps for forest planting scenario")
+            print(
+                "\n[HYDROLOGY] Loading MODIFIED soil maps (forest planting scenario)",
+                flush=True,
+            )
+        else:
+            logger.info("Using original soil maps")
+            print(
+                "\n[HYDROLOGY] Loading original soil maps, no forest planting scenario yet implemented",
+                flush=True,
+            )
+
         self.HRU.var.depth_to_bedrock_m: ArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
                 self.model.files["subgrid"]["soil/depth_to_bedrock_m"],
+                soc_path,
                 layer=None,
             ),
             method="mean",
@@ -1054,6 +1082,7 @@ class LandSurface(Module):
         organic_carbon_percentage: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
+                bd_path,
                 layer=None,
             ),
             method="mean",
