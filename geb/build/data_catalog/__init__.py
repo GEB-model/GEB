@@ -10,9 +10,10 @@ from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
-from .gadm import GADM
+from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
+from .global_exposure_model import GlobalExposureModel
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
@@ -138,6 +139,35 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use",
             "url": "https://www.gebco.net/",
             "paper_doi": "10.5285/a29c5465-b138-234d-e053-6c86abc040b9",
+        },
+    },
+    "global_exposure_model": {
+        "adapter": GlobalExposureModel(
+            folder="global_exposure_model",
+            local_version=2,
+            filename="global_exposure_model.yml",
+            cache="local",
+        ),
+        "url": "https://github.com/gem/global_exposure_model",
+        "source": {
+            "name": "GEM Global Exposure Model",
+            "author": "Global Earthquake Model (GEM) Foundation",
+            "url": "https://github.com/gem/global_exposure_model",
+        },
+    },
+    "gadm_28": {
+        "adapter": GADM28(
+            folder="gadm_28",
+            local_version=1,
+            filename="gadm_28.parquet",
+            cache="global",
+        ),
+        "url": "https://geodata.ucdavis.edu/gadm/gadm2.8/gadm28_levels.shp.zip",
+        "source": {
+            "name": "GADM version 2.8",
+            "author": "GADM",
+            "version": "2.8",
+            "license": "https://gadm.org/license.html",
         },
     },
     "mirca2000_unit_grid": {
