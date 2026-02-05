@@ -184,13 +184,14 @@ def VectorScannerMultiCurves(
         i for i, n in enumerate(curve_names) if "structure" in n.lower()
     ]
     curve_structure = curve_y[i_curves_structure, :]
+    slopes_structure = curve_slopes[i_curves_structure, :]
     damage_matrix_structure = compute_all_numba(
         inundation_parts,
         coverage_parts,
         max_damage_arr_structure,
         curve_x,
         curve_structure,
-        curve_slopes,
+        slopes_structure,
     )
 
     damage_matrix_structure_final = np.add.reduceat(
@@ -208,13 +209,14 @@ def VectorScannerMultiCurves(
     # only select curves relevant for content
     i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
     curve_content = curve_y[i_curves_content, :]
+    slopes_content = curve_slopes[i_curves_content, :]
     damage_matrix_content = compute_all_numba(
         inundation_parts,
         coverage_parts,
         max_damage_arr_content,
         curve_x,
         curve_content,
-        curve_slopes,
+        slopes_content,
     )
 
     damage_matrix_content_final = np.add.reduceat(damage_matrix_content, starts, axis=0)
