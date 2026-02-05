@@ -123,7 +123,7 @@ class GlobalExposureModel(Adapter):
         os.makedirs(self.path.parent, exist_ok=True)
         write_params(
             merged,
-            self.path.with_name("global_exposure_model.json"),
+            self.path.with_name("global_exposure_model.yml"),
         )
 
     def _process_csv(self, df: pd.DataFrame) -> dict[str, dict[str, float]]:

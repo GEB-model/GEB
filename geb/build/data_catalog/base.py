@@ -160,7 +160,7 @@ class Adapter:
             return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix in (".tif", ".asc"):
             return xr.open_dataarray(self.path, **kwargs)
-        elif self.path.suffix == ".json":
+        elif self.path.suffix == ".yml" or self.path.suffix == ".yaml":
             with open(self.path, "r") as file:
                 return yaml.safe_load(file)
         elif self.path.suffix == ".parquet":
