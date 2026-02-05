@@ -93,9 +93,10 @@ def VectorScannerMultiCurves(
         pd.DataFrame:
             A dataframe indexed by building ID (same index as input features),
             with one column per damage curve, containing damages in EUR.
+    Raises:
+        ValueError: If the curves do not share the same x-values or if required columns are missing from the features GeoDataFrame.
     """
     curve_names: list[str] = list(multi_curves.keys())
-
 
     # Shared x-values
     curve_x = multi_curves[curve_names[0]].index.values.astype(np.float64)
@@ -103,7 +104,9 @@ def VectorScannerMultiCurves(
     # assert all curves have the same x-values
     for n in curve_names[1:]:
         if not np.array_equal(curve_x, multi_curves[n].index.values.astype(np.float64)):
-            raise ValueError(f"All curves must have the same x-values. Curve '{n}' does not match.")
+            raise ValueError(
+                f"All curves must have the same x-values. Curve '{n}' does not match."
+            )
 
     curve_x = np.append(curve_x, 1e10)  # sentinel value for safe searchsorted
 
@@ -177,7 +180,9 @@ def VectorScannerMultiCurves(
     # Compute damages for every part
     # only select curves relevant for structure
     # find index of curves relevant for structure based on index searching for "structure" in curve names
-    i_curves_structure = [i for i, n in enumerate(curve_names) if "structure" in n.lower()] 
+    i_curves_structure = [
+        i for i, n in enumerate(curve_names) if "structure" in n.lower()
+    ]
     curve_structure = curve_y[i_curves_structure, :]
     damage_matrix_structure = compute_all_numba(
         inundation_parts,
