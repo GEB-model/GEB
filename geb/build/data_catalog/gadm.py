@@ -86,15 +86,13 @@ class GADM(Adapter):
 class GADM28(Adapter):
     """Class for GADM version 2.8 data adapter."""
 
-    def __init__(self, level: int = 1, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the GADM adapter.
 
         Args:
-            level: The administrative level to download (0 for countries, 1 for first-level subdivisions, etc.).
             *args: Positional arguments to pass to the Adapter constructor.
             **kwargs: Keyword arguments to pass to the Adapter constructor.
         """
-        self.level = level
         super().__init__(*args, **kwargs)
 
     def fetch(self, url: str) -> GADM28:
