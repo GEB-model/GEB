@@ -1607,7 +1607,7 @@ class Agents(BuildModelBase):
     def setup_building_reconstruction_costs(
         self, buildings: gpd.GeoDataFrame
     ) -> gpd.GeoDataFrame:
-        """Assigns reconstruction costs to buildings based on the global exposure model.
+        """Assigns reconstruction costs (in USD) to buildings based on the global exposure model.
 
         Args:
             buildings: A GeoDataFrame containing building data within the model domain.

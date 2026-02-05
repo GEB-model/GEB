@@ -150,6 +150,16 @@ def VectorScannerMultiCurves(
     # Clip hazard values for stable searchsorted
     inundation_parts = np.clip(inundation_parts, curve_x[0], curve_x[-2])
 
+    # check if maximum damage columns are present
+    if "maximum_damage_structure" not in filtered.columns:
+        raise ValueError(
+            "The features GeoDataFrame must contain a 'maximum_damage_structure' column."
+        )
+    if "maximum_damage_content" not in filtered.columns:
+        raise ValueError(
+            "The features GeoDataFrame must contain a 'maximum_damage_content' column."
+        )
+
     # Maximum damage per building-part (broadcasted)
     max_damage_arr_structure = np.fromiter(
         (
