@@ -707,7 +707,7 @@ class WaterBodies(Module):
         # between float32 outflow and float64 storage
         outflow_to_drainage_network_m3 = np.minimum(
             outflow_to_drainage_network_m3, self.var.storage
-        )
+        ).astype(np.float32)
 
         assert (outflow_to_drainage_network_m3 <= self.var.storage).all()
 
