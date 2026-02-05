@@ -1478,7 +1478,8 @@ class MeritHydro(Adapter):
         by streaming the remote 30x30-degree tar packages without saving the tars.
         If a package does not exist (HTTP 404), it is silently skipped. If a needed
         tile is not present inside an existing package (commonly ocean), it is also
-        silently skipped. Any other error is retried up to ``attempts`` times and
+        silently skipped. If a tile should be on disk but is missing, it tries to download it.
+        Any other error is retried up to ``attempts`` times and
         then raised.
 
         Authentication:
