@@ -96,8 +96,15 @@ def VectorScannerMultiCurves(
     """
     curve_names: list[str] = list(multi_curves.keys())
 
+
     # Shared x-values
     curve_x = multi_curves[curve_names[0]].index.values.astype(np.float64)
+
+    # assert all curves have the same x-values
+    for n in curve_names[1:]:
+        if not np.array_equal(curve_x, multi_curves[n].index.values.astype(np.float64)):
+            raise ValueError(f"All curves must have the same x-values. Curve '{n}' does not match.")
+
     curve_x = np.append(curve_x, 1e10)  # sentinel value for safe searchsorted
 
     # Stack curve y-values
@@ -169,7 +176,9 @@ def VectorScannerMultiCurves(
 
     # Compute damages for every part
     # only select curves relevant for structure
-    curve_structure = curve_y[(0, 2), :]
+    # find index of curves relevant for structure based on index searching for "structure" in curve names
+    i_curves_structure = [i for i, n in enumerate(curve_names) if "structure" in n.lower()] 
+    curve_structure = curve_y[i_curves_structure, :]
     damage_matrix_structure = compute_all_numba(
         inundation_parts,
         coverage_parts,
@@ -185,14 +194,15 @@ def VectorScannerMultiCurves(
     # Return as DataFrame
     df_damage_structure = pd.DataFrame(
         damage_matrix_structure_final,
-        columns=np.array(curve_names)[[0, 2]],
+        columns=np.array(curve_names)[i_curves_structure],
         index=filtered.index,
     )
     # fill missing buildings with zero damage
     df_damage_structure = df_damage_structure.reindex(features.index, fill_value=0.0)
 
     # only select curves relevant for content
-    curve_content = curve_y[(1, 3), :]
+    i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
+    curve_content = curve_y[i_curves_content, :]
     damage_matrix_content = compute_all_numba(
         inundation_parts,
         coverage_parts,
@@ -207,7 +217,7 @@ def VectorScannerMultiCurves(
     # Return as DataFrame
     df_damage_content = pd.DataFrame(
         damage_matrix_content_final,
-        columns=np.array(curve_names)[[1, 3]],
+        columns=np.array(curve_names)[i_curves_content],
         index=filtered.index,
     )
     # fill missing buildings with zero damage
