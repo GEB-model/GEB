@@ -1637,17 +1637,24 @@ class Agents(BuildModelBase):
 
         # assert each building has a NAME_1 value
         if buildings["NAME_1"].isnull().any():
-            # iterate over buildings without NAME_1 and match to closest GADM level 1 region
-            # sometimes buildings are just outside the GADM level 1 polygons (e.g., near coastlines),
-            # so we assign them to the closest region
+            # For buildings without NAME_1 we assign them to the nearest GADM level 1 region.
+            # This happens when buildings are just outside the polygons (e.g., near coastlines).
+            # Use a spatial index to avoid an O(n*m) distance calculation over all regions.
             buildings_no_name1 = buildings[buildings["NAME_1"].isnull()]
-            for idx, building in buildings_no_name1.iterrows():
-                building_centroid = building.geometry.centroid
-                distances = gadm_level1.geometry.distance(building_centroid)
-                closest_region_idx = distances.idxmin()
-                buildings.at[idx, "NAME_1"] = gadm_level1.at[
-                    closest_region_idx, "NAME_1"
-                ]
+            if not buildings_no_name1.empty:
+                # Precompute centroids for unmatched buildings
+                unmatched_centroids = buildings_no_name1.geometry.centroid
+                # Build spatial index over GADM level 1 geometries once
+                gadm_sindex = gadm_level1.sindex
+                for building_idx, centroid in zip(
+                    buildings_no_name1.index, unmatched_centroids
+                ):
+                    # Query nearest polygon via its bounding box to limit candidate search
+                    nearest_pos = list(
+                        gadm_sindex.nearest(centroid.bounds, num_results=1)
+                    )[0]
+                    nearest_region = gadm_level1.iloc[nearest_pos]
+                    buildings.at[building_idx, "NAME_1"] = nearest_region["NAME_1"]
 
         # Iterate over unique admin-1 region names to avoid redundant checks and assignments
         for name_1 in gadm_level1["NAME_1"].dropna().unique():
