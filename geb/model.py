@@ -505,6 +505,7 @@ class GEBModel(Module):
         """
         current_time: datetime.datetime = self.run_start
         end_time: datetime.datetime = self.run_end
+        self.config["report"] = {}
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
