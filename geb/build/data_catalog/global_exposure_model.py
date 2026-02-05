@@ -188,6 +188,17 @@ class GlobalExposureModel(Adapter):
             )
 
             self._filter_folders(tree, csv_files, country)
+
+        if not csv_files:
+            # Fail fast with a clear error instead of silently creating an
+            # empty output when no matching CSV files are found for the
+            # requested countries. This guards against misconfiguration
+            # (e.g., misspelled country names or repository structure changes).
+            raise ValueError(
+                "No Global Exposure Model CSV files were found for the "
+                f"requested countries: {countries}. Please verify the "
+                "country names and the repository structure."
+            )
         self._download_and_process_csv(raw_base, csv_files)
 
         return self
