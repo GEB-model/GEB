@@ -193,6 +193,15 @@ def VectorScannerMultiCurves(
     i_curves_structure = [
         i for i, n in enumerate(curve_names) if "structure" in n.lower()
     ]
+
+    if not i_curves_structure:
+        # Fail fast with a clear error when no structure-related curves are available.
+        # Without at least one such curve, damage computation would proceed with empty
+        # curve arrays and likely produce incorrect results or fail deep in numba code.
+        raise ValueError(
+            "No vulnerability curves for structure damages were found. "
+            "Ensure that at least one curve name contains the substring 'structure'."
+        )
     curve_structure = curve_y[i_curves_structure, :]
     slopes_structure = curve_slopes[i_curves_structure, :]
     damage_matrix_structure = compute_all_numba(
