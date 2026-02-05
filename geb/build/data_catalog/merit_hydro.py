@@ -37,7 +37,6 @@ from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
-
 available_tiles: set[str] = {
     "n00e005_dir.tif",
     "n00e010_dir.tif",
