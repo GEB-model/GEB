@@ -1650,11 +1650,11 @@ class Agents(BuildModelBase):
                     buildings_no_name1.index, unmatched_centroids
                 ):
                     # Query nearest polygon via its bounding box to limit candidate search
-                    nearest_pos = list(
-                        gadm_sindex.nearest(centroid.bounds, num_results=1)
-                    )[0]
+                    nearest_pos = gadm_sindex.nearest(centroid)[0]
                     nearest_region = gadm_level1.iloc[nearest_pos]
-                    buildings.at[building_idx, "NAME_1"] = nearest_region["NAME_1"]
+                    buildings.at[building_idx, "NAME_1"] = nearest_region[
+                        "NAME_1"
+                    ].values[0]
 
         # Iterate over unique admin-1 region names to avoid redundant checks and assignments
         for name_1 in gadm_level1["NAME_1"].dropna().unique():
