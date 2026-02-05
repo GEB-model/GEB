@@ -27,6 +27,7 @@
 - Make trade regions inspired by globiom regions and load from file rather than data catalog.
 - Move osm land polygons to new data catalog
 - Add Global Exposure Model and GADM v2.8 to the datacatalog to assign building damages
+- Assign damages categories of the Global Exposure Model to the building geodataframe.
 - Calculate building damages both for structure and content using corresponding functions. 
 
 To support this version:
