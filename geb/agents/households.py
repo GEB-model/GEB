@@ -1878,6 +1878,12 @@ class Households(AgentBaseClass):
         self.buildings_content_curve["building_protected"] = (
             self.buildings_content_curve["building_unprotected"] * 0.7
         )
+        # create another column (curve) in the buildings content curve for flood-proofed buildings
+        self.buildings_content_curve["building_flood_proofed"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.85
+        )
+
+        self.buildings_content_curve["building_flood_proofed"].loc[0:1] = 0.0
 
         # TODO: need to adjust the vulnerability curves
         # create another column (curve) in the buildings content curve for
@@ -2014,8 +2020,8 @@ class Households(AgentBaseClass):
                 "damages_structure_flood_proofed": self.buildings_structure_curve[
                     "building_flood_proofed"
                 ],
-                "damages_content_flood_proofed": self.buildings_content_curve_adapted[
-                    "building_protected"
+                "damages_content_flood_proofed": self.buildings_content_curve[
+                    "building_flood_proofed"
                 ],
             }
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
