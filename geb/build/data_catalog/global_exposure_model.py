@@ -164,6 +164,8 @@ class GlobalExposureModel(Adapter):
             countries: The list of countries to fetch data for.
         Returns:
             GlobalExposureModel: The adapter instance with the processed data.
+        Raises:
+            ValueError: If no CSV files are found for the requested countries.
         """
         # Query the repository tree for all files in the `main` branch so we
         # can locate country-specific folders without cloning the repo.
