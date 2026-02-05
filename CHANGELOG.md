@@ -15,21 +15,32 @@
 - Moves to new data catalog
  - FAOSTAT
  - GLOPOP-SG
+ - UNDP Human Development Index
+ - OSM open_street_map_land_polygons
 - Support custom DEMs
 - Read custom reservoirs and waterbodies from files instead of old data catalog.
 - Add LISFLOOD vegetation properties adapter with crop group number and leaf area index support in setup_vegetation.
 - Add required = True/False to all build_methods allowing checking of build methods at build start rather than erroring when finally running the model.
 - Combine setup_crops and setup_crops_from_source.
 - Use LAI to set interception and compute crop factors for forest and grassland.
+- Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
 - Add MIRCA2000 unit grid and crop calendar entries to the new data catalog and use them in crop calendar setup.
+- Move superwell data to new data catalog.
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
+- Make trade regions inspired by globiom regions and load from file rather than data catalog.
+- move osm land polygons to new data catalog
 
 To support this version:
 
-- Rename `setup_soil_parameters` to `setup_soil` in `build.yml`.
-- Re-run `setup_soil`: `geb update -b build.yml::setup_soil` and `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics` .
-- Re-run `setup_coastal_sfincs_model_regions`: `geb update -b build.yml::setup_coastal_sfincs_model_regions`.
-- Remove setup_low_elevation_coastal_zone_mask from you `build.yml`.
-- Models for inland regions need to be rebuild if floods need to be run.
+- Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
+- Re-run `setup_soil`: `geb update -b build.yml::setup_soil` and `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics` 
+- Re-run `setup_coastal_sfincs_model_regions`: `geb update -b build.yml::setup_coastal_sfincs_model_regions`
+- Remove setup_low_elevation_coastal_zone_mask from you build.yml
+- Models for inland regions need to be rebuild if floods need to be run
+- Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data` to regenerate `gtsm/sea_level_rise_rcp8p5` using the new GTSM station data.
+- Re-run `setup_gtsm_water_levels`: `geb update -b build.yml::setup_gtsm_water_levels`
+- Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 - Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
 - Add and run `setup_vegetation` to `build.yml`. A good place is for example after `setup_soil`.
 

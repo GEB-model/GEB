@@ -6,7 +6,6 @@ from datetime import date
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from hydromt.data_catalog import DataCatalog
 
 from geb.build.workflows.conversions import setup_donor_countries
 from geb.geb_types import TwoDArrayInt32
@@ -250,8 +249,8 @@ def parse_MIRCA2000_crop_calendar(
 def donate_and_receive_crop_prices(
     donor_data: pd.DataFrame,
     recipient_regions: pd.DataFrame,
-    GLOBIOM_regions: pd.DataFrame,
-    data_catalog: DataCatalog,
+    trade_regions: dict[str, str],
+    data_catalog: NewDataCatalog,
     global_countries: gpd.GeoDataFrame,
     regions: gpd.GeoDataFrame,
 ) -> pd.DataFrame:
@@ -260,14 +259,14 @@ def donate_and_receive_crop_prices(
     If there are multiple countries in one selected basin, where one country has prices for a certain crop,
     but the other does not, this gives issues. This function adjusts crop data for those countries by
     filling in missing values using data from nearby regions and PPP conversion rates. In case crop data
-    is missing for a country, and is also not in countries in the same GLOBIOM dataset, it uses the prices
+    is missing for a country, and is also not in countries in the same trade_regions dataset, it uses the prices
     for that crop from the country in the model region with least nan values.
 
     Args:
         donor_data: A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'.
             The DataFrame contains crop prices for different regions.
         recipient_regions: DataFrame containing recipient region information with 'region_id' and 'ISO3' columns.
-        GLOBIOM_regions: DataFrame containing GLOBIOM region mapping with 'ISO3' and 'Region37' columns.
+        trade_regions: A dictionary mapping ISO3 country codes to their respective trade regions.
         data_catalog: The data catalog containing necessary data sources.
         global_countries: A GeoDataFrame containing global country information.
         regions: A GeoDataFrame containing region information.
@@ -282,7 +281,7 @@ def donate_and_receive_crop_prices(
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
         4. Drops the 'ISO3' column before returning the updated DataFrame.
 
-        Some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)).
+        Some countries without data are also not in the trade_regions dataset (e.g Liechtenstein (LIE)).
         For these countries, we cannot assess which donor we should take, and the country_data will be
         empty for these countries. Therefore, we first estimate the most similar country based on the
         setup_donor_countries function. The ISO3 of these countries will be replaced by the ISO3 of the donor.
@@ -300,7 +299,7 @@ def donate_and_receive_crop_prices(
         # Filter the data for the current country
         country_data = donor_data[donor_data["ISO3"] == ISO3]
 
-        if country_data.empty:  # happens if country is not in GLOBIOM regions dataset (e.g. Kosovo). Fill these countries using data from a country that is in the GLOBIOM regions dataset, using the regular donor countries setup.
+        if country_data.empty:  # happens if country is not in trade_regions regions dataset (e.g. Kosovo). Fill these countries using data from a country that is in the trade_regions regions dataset, using the regular donor countries setup.
             countries_with_donor_data = donor_data.ISO3.unique().tolist()
             donor_countries = setup_donor_countries(
                 data_catalog,
@@ -310,7 +309,7 @@ def donate_and_receive_crop_prices(
             )
             ISO3 = donor_countries.get(ISO3, None)
             print(
-                f"Missing price donor data for {region['ISO3']}, using donor country {ISO3}. This country is NOT in the GLOBIOM regions dataset"
+                f"Missing price donor data for {region['ISO3']}, using donor country {ISO3}. This country is NOT in the trade_regions regions dataset"
             )
             assert ISO3 is not None, (
                 f"Could not find a donor country for {region['ISO3']}. Please check the donor countries setup."
@@ -323,25 +322,25 @@ def donate_and_receive_crop_prices(
             )
             # note: it can be that a country is donor for another in the first donor step (outside this function) (e.g. Isreal for cyprus), and that here cyprus is again selected as a donor country for another country (e.g. Liechtenstein)
 
-        GLOBIOM_region = GLOBIOM_regions.loc[
-            GLOBIOM_regions["ISO3"] == ISO3, "Region37"
-        ].item()
+        trade_regions_region = trade_regions[ISO3]
 
-        assert len(GLOBIOM_region) > 0, (
-            f"GLOBIOM region for {ISO3} is empty. Please check the GLOBIOM regions setup."
+        assert len(trade_regions_region) > 0, (
+            f"trade_regions region for {ISO3} is empty. Please check the trade_regions regions setup."
         )
 
-        GLOBIOM_region_countries = GLOBIOM_regions.loc[
-            GLOBIOM_regions["Region37"] == GLOBIOM_region, "ISO3"
+        trade_regions_region_countries: list[str] = [
+            ISO3
+            for ISO3, trade_region in trade_regions.items()
+            if trade_region == trade_regions_region
         ]
 
         for column in country_data.columns:
             if country_data[column].isna().all():
                 donor_data_region = donor_data.loc[
-                    donor_data["ISO3"].isin(GLOBIOM_region_countries), column
+                    donor_data["ISO3"].isin(trade_regions_region_countries), column
                 ]
 
-                # Check if data is available within the GLOBIOM region
+                # Check if data is available within the trade_regions region
                 non_na_values = donor_data_region.groupby("ISO3").count()
 
                 if non_na_values.max() > 0:  # if there is at least one non-NaN value

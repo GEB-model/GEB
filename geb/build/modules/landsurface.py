@@ -11,7 +11,6 @@ from pyflwdir.dem import fill_depressions
 from geb.build.methods import build_method
 from geb.workflows.io import get_window, parse_and_set_zarr_CRS
 from geb.workflows.raster import (
-    bounds_are_within,
     calculate_cell_area,
     convert_nodata,
     interpolate_na_2d,
@@ -356,15 +355,6 @@ class LandSurface(BuildModelBase):
 
         assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
             f"Region database must contain unique region IDs ({self.old_data_catalog[region_database].path})"
-        )
-
-        # allow some tolerance, especially for regions that coincide with coastlines, in which
-        # case the region boundaries may be slightly outside the model region due to differences
-        # in coastline representation. This is especially relevant for islands.
-        assert bounds_are_within(
-            self.region.total_bounds,
-            regions.to_crs(self.region.crs).total_bounds,
-            tolerance=0.1,
         )
 
         region_id_mapping = {

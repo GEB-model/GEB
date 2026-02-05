@@ -28,9 +28,7 @@ from geb.workflows.raster import (
     sample_from_map,
 )
 
-from ..workflows.conversions import (
-    GLOBIOM_NAME_TO_ISO3,
-)
+from ..workflows.conversions import TRADE_REGIONS
 from ..workflows.crop_calendars import (
     donate_and_receive_crop_prices,
     parse_MIRCA2000_crop_calendar,
@@ -198,6 +196,7 @@ class Crops(BuildModelBase):
         """
         if crop_prices == "FAO_stat":
             faostat = self.data_catalog.fetch("faostat_prices").read()
+            assert isinstance(faostat, pd.DataFrame)
 
             all_years_faostat: list[int] = [
                 c for c in faostat.columns if isinstance(c, int)
@@ -205,37 +204,23 @@ class Crops(BuildModelBase):
             all_years_faostat.sort()
             all_crops_faostat = faostat["crop"].unique()
 
-            GLOBIOM_regions = self.old_data_catalog.get_dataframe("GLOBIOM_regions_37")
-            GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
-                GLOBIOM_NAME_TO_ISO3
-            )
-            assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
+            ISO3_codes_region: set[str] = set(self.geom["regions"]["ISO3"].unique())
+            relevant_trade_regions: dict[str, str] = {
+                ISO3: TRADE_REGIONS[ISO3]
+                for ISO3 in ISO3_codes_region
+                if ISO3 in TRADE_REGIONS
+            }
 
-            ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
-            GLOBIOM_regions_region = GLOBIOM_regions[
-                GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
-            ]["Region37"].unique()
-            ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
-                GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
-            ]["ISO3"]
-
-            missing_regions_in_GLOBIOM = set(ISO3_codes_region) - set(
-                ISO3_codes_GLOBIOM_region
-            )
-            if len(missing_regions_in_GLOBIOM) > 0:
-                self.logger.info(
-                    f"Regions in the model not present in GLOBIOM: {list(missing_regions_in_GLOBIOM)}"
-                )
-            for region in missing_regions_in_GLOBIOM:
-                if not faostat[faostat["ISO3"] == region].empty:
-                    raise ValueError(
-                        f"Region {region} is not present in GLOBIOM, but it has crop data. This situation gives problems in the donate_and_receive_crop_prices function, because it will substitute the region's data for donor data. Please consult Tim to change the function"
-                    )
+            all_ISO3_across_relevant_regions: set[str] = {
+                ISO3
+                for ISO3 in ISO3_codes_region
+                if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
+            }
 
             # Setup dataFrame for further data corrections
-            donor_data = {}
-            for ISO3 in ISO3_codes_GLOBIOM_region:
-                region_faostat = (
+            donor_data: dict[str, pd.DataFrame] = {}
+            for ISO3 in all_ISO3_across_relevant_regions:
+                region_faostat: pd.DataFrame = (
                     faostat[faostat["ISO3"] == ISO3]
                     .set_index("crop")
                     .transpose()
@@ -249,7 +234,7 @@ class Crops(BuildModelBase):
                 donor_data[ISO3] = region_faostat
 
             # Concatenate all regional data into a single DataFrame with MultiIndex
-            donor_data = pd.concat(donor_data, names=["ISO3", "year"])
+            donor_data: pd.DataFrame = pd.concat(donor_data, names=["ISO3", "year"])
 
             # Drop crops with no data at all for these regions
             donor_data = donor_data.dropna(axis=1, how="all")
@@ -284,8 +269,8 @@ class Crops(BuildModelBase):
             data = donate_and_receive_crop_prices(
                 donor_data,
                 unique_regions,
-                GLOBIOM_regions,
-                self.old_data_catalog,
+                TRADE_REGIONS,
+                self.data_catalog,
                 self.geom["global_countries"],
                 self.geom["regions"],
             )

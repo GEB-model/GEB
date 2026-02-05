@@ -56,17 +56,6 @@ COAST_RP:
     category: extreme water levels
     paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
     paper_ref: Dullaart et al. (2023)
-UN_dev_index:
-  meta:
-    category: economics
-    source_author: UNDP
-    source_url: https://hdr.undp.org/  
-    source_license: Creative Commons Attribution 3.0 IGO
-  path: socioeconomic/UN_HDI/human-development-index.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    index_col: 'Year'
 oecd_idd:
   meta:
     category: economics
@@ -74,15 +63,6 @@ oecd_idd:
     source_url: https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov
   path:
     socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
-  driver: csv
-  data_type: DataFrame
-gcam_electricity_rates:
-  meta:
-    category: economics
-    source_url: https://github.com/JGCRI/superwell
-    source_version: 1.0
-    unit: USD (2016)
-  path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
 AQUASTAT_municipal_withdrawal:
@@ -136,32 +116,3 @@ cwatm_industry_water_demand_{scenario}_year:
     source_url: https://doi.org/10.5194/gmd-9-175-2016
   placeholders:
     scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
-GLOBIOM_regions_37:
-  data_type: DataFrame
-  driver: excel
-  path: GLOBIOM/Region_Country_Mapping.xlsx
-  meta:
-    source_url: https://iiasa.ac.at/models-tools-data/globiom
-    source_license: Creative Commons Attribution-NonCommercial 4.0 International
-  driver_kwargs:
-    sheet_name: Region37
-osm_land_polygons:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/land-polygons-split-4326/land_polygons.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/land-polygons.html
-    source_license: Data Commons Open Database License (ODbL)   
-osm_coastlines:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/coastlines-split-4326/lines.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/coastlines.html
-    source_license: Data Commons Open Database License (ODbL)
