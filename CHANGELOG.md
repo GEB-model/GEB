@@ -25,7 +25,9 @@
 - Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
 - Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
 - Make trade regions inspired by globiom regions and load from file rather than data catalog.
-- move osm land polygons to new data catalog
+- Move osm land polygons to new data catalog
+- Add Global Exposure Model and GADM v2.8 to the datacatalog to assign building damages
+- Calculate building damages both for structure and content using corresponding functions. 
 
 To support this version:
 
