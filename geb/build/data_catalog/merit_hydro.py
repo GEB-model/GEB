@@ -37,6 +37,9 @@ from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
+# MERIT Hydro is only available over land, so not all tiles exist. This is a set of
+# all available 5x5-degree tile names which we use to check if the tile
+# should exist before attempting to read and if that fails download it.
 available_tiles: set[str] = {
     "n00e005_dir.tif",
     "n00e010_dir.tif",
