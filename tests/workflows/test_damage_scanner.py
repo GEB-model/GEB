@@ -121,18 +121,13 @@ def test_vector_scanner_multicurves(
         flood_raster = flood_raster.rio.clip(
             [Polygon([(1, 1), (1, 9), (9, 9), (9, 1)])]
         )
-    vulnerability_curves["residential_structure"] = vulnerability_curves[
-        "residential"
-    ].copy()
-    vulnerability_curves["commercial_structure"] = vulnerability_curves[
-        "commercial"
-    ].copy()
 
+    # Create multi_curves with structure and content curves for residential and commercial
     vulnerability_curves_multicurves = {
-        "residential_structure": vulnerability_curves["residential_structure"],
-        "commercial_structure": vulnerability_curves["commercial_structure"],
-        "residential_content": vulnerability_curves["residential"],
-        "commercial_content": vulnerability_curves["commercial"],
+        "residential_structure": vulnerability_curves["residential"].copy(),
+        "commercial_structure": vulnerability_curves["commercial"].copy(),
+        "residential_content": vulnerability_curves["residential"].copy(),
+        "commercial_content": vulnerability_curves["commercial"].copy(),
     }
     buildings["maximum_damage_structure"] = buildings["maximum_damage"]
     buildings["maximum_damage_content"] = buildings["maximum_damage"]
