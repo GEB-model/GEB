@@ -28,7 +28,7 @@
 - Move osm land polygons to new data catalog
 - Add Global Exposure Model and GADM v2.8 to the datacatalog to assign building damages
 - Assign damages categories of the Global Exposure Model to the building geodataframe.
-- Calculate building damages both for structure and content using corresponding functions. 
+- Calculate building damages both for structure and content using separate vulnerability curves for structure and content. 
 
 To support this version:
 
