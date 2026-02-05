@@ -138,7 +138,7 @@ class GlobalExposureModel(Adapter):
         # calculations.
         result = {}
         df = df[df["OCCUPANCY"] == "Res"]
-        for admin_1 in df["NAME_1"].unique():
+        for admin_1 in df["NAME_1"].dropna().unique():
             result[admin_1] = {}
             for damage_type in [
                 "TOTAL_REPL_COST_USD",
