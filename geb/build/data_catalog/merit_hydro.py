@@ -1537,7 +1537,6 @@ class MeritHydro(Adapter):
             ):
                 if not self._missing_marker_path(tile_name).exists():
                     missing_names.add(tile_name)
-                continue
 
         if not missing_names:
             return self
