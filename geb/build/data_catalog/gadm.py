@@ -94,8 +94,8 @@ class GADM28(Adapter):
             *args: Positional arguments to pass to the Adapter constructor.
             **kwargs: Keyword arguments to pass to the Adapter constructor.
         """
-        super().__init__(*args, **kwargs)
         self.level = level
+        super().__init__(*args, **kwargs)
 
     def fetch(self, url: str) -> GADM28:
         """Process GADM Level 1 zip file to extract and convert to parquet.
