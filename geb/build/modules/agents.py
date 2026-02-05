@@ -1649,8 +1649,8 @@ class Agents(BuildModelBase):
                     closest_region_idx, "NAME_1"
                 ]
 
-        for name_1 in gadm_level1["NAME_1"]:
-            # clean name_1
+        # Iterate over unique admin-1 region names to avoid redundant checks and assignments
+        for name_1 in gadm_level1["NAME_1"].dropna().unique():
             if name_1 not in global_exposure_model:
                 raise ValueError(
                     f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
