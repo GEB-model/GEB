@@ -144,8 +144,8 @@ data_catalog: dict[str, dict[str, Any]] = {
     "global_exposure_model": {
         "adapter": GlobalExposureModel(
             folder="global_exposure_model",
-            local_version=1,
-            filename="global_exposure_model.json",
+            local_version=2,
+            filename="global_exposure_model.yml",
             cache="local",
         ),
         "url": "https://github.com/gem/global_exposure_model",
