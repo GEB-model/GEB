@@ -31,8 +31,6 @@ from urllib.parse import quote
 import pandas as pd
 import requests
 
-from geb.workflows.io import write_params
-
 from .base import Adapter
 
 # A mapping to correct specific GADM names that may appear in the CSVs, to
@@ -111,8 +109,9 @@ class GlobalExposureModel(Adapter):
         Args:
             raw_base: The base URL for raw file access in the GitHub repository.
             csv_files: List of CSV file paths to download and process.
+            countries_to_download: List of country names corresponding to the CSV files.
         Raises:
-            ValueError: If any of the downloaded CSV files are missing expected columns.
+            ValueError: If an expected column is missing in the CSV or if processing fails.
         """
         # Will collect per-file dictionaries mapping admin_1 -> damage metrics
         for csv, country in zip(csv_files, countries_to_download):
@@ -184,8 +183,6 @@ class GlobalExposureModel(Adapter):
             countries: The list of countries to fetch data for.
         Returns:
             GlobalExposureModel: The adapter instance with the processed data.
-        Raises:
-            ValueError: If no CSV files are found for the requested countries.
         """
         # set attribute of the adapter to the list of countries for which data is being fetched
         self.countries = countries

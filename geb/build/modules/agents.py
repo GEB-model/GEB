@@ -1,6 +1,7 @@
 """Module containing build methods for the agents for GEB."""
 
 import math
+import unicodedata
 from datetime import datetime
 from typing import Any
 
@@ -10,7 +11,6 @@ import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
-import unicodedata
 
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
