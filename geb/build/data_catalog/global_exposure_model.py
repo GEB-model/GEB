@@ -42,14 +42,14 @@ from .base import Adapter
 # they appear in the CSVs, and the values are the corrected names that should
 # be used in the output (matching gadm v2.8).
 gadm_converter: dict[str, str] = {
-    "QuichÃ©": "Quiché",
-    "TotonicapÃ¡n": "Totonicapán",
+    "QuichÃ©": "Quiche",
+    "TotonicapÃ¡n": "Totonicapan",
     "Veracruz de Ignacio de la Llave": "Veracruz",
-    "Midi-Pyrenees": "Midi-Pyrénées",
-    "Ile-de-France": "Île-de-France",
-    "Sant Julia de Loria": "Sant Julià de Lòria",
-    "Provence-Alpes-Cote d'Azur": "Provence-Alpes-Côte d'Azur",
-    "Franche-Comte": "Franche-Comté",
+    "Michoacán de Ocampo": "Michoacan",
+    "Ciudad de México": "Distrito Federal",
+    "PetÃ©n": "Peten",
+    "México": "Mexico",
+    "Nuevo León": "Nuevo Leon",
 }
 
 
@@ -219,7 +219,8 @@ class GlobalExposureModel(Adapter):
                 .encode("ascii", "ignore")
                 .decode("ascii")
             )
-
+            # replace spaces with dashes for matching folder names and search
+            country = country.replace(" ", "_")
             self._filter_folders(tree, csv_files, country)
 
         if not csv_files:
