@@ -15,14 +15,35 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 9. Once the code is approved, you or the reviewer can merge the branch with the main branch and delete the feature branch (so we keep things clean).
 10. Congrats your code is now in the main branch!
 
+## Contributing to documentation
+
+First of all, thank you for (thinking about) contributing to the documentation! When you are a member of the GEB repository, you can edit documentation yourself. Pull requests that only edit the documentation are automatically approved. For outside contributors, please make a pull request and we will merge it for you.
+
+We use [mkdocs](https://www.mkdocs.org) to automatically create a full website based on simple markdown files and a simple GitHub action. You can use this to test your changes locally first. For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
+
+```sh
+uv run mkdocs serve
+```
+
+It is also possible to just build the documentation locally:
+
+```sh
+uv run mkdocs build
+```
+
+Your files will end up in the folder `site`. Open `index.html` in your browser for the main page.
+
+You can also update the site index or other configuration in mkdocs.yml in the root folder of the GEB repository.
+
 ## Making a release
 
 To create a release of GEB, and creating a package on PyPi, take the following steps.
 
 1. Bump the version of GEB using `uv version --bump xxxx`. Replacing xxxx with major, minor, patch, stable, alpha, beta, rc, post or dev.
 2. Update the [changelog](https://github.com/GEB-model/GEB/blob/main/CHANGELOG.md), moving the updates to the appropriate version (keeping the dev header for the next version).
-3. Create a [new release](https://github.com/GEB-model/GEB/releases). Both the tag and the title should match the new version number. In the release notes, paste the relevant updates from the [changelog](https://github.com/GEB-model/GEB/blob/main/CHANGELOG.md).
-4. Now, a [GitHub action](https://github.com/GEB-model/GEB/actions/workflows/publish.yml) should automatically start and upload the new version to PyPi. Confirm the release is indeed available [here](https://pypi.org/project/geb/). 
+3. Ensure that the GitHub repo is updated with these changes.
+4. Create a [new release](https://github.com/GEB-model/GEB/releases). Both the tag and the title should match the new version number. In the release notes, paste the relevant updates from the [changelog](https://github.com/GEB-model/GEB/blob/main/CHANGELOG.md).
+5. Now, a [GitHub action](https://github.com/GEB-model/GEB/actions/workflows/publish.yml) should automatically start and upload the new version to PyPi. Confirm the release is indeed available [here](https://pypi.org/project/geb/). 
 
 ## Rules and recommendations
 

@@ -69,7 +69,7 @@ class GEBModel(Module):
         Raises:
             ValueError: If the mode is not 'r' or 'w'.
         """
-        self.config: dict[str, Any] = config  # model configuration
+        self.config: dict[str, Any] = copy.deepcopy(config)  # model configuration
         self.logger: logging.Logger = self.create_logger()
 
         self.timing = timing  # whether to log timing of modules
@@ -505,6 +505,7 @@ class GEBModel(Module):
         """
         current_time: datetime.datetime = self.run_start
         end_time: datetime.datetime = self.run_end
+        self.config["report"] = {}
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
@@ -686,7 +687,7 @@ class GEBModel(Module):
 
         # ugly switch to determine whether model has coastal basins
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
-        if subbasins["is_coastal_basin"].any():
+        if subbasins["is_coastal"].any():
             generate_storm_surge_hydrographs(self)
 
         self.hazard_driver.floods.get_return_period_maps()

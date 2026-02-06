@@ -9,12 +9,200 @@ Contains several dictionaries to convert between different country coding system
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import geopandas as gpd
-from hydromt.data_catalog import DataCatalog
+
+if TYPE_CHECKING:
+    from ..data_catalog import NewDataCatalog
+
+# Trade regions as used in GLOBIOM, but with minor modifications. See comments below for respective countries.
+TRADE_REGIONS: dict[str, str] = {
+    "ARG": "ArgentinaReg",
+    "AUS": "AustraliaReg",
+    "BRA": "BrazilReg",
+    "CAN": "CanadaReg",
+    "CHN": "ChinaReg",
+    "CMR": "CongoBasin",
+    "CAF": "CongoBasin",
+    "COD": "CongoBasin",
+    "COG": "CongoBasin",
+    "GNQ": "CongoBasin",
+    "GAB": "CongoBasin",
+    "EST": "EU_Baltic",
+    "LVA": "EU_Baltic",
+    "LTU": "EU_Baltic",
+    "BGR": "EU_CentralEast",
+    "HRV": "EU_CentralEast",
+    "CZE": "EU_CentralEast",
+    "HUN": "EU_CentralEast",
+    "POL": "EU_CentralEast",
+    "ROU": "EU_CentralEast",
+    "SVK": "EU_CentralEast",
+    "SVN": "EU_CentralEast",
+    "AUT": "EU_MidWest",
+    "BEL": "EU_MidWest",
+    "FRA": "EU_MidWest",
+    "DEU": "EU_MidWest",
+    "LUX": "EU_MidWest",
+    "NLD": "EU_MidWest",
+    "DNK": "EU_North",
+    "FIN": "EU_North",
+    "IRL": "EU_North",
+    "SWE": "EU_North",
+    "GBR": "EU_North",
+    "CYP": "EU_South",
+    "GRC": "EU_South",
+    "ITA": "EU_South",
+    "MLT": "EU_South",
+    "PRT": "EU_South",
+    "ESP": "EU_South",
+    "ARM": "Former_USSR",
+    "AZE": "Former_USSR",
+    "BLR": "Former_USSR",
+    "GEO": "Former_USSR",
+    "KAZ": "Former_USSR",
+    "KGZ": "Former_USSR",
+    "MDA": "Former_USSR",
+    "TJK": "Former_USSR",
+    "TKM": "Former_USSR",
+    "UZB": "Former_USSR",
+    "IND": "IndiaReg",
+    "IDN": "IndonesiaReg",
+    "JPN": "JapanReg",
+    "MYS": "MalaysiaReg",
+    "MEX": "MexicoReg",
+    "BHR": "MiddleEast",
+    "IRN": "MiddleEast",
+    "IRQ": "MiddleEast",
+    "ISR": "MiddleEast",
+    "JOR": "MiddleEast",
+    "KWT": "MiddleEast",
+    "LBN": "MiddleEast",
+    "OMN": "MiddleEast",
+    "PSE": "MiddleEast",
+    "QAT": "MiddleEast",
+    "SAU": "MiddleEast",
+    "SYR": "MiddleEast",
+    "ARE": "MiddleEast",
+    "YEM": "MiddleEast",
+    "NZL": "NewZealandReg",
+    "DZA": "NorthernAf",
+    "EGY": "NorthernAf",
+    "LBY": "NorthernAf",
+    "MAR": "NorthernAf",
+    "TUN": "NorthernAf",
+    "ESH": "NorthernAf",
+    "FJI": "Pacific_Islands",
+    "PYF": "Pacific_Islands",
+    "NCL": "Pacific_Islands",
+    "PNG": "Pacific_Islands",
+    "WSM": "Pacific_Islands",
+    "SLB": "Pacific_Islands",
+    "VUT": "Pacific_Islands",
+    "BHS": "RCAM",
+    "BLZ": "RCAM",
+    "CRI": "RCAM",
+    "CUB": "RCAM",
+    "DOM": "RCAM",
+    "SLV": "RCAM",
+    "GLP": "RCAM",
+    "GTM": "RCAM",
+    "HTI": "RCAM",
+    "HND": "RCAM",
+    "JAM": "RCAM",
+    "NIC": "RCAM",
+    "PAN": "RCAM",
+    "TTO": "RCAM",
+    "ALB": "RCEU",
+    "BIH": "RCEU",
+    "MKD": "RCEU",
+    "SRB": "RCEU",
+    "GRL": "ROWE",
+    "ISL": "ROWE",
+    "NOR": "ROWE",
+    "CHE": "EU_MidWest",  # Switzerland is grouped with EU_MidWest
+    "BOL": "RSAM",
+    "CHL": "RSAM",
+    "COL": "RSAM",
+    "ECU": "RSAM",
+    "FLK": "RSAM",
+    "GUF": "RSAM",
+    "GUY": "RSAM",
+    "PRY": "RSAM",
+    "PER": "RSAM",
+    "SUR": "RSAM",
+    "URY": "RSAM",
+    "VEN": "RSAM",
+    "AFG": "RSAS",
+    "BGD": "RSAS",
+    "BTN": "RSAS",
+    "NPL": "RSAS",
+    "PAK": "RSAS",
+    "LKA": "RSAS",
+    "BRN": "RSEA_OPA",
+    "MMR": "RSEA_OPA",
+    "PHL": "RSEA_OPA",
+    "SGP": "RSEA_OPA",
+    "THA": "RSEA_OPA",
+    "TLS": "RSEA_OPA",
+    "KHM": "RSEA_PAC",
+    "PRK": "RSEA_PAC",
+    "LAO": "RSEA_PAC",
+    "MNG": "RSEA_PAC",
+    "VNM": "RSEA_PAC",
+    "RUS": "RussiaReg",
+    "ZAF": "SouthAfrReg",
+    "KOR": "SouthKorea",
+    "BDI": "EasternAf",
+    "ETH": "EasternAf",
+    "KEN": "EasternAf",
+    "RWA": "EasternAf",
+    "TZA": "EasternAf",
+    "UGA": "EasternAf",
+    "AGO": "SouthernAf",
+    "BWA": "SouthernAf",
+    "COM": "SouthernAf",
+    "LSO": "SouthernAf",
+    "MDG": "SouthernAf",
+    "MWI": "SouthernAf",
+    "MUS": "SouthernAf",
+    "MOZ": "SouthernAf",
+    "NAM": "SouthernAf",
+    "REU": "SouthernAf",
+    "SWZ": "SouthernAf",
+    "ZMB": "SouthernAf",
+    "ZWE": "SouthernAf",
+    "BEN": "WesternAf",
+    "BFA": "WesternAf",
+    "CPV": "WesternAf",
+    "TCD": "WesternAf",
+    "CIV": "WesternAf",
+    "DJI": "WesternAf",
+    "ERI": "WesternAf",
+    "GMB": "WesternAf",
+    "GHA": "WesternAf",
+    "GIN": "WesternAf",
+    "GNB": "WesternAf",
+    "LBR": "WesternAf",
+    "MLI": "WesternAf",
+    "MRT": "WesternAf",
+    "NER": "WesternAf",
+    "NGA": "WesternAf",
+    "SEN": "WesternAf",
+    "SLE": "WesternAf",
+    "SOM": "WesternAf",
+    "SDN": "WesternAf",
+    "TGO": "WesternAf",
+    "TUR": "TurkeyReg",
+    "UKR": "UkraineReg",
+    "PRI": "USAReg",
+    "USA": "USAReg",
+}
 
 
 def setup_donor_countries(
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     global_countries: gpd.GeoDataFrame,
     countries_with_data: list[str],
     alternative_countries: list[str],
@@ -24,16 +212,15 @@ def setup_donor_countries(
     Args:
         data_catalog: The data catalog instance.
         global_countries: GeoDataFrame with global countries geometries.
-        countries_with_data: list
-            Countries (ISO3 codes) that have data available.
-        alternative_countries: list, optional
-            Alternative countries to consider as donors, e.g. GLOBIOM regions inside the model domain.
+        countries_with_data: Countries (ISO3 codes) that have data available.
+        alternative_countries: Alternative countries to consider as donors, e.g. trade regions inside the model domain.
 
     Returns:
         A dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
     """
     # load HDI index
-    dev_index = data_catalog.get_dataframe("UN_dev_index")  # Human Development Index
+    dev_index = data_catalog.fetch("un_hdi").read()
+
     dev_index.rename(columns={"Human Development Index": "HDI"}, inplace=True)
     dev_index = (
         dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")
@@ -60,15 +247,16 @@ def setup_donor_countries(
         # calculate the HDI of the target country
         if country not in dev_index.index:  # if the country does not have HDI data
             # take the closest country with HDI data (HDI donor)
-            region_countries_geometries = global_countries.loc[
+            region_countries_with_hdi = global_countries.loc[
                 global_countries.index.isin(region_countries)
+                & global_countries.index.isin(dev_index.index)
             ]
             current_country_geometry = global_countries.loc[country].geometry
-            distances = region_countries_geometries.distance(current_country_geometry)
+            distances = region_countries_with_hdi.distance(current_country_geometry)
             distances = distances[
                 distances > 0
             ]  # remove zero distances (self-distance)
-            closest_country = region_countries_geometries.loc[distances.idxmin()].name
+            closest_country = region_countries_with_hdi.loc[distances.idxmin()].name
 
             print(
                 f"Country {country} does not have HDI data available, as it is not an official UN country. Taking HDI from the closest country with HDI data: {closest_country}."

@@ -28,10 +28,7 @@ from geb.workflows.raster import (
     sample_from_map,
 )
 
-from ..workflows.conversions import (
-    GLOBIOM_NAME_TO_ISO3,
-    M49_to_ISO3,
-)
+from ..workflows.conversions import TRADE_REGIONS
 from ..workflows.crop_calendars import (
     donate_and_receive_crop_prices,
     parse_MIRCA2000_crop_calendar,
@@ -151,7 +148,7 @@ class Crops(BuildModelBase):
         if crop_specifier is None:
             crop_data = {
                 "data": (
-                    self.data_catalog.get_dataframe("MIRCA2000_crop_data")
+                    self.old_data_catalog.get_dataframe("MIRCA2000_crop_data")
                     .set_index("id")
                     .to_dict(orient="index")
                 ),
@@ -160,7 +157,7 @@ class Crops(BuildModelBase):
         else:
             crop_data = {
                 "data": (
-                    self.data_catalog.get_dataframe(
+                    self.old_data_catalog.get_dataframe(
                         f"MIRCA2000_crop_data_{crop_specifier}"
                     )
                     .set_index("id")
@@ -199,72 +196,46 @@ class Crops(BuildModelBase):
             4. Formats the processed data into a nested dictionary structure.
         """
         if crop_prices == "FAO_stat":
-            crop_data = self.data_catalog.get_dataframe(
-                "FAO_crop_price",
-                variables=["Area Code (M49)", "year", "crop", "price_per_kg"],
-            )
+            faostat = self.data_catalog.fetch("faostat_prices").read()
+            assert isinstance(faostat, pd.DataFrame)
 
-            # Dropping 58 (Belgium-Luxembourg combined), 200 (former Czechoslovakia),
-            # 230 (old code Ethiopia), 891 (Serbia and Montenegro), 736 (former Sudan)
-            crop_data = crop_data[
-                ~crop_data["Area Code (M49)"].isin([58, 200, 230, 891, 736])
+            all_years_faostat: list[int] = [
+                c for c in faostat.columns if isinstance(c, int)
             ]
+            all_years_faostat.sort()
+            all_crops_faostat = faostat["crop"].unique()
 
-            crop_data["ISO3"] = crop_data["Area Code (M49)"].map(M49_to_ISO3)
-            crop_data = crop_data.drop(columns=["Area Code (M49)"])
+            ISO3_codes_region: set[str] = set(self.geom["regions"]["ISO3"].unique())
+            relevant_trade_regions: dict[str, str] = {
+                ISO3: TRADE_REGIONS[ISO3]
+                for ISO3 in ISO3_codes_region
+                if ISO3 in TRADE_REGIONS
+            }
 
-            crop_data["crop"] = crop_data["crop"].str.lower()
-
-            assert not crop_data["ISO3"].isna().any(), "Missing ISO3 codes"
-
-            all_years = crop_data["year"].unique()
-            all_years.sort()
-            all_crops = crop_data["crop"].unique()
-
-            GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions_37")
-            GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
-                GLOBIOM_NAME_TO_ISO3
-            )
-            assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
-
-            ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
-            GLOBIOM_regions_region = GLOBIOM_regions[
-                GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
-            ]["Region37"].unique()
-            ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
-                GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
-            ]["ISO3"]
-
-            missing_regions_in_GLOBIOM = set(ISO3_codes_region) - set(
-                ISO3_codes_GLOBIOM_region
-            )
-            if len(missing_regions_in_GLOBIOM) > 0:
-                self.logger.info(
-                    f"Regions in the model not present in GLOBIOM: {list(missing_regions_in_GLOBIOM)}"
-                )
-            for region in missing_regions_in_GLOBIOM:
-                if not crop_data[crop_data["ISO3"] == region].empty:
-                    raise ValueError(
-                        f"Region {region} is not present in GLOBIOM, but it has crop data. This situation gives problems in the donate_and_receive_crop_prices function, because it will substitute the region's data for donor data. Please consult Tim to change the function"
-                    )
+            all_ISO3_across_relevant_regions: set[str] = {
+                ISO3
+                for ISO3 in ISO3_codes_region
+                if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
+            }
 
             # Setup dataFrame for further data corrections
-            donor_data = {}
-            for ISO3 in ISO3_codes_GLOBIOM_region:
-                region_crop_data = crop_data[crop_data["ISO3"] == ISO3]
-                region_pivot = region_crop_data.pivot_table(
-                    index="year",
-                    columns="crop",
-                    values="price_per_kg",
-                    aggfunc="first",
-                ).reindex(index=all_years, columns=all_crops)
+            donor_data: dict[str, pd.DataFrame] = {}
+            for ISO3 in all_ISO3_across_relevant_regions:
+                region_faostat: pd.DataFrame = (
+                    faostat[faostat["ISO3"] == ISO3]
+                    .set_index("crop")
+                    .transpose()
+                    .reindex(index=all_years_faostat, columns=all_crops_faostat)
+                )
+                # set all dtypes to float64
+                for col in region_faostat.columns:
+                    region_faostat[col] = region_faostat[col].astype(np.float64)
 
-                region_pivot["ISO3"] = ISO3
-                # Store pivoted data in dictionary with region_id as key
-                donor_data[ISO3] = region_pivot
+                region_faostat["ISO3"] = ISO3
+                donor_data[ISO3] = region_faostat
 
             # Concatenate all regional data into a single DataFrame with MultiIndex
-            donor_data = pd.concat(donor_data, names=["ISO3", "year"])
+            donor_data: pd.DataFrame = pd.concat(donor_data, names=["ISO3", "year"])
 
             # Drop crops with no data at all for these regions
             donor_data = donor_data.dropna(axis=1, how="all")
@@ -299,7 +270,7 @@ class Crops(BuildModelBase):
             data = donate_and_receive_crop_prices(
                 donor_data,
                 unique_regions,
-                GLOBIOM_regions,
+                TRADE_REGIONS,
                 self.data_catalog,
                 self.geom["global_countries"],
                 self.geom["regions"],
@@ -533,19 +504,21 @@ class Crops(BuildModelBase):
         for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
             region_data = costs.loc[region_id]
+
+            # only consider years with at least 1 crops with data
+            region_data = region_data.interpolate(
+                method="linear", limit_direction="both"
+            )
+            region_data = region_data[(~region_data.isnull()).sum(axis=1) > 0]
+
             changes = np.nanmean(
                 region_data[1:].to_numpy() / region_data[:-1].to_numpy(), axis=1
             )
-
             changes = np.insert(changes, 0, np.nan)
-            costs.at[region_id, "_crop_price_inflation"] = changes
 
-            years_with_no_crop_inflation_data = costs.loc[
-                region_id, "_crop_price_inflation"
-            ]
-            years_with_no_crop_inflation_data = costs.loc[
-                region_id, "_crop_price_inflation"
-            ]
+            for year, change in zip(region_data.index, changes, strict=True):
+                costs.at[(region_id, year), "_crop_price_inflation"] = change
+
             region_inflation_rates = self.params["socioeconomics/inflation_rates"][
                 "data"
             ][str(region["region_id"])]
@@ -553,7 +526,8 @@ class Crops(BuildModelBase):
                 "socioeconomics/LCU_per_USD"
             ]["data"][str(region["region_id"])]
 
-            for year, crop_inflation_rate in years_with_no_crop_inflation_data.items():
+            for year, row in costs.loc[region_id].iterrows():
+                crop_inflation_rate = row["_crop_price_inflation"]
                 year_currency_conversion = region_currency_conversion_rates[
                     self.params["socioeconomics/LCU_per_USD"]["time"].index(str(year))
                 ]
@@ -772,7 +746,7 @@ class Crops(BuildModelBase):
                     dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
                     crop_map = xr.open_dataarray(
-                        self.data_catalog.get_source(dataset_name).path
+                        self.old_data_catalog.get_source(dataset_name).path
                     )
                     crop_map = crop_map.isel(
                         {
@@ -885,7 +859,7 @@ class Crops(BuildModelBase):
             irrigating_farmers: A boolean array indicating which farmers are irrigating.
             year: The year for which to set up the irrigation source.
         """
-        fraction_sw_irrigation_data = self.new_data_catalog.fetch(
+        fraction_sw_irrigation_data = self.data_catalog.fetch(
             "global_irrigation_area_surface_water"
         ).read()
         fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
@@ -902,7 +876,7 @@ class Crops(BuildModelBase):
             fraction_sw_irrigation_data
         )
 
-        fraction_gw_irrigation_data = self.new_data_catalog.fetch(
+        fraction_gw_irrigation_data = self.data_catalog.fetch(
             "global_irrigation_area_groundwater"
         ).read()
         fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
@@ -1061,9 +1035,8 @@ class Crops(BuildModelBase):
         """
         n_farmers = self.array["agents/farmers/id"].size
 
-        MIRCA_unit_grid = xr.open_dataarray(
-            self.data_catalog.get_source("MIRCA2000_unit_grid").path
-        )
+        MIRCA_unit_grid = self.data_catalog.fetch("mirca2000_unit_grid").read()
+        assert isinstance(MIRCA_unit_grid, xr.DataArray)
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
             {

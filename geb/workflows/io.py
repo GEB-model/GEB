@@ -355,6 +355,26 @@ def calculate_scaling(
     return scaling_factor, in_dtype, out_dtype
 
 
+def parse_and_set_zarr_CRS(da: xr.DataArray) -> xr.DataArray:
+    """Parse the _CRS attribute of an xarray DataArray and set it as the CRS using rioxarray.
+
+    The _CRS attribute is expected to be a dictionary with a "wkt" key containing the WKT string.
+
+    Args:
+        da: The xarray DataArray to parse and set the CRS for.
+
+    Returns:
+        The xarray DataArray with the CRS set.
+    """
+    if "_CRS" in da.attrs:
+        crs_attr = da.attrs["_CRS"]
+        if isinstance(crs_attr, dict) and "wkt" in crs_attr:
+            wkt: str = crs_attr["wkt"]
+            da.rio.write_crs(pyproj.CRS(wkt), inplace=True)
+            del da.attrs["_CRS"]
+    return da
+
+
 def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     """Open a zarr file as an xarray DataArray.
 
@@ -397,14 +417,12 @@ def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
 
-    if "_CRS" in da.attrs:
-        da.rio.write_crs(pyproj.CRS(da.attrs["_CRS"]["wkt"]), inplace=True)
-        del da.attrs["_CRS"]
+    da = parse_and_set_zarr_CRS(da)
 
     return da
 
 
-def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[unresolved-attribute]
+def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
     """Convert a CRS object (pyproj CRS, rasterio CRS or EPSG code) to a WKT string.
 
     Args:
@@ -420,7 +438,7 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[u
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
         return crs_obj.to_wkt()
-    elif isinstance(crs_obj, rasterio.crs.CRS):  # ty: ignore[unresolved-attribute]
+    elif isinstance(crs_obj, rasterio.crs.CRS):
         return CRS(crs_obj.to_wkt()).to_wkt()
     else:
         raise TypeError("Unsupported CRS type")
@@ -517,6 +535,10 @@ def write_zarr(
     Returns:
         The xarray DataArray saved to disk.
 
+    Raises:
+        ValueError: If the DataArray has invalid dimensions or attributes.
+        ValueError: If the DataArray dtype is float64.
+
     """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
@@ -526,7 +548,8 @@ def write_zarr(
         assert da.dims[-2] == "y", "y should be the second last dimension"
         assert da.dims[-1] == "x", "x should be the last dimension"
 
-    assert da.dtype != np.float64, "should be float32"
+    if da.dtype == np.float64:
+        raise ValueError("DataArray dtype should be float32, not float64")
 
     assert "_FillValue" in da.attrs, "Fill value must be set"
     if da.dtype == bool:
@@ -1164,6 +1187,190 @@ class WorkingDirectory:
         """
         # Change back to the original directory
         os.chdir(self._original_path)
+
+
+class RemoteFile:
+    """A file-like object that reads from a remote URL using HTTP Range headers.
+
+    This class mimics a file object (seek, read) but fetches data on-demand
+    using HTTP Range requests. It includes retry logic for robust downloads.
+    """
+
+    def __init__(self, url: str, max_retries: int = 5, base_delay: float = 1.0) -> None:
+        """Initialize the RemoteFile.
+
+        Args:
+            url: The URL of the remote file.
+            max_retries: Maximum number of retries for HTTP requests.
+            base_delay: Base delay in seconds for exponential backoff.
+
+        Raises:
+            OSError: If the URL cannot be accessed.
+        """
+        self.url_original = url
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+
+        # Resolve redirects and get size
+        resp = self._request_with_retry("HEAD", url, allow_redirects=True)
+
+        # Confirm range support
+        range_supported = (
+            resp.status_code == 200 and resp.headers.get("Accept-Ranges") == "bytes"
+        )
+
+        if not range_supported:
+            # Close the HEAD response before overwriting
+            resp.close()
+            # Fallback to GET with Range if HEAD fails or doesn't confirm support
+            resp = self._request_with_retry(
+                "GET",
+                url,
+                headers={"Range": "bytes=0-0"},
+                stream=True,
+                allow_redirects=True,
+            )
+            if resp.status_code != 206:
+                resp.close()
+                raise OSError(
+                    f"Server does not support HTTP Range requests (Expected 206, got {resp.status_code})"
+                )
+
+        try:
+            if resp.url is None:
+                raise OSError("Failed to resolve URL: response URL is None")
+            self.url: str = resp.url
+
+            if "Content-Range" in resp.headers:
+                self.size = int(resp.headers["Content-Range"].split("/")[-1])
+            else:
+                self.size = int(resp.headers.get("Content-Length", 0))
+        finally:
+            # Ensure connection is closed
+            resp.close()
+
+        self.pos = 0
+
+    def _request_with_retry(
+        self, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        """Execute HTTP request with exponential backoff retry.
+
+        Args:
+            method: HTTP method (e.g. "GET").
+            url: The URL to request.
+            **kwargs: Additional arguments for requests.request.
+
+        Returns:
+            The response object.
+
+        Raises:
+            OSError: If the request fails after maximum retries.
+        """
+        last_error: str | None = None
+        resp: requests.Response | None = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = requests.request(method, url, timeout=30, **kwargs)
+                if resp.status_code in [200, 206]:
+                    return resp
+                if resp.status_code in [429, 500, 502, 503, 504]:
+                    last_error = f"HTTP {resp.status_code}"
+                    # Transient error, continue to retry
+                else:
+                    # Likely a permanent error (404, 403, etc)
+                    # Return response so caller can handle the status code
+                    return resp
+            except requests.RequestException as e:
+                last_error = str(e)
+
+            if attempt < self.max_retries:
+                sleep_time = self.base_delay * (2**attempt)
+                time.sleep(sleep_time)
+
+        if resp is not None:
+            # Return the last failed response
+            return resp
+
+        raise OSError(
+            f"Failed to request {url} after {self.max_retries} retries: {last_error}"
+        )
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        """Move to a new file position.
+
+        Args:
+            offset: The offset.
+            whence: The reference point (0=start, 1=current, 2=end).
+
+        Returns:
+            The new file position.
+        """
+        if whence == 0:
+            self.pos = offset
+        elif whence == 1:
+            self.pos += offset
+        elif whence == 2:
+            self.pos = self.size + offset
+        return self.pos
+
+    def tell(self) -> int:
+        """Return the current file position."""
+        return self.pos
+
+    def read(self, size: int = -1) -> bytes:
+        """Read bytes from the remote file.
+
+        Args:
+            size: Number of bytes to read. -1 means read until end.
+
+        Returns:
+            The read bytes.
+
+        Raises:
+            OSError: If reading from the URL fails.
+        """
+        if size == 0:
+            return b""
+
+        if size == -1:
+            range_header = f"bytes={self.pos}-"
+        else:
+            end = self.pos + size - 1
+            range_header = f"bytes={self.pos}-{end}"
+
+        headers = {"Range": range_header}
+        try:
+            resp = self._request_with_retry("GET", self.url, headers=headers)
+        except OSError as e:
+            raise OSError(f"Failed to read from {self.url}: {e}")
+
+        # If we asked for a range but got 200, it means the server sent the whole file.
+        # This is only okay if we requested from the beginning (pos=0) and wanted everything (size=-1)
+        # or the whole file matches the requested size.
+        # However, for simplicity and safety in random access:
+        # If we expect a partial response (which we always do here with Range header),
+        # we should require 206 Partial Content unless we happen to request the exact full content
+        # effectively making 200 OK valid. But typically 206 is strict for Range.
+        is_partial_request = self.pos > 0 or (size != -1 and size < self.size)
+
+        if is_partial_request and resp.status_code == 200:
+            # Server ignored Range header and sent full file - this is bad for seek/partial read
+            raise OSError(
+                f"Server returned 200 OK but 206 Partial Content was expected for range {range_header}"
+            )
+
+        if resp.status_code not in [200, 206]:
+            raise OSError(f"Failed to read from {self.url}: {resp.status_code}")
+
+        data = resp.content
+        self.pos += len(data)
+        return data
+
+    def seekable(self) -> bool:
+        """Return True if the file is seekable."""
+        return True
 
 
 def fetch_and_save(
