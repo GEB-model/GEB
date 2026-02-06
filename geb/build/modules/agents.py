@@ -1606,6 +1606,13 @@ class Agents(BuildModelBase):
         self.set_farmers_and_create_farms(farmers)
 
     def canon(self, string_to_normalize: str) -> str:
+        """Canonicalizes a string by normalizing it to ASCII and stripping whitespace.
+
+        Args:
+            string_to_normalize: The string to canonicalize.
+        Returns:
+            The canonicalized string.
+        """
         return (
             unicodedata.normalize("NFKD", string_to_normalize)
             .encode("ascii", "ignore")
@@ -1747,7 +1754,8 @@ class Agents(BuildModelBase):
         return output
 
     @build_method
-    def setup_buildings(self):
+    def setup_buildings(self) -> None:
+        """Sets up buildings for agents using the Open Building Map dataset and assigns reconstruction costs based on the global exposure model."""
         # load GDL region within model domain
         GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
             geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
