@@ -1674,6 +1674,7 @@ class Agents(BuildModelBase):
                     ].values[0]
 
         # Iterate over unique admin-1 region names to avoid redundant checks and assignments
+        buildings["NAME_1"] = buildings["NAME_1"].apply(self.canon)
         for name_1 in gadm_level1["NAME_1"].dropna().unique():
             # clean up name
             name_1 = self.canon(name_1)
@@ -1684,14 +1685,19 @@ class Agents(BuildModelBase):
                 )
             exposure_model_region = global_exposure_model[name_1]
             for reconstruction_type in exposure_model_region:
-                buildings.loc[
-                    buildings["NAME_1"].apply(self.canon) == name_1, reconstruction_type
-                ] = float(exposure_model_region[reconstruction_type])
+                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
+                    float(exposure_model_region[reconstruction_type])
+                )
         # assert all buildings have reconstruction costs assigned (i.e., no null values in the reconstruction cost columns)
         reconstruction_cost_columns = list(exposure_model_region.keys())
         if buildings[reconstruction_cost_columns].isnull().any().any():
+            # get NAME_1 values for buildings with null reconstruction costs
+            buildings_with_null_costs = buildings[
+                buildings[reconstruction_cost_columns].isnull().any(axis=1)
+            ]
+            missing_name_1_values = buildings_with_null_costs["NAME_1"].unique()
             raise ValueError(
-                "Some buildings do not have reconstruction costs assigned. Please check the global exposure model and the region names."
+                f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
             )
         return buildings
 
