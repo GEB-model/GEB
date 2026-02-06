@@ -35,6 +35,18 @@ from geb.workflows.io import write_params
 
 from .base import Adapter
 
+# A mapping to correct specific GADM names that may appear in the CSVs, to
+# ensure consistency with expected admin_1 region names. This is a simple
+# hardcoded mapping based on observed discrepancies; it can be extended as
+# needed if more mismatches are found. The keys are the incorrect names as
+# they appear in the CSVs, and the values are the corrected names that should
+# be used in the output (matching gadm v2.8).
+gadm_converter: dict[str, str] = {
+    "QuichÃ©": "Quiché",
+    "TotonicapÃ¡n": "Totonicapán",
+    "Veracruz de Ignacio de la Llave": "Veracruz",
+}
+
 
 class GlobalExposureModel(Adapter):
     """Adapter for Global Exposure Model data."""
@@ -110,6 +122,9 @@ class GlobalExposureModel(Adapter):
                 # processing. Using a temporary file avoids holding raw
                 # bytes in memory and keeps pandas happy with local paths.
                 df = pd.read_csv(out_path)
+                # check if any of the converted GADM names need to be applied
+                if any(key in df["NAME_1"].values for key in gadm_converter.keys()):
+                    df["NAME_1"] = df["NAME_1"].replace(gadm_converter)
                 damages_per_sqm.append(self._process_csv(df))
 
         # Merge per-file dictionaries. Later files overwrite earlier keys
