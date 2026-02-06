@@ -45,7 +45,8 @@ class Agents(BuildModelBase):
             "set_time_range",
             "setup_regions_and_land_use",
             "setup_household_characteristics",
-        ]
+        ],
+        required=True,
     )
     def setup_water_demand(self) -> None:
         """Sets up the water demand data for GEB.
@@ -368,7 +369,7 @@ class Agents(BuildModelBase):
             "ssp2",
         )
 
-    @build_method
+    @build_method(required=True)
     def setup_income_distribution_parameters(self) -> None:
         """Sets up the income distributions for GEB.
 
@@ -445,7 +446,9 @@ class Agents(BuildModelBase):
         )
         self.set_table(income_distributions_pd, "income/national_distribution")
 
-    @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "set_time_range"], required=True
+    )
     def setup_economic_data(self) -> None:
         """Sets up the economic data for GEB.
 
@@ -731,7 +734,7 @@ class Agents(BuildModelBase):
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 
-    @build_method
+    @build_method(required=True)
     def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
         """Sets up the irrigation sources for GEB.
 
@@ -740,7 +743,7 @@ class Agents(BuildModelBase):
         """
         self.set_params(irrigation_sources, name="agents/farmers/irrigation_sources")
 
-    @build_method(depends_on=["set_time_range", "setup_economic_data"])
+    @build_method(depends_on=["set_time_range", "setup_economic_data"], required=False)
     def setup_irrigation_prices_by_reference_year(
         self,
         operation_surface: float,
@@ -821,7 +824,7 @@ class Agents(BuildModelBase):
             # Set the calculated prices in the appropriate dictionary
             self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
-    @build_method(depends_on=["setup_economic_data"])
+    @build_method(depends_on=["setup_economic_data"], required=True)
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,
@@ -1138,7 +1141,9 @@ class Agents(BuildModelBase):
         self.set_array(farmers.index.values, name="agents/farmers/id")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    @build_method(depends_on=["setup_regions_and_land_use", "setup_cell_area"])
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "setup_cell_area"], required=True
+    )
     def setup_create_farms(
         self,
         region_id_column: str = "region_id",
@@ -1764,7 +1769,7 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method(depends_on=["setup_assets", "setup_buildings"])
+    @build_method(depends_on=["setup_assets", "setup_buildings"], required=True)
     def setup_household_characteristics(
         self,
         maximum_age: int = 85,
@@ -2136,7 +2141,7 @@ class Agents(BuildModelBase):
                 name=f"agents/households/{household_attribute}",
             )
 
-    @build_method(depends_on=["setup_create_farms"])
+    @build_method(depends_on=["setup_create_farms"], required=True)
     def setup_farmer_household_characteristics(self, maximum_age: int = 85) -> None:
         """Sets up farmer household characteristics for farmers using GLOPOP-S data.
 
@@ -2441,7 +2446,8 @@ class Agents(BuildModelBase):
         return preferences_country_level
 
     @build_method(
-        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"]
+        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"],
+        required=True,
     )
     def setup_farmer_characteristics(
         self,
@@ -2639,7 +2645,7 @@ class Agents(BuildModelBase):
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=True)
     def setup_assets(
         self,
         feature_types: str | list[str],
