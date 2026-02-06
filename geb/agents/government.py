@@ -767,7 +767,7 @@ class Government(AgentBaseClass):
             flush=True,
         )
         logger.info("\n" + "=" * 80)
-        logger.info("STEP 3: Analyzing Soil Characteristics by Land Cover")
+        logger.info("STEP 4: Analyzing Soil Characteristics by Land Cover")
         logger.info("=" * 80)
 
         soc_stats = self.analyze_soil_by_landcover(
