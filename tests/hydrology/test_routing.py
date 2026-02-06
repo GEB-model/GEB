@@ -314,6 +314,13 @@ def test_accuflux(
         dtype=np.float32,
     )[mask]
 
+    # --- NEW: empty retention arrays for "no retention" case ---
+    retention_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(
+        mask[mask], -1, dtype=np.int32
+    )  # all cells: no retention
+
     (
         Q_new,
         actual_evaporation_m3,
@@ -321,12 +328,18 @@ def test_accuflux(
         waterbody_storage_m3,
         waterbody_inflow_m3,
         outflow_at_pits_m3,
+        retention_storage_m3_out,
+        retention_inflow_m3,
+        retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=retention_storage_m3,
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
     )
 
     assert (
@@ -343,6 +356,82 @@ def test_accuflux(
     assert (waterbody_inflow_m3 == 0).all()
     assert outflow_at_pits_m3 == 2
     assert waterbody_storage_m3.size == 0
+    # check that retention arrays are empty ---
+    assert retention_storage_m3_out.size == 0
+    assert retention_inflow_m3.size == 0
+    assert retention_outflow_m3.size == 0
+
+
+def test_accuflux_with_retention_basins(
+    ldd: npt.NDArray[np.uint8],
+    mask: npt.NDArray[np.bool_],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
+    """Test Accuflux routing with retention basins.
+
+    Verifies that Water is correctly stored in retention basins without exceeding maximum storage.
+    Inflow into each retention basin is correctly recorded.
+    Retention outflow is zero when storage limits are not exceeded.
+    Downstream discharge is reduced by the amount stored in the basins, ensuring mass balance.
+    """
+    river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
+
+    router: Accuflux = Accuflux(
+        dt=1,
+        river_network=river_network,
+        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
+        is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
+    )
+
+    sideflow = np.zeros(mask.sum(), dtype=np.float32)
+
+    # --- define retention nodes ---
+    def flat_idx(row: int, col: int) -> int:
+        return np.flatnonzero(mask)[row * mask.shape[1] + col]
+
+    # Let's say cells 1 and 3 are retention nodes
+    retention_node_id = np.full(mask.sum(), -1, dtype=np.int32)
+    retention_node_id[flat_idx(1, 2)] = 0  # retention basin 0 at cell (1,1)
+    retention_node_id[flat_idx(2, 1)] = 1  # retention basin 1 at cell (2,1)
+
+    # --- set initial storage and max storage ---
+    retention_storage_m3 = np.zeros(2, dtype=np.float32)  # two retention basins
+    retention_max_storage_m3 = np.array([2.0, 3.0], dtype=np.float32)  # max storage
+
+    (
+        Q_new,
+        actual_evaporation_m3,
+        over_abstraction_m3,
+        waterbody_storage_m3,
+        waterbody_inflow_m3,
+        outflow_at_pits_m3,
+        retention_storage_m3_out,
+        retention_inflow_m3,
+        retention_outflow_m3,
+    ) = router.step(
+        Q_prev_m3_s=Q_initial[mask],
+        sideflow_m3=sideflow,
+        evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
+        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=retention_storage_m3,
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+    )
+
+    # make sure retention storage is smaller than max storage
+    assert (retention_storage_m3_out <= retention_max_storage_m3).all()
+    # make sure retention outflow is 0 (no outflow currently implemented)
+    assert (retention_outflow_m3 == 0).all()
+    # make sure that water is actually flowing into the basins
+    assert retention_storage_m3_out.sum() > 0.0
+    # make sure that there is discharge in next timestep (Qnew)
+    assert Q_new.sum() > 0.0
+    # make sure that mass balance is maintained: total initial flow should equal total flow after routing (Qnew + retention storage + outflow at pits)
+    total_initial_flow = Q_initial[mask].sum()
+    total_flow_after = Q_new.sum() + retention_storage_m3_out.sum() + outflow_at_pits_m3
+
+    np.testing.assert_almost_equal(total_initial_flow, total_flow_after, decimal=5)
 
 
 def test_accuflux_with_longer_dt(
@@ -373,6 +462,13 @@ def test_accuflux_with_longer_dt(
         dtype=np.float32,
     )[mask]
 
+    # --- NEW: empty retention arrays for "no retention" case ---
+    retention_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(
+        mask[mask], -1, dtype=np.int32
+    )  # all cells: no retention
+
     (
         Q_new,
         actual_evaporation_m3,
@@ -380,12 +476,18 @@ def test_accuflux_with_longer_dt(
         waterbody_storage_m3,
         waterbody_inflow_m3,
         outflow_at_pits_m3,
+        retention_storage_m3_out,
+        retention_inflow_m3,
+        retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=retention_storage_m3,
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
     )
 
     assert (
@@ -431,6 +533,13 @@ def test_accuflux_with_sideflow(
         ]
     )[mask]
 
+    # --- NEW: empty retention arrays for "no retention" case ---
+    retention_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(
+        mask[mask], -1, dtype=np.int32
+    )  # all cells: no retention
+
     (
         Q_new,
         actual_evaporation_m3,
@@ -438,12 +547,18 @@ def test_accuflux_with_sideflow(
         waterbody_storage_m3,
         waterbody_inflow_m3,
         outflow_at_pits_m3,
+        retention_storage_m3_out,
+        retention_inflow_m3,
+        retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=retention_storage_m3,
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
     )
 
     assert (
@@ -517,6 +632,13 @@ def test_accuflux_with_waterbodies(
 
     waterbody_storage_m3_pre = waterbody_storage_m3.copy()
 
+    # --- NEW: empty retention arrays for "no retention" case ---
+    retention_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(
+        mask[mask], -1, dtype=np.int32
+    )  # all cells: no retention
+
     (
         Q_new,
         actual_evaporation_m3,
@@ -524,12 +646,18 @@ def test_accuflux_with_waterbodies(
         waterbody_storage_m3,
         waterbody_inflow_m3,
         outflow_at_pits_m3,
+        retention_storage_m3_out,
+        retention_inflow_m3,
+        retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=waterbody_storage_m3,
         outflow_per_waterbody_m3=outflow_per_waterbody_m3,
+        retention_storage_m3=retention_storage_m3,
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
     )
 
     np.testing.assert_array_equal(

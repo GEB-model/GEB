@@ -807,11 +807,16 @@ class Accuflux(Router):
         idxs_up_to_downstream: ArrayInt32,
         is_waterbody_outflow: ArrayBool,
         waterbody_id: ArrayInt32,
+        retention_storage_m3: ArrayFloat32,  # new for retention logic
+        retention_max_storage_m3: ArrayFloat32,  # new for retention logic
+        retention_node_id: ArrayInt32,  # new for retention logic
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
+        ArrayFloat32,  # retention outflow
+        ArrayFloat32,  # retention inflow
     ]:
         """Accuflux routing.
 
@@ -829,12 +834,18 @@ class Accuflux(Router):
             idxs_up_to_downstream: Indices of the cells in the river network, associated with the upstream_matrix_from_up_to_downstream.
             is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
             waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell. -1 indicates no waterbody.
+            retention_storage_m3: Storage of each retention node in m3.
+            retention_max_storage_m3: Maximum storage of each retention node in m3.
+            retention_node_id: A 1D array with the same shape as the grid, which is the retention node ID for each cell. -1 indicates no retention node.
+
 
         Returns:
             Qnew: New discharge array, which is a 1D array with discharge for each grid cell in the river network.
             actual_evaporation_m3: Actual evaporation in m3 for each grid cell in the river network.
             over_abstraction_m3: Over abstraction in m3 for each grid cell in the river network.
             waterbody_inflow_m3: Inflow to each waterbody in m3.
+            retention_outflow_m3: Outflow from retention nodes in m3.
+            retention_inflow_m3: Inflow to retention nodes in m3.
         """
         Qold += sideflow_m3 / dt
 
@@ -850,6 +861,10 @@ class Accuflux(Router):
         waterbody_inflow_m3: ArrayFloat32 = np.zeros_like(
             waterbody_storage_m3, dtype=np.float32
         )
+        # NEW: initialize retention inflow/outflow arrays
+        retention_inflow_m3 = np.zeros_like(retention_storage_m3, dtype=np.float32)
+        retention_outflow_m3 = np.zeros_like(retention_storage_m3, dtype=np.float32)
+
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
             node = idxs_up_to_downstream[i]
             upstream_nodes = upstream_matrix_from_up_to_downstream[i]
@@ -889,6 +904,22 @@ class Accuflux(Router):
                     inflow_volume += Qold[upstream_node] * dt
 
             node_waterbody_id = waterbody_id[node]
+
+            # --- NEW: retention node diversion ---
+            node_retention_id = retention_node_id[node]
+            if node_retention_id != -1:
+                # How much can we still store?
+                available_storage = (
+                    retention_max_storage_m3[node_retention_id]
+                    - retention_storage_m3[node_retention_id]
+                )
+                # Divert as much as possible without exceeding capacity
+                diverted_volume = min(inflow_volume, available_storage)
+                retention_storage_m3[node_retention_id] += diverted_volume
+                retention_inflow_m3[node_retention_id] += diverted_volume
+                # Reduce the flow remaining to the river
+                inflow_volume -= diverted_volume
+
             if node_waterbody_id != -1:
                 waterbody_storage_m3[node_waterbody_id] += inflow_volume
                 waterbody_inflow_m3[node_waterbody_id] += inflow_volume
@@ -900,7 +931,14 @@ class Accuflux(Router):
                     Qnew_node = 0.0
                 Qnew[node] = Qnew_node
                 assert Qnew[node] >= 0.0, "Discharge cannot be negative"
-        return Qnew, actual_evaporation_m3, over_abstraction_m3, waterbody_inflow_m3
+        return (
+            Qnew,
+            actual_evaporation_m3,
+            over_abstraction_m3,
+            waterbody_inflow_m3,
+            retention_inflow_m3,
+            retention_outflow_m3,
+        )
 
     def step(
         self,
@@ -909,6 +947,9 @@ class Accuflux(Router):
         evaporation_m3: ArrayFloat32,
         waterbody_storage_m3: ArrayFloat64,
         outflow_per_waterbody_m3: ArrayFloat32,
+        retention_storage_m3: ArrayFloat32,
+        retention_max_storage_m3: ArrayFloat32,
+        retention_node_id: ArrayInt32,
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat32,
@@ -916,6 +957,9 @@ class Accuflux(Router):
         ArrayFloat64,
         ArrayFloat32,
         np.float32,
+        ArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat32,
     ]:
         """Perform a routing step using the simple accumulation algorithm.
 
@@ -928,6 +972,9 @@ class Accuflux(Router):
             evaporation_m3: Evaporation in m3 for each grid cell in the river network.
             waterbody_storage_m3: Storage of each waterbody in m3.
             outflow_per_waterbody_m3: Outflow of each waterbody in m3.
+            retention_storage_m3: Storage of each retention node in m3.
+            retention_max_storage_m3: Maximum storage of each retention node in m3.
+            retention_node_id: A 1D array with the same shape as the grid. Each cell’s value is the retention node ID it belongs to, -1 if no retention node.
 
         Returns:
             A tuple containing:
@@ -937,13 +984,23 @@ class Accuflux(Router):
                 waterbody_storage_m3: Updated storage of each waterbody in m3.
                 waterbody_inflow_m3: Inflow to each waterbody in m3.
                 outflow_at_pits_m3: Outflow at pits in m3.
+                retention_storage_m3: Updated storage of each retention node in m3.
+                retention_inflow_m3: Inflow to each retention node in m3.
+                retention_outflow_m3: Outflow from each retention node in m3.
         """
         outflow_at_pits_m3 = (
             self.get_total_storage(Q_prev_m3_s)[self.is_pit].sum()
             + sideflow_m3[self.is_pit].sum()
             - evaporation_m3[self.is_pit].sum()
         )
-        Q, actual_evaporation_m3, over_abstraction_m3, waterbody_inflow_m3 = self._step(
+        (
+            Q,
+            actual_evaporation_m3,
+            over_abstraction_m3,
+            waterbody_inflow_m3,
+            retention_inflow_m3,
+            retention_outflow_m3,
+        ) = self._step(
             dt=self.dt,
             Qold=Q_prev_m3_s,
             sideflow_m3=sideflow_m3,
@@ -954,6 +1011,9 @@ class Accuflux(Router):
             idxs_up_to_downstream=self.idxs_up_to_downstream,
             is_waterbody_outflow=self.is_waterbody_outflow,
             waterbody_id=self.waterbody_id,
+            retention_storage_m3=retention_storage_m3,  # local variable
+            retention_max_storage_m3=retention_max_storage_m3,  # local variable
+            retention_node_id=retention_node_id,  # local variable
         )
 
         return (
@@ -963,6 +1023,9 @@ class Accuflux(Router):
             waterbody_storage_m3,
             waterbody_inflow_m3,
             outflow_at_pits_m3,
+            retention_storage_m3,
+            retention_inflow_m3,
+            retention_outflow_m3,
         )
 
     def get_total_storage(self, Q: ArrayFloat32) -> ArrayFloat32:
