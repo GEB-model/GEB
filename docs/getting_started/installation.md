@@ -26,7 +26,7 @@ To run SFINCS (the hydrodynamic model), you also need to install Docker (on Wind
 
 ## Installation as a tool
 
-GEB can also be installed without setting up a Python environment (thanks to [uvx.sh](https://uvx.sh/).
+GEB can also be installed without setting up a Python environment (thanks to [uvx.sh](https://uvx.sh/)).
 
 On Mac OS X and Linux:
 
