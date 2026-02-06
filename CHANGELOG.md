@@ -31,6 +31,7 @@
 - Add Global Exposure Model and GADM v2.8 to the datacatalog to assign building damages
 - Assign damages categories of the Global Exposure Model to the building geodataframe.
 - Calculate building damages both for structure and content using separate vulnerability curves for structure and content. 
+- Check which MeritHydro files are present on the shared IVM datadrive. Ignore tiles that are not present in build as these are in the ocean.
 
 To support this version:
 

@@ -71,7 +71,6 @@ class SoilGridsV1(Adapter):
 
         Args:
             variable: The soil variable to read (e.g., 'bdod', 'clay', 'silt', 'soc').
-            depth: The soil depth layer to read (e.g., '0-5cm', '5-15cm', etc.).
             **kwargs: Additional keyword arguments (not used).
 
         Returns:
