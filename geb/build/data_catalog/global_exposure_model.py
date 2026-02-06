@@ -122,9 +122,18 @@ class GlobalExposureModel(Adapter):
                 # processing. Using a temporary file avoids holding raw
                 # bytes in memory and keeps pandas happy with local paths.
                 df = pd.read_csv(out_path)
+                if "NAME_1" not in df.columns:
+                    # Fail explicitly with a clear error if the expected admin_1
+                    # column is missing, rather than raising an opaque KeyError
+                    # later during processing.
+                    raise ValueError(
+                        "Expected column 'NAME_1' to be present in GEM exposure CSV "
+                        f"'{csv}', but it was not found."
+                    )
+                name_1_series = df["NAME_1"]
                 # check if any of the converted GADM names need to be applied
-                if any(key in df["NAME_1"].values for key in gadm_converter.keys()):
-                    df["NAME_1"] = df["NAME_1"].replace(gadm_converter)
+                if any(key in name_1_series.values for key in gadm_converter.keys()):
+                    df["NAME_1"] = name_1_series.replace(gadm_converter)
                 damages_per_sqm.append(self._process_csv(df))
 
         # Merge per-file dictionaries. Later files overwrite earlier keys
