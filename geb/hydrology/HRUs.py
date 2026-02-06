@@ -569,7 +569,7 @@ class Grid(BaseVariables):
 class HRUVariables(Bucket):
     """This class contains functions to handle variables on the HRU scale."""
 
-    arno_shape_parameter: ArrayFloat32
+    variable_runoff_shape_beta: ArrayFloat32
     interception_storage_m: ArrayFloat32
     snow_temperature_C: ArrayFloat32
     liquid_water_in_snow_m: ArrayFloat32

@@ -24,12 +24,10 @@ from geb.workflows.raster import (
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
     COUNTRY_NAME_TO_ISO3,
-    GLOBIOM_NAME_TO_ISO3,
-    SUPERWELL_NAME_TO_ISO3,
+    TRADE_REGIONS,
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution
-from ..workflows.population import load_GLOPOP_S
 from .base import BuildModelBase
 
 
@@ -111,7 +109,7 @@ class Agents(BuildModelBase):
                 if ISO3 not in municipal_water_demand.index:
                     countries_with_data = municipal_water_demand.index.unique().tolist()
                     donor_countries = setup_donor_countries(
-                        self.old_data_catalog,
+                        self.data_catalog,
                         self.geom["global_countries"],
                         countries_with_data,
                         alternative_countries=self.geom["regions"]["ISO3"]
@@ -157,7 +155,7 @@ class Agents(BuildModelBase):
                 )
 
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_water_withdrawal_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -205,7 +203,7 @@ class Agents(BuildModelBase):
 
                 # fill the municipal water withdrawal data for missing years from donor countries
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -395,7 +393,7 @@ class Agents(BuildModelBase):
         )
         # setup donor countries for country missing in oecd data
         donor_countries = setup_donor_countries(
-            self.old_data_catalog,
+            self.data_catalog,
             self.geom["global_countries"],
             oecd_idd["REF_AREA"],
             alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
@@ -590,7 +588,7 @@ class Agents(BuildModelBase):
 
                 ## get all the donor countries for countries in the dataset
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -636,7 +634,7 @@ class Agents(BuildModelBase):
                     .tolist()
                 )
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_price_ratio_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -668,7 +666,7 @@ class Agents(BuildModelBase):
                     .tolist()
                 )
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_lcu_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -906,13 +904,7 @@ class Agents(BuildModelBase):
             # Set the calculated prices in the appropriate dictionary
             self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
-        electricity_rates = self.old_data_catalog.get_dataframe(
-            "gcam_electricity_rates"
-        )
-        electricity_rates["ISO3"] = electricity_rates["Country"].map(
-            SUPERWELL_NAME_TO_ISO3
-        )
-        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
+        electricity_rates = self.data_catalog.fetch("gcam_electricity_rates").read()
 
         electricity_rates_dict = {
             "time": list(range(start_year, end_year + 1)),
@@ -928,7 +920,7 @@ class Agents(BuildModelBase):
             if country not in electricity_rates:
                 countries_with_data = list(electricity_rates.keys())
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_data,
                     alternative_countries=self.geom["regions"]["ISO3"]
@@ -1211,7 +1203,7 @@ class Agents(BuildModelBase):
 
             farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
             farm_size_donor_country = setup_donor_countries(
-                self.old_data_catalog,
+                self.data_catalog,
                 self.geom["global_countries"],
                 farm_countries_list,
                 alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
@@ -1612,6 +1604,71 @@ class Agents(BuildModelBase):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
+    def setup_building_reconstruction_costs(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns reconstruction costs (in USD) to buildings based on the global exposure model.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with reconstruction costs assigned to each building.
+        Raises:
+            ValueError: If a region in GADM level 1 is not found in the global exposure model.
+        """
+        # load GADM level 1 within model domain (older version for compatibility with global exposure model)
+        gadm_level1 = self.data_catalog.fetch("gadm_28").read(
+            geom=self.region.union_all().buffer(0.1),
+        )
+        countries_in_model = gadm_level1["NAME_0"].unique().tolist()
+
+        global_exposure_model = self.data_catalog.fetch(
+            "global_exposure_model",
+            countries=countries_in_model,
+        ).read()
+
+        # append the NAME_1 column to the buildings
+        buildings["NAME_1"] = gpd.sjoin(
+            buildings,
+            gadm_level1[["NAME_1", "geometry"]],
+            how="left",
+            predicate="within",
+        )["NAME_1"].values
+
+        # assert each building has a NAME_1 value
+        if buildings["NAME_1"].isnull().any():
+            # For buildings without NAME_1 we assign them to the nearest GADM level 1 region.
+            # This happens when buildings are just outside the polygons (e.g., near coastlines).
+            # Use a spatial index to avoid an O(n*m) distance calculation over all regions.
+            buildings_no_name1 = buildings[buildings["NAME_1"].isnull()]
+            if not buildings_no_name1.empty:
+                # Precompute centroids for unmatched buildings
+                unmatched_centroids = buildings_no_name1.geometry.centroid
+                # Build spatial index over GADM level 1 geometries once
+                gadm_sindex = gadm_level1.sindex
+                for building_idx, centroid in zip(
+                    buildings_no_name1.index, unmatched_centroids
+                ):
+                    # Query nearest polygon via its bounding box to limit candidate search
+                    nearest_pos = gadm_sindex.nearest(centroid)[0]
+                    nearest_region = gadm_level1.iloc[nearest_pos]
+                    buildings.at[building_idx, "NAME_1"] = nearest_region[
+                        "NAME_1"
+                    ].values[0]
+
+        # Iterate over unique admin-1 region names to avoid redundant checks and assignments
+        for name_1 in gadm_level1["NAME_1"].dropna().unique():
+            if name_1 not in global_exposure_model:
+                raise ValueError(
+                    f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
+                )
+            exposure_model_region = global_exposure_model[name_1]
+            for reconstruction_type in exposure_model_region:
+                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
+                    float(exposure_model_region[reconstruction_type])
+                )
+        return buildings
+
     def get_buildings_per_GDL_region(
         self, GDL_regions: gpd.GeoDataFrame
     ) -> dict[str, gpd.GeoDataFrame]:
@@ -1624,12 +1681,13 @@ class Agents(BuildModelBase):
         """
         output = {}
         # load region mask
-        mask = self.region.unary_union
+        mask = self.region.union_all()
         buildings = self.data_catalog.fetch(
             "open_building_map",
             geom=mask,
             prefix="assets",
         ).read()
+        buildings = self.setup_building_reconstruction_costs(buildings)
 
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
@@ -1643,9 +1701,9 @@ class Agents(BuildModelBase):
         buildings["lat"] = centroids.y
 
         for _, GDL_region in GDL_regions.iterrows():
-            _, GLOPOP_GRID_region = load_GLOPOP_S(
-                self.old_data_catalog, GDL_region["GDLcode"]
-            )
+            _, GLOPOP_GRID_region = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_region["GDLcode"]
+            ).read(GDL_region["GDLcode"])
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
             # subset buildings to those within the GLOPOP_GRID_region
@@ -1693,9 +1751,10 @@ class Agents(BuildModelBase):
 
         # setup buildings in region for household allocation
         all_buildings_model_region = self.get_buildings_per_GDL_region(GDL_regions)
+        # append reconstruction costs to buildings
         residential_buildings_model_region = {}
 
-        # iterate over GDL regions and filter buildings to residential
+        # iterate over GDL regions and filter buildings to residential and set damage values
         for GDL_code in all_buildings_model_region:
             buildings = all_buildings_model_region[GDL_code]
             # filter to residential buildings
@@ -1762,9 +1821,9 @@ class Agents(BuildModelBase):
             # load building database with grid idx
             buildings = residential_buildings_model_region[GDL_code]
 
-            GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
-                self.old_data_catalog, GDL_code
-            )
+            GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_code
+            ).read(GDL_code)
 
             GLOPOP_S_region = GLOPOP_S_region.rename(columns=rename)
 
@@ -2115,7 +2174,9 @@ class Agents(BuildModelBase):
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            GLOPOP_S_region, _ = load_GLOPOP_S(self.old_data_catalog, GDL_region)
+            GLOPOP_S_region, _ = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_region
+            ).read(GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(
@@ -2371,29 +2432,24 @@ class Agents(BuildModelBase):
             inplace=True,
         )
 
-        GLOBIOM_regions = self.old_data_catalog.get_dataframe("GLOBIOM_regions_37")
-        GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(GLOBIOM_NAME_TO_ISO3)
-        # For my personal branch
-        GLOBIOM_regions.loc[GLOBIOM_regions["Country"] == "Switzerland", "Region37"] = (
-            "EU_MidWest"
-        )
-        assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
+        ISO3_codes_region: set[str] = set(self.geom["regions"]["ISO3"].unique())
+        relevant_trade_regions: dict[str, str] = {
+            ISO3: TRADE_REGIONS[ISO3]
+            for ISO3 in ISO3_codes_region
+            if ISO3 in TRADE_REGIONS
+        }
 
-        ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
-        GLOBIOM_regions_region = GLOBIOM_regions[
-            GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
-        ]["Region37"].unique()
+        all_ISO3_across_relevant_regions: set[str] = {
+            ISO3
+            for ISO3 in ISO3_codes_region
+            if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
+        }
 
-        ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
-            GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
-        ]["ISO3"]
-
-        self.logger.info(
-            f" missing ISO3 codes in GLOBIOM regions: {set(ISO3_codes_region) - set(ISO3_codes_GLOBIOM_region)}"
-        )
-
-        donor_data = {}  # determine the donors: donors are all the countries in the GLOBIOM regions that are within our model domain(self.geoms["regions"]). Therefore, this can be a region OUTSIDE of the model domain, but within a GLOBIOM region in the model domain.
-        for ISO3 in ISO3_codes_GLOBIOM_region:
+        # determine the donors: donors are all the countries in the trade regions that are within our
+        # model domain(self.geoms["regions"]).
+        # Therefore, this can be a region OUTSIDE of the model domain, but within a trade region in the model domain.
+        donor_data = {}
+        for ISO3 in all_ISO3_across_relevant_regions:
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
@@ -2402,10 +2458,10 @@ class Agents(BuildModelBase):
                     preferences_global["ISO3"].unique().tolist()
                 )
                 donor_countries = setup_donor_countries(
-                    self.old_data_catalog,
+                    self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_preferences_data,
-                    ISO3_codes_GLOBIOM_region.to_list(),
+                    list(all_ISO3_across_relevant_regions),
                 )
 
                 donor_country = donor_countries.get(ISO3, None)
@@ -2451,8 +2507,8 @@ class Agents(BuildModelBase):
         data = donate_and_receive_crop_prices(
             donor_data,
             unique_regions,
-            GLOBIOM_regions,
-            self.old_data_catalog,
+            TRADE_REGIONS,
+            self.data_catalog,
             self.geom["global_countries"],
             self.geom["regions"],
         )

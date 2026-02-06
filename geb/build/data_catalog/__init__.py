@@ -9,22 +9,29 @@ from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
-from .fao import GMIA
-from .gadm import GADM
+from .fao import FAOSTAT, GMIA
+from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
+from .global_exposure_model import GlobalExposureModel
 from .globgm import GlobGM, GlobGMDEM
+from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
+from .gtsm import GTSM
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
+from .mirca2000 import MIRCA2000
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
+from .osm_data import OpenStreetMapCoastlines, OpenStreetMapLandPolygons
 from .soilgrids import SoilGridsV1, SoilGridsV2
+from .superwell import GCAMElectricityRates
 from .sword import Sword
+from .undp import HumanDevelopmentIndex
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
@@ -134,6 +141,89 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "10.5285/a29c5465-b138-234d-e053-6c86abc040b9",
         },
     },
+    "global_exposure_model": {
+        "adapter": GlobalExposureModel(
+            folder="global_exposure_model",
+            local_version=2,
+            filename="global_exposure_model.yml",
+            cache="local",
+        ),
+        "url": "https://github.com/gem/global_exposure_model",
+        "source": {
+            "name": "GEM Global Exposure Model",
+            "author": "Global Earthquake Model (GEM) Foundation",
+            "url": "https://github.com/gem/global_exposure_model",
+        },
+    },
+    "gadm_28": {
+        "adapter": GADM28(
+            folder="gadm_28",
+            local_version=1,
+            filename="gadm_28.parquet",
+            cache="global",
+        ),
+        "url": "https://geodata.ucdavis.edu/gadm/gadm2.8/gadm28_levels.shp.zip",
+        "source": {
+            "name": "GADM version 2.8",
+            "author": "GADM",
+            "version": "2.8",
+            "license": "https://gadm.org/license.html",
+        },
+    },
+    "mirca2000_unit_grid": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="unit_code.asc",
+            cache="global",
+            target_member_suffix="unit_code.asc.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/unit_code_grid.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Unit Code Grid",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
+        },
+    },
+    "mirca2000_cropping_calendar_rainfed": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="cropping_calendar_rainfed.txt",
+            cache="global",
+            target_member_suffix="cropping_calendar_rainfed.txt.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/condensed_cropping_calendars.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Condensed Cropping Calendars (Rainfed)",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
+        },
+    },
+    "mirca2000_cropping_calendar_irrigated": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="cropping_calendar_irrigated.txt",
+            cache="global",
+            target_member_suffix="cropping_calendar_irrigated.txt.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/condensed_cropping_calendars.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Condensed Cropping Calendars (Irrigated)",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
+        },
+    },
     "GRDC": {
         "adapter": GRDC(
             folder="grdc",
@@ -193,6 +283,36 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
             "license": "CC BY 4.0",
+        },
+    },
+    "faostat_prices": {
+        "adapter": FAOSTAT(
+            folder="faostat_prices",
+            local_version=1,
+            filename="faostat_prices.parquet",
+            cache="local",
+        ),
+        "url": "https://bulks-faostat.fao.org/production/Prices_E_All_Data.zip",
+        "source": {
+            "name": "FAOSTAT (Producer Prices)",
+            "author": "FAO",
+            "url": "https://www.fao.org/faostat/en/#data/PP",
+            "license": "CC BY 4.0",
+        },
+    },
+    "gcam_electricity_rates": {
+        "adapter": GCAMElectricityRates(
+            folder="socioeconomic/electricity_rates",
+            local_version=1,
+            filename="GCAM_Electricity_Rates.csv",
+            cache="global",
+        ),
+        "url": "https://raw.githubusercontent.com/JGCRI/superwell/main/inputs/GCAM_Electricity_Rates.csv",
+        "source": {
+            "name": "GCAM Electricity Rates",
+            "author": "JGCRI",
+            "url": "https://github.com/JGCRI/superwell",
+            "license": "MIT",
         },
     },
     "specific_yield_aquifer_globgm": {
@@ -374,6 +494,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
         },
     },
+    "un_hdi": {
+        "adapter": HumanDevelopmentIndex(
+            folder="un_hdi",
+            local_version=1,
+            filename="un_hdi.csv",
+            cache="global",
+        ),
+        "url": "https://ourworldindata.org/grapher/human-development-index.csv?v=1&csvType=full&useColumnShortNames=true",
+        "source": {
+            "name": "Human Development Index",
+            "author": "UNDP / Our World In Data",
+            "license": "CC BY 3.0 IGO",
+            "url": "https://ourworldindata.org/grapher/human-development-index",
+            "original_source_url": "https://hdr.undp.org",
+        },
+    },
     "esa_worldcover_2021": {
         "adapter": ESAWorldCover(),
         "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
@@ -467,8 +603,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroDir(
             folder="merit_hydro_dir",
             local_version=1,
-            filename="merit_hydro_dir.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {
@@ -482,8 +618,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroElv(
             folder="merit_hydro_elv",
             local_version=1,
-            filename="merit_hydro_elv.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {
@@ -525,6 +661,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY-NC-SA 4.0",
             "url": "https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7",
             "paper_doi": "10.1088/1748-9326/ac4d4f",
+        },
+    },
+    "gtsm": {
+        "adapter": GTSM(
+            folder="gtsm",
+            local_version=1,
+            filename="gtsm_mean_sea_level.zip",
+            cache="local",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
+        "source": {
+            "name": "Global Tide and Storm Surge Model (GTSM)",
+            "author": "Muis et al. (2022)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.24381/cds.a6d42d60",
+            "paper_doi": "10.5281/zenodo.8314503",
         },
     },
     "merit_basins_rivers": {
@@ -597,6 +749,52 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "OpenStreetMap contributors",
             "license": "ODbL 1.0",
             "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "open_street_map_coastlines": {
+        "adapter": OpenStreetMapCoastlines(
+            folder="open_street_map_coastlines",
+            local_version=1,
+            filename="open_street_map_coastlines.zip",
+            cache="global",
+        ),
+        "url": "https://osmdata.openstreetmap.de/download/coastlines-split-4326.zip",
+        "source": {
+            "name": "OpenStreetMap Coastlines",
+            "author": "OpenStreetMap contributors",
+            "license": "ODbL 1.0",
+            "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "open_street_map_land_polygons": {
+        "adapter": OpenStreetMapLandPolygons(
+            folder="open_street_map_land_polygons",
+            local_version=1,
+            filename="open_street_map_land_polygons.zip",
+            cache="global",
+        ),
+        "url": "https://osmdata.openstreetmap.de/download/land-polygons-split-4326.zip",
+        "source": {
+            "name": "OpenStreetMap Land Polygons",
+            "author": "OpenStreetMap contributors",
+            "license": "ODbL 1.0",
+            "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "glopop-sg": {
+        "adapter": GLOPOP_SG(
+            folder="glopop_sg",
+            local_version=1,
+            filename="placeholder",
+            cache="local",
+        ),
+        "url": "https://zenodo.org/records/15680747/files/GLOPOP_SG%20(1).zip?download=1",
+        "source": {
+            "name": "GLOPOP-SG",
+            "author": "M.J. Ton et al. (2025)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.15680747",
+            "paper_doi": "10.5281/zenodo.15680747",
         },
     },
 }
