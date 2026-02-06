@@ -63,6 +63,8 @@ hydrology:
       method: manning # or power law. If power law, alpha and beta must be set additionally in the parameters
 
 agent_settings:
+  government:
+    plant_forest: false  # default false. Enable (true) for forest planting policy for reforestation scenarios
   market:
     dynamic_market: false
     price_frequency: yearly

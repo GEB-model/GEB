@@ -417,6 +417,25 @@ class GEBModel(Module):
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
+        # Prepare modified soil maps BEFORE hydrology initialization if forest planting is enabled
+        if (
+            "agent_settings" in self.config
+            and "government" in self.config["agent_settings"]
+            and self.config["agent_settings"]["government"].get("plant_forest", False)
+        ):
+            print(
+                "MODEL: Forest planting enabled - preparing modified soil maps...",
+                flush=True,
+            )
+            # Import here to avoid circular dependency
+            from geb.agents.government import prepare_modified_soil_maps_standalone
+
+            prepare_modified_soil_maps_standalone(self)
+            print(
+                "MODEL: Modified soil maps ready for hydrology initialization\n",
+                flush=True,
+            )
+
         self.hydrology: Hydrology = Hydrology(self)
 
         self.hazard_driver = HazardDriver(self)

@@ -1,3 +1,25 @@
+## Unreleased
+
+### Added
+- **Forest Planting Policy Implementation**: Reforestation scenario modeling capability in Government agent
+  - Create suitability maps from global restoration potential data (Bastin et al. 2019)
+  - Convert cropland/grassland to forest based on suitability thresholds
+  - Modify soil properties in converted areas:
+    - **SOC**: Replace with mean from existing forests in the area (absolute replacement strategy)
+    - **Bulk Density**: Apply data-driven reduction factor calculated from regional forest-to-non-forest bulk density ratio (multiplicative reduction preserves parent material and soil type)
+  - Automatically remove farmers from converted forest areas with proper HRU reassignment
+  - Generate visualization of reforestation scenarios showing land cover changes and soil modifications
+  - Configuration option: `agent_settings.government.plant_forest: true`
+
+### Fixed
+- Fixed AttributeError when deleting cached `activation_order_by_elevation_fixed` property in farmer removal
+- Fixed IndexError in market module when tracking production after farmer removal (added size mismatch check)
+
+### Changed
+- Import `FOREST` constant value from `geb.hydrology.landcovers` in Government agent
+- Enhanced `remove_agents()` method in crop_farmers to handle missing cached properties
+- Market module can skip tracking when farmer count changes, it resumes after next harvest cycle
+
 # dev
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
 - Add download and processing for soil thickness data.
