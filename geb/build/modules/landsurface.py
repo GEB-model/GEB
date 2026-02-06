@@ -14,6 +14,7 @@ from geb.workflows.raster import (
     calculate_cell_area,
     convert_nodata,
     interpolate_na_2d,
+    interpolate_na_along_dim,
     pad_xy,
     rasterize_like,
     reclassify,
@@ -624,6 +625,7 @@ class LandSurface(BuildModelBase):
 
             crop_group_number = crop_group_number.astype(np.float32)
             crop_group_number = convert_nodata(crop_group_number, np.nan)
+            crop_group_number = interpolate_na_2d(crop_group_number)
             crop_group_number = resample_like(
                 crop_group_number,
                 self.grid["mask"],
@@ -648,6 +650,7 @@ class LandSurface(BuildModelBase):
 
             leaf_area_index = leaf_area_index.astype(np.float32)
             leaf_area_index = convert_nodata(leaf_area_index, np.nan)
+            leaf_area_index = interpolate_na_along_dim(leaf_area_index, dim="time")
             leaf_area_index = resample_like(
                 leaf_area_index,
                 self.grid["mask"],
