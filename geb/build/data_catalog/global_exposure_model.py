@@ -46,6 +46,10 @@ gadm_converter: dict[str, str] = {
     "TotonicapÃ¡n": "Totonicapán",
     "Veracruz de Ignacio de la Llave": "Veracruz",
     "Midi-Pyrenees": "Midi-Pyrénées",
+    "Ile-de-France": "Île-de-France",
+    "Sant Julia de Loria": "Sant Julià de Lòria",
+    "Provence-Alpes-Cote d'Azur": "Provence-Alpes-Côte d'Azur",
+    "Franche-Comte": "Franche-Comté",
 }
 
 
