@@ -44,6 +44,7 @@ To support this version:
 - Models for inland regions need to be rebuild if floods need to be run
 - Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data` to regenerate `gtsm/sea_level_rise_rcp8p5` using the new GTSM station data.
 - Re-run `setup_gtsm_water_levels`: `geb update -b build.yml::setup_gtsm_water_levels`
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`
 - Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 
 # v1.0.0b10
