@@ -46,6 +46,7 @@ gadm_converter: dict[str, str] = {
     "Michoacán de Ocampo": "Michoacan",
     "Ciudad de México": "Distrito Federal",
     "PetÃ©n": "Peten",
+    "SololÃ¡": "Solola",
 }
 
 
