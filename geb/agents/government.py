@@ -307,7 +307,9 @@ class Government(AgentBaseClass):
         modified_ds = bulk_density_ds.copy(deep=True)
 
         for layer_idx in range(bulk_density_ds.sizes["soil_layer"]):
-            layer_data = bulk_density_ds["bulk_density"].isel(soil_layer=layer_idx)
+            layer_data = bulk_density_ds["bulk_density_kg_per_dm3"].isel(
+                soil_layer=layer_idx
+            )
 
             original_mean = float(layer_data.mean())
             original_min = float(layer_data.min())
@@ -319,7 +321,9 @@ class Government(AgentBaseClass):
             )
 
             # Use direct array assignment instead of .loc indexing
-            modified_ds["bulk_density"].values[layer_idx, :, :] = modified_layer.values
+            modified_ds["bulk_density_kg_per_dm3"].values[layer_idx, :, :] = (
+                modified_layer.values
+            )
 
             modified_mean = float(modified_layer.mean())
             modified_min = float(modified_layer.min())
@@ -637,18 +641,22 @@ class Government(AgentBaseClass):
 
         # Load soil data using model.files paths
         logger.info("\nLoading soil datasets:")
-        bulk_density_path = self.model.files["subgrid"]["soil/bulk_density"]
-        soc_path = self.model.files["subgrid"]["soil/soil_organic_carbon"]
+        bulk_density_path = self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"]
+        soc_path = self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"]
 
         logger.info(f"  Bulk density: {bulk_density_path}")
         bulk_density_ds = xr.open_zarr(bulk_density_path)
-        logger.info(f"    Shape: {bulk_density_ds['bulk_density'].shape}")
-        logger.info(f"    Dimensions: {list(bulk_density_ds['bulk_density'].dims)}")
+        logger.info(f"    Shape: {bulk_density_ds['bulk_density_kg_per_dm3'].shape}")
+        logger.info(
+            f"    Dimensions: {list(bulk_density_ds['bulk_density_kg_per_dm3'].dims)}"
+        )
 
         logger.info(f"  Soil organic carbon: {soc_path}")
         soc_ds = xr.open_zarr(soc_path)
-        logger.info(f"    Shape: {soc_ds['soil_organic_carbon'].shape}")
-        logger.info(f"    Dimensions: {list(soc_ds['soil_organic_carbon'].dims)}")
+        logger.info(f"    Shape: {soc_ds['soil_organic_carbon_percentage'].shape}")
+        logger.info(
+            f"    Dimensions: {list(soc_ds['soil_organic_carbon_percentage'].dims)}"
+        )
 
         # Load landcover
         landcover_path = self.model.files["other"]["landcover/classification"]
@@ -684,7 +692,7 @@ class Government(AgentBaseClass):
 
         # Use first soil layer as template for reprojection
         # Need to copy CRS from model since zarr files may not have it embedded
-        template_da = bulk_density_ds["bulk_density"].isel(soil_layer=0)
+        template_da = bulk_density_ds["bulk_density_kg_per_dm3"].isel(soil_layer=0)
 
         # Get CRS and transform from model hydrology grid (most reliable source)
         if (
@@ -773,7 +781,7 @@ class Government(AgentBaseClass):
         soc_stats = self.analyze_soil_by_landcover(
             soil_ds=soc_ds,
             landcover=landcover_resampled,
-            variable_name="soil_organic_carbon",
+            variable_name="soil_organic_carbon_percentage",
             target_class=10,
         )
         print(
@@ -784,7 +792,7 @@ class Government(AgentBaseClass):
         bulk_density_stats = self.analyze_soil_by_landcover(
             soil_ds=bulk_density_ds,
             landcover=landcover_resampled,
-            variable_name="bulk_density",
+            variable_name="bulk_density_kg_per_dm3",
             target_class=10,
         )
         print(
@@ -811,7 +819,7 @@ class Government(AgentBaseClass):
             landcover_resampled=landcover_resampled,
             suitability=suitability,
             stats_by_class=soc_stats,
-            variable_name="soil_organic_carbon",
+            variable_name="soil_organic_carbon_percentage",
             strategy="mean",  # Use mean from forest class
             target_class=10,
         )
@@ -878,7 +886,7 @@ class Government(AgentBaseClass):
         # Save to input folder (where original soil data is located)
         # Get the directory containing the original bulk density file
         original_bulk_density_path = Path(
-            self.model.files["subgrid"]["soil/bulk_density"]
+            self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"]
         )
         input_soil_folder = original_bulk_density_path.parent
         print(f"[STEP 6] Saving to input folder: {input_soil_folder}", flush=True)
@@ -898,7 +906,7 @@ class Government(AgentBaseClass):
         logger.info(f"Saving modified SOC to: {modified_soc_path}")
         # Create new dataset with renamed variable to match the filename for proper zarr reading
         modified_soc_renamed = modified_soc_ds.rename(
-            {"soil_organic_carbon": "soil_organic_carbon_forest_modified"}
+            {"soil_organic_carbon_percentage": "soil_organic_carbon_forest_modified"}
         )
         modified_soc_renamed.to_zarr(modified_soc_path, mode="w")
 
@@ -921,14 +929,18 @@ class Government(AgentBaseClass):
         logger.info("UPDATING MODEL FILE PATHS TO USE MODIFIED SOIL MAPS")
         logger.info("=" * 80)
 
-        self.model.files["subgrid"]["soil/bulk_density"] = modified_bulk_density_path
-        self.model.files["subgrid"]["soil/soil_organic_carbon"] = modified_soc_path
+        self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"] = (
+            modified_bulk_density_path
+        )
+        self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"] = (
+            modified_soc_path
+        )
 
         logger.info(
-            f"Updated bulk density path: {self.model.files['subgrid']['soil/bulk_density']}"
+            f"Updated bulk density path: {self.model.files['subgrid']['soil/bulk_density_kg_per_dm3']}"
         )
         logger.info(
-            f"Updated SOC path: {self.model.files['subgrid']['soil/soil_organic_carbon']}"
+            f"Updated SOC path: {self.model.files['subgrid']['soil/soil_organic_carbon_percentage']}"
         )
         print("[STEP 6] Model file paths updated to use modified soil maps", flush=True)
 
