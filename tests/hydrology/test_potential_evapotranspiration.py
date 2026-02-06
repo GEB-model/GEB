@@ -108,7 +108,7 @@ def test_get_slope_of_saturation_vapour_pressure_curve() -> None:
     assert math.isclose(slope_kPa_per_C, expected_value, rel_tol=1e-6)
 
 
-def test_adjust_adjust_wind_speed_log_profile() -> None:
+def test_adjust_wind_speed_log_profile() -> None:
     """Test the wind speed adjustment function.
 
     See Example 14: https://www.fao.org/4/x0490e/x0490e07.htm#wind%20profile%20relationship
