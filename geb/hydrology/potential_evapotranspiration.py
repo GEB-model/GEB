@@ -142,10 +142,10 @@ def adjust_wind_speed_log_profile(
     roughness length is set to 0.123 of canopy height based on FAO guidelines for short grass.
 
     Args:
-        wind_10m_m_per_s: Speed at the sensor (u_z).
-        measurement_height_m: Height of the sensor above ground (z_m).
-        target_height_m: Desired height for output (z_target).
-        canopy_height_m: Height of the vegetation/surface elements (h).
+        wind_10m_m_per_s: Wind speed at the measurement height (m/s).
+        measurement_height_m: Height above ground of the wind-speed measurement (m).
+        target_height_m: Height above ground to which wind speed is adjusted (m).
+        canopy_height_m: Vegetation or surface canopy height used for displacement and roughness (m).
 
     Returns:
         Adjusted wind speed at the target height.
