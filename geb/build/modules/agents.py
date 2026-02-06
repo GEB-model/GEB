@@ -1609,6 +1609,71 @@ class Agents(BuildModelBase):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
+    def setup_building_reconstruction_costs(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns reconstruction costs (in USD) to buildings based on the global exposure model.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with reconstruction costs assigned to each building.
+        Raises:
+            ValueError: If a region in GADM level 1 is not found in the global exposure model.
+        """
+        # load GADM level 1 within model domain (older version for compatibility with global exposure model)
+        gadm_level1 = self.data_catalog.fetch("gadm_28").read(
+            geom=self.region.union_all().buffer(0.1),
+        )
+        countries_in_model = gadm_level1["NAME_0"].unique().tolist()
+
+        global_exposure_model = self.data_catalog.fetch(
+            "global_exposure_model",
+            countries=countries_in_model,
+        ).read()
+
+        # append the NAME_1 column to the buildings
+        buildings["NAME_1"] = gpd.sjoin(
+            buildings,
+            gadm_level1[["NAME_1", "geometry"]],
+            how="left",
+            predicate="within",
+        )["NAME_1"].values
+
+        # assert each building has a NAME_1 value
+        if buildings["NAME_1"].isnull().any():
+            # For buildings without NAME_1 we assign them to the nearest GADM level 1 region.
+            # This happens when buildings are just outside the polygons (e.g., near coastlines).
+            # Use a spatial index to avoid an O(n*m) distance calculation over all regions.
+            buildings_no_name1 = buildings[buildings["NAME_1"].isnull()]
+            if not buildings_no_name1.empty:
+                # Precompute centroids for unmatched buildings
+                unmatched_centroids = buildings_no_name1.geometry.centroid
+                # Build spatial index over GADM level 1 geometries once
+                gadm_sindex = gadm_level1.sindex
+                for building_idx, centroid in zip(
+                    buildings_no_name1.index, unmatched_centroids
+                ):
+                    # Query nearest polygon via its bounding box to limit candidate search
+                    nearest_pos = gadm_sindex.nearest(centroid)[0]
+                    nearest_region = gadm_level1.iloc[nearest_pos]
+                    buildings.at[building_idx, "NAME_1"] = nearest_region[
+                        "NAME_1"
+                    ].values[0]
+
+        # Iterate over unique admin-1 region names to avoid redundant checks and assignments
+        for name_1 in gadm_level1["NAME_1"].dropna().unique():
+            if name_1 not in global_exposure_model:
+                raise ValueError(
+                    f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
+                )
+            exposure_model_region = global_exposure_model[name_1]
+            for reconstruction_type in exposure_model_region:
+                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
+                    float(exposure_model_region[reconstruction_type])
+                )
+        return buildings
+
     def get_buildings_per_GDL_region(
         self, GDL_regions: gpd.GeoDataFrame
     ) -> dict[str, gpd.GeoDataFrame]:
@@ -1621,12 +1686,13 @@ class Agents(BuildModelBase):
         """
         output = {}
         # load region mask
-        mask = self.region.unary_union
+        mask = self.region.union_all()
         buildings = self.data_catalog.fetch(
             "open_building_map",
             geom=mask,
             prefix="assets",
         ).read()
+        buildings = self.setup_building_reconstruction_costs(buildings)
 
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
@@ -1690,9 +1756,10 @@ class Agents(BuildModelBase):
 
         # setup buildings in region for household allocation
         all_buildings_model_region = self.get_buildings_per_GDL_region(GDL_regions)
+        # append reconstruction costs to buildings
         residential_buildings_model_region = {}
 
-        # iterate over GDL regions and filter buildings to residential
+        # iterate over GDL regions and filter buildings to residential and set damage values
         for GDL_code in all_buildings_model_region:
             buildings = all_buildings_model_region[GDL_code]
             # filter to residential buildings

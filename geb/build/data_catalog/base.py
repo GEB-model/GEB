@@ -9,6 +9,7 @@ from typing import Any
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+import yaml
 
 from geb.workflows.geometry import read_parquet_with_geom
 from geb.workflows.io import read_zarr
@@ -159,6 +160,9 @@ class Adapter:
             return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix in (".tif", ".asc"):
             return xr.open_dataarray(self.path, **kwargs)
+        elif self.path.suffix == ".yml" or self.path.suffix == ".yaml":
+            with open(self.path, "r") as file:
+                return yaml.safe_load(file)
         elif self.path.suffix == ".parquet":
             if "columns" in kwargs and "geometry" not in kwargs["columns"]:
                 return pd.read_parquet(path=self.path, **kwargs)
