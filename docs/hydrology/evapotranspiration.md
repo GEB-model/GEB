@@ -14,7 +14,7 @@ where:
 * $d$ zero plane displacement height, $d = 0.08$ m,
 * $z_0$ roughness length, $z_0 = 0.01476$ m.
 
-The displacement height $d$ and roughness length $z_0$ are calculated based on a reference crop height $h = 0.12$ m , where:
+The displacement height $d$ and roughness length $z_0$ are calculated based on a reference crop height $h = 0.12$ m, where:
 
 $d = \frac{2}{3} h$ and $z_0 = 0.123 h$.
 
