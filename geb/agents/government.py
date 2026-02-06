@@ -210,7 +210,7 @@ class Government(AgentBaseClass):
     def step(self) -> None:
         """This function is run each timestep."""
         self.set_irrigation_limit()
-        self.provide_subsidies()
+        # self.provide_subsidies()
 
         self.report(locals())
 
@@ -273,7 +273,7 @@ class Government(AgentBaseClass):
         n_total = int((~np.isnan(potential_reprojected)).sum())
         pct_suitable = (n_suitable / n_total * 100) if n_total > 0 else 0.0
 
-        logger.info(f"\nSuitability Statistics:")
+        logger.info("\nSuitability Statistics:")
         logger.info(f"  Total valid cells: {n_total:,}")
         logger.info(f"  Suitable cells (1): {n_suitable:,}")
         logger.info(f"  Unsuitable cells (0): {n_total - n_suitable:,}")
@@ -491,7 +491,7 @@ class Government(AgentBaseClass):
         n_total = int((~np.isnan(landcover)).sum())
         pct_converted = (n_conversions / n_total * 100) if n_total > 0 else 0.0
 
-        logger.info(f"Conversion statistics:")
+        logger.info("Conversion statistics:")
         logger.info(f"  Total cells: {n_total:,}")
         logger.info(f"  Cells to convert: {n_conversions:,}")
         logger.info(f"  Percentage converted: {pct_converted:.2f}%")
@@ -913,13 +913,19 @@ class Government(AgentBaseClass):
         logger.info(f"Saving modified bulk density to: {modified_bulk_density_path}")
         # Create new dataset with renamed variable to match the filename for proper zarr reading
         modified_bulk_density_renamed = modified_bulk_density_ds.rename(
-            {"bulk_density": "bulk_density_forest_modified"}
+            {"bulk_density_kg_per_dm3": "bulk_density_forest_modified"}
         )
         modified_bulk_density_renamed.to_zarr(modified_bulk_density_path, mode="w")
 
         logger.info(f"Saving future landcover to: {future_landcover_path}")
         future_landcover_ds = xr.Dataset({"classification": future_landcover})
         future_landcover_ds.to_zarr(future_landcover_path, mode="w")
+
+        # # Save the reforestation suitability map (>50% threshold)
+        # suitability_path = output_folder / "reforestation_suitability_50pct.zarr"
+        # logger.info(f"Saving reforestation suitability map to: {suitability_path}")
+        # suitability_ds = xr.Dataset({"suitability": suitability})
+        # suitability_ds.to_zarr(suitability_path, mode="w")
 
         logger.info("\nAll modified datasets saved successfully!")
         print("[STEP 6] All modified datasets saved successfully!", flush=True)
@@ -1088,7 +1094,7 @@ class Government(AgentBaseClass):
 
         # Remove farmers using crop_farmers' remove_agents method
         # The new land use type should be FOREST (hydrology module constant = 0)
-        print(f"  Removing farmers (this may take a moment)...", flush=True)
+        print("  Removing farmers (this may take a moment)...", flush=True)
         removed_HRUs = crop_farmers.remove_agents(
             farmer_indices=unique_farmer_indices,
             new_land_use_type=FOREST,

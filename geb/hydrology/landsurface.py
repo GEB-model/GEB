@@ -1048,8 +1048,8 @@ class LandSurface(Module):
         )
 
         # Load soil organic carbon and bulk density with logging
-        soc_path = self.model.files["subgrid"]["soil/soil_organic_carbon"]
-        bd_path = self.model.files["subgrid"]["soil/bulk_density"]
+        soc_path = self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"]
+        bd_path = self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"]
 
         logger.info("\n" + "=" * 80)
         logger.info("LOADING SOIL DATA IN HYDROLOGY MODULE")
@@ -1073,7 +1073,6 @@ class LandSurface(Module):
         self.HRU.var.depth_to_bedrock_m: ArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
                 self.model.files["subgrid"]["soil/depth_to_bedrock_m"],
-                soc_path,
                 layer=None,
             ),
             method="mean",
@@ -1082,7 +1081,6 @@ class LandSurface(Module):
         organic_carbon_percentage: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
-                bd_path,
                 layer=None,
             ),
             method="mean",
