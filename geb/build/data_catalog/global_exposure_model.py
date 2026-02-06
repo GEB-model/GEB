@@ -103,7 +103,9 @@ class GlobalExposureModel(Adapter):
                     ):
                         csv_files.append(item["path"])
 
-    def _download_and_process_csv(self, raw_base: str, csv_files: list[str]) -> None:
+    def _download_and_process_csv(
+        self, raw_base: str, csv_files: list[str], countries_to_download: list[str]
+    ) -> None:
         """Download and process CSV files from the repository.
 
         Args:
@@ -113,8 +115,7 @@ class GlobalExposureModel(Adapter):
             ValueError: If any of the downloaded CSV files are missing expected columns.
         """
         # Will collect per-file dictionaries mapping admin_1 -> damage metrics
-        damages_per_sqm = []
-        for csv in csv_files:
+        for csv, country in zip(csv_files, countries_to_download):
             url = raw_base + quote(csv)
 
             r = requests.get(url)
@@ -137,25 +138,13 @@ class GlobalExposureModel(Adapter):
                         "Expected column 'NAME_1' to be present in GEM exposure CSV "
                         f"'{csv}', but it was not found."
                     )
-                name_1_series = df["NAME_1"]
-                # check if any of the converted GADM names need to be applied
-                if any(key in name_1_series.values for key in gadm_converter.keys()):
-                    df["NAME_1"] = name_1_series.replace(gadm_converter)
-                damages_per_sqm.append(self._process_csv(df))
-
-        # Merge per-file dictionaries. Later files overwrite earlier keys
-        # for the same admin_1; this behavior matches a simple update
-        # aggregation strategy.
-        merged = {}
-        for d in damages_per_sqm:
-            merged.update(d)
-
-        # and write to file
-        os.makedirs(self.path.parent, exist_ok=True)
-        write_params(
-            merged,
-            self.path,
-        )
+                df_processed = pd.DataFrame(self._process_csv(df)).T
+                df_processed.index.name = "NAME_1"
+                # write to path
+                fn_country_data = (
+                    self.path.parent / f"global_exposure_model_{country}.csv"
+                )
+                df_processed.to_csv(fn_country_data, index=True)
 
     def _process_csv(self, df: pd.DataFrame) -> dict[str, dict[str, float]]:
         """Process a single CSV DataFrame to compute damages per square meter.
@@ -198,6 +187,9 @@ class GlobalExposureModel(Adapter):
         Raises:
             ValueError: If no CSV files are found for the requested countries.
         """
+        # set attribute of the adapter to the list of countries for which data is being fetched
+        self.countries = countries
+
         # Query the repository tree for all files in the `main` branch so we
         # can locate country-specific folders without cloning the repo.
         branch = "main"
@@ -210,7 +202,8 @@ class GlobalExposureModel(Adapter):
             f"https://raw.githubusercontent.com/gem/global_exposure_model/{branch}/"
         )
 
-        csv_files = []
+        csv_files_to_download = []
+        countries_to_download = []
         for country in countries:
             # Normalize the country name to ASCII for matching against
             # repository folder names (avoids accented-character mismatches).
@@ -221,19 +214,16 @@ class GlobalExposureModel(Adapter):
             )
             # replace spaces with dashes for matching folder names and search
             country = country.replace(" ", "_")
-            self._filter_folders(tree, csv_files, country)
-
-        if not csv_files:
-            # Fail fast with a clear error instead of silently creating an
-            # empty output when no matching CSV files are found for the
-            # requested countries. This guards against misconfiguration
-            # (e.g., misspelled country names or repository structure changes).
-            raise ValueError(
-                "No Global Exposure Model CSV files were found for the "
-                f"requested countries: {countries}. Please verify the "
-                "country names and the repository structure."
-            )
-        self._download_and_process_csv(raw_base, csv_files)
+            # create pathname and check if exist in GEB datacatalog
+            fn_country_data = self.path.parent / f"global_exposure_model_{country}.csv"
+            if not fn_country_data.exists():
+                self._filter_folders(tree, csv_files_to_download, country)
+                countries_to_download.append(country)
+        if not csv_files_to_download:
+            return self  # No new files to download, return early
+        self._download_and_process_csv(
+            raw_base, csv_files_to_download, countries_to_download
+        )
 
         return self
 
@@ -245,4 +235,21 @@ class GlobalExposureModel(Adapter):
         Returns:
             The dataset as a dictionary.
         """
-        return super().read(**kwargs)
+        # read all country-specific CSV files that were downloaded and processed, and merge them into a single dictionary
+        merged_result: dict[str, dict[str, float]] = {}
+        for country in self.countries:
+            fn_country_data = self.path.parent / f"global_exposure_model_{country}.csv"
+            df = pd.read_csv(fn_country_data)
+            name_1_series = df["NAME_1"]
+            # check if any of the converted GADM names need to be applied
+            if any(key in name_1_series.values for key in gadm_converter.keys()):
+                df["NAME_1"] = name_1_series.replace(gadm_converter)
+            # merge the processed data for this country into the overall result dictionary
+            for _, row in df.iterrows():
+                admin_1 = row["NAME_1"]
+                if admin_1 not in merged_result:
+                    merged_result[admin_1] = {}
+                for col in df.columns:
+                    if col != "NAME_1":
+                        merged_result[admin_1][col] = row[col]
+        return merged_result
