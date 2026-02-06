@@ -6,7 +6,7 @@
 
 The model uses crop group numbers to characterize the drought sensitivity of vegetation types (Forest and Grassland-like). These parameters determine the fraction of easily available soil water ($p$).
 
-The data is obtained from LISFLOOD[@vanderknijff2010lisflood] data repository. There derivation of the paramters is described [here](https://ec-jrc.github.io/lisflood-code/4_Static-Maps_land-use-depending/).
+The data is obtained from LISFLOOD[@vanderknijff2010lisflood] data repository. There derivation of the parameters is described [here](https://ec-jrc.github.io/lisflood-code/4_Static-Maps_land-use-depending/).
 
 ### Leaf Area Index
 
