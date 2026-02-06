@@ -104,6 +104,8 @@ class GlobalExposureModel(Adapter):
         Args:
             raw_base: The base URL for raw file access in the GitHub repository.
             csv_files: List of CSV file paths to download and process.
+        Raises:
+            ValueError: If any of the downloaded CSV files are missing expected columns.
         """
         # Will collect per-file dictionaries mapping admin_1 -> damage metrics
         damages_per_sqm = []
