@@ -57,6 +57,8 @@ setup_create_farms:
 
 setup_income_distribution_parameters:
 
+setup_buildings:
+
 setup_household_characteristics:
 
 setup_water_demand:
