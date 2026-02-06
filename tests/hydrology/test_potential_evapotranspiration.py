@@ -14,7 +14,7 @@ from geb.hydrology.landcovers import (
 )
 from geb.hydrology.potential_evapotranspiration import (
     W_per_m2_to_MJ_per_m2_per_hour,
-    adjust_wind_speed,
+    adjust_wind_speed_log_profile,
     get_CO2_induced_crop_factor_adustment,
     get_crop_factors_and_root_depths,
     get_net_solar_radiation,
@@ -108,12 +108,42 @@ def test_get_slope_of_saturation_vapour_pressure_curve() -> None:
     assert math.isclose(slope_kPa_per_C, expected_value, rel_tol=1e-6)
 
 
-def test_adjust_wind_speed() -> None:
-    """Test the wind speed adjustment function."""
-    wind_10m_m_per_s = np.float32(100.0)  # Example wind speed in m/s
-    adjusted_wind_speed_m_per_s = adjust_wind_speed(wind_10m_m_per_s=wind_10m_m_per_s)
+def test_adjust_adjust_wind_speed_log_profile() -> None:
+    """Test the wind speed adjustment function.
 
-    assert math.isclose(adjusted_wind_speed_m_per_s, 74.8, rel_tol=1e-6)
+    See Example 14: https://www.fao.org/4/x0490e/x0490e07.htm#wind%20profile%20relationship
+        u2 = uz * 4.87 / ln(67.8 * z - 5.42)
+
+    where uz is the wind speed at height z, and u2 is the wind speed at 2 m, with example
+    values of uz = 3.2 m/s at z = 10 m, which should yield u2 = 2.4 m/s.
+
+    Derivation of FAO 56 Equation 47 from the general logarithmic profile used here:
+
+    The code uses:
+        u_2 = u_z * (ln((z_2 - d) / z_0) / ln((z_z - d) / z_0))
+
+    FAO 56 assumes for a standard crop:
+    - h (height) = 0.12 m
+    - d (displacement height) = 0.67 * h = 0.08 m
+    - z_0 (roughness length) = 0.123 * h = 0.01476 m
+
+    Numerator term with z_2 = 2.0 m:
+        ln((2.0 - 0.08) / 0.01476) approx 4.87
+
+    Denominator term inner part:
+        (z_z - 0.08) / 0.01476 = (1/0.01476) * z_z - (0.08/0.01476)
+                           approx 67.8 * z_z - 5.42
+
+    Putting it together yields Eq. 47:
+        u_2 = u_z * 4.87 / ln(67.8 * z_z - 5.42)
+    """
+    wind_10m_m_per_s = np.float32(3.2)
+
+    adjusted_wind_speed_m_per_s = adjust_wind_speed_log_profile(
+        wind_10m_m_per_s=wind_10m_m_per_s
+    )
+
+    assert math.isclose(adjusted_wind_speed_m_per_s, 2.4, abs_tol=0.05)
 
 
 def test_penman_monteith_day() -> None:
