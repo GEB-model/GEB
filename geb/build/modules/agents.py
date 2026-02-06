@@ -10,6 +10,7 @@ import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
+import unicodedata
 
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
@@ -1604,6 +1605,14 @@ class Agents(BuildModelBase):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
+    def canon(self, string_to_normalize: str) -> str:
+        return (
+            unicodedata.normalize("NFKD", string_to_normalize)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+            .strip()
+        )
+
     def setup_building_reconstruction_costs(
         self, buildings: gpd.GeoDataFrame
     ) -> gpd.GeoDataFrame:
@@ -1614,7 +1623,8 @@ class Agents(BuildModelBase):
         Returns:
             A GeoDataFrame with reconstruction costs assigned to each building.
         Raises:
-            ValueError: If a region in GADM level 1 is not found in the global exposure model.
+            ValueError: If a region in GADM level 1 is not found in the global exposure model or
+                        if some buildings do not have reconstruction costs assigned.
         """
         # load GADM level 1 within model domain (older version for compatibility with global exposure model)
         gadm_level1 = self.data_catalog.fetch("gadm_28").read(
@@ -1658,15 +1668,24 @@ class Agents(BuildModelBase):
 
         # Iterate over unique admin-1 region names to avoid redundant checks and assignments
         for name_1 in gadm_level1["NAME_1"].dropna().unique():
+            # clean up name
+            name_1 = self.canon(name_1)
+            # check if region is in global exposure model
             if name_1 not in global_exposure_model:
                 raise ValueError(
                     f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
                 )
             exposure_model_region = global_exposure_model[name_1]
             for reconstruction_type in exposure_model_region:
-                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
-                    float(exposure_model_region[reconstruction_type])
-                )
+                buildings.loc[
+                    buildings["NAME_1"].apply(self.canon) == name_1, reconstruction_type
+                ] = float(exposure_model_region[reconstruction_type])
+        # assert all buildings have reconstruction costs assigned (i.e., no null values in the reconstruction cost columns)
+        reconstruction_cost_columns = list(exposure_model_region.keys())
+        if buildings[reconstruction_cost_columns].isnull().any().any():
+            raise ValueError(
+                "Some buildings do not have reconstruction costs assigned. Please check the global exposure model and the region names."
+            )
         return buildings
 
     def get_buildings_per_GDL_region(
@@ -1727,7 +1746,17 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method(depends_on="setup_assets")
+    @build_method
+    def setup_buildings(self):
+        # load GDL region within model domain
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+
+        # setup buildings in region for household allocation
+        self.get_buildings_per_GDL_region(GDL_regions)
+
+    @build_method(depends_on=["setup_assets", "setup_buildings"])
     def setup_household_characteristics(
         self,
         maximum_age: int = 85,
@@ -1750,7 +1779,7 @@ class Agents(BuildModelBase):
         )
 
         # setup buildings in region for household allocation
-        all_buildings_model_region = self.get_buildings_per_GDL_region(GDL_regions)
+        all_buildings_model_region = self.geom["assets/open_building_map"]
         # append reconstruction costs to buildings
         residential_buildings_model_region = {}
 
