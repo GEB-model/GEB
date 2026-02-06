@@ -7,12 +7,12 @@ processes those CSVs to compute damages per square metre for residential
 JSON file named `global_exposure_model.json` next to the adapter's path.
 
 Operations performed by the adapter:
+- Check for existing processed CSV files to avoid redundant downloads.
 - Query the GitHub tree API to find CSV file paths for requested countries.
 - Download matching raw CSV files from the `raw.githubusercontent.com` URL.
 - Parse CSVs with pandas, filter residential rows and aggregate by
     `NAME_1` (admin_1) to compute damage per sqm for several damage columns.
-- Merge results across files and write the final parameter mapping using
-    `geb.workflows.io.write_params`.
+
 
 The class is intentionally lightweight: network interactions use
 `requests`, temporary files are used for pandas reads, and numerical
@@ -46,8 +46,6 @@ gadm_converter: dict[str, str] = {
     "Michoacán de Ocampo": "Michoacan",
     "Ciudad de México": "Distrito Federal",
     "PetÃ©n": "Peten",
-    "México": "Mexico",
-    "Nuevo León": "Nuevo Leon",
 }
 
 
@@ -62,6 +60,21 @@ class GlobalExposureModel(Adapter):
             **kwargs: Keyword arguments to pass to the Adapter constructor.
         """
         super().__init__(*args, **kwargs)
+
+    def canon(self, string_to_normalize: str) -> str:
+        """Canonicalizes a string by normalizing it to ASCII and stripping whitespace.
+
+        Args:
+            string_to_normalize: The string to canonicalize.
+        Returns:
+            The canonicalized string.
+        """
+        return (
+            unicodedata.normalize("NFKD", string_to_normalize)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+            .strip()
+        )
 
     def _filter_folders(
         self, tree: list[dict[str, Any]], csv_files: list[str], country: str
@@ -114,6 +127,12 @@ class GlobalExposureModel(Adapter):
             ValueError: If an expected column is missing in the CSV or if processing fails.
         """
         # Will collect per-file dictionaries mapping admin_1 -> damage metrics
+        # assert the lengths of csv_files and countries_to_download match to ensure correct pairing
+        if len(csv_files) != len(countries_to_download):
+            raise ValueError(
+                "The number of CSV files and countries to download must match. "
+                f"Got {len(csv_files)} CSV files and {len(countries_to_download)} countries."
+            )
         for csv, country in zip(csv_files, countries_to_download):
             url = raw_base + quote(csv)
 
@@ -185,7 +204,8 @@ class GlobalExposureModel(Adapter):
             GlobalExposureModel: The adapter instance with the processed data.
         """
         # set attribute of the adapter to the list of countries for which data is being fetched
-        self.countries = countries
+        countries = [country.replace(" ", "_") for country in countries]
+        self.countries = [self.canon(country) for country in countries]
 
         # Query the repository tree for all files in the `main` branch so we
         # can locate country-specific folders without cloning the repo.
@@ -201,7 +221,7 @@ class GlobalExposureModel(Adapter):
 
         csv_files_to_download = []
         countries_to_download = []
-        for country in countries:
+        for country in self.countries:
             # Normalize the country name to ASCII for matching against
             # repository folder names (avoids accented-character mismatches).
             country = (
@@ -243,7 +263,7 @@ class GlobalExposureModel(Adapter):
                 df["NAME_1"] = name_1_series.replace(gadm_converter)
             # merge the processed data for this country into the overall result dictionary
             for _, row in df.iterrows():
-                admin_1 = row["NAME_1"]
+                admin_1 = self.canon(row["NAME_1"])
                 if admin_1 not in merged_result:
                     merged_result[admin_1] = {}
                 for col in df.columns:
