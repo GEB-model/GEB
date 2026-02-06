@@ -45,6 +45,7 @@ gadm_converter: dict[str, str] = {
     "QuichÃ©": "Quiché",
     "TotonicapÃ¡n": "Totonicapán",
     "Veracruz de Ignacio de la Llave": "Veracruz",
+    "Midi-Pyrenees": "Midi-Pyrénées",
 }
 
 
