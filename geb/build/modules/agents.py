@@ -1701,17 +1701,9 @@ class Agents(BuildModelBase):
             )
         return buildings
 
-    def get_buildings_per_GDL_region(
-        self, GDL_regions: gpd.GeoDataFrame
-    ) -> dict[str, gpd.GeoDataFrame]:
-        """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
-
-        Args:
-            GDL_regions: A GeoDataFrame containing GDL regions within the model domain.
-        Returns:
-            A dictionary with GDLcode as keys and GeoDataFrames of buildings with grid indices as values.
-        """
-        output = {}
+    @build_method
+    def setup_buildings(self) -> None:
+        """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
         # load region mask
         mask = self.region.union_all()
         buildings = self.data_catalog.fetch(
@@ -1726,6 +1718,19 @@ class Agents(BuildModelBase):
 
         # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
+
+    def assign_buildings_to_grid_cells(
+        self, GDL_regions: gpd.GeoDataFrame
+    ) -> dict[str, gpd.GeoDataFrame]:
+        """Assigns buildings to grid cells from GLOPOP-S grid for each GDL region.
+
+        Args:
+            GDL_regions: A GeoDataFrame containing GDL regions within the model domain.
+        Returns:
+            A dictionary with GDLcode as keys and GeoDataFrames of buildings with grid indices as values.
+        """
+        output = {}
+        buildings = self.geom["assets/open_building_map"]
 
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
@@ -1759,17 +1764,6 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method
-    def setup_buildings(self) -> None:
-        """Sets up buildings for agents using the Open Building Map dataset and assigns reconstruction costs based on the global exposure model."""
-        # load GDL region within model domain
-        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
-            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
-        )
-
-        # setup buildings in region for household allocation
-        self.get_buildings_per_GDL_region(GDL_regions)
-
     @build_method(depends_on=["setup_assets", "setup_buildings"])
     def setup_household_characteristics(
         self,
@@ -1793,7 +1787,7 @@ class Agents(BuildModelBase):
         )
 
         # setup buildings in region for household allocation
-        all_buildings_model_region = self.geom["assets/open_building_map"]
+        all_buildings_model_region = self.assign_buildings_to_grid_cells(GDL_regions)
         # append reconstruction costs to buildings
         residential_buildings_model_region = {}
 
