@@ -798,7 +798,7 @@ class Government(AgentBaseClass):
             flush=True,
         )
         logger.info("\n" + "=" * 80)
-        logger.info("STEP 4: Modifying Soil Characteristics")
+        logger.info("STEP 5: Modifying Soil Characteristics")
         logger.info("=" * 80)
 
         # SOC: Use MEAN strategy
