@@ -1706,7 +1706,7 @@ class Agents(BuildModelBase):
             )
         return buildings
 
-    @build_method
+    @build_method(required=True)
     def setup_buildings(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
         # load region mask
