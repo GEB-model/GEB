@@ -320,7 +320,7 @@ def get_reference_evapotranspiration(
         get_slope_of_saturation_vapour_pressure_curve(temperature_C=tas_C)
     )
 
-    wind_2m_m_per_s: np.float32 = adjust_wind_speed_10m_to_2m(wind_10m_m_per_s)
+    wind_2m_m_per_s: np.float32 = adjust_wind_speed_log_profile(wind_10m_m_per_s)
 
     soil_heat_flux_MJ_per_m2_per_hour: np.float32 = np.float32(0.0)
 
