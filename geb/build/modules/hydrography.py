@@ -36,6 +36,17 @@ from geb.workflows.raster import (
 
 from .base import BuildModelBase
 
+D8_NORTHWEST = 32
+D8_NORTH = 64
+D8_NORTHEAST = 128
+D8_EAST = 1
+D8_SOUTHEAST = 2
+D8_SOUTH = 4
+D8_SOUTHWEST = 8
+D8_WEST = 16
+D8_PIT = 0
+D8_NODATA = 247
+
 
 def calculate_stream_length(
     original_d8_ldd: xr.DataArray,
@@ -74,26 +85,26 @@ def calculate_stream_length(
     )
 
     # pit -> no channel, so set stream length to 0
-    stream_length = xr.where(original_d8_ldd != 0, stream_length, 0)
+    stream_length = xr.where(original_d8_ldd != D8_PIT, stream_length, 0)
     # vertical -> set stream length to cell height
     stream_length = xr.where(
-        ~((original_d8_ldd == 64) | (original_d8_ldd == 4)),
+        ~((original_d8_ldd == D8_NORTH) | (original_d8_ldd == D8_SOUTH)),
         stream_length,
         cell_height_m,
     )
     # horizontal -> set stream length to cell width
     stream_length = xr.where(
-        ~((original_d8_ldd == 16) | (original_d8_ldd == 1)),
+        ~((original_d8_ldd == D8_WEST) | (original_d8_ldd == D8_EAST)),
         stream_length,
         cell_width_m,
     )
     # diagonal -> set stream length to cell diagonal
     stream_length = xr.where(
         ~(
-            (original_d8_ldd == 128)
-            | (original_d8_ldd == 2)
-            | (original_d8_ldd == 8)
-            | (original_d8_ldd == 32)
+            (original_d8_ldd == D8_NORTHEAST)
+            | (original_d8_ldd == D8_SOUTHEAST)
+            | (original_d8_ldd == D8_SOUTHWEST)
+            | (original_d8_ldd == D8_NORTHWEST)
         ),
         stream_length,
         np.sqrt(cell_width_m**2 + cell_height_m**2),
