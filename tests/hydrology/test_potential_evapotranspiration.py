@@ -144,7 +144,10 @@ def test_adjust_wind_speed_log_profile() -> None:
     wind_10m_m_per_s = np.float32(3.2)
 
     adjusted_wind_speed_m_per_s = adjust_wind_speed_log_profile(
-        wind_10m_m_per_s=wind_10m_m_per_s
+        wind_measurement_height_m_per_s=wind_10m_m_per_s,
+        measurement_height_m=np.float32(10.0),
+        target_height_m=np.float32(2.0),
+        canopy_height_m=np.float32(0.12),
     )
 
     assert math.isclose(adjusted_wind_speed_m_per_s, 2.4, abs_tol=0.05)

@@ -126,10 +126,10 @@ def get_slope_of_saturation_vapour_pressure_curve(
 
 @njit(cache=True, inline="always")
 def adjust_wind_speed_log_profile(
-    wind_10m_m_per_s: np.float32,
-    measurement_height_m: np.float32 = np.float32(10.0),
-    target_height_m: np.float32 = np.float32(2.0),
-    canopy_height_m: np.float32 = np.float32(0.12),
+    wind_measurement_height_m_per_s: np.float32,
+    measurement_height_m: np.float32,
+    target_height_m: np.float32,
+    canopy_height_m: np.float32,
 ) -> np.float32:
     """
     Translates wind speed from a measurement height to a target height.
@@ -142,7 +142,7 @@ def adjust_wind_speed_log_profile(
     roughness length is set to 0.123 of canopy height based on FAO guidelines for short grass.
 
     Args:
-        wind_10m_m_per_s: Wind speed at the measurement height (m/s).
+        wind_measurement_height_m_per_s: Wind speed at the measurement height (m/s).
         measurement_height_m: Height above ground of the wind-speed measurement (m).
         target_height_m: Height above ground to which wind speed is adjusted (m).
         canopy_height_m: Vegetation or surface canopy height used for displacement and roughness (m).
@@ -166,7 +166,7 @@ def adjust_wind_speed_log_profile(
         (measurement_height_m - displacement_height_m) / roughness_length_m
     )
 
-    return wind_10m_m_per_s * (log_target / log_measured)
+    return wind_measurement_height_m_per_s * (log_target / log_measured)
 
 
 @njit(cache=True, inline="always")
@@ -320,7 +320,12 @@ def get_reference_evapotranspiration(
         get_slope_of_saturation_vapour_pressure_curve(temperature_C=tas_C)
     )
 
-    wind_2m_m_per_s: np.float32 = adjust_wind_speed_log_profile(wind_10m_m_per_s)
+    wind_2m_m_per_s: np.float32 = adjust_wind_speed_log_profile(
+        wind_10m_m_per_s,
+        target_height_m=np.float32(2.0),
+        measurement_height_m=np.float32(10.0),
+        canopy_height_m=np.float32(0.12),
+    )
 
     soil_heat_flux_MJ_per_m2_per_hour: np.float32 = np.float32(0.0)
 
