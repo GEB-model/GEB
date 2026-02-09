@@ -961,14 +961,17 @@ class Hydrography(BuildModelBase):
             return
 
         # load elevation data
-        elevation = self.other["DEM/fabdem"]
+        elevation = self.other["DEM/delta_dtm"]
         # load the lecz mask
-        low_elevation_coastal_zone_mask = self.create_low_elevation_coastal_zone_mask()
-
-        # add small buffer to ensure connection of 'islands' with coastlines
-        low_elevation_coastal_zone_mask.geometry = (
-            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+        low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = (
+            self.create_low_elevation_coastal_zone_mask()
         )
+
+        if low_elevation_coastal_zone_mask is None:
+            self.logger.info(
+                "No low elevation coastal zone mask found, skipping setup_coastal_sfincs_model_regions"
+            )
+            return
 
         # sample the minimum elevation present in the lecz mask
         mask = elevation.rio.clip(
@@ -979,6 +982,11 @@ class Hydrography(BuildModelBase):
         )
 
         initial_water_levels = float(np.nanmin(mask.values))
+
+        # add small buffer to ensure connection of 'islands' with coastlines
+        low_elevation_coastal_zone_mask.geometry = (
+            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+        )
 
         low_elevation_coastal_zone_mask["initial_water_level"] = initial_water_levels
         self.set_geom(
