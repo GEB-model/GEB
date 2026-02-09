@@ -1,4 +1,6 @@
 # dev
+
+# v1.0.0b10
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
 - Add download and processing for soil thickness data.
 - DeltaDTM is now also setup for the model region in setup_elevation. 
