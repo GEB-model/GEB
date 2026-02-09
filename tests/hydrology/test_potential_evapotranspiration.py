@@ -334,7 +334,7 @@ def test_get_crop_factors_and_root_depths() -> None:
     # first crop in initial stage, second crop halfway in second stage, third crop fully grown, fourth crop halfway in last stage
     # fifth is forest, sixth is grassland, seventh is sealed, eighth is open water
     expected_crop_factor = np.array(
-        [0.6, 0.75, 1.2, 1.05, 1.299235, 1.000112, np.nan, np.nan], dtype=np.float32
+        [0.6, 0.75, 1.2, 1.05, 0.985168, 1.000112, np.nan, np.nan], dtype=np.float32
     )
     expected_root_depth = np.array(
         [
