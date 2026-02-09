@@ -40,6 +40,7 @@
 - Added a gadm_converter dictionary mapping incorrect GADM names to corrected versions in the global exposure model data adapter.
 - Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
+- Removed waterbodies from gadv28 for better matching with the global exposure model.
 
 To support this version:
 
