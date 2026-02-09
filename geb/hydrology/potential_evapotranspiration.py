@@ -125,18 +125,48 @@ def get_slope_of_saturation_vapour_pressure_curve(
 
 
 @njit(cache=True, inline="always")
-def adjust_wind_speed(
-    wind_10m_m_per_s: np.float32,
+def adjust_wind_speed_log_profile(
+    wind_measurement_height_m_per_s: np.float32,
+    measurement_height_m: np.float32,
+    target_height_m: np.float32,
+    canopy_height_m: np.float32,
 ) -> np.float32:
-    """Adjust wind speed to surface level.
+    """
+    Translates wind speed from a measurement height to a target height.
+
+    Uses a logarithmic wind profile.
+
+    See: https://www.fao.org/4/x0490e/x0490e06.htm
+
+    displacement height (d) is set to 2/3 of canopy height
+    roughness length is set to 0.123 of canopy height based on FAO guidelines for short grass.
 
     Args:
-        wind_10m_m_per_s: Wind speed at 10 m height in m/s.
+        wind_measurement_height_m_per_s: Wind speed at the measurement height (m/s).
+        measurement_height_m: Height above ground of the wind-speed measurement (m).
+        target_height_m: Height above ground to which wind speed is adjusted (m).
+        canopy_height_m: Vegetation or surface canopy height used for displacement and roughness (m).
 
     Returns:
-        Adjusted wind speed at 2 m height in m/s.
+        Adjusted wind speed at the target height.
     """
-    return wind_10m_m_per_s * np.float32(0.748)
+    # d: Zero-plane displacement height
+    # The height above the ground where the wind speed is effectively zero
+    # due to the density of the canopy.
+    displacement_height_m = np.float32(2 / 3) * canopy_height_m
+
+    # z0: Aerodynamic roughness length
+    # A parameter representing the roughness/drag of the surface.
+    roughness_length_m = np.float32(0.123) * canopy_height_m
+
+    log_target: np.float32 = np.log(
+        (target_height_m - displacement_height_m) / roughness_length_m
+    )
+    log_measured: np.float32 = np.log(
+        (measurement_height_m - displacement_height_m) / roughness_length_m
+    )
+
+    return wind_measurement_height_m_per_s * (log_target / log_measured)
 
 
 @njit(cache=True, inline="always")
@@ -290,7 +320,12 @@ def get_reference_evapotranspiration(
         get_slope_of_saturation_vapour_pressure_curve(temperature_C=tas_C)
     )
 
-    wind_2m_m_per_s: np.float32 = adjust_wind_speed(wind_10m_m_per_s)
+    wind_2m_m_per_s: np.float32 = adjust_wind_speed_log_profile(
+        wind_10m_m_per_s,
+        target_height_m=np.float32(2.0),
+        measurement_height_m=np.float32(10.0),
+        canopy_height_m=np.float32(0.12),
+    )
 
     soil_heat_flux_MJ_per_m2_per_hour: np.float32 = np.float32(0.0)
 
@@ -377,10 +412,30 @@ def get_potential_evapotranspiration(
     ) * CO2_induced_crop_factor_adustment
 
 
+@njit(cache=True, inline="always")
+def get_crop_factor_from_lai(
+    min_kc: np.float32,
+    max_kc: np.float32,
+    lai: np.float32,
+) -> np.float32:
+    """Calculate crop factor from leaf area index using exponential formula.
+
+    Args:
+        min_kc: Minimum crop factor.
+        max_kc: Maximum crop factor.
+        lai: Leaf area index.
+
+    Returns:
+        Crop factor.
+    """
+    return min_kc + (max_kc - min_kc) * (1 - np.exp(-0.7 * lai))
+
+
 @njit(cache=True)
 def get_crop_factors_and_root_depths(
     land_use_map: npt.NDArray[np.int32],
-    crop_factor_forest_map: npt.NDArray[np.float32],
+    leaf_area_index_forest: npt.NDArray[np.float32],
+    leaf_area_index_grassland_like: npt.NDArray[np.float32],
     crop_map: npt.NDArray[np.int32],
     crop_age_days_map: npt.NDArray[np.int32],
     crop_harvest_age_days: npt.NDArray[np.int32],
@@ -397,9 +452,16 @@ def get_crop_factors_and_root_depths(
 ]:
     """Calculate crop factors and root depths based on land use and crop information.
 
+    Crop factor for forest is calculated based on leaf area index based on:
+
+        Allen, R.G., Pereira, L.S.
+        Estimating crop coefficients from fraction of ground cover and height. Irrig Sci 28, 17–34 (2009).
+        https://doi.org/10.1007/s00271-009-0182-z
+
     Args:
         land_use_map: Map of land use types.
-        crop_factor_forest_map: Map of crop factors for forest land use if forested.
+        leaf_area_index_forest: Leaf area index for forest land use type.
+        leaf_area_index_grassland_like: Leaf area index for grassland land use type.
         crop_map: Map of crop types, -1 for non-crop land use. Indices refer to crop arrays.
         crop_age_days_map: Map of crop ages in days, -1 for non-crop land use.
         crop_harvest_age_days: Array of harvest ages in days for each crop type.
@@ -476,12 +538,16 @@ def get_crop_factors_and_root_depths(
         elif land_use == FOREST:
             root_depth[i] = 2.0  # forest root depth is set to 2m
             # crop sub stage remains -1
-            crop_factor[i] = crop_factor_forest_map[i]
+            crop_factor[i] = get_crop_factor_from_lai(
+                np.float32(0.2), np.float32(1.2), leaf_area_index_forest[i]
+            )
 
         elif land_use == GRASSLAND_LIKE:
             root_depth[i] = 0.1  # grassland root depth is set to 0.1m
             # crop sub stage remains -1
-            crop_factor[i] = 1.0
+            crop_factor[i] = get_crop_factor_from_lai(
+                np.float32(0.2), np.float32(1.2), leaf_area_index_grassland_like[i]
+            )
 
     return crop_factor, root_depth, crop_sub_stage
 

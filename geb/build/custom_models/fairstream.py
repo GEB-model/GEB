@@ -1020,7 +1020,9 @@ class fairSTREAMModel(GEBModel):
         farm_size_m2 = farm_size_n_cells * mean_cell_size
         return farm_size_m2
 
-    @build_method(depends_on=["setup_create_farms", "setup_regions_and_land_use"])
+    @build_method(
+        depends_on=["setup_create_farms", "setup_regions_and_land_use"], required=True
+    )
     def setup_farmer_crop_calendar(
         self,
         seasons: Mapping[str, int],
@@ -1512,7 +1514,7 @@ class fairSTREAMModel(GEBModel):
             name="agents/farmers/crop_calendar_rotation_years",
         )
 
-    @build_method(depends_on="setup_farmer_crop_calendar")
+    @build_method(depends_on="setup_farmer_crop_calendar", required=True)
     def adjust_crop_calendar(self) -> None:
         """Adjust the crop calendar by unifying certain crop variants.
 

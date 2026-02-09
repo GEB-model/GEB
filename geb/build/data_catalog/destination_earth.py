@@ -12,7 +12,7 @@ import aiohttp
 import numpy as np
 import xarray as xr
 
-from geb.workflows.raster import convert_nodata, interpolate_na_along_time_dim
+from geb.workflows.raster import convert_nodata, interpolate_na_along_dim
 
 from .base import Adapter
 
@@ -210,6 +210,6 @@ class DestinationEarth(Adapter):
         da = da.chunk({"x": -1, "y": -1, "time": 24})
 
         da: xr.DataArray = da.rio.write_crs(4326)
-        da: xr.DataArray = interpolate_na_along_time_dim(da)
+        da: xr.DataArray = interpolate_na_along_dim(da)
 
         return da

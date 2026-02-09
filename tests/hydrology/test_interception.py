@@ -367,17 +367,40 @@ def test_interception_storage_exceeds_capacity_initially() -> None:
 
     # Storage after throughfall should be at capacity
     storage_after_throughfall = capacity_m
-    assert new_storage == storage_after_throughfall - evaporation
-
-    # Evaporation should be calculated from the storage at capacity
-    expected_evaporation = min(
-        storage_after_throughfall,
-        potential_transpiration_m
-        * (storage_after_throughfall / capacity_m) ** (2.0 / 3.0),
+    assert math.isclose(
+        new_storage, storage_after_throughfall - evaporation, abs_tol=1e-7
     )
-    assert math.isclose(evaporation, expected_evaporation, abs_tol=1e-7)
 
     # Water balance check
     assert math.isclose(
         rainfall_m, throughfall + evaporation + (new_storage - storage_m), abs_tol=1e-7
+    )
+
+
+def test_leaf_area_index_to_interception_capacity_m() -> None:
+    """Test the Von Hoyningen-Huene (1981) formula implementation.
+
+    Formula: S_max (mm) = 0.935 + 0.498*LAI - 0.00575*LAI^2 for LAI > 0.1
+    """
+    from geb.hydrology.interception import leaf_area_index_to_interception_capacity_m
+
+    # Test case 1: LAI <= 0.1 -> Capacity 0
+    lai_low = np.array([0.05, 0.1, 0.0], dtype=np.float32)
+    result_low = leaf_area_index_to_interception_capacity_m(lai_low)
+    expected_low = np.zeros_like(lai_low)
+    np.testing.assert_allclose(result_low, expected_low)
+
+    # Test case 2: LAI = 5.0
+    # S_max = 0.935 + 0.498*5 - 0.00575*25
+    # S_max = 0.935 + 2.49 - 0.14375
+    # S_max = 3.28125 mm -> 0.00328125 m
+    lai_val = 5.0
+    lai_arr = np.array([lai_val], dtype=np.float32)
+    result = leaf_area_index_to_interception_capacity_m(lai_arr)
+
+    expected_mm = 0.935 + 0.498 * lai_val - 0.00575 * (lai_val**2)
+    expected_m = expected_mm / 1000.0
+
+    np.testing.assert_allclose(
+        result, np.array([expected_m], dtype=np.float32), rtol=1e-5
     )

@@ -272,7 +272,8 @@ def calculate_transpiration(
     land_use_type: np.int32,
     root_depth_m: np.float32,  # [m]
     crop_map: np.int32,
-    natural_crop_groups: np.float32,
+    crop_group_forest: np.float32,
+    crop_group_grassland_like: np.float32,
     potential_transpiration_m: np.float32,  # [m]
     reference_evapotranspiration_grass_m_hour: np.float32,  # [m]
     crop_group_number_per_group: npt.NDArray[np.float32],
@@ -291,7 +292,8 @@ def calculate_transpiration(
         land_use_type: Land use type of the hydrological response unit.
         root_depth_m: The root depth [m].
         crop_map: Crop map indicating the crop type for the hydrological response unit. -1 indicates no crop.
-        natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
+        crop_group_forest: Crop group numbers for forest (see WOFOST 6.0).
+        crop_group_grassland_like: Crop group numbers for grassland-like areas (see WOFOST 6.0).
         potential_transpiration_m: Potential transpiration [m].
         reference_evapotranspiration_grass_m_hour: Reference evapotranspiration for grass [m/hour]. This is an hourly value that will be converted to a daily value for the calculation.
         crop_group_number_per_group: Crop group numbers for each crop type.
@@ -317,8 +319,10 @@ def calculate_transpiration(
 
     if not soil_is_frozen:
         # get group group numbers for natural areas
-        if land_use_type == FOREST or land_use_type == GRASSLAND_LIKE:
-            crop_group_number: np.float32 = natural_crop_groups
+        if land_use_type == FOREST:
+            crop_group_number: np.float32 = crop_group_forest
+        elif land_use_type == GRASSLAND_LIKE:
+            crop_group_number: np.float32 = crop_group_grassland_like
         else:  #
             crop_group_number: np.float32 = crop_group_number_per_group[crop_map]
 
