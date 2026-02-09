@@ -1,4 +1,6 @@
 # dev
+- Add units to all data from `setup_hydography`
+- Compute hillslope length based on drainage density
 
 # v1.0.0b10
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
