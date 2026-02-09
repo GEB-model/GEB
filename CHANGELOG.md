@@ -36,6 +36,7 @@
 - Assign damages categories of the Global Exposure Model to the building geodataframe.
 - Calculate building damages both for structure and content using separate vulnerability curves for structure and content. 
 - Check which MeritHydro files are present on the shared IVM datadrive. Ignore tiles that are not present in build as these are in the ocean.
+- Adjust wind speed computation to use FAO56 specifications.
 - Added a gadm_converter dictionary mapping incorrect GADM names to corrected versions in the global exposure model data adapter.
 - Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
