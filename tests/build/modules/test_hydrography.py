@@ -30,7 +30,7 @@ def test_calculate_stream_length_high_res_diagonal() -> None:
         np.array([[2, 0], [0, 0]], dtype=np.uint8), coords=ups.coords, dims=ups.dims
     )
 
-    length = calculate_stream_length(ldd, ups, threshold=1_000_000)
+    length = calculate_stream_length(ldd, ups, threshold_m2=1_000_000)
 
     # Check shape
     assert length.shape == ups.shape
@@ -62,7 +62,7 @@ def test_calculate_stream_length_high_res_cardinal() -> None:
         np.array([[1, 4], [0, 0]], dtype=np.uint8), coords=ups.coords, dims=ups.dims
     )
 
-    length = calculate_stream_length(ldd, ups, threshold=1_000_000)
+    length = calculate_stream_length(ldd, ups, threshold_m2=1_000_000)
 
     # Horizontal
     val_h = length.isel(y=0, x=0).item()

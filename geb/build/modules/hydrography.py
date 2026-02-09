@@ -49,22 +49,22 @@ D8_NODATA = 247
 
 
 def calculate_stream_length(
-    original_d8_ldd: xr.DataArray,
+    d8_ldd: xr.DataArray,
     upstream_area_m2: xr.DataArray,
-    threshold: float = 1_000_000,
+    threshold_m2: float = 1_000_000,
 ) -> xr.DataArray:
-    """Calculate the stream length for the high resolution grid.
+    """Calculate the stream length for a grid.
 
     Args:
-        original_d8_ldd: The high resolution flow direction raster (D8).
+        d8_ldd: The high resolution flow direction raster (D8).
         upstream_area_m2: The high resolution upstream area raster (m2).
-        threshold: The threshold for defining a stream based on upstream area (m2).
+        threshold_m2: The threshold for defining a stream based on upstream area (m2).
 
     Returns:
         A DataArray containing the stream length for the high resolution grid (meters).
     """
     is_stream: xr.DataArray = (
-        upstream_area_m2 > threshold
+        upstream_area_m2 > threshold_m2
     )  # threshold for streams is 1 km^2 upstream area
 
     cell_width_m = calculate_width_m(
@@ -85,26 +85,26 @@ def calculate_stream_length(
     )
 
     # pit -> no channel, so set stream length to 0
-    stream_length = xr.where(original_d8_ldd != D8_PIT, stream_length, 0)
+    stream_length = xr.where(d8_ldd != D8_PIT, stream_length, 0)
     # vertical -> set stream length to cell height
     stream_length = xr.where(
-        ~((original_d8_ldd == D8_NORTH) | (original_d8_ldd == D8_SOUTH)),
+        ~((d8_ldd == D8_NORTH) | (d8_ldd == D8_SOUTH)),
         stream_length,
         cell_height_m,
     )
     # horizontal -> set stream length to cell width
     stream_length = xr.where(
-        ~((original_d8_ldd == D8_WEST) | (original_d8_ldd == D8_EAST)),
+        ~((d8_ldd == D8_WEST) | (d8_ldd == D8_EAST)),
         stream_length,
         cell_width_m,
     )
     # diagonal -> set stream length to cell diagonal
     stream_length = xr.where(
         ~(
-            (original_d8_ldd == D8_NORTHEAST)
-            | (original_d8_ldd == D8_SOUTHEAST)
-            | (original_d8_ldd == D8_SOUTHWEST)
-            | (original_d8_ldd == D8_NORTHWEST)
+            (d8_ldd == D8_NORTHEAST)
+            | (d8_ldd == D8_SOUTHEAST)
+            | (d8_ldd == D8_SOUTHWEST)
+            | (d8_ldd == D8_NORTHWEST)
         ),
         stream_length,
         np.sqrt(cell_width_m**2 + cell_height_m**2),
@@ -613,7 +613,7 @@ class Hydrography(BuildModelBase):
         )
 
         streams_length_high_res = calculate_stream_length(
-            original_d8_ldd, upstream_area_high_res, threshold=1_000_000
+            original_d8_ldd, upstream_area_high_res, threshold_m2=1_000_000
         )
 
         streams_length_low_res = streams_length_high_res.coarsen(
