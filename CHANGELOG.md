@@ -1,5 +1,5 @@
 # dev
-- Add build method so set up reforestation potential (and data catalog entry)
+- Add build method to set up reforestation potential (and data catalog entry)
 
 # v1.0.0b10
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
