@@ -398,7 +398,11 @@ def get_farm_distribution(
 
             # when there are only some farms at the top of the farm size distribution, the growth factor can become very large and the estimate can become very small.
             # is can lead to NaNs in the estimate. In this case we can start from the top of the farm size distribution.
-            if np.isnan(estimate).any() or not start_from_bottom:
+            if (
+                np.isnan(estimate).any()
+                or not start_from_bottom
+                or np.isinf(growth_factor)
+            ):
                 if (
                     start_from_bottom
                 ):  # reset growth factor, but only first time this code is run
@@ -406,7 +410,7 @@ def get_farm_distribution(
                     growth_factor = 1
                 if logger is not None:
                     logger.warning(
-                        f"estimate contains NaNs; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}, start from the top"
+                        f"estimate contains NaNs or infinite growth_factor; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}, start from the top"
                     )
                 estimate = np.zeros(n_farm_sizes, dtype=np.float64)
                 estimate[-1] = 1
@@ -414,8 +418,14 @@ def get_farm_distribution(
                     estimate[i] = estimate[i + 1] * growth_factor
                 estimate /= estimate.sum() / n
 
-            assert (estimate >= 0).all(), (
-                f"Some numbers are negative; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}"
+                # Simple fallback: if still problematic, use uniform distribution
+                if np.isnan(estimate).any() or np.isinf(estimate).any():
+                    if logger is not None:
+                        logger.warning("Using uniform distribution fallback")
+                    estimate = np.full(n_farm_sizes, n / n_farm_sizes, dtype=np.float64)
+
+            assert (estimate >= 0).all() and np.isfinite(estimate).all(), (
+                f"Some numbers are negative, NaN, or infinite; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}"
             )
 
             estimated_area: float = (estimate * farm_sizes).sum()
@@ -431,9 +441,42 @@ def get_farm_distribution(
                 break
             growth_factor *= difference
 
-        n_farms, farm_sizes = fit_n_farms_to_sizes(
-            n, estimate, farm_sizes, mean, offset
-        )
+            # Prevent infinite growth factors
+            if not np.isfinite(growth_factor):
+                if logger is not None:
+                    logger.warning(
+                        f"Growth factor became infinite, using uniform distribution"
+                    )
+                estimate = np.full(n_farm_sizes, n / n_farm_sizes, dtype=np.float64)
+                break
+
+        try:
+            n_farms, farm_sizes = fit_n_farms_to_sizes(
+                n, estimate, farm_sizes, mean, offset
+            )
+        except ValueError:
+            # If fitting fails (e.g., with uniform distribution), use simple rounding
+            if logger is not None:
+                logger.warning(
+                    "fit_n_farms_to_sizes failed, using simple rounding approach"
+                )
+            n_farms = np.round(estimate).astype(np.int32)
+            # Adjust to ensure exact number of farms
+            diff = n - n_farms.sum()
+            if diff != 0:
+                if diff > 0:
+                    # Add missing farms to largest size classes
+                    idx = np.argmax(farm_sizes)
+                    n_farms[idx] += diff
+                else:
+                    # Remove excess farms from smallest size classes with farms
+                    for i in range(len(n_farms)):
+                        if n_farms[i] > 0:
+                            reduction = min(-diff, n_farms[i])
+                            n_farms[i] -= reduction
+                            diff += reduction
+                            if diff == 0:
+                                break
         assert n == n_farms.sum()
         estimated_area_int: int = (n_farms * farm_sizes).sum()
         assert estimated_area_int == target_area

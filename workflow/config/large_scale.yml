@@ -10,7 +10,7 @@ LARGE_SCALE_DIR: "/scistor/ivm/tbr910/GEB/models/large_scale"
 CLUSTER_PREFIX: "Europe"
 
 # Evaluation methods to run for each cluster
-EVALUATION_METHODS: "plot_discharge,evaluate_discharge"
+EVALUATION_METHODS: "hydrology.plot_discharge,hydrology.evaluate_discharge"
 
 # Automatic Memory Allocation:
 # Memory and partition are now automatically determined based on basin size in model.yml

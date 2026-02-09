@@ -18,7 +18,7 @@ from pathlib import Path
 # CLUSTER_PREFIX should match the value in config/large_scale.yml
 CLUSTER_PREFIX = "Europe"
 LARGE_SCALE_DIR = "/scistor/ivm/tbr910/GEB/models/large_scale"
-EVALUATION_METHODS = "plot_discharge,evaluate_discharge"
+EVALUATION_METHODS = "hydrology.plot_discharge,hydrology.evaluate_discharge"
 
 # Cache for basin areas to avoid repeated file reads
 _basin_area_cache = {}
@@ -58,7 +58,7 @@ def get_resources(cluster_name, phase="build"):
     if area_km2 < 200000:  # Smaller basins
         memory_mb = 60000   # 60GB
     else:  # Larger basins
-        memory_mb = 300000  # 300GB
+        memory_mb = 200000  # 200GB
     
     # Get cluster index for balanced distribution
     try:
@@ -89,8 +89,8 @@ def get_resources(cluster_name, phase="build"):
     if partition_index == 0:
         partition = "defq"
         partition_arg = ""  # defq uses default queue (no partition specified)
-        # For defq, always use 300GB (since defq handles any memory size)
-        memory_mb = 300000  # This overrides the basin-size based allocation!
+        # For defq, always use 200GB (since defq handles any memory size)
+        memory_mb = 200000  # This overrides the basin-size based allocation!
     elif partition_index == 1:
         partition = "ivm"
         partition_arg = "--partition=ivm"
@@ -98,7 +98,7 @@ def get_resources(cluster_name, phase="build"):
         partition = "ivm-fat"
         partition_arg = "--partition=ivm-fat"
         # Ensure ivm-fat gets enough memory
-        memory_mb = max(memory_mb, 300000)
+        memory_mb = max(memory_mb, 200000)
     
     return memory_mb, partition, partition_arg
 
@@ -125,6 +125,31 @@ if 'CLUSTER_NAMES' not in globals():
 
 # Cluster names cached for efficient access
 
+# ============================================================================
+# PARALLEL EXECUTION CONFIGURATION
+# ============================================================================
+
+# Enable parallel execution mode via config (--config parallel_batch_size=N)
+PARALLEL_BATCH_SIZE = config.get("parallel_batch_size", 0)
+PARALLEL_MODE = PARALLEL_BATCH_SIZE > 0
+
+if PARALLEL_MODE:
+    print(f"🚀 PARALLEL MODE ENABLED: Batching {PARALLEL_BATCH_SIZE} clusters per SLURM job")
+    print(f"   Jobs will run clusters in parallel using & and wait pattern")
+else:
+    print(f"📋 STANDARD MODE: Each cluster gets separate SLURM jobs")
+
+def get_parallel_batches():
+    """Split clusters into batches for parallel execution."""
+    if not PARALLEL_MODE:
+        return []
+    
+    batches = []
+    for i in range(0, len(CLUSTER_NAMES), PARALLEL_BATCH_SIZE):
+        batch = CLUSTER_NAMES[i:i+PARALLEL_BATCH_SIZE]
+        batches.append((i // PARALLEL_BATCH_SIZE, batch))
+    return batches
+
 # Rule to build a cluster
 rule build_cluster:
     output:
@@ -140,7 +165,6 @@ rule build_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
-    group: lambda wildcards: get_resources(wildcards.cluster)[1] + ("_empty" if get_resources(wildcards.cluster)[2] == "" else "_part")  # Use partition + partition_arg as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -166,7 +190,6 @@ rule spinup_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
-    group: lambda wildcards: get_resources(wildcards.cluster)[1] + ("_empty" if get_resources(wildcards.cluster)[2] == "" else "_part")  # Use partition + partition_arg as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -192,7 +215,6 @@ rule run_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 56000)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster, 56000)[2],
         slurm_account="ivm"
-    group: lambda wildcards: get_resources(wildcards.cluster)[1] + ("_empty" if get_resources(wildcards.cluster)[2] == "" else "_part")  # Use partition + partition_arg as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -222,9 +244,8 @@ rule evaluate_cluster:
         runtime=11520,  # 8 days
         cpus=2,
         slurm_partition="ivm",
-        partition_arg="--partition=ivm",  # Need to be explicit for consistent grouping
+        partition_arg="--partition=ivm",
         slurm_account="ivm"
-    group: "ivm_part"  # Consistent with other rules using ivm partition
     shell:
         """
         mkdir -p $(dirname {log})
@@ -258,3 +279,295 @@ rule run_all:
 rule evaluate_all:
     input:
         expand(LARGE_SCALE_DIR + "/{cluster}/base/evaluate.done", cluster=CLUSTER_NAMES)
+
+# ============================================================================
+# PARALLEL BATCH RULES (enabled with --config parallel_batch_size=N)
+# Uses & and wait to run multiple clusters in parallel within one SLURM job
+# ============================================================================
+
+if PARALLEL_MODE:
+    # Build phase - parallel batches
+    rule build_parallel_batch:
+        output:
+            [f"{LARGE_SCALE_DIR}/{c}/base/build.done" for c in get_parallel_batches()[0][1]] if get_parallel_batches() else []
+        params:
+            clusters=lambda wildcards, input, output: [p.split('/')[6] for p in output],
+            batch_id=0
+        threads: 2 * PARALLEL_BATCH_SIZE
+        resources:
+            mem_mb=60000 * PARALLEL_BATCH_SIZE,
+            runtime=11520,
+            slurm_partition="defq",
+            partition_arg="",
+            slurm_account="ivm"
+        log:
+            LARGE_SCALE_DIR + "/.parallel/build_batch_0.log"
+        shell:
+            """
+            mkdir -p $(dirname {log})
+            echo "🚀 Parallel build: {params.clusters}" | tee {log}
+            
+            pids=()
+            for cluster in {params.clusters}; do
+                cluster_dir="{LARGE_SCALE_DIR}/$cluster/base"
+                mkdir -p "$cluster_dir/logs"
+                (
+                    cd "$cluster_dir"
+                    geb build --continue &> logs/build.log
+                    touch build.done
+                    echo "✓ $cluster" | tee -a {log}
+                ) &
+                pids+=($!)
+            done
+            
+            failed=0
+            for pid in "${{pids[@]}}"; do
+                wait $pid || failed=$((failed + 1))
+            done
+            
+            [ $failed -eq 0 ] || (echo "✗ $failed clusters failed" | tee -a {log} && exit 1)
+            echo "✓ All clusters completed" | tee -a {log}
+            """
+    
+    # Generate rules for each batch dynamically
+    for batch_id, clusters in get_parallel_batches():
+        if batch_id == 0:
+            continue  # Already defined above as template
+        
+        # This is a workaround - Snakemake doesn't easily support dynamic rule generation
+        # We'll use a single rule with wildcard batch_id instead
+        pass
+    
+    # Actually, let's use a cleaner approach with wildcards
+    rule build_batch_parallel:
+        output:
+            touch(LARGE_SCALE_DIR + "/.parallel/build_batch_{batch_id}.done")
+        params:
+            clusters=lambda wildcards: get_parallel_batches()[int(wildcards.batch_id)][1],
+            outputs=lambda wildcards: [f"{LARGE_SCALE_DIR}/{c}/base/build.done" 
+                                       for c in get_parallel_batches()[int(wildcards.batch_id)][1]]
+        threads: 2 * PARALLEL_BATCH_SIZE
+        resources:
+            mem_mb=60000 * PARALLEL_BATCH_SIZE,
+            runtime=11520,
+            slurm_partition="defq",
+            partition_arg="",
+            slurm_account="ivm"
+        log:
+            LARGE_SCALE_DIR + "/.parallel/logs/build_batch_{batch_id}.log"
+        shell:
+            """
+            mkdir -p $(dirname {log})
+            echo "🚀 Parallel build batch {wildcards.batch_id}: {params.clusters}" | tee {log}
+            
+            pids=()
+            for cluster in {params.clusters}; do
+                cluster_dir="{LARGE_SCALE_DIR}/$cluster/base"
+                mkdir -p "$cluster_dir/logs"
+                echo "  Starting $cluster..." | tee -a {log}
+                (
+                    cd "$cluster_dir"
+                    geb build --continue &> logs/build.log
+                    if [ $? -eq 0 ]; then
+                        touch build.done
+                        echo "  ✓ $cluster completed" | tee -a {log}
+                    else
+                        echo "  ✗ $cluster FAILED" | tee -a {log}
+                        exit 1
+                    fi
+                ) &
+                pids+=($!)
+            done
+            
+            failed=0
+            for pid in "${{pids[@]}}"; do
+                wait $pid || failed=$((failed + 1))
+            done
+            
+            if [ $failed -eq 0 ]; then
+                echo "✓ Batch {wildcards.batch_id} completed successfully" | tee -a {log}
+            else
+                echo "✗ Batch {wildcards.batch_id}: $failed clusters failed" | tee -a {log}
+                exit 1
+            fi
+            """
+    
+    # Spinup phase - parallel batches
+    rule spinup_batch_parallel:
+        input:
+            LARGE_SCALE_DIR + "/.parallel/build_batch_{batch_id}.done"
+        output:
+            touch(LARGE_SCALE_DIR + "/.parallel/spinup_batch_{batch_id}.done")
+        params:
+            clusters=lambda wildcards: get_parallel_batches()[int(wildcards.batch_id)][1]
+        threads: 4 * PARALLEL_BATCH_SIZE
+        resources:
+            mem_mb=60000 * PARALLEL_BATCH_SIZE,
+            runtime=11520,
+            slurm_partition="defq",
+            partition_arg="",
+            slurm_account="ivm"
+        log:
+            LARGE_SCALE_DIR + "/.parallel/logs/spinup_batch_{batch_id}.log"
+        shell:
+            """
+            mkdir -p $(dirname {log})
+            echo "🚀 Parallel spinup batch {wildcards.batch_id}: {params.clusters}" | tee {log}
+            
+            pids=()
+            for cluster in {params.clusters}; do
+                cluster_dir="{LARGE_SCALE_DIR}/$cluster/base"
+                echo "  Starting $cluster..." | tee -a {log}
+                (
+                    cd "$cluster_dir"
+                    geb spinup &> logs/spinup.log
+                    if [ $? -eq 0 ]; then
+                        touch spinup.done
+                        echo "  ✓ $cluster completed" | tee -a {log}
+                    else
+                        echo "  ✗ $cluster FAILED" | tee -a {log}
+                        exit 1
+                    fi
+                ) &
+                pids+=($!)
+            done
+            
+            failed=0
+            for pid in "${{pids[@]}}"; do
+                wait $pid || failed=$((failed + 1))
+            done
+            
+            [ $failed -eq 0 ] || (echo "✗ $failed clusters failed" | tee -a {log} && exit 1)
+            echo "✓ Batch {wildcards.batch_id} completed" | tee -a {log}
+            """
+    
+    # Run phase - parallel batches
+    rule run_batch_parallel:
+        input:
+            LARGE_SCALE_DIR + "/.parallel/spinup_batch_{batch_id}.done"
+        output:
+            touch(LARGE_SCALE_DIR + "/.parallel/run_batch_{batch_id}.done")
+        params:
+            clusters=lambda wildcards: get_parallel_batches()[int(wildcards.batch_id)][1]
+        threads: 6 * PARALLEL_BATCH_SIZE
+        resources:
+            mem_mb=60000 * PARALLEL_BATCH_SIZE,
+            runtime=11520,
+            slurm_partition="defq",
+            partition_arg="",
+            slurm_account="ivm"
+        log:
+            LARGE_SCALE_DIR + "/.parallel/logs/run_batch_{batch_id}.log"
+        shell:
+            """
+            mkdir -p $(dirname {log})
+            echo "🚀 Parallel run batch {wildcards.batch_id}: {params.clusters}" | tee {log}
+            
+            pids=()
+            for cluster in {params.clusters}; do
+                cluster_dir="{LARGE_SCALE_DIR}/$cluster/base"
+                echo "  Starting $cluster..." | tee -a {log}
+                (
+                    cd "$cluster_dir"
+                    export TMPDIR=/scratch/$SLURM_JOB_ID/$cluster
+                    mkdir -p $TMPDIR
+                    geb run &> logs/run.log
+                    rm -rf $TMPDIR
+                    if [ $? -eq 0 ]; then
+                        touch run.done
+                        echo "  ✓ $cluster completed" | tee -a {log}
+                    else
+                        echo "  ✗ $cluster FAILED" | tee -a {log}
+                        exit 1
+                    fi
+                ) &
+                pids+=($!)
+            done
+            
+            failed=0
+            for pid in "${{pids[@]}}"; do
+                wait $pid || failed=$((failed + 1))
+            done
+            
+            [ $failed -eq 0 ] || (echo "✗ $failed clusters failed" | tee -a {log} && exit 1)
+            echo "✓ Batch {wildcards.batch_id} completed" | tee -a {log}
+            """
+    
+    # Evaluate phase - parallel batches
+    rule evaluate_batch_parallel:
+        input:
+            LARGE_SCALE_DIR + "/.parallel/run_batch_{batch_id}.done"
+        output:
+            touch(LARGE_SCALE_DIR + "/.parallel/evaluate_batch_{batch_id}.done")
+        params:
+            clusters=lambda wildcards: get_parallel_batches()[int(wildcards.batch_id)][1]
+        threads: 2 * PARALLEL_BATCH_SIZE
+        resources:
+            mem_mb=16000 * PARALLEL_BATCH_SIZE,
+            runtime=11520,
+            slurm_partition="ivm",
+            partition_arg="--partition=ivm",
+            slurm_account="ivm"
+        log:
+            LARGE_SCALE_DIR + "/.parallel/logs/evaluate_batch_{batch_id}.log"
+        shell:
+            """
+            mkdir -p $(dirname {log})
+            echo "🚀 Parallel evaluate batch {wildcards.batch_id}: {params.clusters}" | tee {log}
+            
+            pids=()
+            for cluster in {params.clusters}; do
+                cluster_dir="{LARGE_SCALE_DIR}/$cluster/base"
+                echo "  Starting $cluster..." | tee -a {log}
+                (
+                    cd "$cluster_dir"
+                    geb evaluate --methods {EVALUATION_METHODS} &> logs/evaluate.log
+                    if [ $? -eq 0 ]; then
+                        touch evaluate.done
+                        echo "  ✓ $cluster completed" | tee -a {log}
+                    else
+                        echo "  ✗ $cluster FAILED" | tee -a {log}
+                        exit 1
+                    fi
+                ) &
+                pids+=($!)
+            done
+            
+            failed=0
+            for pid in "${{pids[@]}}"; do
+                wait $pid || failed=$((failed + 1))
+            done
+            
+            [ $failed -eq 0 ] || (echo "✗ $failed clusters failed" | tee -a {log} && exit 1)
+            echo "✓ Batch {wildcards.batch_id} completed" | tee -a {log}
+            """
+    
+    # Override convenience rules to use parallel batches
+    rule build_all_parallel:
+        input:
+            [f"{LARGE_SCALE_DIR}/.parallel/build_batch_{i}.done" 
+             for i, _ in get_parallel_batches()]
+    
+    rule spinup_all_parallel:
+        input:
+            [f"{LARGE_SCALE_DIR}/.parallel/spinup_batch_{i}.done" 
+             for i, _ in get_parallel_batches()]
+    
+    rule run_all_parallel:
+        input:
+            [f"{LARGE_SCALE_DIR}/.parallel/run_batch_{i}.done" 
+             for i, _ in get_parallel_batches()]
+    
+    rule evaluate_all_parallel:
+        input:
+            [f"{LARGE_SCALE_DIR}/.parallel/evaluate_batch_{i}.done" 
+             for i, _ in get_parallel_batches()]
+    
+    rule all_parallel:
+        input:
+            [f"{LARGE_SCALE_DIR}/.parallel/evaluate_batch_{i}.done" 
+             for i, _ in get_parallel_batches()]
+        shell:
+            f"""
+            echo "✓ All {len(CLUSTER_NAMES)} clusters completed in parallel mode!"
+            """
