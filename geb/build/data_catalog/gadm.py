@@ -134,4 +134,6 @@ class GADM28(Adapter):
         """
         gdf = Adapter.read(self, **kwargs)
         assert isinstance(gdf, gpd.GeoDataFrame)
+        # remove waterbodies from data
+        gdf = gdf[gdf["ENGTYPE_1"] != "Water body"]
         return gdf
