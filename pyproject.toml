@@ -15,8 +15,13 @@ authors = [
     {name = "Veerle Bril", email = "v.c.bril@vu.nl"},
     {name = "Lars Tierolf", email = "lars.tierolf@vu.nl"},
     {name = "Tarun Sadana", email = "t.sadana@vu.nl"},
+    {name = "Elisa Stefaniak", email="stefaniak@iiasa.ac.at"},
     {name = "Tim Busker", email = "tim.busker@vu.nl"},
     {name = "Rafaella Oliveira", email = "r.gouveialoureirooliveira@vu.nl"},
+    {name = "Carolina Carral", email = "c.fermancarral@vu.nl"},
+    {name = "Roy Pontman", email = "r.k.pontman@vu.nl"},
+    {name = "Lisanne van Amelsvoort", email = "l.m.c.van.amelsvoort@vu.nl"},
+    {name = "Joshua Kiesel", email = "j.kiesel@vu.nl"},
 ]
 dependencies = [
     "cartopy==0.24.1", # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
