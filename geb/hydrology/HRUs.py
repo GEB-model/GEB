@@ -228,7 +228,6 @@ class BaseVariables:
 class GridVariables(Bucket):
     """This class contains functions to handle variables on the grid scale."""
 
-    interception_capacity_forest: TwoDArrayFloat32
     heads: TwoDArrayFloat64
     capillar: ArrayFloat32
     layer_boundary_elevation: TwoDArrayFloat32
@@ -604,7 +603,12 @@ class HRUVariables(Bucket):
     saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
     organic_matter_percentage: TwoDArrayFloat32
     bulk_density: TwoDArrayFloat32
-    natural_crop_groups: ArrayFloat32
+    crop_group_number_forest: ArrayFloat32
+    crop_group_number_grassland_like: ArrayFloat32
+    leaf_area_index_forest: TwoDArrayFloat32
+    leaf_area_index_grassland_like: TwoDArrayFloat32
+    interception_capacity_forest_m: TwoDArrayFloat32
+    interception_capacity_grassland_like_m: TwoDArrayFloat32
     transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
     potential_transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
     cell_length: ArrayFloat32
@@ -694,8 +698,10 @@ class HRUs(BaseVariables):
         """
         self.var: HRUVariables = self.model.store.create_bucket(
             "hydrology.HRU.var",
-            validator=lambda x: isinstance(x, np.ndarray)
-            and (not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32),
+            validator=lambda x: (
+                isinstance(x, np.ndarray)
+                and (not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32)
+            ),
         )
 
         (

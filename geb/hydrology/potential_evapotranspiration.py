@@ -407,10 +407,30 @@ def get_potential_evapotranspiration(
     ) * CO2_induced_crop_factor_adustment
 
 
+@njit(cache=True, inline="always")
+def get_crop_factor_from_lai(
+    min_kc: np.float32,
+    max_kc: np.float32,
+    lai: np.float32,
+) -> np.float32:
+    """Calculate crop factor from leaf area index using exponential formula.
+
+    Args:
+        min_kc: Minimum crop factor.
+        max_kc: Maximum crop factor.
+        lai: Leaf area index.
+
+    Returns:
+        Crop factor.
+    """
+    return min_kc + (max_kc - min_kc) * (1 - np.exp(-0.7 * lai))
+
+
 @njit(cache=True)
 def get_crop_factors_and_root_depths(
     land_use_map: npt.NDArray[np.int32],
-    crop_factor_forest_map: npt.NDArray[np.float32],
+    leaf_area_index_forest: npt.NDArray[np.float32],
+    leaf_area_index_grassland_like: npt.NDArray[np.float32],
     crop_map: npt.NDArray[np.int32],
     crop_age_days_map: npt.NDArray[np.int32],
     crop_harvest_age_days: npt.NDArray[np.int32],
@@ -427,9 +447,16 @@ def get_crop_factors_and_root_depths(
 ]:
     """Calculate crop factors and root depths based on land use and crop information.
 
+    Crop factor for forest is calculated based on leaf area index based on:
+
+        Allen, R.G., Pereira, L.S.
+        Estimating crop coefficients from fraction of ground cover and height. Irrig Sci 28, 17–34 (2009).
+        https://doi.org/10.1007/s00271-009-0182-z
+
     Args:
         land_use_map: Map of land use types.
-        crop_factor_forest_map: Map of crop factors for forest land use if forested.
+        leaf_area_index_forest: Leaf area index for forest land use type.
+        leaf_area_index_grassland_like: Leaf area index for grassland land use type.
         crop_map: Map of crop types, -1 for non-crop land use. Indices refer to crop arrays.
         crop_age_days_map: Map of crop ages in days, -1 for non-crop land use.
         crop_harvest_age_days: Array of harvest ages in days for each crop type.
@@ -506,12 +533,16 @@ def get_crop_factors_and_root_depths(
         elif land_use == FOREST:
             root_depth[i] = 2.0  # forest root depth is set to 2m
             # crop sub stage remains -1
-            crop_factor[i] = crop_factor_forest_map[i]
+            crop_factor[i] = get_crop_factor_from_lai(
+                np.float32(0.2), np.float32(1.2), leaf_area_index_forest[i]
+            )
 
         elif land_use == GRASSLAND_LIKE:
             root_depth[i] = 0.1  # grassland root depth is set to 0.1m
             # crop sub stage remains -1
-            crop_factor[i] = 1.0
+            crop_factor[i] = get_crop_factor_from_lai(
+                np.float32(0.2), np.float32(1.2), leaf_area_index_grassland_like[i]
+            )
 
     return crop_factor, root_depth, crop_sub_stage
 
