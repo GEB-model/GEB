@@ -10,6 +10,7 @@ from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
@@ -93,6 +94,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://soilgrids.org",
             "version": "2020",
             "paper_doi": "10.5194/soil-2020-65",
+        },
+    },
+    "forest_restoration_potential": {
+        "adapter": ForestRestorationPotential(
+            folder="forest_restoration_potential",
+            local_version=1,
+            filename="restoration_potential.tif",
+            cache="global",
+        ),
+        "url": "https://www.research-collection.ethz.ch/bitstreams/77c1863d-b9b0-417e-8e49-d13079fb7825/download",
+        "source": {
+            "name": "Forest Restoration Potential",
+            "author": "Bastin, Jean-François et al.",
+            "url": "https://www.research-collection.ethz.ch/entities/researchdata/7234f0a1-e37d-4362-99e9-d0e6e75793dc",
+            "license": "In Copyright - Non-Commercial Use Permitted",
+            "doi": "10.3929/ethz-b-000350258",
+            "year": "2019",
         },
     },
     "lisflood_crop_group_number_forest": {

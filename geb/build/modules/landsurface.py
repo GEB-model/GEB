@@ -659,3 +659,38 @@ class LandSurface(BuildModelBase):
             self.set_other(
                 leaf_area_index, name=f"vegetation/leaf_area_index_{vegetation_type}"
             )
+
+    @build_method(depends_on=[], required=False)
+    def setup_forest_restoration_potential(self) -> None:
+        """Sets up the forest restoration potential data for the model.
+
+        Source data is in percentage, which is converted to ratio.
+        """
+        forest_restoration_potential_percentage = self.data_catalog.fetch(
+            "forest_restoration_potential"
+        ).read()
+        assert isinstance(forest_restoration_potential_percentage, xr.DataArray)
+        forest_restoration_potential_percentage = (
+            forest_restoration_potential_percentage.isel(
+                get_window(
+                    forest_restoration_potential_percentage.x,
+                    forest_restoration_potential_percentage.y,
+                    self.bounds,
+                    buffer=2,
+                ),
+            ).compute()
+        )
+
+        forest_restoration_potential_percentage = interpolate_na_2d(
+            forest_restoration_potential_percentage
+        )
+        forest_restoration_potential_percentage = resample_like(
+            forest_restoration_potential_percentage, self.grid["mask"]
+        )
+        forest_restoration_potential_ratio = (
+            forest_restoration_potential_percentage / 100
+        )  # convert from percentage to ratio
+        self.set_grid(
+            forest_restoration_potential_ratio,
+            name="landsurface/forest_restoration_potential_ratio",
+        )
