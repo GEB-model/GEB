@@ -27,9 +27,80 @@ from geb.geb_types import (
     TwoDArrayInt64,
 )
 from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.workflows.raster import rasterize_like, snap_to_grid
+from geb.workflows.raster import (
+    calculate_height_m,
+    calculate_width_m,
+    rasterize_like,
+    snap_to_grid,
+)
 
 from .base import BuildModelBase
+
+
+def calculate_stream_length(
+    original_d8_ldd: xr.DataArray,
+    upstream_area_m2: xr.DataArray,
+    threshold: float = 1_000_000,
+) -> xr.DataArray:
+    """Calculate the stream length for the high resolution grid.
+
+    Args:
+        original_d8_ldd: The high resolution flow direction raster (D8).
+        upstream_area_m2: The high resolution upstream area raster (m2).
+        threshold: The threshold for defining a stream based on upstream area (m2).
+
+    Returns:
+        A DataArray containing the stream length for the high resolution grid (meters).
+    """
+    is_stream: xr.DataArray = (
+        upstream_area_m2 > threshold
+    )  # threshold for streams is 1 km^2 upstream area
+
+    cell_width_m = calculate_width_m(
+        is_stream.rio.transform(),
+        height=is_stream.shape[0],
+        width=is_stream.shape[1],
+    )
+    cell_height_m = calculate_height_m(
+        is_stream.rio.transform(),
+        height=is_stream.shape[0],
+        width=is_stream.shape[1],
+    )
+
+    stream_length = xr.DataArray(
+        np.full_like(is_stream, np.nan, dtype=np.float32),
+        coords=is_stream.coords,
+        dims=is_stream.dims,
+    )
+
+    # pit -> no channel, so set stream length to 0
+    stream_length = xr.where(original_d8_ldd == 0, stream_length, 0)
+    # vertical -> set stream length to cell height
+    stream_length = xr.where(
+        ~((original_d8_ldd == 64) | (original_d8_ldd == 4)),
+        stream_length,
+        cell_height_m,
+    )
+    # horizontal -> set stream length to cell width
+    stream_length = xr.where(
+        ~((original_d8_ldd == 16) | (original_d8_ldd == 1)),
+        stream_length,
+        cell_width_m,
+    )
+    # diagonal -> set stream length to cell diagonal
+    stream_length = xr.where(
+        ~(
+            (original_d8_ldd == 128)
+            | (original_d8_ldd == 2)
+            | (original_d8_ldd == 8)
+            | (original_d8_ldd == 32)
+        ),
+        stream_length,
+        np.sqrt(cell_width_m**2 + cell_height_m**2),
+    )
+    stream_length = xr.where(is_stream, stream_length, 0)
+
+    return stream_length
 
 
 def get_all_upstream_subbasin_ids(
@@ -354,7 +425,7 @@ class Hydrography(BuildModelBase):
             `set_grid()` method.
         """
         a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
-            "routing/upstream_area"
+            "routing/upstream_area_m2"
         ]
         a: xr.DataArray = xr.where(a < 1, a, 1, keep_attrs=True)
         b: xr.DataArray = self.grid["routing/outflow_elevation"] / 2000
@@ -504,7 +575,7 @@ class Hydrography(BuildModelBase):
             self.set_geom(custom_rivers_gdf, name="routing/custom_rivers")
 
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
-        original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
+        original_d8_ldd = self.other["drainage/original_d8_flow_directions"].compute()
         original_d8_ldd_data = original_d8_ldd.values
 
         flow_raster_original = pyflwdir.from_array(
@@ -527,8 +598,28 @@ class Hydrography(BuildModelBase):
         upstream_area_high_res_data[upstream_area_high_res_data == -9999.0] = np.nan
         upstream_area_high_res.data = upstream_area_high_res_data
         self.set_other(
-            upstream_area_high_res, name="drainage/original_d8_upstream_area"
+            upstream_area_high_res, name="drainage/original_d8_upstream_area_m2"
         )
+
+        streams_length_high_res = calculate_stream_length(
+            original_d8_ldd, upstream_area_high_res, threshold=1_000_000
+        )
+
+        streams_length_low_res = streams_length_high_res.coarsen(
+            x=self.ldd_scale_factor,  # ty:ignore[invalid-argument-type]
+            y=self.ldd_scale_factor,  # ty:ignore[invalid-argument-type]
+            boundary="exact",
+            coord_func="mean",
+        ).sum()  # ty:ignore[unresolved-attribute]
+        streams_length_low_res = snap_to_grid(streams_length_low_res, self.grid["mask"])
+
+        drainage_density = streams_length_low_res / self.grid["cell_area"]
+
+        hillslope_length = 1 / (2 * drainage_density)
+        hillslope_length = xr.where(
+            hillslope_length < 1000, hillslope_length, 1000
+        )  # cap hill slope length at 1000 m
+        self.set_grid(hillslope_length, name="drainage/hillslope_length_m")
 
         elevation_coarsened = original_d8_elevation.coarsen(
             x=self.ldd_scale_factor,
@@ -537,26 +628,16 @@ class Hydrography(BuildModelBase):
             coord_func="mean",
         )
 
-        # elevation (we only set this later, because it has to be done after setting the mask)
         elevation = elevation_coarsened.mean()
         elevation = snap_to_grid(elevation, self.grid["mask"])
+        self.set_grid(elevation, name="landsurface/elevation_m")
 
-        self.set_grid(elevation, name="landsurface/elevation")
-
-        elevation_std = elevation_coarsened.std()
-        elevation_std = snap_to_grid(elevation_std, self.grid["mask"])
-        self.set_grid(
-            elevation_std,
-            name="landsurface/elevation_standard_deviation",
-        )
-
-        # outflow elevation
-        outflow_elevation = elevation_coarsened.min()
-        outflow_elevation = snap_to_grid(outflow_elevation, self.grid["mask"])
-        self.set_grid(outflow_elevation, name="routing/outflow_elevation")
+        elevation_min = elevation_coarsened.min()
+        elevation_min = snap_to_grid(elevation_min, self.grid["mask"])
+        self.set_grid(elevation_min, name="landsurface/elevation_min_m")
 
         slope = self.full_like(
-            outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
         slope_data = pyflwdir.dem.slope(
             elevation.values,
@@ -567,7 +648,7 @@ class Hydrography(BuildModelBase):
         # set slope to zero on the mask boundary
         slope_data[np.isnan(slope_data) & (~self.grid["mask"].data)] = 0
         slope.data = slope_data
-        self.set_grid(slope, name="landsurface/slope")
+        self.set_grid(slope, name="landsurface/slope_m_per_m")
 
         flow_raster_idxs_ds = self.grid["flow_raster_idxs_ds"].compute()
         flow_raster = FlwdirRaster(
@@ -580,24 +661,24 @@ class Hydrography(BuildModelBase):
 
         # flow direction
         ldd: xr.DataArray = self.full_like(
-            outflow_elevation, fill_value=255, nodata=255, dtype=np.uint8
+            elevation_min, fill_value=255, nodata=255, dtype=np.uint8
         )
         ldd.data = flow_raster.to_array(ftype="ldd")
         self.set_grid(ldd, name="routing/ldd")
 
         # upstream area
         upstream_area: xr.DataArray = self.full_like(
-            outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
         upstream_area_data: npt.NDArray[np.float32] = flow_raster.upstream_area(
             unit="m2"
         ).astype(np.float32)
         upstream_area_data[upstream_area_data == -9999.0] = np.nan
         upstream_area.data = upstream_area_data
-        self.set_grid(upstream_area, name="routing/upstream_area")
+        self.set_grid(upstream_area, name="routing/upstream_area_m2")
 
         upstream_area_n_cells: xr.DataArray = self.full_like(
-            outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+            elevation_min, fill_value=-1, nodata=-1, dtype=np.int32
         )
         upstream_area_n_cells_data: npt.NDArray[np.int32] = flow_raster.upstream_area(
             unit="cell"
@@ -607,7 +688,7 @@ class Hydrography(BuildModelBase):
 
         # river length
         river_length: xr.DataArray = self.full_like(
-            outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
         river_length_data: npt.NDArray[np.float32] = (
             flow_raster_original.subgrid_rivlen(
@@ -616,11 +697,11 @@ class Hydrography(BuildModelBase):
         )
         river_length_data[river_length_data == -9999.0] = np.nan
         river_length.data = river_length_data
-        self.set_grid(river_length, name="routing/river_length")
+        self.set_grid(river_length, name="routing/river_length_m")
 
         # river slope
         river_slope: xr.DataArray = self.full_like(
-            outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
         river_slope_data: npt.NDArray[np.float32] = flow_raster_original.subgrid_rivslp(
             self.grid["idxs_outflow"].values, original_d8_elevation
@@ -629,7 +710,7 @@ class Hydrography(BuildModelBase):
         river_slope.data = river_slope_data
         self.set_grid(
             river_slope,
-            name="routing/river_slope",
+            name="routing/river_slope_m_per_m",
         )
 
         self.logger.info("Retrieving river data")
@@ -751,13 +832,13 @@ class Hydrography(BuildModelBase):
                 )
 
         COMID_IDs_raster: xr.DataArray = self.full_like(
-            outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+            elevation_min, fill_value=-1, nodata=-1, dtype=np.int32
         )
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
         basin_ids = self.full_like(
-            outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+            elevation_min, fill_value=-1, nodata=-1, dtype=np.int32
         )
 
         river_linear_indices = np.where(COMID_IDs_raster.values.ravel() != -1)[0]
@@ -798,10 +879,10 @@ class Hydrography(BuildModelBase):
         )(COMID_IDs_raster.values).astype(np.float32)
 
         river_width: xr.DataArray = self.full_like(
-            outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
         river_width.data = river_width_data
-        self.set_grid(river_width, name="routing/river_width")
+        self.set_grid(river_width, name="routing/river_width_m")
 
     @build_method(required=True)
     def setup_global_ocean_mean_dynamic_topography(self) -> None:

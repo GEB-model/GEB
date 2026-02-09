@@ -713,7 +713,7 @@ class HRUs(BaseVariables):
             self.var.linear_mapping,
         ) = self.create_HRUs()
 
-        upstream_area = read_grid(self.model.files["grid"]["routing/upstream_area"])
+        upstream_area = read_grid(self.model.files["grid"]["routing/upstream_area_m2"])
 
         self.var.nearest_river_grid_cell = determine_nearest_river_cell(
             upstream_area,

@@ -11,7 +11,7 @@ from pyflwdir.dem import fill_depressions
 from geb.build.methods import build_method
 from geb.workflows.io import get_window, parse_and_set_zarr_CRS
 from geb.workflows.raster import (
-    calculate_cell_area,
+    calculate_cell_area_m2,
     convert_nodata,
     interpolate_na_2d,
     interpolate_na_along_dim,
@@ -57,7 +57,7 @@ class LandSurface(BuildModelBase):
         )
 
         height, width = cell_area.shape
-        cell_area.data = calculate_cell_area(
+        cell_area.data = calculate_cell_area_m2(
             mask.rio.transform(recalc=True), height, width
         )
         cell_area = cell_area.where(~mask, cell_area.attrs["_FillValue"])
@@ -83,7 +83,7 @@ class LandSurface(BuildModelBase):
         )
 
         height, width = region_subgrid_cell_area.shape
-        region_subgrid_cell_area.data = calculate_cell_area(
+        region_subgrid_cell_area.data = calculate_cell_area_m2(
             region_subgrid_cell_area.rio.transform(recalc=True),
             height,
             width,

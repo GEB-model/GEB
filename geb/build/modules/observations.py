@@ -370,9 +370,9 @@ class Observations(BuildModelBase):
         """
         # load data
         upstream_area = self.grid[
-            "routing/upstream_area"
+            "routing/upstream_area_m2"
         ].compute()  # we need to use this one many times, so we compute it once
-        upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
+        upstream_area_subgrid = self.other["drainage/original_d8_upstream_area_m2"]
         rivers = self.geom["routing/rivers"]
         region_mask = self.geom["mask"]
 

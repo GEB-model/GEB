@@ -62,14 +62,32 @@ Any water that does not infiltrate contributes to surface runoff.
 
 Interflow, or lateral subsurface flow, is the movement of water within the soil profile parallel to the land surface. In GEB, interflow is calculated for each soil layer when the soil moisture content exceeds the field capacity. This "free water" is available to move laterally driven by gravity and the slope of the terrain, and then added to the channel in each grid cell.
 
-The interflow calculation conceptualizes the hillslope as a draining reservoir. The rate of drainage is determined by:
+The interflow calculation conceptualizes the hillslope as a draining reservoir. The rate of drainage is determined by[@sloan1984modeling]:
 
-1.  **Free Water**: The amount of water in excess of the soil's field capacity.
-2.  **Drainable Porosity**: The difference between saturated water content and field capacity per unit of soil depth.
-3.  **Physical Properties**:
-    *   **Slope**: Steeper slopes result in faster drainage.
-    *   **Hillslope Length**: Longer slopes provide more resistance/storage.
-    *   **Lateral Hydraulic Conductivity**: Assumed to be 10 times the vertical saturated hydraulic conductivity to account for soil anisotropy.
+## Interflow
+
+Interflow, or lateral subsurface flow, is the movement of water within the soil profile parallel to the land surface. In GEB, interflow is calculated for each soil layer when the soil moisture content exceeds the field capacity. This "free water" is available to move laterally driven by gravity and the slope of the terrain, and then added to the channel in each grid cell.
+
+### Kinematic Wave Approximation
+
+The interflow calculation conceptualizes the hillslope as a draining reservoir. The rate of drainage is determined by the **kinematic wave approximation** for saturated subsurface flow[@sloan1984modeling]. This approach assumes that the hydraulic gradient is approximately equal to the land surface slope and that flow lines are parallel to the soil-bedrock interface.
+
+The physical derivation follows these steps:
+
+1.  **Kinematic Flux**: The discharge per unit width $q$ ($m^2/h$) is defined as:
+
+    $$q = K_{lat} H_w \sin(\beta)$$
+
+    where $H_w$ is the saturated thickness ($m$) and $\beta$ is the slope angle.
+2.  **Conversion to storage**: To integrate this into a grid-based volume balance, the saturated thickness $H_w$ is expressed in terms of the "free water" depth ($W_{free}$ in meters) and the drainable porosity ($\phi_d$):
+
+    $$H_w = \frac{W_{free}}{\phi_d}$$
+
+3.  **Grid cell integration**: The total interflow depth produced by a grid cell of length $L$ is the discharge $q$ divided by that length:
+
+    $$\text{Interflow} = \frac{q}{L} = \frac{K_{lat} \sin(\beta) W_{free}}{\phi_d L}$$
+
+### Implementation
 
 The fraction of free water that becomes interflow is controlled by a `storage_coefficient`.
 
@@ -83,9 +101,17 @@ $$
 \text{Storage Coeff.} = \left( \frac{K_{lat} \times \text{Slope}}{\phi_d \times L_{hill}} \right) \times \text{Multiplier}
 $$
 
-*   $K_{lat}$: Lateral saturated hydraulic conductivity [m/h]
-*   $\phi_d$: Drainable porosity [-]
-*   $L_{hill}$: Hillslope length [m]
+* $K_{lat}$: Lateral saturated hydraulic conductivity ($m/h$).
+* $\phi_d$: Drainable porosity ($-$).
+* $L_{hill}$: Hillslope length ($m$).
+* $\text{Slope}$: Slope of the terrain ($m/m$).
+* $\text{Multiplier}$: Calibration factor.
+
+$L_{hill}$ is derived from the drainage density ($D_d$) of the river network:
+
+$$ L_{hill} = \frac{1}{2 D_d} $$
+
+The drainage density is calculated by summing the length of all streams (defined as pixels with > 1 km² upstream area) within the grid cell and dividing by the cell area. To avoid unrealistic values in areas with sparse river networks, the hillslope length is capped at 1000 m.
 
 ## Code
 

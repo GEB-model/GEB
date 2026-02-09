@@ -306,7 +306,7 @@ def test_accumulated_runoff(
             geb_model.files["grid"]["routing/basin_ids"], compress=False
         )
         upstream_area = geb_model.hydrology.grid.load(
-            geb_model.files["grid"]["routing/upstream_area"], compress=False
+            geb_model.files["grid"]["routing/upstream_area_m2"], compress=False
         )
 
         cell_area = geb_model.hydrology.grid.decompress(
