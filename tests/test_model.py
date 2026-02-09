@@ -530,10 +530,11 @@ def test_custom_DEM() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_setup_reforestation_potential() -> None:
-    """Test setup of inflow hydrograph.
+    """Test setup of forest restoration potential.
 
-    Verifies that the model can set up an inflow hydrograph
-    from specified locations and inflow data files.
+    Verifies that the model can run the
+    ``setup_forest_restoration_potential`` build step with a basic
+    configuration without raising errors.
     """
     with WorkingDirectory(working_directory):
         build_args = DEFAULT_BUILD_ARGS.copy()
