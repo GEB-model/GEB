@@ -74,7 +74,7 @@ def calculate_stream_length(
     )
 
     # pit -> no channel, so set stream length to 0
-    stream_length = xr.where(original_d8_ldd == 0, stream_length, 0)
+    stream_length = xr.where(original_d8_ldd != 0, stream_length, 0)
     # vertical -> set stream length to cell height
     stream_length = xr.where(
         ~((original_d8_ldd == 64) | (original_d8_ldd == 4)),
@@ -98,7 +98,7 @@ def calculate_stream_length(
         stream_length,
         np.sqrt(cell_width_m**2 + cell_height_m**2),
     )
-    stream_length = xr.where(is_stream, stream_length, 0)
+    stream_length = xr.where(is_stream | np.isnan(stream_length), stream_length, 0)
 
     return stream_length
 
@@ -428,7 +428,7 @@ class Hydrography(BuildModelBase):
             "routing/upstream_area_m2"
         ]
         a: xr.DataArray = xr.where(a < 1, a, 1, keep_attrs=True)
-        b: xr.DataArray = self.grid["routing/outflow_elevation"] / 2000
+        b: xr.DataArray = self.grid["landsurface/elevation_min_m"] / 2000
         b: xr.DataArray = xr.where(b < 1, b, 1, keep_attrs=True)
 
         mannings: xr.DataArray = 0.025 + 0.015 * a + 0.030 * b

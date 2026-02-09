@@ -542,7 +542,7 @@ class WaterBodies(Module):
         # especially for very small lakes with a small drainage area.
         # In such cases, we take the outflow cell with the lowest elevation.
         outflow_elevation = read_grid(
-            self.model.files["grid"]["routing/outflow_elevation"]
+            self.model.files["grid"]["landsurface/elevation_min_m"]
         )
         outflow_elevation = self.grid.compress(outflow_elevation)
 

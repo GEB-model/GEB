@@ -1,5 +1,5 @@
 # dev
-- Add units to all data from `setup_hydography`
+- Add units to all data from `setup_hydrography`
 - Compute hillslope length based on drainage density
 
 # v1.0.0b10
