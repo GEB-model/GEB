@@ -105,18 +105,14 @@ class Hydrology:
 
         Notes:
             The discharge data must exist in the report directory structure. If the discharge
-            file is not found, a FileNotFoundError will be raised. The mean is calculated
-            across the entire simulation time period.
+            file is not found, a warning is printed and the function returns early. The mean
+            is calculated across the entire simulation time period.
 
         Args:
             run_name: Name of the simulation run to plot. Must correspond to an existing
                 run directory in the model output folder.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
-
-        Raises:
-            FileNotFoundError: If the discharge file for the specified run does not exist
-                in the report directory.
         """
         # check if discharge file exists
         discharge_file_path = (
