@@ -119,23 +119,27 @@ class Hydrology:
                 in the report directory.
         """
         # check if discharge file exists
-        if not (
+        discharge_file_path = (
             self.model.output_folder
             / "report"
             / run_name
             / "hydrology.routing"
-            / "discharge_daily.zarr"
-        ).exists():
-            raise FileNotFoundError(
-                f"Discharge file for run '{run_name}' does not exist in the report directory. Did you run the model?"
+            / "discharge_hourly.zarr"
+        )
+        if not discharge_file_path.exists():
+            print(
+                f"WARNING: Gridded discharge file not found at {discharge_file_path}. "
+                f"Skipping spatial discharge plot. To generate this file, configure the model with: "
+                f"hydrology.routing: {{discharge_hourly: {{varname: grid.var.discharge_m3_s, type: grid, function: null}}}}"
             )
+            return
         # load the discharge simulation
         GEB_discharge = read_zarr(
             self.model.output_folder
             / "report"
             / run_name
             / "hydrology.routing"
-            / "discharge_daily.zarr"
+            / "discharge_hourly.zarr"
         )
 
         # calculate the mean discharge over time, and plot spatially
@@ -258,20 +262,12 @@ class Hydrology:
         # check if evaluation has already been executed
         if eval_result_folder.joinpath("evaluation_metrics.xlsx").exists():
             print(
-                "evaluation already executed, skipping. If you want to re-run the discharge evaluation, delete the evaluation_results folder."
+                "evaluation already executed, skipping. If you want to re-run the discharge evaluation, delete the evaluate output folder."
             )
             evaluation_df = pd.read_excel(
                 eval_result_folder.joinpath("evaluation_metrics.xlsx")
             )
             return
-        GEB_discharge = read_zarr(
-            self.model.output_folder
-            / "report"
-            / run_name
-            / "hydrology.routing"
-            / "discharge_daily.zarr"
-        )
-        print(f"Loaded discharge simulation from {run_name} run.")
 
         # check if run file exists, if not, raise an error
         if not (self.model.output_folder / "report" / run_name).exists():
@@ -289,9 +285,33 @@ class Hydrology:
             discharge_Q_obs_df.columns = ["Q"]
             discharge_Q_obs_df.name = "Q"
 
+            # Get time range from the station CSV file instead of from zarr
+            routing_dir = (
+                self.model.output_folder / "report" / run_name / "hydrology.routing"
+            )
+            station_file_name = f"discharge_hourly_m3_per_s_{ID}.csv"
+            station_file_path = routing_dir / station_file_name
+
+            if not station_file_path.exists():
+                print(
+                    f"WARNING: Station file {station_file_path} does not exist. Skipping station {ID}."
+                )
+                continue
+
+            # Read the station file to get time range
+            try:
+                station_discharge = pd.read_csv(
+                    station_file_path, index_col=0, parse_dates=True
+                )
+                start_date = station_discharge.index.min()
+                end_date = station_discharge.index.max()
+            except Exception as e:
+                print(
+                    f"ERROR reading station file {station_file_path}: {e}. Skipping station {ID}."
+                )
+                continue
+
             # check if there is data in the model time period
-            start_date = GEB_discharge.time.min().values
-            end_date = GEB_discharge.time.max().values
             data_check = discharge_Q_obs_df[
                 (discharge_Q_obs_df.index >= start_date)
                 & (discharge_Q_obs_df.index <= end_date)
@@ -382,12 +402,17 @@ class Hydrology:
 
                     # rename series to Q
                     GEB_discharge_station.name = "Q"
-                    discharge_sim_station_df = GEB_discharge_station
+
+                    # Resample hourly discharge to daily mean to match Q_obs frequency
+                    # Q_obs is typically daily, so we need to aggregate hourly values
+                    GEB_discharge_station_daily = GEB_discharge_station.resample(
+                        "D"
+                    ).mean()
 
                     # merge to one df but keep only the rows where both have data
                     validation_df = pd.merge(
                         discharge_Q_obs_df,
-                        discharge_sim_station_df,
+                        GEB_discharge_station_daily,
                         left_index=True,
                         right_index=True,
                         how="inner",

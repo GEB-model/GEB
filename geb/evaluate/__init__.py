@@ -60,7 +60,7 @@ class Evaluate:
                 "hydrology.water_circle",
                 "hydrology.evaluate_hydrodynamics",
                 "hydrology.water_balance",
-                "meteriological_forecasts.evaluate_forecasts",
+                "meteorological_forecasts.evaluate_forecasts",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (
