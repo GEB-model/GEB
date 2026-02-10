@@ -8,11 +8,15 @@ import os
 import warnings
 from datetime import datetime, timedelta
 from typing import Any
+import scipy.stats as sp
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.signal as ss
+from pandas.plotting import (
+    register_matplotlib_converters,
+)
 
 from geb.workflows.io import read_geom
 
@@ -21,7 +25,67 @@ from ....workflows.io import read_table
 warnings.filterwarnings("ignore")
 
 
-def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> None:
+def lin_detrend_wNa(data, ref_date, station, remove_means=True, figure_plotting=True):
+    """arguments:
+        data is a pd.Series with date as index
+        ref_date: if a date is mentioned, remove trend taking the sealevel on this date as ref
+        remove_means: if True, centers the detrended timeseries around 0
+        figure_plotting: if True returns a figure of both timeseries
+    returns:
+        the linearly detrended data with time as index"""
+
+    y = np.array(data.values)  # sealevel time series
+    x = np.arange(
+        0, len(y), 1
+    )  # create x-values ranging from 0 to 1 corresponding to the sealevel timeseries (y)
+    not_nan_ind = ~np.isnan(
+        y
+    )  # create boolean, all indexes that are not nan become 'True'
+    # regression line: m=slope; b=intercept; r_val=correlation coefficient; p_val=two-sided p-value; std_err=standard error of the estimated gradient
+    m, b, r_val, p_val, std_err = sp.linregress(
+        x[not_nan_ind], y[not_nan_ind]
+    )  # see docs 'https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.linregress.html'
+
+    if remove_means:  # if true, values will be centered around the mean, such that the mean of the complete time series becomes zero
+        detrend_y = (
+            y - (m * x + b)
+        )  # y = original time series; m = slope regression line; x = x-values range; b = intercept of the regression line;
+    elif (
+        ref_date is not None
+    ):  # elif ref_date is given, detrend with this date as reference point
+        x_0 = np.flatnonzero(
+            data.index == ref_date
+        )  # index of the refdate used to detrend the complete time series
+        detrend_y = (
+            y - (m * x + b) + (m * x_0 + b)
+        )  # y = original time series; m = slope regression line; x = x-values range; b = intercept of the regression line;
+    else:  # else ref_date automatically becomes the first timestep of the time series
+        detrend_y = y - (
+            m * x
+        )  # y = original time series; m = slope regression line; x = x-values range;
+
+    if figure_plotting:
+        register_matplotlib_converters()
+        plt.figure()
+        plt.plot(data.index, y, label="original")
+        plt.plot(data.index, detrend_y, label="detrended")
+        plt.xlabel("year")
+        plt.ylabel("waterlevel [m]")
+        plt.legend(loc="upper right")
+        plt.savefig(
+            "plot/gtsm/tide_detrended_station_%05d.png" % (int(station)),
+            format="png",
+            bbox_inches="tight",
+            dpi=300,
+        )
+
+    result = pd.DataFrame(
+        data=detrend_y, index=data.index, columns=["sealevel_det"]
+    )  # create a pandas dataframe with the detrended time series and dates as index
+    return m, result
+
+
+def generate_storm_surge_hydrographs(model: Any, make_plot: bool = True) -> None:
     """Generate storm surge hydrographs for a given GEB model.
 
     Args:
@@ -46,6 +110,15 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
         waterlevelpd = waterlevels[int(station)]
         surgepd = surge[int(station)]
         tidepd = waterlevelpd - surgepd
+        # detrend the tide signal to remove any long-term trends that might be present in the data, which could affect the analysis of the tidal cycles and the surge hydrograph
+        m, result = lin_detrend_wNa(
+            tidepd,
+            tidepd.index[-1],
+            station,
+            remove_means=False,
+            figure_plotting=True,
+        )
+
         average_tide_signal, spring_tide_signal = generate_tide_signals(
             station, tidepd, make_plot=make_plot
         )
