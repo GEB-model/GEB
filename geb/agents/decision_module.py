@@ -232,11 +232,23 @@ class DecisionModule:
         )
 
         # Filter out negative NPVs
-        NPV_summed = np.maximum(1, NPV_summed)
+        NPV_summed = np.maximum(1e-6, NPV_summed).astype(np.float32)
 
         # Calculate expected utility
         ## NPV_Summed here is the wealth and income minus the expected damages of a certain probabilty event
-        EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+        sigma_arr = np.asarray(sigma, dtype=np.float32)
+        if sigma_arr.ndim == 0:
+            sigma_arr = np.full(NPV_summed.shape[1], sigma_arr, dtype=np.float32)
+
+        # Compute EU with log limit at sigma ~ 1
+        eps = 1e-6
+        den = 1.0 - sigma_arr  # (n_agents,)
+        EU_crra = (NPV_summed ** den[None, :]) / den[None, :]  # (n_events, n_agents)
+
+        sigma_is_one = np.abs(den) < eps
+        EU_crra[:, sigma_is_one] = np.log(NPV_summed[:, sigma_is_one])
+
+        EU_store = EU_crra
 
         p_all_events = np.full((p_droughts.size + 3, n_agents), -1, dtype=np.float32)
 
@@ -366,9 +378,13 @@ class DecisionModule:
             NPV_adapt_no_flood_summed = max(
                 NPV_adapt_no_flood_summed, 1e-6
             )  # Ensure positive
-            EU_adapt_no_flood = (NPV_adapt_no_flood_summed ** (1 - sigma[i])) / (
-                1 - sigma[i]
-            )
+            sig = sigma[i]
+            if abs(sig - 1.0) < 1e-6:
+                EU_adapt_no_flood = np.log(NPV_adapt_no_flood_summed)
+            else:
+                EU_adapt_no_flood = (NPV_adapt_no_flood_summed ** (1.0 - sig)) / (
+                    1.0 - sig
+                )
 
             # Calculate NPVs for each drought event
             n_events = p_droughts.size
