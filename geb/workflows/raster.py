@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Hashable, Mapping
+import tempfile
+from collections.abc import Generator, Hashable, Mapping
+from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import Any, Literal, cast, overload
 
 import geopandas as gpd
@@ -34,6 +37,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayWithScalar,
 )
+from geb.workflows.io import read_zarr, write_zarr
 
 
 @overload
@@ -1425,3 +1429,130 @@ def get_neighbor_cell_ids_for_linear_indices(
                 neighbor_id: int = r * nx + c
                 neighbor_cell_ids.append(neighbor_id)
     return neighbor_cell_ids
+
+
+@contextmanager
+def create_temp_zarr(
+    da: xr.DataArray,
+    name: str = "temp",
+    crs: Any | None = None,
+    x_chunksize: int = 350,
+    y_chunksize: int = 350,
+    time_chunksize: int = 1,
+    time_chunks_per_shard: int | None = 30,
+) -> Generator[xr.DataArray, None, None]:
+    """Create a DataArray to a temporary Zarr file with specified chunks.
+
+    This context manager writes the DataArray to a temporary Zarr file and yields
+    the lazily opened DataArray. The temporary file is cleaned up when the context exits.
+
+    Args:
+        da: The DataArray to create.
+        name: Name suffix for the temporary file.
+        crs: Coordinate reference system. If None, derived from da.
+        x_chunksize: Chunk size for x dimension.
+        y_chunksize: Chunk size for y dimension.
+        time_chunksize: Chunk size for time dimension.
+        time_chunks_per_shard: Time chunks per shard.
+
+    Yields:
+        The created DataArray opened from the temporary Zarr file.
+    """
+    if crs is None:
+        crs = 4326
+        if hasattr(da, "rio"):
+            try:
+                crs = da.rio.crs or 4326
+            except Exception:
+                pass
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / f"{name}.zarr"
+        temp_da = write_zarr(
+            da,
+            tmp_path,
+            crs=crs,
+            x_chunksize=x_chunksize,
+            y_chunksize=y_chunksize,
+            time_chunksize=time_chunksize,
+            time_chunks_per_shard=time_chunks_per_shard,
+            progress=True,
+        )
+        yield temp_da
+
+
+def rechunk_zarr_file(
+    input_path: Path | str,
+    output_path: Path | str,
+    how: Literal["time-optimized", "space-optimized", "balanced"],
+    intermediate: bool = True,
+) -> None:
+    """Rechunk a Zarr file to a new Zarr file with optimized chunking.
+
+    Args:
+        input_path: Path to the input Zarr file.
+        output_path: Path to the output Zarr file.
+        how: How to rechunk the file. Options:
+            - "time-optimized": Optimized for time series access (small x/y, large time).
+            - "space-optimized": Optimized for spatial access (large x/y, small time).
+            - "balanced": Balanced access (medium chunks).
+        intermediate: Whether to use an intermediate rechunking step (recommended for large files).
+            This may be somewhat slower bug drastically reduces memory usage and can prevent out-of-memory errors.
+
+    Raises:
+        ValueError: If `how` is not one of the specified options.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    da: xr.DataArray = read_zarr(input_path)
+
+    # Determine chunks based on strategy
+    if how == "time-optimized":
+        x_chunk, y_chunk, time_chunk = 10, 10, da.sizes.get("time", 1)
+        shards = None
+    elif how == "space-optimized":
+        x_chunk, y_chunk, time_chunk = 350, 350, 1
+        shards = 30
+    elif how == "balanced":
+        x_chunk, y_chunk, time_chunk = 50, 50, 50
+        shards = None
+    else:
+        raise ValueError(
+            f"Unknown rechunking strategy: {how}, must be 'time-optimized', 'space-optimized', or 'balanced'"
+        )
+
+    if intermediate:
+        # Check if immediate chunking is beneficial (if strategies are very different)
+        # For simplicity, we use balanced 50x50x50 as intermediate if target is not balanced
+        # Or just always use balanced intermediate
+        print(
+            "Creating intermediate rechunked Zarr with 50x50 spatial chunks and 50 time chunks..."
+        )
+        ctx = create_temp_zarr(
+            da,
+            name="intermediate",
+            x_chunksize=50,
+            y_chunksize=50,
+            time_chunksize=50,
+            time_chunks_per_shard=None,
+        )
+    else:
+        # No intermediate step, directly rechunk from source to target
+        # Null context that just yields the original DataArray
+        ctx: nullcontext[xr.DataArray] = nullcontext(da)
+
+    with ctx as source_da:
+        print(
+            f"Rechunking Zarr with strategy '{how}' (x_chunk={x_chunk}, y_chunk={y_chunk}, time_chunk={time_chunk}, shards={shards})..."
+        )
+        write_zarr(
+            source_da,
+            output_path,
+            crs=da.rio.crs,
+            x_chunksize=x_chunk,
+            y_chunksize=y_chunk,
+            time_chunksize=time_chunk,
+            time_chunks_per_shard=shards,
+            progress=True,
+        )

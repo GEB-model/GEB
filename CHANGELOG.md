@@ -1,6 +1,8 @@
 # dev
 - Add units to all data from `setup_hydrography`
 - Compute hillslope length based on drainage density
+- Fix: Also set nodata type in _FillValue when using reporter. This is now also correctly loaded with zarr.
+- Add geb tool rechunk to allow rechunking of dataset to space-optimized, time-optimized or balanced. Currently using some reasonable defaults, but if needed we can expand this with custom values.
 
 # v1.0.0b10
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.

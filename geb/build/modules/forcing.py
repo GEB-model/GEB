@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import tempfile
 from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
@@ -27,9 +26,9 @@ from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
-from geb.workflows.raster import resample_like
+from geb.workflows.raster import create_temp_zarr, resample_like
 
-from ...workflows.io import calculate_scaling, write_zarr
+from ...workflows.io import calculate_scaling
 from .base import BuildModelBase
 
 
@@ -1189,20 +1188,19 @@ class Forcing(BuildModelBase):
 
         temp_xy_chunk_size = 50
 
-        with tempfile.TemporaryDirectory() as tmp_water_budget_folder:
-            tmp_water_budget_file = (
-                Path(tmp_water_budget_folder) / "tmp_water_budget_file.zarr"
-            )
-            self.logger.info("Exporting temporary water budget to zarr")
-            water_budget = write_zarr(
-                water_budget,
-                tmp_water_budget_file,
-                crs=4326,
-                x_chunksize=temp_xy_chunk_size,
-                y_chunksize=temp_xy_chunk_size,
-                time_chunksize=50,
-                time_chunks_per_shard=None,
-            ).chunk({"time": -1})  # for the SPEI calculation time must not be chunked
+        self.logger.info("Exporting temporary water budget to zarr")
+        with create_temp_zarr(
+            water_budget,
+            name="tmp_water_budget_file",
+            crs=4326,
+            x_chunksize=temp_xy_chunk_size,
+            y_chunksize=temp_xy_chunk_size,
+            time_chunksize=50,
+            time_chunks_per_shard=None,
+        ) as water_budget:
+            water_budget = water_budget.chunk(
+                {"time": -1}
+            )  # for the SPEI calculation time must not be chunked
 
             # We set freq to None, so that the input frequency is used (no recalculating)
             # this means that we can calculate SPEI much more efficiently, as it is not
@@ -1232,22 +1230,19 @@ class Forcing(BuildModelBase):
                 time=slice(window_months - 1, None)
             ).compute()
 
-            with tempfile.TemporaryDirectory() as tmp_spei_folder:
-                tmp_spei_file = Path(tmp_spei_folder) / "tmp_spei_file.zarr"
-                self.logger.info("Calculating SPEI and exporting to temporary file...")
-                SPEI.attrs = {
-                    "_FillValue": np.nan,
-                }
-                SPEI: xr.DataArray = write_zarr(
-                    SPEI,
-                    tmp_spei_file,
-                    x_chunksize=temp_xy_chunk_size,
-                    y_chunksize=temp_xy_chunk_size,
-                    time_chunksize=10,
-                    time_chunks_per_shard=None,
-                    crs=4326,
-                )
-
+            self.logger.info("Calculating SPEI and exporting to temporary file...")
+            SPEI.attrs = {
+                "_FillValue": np.nan,
+            }
+            with create_temp_zarr(
+                SPEI,
+                name="tmp_spei_file",
+                x_chunksize=temp_xy_chunk_size,
+                y_chunksize=temp_xy_chunk_size,
+                time_chunksize=10,
+                time_chunks_per_shard=None,
+                crs=4326,
+            ) as SPEI:
                 self.set_SPEI(SPEI)
 
                 self.logger.info("calculating GEV parameters...")
