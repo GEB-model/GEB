@@ -828,10 +828,6 @@ def server() -> None:
     mcp.run()
 
 
-if __name__ == "__main__":
-    cli()
-
-
 @cli.group()
 def tool() -> None:
     """Useful tools for GEB."""
@@ -850,11 +846,17 @@ def tool() -> None:
     help="How to optimize the chunks.",
 )
 @click.option(
-    "--intermediate",
-    is_flag=True,
+    "--no-intermediate",
+    is_flag=False,
     default=True,
     help="Use intermediate rechunking step (recommended for large files).",
 )
-def rechunk(input_path: Path, output_path: Path, how: str, intermediate: bool) -> None:
+def rechunk(
+    input_path: Path, output_path: Path, how: str, no_intermediate: bool
+) -> None:
     """Rechunk a Zarr file."""
-    rechunk_zarr_file(input_path, output_path, how, intermediate)  # type: ignore
+    rechunk_zarr_file(input_path, output_path, how, not no_intermediate)  # type: ignore
+
+
+if __name__ == "__main__":
+    cli()

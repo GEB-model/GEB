@@ -200,7 +200,7 @@ ENERGY_BALANCE_REPORT_CONFIG = {
 
 
 def get_fill_value(
-    data: np.ndarray[Any] | int | float | bool | np.floating | np.integer,
+    data: np.ndarray[Any],
 ) -> tuple[int | float | None, Any]:
     """Get the fill value for a zarr array based on the data type.
 
@@ -213,8 +213,6 @@ def get_fill_value(
     Raises:
         ValueError: If the data type is not recognized.
     """
-    data = np.asarray(data)
-
     if np.issubdtype(data.dtype, np.floating):
         kind = np.dtype(data.dtype)
         fill_value: int | float = np.nan
@@ -484,8 +482,10 @@ def prepare_agent_group(
         )
         if isinstance(example_value, float):
             dtype_ = np.float32
+            example_value = np.array(example_value, dtype=np.float32)
         else:
             dtype_ = np.int32
+            example_value = np.array(example_value, dtype=np.int32)
         chunk_size = min(chunk_size, time_group.size)
         chunks = (chunk_size,)
         compressors = None

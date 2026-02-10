@@ -1435,7 +1435,6 @@ def get_neighbor_cell_ids_for_linear_indices(
 def create_temp_zarr(
     da: xr.DataArray,
     name: str = "temp",
-    crs: Any | None = None,
     x_chunksize: int = 350,
     y_chunksize: int = 350,
     time_chunksize: int = 1,
@@ -1449,7 +1448,6 @@ def create_temp_zarr(
     Args:
         da: The DataArray to create.
         name: Name suffix for the temporary file.
-        crs: Coordinate reference system. If None, derived from da.
         x_chunksize: Chunk size for x dimension.
         y_chunksize: Chunk size for y dimension.
         time_chunksize: Chunk size for time dimension.
@@ -1457,21 +1455,19 @@ def create_temp_zarr(
 
     Yields:
         The created DataArray opened from the temporary Zarr file.
+
+    Raises:
+        ValueError: If the input DataArray does not have a CRS defined.
     """
-    if crs is None:
-        crs = 4326
-        if hasattr(da, "rio"):
-            try:
-                crs = da.rio.crs or 4326
-            except Exception:
-                pass
+    if da.rio.crs is None:
+        raise ValueError("DataArray must have a CRS defined to use create_temp_zarr")
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / f"{name}.zarr"
         temp_da = write_zarr(
             da,
             tmp_path,
-            crs=crs,
+            crs=da.rio.crs,
             x_chunksize=x_chunksize,
             y_chunksize=y_chunksize,
             time_chunksize=time_chunksize,
@@ -1497,7 +1493,7 @@ def rechunk_zarr_file(
             - "space-optimized": Optimized for spatial access (large x/y, small time).
             - "balanced": Balanced access (medium chunks).
         intermediate: Whether to use an intermediate rechunking step (recommended for large files).
-            This may be somewhat slower bug drastically reduces memory usage and can prevent out-of-memory errors.
+            This may be somewhat slower but drastically reduces memory usage and can prevent out-of-memory errors.
 
     Raises:
         ValueError: If `how` is not one of the specified options.

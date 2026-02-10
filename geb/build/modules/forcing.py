@@ -1192,7 +1192,6 @@ class Forcing(BuildModelBase):
         with create_temp_zarr(
             water_budget,
             name="tmp_water_budget_file",
-            crs=4326,
             x_chunksize=temp_xy_chunk_size,
             y_chunksize=temp_xy_chunk_size,
             time_chunksize=50,
@@ -1241,7 +1240,6 @@ class Forcing(BuildModelBase):
                 y_chunksize=temp_xy_chunk_size,
                 time_chunksize=10,
                 time_chunks_per_shard=None,
-                crs=4326,
             ) as SPEI:
                 self.set_SPEI(SPEI)
 
