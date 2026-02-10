@@ -125,13 +125,19 @@ class GADM28(Adapter):
         return self
 
     def read(self, **kwargs: Any) -> gpd.GeoDataFrame:
-        """Read the GADM data as a GeoDataFrame.
+        """Read the GADM data as a GeoDataFrame. It also removes water bodies from the data.
 
         Args:
             **kwargs: Additional keyword arguments to pass to gpd.read_parquet.
         Returns:
             A GeoDataFrame with the GADM data.
+        Raises:
+            ValueError: If the expected 'ENGTYPE_1' column is not found in the GADM data.
         """
-        gdf = Adapter.read(self, **kwargs)
+        gdf: gpd.GeoDataFrame = Adapter.read(self, **kwargs)
         assert isinstance(gdf, gpd.GeoDataFrame)
+        # remove waterbodies from data
+        if "ENGTYPE_1" not in gdf.columns:
+            raise ValueError("Expected 'ENGTYPE_1' column not found in GADM data")
+        gdf: gpd.GeoDataFrame = gdf[gdf["ENGTYPE_1"] != "Water body"]
         return gdf
