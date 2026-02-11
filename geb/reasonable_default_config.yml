@@ -26,7 +26,7 @@ hazards:
     grid_size_multiplier: 1  # must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.
     subgrid: false
     overwrite: auto  # whether to overwrite existing flood model. True, False, "auto". If "auto", it will check if the model input parameters have changed.
-    coastal_only: false
+    coastal_only: false # if true, only simulate floods in coastal areas, defined as areas with elevation below 10m. This can significantly reduce computation time for large domains with small coastal areas.
     write_figures: true  # whether to generate and save diagnostic figures
     return_periods:
       - 2
