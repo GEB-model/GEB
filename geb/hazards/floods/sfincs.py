@@ -805,6 +805,12 @@ class SFINCSRootModel:
                     river.intersection(boundary)
                 )
 
+                if not isinstance(outflow_point, Point):
+                    export_diagnostics(outflow_point)
+                    raise ValueError(
+                        "Calculated outflow point is not a single point. Please check the river geometries and subbasins boundary."
+                    )
+
                 outflow_col, outflow_row = coord_to_pixel(
                     (outflow_point.x, outflow_point.y),
                     self.mask.rio.transform().to_gdal(),
