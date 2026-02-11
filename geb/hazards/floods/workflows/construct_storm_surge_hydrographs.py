@@ -90,7 +90,7 @@ def linear_detrend_with_nan(
             bbox_inches="tight",
             dpi=300,
         )
-
+        plt.close()
     result = pd.Series(
         data=detrend_y,
         index=data.index,
