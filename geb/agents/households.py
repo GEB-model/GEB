@@ -2276,6 +2276,7 @@ class Households(AgentBaseClass):
                 ],
                 "damages_content_flood_proofed": self.buildings_content_curve[
                     "building_flood_proofed"
+                ],
                 "damages": self.buildings_structure_curve["building_unprotected"],
                 "damages_dryproofed": self.buildings_structure_curve[
                     "building_dryproofed"
