@@ -4909,7 +4909,6 @@ class CropFarmers(AgentBaseClass):
                     | self.well_irrigated
                 ).data,
                 self.pr_class,
-                self.var.irrigation_efficiency_group,
             )
             print("Nr of base groups", len(np.unique(self.var.farmer_base_class[:])))
 
