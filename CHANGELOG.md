@@ -42,7 +42,7 @@
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
 - Added a water level boundary for coastal rivers (for now set to zero).
-- Inlcuded detrending of tide data in estimation of hydrograph shape. 
+- Included detrending of tide data in estimation of hydrograph shape. 
 
 To support this version:
 
