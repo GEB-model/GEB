@@ -1776,7 +1776,7 @@ class Agents(BuildModelBase):
         skip_countries_ISO3: list[str] = [],
         single_household_per_building: bool = False,
         occupancy_type: list[str] = ["RES", "UNK"],
-        minimum_building_size: int | None = None,
+        minimum_building_size_m2: int | None = None,
     ) -> None:
         """Sets up household characteristics for agents using GLOPOP-S data.
 
@@ -1785,7 +1785,7 @@ class Agents(BuildModelBase):
             skip_countries_ISO3: A list of ISO3 country codes to skip when setting up household characteristics.
             single_household_per_building: If True, only one household will be allocated per building. Default is False.
             occupancy_type: A list of strings to filter the building occupancy types for residential buildings. Default is ["RES", "UNK"].
-            minimum_building_size: Minimum building size in m2 to be considered for household allocation. If None, no minimum size is applied. Default is None.
+            minimum_building_size_m2: Minimum building size in m2 to be considered for household allocation. If None, no minimum size is applied. Default is None.
 
         Raises:
             ValueError: If any household could not be allocated to a building.
@@ -1803,21 +1803,23 @@ class Agents(BuildModelBase):
         # iterate over GDL regions and filter buildings to residential and set damage values
         for GDL_code in all_buildings_model_region:
             buildings = all_buildings_model_region[GDL_code]
-            # filter to residential buildings specifiec in occupancy_type
+            # filter to residential buildings specified in occupancy_type
             occupancy_type_joined = "|".join(occupancy_type)
             buildings = buildings[
                 buildings["occupancy"].str.contains(occupancy_type_joined, na=False)
             ]
 
             # Optional filter to include minimum building size for household allocation
-            if minimum_building_size is not None:
+            if minimum_building_size_m2 is not None:
                 projected_crs = gpd.GeoSeries(
                     [GDL_regions.geometry.union_all()], crs=GDL_regions.crs
                 ).estimate_utm_crs()
                 buildings_reprojected = buildings.to_crs(projected_crs)
-                buildings["building_size_m2"] = buildings_reprojected.geometry.area
+                buildings = buildings.assign(
+                    building_size_m2=buildings_reprojected.geometry.area
+                )
                 buildings = buildings[
-                    buildings["building_size_m2"] >= minimum_building_size
+                    buildings["building_size_m2"] >= minimum_building_size_m2
                 ]
 
             residential_buildings_model_region[GDL_code] = buildings.reset_index(
