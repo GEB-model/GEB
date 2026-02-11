@@ -1,4 +1,5 @@
 # dev
+- Optional setting to setup_household_characteristics to assign households to specific occupancy types and to set a minimum building size (m2)
 
 # v1.0.0b10
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
