@@ -124,7 +124,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
         surgepd = surge[int(station)]
         tidepd = waterlevelpd - surgepd
         # detrend the tide signal to remove any long-term trends that might be present in the data, which could affect the analysis of the tidal cycles and the surge hydrograph
-        m, result = lin_detrend_wNa(
+        _m, result = lin_detrend_wNa(
             tidepd,
             tidepd.index[-1],
             station,
