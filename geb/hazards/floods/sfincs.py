@@ -260,7 +260,6 @@ class SFINCSRootModel:
 
         subbasins: gpd.GeoDataFrame = subbasins.to_crs(mask.rio.crs)
         rivers: gpd.GeoDataFrame = rivers.to_crs(mask.rio.crs)
-        self.is_coastal = subbasins["is_coastal"].values
 
         print("Starting SFINCS model build...")
         # build base model
