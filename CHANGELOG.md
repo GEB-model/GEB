@@ -41,6 +41,8 @@
 - Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
+- Added a water level boundary for coastal rivers (for now set to zero).
+- Inlcuded detrending of tide data in estimation of hydrograph shape. 
 
 To support this version:
 
