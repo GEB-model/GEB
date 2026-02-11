@@ -129,7 +129,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
             tidepd.index[-1],
             station,
             remove_means=False,
-            figure_plotting=True,
+            figure_plotting=make_plot,
         )
         tidepd = result
         average_tide_signal, spring_tide_signal = generate_tide_signals(
