@@ -26,7 +26,7 @@ warnings.filterwarnings("ignore")
 
 
 def lin_detrend_wNa(
-    data: pd.DataFrame,
+    data: pd.Series,
     ref_date: datetime,
     station: int,
     remove_means: bool = True,
@@ -38,7 +38,7 @@ def lin_detrend_wNa(
     which could affect the analysis of the tidal cycles and the surge hydrograph.
 
     Args:
-        data: A pd.DataFrame with date as index and sea level as values.
+        data: A pd.Series with date as index and sea level as values.
         ref_date: If a date is mentioned, remove trend taking the sealevel on this date as reference.
         station: The station identifier.
         remove_means: If True, centers the detrended timeseries around 0.
