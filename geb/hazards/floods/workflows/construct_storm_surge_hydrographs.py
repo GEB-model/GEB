@@ -8,12 +8,12 @@ import os
 import warnings
 from datetime import datetime, timedelta
 from typing import Any
-import scipy.stats as sp
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.signal as ss
+import scipy.stats as sp
 from pandas.plotting import (
     register_matplotlib_converters,
 )
@@ -25,15 +25,27 @@ from ....workflows.io import read_table
 warnings.filterwarnings("ignore")
 
 
-def lin_detrend_wNa(data, ref_date, station, remove_means=True, figure_plotting=True):
-    """arguments:
-        data is a pd.Series with date as index
-        ref_date: if a date is mentioned, remove trend taking the sealevel on this date as ref
-        remove_means: if True, centers the detrended timeseries around 0
-        figure_plotting: if True returns a figure of both timeseries
-    returns:
-        the linearly detrended data with time as index"""
+def lin_detrend_wNa(
+    data: pd.DataFrame,
+    ref_date: datetime,
+    station: int,
+    remove_means: bool = True,
+    figure_plotting: bool = True,
+) -> tuple[float, pd.DataFrame]:
+    """This function detrends a time series linearly, while keeping NaN values in the original time series.
 
+    The function can be used to remove long-term trends from the tide signal,
+    which could affect the analysis of the tidal cycles and the surge hydrograph.
+
+    Args:
+        data: A pd.DataFrame with date as index and sea level as values.
+        ref_date: If a date is mentioned, remove trend taking the sealevel on this date as reference.
+        station: The station identifier.
+        remove_means: If True, centers the detrended timeseries around 0.
+        figure_plotting: If True, returns a figure of both timeseries.
+    Returns:
+        The linearly detrended data with time as index.
+    """
     y = np.array(data.values)  # sealevel time series
     x = np.arange(
         0, len(y), 1
