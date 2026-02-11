@@ -98,7 +98,7 @@ def lin_detrend_wNa(
     return m, result
 
 
-def generate_storm_surge_hydrographs(model: Any, make_plot: bool = True) -> None:
+def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> None:
     """Generate storm surge hydrographs for a given GEB model.
 
     Args:
