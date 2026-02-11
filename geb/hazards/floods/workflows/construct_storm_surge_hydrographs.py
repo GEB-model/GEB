@@ -543,8 +543,8 @@ def generate_surge_hydrograph(
 def generate_storm_tide_hydrograph(
     rps: pd.DataFrame,
     station: int,
-    tidepd: pd.DataFrame,
-    surgepd: pd.DataFrame,
+    tidepd: pd.Series,
+    surgepd: pd.Series,
     average_tide_signal: np.ndarray,
     spring_tide_signal: np.ndarray,
     surge_hydrograph_duration_mean: np.ndarray,
@@ -559,8 +559,8 @@ def generate_storm_tide_hydrograph(
     Args:
         rps: A DataFrame containing return period statistics.
         station: The station ID.
-        tidepd: A DataFrame containing tide predictions.
-        surgepd: A DataFrame containing surge predictions.
+        tidepd: A Series containing tide predictions.
+        surgepd: A Series containing surge predictions.
         average_tide_signal: An array containing the average tide signal.
         spring_tide_signal: An array containing the spring tide signal.
         surge_hydrograph_duration_mean: An array containing the mean duration of the surge hydrograph.
