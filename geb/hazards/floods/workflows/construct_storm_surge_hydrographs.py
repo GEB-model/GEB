@@ -25,7 +25,7 @@ from ....workflows.io import read_table
 warnings.filterwarnings("ignore")
 
 
-def lin_detrend_wNa(
+def linear_detrend_with_nan(
     data: pd.Series,
     ref_date: datetime,
     station: int,
@@ -124,7 +124,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
         surgepd = surge[int(station)]
         tidepd = waterlevelpd - surgepd
         # detrend the tide signal to remove any long-term trends that might be present in the data, which could affect the analysis of the tidal cycles and the surge hydrograph
-        _m, result = lin_detrend_wNa(
+        _m, result = linear_detrend_with_nan(
             tidepd,
             tidepd.index[-1],
             station,
