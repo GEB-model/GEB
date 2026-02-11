@@ -593,7 +593,7 @@ class ECMWFForecasts(Adapter):
                 "increase the buffer around the forecasts (fc_area_buffer), as probably not "
                 "the whole area is downloaded"
             )
-            # fill the nan values using interpolate_na_along_time_dim and interpolate_na in space
+            # fill the nan values using interpolate_na_along_dim and interpolate_na in space
             if nan_percentage > 0:  # Check if there are any NaN values to fill
                 print(
                     f"Found {nan_percentage:.2f}% missing values for variable '{variable_name}' after regridding. Interpolating missing values."

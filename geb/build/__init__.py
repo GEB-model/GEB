@@ -1724,7 +1724,7 @@ class GEBModel(
     def files(self, value: dict) -> None:
         self._files = value
 
-    @build_method
+    @build_method(required=True)
     def setup_region(
         self,
         region: dict,
@@ -2014,9 +2014,9 @@ class GEBModel(
         )
 
         rivers["outflow_type"] = rivers.apply(
-            lambda row: STUDY_AREA_OUTFLOW
-            if row.name in subbasins.index
-            else NEARBY_OUTFLOW,
+            lambda row: (
+                STUDY_AREA_OUTFLOW if row.name in subbasins.index else NEARBY_OUTFLOW
+            ),
             axis=1,
         )
 
@@ -2248,7 +2248,7 @@ class GEBModel(
 
         self.set_subgrid(submask, name="mask")
 
-    @build_method
+    @build_method(required=True)
     def set_time_range(self, start_date: date, end_date: date) -> None:
         """Sets the time range for the build model.
 
@@ -2298,7 +2298,7 @@ class GEBModel(
             end_date = datetime.fromisoformat(end_date)
         return end_date
 
-    @build_method
+    @build_method(required=True)
     def set_ssp(self, ssp: str) -> None:
         """Sets the SSP name for the model.
 
@@ -2374,7 +2374,7 @@ class GEBModel(
             time_chunksize=24 * 6,  # 10 minute data
         )
 
-    @build_method
+    @build_method(required=True)
     def setup_damage_parameters(
         self,
         parameters: dict[
@@ -2421,7 +2421,7 @@ class GEBModel(
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
-    @build_method
+    @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors: list[tuple[float, float]]
     ) -> None:
@@ -3073,6 +3073,8 @@ class GEBModel(
                 '"setup_region" must be present in methods when building a new model.'
             )
         methods["setup_region"].update(region=region)
+
+        build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
         if continue_:

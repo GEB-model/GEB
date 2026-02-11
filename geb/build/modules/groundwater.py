@@ -23,7 +23,7 @@ class GroundWater(BuildModelBase):
         """Initialize the GroundWater class."""
         pass
 
-    @build_method(depends_on=["setup_elevation"])
+    @build_method(depends_on=["setup_elevation"], required=True)
     def setup_groundwater(
         self,
         minimum_thickness_confined_layer: int | float = 50,

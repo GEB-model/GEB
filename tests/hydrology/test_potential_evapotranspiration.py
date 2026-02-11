@@ -2,6 +2,7 @@
 
 import math
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from geb.hydrology.landcovers import (
@@ -14,8 +15,9 @@ from geb.hydrology.landcovers import (
 )
 from geb.hydrology.potential_evapotranspiration import (
     W_per_m2_to_MJ_per_m2_per_hour,
-    adjust_wind_speed,
+    adjust_wind_speed_log_profile,
     get_CO2_induced_crop_factor_adustment,
+    get_crop_factor_from_lai,
     get_crop_factors_and_root_depths,
     get_net_solar_radiation,
     get_potential_bare_soil_evaporation,
@@ -28,6 +30,8 @@ from geb.hydrology.potential_evapotranspiration import (
     get_vapour_pressure_deficit,
     penman_monteith,
 )
+
+from ..testconfig import output_folder
 
 
 def test_get_vapour_pressure() -> None:
@@ -108,12 +112,45 @@ def test_get_slope_of_saturation_vapour_pressure_curve() -> None:
     assert math.isclose(slope_kPa_per_C, expected_value, rel_tol=1e-6)
 
 
-def test_adjust_wind_speed() -> None:
-    """Test the wind speed adjustment function."""
-    wind_10m_m_per_s = np.float32(100.0)  # Example wind speed in m/s
-    adjusted_wind_speed_m_per_s = adjust_wind_speed(wind_10m_m_per_s=wind_10m_m_per_s)
+def test_adjust_wind_speed_log_profile() -> None:
+    """Test the wind speed adjustment function.
 
-    assert math.isclose(adjusted_wind_speed_m_per_s, 74.8, rel_tol=1e-6)
+    See Example 14: https://www.fao.org/4/x0490e/x0490e07.htm#wind%20profile%20relationship
+        u2 = uz * 4.87 / ln(67.8 * z - 5.42)
+
+    where uz is the wind speed at height z, and u2 is the wind speed at 2 m, with example
+    values of uz = 3.2 m/s at z = 10 m, which should yield u2 = 2.4 m/s.
+
+    Derivation of FAO 56 Equation 47 from the general logarithmic profile used here:
+
+    The code uses:
+        u_2 = u_z * (ln((z_2 - d) / z_0) / ln((z_z - d) / z_0))
+
+    FAO 56 assumes for a standard crop:
+    - h (height) = 0.12 m
+    - d (displacement height) = 0.67 * h = 0.08 m
+    - z_0 (roughness length) = 0.123 * h = 0.01476 m
+
+    Numerator term with z_2 = 2.0 m:
+        ln((2.0 - 0.08) / 0.01476) approx 4.87
+
+    Denominator term inner part:
+        (z_z - 0.08) / 0.01476 = (1/0.01476) * z_z - (0.08/0.01476)
+                           approx 67.8 * z_z - 5.42
+
+    Putting it together yields Eq. 47:
+        u_2 = u_z * 4.87 / ln(67.8 * z_z - 5.42)
+    """
+    wind_10m_m_per_s = np.float32(3.2)
+
+    adjusted_wind_speed_m_per_s = adjust_wind_speed_log_profile(
+        wind_measurement_height_m_per_s=wind_10m_m_per_s,
+        measurement_height_m=np.float32(10.0),
+        target_height_m=np.float32(2.0),
+        canopy_height_m=np.float32(0.12),
+    )
+
+    assert math.isclose(adjusted_wind_speed_m_per_s, 2.4, abs_tol=0.05)
 
 
 def test_penman_monteith_day() -> None:
@@ -237,6 +274,28 @@ def test_get_CO2_induced_crop_factor_adustment() -> None:
     assert get_CO2_induced_crop_factor_adustment(550.0 + (550.0 - 369.41) == 0.9)
 
 
+def test_get_crop_factor_from_lai() -> None:
+    """Test the calculation of crop factor from leaf area index."""
+    # Test with lai=0, should return min_kc
+    kc = get_crop_factor_from_lai(
+        min_kc=np.float32(0.2), max_kc=np.float32(1.2), lai=np.float32(0.0)
+    )
+    assert math.isclose(kc, 0.2, rel_tol=1e-6)
+
+    # Test with large lai, should approach max_kc
+    kc = get_crop_factor_from_lai(
+        min_kc=np.float32(0.2), max_kc=np.float32(1.2), lai=np.float32(10.0)
+    )
+    assert math.isclose(kc, 1.2, rel_tol=1e-3)
+
+    # Test with lai=1
+    kc = get_crop_factor_from_lai(
+        min_kc=np.float32(0.2), max_kc=np.float32(1.2), lai=np.float32(1.0)
+    )
+    expected = 0.2 + 1.0 * (1 - np.exp(-0.7))
+    assert math.isclose(kc, expected, rel_tol=1e-6)
+
+
 def test_get_crop_factors_and_root_depths() -> None:
     """Test the calculation of crop factors and root depths."""
     land_use_map = np.array(
@@ -254,6 +313,14 @@ def test_get_crop_factors_and_root_depths() -> None:
     )
     crop_factor_forest_map = np.array(
         [0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6],
+        dtype=np.float32,
+    )
+    leaf_area_index_forest = np.array(
+        [0.8, 1.0, 1.47, 1.785, 2.197, 3.77, 10.0, 10.0],
+        dtype=np.float32,
+    )
+    leaf_area_index_grassland_like = np.array(
+        [0.0, 0.0, 10.0, 2.7, 0.0, 2.3, 0.0, 0.0],
         dtype=np.float32,
     )
     crop_map = np.array([1, 2, 0, 0, -1, -1, -1, -1], dtype=np.int32)
@@ -285,7 +352,8 @@ def test_get_crop_factors_and_root_depths() -> None:
 
     crop_factor, root_depth, crop_sub_stage = get_crop_factors_and_root_depths(
         land_use_map=land_use_map,
-        crop_factor_forest_map=crop_factor_forest_map,
+        leaf_area_index_forest=leaf_area_index_forest,
+        leaf_area_index_grassland_like=leaf_area_index_grassland_like,
         crop_map=crop_map,
         crop_age_days_map=crop_age_days_map,
         crop_harvest_age_days=crop_harvest_age_days,
@@ -299,7 +367,7 @@ def test_get_crop_factors_and_root_depths() -> None:
     # first crop in initial stage, second crop halfway in second stage, third crop fully grown, fourth crop halfway in last stage
     # fifth is forest, sixth is grassland, seventh is sealed, eighth is open water
     expected_crop_factor = np.array(
-        [0.6, 0.75, 1.2, 1.05, 1.3, 1.0, np.nan, np.nan], dtype=np.float32
+        [0.6, 0.75, 1.2, 1.05, 0.985168, 1.000112, np.nan, np.nan], dtype=np.float32
     )
     expected_root_depth = np.array(
         [
@@ -321,10 +389,14 @@ def test_get_crop_factors_and_root_depths() -> None:
     np.testing.assert_allclose(
         crop_factor,
         expected_crop_factor,
+        equal_nan=True,
+        atol=1e-6,
     )
     np.testing.assert_allclose(
         root_depth,
         expected_root_depth,
+        equal_nan=True,
+        atol=1e-6,
     )
     np.testing.assert_allclose(
         crop_sub_stage,
@@ -333,7 +405,8 @@ def test_get_crop_factors_and_root_depths() -> None:
 
     crop_factor, root_depth, crop_sub_stage = get_crop_factors_and_root_depths(
         land_use_map=land_use_map,
-        crop_factor_forest_map=crop_factor_forest_map,
+        leaf_area_index_forest=leaf_area_index_forest,
+        leaf_area_index_grassland_like=leaf_area_index_grassland_like,
         crop_map=crop_map,
         crop_age_days_map=crop_age_days_map,
         crop_harvest_age_days=crop_harvest_age_days,
@@ -358,8 +431,34 @@ def test_get_crop_factors_and_root_depths() -> None:
     np.testing.assert_allclose(
         crop_factor,
         expected_crop_factor,
+        equal_nan=True,
+        atol=1e-6,
     )
     np.testing.assert_allclose(
         root_depth,
         expected_root_depth,
+        equal_nan=True,
+        atol=1e-6,
     )
+
+
+def test_plot_crop_factor_vs_lai() -> None:
+    """Plot crop factor as a function of leaf area index."""
+    lai = np.linspace(0, 10, 100)
+    kc_forest = get_crop_factor_from_lai(
+        min_kc=np.float32(0.2), max_kc=np.float32(1.6), lai=lai
+    )
+    kc_grassland = get_crop_factor_from_lai(
+        min_kc=np.float32(0.2), max_kc=np.float32(1.2), lai=lai
+    )
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(lai, kc_forest, label="Forest (min=0.2, max=1.6)", color="green")
+    plt.plot(lai, kc_grassland, label="Grassland (min=0.2, max=1.2)", color="blue")
+    plt.xlabel("Leaf Area Index")
+    plt.ylabel("Crop Factor")
+    plt.title("Crop Factor vs Leaf Area Index")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(output_folder / "crop_factor_vs_lai.png")
+    plt.close()

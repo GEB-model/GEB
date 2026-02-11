@@ -20,6 +20,7 @@ from .grdc import GRDC
 from .gtsm import GTSM
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
+from .lisflood import LISFLOOD
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -94,6 +95,66 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "10.5194/soil-2020-65",
         },
     },
+    "lisflood_crop_group_number_forest": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="cropgrpn_f_Global_03min.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/cropgrpn_f_Global_03min.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Crop Group Number (forest)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_crop_group_number_grassland_like": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="cropgrpn_o_Global_03min.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/cropgrpn_o_Global_03min.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Crop Group Number (other)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_leaf_area_index_forest": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="laif.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/laif.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Leaf Area Index (forest)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_leaf_area_index_grassland_like": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="laio.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/laio.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Leaf Area Index (other)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
     "why_map": {
         "adapter": WhyMap(
             folder="why_map",
@@ -144,9 +205,9 @@ data_catalog: dict[str, dict[str, Any]] = {
     "global_exposure_model": {
         "adapter": GlobalExposureModel(
             folder="global_exposure_model",
-            local_version=2,
-            filename="global_exposure_model.yml",
-            cache="local",
+            local_version=1,
+            filename="global_exposure_model_{}.csv",
+            cache="global",
         ),
         "url": "https://github.com/gem/global_exposure_model",
         "source": {

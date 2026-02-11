@@ -930,16 +930,17 @@ def pad_xy(
         return superset
 
 
-def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
+def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArray:
     """Interpolate NaN values along the time dimension of a DataArray.
 
     Uses nearest neighbor interpolation in the spatial dimensions for each time slice.
 
     Args:
-        da: The input DataArray with a time dimension.
+        da: The input 3D DataArray with dimensions (dim, y, x) and NaN values to interpolate.
+        dim: The dimension along which to interpolate NaN values. Default is 'time'.
 
     Returns:
-        A new DataArray with NaN values interpolated along the time dimension.
+        A new DataArray with NaN values interpolated along the dimension.
 
     Raises:
         ValueError: If '_FillValue' attribute is missing.
@@ -966,21 +967,21 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
         if not mask.any():
             return arr
 
-        assert dims == ("time", "y", "x")
+        assert dims == (dim, "y", "x")
 
-        for time_idx in range(arr.shape[0]):
-            mask_slice = mask[time_idx]
-            time_slice = arr[time_idx]
+        for idx in range(arr.shape[0]):
+            mask_slice = mask[idx]
+            dim_slice = arr[idx]
 
-            y, x = np.indices(time_slice.shape)
+            y, x = np.indices(dim_slice.shape)
             known_x, known_y = x[~mask_slice], y[~mask_slice]
-            known_v = time_slice[~mask_slice]
+            known_v = dim_slice[~mask_slice]
             missing_x, missing_y = x[mask_slice], y[mask_slice]
 
             filled_values = griddata(
                 (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
             )
-            arr[time_idx][mask_slice] = filled_values
+            arr[idx][mask_slice] = filled_values
         return arr
 
     da = xr.apply_ufunc(
