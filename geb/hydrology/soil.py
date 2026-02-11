@@ -2253,6 +2253,12 @@ class Soil(Module):
         if self.model.timing:
             print(timer)
 
+        soil_HRU_forest_cell_area = self.HRU.var.cell_area.copy()
+        soil_HRU_forest_cell_area[self.HRU.var.land_use_type != FOREST] = 0
+        soil_forest_cell_area_grid = self.hydrology.to_grid(
+            HRU_data=soil_HRU_forest_cell_area, fn="sum"
+        )
+
         # Soil moisture
         soil_moisture = np.nan_to_num(self.HRU.var.w.sum(axis=0))
         soil_moisture_grid = self.hydrology.to_grid(
@@ -2376,6 +2382,13 @@ class Soil(Module):
             NPP_forest_plantFATE_grid = self.hydrology.to_grid(
                 HRU_data=NPP_forest_plantFATE_HRU, fn="weightednanmean"
             )
+
+            soil_HRU_plantfate_cell_area = self.HRU.var.cell_area.copy()
+            soil_HRU_plantfate_cell_area[~self.plantFATE_forest_RUs] = 0
+            soil_plantfate_cell_area_grid = self.hydrology.to_grid(
+                HRU_data=soil_HRU_plantfate_cell_area, fn="sum"
+            )
+
 
         self.report(locals())
 
