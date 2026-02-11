@@ -759,7 +759,9 @@ class SFINCSRootModel:
             ValueError: if the calculated outflow point is outside of the model grid.
         """
 
-        def export_diagnostics(outflow_point: Point | MultiPoint) -> None:
+        def export_diagnostics(
+            outflow_point: Point | MultiPoint | GeometryCollection,
+        ) -> None:
             write_zarr(
                 self.mask,
                 self.path / "debug_outflow_mask.zarr",
