@@ -260,6 +260,7 @@ class SFINCSRootModel:
 
         subbasins: gpd.GeoDataFrame = subbasins.to_crs(mask.rio.crs)
         rivers: gpd.GeoDataFrame = rivers.to_crs(mask.rio.crs)
+        self.is_coastal = subbasins["is_coastal"].values
 
         print("Starting SFINCS model build...")
         # build base model
@@ -781,7 +782,71 @@ class SFINCSRootModel:
         ].iterrows():
             downstream_river_idx = river["downstream_ID"]
             if downstream_river_idx == -1:
-                print("Skipping coastal river")
+                # continue  # skip rivers that flow into ocean, as they don't have an outflow point on the grid
+                river = river.geometry
+
+                # Elongate the river geometry to ensure it intersects with the boundary. Since there is no downstream
+                # river segment to combine with, we create a long line segment in the direction of the last segment of the river.
+                p1: np.ndarray[tuple[Any, ...]] = np.array(river.coords[-2])
+                p2: np.ndarray[tuple[Any, ...]] = np.array(river.coords[-1])
+
+                direction = p2 - p1
+                # extent by 10 times the length of the last segment to ensure intersection with boundary
+                extended_point = (
+                    p2[0] + direction[0] * 10,
+                    p2[1] + direction[1] * 10,
+                )
+                # create a long line from the last point of the river to the extended point
+                long_line = LineString([tuple(p2), extended_point])
+
+                # combine the river geometry with the long line to ensure intersection with the boundary
+                river = LineString(river.coords[:] + long_line.coords[:])
+                outflow_point: Point | MultiPoint | GeometryCollection = (
+                    river.intersection(boundary)
+                )
+
+                outflow_col, outflow_row = coord_to_pixel(
+                    (outflow_point.x, outflow_point.y),
+                    self.mask.rio.transform().to_gdal(),
+                )
+
+                # due to floating point precision, the intersection point
+                # may be just outside the model grid. We therefore check if the
+                # point is outside the grid, and if so, move it 1 m upstream along the river
+                if not self.mask.values[outflow_row, outflow_col]:
+                    # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
+                    outflow_point: Point | MultiPoint | GeometryCollection = (
+                        river.interpolate(
+                            line_locate_point(river, outflow_point) - 0.000008983
+                            if self.is_geographic
+                            else 1.0
+                        )
+                    )
+                    if not isinstance(outflow_point, Point):
+                        # if the intersection is not a single point, select the most downstream point
+                        outflow_point: Point = select_most_downstream_point(
+                            river, outflow_point
+                        )
+
+                    outflow_col, outflow_row = coord_to_pixel(
+                        (outflow_point.x, outflow_point.y),
+                        self.mask.rio.transform().to_gdal(),
+                    )
+
+                    # if still outside the grid, raise error for boundary rivers
+                    if not self.mask.values[outflow_row, outflow_col]:
+                        export_diagnostics(outflow_point)
+                        raise ValueError(
+                            "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
+                        )
+
+                self.rivers.at[river_idx, "outflow_elevation"] = 0
+                self.rivers.at[river_idx, "outflow_point_xy"] = (
+                    outflow_point.x,
+                    outflow_point.y,
+                )
+                self.rivers.at[river_idx, "is_outflow_boundary"] = True
+
             else:
                 river = river.geometry
                 assert isinstance(river, LineString)
