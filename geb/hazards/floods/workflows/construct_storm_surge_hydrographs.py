@@ -31,7 +31,7 @@ def lin_detrend_wNa(
     station: int,
     remove_means: bool = True,
     figure_plotting: bool = True,
-) -> tuple[float, pd.DataFrame]:
+) -> tuple[float, pd.Series]:
     """This function detrends a time series linearly, while keeping NaN values in the original time series.
 
     The function can be used to remove long-term trends from the tide signal,
