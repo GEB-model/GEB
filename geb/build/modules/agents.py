@@ -1732,9 +1732,9 @@ class Agents(BuildModelBase):
         self,
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
-        single_household_per_building: bool = True,
-        occupancy_type: list[str] = ["RES"],  # ["RES", "UNK"],
-        minimum_building_size: int | None = 30,
+        single_household_per_building: bool = False,
+        occupancy_type: list[str] = ["RES", "UNK"],  # ["RES", "UNK"],
+        minimum_building_size: int | None = None,
     ) -> None:
         """Sets up household characteristics for agents using GLOPOP-S data.
 
