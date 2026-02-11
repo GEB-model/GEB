@@ -347,6 +347,10 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_sprinkler"]["allocation_reduction"]
 
+        self.irrigation_reduction = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["allocation_reduction"]
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -872,6 +876,13 @@ class CropFarmers(AgentBaseClass):
             dtype=np.float32,
             fill_value=self.var.irr_eff_surface,
         )
+        self.var.irrigation_reduction = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=1,
+        )
+
         # if dynamic adaptation is active, irrigation efficiency needs to be initialized
         if (
             self.sprinkler_adaptation_active
@@ -3701,21 +3712,23 @@ class CropFarmers(AgentBaseClass):
         # Determine for which agents it is beneficial to switch crops
         initial_mask = (best_option_SEUT > SEUT_do_nothing) & (new_id_temp != -1)
 
-        cap = int(np.floor(0.05 * best_option_SEUT.size))
-        n_true = int(initial_mask.sum())
-        if n_true <= cap:
-            SEUT_adaptation_decision = initial_mask
-        else:
-            denom = np.maximum(np.abs(SEUT_do_nothing), 1e-12)
-            pct_diff = (best_option_SEUT - SEUT_do_nothing) / denom
+        SEUT_adaptation_decision = initial_mask
 
-            idx_true = np.flatnonzero(initial_mask)
-            scores = pct_diff[idx_true]
-            top_k_rel = np.argpartition(scores, -cap)[-cap:]
-            keep_idx = idx_true[top_k_rel]
+        # cap = int(np.floor(0.05 * best_option_SEUT.size))
+        # n_true = int(initial_mask.sum())
+        # if n_true <= cap:
+        #     SEUT_adaptation_decision = initial_mask
+        # else:
+        #     denom = np.maximum(np.abs(SEUT_do_nothing), 1e-12)
+        #     pct_diff = (best_option_SEUT - SEUT_do_nothing) / denom
 
-            SEUT_adaptation_decision = np.zeros_like(initial_mask, dtype=bool)
-            SEUT_adaptation_decision[keep_idx] = True
+        #     idx_true = np.flatnonzero(initial_mask)
+        #     scores = pct_diff[idx_true]
+        #     top_k_rel = np.argpartition(scores, -cap)[-cap:]
+        #     keep_idx = idx_true[top_k_rel]
+
+        #     SEUT_adaptation_decision = np.zeros_like(initial_mask, dtype=bool)
+        #     SEUT_adaptation_decision[keep_idx] = True
 
         # Protect against full loss of rotation
         switch = SEUT_adaptation_decision.copy()
@@ -4496,6 +4509,27 @@ class CropFarmers(AgentBaseClass):
             self.var.time_adapted[mask, adaptation_type] = -1
             self.var.loan_tracker[mask, adaptation_type + 1, 0] = 0
 
+        def apply_efficiency_and_reduction(
+            mask: npt.NDArray[np.bool_],
+            new_eff: float,
+            new_return_fraction: float,
+        ) -> None:
+            """Update irrigation_efficiency + return_fraction and decrement irrigation_reduction by Δeff."""
+            if not np.any(mask):
+                return
+
+            old_eff = self.var.irrigation_efficiency[mask].copy()
+            self.var.irrigation_efficiency[mask] = new_eff
+            self.var.return_fraction[mask] = new_return_fraction
+
+            delta = new_eff - old_eff  # expected >= 0 due to monotonic upgrades
+            self.var.irrigation_reduction[mask] -= delta
+
+            # Safety bounds (optional but recommended)
+            self.var.irrigation_reduction[mask] = np.clip(
+                self.var.irrigation_reduction[mask], 0.0, 1.0
+            )
+
         irrigated_mask = self.irrigated.astype(bool)
         if not np.any(irrigated_mask):
             return
@@ -4505,8 +4539,13 @@ class CropFarmers(AgentBaseClass):
             self.var.adaptations[:, drip_type] == -1
         )
         if np.any(base_mask):
-            self.var.irrigation_efficiency[base_mask] = self.var.irr_eff_surface
-            self.var.return_fraction[base_mask] = self.var.return_fraction_surface
+            apply_efficiency_and_reduction(
+                base_mask,
+                float(self.var.irr_eff_surface),
+                float(self.var.return_fraction_surface),
+            )
+            # If you instead want surface to *reset* irrigation_reduction to 1, uncomment:
+            # self.var.irrigation_reduction[base_mask] = 1.0
 
         # RNG
         if not hasattr(self, "rng_irrigation"):
@@ -4599,8 +4638,11 @@ class CropFarmers(AgentBaseClass):
                 clear_adaptation(mask, sprinkler_type)  # conservative; cheap and safe
                 self.var.adaptations[mask, drip_type] = 1
                 self.var.time_adapted[mask, drip_type] = 0
-                self.var.irrigation_efficiency[mask] = self.var.irr_eff_drip
-                self.var.return_fraction[mask] = self.var.return_fraction_drip
+                apply_efficiency_and_reduction(
+                    mask,
+                    float(self.var.irr_eff_drip),
+                    float(self.var.return_fraction_drip),
+                )
 
                 self.var.all_loans_annual_cost[mask, drip_type + 1, 0] += (
                     annual_cost_drip[mask]
@@ -4612,10 +4654,7 @@ class CropFarmers(AgentBaseClass):
 
                 # remove chosen from surface pool for subsequent draws
                 if k_surf_to_spr > 0:
-                    keep = np.ones(idx_surf.shape[0], dtype=bool)
-                    # safer without assuming sorted: build mask by isin
-                    keep = ~np.isin(idx_surf, chosen)
-                    idx_surf = idx_surf[keep]
+                    idx_surf = idx_surf[~np.isin(idx_surf, chosen)]
 
             # Sprinkler -> Drip
             if k_spr_to_drip > 0:
@@ -4627,8 +4666,11 @@ class CropFarmers(AgentBaseClass):
                 clear_adaptation(mask, sprinkler_type)
                 self.var.adaptations[mask, drip_type] = 1
                 self.var.time_adapted[mask, drip_type] = 0
-                self.var.irrigation_efficiency[mask] = self.var.irr_eff_drip
-                self.var.return_fraction[mask] = self.var.return_fraction_drip
+                apply_efficiency_and_reduction(
+                    mask,
+                    float(self.var.irr_eff_drip),
+                    float(self.var.return_fraction_drip),
+                )
 
                 self.var.all_loans_annual_cost[mask, drip_type + 1, 0] += (
                     annual_cost_drip[mask]
@@ -4648,8 +4690,11 @@ class CropFarmers(AgentBaseClass):
                 clear_adaptation(mask, drip_type)  # conservative; cheap and safe
                 self.var.adaptations[mask, sprinkler_type] = 1
                 self.var.time_adapted[mask, sprinkler_type] = 0
-                self.var.irrigation_efficiency[mask] = self.var.irr_eff_sprinkler
-                self.var.return_fraction[mask] = self.var.return_fraction_sprinkler
+                apply_efficiency_and_reduction(
+                    mask,
+                    float(self.var.irr_eff_sprinkler),
+                    float(self.var.return_fraction_sprinkler),
+                )
 
                 self.var.all_loans_annual_cost[mask, sprinkler_type + 1, 0] += (
                     annual_cost_sprinkler[mask]
@@ -5755,6 +5800,8 @@ class CropFarmers(AgentBaseClass):
         ):
             if self.model.current_time.year > self.model.spinup_start.year:
                 irrigation_limit = self.irrigation_limit_mdb
+                if self.irrigation_reduction and not self.model.in_spinup:
+                    irrigation_limit *= self.var.irrigation_reduction
                 # reset the irrigation limit, but only if a full year has passed already. Otherwise
                 # the cumulative water deficit is not year completed.
                 self.var.remaining_irrigation_limit_m3_reservoir[:] = irrigation_limit[
