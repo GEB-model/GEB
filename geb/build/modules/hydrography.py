@@ -1021,6 +1021,9 @@ class Hydrography(BuildModelBase):
                 from the waterbody dataset are used. The table must have
                 ``waterbody_id`` as the index and a ``volume_total`` column defining
                 the reservoir capacity.
+
+        Raises:
+            ValueError: If ``custom_reservoir_capacity`` is not a .csv file or .xlsx file
         """
         waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
@@ -1360,7 +1363,7 @@ class Hydrography(BuildModelBase):
             ]
 
             waterbodies.set_index("waterbody_id", inplace=True)
-            waterbodies.update(custom_reservoir_capacity_df)
+            waterbodies.update(custom_reservoir_capacity)
             waterbodies.reset_index(inplace=True)
 
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"

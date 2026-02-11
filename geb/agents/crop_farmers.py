@@ -6,7 +6,7 @@ import calendar
 import copy
 import math
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -40,7 +40,6 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
-    compute_premiums_and_best_contracts_numba,
     crop_profit_difference_total,
     farmer_command_area,
     find_most_similar_index,
@@ -328,7 +327,7 @@ class CropFarmers(AgentBaseClass):
         self.electricity_cost = load_economic_data(
             self.model.files["dict"]["socioeconomics/electricity_cost"]
         )
-        self.water_price = load_economic_data(
+        self.water_price_dict = load_economic_data(
             self.model.files["dict"]["socioeconomics/water_price"]
         )
 
@@ -986,6 +985,10 @@ class CropFarmers(AgentBaseClass):
             "farmers"
         ]["expected_utility"]["adaptation_sprinkler"]["return_fraction_sprinkler"]
 
+        efficiency_division = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["efficiency_division"]
+
         self.var.return_fraction = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -998,109 +1001,66 @@ class CropFarmers(AgentBaseClass):
             dtype=np.float32,
             fill_value=self.var.irr_eff_surface,
         )
-        self.var.irrigation_reduction = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            dtype=np.float32,
-            fill_value=1,
+
+        # HETAO: you could initialize your irrigation efficiency here
+        efficiency_division_array = np.array(
+            [efficiency_division[0], efficiency_division[1], efficiency_division[2]],
+            dtype=float,
+        )
+        efficiency_division_array /= np.array(efficiency_division_array).sum()
+
+        rng = np.random.default_rng(42)
+
+        self.var.irrigation_efficiency[self.irrigated] = rng.choice(
+            [
+                self.var.irr_eff_surface,
+                self.var.irr_eff_sprinkler,
+                self.var.irr_eff_drip,
+            ],
+            size=self.irrigated.sum(),
+            p=efficiency_division_array,
         )
 
-        # if dynamic adaptation is active, irrigation efficiency needs to be initialized
-        if (
-            self.sprinkler_adaptation_active
-            and self.sprinkler_adaptation_type == "dynamic"
-        ):
-            region_agents = np.where(
-                self.model.regions["NAME_1"].values[self.var.region_id] == "Victoria",
-                0,
-                1,
-            )  # Vict is 0, NSW is 1
+        self.var.adaptations[
+            self.var.irrigation_efficiency == self.var.irr_eff_sprinkler,
+            IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
+        ] = 1
+        self.var.adaptations[
+            self.var.irrigation_efficiency == self.var.irr_eff_drip,
+            IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+        ] = 1
 
-            eff_vict_mask = irrigation_mask & (region_agents == 0)
-            eff_nsw_mask = irrigation_mask & (region_agents == 1)
+        self.var.return_fraction[
+            self.var.irrigation_efficiency == self.var.irr_eff_sprinkler
+        ] = self.var.return_fraction_sprinkler
+        self.var.return_fraction[
+            self.var.irrigation_efficiency == self.var.irr_eff_drip
+        ] = self.var.return_fraction_drip
 
-            rng = np.random.default_rng(42)
+        self.var.mean_irrigation_efficiency = np.mean(self.var.irrigation_efficiency)
+        _, self.var.irrigation_efficiency_group = np.unique(
+            self.var.irrigation_efficiency, return_inverse=True
+        )
 
-            time = self.model.current_time
-            # Per-region (VICT=0, NSW=1) arrays
-            surface_by_region, inv = self.get_value_per_aus_region(
-                self.surface_fraction, time, region_agents
-            )
-            sprinkler_by_region, _ = self.get_value_per_aus_region(
-                self.sprinkler_fraction, time, region_agents
-            )
-            drip_by_region, _ = self.get_value_per_aus_region(
-                self.drip_fraction, time, region_agents
-            )
-
-            p_vict = np.array(
-                [surface_by_region[0], sprinkler_by_region[0], drip_by_region[0]],
-                dtype=float,
-            )
-            p_vict /= p_vict.sum()
-            self.var.irrigation_efficiency[eff_vict_mask] = rng.choice(
-                [
-                    self.var.irr_eff_surface,
-                    self.var.irr_eff_sprinkler,
-                    self.var.irr_eff_drip,
-                ],
-                size=eff_vict_mask.sum(),
-                p=p_vict,
-            )  # vict
-            p_nsw = np.array(
-                [surface_by_region[1], sprinkler_by_region[1], drip_by_region[1]],
-                dtype=float,
-            )
-            p_nsw /= p_nsw.sum()
-
-            self.var.irrigation_efficiency[eff_nsw_mask] = rng.choice(
-                [
-                    self.var.irr_eff_surface,
-                    self.var.irr_eff_sprinkler,
-                    self.var.irr_eff_drip,
-                ],
-                size=eff_nsw_mask.sum(),
-                p=p_nsw,
-            )  # nsw
-            self.var.adaptations[
-                self.var.irrigation_efficiency == self.var.irr_eff_sprinkler,
-                IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-            ] = 1
-            self.var.adaptations[
-                self.var.irrigation_efficiency == self.var.irr_eff_drip,
-                IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
-            ] = 1
-
-            self.var.return_fraction[
-                self.var.irrigation_efficiency == self.var.irr_eff_sprinkler
-            ] = self.var.return_fraction_sprinkler
-            self.var.return_fraction[
-                self.var.irrigation_efficiency == self.var.irr_eff_drip
-            ] = self.var.return_fraction_drip
-
-            rng_drip = np.random.default_rng(70)
-            self.var.time_adapted[
-                self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER]
-                == 1,
-                IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-            ] = rng_drip.uniform(
-                1,
-                self.var.lifespan_irrigation,
-                np.sum(
-                    self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER]
-                    == 1
-                ),
-            )
-            self.var.time_adapted[
-                self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_DRIP] == 1,
-                IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
-            ] = rng_drip.uniform(
-                1,
-                self.var.lifespan_irrigation,
-                np.sum(
-                    self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_DRIP] == 1
-                ),
-            )
+        rng_drip = np.random.default_rng(70)
+        self.var.time_adapted[
+            self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER] == 1,
+            IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
+        ] = rng_drip.uniform(
+            1,
+            self.var.lifespan_irrigation,
+            np.sum(
+                self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER] == 1
+            ),
+        )
+        self.var.time_adapted[
+            self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_DRIP] == 1,
+            IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+        ] = rng_drip.uniform(
+            1,
+            self.var.lifespan_irrigation,
+            np.sum(self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_DRIP] == 1),
+        )
 
         self.var.mean_irrigation_efficiency = np.mean(self.var.irrigation_efficiency)
         _, self.var.irrigation_efficiency_group = np.unique(
@@ -1641,7 +1601,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     @property
-    def water_price_mdb(self) -> np.ndarray:
+    def water_price(self) -> np.ndarray:
         """Yearly water price per region (USD/m³).
 
         Taken from observed water markets data.
@@ -1649,171 +1609,11 @@ class CropFarmers(AgentBaseClass):
         water_price_usd_m3 = np.full(
             self.var.n,
             self.get_value_per_farmer_from_region_id(
-                self.water_price, self.model.current_time
+                self.water_price_dict, self.model.current_time
             ),
             dtype=np.float32,
         )
         return water_price_usd_m3
-
-    @property
-    def irrigation_limit_mdb(self) -> np.ndarray:
-        """Yearly allocation per farmer (m³/year).
-
-        Taken from observed allocation data.
-        """
-        diversions_total = (
-            np.full(
-                self.var.n,
-                self.get_value_per_farmer_from_region_id(
-                    self.diversions, self.model.current_time
-                ),
-                dtype=np.float32,
-            )
-            * self.allocation_reduction
-        )
-
-        aus_region_agents = np.where(
-            self.model.regions["NAME_1"].values[self.var.region_id] == "Victoria",
-            0,
-            1,
-        )  # Vict is 0, NSW is 1
-
-        allocation_vic = diversions_total[aus_region_agents == 0][0]
-        allocation_nsw = diversions_total[aus_region_agents == 1][0]
-
-        aus_region_HRUs = np.where(
-            self.model.regions["NAME_1"].values[self.var.HRU_regions_map] == "Victoria",
-            0,
-            1,
-        )  # Vict is 0, NSW is 1
-
-        # Divide between livestock and crop farmers
-        vic_crop_to_livestock_factor = 0.33  # 67% went to pastures, 33% to crops
-        nsw_crop_to_livestock_factor = 0.75  # 25% went to pastures, 75% to crops
-
-        crop_allocation_vic = allocation_vic * vic_crop_to_livestock_factor
-        crop_allocation_nsw = allocation_nsw * nsw_crop_to_livestock_factor
-
-        # Give remainder of allocation to livestock farmers
-        livestock_demand_m3 = (
-            self.agents.livestock_farmers.var.current_water_demand
-            * self.HRU.var.cell_area
-        ) * 365  # yearly existing demand in m3
-        livestock_demand_vic_m3 = livestock_demand_m3[aus_region_HRUs == 0]
-        livestock_demand_nsw_m3 = livestock_demand_m3[aus_region_HRUs == 1]
-
-        # Also subtract the current livestock demand from allocation to prevent double counting
-        pasture_allocation_vic_m3 = (
-            max(
-                allocation_vic - crop_allocation_vic - np.sum(livestock_demand_vic_m3),
-                0,
-            )
-            / 365
-        )  # daily water demand in m3
-        pasture_allocation_nsw_m3 = (
-            max(
-                allocation_nsw - crop_allocation_nsw - np.sum(livestock_demand_nsw_m3),
-                0,
-            )
-            / 365
-        )  # daily water demand in m3
-
-        # Divide over cells with values
-        mask_vic_positive = (aus_region_HRUs == 0) & (livestock_demand_m3 > 0)
-        mask_nsw_positive = (aus_region_HRUs == 1) & (livestock_demand_m3 > 0)
-
-        additional_water_allocation_m3 = np.zeros_like(livestock_demand_m3)
-
-        allocation_per_cell_vic_m3 = pasture_allocation_vic_m3 / np.sum(
-            mask_vic_positive
-        )
-        allocation_per_cell_nsw_m3 = pasture_allocation_nsw_m3 / np.sum(
-            mask_nsw_positive
-        )
-
-        additional_water_allocation_m3[mask_vic_positive] = allocation_per_cell_vic_m3
-        additional_water_allocation_m3[mask_nsw_positive] = allocation_per_cell_nsw_m3
-
-        self.agents.livestock_farmers.var.additional_water_allocation = (
-            additional_water_allocation_m3 / self.HRU.var.cell_area
-        )  # daily water demand in m
-
-        allocation_farmers_m3 = np.full_like(
-            self.var.remaining_irrigation_limit_m3_channel.data,
-            np.nan,
-            dtype=np.float32,
-        )
-
-        groundwater_mask = self.well_irrigated
-        surface_water_mask = self.surface_irrigated
-
-        vic_mask = aus_region_agents == 0
-        nsw_mask = aus_region_agents == 1
-
-        field_size = self.field_size_per_farmer
-
-        # --- surface water (channel + reservoir) ---
-
-        vic_sw_mask = vic_mask & surface_water_mask
-        nsw_sw_mask = nsw_mask & surface_water_mask
-
-        total_area_vic_sw = field_size[vic_sw_mask].sum()
-        total_area_nsw_sw = field_size[nsw_sw_mask].sum()
-
-        if total_area_vic_sw > 0:
-            area_fraction_vic_sw = field_size[vic_sw_mask] / total_area_vic_sw
-            allocation_farmers_m3[vic_sw_mask] = (
-                crop_allocation_vic * area_fraction_vic_sw
-            )
-
-        if total_area_nsw_sw > 0:
-            area_fraction_nsw_sw = field_size[nsw_sw_mask] / total_area_nsw_sw
-            allocation_farmers_m3[nsw_sw_mask] = (
-                crop_allocation_nsw * area_fraction_nsw_sw
-            )
-
-        # --- extra groundwater allocation based on GW vs SW deficit ratio ---
-        # Groundwater is not included in the SW limits and unreported
-
-        vic_gw_mask = vic_mask & groundwater_mask
-        nsw_gw_mask = nsw_mask & groundwater_mask
-
-        total_area_sw = total_area_nsw_sw + total_area_nsw_sw
-        total_area_gw = field_size[groundwater_mask].sum()
-
-        if total_area_sw > 0 and total_area_gw > 0:
-            frac_gw_vs_sw = total_area_gw / total_area_sw
-
-            total_area_vic_gw = field_size[vic_gw_mask].sum()
-            if total_area_vic_gw > 0:
-                area_fraction_vic_gw = field_size[vic_gw_mask] / total_area_vic_gw
-                extra_vic_gw = crop_allocation_vic * frac_gw_vs_sw
-                allocation_farmers_m3[vic_gw_mask] = extra_vic_gw * area_fraction_vic_gw
-
-            total_area_nsw_gw = field_size[nsw_gw_mask].sum()
-            if total_area_nsw_gw > 0:
-                area_fraction_nsw_gw = field_size[nsw_gw_mask] / total_area_nsw_gw
-                extra_nsw_gw = crop_allocation_nsw * frac_gw_vs_sw
-                allocation_farmers_m3[nsw_gw_mask] = extra_nsw_gw * area_fraction_nsw_gw
-
-        return allocation_farmers_m3
-
-    @property
-    def irrigation_limit_groundwater_india(self) -> np.ndarray:
-        """Yearly groundwater irrigation limit per farmer (m³/year).
-
-        Computed as an hourly maximum derived from groundwater depth, multiplied by
-        the total hours (``365 * 5``). Follows the maximum flow rate in an (Indian) tubewell
-        by Robert et al. (2018) https://doi.org/10.1016/j.ejor.2017.08.029
-        """
-        hourly_irrigation_maximum = 79.93 * (self.groundwater_depth + 0.01) ** -0.728
-        # crop_growth_lengths = self.var.crop_calendar[:, :, 2].data
-        # crop_growth_lengths = np.where(
-        #     crop_growth_lengths == -1, 0, crop_growth_lengths
-        # )
-        total_hours = 365 * 5
-        yearly_irrigation_total = hourly_irrigation_maximum * total_hours
-        return yearly_irrigation_total
 
     @property
     def command_area(self) -> np.ndarray:
@@ -1836,14 +1636,9 @@ class CropFarmers(AgentBaseClass):
         return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0
 
     @property
-    def reservoir_channel_irrigated(self) -> np.ndarray:
-        """Per-farmer indicator (int8) of reservoir/channel irrigation.
-
-        Combines reservoir access and any yearly channel abstraction.
-        """
-        return (self.command_area >= 0).astype(np.int8) | (
-            self.var.yearly_abstraction_m3_by_farmer[:, CHANNEL_IRRIGATION, 0] > 0
-        ).astype(np.int8)
+    def channel_irrigated(self) -> DynamicArray:
+        """Boolean mask of farmers that have surface-irrigation equipment but do not have reservoir access."""
+        return self.surface_irrigated & (~self.is_in_command_area)
 
     @property
     def well_irrigated(self) -> DynamicArray:
@@ -1961,7 +1756,7 @@ class CropFarmers(AgentBaseClass):
             field_indices_by_farmer=self.var.field_indices_by_farmer.data,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
-            channel_irrigated=self.channel_irrigating_mdb.data,
+            channel_irrigated=self.channel_irrigated.data,
             well_irrigated=self.well_irrigated.data,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
@@ -1971,9 +1766,7 @@ class CropFarmers(AgentBaseClass):
             available_groundwater_m3=available_groundwater_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             groundwater_depth=groundwater_depth,
-            command_area_by_farmer=np.where(
-                self.reservoir_irrigating_mdb, self.command_area, -1
-            ),
+            command_area_by_farmer=self.command_area,
             return_fraction=self.var.return_fraction.data,
             well_depth=self.var.well_depth.data,
             remaining_irrigation_limit_m3_reservoir=self.var.remaining_irrigation_limit_m3_reservoir.data,
@@ -2779,351 +2572,6 @@ class CropFarmers(AgentBaseClass):
             annual_cost_microcredit
         )
 
-    def government_premium_cap(self) -> np.ndarray:
-        """Compute per-farmer government premium cap based on income and crop mix.
-
-        Farmers are grouped by well status. If all farmers in a group have
-        sugarcane (``crop_calendar[..., -1, 0] == 4``), the cap is 5% of mean
-        income per m²; otherwise 2%. Caps are then scaled by each farmer's field
-        size.
-
-        Returns:
-            numpy.ndarray: Premium cap per farmer.
-        """
-        year_income_m2 = self.var.yearly_income[:, 0] / self.field_size_per_farmer
-
-        group_indices, n_groups = self.create_unique_groups(
-            self.well_irrigated,
-        )
-        group_mean_cap = np.zeros(n_groups, dtype=float)
-        for group_idx in range(n_groups):
-            agent_indices = np.where(group_indices == group_idx)[0]
-            sugarcane_check = np.all(self.var.crop_calendar[agent_indices, -1, 0] == 4)
-            if sugarcane_check:
-                group_mean_cap[group_idx] = (
-                    np.mean(year_income_m2[agent_indices]) * 0.05
-                )
-            else:
-                group_mean_cap[group_idx] = (
-                    np.mean(year_income_m2[agent_indices]) * 0.02
-                )
-
-        agent_caps = group_mean_cap[group_indices] * self.field_size_per_farmer
-
-        return agent_caps
-
-    def potential_insured_loss(self) -> np.ndarray:
-        """Compute potential insured loss per farmer-year.
-
-        Masks unfilled years (all-zero income), computes each farmer's average
-        income over filled years, and sets the potential insured loss as the
-        positive difference between that average and the realized income.
-
-        Returns:
-            np.ndarray: Array shaped like ``yearly_income`` with per farmer-year
-                potential insured losses (``float32``). Masked years remain zero.
-        """
-        # Calculating personal pure premiums and Bühlmann-Straub parameters to get the credibility premium
-        # Mask out unfilled years
-        mask_columns = np.all(self.var.yearly_income == 0, axis=0)
-
-        # Apply the mask to data
-        income_masked = self.var.yearly_income.data[:, ~mask_columns]
-        n_agents, n_years = income_masked.shape
-
-        # Calculate personal loss
-        self.var.avg_income_per_agent = np.nanmean(income_masked, axis=1)
-
-        potential_insured_loss = np.zeros_like(self.var.yearly_income, dtype=np.float32)
-
-        potential_insured_loss[:, ~mask_columns] = np.maximum(
-            self.var.avg_income_per_agent[..., None] - income_masked, 0
-        )
-
-        return potential_insured_loss
-
-    def premium_personal_insurance(
-        self,
-        potential_insured_loss: npt.NDArray[np.floating],
-        government_premium_cap: npt.NDArray[np.floating],
-    ) -> npt.NDArray[np.floating]:
-        """Compute capped personal insurance premiums via Bühlmann–Straub credibility.
-
-        Uses each farmer's pure premium (mean potential loss per m²), blends it with
-        their group's mean using credibility weights ``Z = n / (n + K)``, and then
-        caps the resulting premium by the government cap.
-
-        Args:
-            potential_insured_loss: Potential insured loss per
-                farmer-year; shape matches ``yearly_income``.
-            government_premium_cap: Maximum allowed premium per
-                farmer (currency units).
-
-        Returns:
-            npt.NDArray[np.floating]: Capped personal premium per farmer.
-        """
-        # Calculating personal pure premiums and Bühlmann-Straub parameters to get the credibility premium
-        # Mask out unfilled years
-        mask_columns = np.all(self.var.yearly_income == 0, axis=0)
-
-        # Apply the mask to data
-        income_masked = self.var.yearly_income.data[:, ~mask_columns]
-        # Calculate personal loss
-        agent_pure_premiums_m2 = (
-            np.mean(potential_insured_loss, axis=1) / self.field_size_per_farmer
-        )
-
-        group_indices, n_groups = self.create_unique_groups(
-            self.well_irrigated,
-        )
-
-        years_observed = np.sum(~np.isnan(income_masked), axis=1)
-        # Initialize arrays for coefficients and R²
-        group_mean_premiums = np.zeros(n_groups, dtype=float)
-        for group_idx in range(n_groups):
-            agent_indices = np.where(group_indices == group_idx)[0]
-            group_mean_premiums[group_idx] = np.mean(
-                agent_pure_premiums_m2[agent_indices]
-            )
-
-        sample_var_per_agent = np.var(potential_insured_loss, axis=1, ddof=1)
-        valid_for_within = years_observed > 1
-
-        within_variance = np.sum(
-            (years_observed[valid_for_within] - 1)
-            * sample_var_per_agent[valid_for_within]
-        ) / np.sum(years_observed[valid_for_within] - 1)
-        between_variance = np.var(agent_pure_premiums_m2, ddof=1)
-        credibility_param_K = (
-            within_variance / between_variance if between_variance > 0 else np.inf
-        )
-
-        # Classical Bühlmann–Straub: Z = n / (n + K)
-        credibility_weights = years_observed / (years_observed + credibility_param_K)
-        credibility_premiums_m2 = (
-            credibility_weights * agent_pure_premiums_m2
-            + (1 - credibility_weights) * group_mean_premiums[group_indices]
-        )
-        # Return to personal prices and add loading factor
-        personal_premium = credibility_premiums_m2 * self.field_size_per_farmer * 1.3
-
-        return np.minimum(government_premium_cap, personal_premium)
-
-    def insured_payouts_personal(
-        self,
-        insured_farmers_mask: DynamicArray,
-    ) -> npt.NDArray[np.floating]:
-        """Compute insured payouts for personal insurance and update state.
-
-        Uses a trailing mean income threshold per farmer-year (first 7 years use the
-        cumulative mean; afterwards a 7-year moving average), compares it to current
-        income, and pays the positive shortfall for insured farmers. Updates
-        ``insured_yearly_income`` for the current year and records payout events in
-        ``payout_mask``.
-
-        Args:
-            insured_farmers_mask: Boolean mask indicating
-                which farmers are covered by personal insurance.
-
-        Returns:
-            npt.NDArray[np.floating]: Per farmer-year insured losses (same shape as
-            ``yearly_income``).
-        """
-        data_full = self.var.yearly_income.data
-
-        mask_cols = (data_full == 0).all(axis=0)
-        data_masked = data_full[:, ~mask_cols]
-
-        cumsum = np.cumsum(data_masked, axis=1, dtype=float)
-
-        n_agents, T = data_masked.shape
-        years = np.arange(T)
-        thr_m = np.empty_like(data_masked, dtype=float)
-
-        first7 = years < 7
-        thr_m[:, first7] = cumsum[:, first7] / (years[first7] + 1)
-
-        if T > 7:
-            window_sum = cumsum[:, 7:] - cumsum[:, :-7]
-            thr_m[:, 7:] = window_sum / 7
-
-        thr_m = thr_m[:, ::-1]
-
-        threshold_full = np.zeros_like(data_full, dtype=float)
-        threshold_full[:, ~mask_cols] = thr_m
-
-        insured_losses = np.maximum(threshold_full - self.var.yearly_income, 0)
-
-        self.var.insured_yearly_income[insured_farmers_mask, 0] += insured_losses[
-            insured_farmers_mask, 0
-        ]
-
-        # Improve intention factor of farmers who have had a payout
-        new_payouts = (insured_losses[:, 0] > 0) & insured_farmers_mask
-        self.var.payout_mask[:, PERSONAL_INSURANCE_ADAPTATION] |= new_payouts
-
-        return insured_losses
-
-    def premium_index_insurance(
-        self,
-        potential_insured_loss: npt.NDArray[np.floating],
-        history: npt.NDArray[np.floating],
-        gev_params: npt.NDArray[np.floating],
-        strike_vals: npt.NDArray[np.floating],
-        exit_vals: npt.NDArray[np.floating],
-        rate_vals: npt.NDArray[np.floating],
-        government_premium_cap: npt.NDArray[np.floating],
-    ) -> tuple[
-        npt.NDArray[np.floating],
-        npt.NDArray[np.floating],
-        npt.NDArray[np.floating],
-        npt.NDArray[np.floating],
-    ]:
-        """Select an index-insurance contract and compute capped premiums.
-
-        Builds candidate contracts (strike/exit/rate), evaluates basis risk using
-        past losses, and selects the best contract per farmer. Premiums include a
-        loading factor and are capped by the government premium cap.
-
-        Args:
-            potential_insured_loss: Potential insured loss per
-                farmer-year; shape matches ``yearly_income``.
-            history: Historical index (e.g., rainfall) per
-                farmer-year aligned with ``potential_insured_loss``.
-            gev_params: Fitted GEV parameters per farmer
-                (shape as required by the pricing routine).
-            strike_vals: Candidate strike levels.
-            exit_vals: Candidate exit levels.
-            rate_vals: Candidate rate-on-line values.
-            government_premium_cap: Max premium per farmer.
-
-        Returns:
-            tuple[npt.NDArray[np.floating], npt.NDArray[np.floating],
-            npt.NDArray[np.floating], npt.NDArray[np.floating]]: Best strike, exit,
-                rate, and capped premium per farmer.
-        """
-        # Make a series of candidate insurance contracts and find the optimal contract
-        # with the least basis risk considering past losses
-        mask_columns = np.all(self.var.yearly_income == 0, axis=0)
-
-        potential_insured_loss_masked = potential_insured_loss[:, ~mask_columns]
-        history_masked = history[:, ~mask_columns]
-
-        (
-            best_strike_idx,
-            best_exit_idx,
-            best_rate_idx,
-            best_rmse,
-            best_prem,
-        ) = compute_premiums_and_best_contracts_numba(
-            gev_params,
-            history_masked,
-            potential_insured_loss_masked,
-            strike_vals,
-            exit_vals,
-            rate_vals,
-            n_sims=100,
-            seed=42,
-        )
-
-        best_strike = strike_vals[best_strike_idx]
-        best_exit = exit_vals[best_exit_idx]
-        best_rate = rate_vals[best_rate_idx]
-        best_premiums = best_prem * 1.3  # add loading factor
-
-        return (
-            best_strike,
-            best_exit,
-            best_rate,
-            np.minimum(best_premiums, government_premium_cap),
-        )
-
-    def insured_payouts_index(
-        self,
-        strike: npt.NDArray[np.floating],
-        exit: npt.NDArray[np.floating],
-        rate: npt.NDArray[np.floating],
-        insured_farmers_mask: DynamicArray,
-        index_nr: int,
-    ) -> npt.NDArray[np.floating]:
-        """Compute index-insurance payouts historically and update state.
-
-        Uses strike/exit thresholds and per-farmer rates to derive payouts from the
-        historical SPEI index, updates ``insured_yearly_income`` for insured farmers,
-        and records payout events in ``payout_mask`` at ``index_nr``.
-
-        Args:
-            strike: Strike level per farmer.
-            exit: Exit level per farmer (≤ strike).
-            rate: Rate-on-line per farmer.
-            insured_farmers_mask: Boolean mask of insured farmers.
-            index_nr: Column in ``payout_mask`` corresponding to this product.
-
-        Returns:
-            npt.NDArray[np.floating]: Per farmer-year payouts shaped like
-            ``yearly_income`` (masked years are zero).
-        """
-        # Determine what the index insurance would have paid out in the past
-        mask_columns = np.all(self.var.yearly_income == 0, axis=0)
-        spei_hist = self.var.yearly_SPEI.data[:, ~mask_columns]
-
-        denom = strike - exit
-        shortfall = strike[:, None] - spei_hist
-        # (no payout if rainfall ≥ strike)
-        shortfall = np.clip(shortfall, 0.0, None)
-        # (full payout once exit is breached)
-        shortfall = np.minimum(shortfall, denom[:, None])
-        # convert to fraction of maximum shortfall
-        ratio = shortfall / denom[:, None]
-        # scale by each agent’s rate
-        payouts = ratio * rate[:, None]
-
-        potential_insured_loss = np.zeros_like(self.var.yearly_income, dtype=np.float32)
-        potential_insured_loss[:, ~mask_columns] = payouts
-
-        self.var.insured_yearly_income[insured_farmers_mask, 0] += (
-            potential_insured_loss[insured_farmers_mask, 0]
-        )
-
-        # Improve intention factor of farmers who have had a payout
-        self.var.payout_mask[:, index_nr] |= (
-            potential_insured_loss[:, 0] > 0
-        ) & insured_farmers_mask
-
-        return potential_insured_loss
-
-    def insured_yields(
-        self,
-        potential_insured_loss: npt.NDArray[np.floating],
-    ) -> npt.NDArray[np.floating]:
-        """Compute insured yield-SPEI relation given the agent had insurance.
-
-        Adds the potential insured loss to yearly income, converts to a yield ratio
-        relative to potential income (clipped to ``[0, 1]``), and derives the
-        yield-SPEI relationship using the groupwise linear relation.
-
-        Args:
-            potential_insured_loss: Potential insured loss
-                per farmer-year; shape compatible with ``yearly_income``.
-
-        Returns:
-            npt.NDArray[np.floating]: Insured yield-SPEI relationship per farmer-year.
-        """
-        insured_yearly_income = self.var.yearly_income + potential_insured_loss
-
-        insured_yearly_yield_ratio = (
-            insured_yearly_income / self.var.yearly_potential_income
-        )
-
-        insured_yearly_yield_ratio = np.clip(insured_yearly_yield_ratio.data, 0, 1)
-
-        insured_yield_probability_relation = (
-            self.calculate_yield_spei_relation_group_lin(
-                insured_yearly_yield_ratio, self.var.yearly_SPEI_probability
-            )
-        )
-        return insured_yield_probability_relation
-
     @staticmethod
     @njit(cache=True)
     def set_loans_numba(
@@ -3257,8 +2705,8 @@ class CropFarmers(AgentBaseClass):
         Also computes the total costs per farmer.
 
         """
-        mask_channel = self.channel_irrigating_mdb.copy()
-        mask_reservoir = self.reservoir_irrigating_mdb.copy()
+        mask_channel = self.channel_irrigated.copy()
+        mask_reservoir = self.is_in_command_area.copy()
         mask_groundwater = self.well_irrigated.copy()
 
         if self.static_water_price:
@@ -3266,9 +2714,9 @@ class CropFarmers(AgentBaseClass):
             price_reservoir = self.water_costs_m3_reservoir  # scalar
             price_groundwater = self.water_costs_m3_groundwater  # scalar
         else:
-            price_channel = self.water_price_mdb[mask_channel]
-            price_reservoir = self.water_price_mdb[mask_reservoir]
-            price_groundwater = self.water_price_mdb[mask_groundwater]
+            price_channel = self.water_price[mask_channel]
+            price_reservoir = self.water_price[mask_reservoir]
+            price_groundwater = self.water_price[mask_groundwater]
 
         water_costs_channel = (
             self.var.yearly_abstraction_m3_by_farmer[
@@ -3858,12 +3306,11 @@ class CropFarmers(AgentBaseClass):
         metadata = np.column_stack(
             [
                 (
-                    self.reservoir_irrigating_mdb
-                    | self.channel_irrigating_mdb
+                    self.is_in_command_area
+                    | self.channel_irrigated
                     | self.well_irrigated
                 ).astype(np.int32),
                 self.pr_class.astype(np.int32),
-                self.region_agents.astype(np.int32),
                 self.var.irrigation_efficiency_group.astype(np.int32),
             ]
         )
@@ -3936,10 +3383,6 @@ class CropFarmers(AgentBaseClass):
         Args:
             farmer_yield_probability_relation: Per-farmer
                 yield-SPEI relationship used to evaluate profits under drought risk.
-            average_extraction_speed: Average pump
-                extraction speed (can be scalar or per-farmer array).
-            energy_cost: Energy cost per farmer (currency/yr).
-            water_cost: Water cost per farmer (currency/yr).
         """
         groundwater_depth = self.groundwater_depth.copy()
         groundwater_depth[groundwater_depth <= 0] = 0.001
@@ -4111,8 +3554,6 @@ class CropFarmers(AgentBaseClass):
                 Shape (n_agents, 2).
             annual_cost: Annual cost per farmer for the irrigation efficiency method
                  (LCU/year). Shape (n_agents,).
-            adaptation_costs_m2: Capital cost per m² for the efficiency upgrade
-                (LCU/m²). Shape (n_agents,).
             adaptation_type: Index of the adaptation slot/column to update.
             efficiency: New irrigation efficiency to assign to adopters (0-1).
             return_fraction: Fraction of non-consumed irrigation water returning
@@ -4258,197 +3699,6 @@ class CropFarmers(AgentBaseClass):
         )
         print("Irrigation efficient farms:", percentage_adapted, "(%)")
 
-    def adapt_insurance(
-        self,
-        adaptation_types: Sequence[int] | npt.NDArray[np.integer],
-        adaptation_names: Sequence[str],
-        farmer_yield_probability_relation_base: npt.NDArray[np.floating],
-        farmer_yield_probability_relations_insured: Sequence[npt.NDArray[np.floating]],
-        premiums: list[DynamicArray],
-    ) -> None:
-        """Evaluate and adopt insurance options using expected utility (SEUT).
-
-        Computes expected utilities for one or more insurance adaptations, using
-        base and insured yield-SPEI relations, and adopts the highest-SEUT option
-        subject to constraints. Updates adaptation state in place.
-
-        Args:
-            adaptation_types: Numeric codes of insurance adaptations
-                to evaluate (e.g., personal, index, etc.).
-            adaptation_names: Human-readable names aligned with
-                ``adaptation_types`` for logging.
-            farmer_yield_probability_relation_base:
-                Base (uninsured) yield-SPEI relation per farmer.
-            farmer_yield_probability_relations_insured:
-                Per-option insured yield-SPEI relations; same order as
-                ``adaptation_types``.
-            premiums: Annual premium per farmer for each
-                option; shape should broadcast with the per-option loop.
-        """
-        loan_duration = self.var.insurance_duration
-        interest_rate = self.var.interest_rate.data
-
-        # Determine the income of each farmer with or without insurance
-        # Profits without insurance
-        regular_yield_ratios = self.convert_probability_to_yield_ratio(
-            farmer_yield_probability_relation_base
-        )
-        total_profits = self.compute_total_profits(regular_yield_ratios)
-        total_profits, profits_no_event = self.format_results(total_profits)
-
-        # Determine the additional spending room insurance brings
-        # Is done separately as index insurance does affect income,
-        # but does not affect adaptation decisions
-        yield_ratios_exp_cap = self.convert_probability_to_yield_ratio(
-            self.farmer_yield_probability_relation_exp_cap
-        )
-        total_profits_exp_cap = self.compute_total_profits(yield_ratios_exp_cap)
-        _, profits_no_event_exp_cap = self.format_results(total_profits_exp_cap)
-
-        SEUT_insurance_options = np.full(
-            (self.var.n, len(premiums)), 0, dtype=np.float32
-        )
-        annual_cost_array = np.full((self.var.n, len(premiums)), 0, dtype=np.float32)
-
-        for idx, adaptation_type in enumerate(adaptation_types):
-            # Parameters
-            farmer_yield_probability_relation_insured = (
-                farmer_yield_probability_relations_insured[idx]
-            )
-            annual_cost = premiums[idx]
-
-            # Reset farmers' adatations that exceeded their lifespan
-            expired_adaptations = (
-                self.var.time_adapted[:, adaptation_type] == loan_duration
-            )
-            self.var.adaptations[expired_adaptations, adaptation_type] = -1
-            self.var.time_adapted[expired_adaptations, adaptation_type] = -1
-
-        if len(adaptation_types) > 1:
-            test_array = np.zeros_like(interest_rate, dtype=np.int8)
-
-            # Define extra constraints -- cant adapt another insurance type while having one before
-            for t in adaptation_types:
-                test_array += (self.var.adaptations[:, t] >= 0).astype(np.int8)
-
-            extra_constraint = test_array < 1
-            adapted = np.zeros_like(interest_rate, dtype=bool)
-        else:
-            extra_constraint = np.ones_like(interest_rate, dtype=bool)
-            adapted = (self.var.adaptations[:, adaptation_type] > 0).data
-
-        for idx, adaptation_type in enumerate(adaptation_types):
-            # Compute profits with index insurance
-            annual_cost = annual_cost * (
-                interest_rate
-                * (1 + interest_rate) ** loan_duration
-                / ((1 + interest_rate) ** loan_duration - 1)
-            )
-            annual_cost_array[:, idx] = annual_cost
-
-            # Total cost = adaptation costs + existing loans
-            total_annual_costs_m2 = (
-                annual_cost + self.var.all_loans_annual_cost[:, -1, 0]
-            ) / self.field_size_per_farmer
-
-            # Solely the annual cost of the adaptation
-            annual_cost_m2 = annual_cost / self.field_size_per_farmer
-            within_budget = (
-                profits_no_event_exp_cap * self.var.expenditure_cap > annual_cost_m2
-            )
-
-            # Determine the would be income with insurance
-            insured_yield_ratios = self.convert_probability_to_yield_ratio(
-                farmer_yield_probability_relation_insured, model="linear"
-            )
-            total_profits_insured = self.compute_total_profits(insured_yield_ratios)
-            total_profits_index_insured, profits_no_event_index_insured = (
-                self.format_results(total_profits_insured)
-            )
-
-            # Construct a dictionary of parameters to pass to the decision module functions
-            decision_params: dict[str, Any] = {
-                "loan_duration": loan_duration,
-                "expenditure_cap": within_budget,
-                "n_agents": self.var.n,
-                "sigma": self.var.risk_aversion.data,
-                "p_droughts": 1 / self.var.p_droughts[:-1],
-                "total_profits_adaptation": total_profits_index_insured,
-                "profits_no_event": profits_no_event,
-                "profits_no_event_adaptation": profits_no_event_index_insured,
-                "total_profits": total_profits,
-                "risk_perception": self.var.risk_perception.data,
-                "total_annual_costs": total_annual_costs_m2.data,
-                "adaptation_costs": annual_cost_m2.data,
-                "adapted": adapted,
-                "time_adapted": self.var.time_adapted[:, adaptation_type].data,
-                "T": np.full(
-                    self.var.n,
-                    self.model.config["agent_settings"]["farmers"]["expected_utility"][
-                        "adaptation_well"
-                    ]["decision_horizon"],
-                ),
-                "discount_rate": self.var.discount_rate.data,
-                "extra_constraint": extra_constraint,
-            }
-
-            SEUT_insurance_options[:, idx] = self.decision_module.calcEU_adapt_drought(
-                **decision_params
-            )
-
-        # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
-            **decision_params
-        )
-
-        assert (SEUT_do_nothing != -1).any() or (SEUT_insurance_options != -1).any()
-
-        best_option_SEUT = np.max(SEUT_insurance_options, axis=1)
-        chosen_option = np.argmax(SEUT_insurance_options, axis=1)
-
-        for idx, adaptation_type in enumerate(adaptation_types):
-            adapted = self.var.adaptations[:, adaptation_type] > 0
-            annual_cost = annual_cost_array[:, idx]
-            adaptation_name = adaptation_names[idx]
-
-            mask_highest_SEUT = chosen_option == idx
-
-            SEUT_decision_array = np.full(self.var.n, -np.inf, dtype=np.float32)
-            SEUT_decision_array[mask_highest_SEUT] = best_option_SEUT[mask_highest_SEUT]
-
-            SEUT_adaptation_decision = self.update_adaptation_decision(
-                adaptation_type=adaptation_type,
-                adapted=adapted,
-                loan_duration=loan_duration,
-                annual_cost=annual_cost,
-                SEUT_do_nothing=SEUT_do_nothing,
-                SEUT_adapt=SEUT_decision_array,
-                ids_to_switch_to=np.arange(self.var.n),
-            )
-
-            if np.count_nonzero(SEUT_adaptation_decision) > 0:
-                assert np.min(SEUT_decision_array[SEUT_adaptation_decision]) != -np.inf
-
-            # Print the percentage of adapted households
-            percentage_adapted = round(
-                np.sum(self.var.adaptations[:, adaptation_type] > 0) / self.var.n * 100,
-                2,
-            )
-
-            print(
-                f"{adaptation_name} Insured farms:",
-                percentage_adapted,
-                "(%)",
-                "New/Renewed insurance contracts:",
-                np.sum(SEUT_adaptation_decision),
-                "(-)",
-            )
-
-        # Check whether a single agent does not have multiple insurances
-        assert not np.any(
-            (self.var.adaptations.data[:, adaptation_types] == 1).sum(1) > 1
-        )
-
     def update_adaptation_decision(
         self,
         adaptation_type: int,
@@ -4563,288 +3813,6 @@ class CropFarmers(AgentBaseClass):
             self.var.yearly_SPEI_probability[new_id_final, :]
         )
         return SEUT_adaptation_decision
-
-    def update_irrigation_efficiency(
-        self,
-        annual_cost_surface: npt.NDArray[np.floating[Any]],
-        annual_cost_sprinkler: npt.NDArray[np.floating[Any]],
-        annual_cost_drip: npt.NDArray[np.floating[Any]],
-    ) -> None:
-        """Update irrigation technology choices and costs for all irrigated farmers.
-
-        Farmers reconsider their irrigation technology (surface, sprinkler, or drip)
-        based on regional target fractions and a Markov-style transition rule with
-        monotonic upgrades (no downgrades). Adaptation state and loan-related
-        variables are updated consistently with new technology choices.
-
-        Notes:
-            Australian farmers are grouped into two regions (Victoria and New South
-            Wales) for which target irrigation-type fractions are obtained from
-            region-specific time series at the current model time. Technology
-            changes from surface to sprinkler or drip, and from sprinkler to drip,
-            are allowed, while downgrades are disallowed by enforcing that the new
-            technology code is at least as high as the old one.
-
-        Args:
-            annual_cost_surface: Annualised total cost per farmer for surface
-                irrigation, including capital repayment and operational costs.
-            annual_cost_sprinkler: Annualised total cost per farmer for sprinkler
-                irrigation.
-            annual_cost_drip: Annualised total cost per farmer for drip
-                irrigation.
-        """
-        sprinkler_type = IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER
-        drip_type = IRRIGATION_EFFICIENCY_ADAPTATION_DRIP
-
-        # 0 = VICT, 1 = NSW  (per farmer)
-        aus_region_agents = np.where(
-            self.model.regions["NAME_1"].values[self.var.region_id] == "Victoria",
-            0,
-            1,
-        )
-
-        time = self.model.current_time
-
-        # 1) Get current *fractions* per AUS region (VICT/NSW) at this time
-        surface_by_region, _ = self.get_value_per_aus_region(
-            self.surface_fraction,
-            time,
-            aus_region_agents,
-        )
-        sprinkler_by_region, _ = self.get_value_per_aus_region(
-            self.sprinkler_fraction,
-            time,
-            aus_region_agents,
-        )
-        drip_by_region, _ = self.get_value_per_aus_region(
-            self.drip_fraction,
-            time,
-            aus_region_agents,
-        )
-
-        def clear_adaptation(mask: npt.NDArray[np.bool_], adaptation_type: int) -> None:
-            if not np.any(mask):
-                return
-            self.var.adaptations[mask, adaptation_type] = -1
-            self.var.time_adapted[mask, adaptation_type] = -1
-            self.var.loan_tracker[mask, adaptation_type + 1, 0] = 0
-
-        def apply_efficiency_and_reduction(
-            mask: npt.NDArray[np.bool_],
-            new_eff: float,
-            new_return_fraction: float,
-        ) -> None:
-            """Update irrigation_efficiency + return_fraction and decrement irrigation_reduction by Δeff."""
-            if not np.any(mask):
-                return
-
-            old_eff = self.var.irrigation_efficiency[mask].copy()
-            self.var.irrigation_efficiency[mask] = new_eff
-            self.var.return_fraction[mask] = new_return_fraction
-
-            delta = new_eff - old_eff  # expected >= 0 due to monotonic upgrades
-            self.var.irrigation_reduction[mask] -= delta
-
-            # Safety bounds (optional but recommended)
-            self.var.irrigation_reduction[mask] = np.clip(
-                self.var.irrigation_reduction[mask], 0.0, 1.0
-            )
-
-        irrigated_mask = self.irrigated.astype(bool)
-        if not np.any(irrigated_mask):
-            return
-
-        # Base: any farmer with no active sprinkler/drip is "surface"
-        base_mask = (self.var.adaptations[:, sprinkler_type] == -1) & (
-            self.var.adaptations[:, drip_type] == -1
-        )
-        if np.any(base_mask):
-            apply_efficiency_and_reduction(
-                base_mask,
-                float(self.var.irr_eff_surface),
-                float(self.var.return_fraction_surface),
-            )
-            # If you instead want surface to *reset* irrigation_reduction to 1, uncomment:
-            # self.var.irrigation_reduction[base_mask] = 1.0
-
-        # RNG
-        if not hasattr(self, "rng_irrigation"):
-            self.rng_irrigation = np.random.default_rng(42)
-        rng = self.rng_irrigation
-
-        # Map current efficiencies to codes: 0=surface, 1=sprinkler, 2=drip
-        eff_to_code = {
-            np.float32(self.var.irr_eff_surface): 0,
-            np.float32(self.var.irr_eff_sprinkler): 1,
-            np.float32(self.var.irr_eff_drip): 2,
-        }
-        old_codes = np.vectorize(eff_to_code.get)(self.var.irrigation_efficiency.data)
-        old_codes = np.asarray(old_codes, dtype=int)
-
-        # Track transitions for diagnostics (global across both AUS regions)
-        surf_to_spr_count = 0
-        surf_to_drip_count = 0
-        spr_to_drip_count = 0
-
-        # ------------------------------------------------------------------------
-        # Per AUS region: compute desired counts and perform minimal upgrades
-        # ------------------------------------------------------------------------
-        region_ids = np.unique(self.var.region_id)
-        for region_id in region_ids:
-            region_mask = irrigated_mask & (aus_region_agents == region_id)
-            N = int(region_mask.sum())
-            if N == 0:
-                continue
-
-            # Normalised target probabilities for this AUS region
-            p = np.array(
-                [
-                    surface_by_region[region_id],
-                    sprinkler_by_region[region_id],
-                    drip_by_region[region_id],
-                ],
-                dtype=float,
-            )
-            p /= p.sum()
-
-            # Desired counts (integer)
-            desired_drip = int(np.round(p[2] * N))
-            desired_spr = int(np.round(p[1] * N))
-            if desired_drip + desired_spr > N:
-                desired_spr = N - desired_drip
-
-            # Current counts
-            codes_r = old_codes[region_mask]
-            n_surf = int(np.sum(codes_r == 0))
-            n_spr = int(np.sum(codes_r == 1))
-            n_drip = int(np.sum(codes_r == 2))
-
-            # If already above target drip, we cannot fix without downgrades; do nothing
-            if n_drip > desired_drip:
-                continue
-
-            # 1) Bring drip up to target: upgrade sprinkler surplus first, else surface
-            need_drip = max(0, desired_drip - n_drip)
-
-            spr_surplus = max(0, n_spr - desired_spr)
-            k_spr_to_drip = min(need_drip, spr_surplus)
-            k_surf_to_drip = min(need_drip - k_spr_to_drip, n_surf)
-
-            # Update counts after planned drip upgrades
-            n_spr2 = n_spr - k_spr_to_drip
-            n_surf2 = n_surf - k_surf_to_drip
-
-            # 2) Bring sprinkler up to target (only from surface)
-            need_spr = max(0, desired_spr - n_spr2)
-            k_surf_to_spr = min(need_spr, n_surf2)
-
-            # --------------------------------------------------------------------
-            # Select actual farmers for each transition (random without replacement)
-            # --------------------------------------------------------------------
-            # Indices into global arrays
-            idx_region = np.where(region_mask)[0]
-
-            # Eligible pools
-            idx_surf = idx_region[codes_r == 0]
-            idx_spr = idx_region[codes_r == 1]
-
-            # Surface -> Drip
-            if k_surf_to_drip > 0:
-                chosen = rng.choice(idx_surf, size=k_surf_to_drip, replace=False)
-                mask = np.zeros_like(irrigated_mask, dtype=bool)
-                mask[chosen] = True
-
-                # apply: surface -> drip
-                clear_adaptation(mask, sprinkler_type)  # conservative; cheap and safe
-                self.var.adaptations[mask, drip_type] = 1
-                self.var.time_adapted[mask, drip_type] = 0
-                apply_efficiency_and_reduction(
-                    mask,
-                    float(self.var.irr_eff_drip),
-                    float(self.var.return_fraction_drip),
-                )
-
-                self.var.all_loans_annual_cost[mask, drip_type + 1, 0] += (
-                    annual_cost_drip[mask]
-                )
-                self.var.all_loans_annual_cost[mask, -1, 0] += annual_cost_drip[mask]
-                self.var.loan_tracker[mask, drip_type + 1, 0] += 100
-
-                surf_to_drip_count += k_surf_to_drip
-
-                # remove chosen from surface pool for subsequent draws
-                if k_surf_to_spr > 0:
-                    idx_surf = idx_surf[~np.isin(idx_surf, chosen)]
-
-            # Sprinkler -> Drip
-            if k_spr_to_drip > 0:
-                chosen = rng.choice(idx_spr, size=k_spr_to_drip, replace=False)
-                mask = np.zeros_like(irrigated_mask, dtype=bool)
-                mask[chosen] = True
-
-                # apply: sprinkler -> drip
-                clear_adaptation(mask, sprinkler_type)
-                self.var.adaptations[mask, drip_type] = 1
-                self.var.time_adapted[mask, drip_type] = 0
-                apply_efficiency_and_reduction(
-                    mask,
-                    float(self.var.irr_eff_drip),
-                    float(self.var.return_fraction_drip),
-                )
-
-                self.var.all_loans_annual_cost[mask, drip_type + 1, 0] += (
-                    annual_cost_drip[mask]
-                )
-                self.var.all_loans_annual_cost[mask, -1, 0] += annual_cost_drip[mask]
-                self.var.loan_tracker[mask, drip_type + 1, 0] += 100
-
-                spr_to_drip_count += k_spr_to_drip
-
-            # Surface -> Sprinkler
-            if k_surf_to_spr > 0:
-                chosen = rng.choice(idx_surf, size=k_surf_to_spr, replace=False)
-                mask = np.zeros_like(irrigated_mask, dtype=bool)
-                mask[chosen] = True
-
-                # apply: surface -> sprinkler
-                clear_adaptation(mask, drip_type)  # conservative; cheap and safe
-                self.var.adaptations[mask, sprinkler_type] = 1
-                self.var.time_adapted[mask, sprinkler_type] = 0
-                apply_efficiency_and_reduction(
-                    mask,
-                    float(self.var.irr_eff_sprinkler),
-                    float(self.var.return_fraction_sprinkler),
-                )
-
-                self.var.all_loans_annual_cost[mask, sprinkler_type + 1, 0] += (
-                    annual_cost_sprinkler[mask]
-                )
-                self.var.all_loans_annual_cost[mask, -1, 0] += annual_cost_sprinkler[
-                    mask
-                ]
-                self.var.loan_tracker[mask, sprinkler_type + 1, 0] += 100
-
-                surf_to_spr_count += k_surf_to_spr
-
-        # ------------------------------------------------------------------------
-        # Diagnostics (global, across irrigated farmers)
-        # ------------------------------------------------------------------------
-        eff = self.var.irrigation_efficiency
-        n_irr = max(1, irrigated_mask.sum())
-        frac_surf = np.sum(eff[irrigated_mask] == self.var.irr_eff_surface) / n_irr
-        frac_spr = np.sum(eff[irrigated_mask] == self.var.irr_eff_sprinkler) / n_irr
-        frac_drip = np.sum(eff[irrigated_mask] == self.var.irr_eff_drip) / n_irr
-
-        print(
-            "Transitions this step: "
-            f"surface→sprinkler={surf_to_spr_count}, "
-            f"surface→drip={surf_to_drip_count}, "
-            f"sprinkler→drip={spr_to_drip_count}"
-        )
-        print(
-            "Actual shares (irrigated): "
-            f"surface={frac_surf:.3f}, sprinkler={frac_spr:.3f}, drip={frac_drip:.3f}"
-        )
 
     def load_irrigation_efficiency_costs(
         self,
@@ -5184,12 +4152,11 @@ class CropFarmers(AgentBaseClass):
             (
                 self.var.crop_calendar[:, :, 0].data,
                 (
-                    self.reservoir_irrigating_mdb
-                    | self.channel_irrigating_mdb
+                    self.is_in_command_area
+                    | self.channel_irrigated
                     | self.well_irrigated
                 ).reshape(-1, 1),
                 self.pr_class.reshape(-1, 1),
-                self.region_agents.reshape(-1, 1),
                 self.var.irrigation_efficiency_group.reshape(-1, 1),
             )
         ).astype(np.int32)
@@ -5769,34 +4736,6 @@ class CropFarmers(AgentBaseClass):
             values[i] = data[1][region_id][index]
         return values[inv]
 
-    def get_value_per_aus_region(
-        self,
-        data: tuple[dict[datetime, int], npt.NDArray[np.floating]],
-        time: datetime,
-        aus_region_agents: npt.NDArray[np.int_],
-    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.int_]]:
-        """Return per-AUS-region values (VICT=0, NSW=1) for a given time.
-
-        data[0]: dict[datetime, int]         -> date_index
-        data[1]: array[region_id, time_idx]  -> values
-
-        aus_region_agents: array of region IDs (0=VICT, 1=NSW) per farmer.
-        Returns:
-            values_by_region: array of shape (n_unique_regions,) in order of unique_region_ids
-            inv: mapping so that values_by_region[inv] is per-farmer.
-        """
-        date_index, values_by_region = data
-        index = date_index.get(time)
-
-        # unique_region_ids will be [0, 1] (sorted)
-        unique_region_ids, inv = np.unique(aus_region_agents, return_inverse=True)
-
-        values = np.full_like(unique_region_ids, np.nan, dtype=np.float32)
-        for i, region_id in enumerate(unique_region_ids):
-            values[i] = values_by_region[region_id][index]
-
-        return values, inv
-
     @staticmethod
     @njit(cache=True)
     def field_size_per_farmer_numba(
@@ -5931,27 +4870,6 @@ class CropFarmers(AgentBaseClass):
                 self.save_yearly_spei()
                 self.save_yearly_pr()
 
-            if self.model.in_spinup or (
-                self.sprinkler_adaptation_active
-                and self.sprinkler_adaptation_type == "observed"
-            ):
-                annual_cost_surface, annual_cost_sprinkler, annual_cost_drip = (
-                    self.load_irrigation_efficiency_costs()
-                )
-                self.update_irrigation_efficiency(
-                    annual_cost_surface,
-                    annual_cost_sprinkler,
-                    annual_cost_drip,
-                )
-
-                self.var.mean_irrigation_efficiency = np.mean(
-                    self.var.irrigation_efficiency
-                )
-                # Update irrigation efficiency group
-                _, self.var.irrigation_efficiency_group[:] = np.unique(
-                    self.var.irrigation_efficiency, return_inverse=True
-                )
-
             if self.base_efficiency:
                 assert isinstance(self.base_efficiency, float)
                 self.var.irrigation_efficiency[:] = self.base_efficiency
@@ -5982,21 +4900,15 @@ class CropFarmers(AgentBaseClass):
                 pr_sum, np.linspace(100 / k, 100 - 100 / k, k - 1)
             )
             self.pr_class = np.digitize(pr_sum, edges_pr, right=True).astype(np.int8)
-            self.region_agents = np.where(
-                self.model.regions["NAME_1"].values[self.var.region_id] == "Victoria",
-                0,
-                1,
-            )  # Vict is 0, NSW is 1
 
             self.var.farmer_base_class[:] = self.create_farmer_classes(
                 self.crop_calendar_group,
                 (
-                    self.reservoir_irrigating_mdb
-                    | self.channel_irrigating_mdb
+                    self.is_in_command_area
+                    | self.channel_irrigated
                     | self.well_irrigated
                 ).data,
                 self.pr_class,
-                self.region_agents,
                 self.var.irrigation_efficiency_group,
             )
             print("Nr of base groups", len(np.unique(self.var.farmer_base_class[:])))
@@ -6028,133 +4940,6 @@ class CropFarmers(AgentBaseClass):
 
                 timer.finish_split("yield-spei relation")
 
-                if (
-                    self.personal_insurance_adaptation_active
-                    or self.index_insurance_adaptation_active
-                    or self.pr_insurance_adaptation_active
-                ):
-                    # save the base relations for determining the difference with and without insurance
-                    farmer_yield_probability_relation_base = (
-                        farmer_yield_probability_relation.copy()
-                    )
-                    potential_insured_loss = self.potential_insured_loss()
-
-                    self.var.payout_mask = np.zeros((self.var.n, 7), dtype=np.bool)
-
-                    government_premium_cap = self.government_premium_cap()
-                if self.personal_insurance_adaptation_active:
-                    # Now determine the potential (past & current) indemnity payments and recalculate
-                    # probability and yield relation
-                    self.var.personal_premium[:] = self.premium_personal_insurance(
-                        potential_insured_loss, government_premium_cap
-                    )
-                    # Give only the insured agents the relation with covered losses
-                    personal_insured_farmers_mask = (
-                        self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
-                    )
-
-                    # Add the insured loss to the income of this year's insured farmers
-                    potential_insured_loss_personal = self.insured_payouts_personal(
-                        personal_insured_farmers_mask
-                    )
-
-                    farmer_yield_probability_relation_insured_personal = (
-                        self.insured_yields(potential_insured_loss_personal)
-                    )
-
-                    farmer_yield_probability_relation[
-                        personal_insured_farmers_mask, :
-                    ] = farmer_yield_probability_relation_insured_personal[
-                        personal_insured_farmers_mask, :
-                    ]
-                    self.farmer_yield_probability_relation_exp_cap[
-                        personal_insured_farmers_mask, :
-                    ] = farmer_yield_probability_relation_insured_personal[
-                        personal_insured_farmers_mask, :
-                    ]
-                    timer.finish_split("personal insurance")
-                if self.index_insurance_adaptation_active:
-                    gev_params = self.var.GEV_parameters.data
-                    strike_vals = np.round(np.arange(0.0, -2.6, -0.2), 2)
-                    exit_vals = np.round(np.arange(-2, -3.6, -0.2), 2)
-                    rate_vals = np.geomspace(10, 5000, 10)
-                    # Calculate best strike, exit, rate for chosen contract
-                    strike, exit, rate, self.var.index_premium[:] = (
-                        self.premium_index_insurance(
-                            potential_insured_loss=potential_insured_loss,
-                            history=self.var.yearly_SPEI.data,
-                            gev_params=gev_params,
-                            strike_vals=strike_vals,
-                            exit_vals=exit_vals,
-                            rate_vals=rate_vals,
-                            government_premium_cap=government_premium_cap,
-                        )
-                    )
-                    index_insured_farmers_mask = (
-                        self.var.adaptations[:, INDEX_INSURANCE_ADAPTATION] > 0
-                    )
-                    potential_insured_loss_index = self.insured_payouts_index(
-                        strike,
-                        exit,
-                        rate,
-                        index_insured_farmers_mask,
-                        INDEX_INSURANCE_ADAPTATION,
-                    )
-                    farmer_yield_probability_relation_insured_index = (
-                        self.insured_yields(potential_insured_loss_index)
-                    )
-                    index_insured_farmers_mask = (
-                        self.var.adaptations[:, INDEX_INSURANCE_ADAPTATION] > 0
-                    )
-                    self.farmer_yield_probability_relation_exp_cap[
-                        index_insured_farmers_mask, :
-                    ] = farmer_yield_probability_relation_insured_index[
-                        index_insured_farmers_mask, :
-                    ]
-                    timer.finish_split("index insurance")
-                if self.pr_insurance_adaptation_active:
-                    gev_params = self.var.GEV_pr_parameters.data
-                    strike_vals = np.round(np.arange(1500, 300, -100), 2)
-                    low, high, N = 0, 800, 10
-                    u = np.linspace(0, 1, N)  # linear grid on [0,1]
-                    s = 0.5 * (1 - np.cos(np.pi * u))
-                    exit_vals = low + s * (high - low)
-                    # exit_vals = np.round(np.arange(600, 50, -50), 2)
-                    rate_vals = np.geomspace(10, 5000, 10)
-                    # Calculate best strike, exit, rate for chosen contract
-                    strike, exit, rate, self.var.pr_premium[:] = (
-                        self.premium_index_insurance(
-                            potential_insured_loss=potential_insured_loss,
-                            history=self.var.yearly_pr.data,
-                            gev_params=gev_params,
-                            strike_vals=strike_vals,
-                            exit_vals=exit_vals,
-                            rate_vals=rate_vals,
-                            government_premium_cap=government_premium_cap,
-                        )
-                    )
-                    pr_insured_farmers_mask = (
-                        self.var.adaptations[:, PR_INSURANCE_ADAPTATION] > 0
-                    )
-                    potential_insured_loss_pr = self.insured_payouts_index(
-                        strike,
-                        exit,
-                        rate,
-                        pr_insured_farmers_mask,
-                        PR_INSURANCE_ADAPTATION,
-                    )
-                    farmer_yield_probability_relation_insured_pr = self.insured_yields(
-                        potential_insured_loss_pr
-                    )
-                    pr_insured_farmers_mask = (
-                        self.var.adaptations[:, PR_INSURANCE_ADAPTATION] > 0
-                    )
-                    self.farmer_yield_probability_relation_exp_cap[
-                        pr_insured_farmers_mask, :
-                    ] = farmer_yield_probability_relation_insured_pr[
-                        pr_insured_farmers_mask, :
-                    ]
-                    timer.finish_split("precipitation insurance")
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(farmer_yield_probability_relation == 0):
                     if self.wells_adaptation_active:
@@ -6193,61 +4978,6 @@ class CropFarmers(AgentBaseClass):
                     if self.crop_switching_adaptation_active:
                         self.adapt_crops(farmer_yield_probability_relation)
                         timer.finish_split("adapt crops")
-
-                    if (
-                        self.personal_insurance_adaptation_active
-                        and self.index_insurance_adaptation_active
-                        and self.pr_insurance_adaptation_active
-                    ):
-                        # In scenario with both insurance, compare simultaneously
-                        self.adapt_insurance(
-                            np.array(
-                                [
-                                    PERSONAL_INSURANCE_ADAPTATION,
-                                    INDEX_INSURANCE_ADAPTATION,
-                                    PR_INSURANCE_ADAPTATION,
-                                ]
-                            ),
-                            ["Personal", "Precipitation"],
-                            farmer_yield_probability_relation_base,
-                            [
-                                farmer_yield_probability_relation_insured_personal,
-                                farmer_yield_probability_relation_insured_index,
-                                farmer_yield_probability_relation_insured_pr,
-                            ],
-                            [
-                                self.var.personal_premium,
-                                self.var.index_premium,
-                                self.var.pr_premium,
-                            ],
-                        )
-                    elif self.personal_insurance_adaptation_active:
-                        self.adapt_insurance(
-                            [PERSONAL_INSURANCE_ADAPTATION],
-                            ["Personal"],
-                            farmer_yield_probability_relation_base,
-                            [farmer_yield_probability_relation_insured_personal],
-                            [self.var.personal_premium],
-                        )
-                        timer.finish_split("adapt pers. insurance")
-                    elif self.index_insurance_adaptation_active:
-                        self.adapt_insurance(
-                            [INDEX_INSURANCE_ADAPTATION],
-                            ["Index"],
-                            farmer_yield_probability_relation_base,
-                            [farmer_yield_probability_relation_insured_index],
-                            [self.var.index_premium],
-                        )
-                        timer.finish_split("adapt index insurance")
-                    elif self.pr_insurance_adaptation_active:
-                        self.adapt_insurance(
-                            [PR_INSURANCE_ADAPTATION],
-                            ["Precipitation"],
-                            farmer_yield_probability_relation_base,
-                            [farmer_yield_probability_relation_insured_pr],
-                            [self.var.pr_premium],
-                        )
-                        timer.finish_split("adapt prec. insurance")
                 else:
                     raise ValueError(
                         "Cannot adapt without yield - probability relation"
