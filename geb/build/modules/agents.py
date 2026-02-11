@@ -1857,6 +1857,7 @@ class Agents(BuildModelBase):
             8: (66, maximum_age + 1),
         }
 
+        allocated_agents = pd.DataFrame()
         households_not_allocated = 0
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
@@ -1878,7 +1879,6 @@ class Agents(BuildModelBase):
 
             # load building database with grid idx
             buildings = residential_buildings_model_region[GDL_code]
-            allocated_agents = pd.DataFrame()
 
             GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
                 "glopop-sg", region=GDL_code
