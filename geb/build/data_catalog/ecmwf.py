@@ -308,13 +308,12 @@ class ECMWFForecasts(Adapter):
         forecast_horizon: int,
         forecast_timestep_hours: int,
         reproject_like: xr.DataArray,
-    ) -> None | xr.Dataset:
+    ) -> xr.Dataset:
         """Process downloaded ECMWF forecast data.
 
         We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
 
         Args:
-            preprocessing_folder: Path to the folder containing the downloaded ECMWF forecast data.
             bounds: The bounding box in the format (min_lon, min_lat, max_lon,
                     max_lat).
             forecast_issue_date: The forecast initialization time.
@@ -557,7 +556,7 @@ class ECMWFForecasts(Adapter):
             x=((ds.x + 180) % 360 - 180)
         )  # Convert longitude coordinates to -180 to 180 format
         ds.attrs["_FillValue"] = np.nan  # Set fill value attribute for missing data
-        ds: xr.DataArray = convert_nodata(ds, np.nan)
+        ds: xr.Dataset = convert_nodata(ds, np.nan)
 
         # assert that time is monotonically increasing with a constant step size
         assert (
@@ -594,7 +593,7 @@ class ECMWFForecasts(Adapter):
                 "increase the buffer around the forecasts (fc_area_buffer), as probably not "
                 "the whole area is downloaded"
             )
-            # fill the nan values using interpolate_na_along_time_dim and interpolate_na in space
+            # fill the nan values using interpolate_na_along_dim and interpolate_na in space
             if nan_percentage > 0:  # Check if there are any NaN values to fill
                 print(
                     f"Found {nan_percentage:.2f}% missing values for variable '{variable_name}' after regridding. Interpolating missing values."

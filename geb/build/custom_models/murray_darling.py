@@ -1295,7 +1295,6 @@ class Agents(GEBModel):
                 )
                 dictionary: dict[str, list[str] | dict[str, list[float]]] = {
                     "time": [d.strftime("%Y-%m-%d") for d in monthly_dates],
-                    "data": {},
                 }
             else:
                 # For diversions, keep the original annual time steps
@@ -1473,7 +1472,7 @@ class Agents(GEBModel):
         """
         self.logger.info("Setting up drip irrigation prices by reference year")
 
-        inflation = self.new_data_catalog.fetch("wb_inflation_rate").read()
+        inflation = self.data_catalog.fetch("wb_inflation_rate").read()
         regions = list(inflation["data"].keys())
         infl_years: list[str] = [str(y) for y in inflation["time"]]
 

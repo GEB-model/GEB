@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import hashlib
 import json
 import os
 import platform
@@ -17,8 +18,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, overload
 
-import cftime
+import dask.tokenize
 import geopandas as gpd
+import joblib
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -36,18 +38,21 @@ from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
-from zarr.codecs.blosc import BloscShuffle
+from zarr.codecs.zstd import ZstdCodec
 
-from geb.types import (
+from geb.geb_types import (
     ArrayDatetime64,
+    ArrayFloat64,
     ThreeDArray,
     ThreeDArrayFloat32,
     TwoDArray,
     TwoDArrayFloat32,
 )
 
+zarr.config.set({"codec_pipeline.fill_missing_chunks": False})
 
-def load_table(fp: Path | str) -> pd.DataFrame:
+
+def read_table(fp: Path) -> pd.DataFrame:
     """Load a parquet file as a pandas DataFrame.
 
     Args:
@@ -59,7 +64,22 @@ def load_table(fp: Path | str) -> pd.DataFrame:
     return pd.read_parquet(fp, engine="pyarrow")
 
 
-def load_array(fp: Path) -> np.ndarray:
+def write_table(df: pd.DataFrame, fp: Path) -> None:
+    """Save a pandas DataFrame to a parquet file.
+
+    brotli is a bit slower but gives better compression,
+    gzip is faster to read. Higher compression levels
+    generally don't make it slower to read, therefore
+    we use the highest compression level for gzip
+
+    Args:
+        df: The pandas DataFrame to save.
+        fp: The path to the output parquet file.
+    """
+    df.to_parquet(fp, engine="pyarrow", compression="gzip", compression_level=9)
+
+
+def read_array(fp: Path) -> np.ndarray:
     """Load a numpy array from a .npz or .zarr file.
 
     Args:
@@ -82,18 +102,30 @@ def load_array(fp: Path) -> np.ndarray:
 
 
 @overload
-def load_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
-) -> np.ndarray: ...
+def read_grid(
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+) -> TwoDArray: ...
 
 
 @overload
-def load_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = True
-) -> tuple[np.ndarray, Affine, str]: ...
+def read_grid(
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+) -> tuple[TwoDArray, Affine, str]: ...
 
 
-def load_grid(
+@overload
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
+) -> ThreeDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
+) -> tuple[ThreeDArray, Affine, str]: ...
+
+
+def read_grid(
     filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
 ) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
     """Load a raster grid from a .tif or .zarr file.
@@ -129,8 +161,11 @@ def load_grid(
         data_array: zarr.Array | zarr.Group = group[filepath.stem]
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
+        assert isinstance(data, np.ndarray)
+        data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
         if data.dtype == np.float64:
-            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
+            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
+        assert data.ndim in (2, 3)
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)
@@ -151,7 +186,8 @@ def load_grid(
                 f=y[0] - y_diff / 2,
             )
             crs = data_array.attrs["_CRS"]
-            wkt: str = crs["wkt"]  # ty: ignore[invalid-argument-type,non-subscriptable]
+            assert isinstance(crs, dict)
+            wkt: str = crs["wkt"]
             return data, transform, wkt
         else:
             return data
@@ -159,7 +195,7 @@ def load_grid(
         raise ValueError("File format not supported.")
 
 
-def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+def read_geom(filepath: str | Path) -> gpd.GeoDataFrame:
     """Load a geometry for the GEB model from disk.
 
     Args:
@@ -172,7 +208,24 @@ def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath)
 
 
-def load_dict(filepath: Path) -> Any:
+def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
+    """Save a GeoDataFrame to a parquet file.
+
+    Args:
+        gdf: The GeoDataFrame to save.
+        filepath: Path to the output parquet file.
+    """
+    gdf.to_parquet(
+        filepath,
+        engine="pyarrow",
+        compression="zstd",
+        compression_level=9,
+        row_group_size=10_000,
+        schema_version="1.1.0",
+    )
+
+
+def read_params(filepath: Path) -> Any:
     """Load a dictionary from a JSON or YAML file.
 
     Args:
@@ -214,7 +267,7 @@ def _convert_paths_to_strings(obj: Any) -> Any:
         return obj
 
 
-def to_dict(d: dict, filepath: Path) -> None:
+def write_params(d: dict, filepath: Path) -> None:
     """Save a dictionary to a YAML file.
 
     Args:
@@ -228,7 +281,7 @@ def to_dict(d: dict, filepath: Path) -> None:
 
 
 def calculate_scaling(
-    da: xr.DataArray,
+    da: xr.DataArray | np.ndarray,
     min_value: float,
     max_value: float,
     precision: float,
@@ -302,7 +355,27 @@ def calculate_scaling(
     return scaling_factor, in_dtype, out_dtype
 
 
-def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+def parse_and_set_zarr_CRS(da: xr.DataArray) -> xr.DataArray:
+    """Parse the _CRS attribute of an xarray DataArray and set it as the CRS using rioxarray.
+
+    The _CRS attribute is expected to be a dictionary with a "wkt" key containing the WKT string.
+
+    Args:
+        da: The xarray DataArray to parse and set the CRS for.
+
+    Returns:
+        The xarray DataArray with the CRS set.
+    """
+    if "_CRS" in da.attrs:
+        crs_attr = da.attrs["_CRS"]
+        if isinstance(crs_attr, dict) and "wkt" in crs_attr:
+            wkt: str = crs_attr["wkt"]
+            da.rio.write_crs(pyproj.CRS(wkt), inplace=True)
+            del da.attrs["_CRS"]
+    return da
+
+
+def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     """Open a zarr file as an xarray DataArray.
 
     If the data is a boolean type and does not have a _FillValue attribute,
@@ -344,14 +417,12 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
 
-    if "_CRS" in da.attrs:
-        da.rio.write_crs(pyproj.CRS(da.attrs["_CRS"]["wkt"]), inplace=True)
-        del da.attrs["_CRS"]
+    da = parse_and_set_zarr_CRS(da)
 
     return da
 
 
-def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[unresolved-attribute]
+def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
     """Convert a CRS object (pyproj CRS, rasterio CRS or EPSG code) to a WKT string.
 
     Args:
@@ -367,7 +438,7 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[u
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
         return crs_obj.to_wkt()
-    elif isinstance(crs_obj, rasterio.crs.CRS):  # ty: ignore[unresolved-attribute]
+    elif isinstance(crs_obj, rasterio.crs.CRS):
         return CRS(crs_obj.to_wkt()).to_wkt()
     else:
         raise TypeError("Unsupported CRS type")
@@ -434,7 +505,7 @@ def check_buffer_size(
         )
 
 
-def to_zarr(
+def write_zarr(
     da: xr.DataArray,
     path: str | Path,
     crs: int | pyproj.CRS,
@@ -442,7 +513,6 @@ def to_zarr(
     y_chunksize: int = 350,
     time_chunksize: int = 1,
     time_chunks_per_shard: int | None = 30,
-    byteshuffle: bool = True,
     filters: list = [],
     compressor: None | BytesBytesCodec = None,
     progress: bool = True,
@@ -458,13 +528,16 @@ def to_zarr(
         time_chunksize: The chunk size for the time dimension. Default is 1.
         time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
             to disable sharding.
-        byteshuffle: Whether to use byteshuffle compression. Default is True.
         filters: A list of filters to apply. Default is [].
         compressor: The compressor to use. Default is None, using the default Blosc compressor.
         progress: Whether to show a progress bar. Default is True.
 
     Returns:
         The xarray DataArray saved to disk.
+
+    Raises:
+        ValueError: If the DataArray has invalid dimensions or attributes.
+        ValueError: If the DataArray dtype is float64.
 
     """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
@@ -475,7 +548,8 @@ def to_zarr(
         assert da.dims[-2] == "y", "y should be the second last dimension"
         assert da.dims[-1] == "x", "x should be the last dimension"
 
-    assert da.dtype != np.float64, "should be float32"
+    if da.dtype == np.float64:
+        raise ValueError("DataArray dtype should be float32, not float64")
 
     assert "_FillValue" in da.attrs, "Fill value must be set"
     if da.dtype == bool:
@@ -523,10 +597,8 @@ def to_zarr(
                 shards["time"] = time_chunks_per_shard * chunks["time"]
 
         if compressor is None:
-            compressor: BloscCodec = BloscCodec(
-                cname="zstd",
-                clevel=9,
-                shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
+            compressor: ZstdCodec = ZstdCodec(
+                level=22,
             )
 
         check_buffer_size(da, chunks_or_shards=shards if shards else chunks)
@@ -582,7 +654,7 @@ def to_zarr(
             shutil.rmtree(path)
         shutil.move(tmp_zarr, folder)
 
-    da_disk: xr.DataArray = open_zarr(path)
+    da_disk: xr.DataArray = read_zarr(path)
 
     # perform some asserts to check if the data was written and read correctly
     assert da.dtype == da_disk.dtype, "dtype mismatch"
@@ -596,7 +668,7 @@ def to_zarr(
 def get_window(
     x: xr.DataArray,
     y: xr.DataArray,
-    bounds: tuple[int | float, int | float, int | float, int | float],
+    bounds: tuple[float, float, float, float],
     buffer: int = 0,
     raise_on_out_of_bounds: bool = True,
     raise_on_buffer_out_of_bounds: bool = True,
@@ -726,40 +798,9 @@ class AsyncGriddedForcingReader:
 
     This reader uses the Zarr async API for efficient reads, with a workaround
     for occasional Zarr async loading issues.
-
-    All instances of this class share a single event loop running in a background thread.
     """
 
-    # Class-level shared event loop and thread
-    _shared_loop: asyncio.AbstractEventLoop | None = None
-    _shared_thread: threading.Thread | None = None
-    _init_lock = threading.Lock()
-
-    @classmethod
-    def _get_loop(cls) -> asyncio.AbstractEventLoop:
-        """Get or create the shared event loop.
-
-        Returns:
-            The shared event loop.
-        """
-        if cls._shared_loop is None:
-            with cls._init_lock:
-                if cls._shared_loop is None:
-                    cls._shared_loop = asyncio.new_event_loop()
-                    cls._shared_thread = threading.Thread(
-                        target=cls._run_shared_loop,
-                        daemon=True,
-                        name="AsyncZarrLoop",
-                    )
-                    cls._shared_thread.start()
-        return cls._shared_loop
-
-    @classmethod
-    def _run_shared_loop(cls) -> None:
-        """Run the shared event loop in a background thread."""
-        assert cls._shared_loop is not None
-        asyncio.set_event_loop(cls._shared_loop)
-        cls._shared_loop.run_forever()
+    array: zarr.Array
 
     def __init__(
         self,
@@ -786,27 +827,40 @@ class AsyncGriddedForcingReader:
         self.ds = zarr.open_group(self.store, mode="r")
 
         # Metadata and time index
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Numcodecs codecs are not in the Zarr version 3 specification",
-            )
-            time_arr = self.ds["time"]
-            assert isinstance(time_arr, zarr.Array)
-            time = time_arr[:]
+        time_arr = self.ds["time"]
+        assert isinstance(time_arr, zarr.Array)
+        time = time_arr[:]
+        assert isinstance(time, np.ndarray)
 
-        datetime_index_unparsed = cftime.num2date(
-            time,
-            units=self.ds["time"].attrs.get("units"),
-            calendar=self.ds["time"].attrs.get("calendar"),
-        )
+        assert self.ds["time"].attrs.get("calendar") == "proleptic_gregorian"
+
+        time_unit = self.ds["time"].attrs.get("units")
+        assert isinstance(time_unit, str)
+        time_unit, origin = time_unit.split(" since ")
+        pandas_time_unit: str = {
+            "seconds": "s",
+            "minutes": "m",
+            "hours": "h",
+            "days": "D",
+        }[time_unit]
+
         self.datetime_index: ArrayDatetime64 = pd.to_datetime(
-            [obj.isoformat() for obj in datetime_index_unparsed]
+            time, unit=pandas_time_unit, origin=origin
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
         # Check if the variable uses NaN as fill value for the retry workaround
-        self.array = self.ds[self.variable_name]
+        array = self.ds[self.variable_name]
+        assert isinstance(array, zarr.Array)
+        self.array: zarr.Array = array
+
+        for compressor in self.array.compressors:
+            # Blosc is not supported due to known issues with async reading
+            if isinstance(compressor, BloscCodec):
+                raise ValueError(
+                    f"Variable {self.variable_name} uses Blosc compression, which is not supported by AsyncGriddedForcingReader. Please recompress the data using a different codec (e.g., Zstd)."
+                )
+
         fill_value = self.array.fill_value
         # The fill value is NaN if it's a float type and is NaN, or explicitly None for some types
         has_nan_fill = isinstance(fill_value, (float, np.floating)) and np.isnan(
@@ -821,76 +875,81 @@ class AsyncGriddedForcingReader:
         # Cache tracking
         self.current_start_index = -1
         self.current_end_index = -1
-        self.current_data: npt.NDArray[Any] | None = None
+        self.current_data: ThreeDArrayFloat32 | None = None
         self.preloaded_data_future: asyncio.Task | None = None
 
         # Async event loop setup
         if self.asynchronous:
-            self.loop: asyncio.AbstractEventLoop | None = self._get_loop()
-            assert self.loop is not None
+            self.loop: asyncio.AbstractEventLoop | None = asyncio.new_event_loop()
+            self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+            self.thread.start()
 
             # Initialize lock in the shared loop
-            async def _init_lock() -> asyncio.Lock:
-                return asyncio.Lock()
+            async def _init_lock() -> tuple[asyncio.Lock, asyncio.Lock]:
+                return asyncio.Lock(), asyncio.Lock()
 
-            self.async_lock = asyncio.run_coroutine_threadsafe(
+            self.async_lock, self.io_lock = asyncio.run_coroutine_threadsafe(
                 _init_lock(), self.loop
             ).result()
         else:
             self.loop = None
             self.async_lock = None
+            self.io_lock = None
 
-    def load(self, start_index: int, end_index: int) -> np.ndarray:
+    def load(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
         """Safe synchronous load (only used if asynchronous=False).
 
         Returns:
             The requested data slice.
         """
-        array = self.ds[self.variable_name]
-        assert isinstance(array, zarr.Array)
-        data = array[start_index:end_index]
-        assert isinstance(data, np.ndarray)
-        return data
+        assert isinstance(self.array, zarr.Array)
+        data = self.array[start_index:end_index]
+        assert (
+            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 3
+        )
+        return data  # ty:ignore[invalid-return-type]
 
-    async def load_await(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
+    async def load_await(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
         """Load data asynchronously via reusable async group.
-
-        Uses a workaround for Zarr async loading issues: if the first read returns
-        all NaN values (and the array uses NaN as fill value), retry the read.
 
         Returns:
             The requested data slice (not a copy - caller must copy if needed).
 
         Raises:
-            RuntimeError: If data loading fails after maximum retries.
+            IOError: If the async load returns only NaN values after multiple attempts.
         """
-        # Select the variable array from the pre-opened async group.
-        arr: zarr.AsyncArray[Any] = self.array.async_array
-        max_retries = 100
-        retries = 0
-        while retries < max_retries:
-            data = await arr.getitem(
-                (slice(start_index, end_index), slice(None), slice(None))
-            )
+        assert self.io_lock is not None
+        async with self.io_lock:
+            # Select the variable array from the pre-opened async group.
+            arr: zarr.AsyncArray[Any] = self.array.async_array
 
-            # Only apply the NaN workaround if the array actually uses NaN as fill value
-            if np.isnan(data).any():
-                retries += 1
-                print(
-                    f"Warning: Async read returned NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
+            attempts: int = 100
+
+            # Try up to 100 times
+            for _ in range(attempts):
+                data = await arr.getitem(
+                    (slice(start_index, end_index), slice(None), slice(None))
                 )
-                await asyncio.sleep(delay=0.1)  # brief pause before retrying
-            else:
-                return data
 
-        # If still NaN after retries, raise an error
-        raise RuntimeError(
-            f"Failed to load data for {self.variable_name} after {max_retries} retries due to NaN values."
-        )
+                if not np.any(np.isnan(data)):
+                    assert (
+                        isinstance(data, np.ndarray)
+                        and data.dtype == np.float32
+                        and data.ndim == 3
+                    )
+                    return data  # ty:ignore[invalid-return-type]
+                print(
+                    f"Async load returned NaN values for indices {start_index}:{end_index}, retrying..."
+                )
+
+            else:
+                raise IOError(
+                    f"Async load failed after {attempts} attempts for indices {start_index}:{end_index}"
+                )
 
     async def preload_next(
         self, start_index: int, end_index: int, n: int
-    ) -> npt.NDArray[Any] | None:
+    ) -> ThreeDArrayFloat32 | None:
         """Preload next timestep asynchronously.
 
         Returns:
@@ -902,7 +961,7 @@ class AsyncGriddedForcingReader:
 
     async def read_timestep_async(
         self, start_index: int, end_index: int, n: int
-    ) -> npt.NDArray[Any]:
+    ) -> ThreeDArrayFloat32:
         """Core async read with safe preload caching.
 
         This method ensures that only one read operation (including preloading)
@@ -950,6 +1009,10 @@ class AsyncGriddedForcingReader:
             if data is None:
                 if self.preloaded_data_future and not self.preloaded_data_future.done():
                     self.preloaded_data_future.cancel()
+                    try:
+                        await self.preloaded_data_future
+                    except asyncio.CancelledError:
+                        pass
                 data = await self.load_await(start_index, end_index)
 
             # Consistency check
@@ -965,6 +1028,13 @@ class AsyncGriddedForcingReader:
 
             # Schedule next preload
             assert self.loop is not None
+            if self.preloaded_data_future and not self.preloaded_data_future.done():
+                self.preloaded_data_future.cancel()
+                try:
+                    await self.preloaded_data_future
+                except asyncio.CancelledError:
+                    pass
+
             self.preloaded_data_future = self.loop.create_task(
                 self.preload_next(start_index, end_index, n)
             )
@@ -1042,30 +1112,33 @@ class AsyncGriddedForcingReader:
                     await self.preloaded_data_future
                 except asyncio.CancelledError:
                     pass
+            # Stop the loop
+            asyncio.get_event_loop().stop()
 
         if self.loop and self.loop.is_running():
             try:
                 asyncio.run_coroutine_threadsafe(cleanup(), self.loop).result(timeout=5)
             except Exception:
                 pass
+            self.thread.join(timeout=1)
 
     @property
-    def x(self) -> np.ndarray:
+    def x(self) -> ArrayFloat64:
         """The x-coordinates of the grid."""
         x_array = self.ds["x"]
         assert isinstance(x_array, zarr.Array)
         x = x_array[:]
-        assert isinstance(x, np.ndarray)
-        return x
+        assert isinstance(x, np.ndarray) and x.dtype == np.float64 and x.ndim == 1
+        return x  # ty:ignore[invalid-return-type]
 
     @property
-    def y(self) -> npt.NDArray[Any]:
+    def y(self) -> ArrayFloat64:
         """The y-coordinates of the grid."""
         y_array = self.ds["y"]
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
-        assert isinstance(y, np.ndarray)
-        return y
+        assert isinstance(y, np.ndarray) and y.dtype == np.float64 and y.ndim == 1
+        return y  # ty:ignore[invalid-return-type]
 
 
 class WorkingDirectory:
@@ -1114,6 +1187,190 @@ class WorkingDirectory:
         """
         # Change back to the original directory
         os.chdir(self._original_path)
+
+
+class RemoteFile:
+    """A file-like object that reads from a remote URL using HTTP Range headers.
+
+    This class mimics a file object (seek, read) but fetches data on-demand
+    using HTTP Range requests. It includes retry logic for robust downloads.
+    """
+
+    def __init__(self, url: str, max_retries: int = 5, base_delay: float = 1.0) -> None:
+        """Initialize the RemoteFile.
+
+        Args:
+            url: The URL of the remote file.
+            max_retries: Maximum number of retries for HTTP requests.
+            base_delay: Base delay in seconds for exponential backoff.
+
+        Raises:
+            OSError: If the URL cannot be accessed.
+        """
+        self.url_original = url
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+
+        # Resolve redirects and get size
+        resp = self._request_with_retry("HEAD", url, allow_redirects=True)
+
+        # Confirm range support
+        range_supported = (
+            resp.status_code == 200 and resp.headers.get("Accept-Ranges") == "bytes"
+        )
+
+        if not range_supported:
+            # Close the HEAD response before overwriting
+            resp.close()
+            # Fallback to GET with Range if HEAD fails or doesn't confirm support
+            resp = self._request_with_retry(
+                "GET",
+                url,
+                headers={"Range": "bytes=0-0"},
+                stream=True,
+                allow_redirects=True,
+            )
+            if resp.status_code != 206:
+                resp.close()
+                raise OSError(
+                    f"Server does not support HTTP Range requests (Expected 206, got {resp.status_code})"
+                )
+
+        try:
+            if resp.url is None:
+                raise OSError("Failed to resolve URL: response URL is None")
+            self.url: str = resp.url
+
+            if "Content-Range" in resp.headers:
+                self.size = int(resp.headers["Content-Range"].split("/")[-1])
+            else:
+                self.size = int(resp.headers.get("Content-Length", 0))
+        finally:
+            # Ensure connection is closed
+            resp.close()
+
+        self.pos = 0
+
+    def _request_with_retry(
+        self, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        """Execute HTTP request with exponential backoff retry.
+
+        Args:
+            method: HTTP method (e.g. "GET").
+            url: The URL to request.
+            **kwargs: Additional arguments for requests.request.
+
+        Returns:
+            The response object.
+
+        Raises:
+            OSError: If the request fails after maximum retries.
+        """
+        last_error: str | None = None
+        resp: requests.Response | None = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = requests.request(method, url, timeout=30, **kwargs)
+                if resp.status_code in [200, 206]:
+                    return resp
+                if resp.status_code in [429, 500, 502, 503, 504]:
+                    last_error = f"HTTP {resp.status_code}"
+                    # Transient error, continue to retry
+                else:
+                    # Likely a permanent error (404, 403, etc)
+                    # Return response so caller can handle the status code
+                    return resp
+            except requests.RequestException as e:
+                last_error = str(e)
+
+            if attempt < self.max_retries:
+                sleep_time = self.base_delay * (2**attempt)
+                time.sleep(sleep_time)
+
+        if resp is not None:
+            # Return the last failed response
+            return resp
+
+        raise OSError(
+            f"Failed to request {url} after {self.max_retries} retries: {last_error}"
+        )
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        """Move to a new file position.
+
+        Args:
+            offset: The offset.
+            whence: The reference point (0=start, 1=current, 2=end).
+
+        Returns:
+            The new file position.
+        """
+        if whence == 0:
+            self.pos = offset
+        elif whence == 1:
+            self.pos += offset
+        elif whence == 2:
+            self.pos = self.size + offset
+        return self.pos
+
+    def tell(self) -> int:
+        """Return the current file position."""
+        return self.pos
+
+    def read(self, size: int = -1) -> bytes:
+        """Read bytes from the remote file.
+
+        Args:
+            size: Number of bytes to read. -1 means read until end.
+
+        Returns:
+            The read bytes.
+
+        Raises:
+            OSError: If reading from the URL fails.
+        """
+        if size == 0:
+            return b""
+
+        if size == -1:
+            range_header = f"bytes={self.pos}-"
+        else:
+            end = self.pos + size - 1
+            range_header = f"bytes={self.pos}-{end}"
+
+        headers = {"Range": range_header}
+        try:
+            resp = self._request_with_retry("GET", self.url, headers=headers)
+        except OSError as e:
+            raise OSError(f"Failed to read from {self.url}: {e}")
+
+        # If we asked for a range but got 200, it means the server sent the whole file.
+        # This is only okay if we requested from the beginning (pos=0) and wanted everything (size=-1)
+        # or the whole file matches the requested size.
+        # However, for simplicity and safety in random access:
+        # If we expect a partial response (which we always do here with Range header),
+        # we should require 206 Partial Content unless we happen to request the exact full content
+        # effectively making 200 OK valid. But typically 206 is strict for Range.
+        is_partial_request = self.pos > 0 or (size != -1 and size < self.size)
+
+        if is_partial_request and resp.status_code == 200:
+            # Server ignored Range header and sent full file - this is bad for seek/partial read
+            raise OSError(
+                f"Server returned 200 OK but 206 Partial Content was expected for range {range_header}"
+            )
+
+        if resp.status_code not in [200, 206]:
+            raise OSError(f"Failed to read from {self.url}: {resp.status_code}")
+
+        data = resp.content
+        self.pos += len(data)
+        return data
+
+    def seekable(self) -> bool:
+        """Return True if the file is seekable."""
+        return True
 
 
 def fetch_and_save(
@@ -1309,3 +1566,87 @@ def fast_rmtree(path: Path) -> None:
         raise NotImplementedError(
             f"Optimized fast deletion is not implemented for system: {system}"
         )
+
+
+def create_hash_from_parameters(
+    parameters: dict[str, Any], code_path: Path | None = None
+) -> str:
+    """Create a hash from a dictionary of parameters.
+
+    Args:
+        parameters: A dictionary of parameters.
+        code_path: Optional path to a file or directory containing code to include in the hash.
+
+    Returns:
+        A hexadecimal string representing the hash of the parameters.
+
+    Raises:
+        ValueError: If the parameters dictionary contains a key named '_code_content'.
+    """
+
+    def make_hashable(value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            value = str(value.tobytes())
+        elif isinstance(value, (xr.DataArray, xr.Dataset)):
+            value = dask.tokenize.tokenize(value, ensure_deterministic=True)
+        elif isinstance(value, dict):
+            value = {k: make_hashable(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            value = [make_hashable(v) for v in value]
+        elif isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
+            value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
+        elif isinstance(value, np.generic):
+            value = value.item()
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"Value {value} is not JSON serializable")
+        return value
+
+    hashable_dict = make_hashable(parameters)
+
+    if code_path is not None:
+        if "_code_content" in hashable_dict:
+            raise ValueError(
+                "The parameters dictionary cannot contain a key named '_code_content'"
+            )
+        code_content: dict[str, str] = {}
+        if code_path.is_file():
+            code_content[code_path.name] = code_path.read_text()
+        elif code_path.is_dir():
+            for root, _, files in sorted(os.walk(code_path)):
+                for file in sorted(files):
+                    file_path = Path(root) / file
+                    try:
+                        rel_path = str(file_path.relative_to(code_path))
+                        code_content[rel_path] = file_path.read_text()
+                    except UnicodeDecodeError:
+                        continue
+        hashable_dict["_code_content"] = code_content
+
+    hash_: str = hashlib.md5(
+        json.dumps(hashable_dict, sort_keys=True).encode()
+    ).hexdigest()
+    return hash_
+
+
+def write_hash(path: Path, hash: str) -> None:
+    """Write a hash to a file in hexadecimal format.
+
+    Args:
+        path: The path to the file where the hash will be written.
+        hash: The hash as a str object.
+    """
+    path.write_text(hash)
+
+
+def read_hash(path: Path) -> str:
+    """Read a hash from a file in hexadecimal format.
+
+    Args:
+        path: The path to the file containing the hash.
+
+    Returns:
+        The hash as a str object.
+    """
+    return path.read_text().strip()

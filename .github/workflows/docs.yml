@@ -1,4 +1,4 @@
-name: sphinx
+name: mkdocs build and deploy
 on:
   push:
     branches:
@@ -14,32 +14,19 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - name: Install Pandoc and xelatex
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra librsvg2-bin
       - name: Set up uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Install the project
         run: uv sync --dev
-      - uses: ammaraskar/sphinx-problem-matcher@master
-      - name: Build Sphinx docs
-        working-directory: docs
+      - name: Build MkDocs
         run: |
-          mkdir -p _build
-          uv run make html
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: run_logs
-          path: /tmp/sphinx-err-*.log
+          uv run mkdocs build -f mkdocs.yml
       - name: Setup Node.js
         uses: actions/setup-node@v4
       - name: Install Wrangler
         run: |
           npm install -g wrangler
       - name: Deploy with Wrangler
-        working-directory: docs
         run: |
           wrangler deploy
         env:

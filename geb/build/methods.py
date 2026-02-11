@@ -6,7 +6,7 @@ import logging
 from logging import Logger
 from pathlib import Path
 from time import time
-from typing import Any, Callable
+from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -15,19 +15,43 @@ logger: Logger = logging.getLogger("GEB")
 
 __all__: list[str] = ["build_method"]
 
+from typing import Any, Protocol
+
+
+class NamedCallable(Protocol):
+    __name__: str
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
 
 class _build_method:
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
         self.tree = nx.DiGraph()
+        self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
 
     def __call__(
         self,
-        func: Callable[..., Any] | None = None,
+        required: bool,
+        func: NamedCallable | None = None,
         depends_on: str | list[str] | None = None,
-    ) -> Callable[..., Any]:
-        def partial_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    ) -> NamedCallable:
+        """Decorator to mark a method as a build method.
+
+        Args:
+            required: Whether the method is required to run.
+            func: The function to decorate.
+            depends_on: A method name or list of build_method that this method depends on.
+
+        Returns:
+            The decorated function.
+
+        Raises:
+            TypeError: if the decorator is used without parentheses.
+        """
+
+        def partial_decorator(func: NamedCallable) -> NamedCallable:
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 self.logger.info(f"Running {func.__name__}")
@@ -57,16 +81,20 @@ class _build_method:
                 else:
                     raise ValueError("depends_on must be a string or a list of strings")
 
-            wrapper.__is_build_method__ = True
+            if required:
+                self.required_methods.add(func.__name__)
+
+            setattr(wrapper, "__is_build_method__", True)
             return wrapper
 
         if func is None:
             return partial_decorator
         else:
-            f: Callable[..., Any] = partial_decorator(func)
-            return f
+            raise TypeError(
+                "Use @build_method() rather than @build_method without parentheses."
+            )
 
-    def add_tree_node(self, func: Callable[..., Any]) -> None:
+    def add_tree_node(self, func: NamedCallable) -> None:
         """Add a node to the dependency tree."""
         parameters = inspect.signature(func).parameters
         required_parameters = [
@@ -88,7 +116,7 @@ class _build_method:
             },
         )
 
-    def add_tree_edge(self, func: Callable[..., Any], depends_on: str) -> None:
+    def add_tree_edge(self, func: NamedCallable, depends_on: str) -> None:
         """Add an edge to the dependency tree.
 
         Raises:
@@ -256,8 +284,23 @@ class _build_method:
         if not progress_path.exists():
             return []
         with open(progress_path, "r") as f:
-            completed_methods = f.read().splitlines()
+            completed_methods: list[str] = f.read().splitlines()
         return completed_methods
+
+    def check_required_methods(self, methods: Iterable[str]) -> None:
+        """Check that all required methods are present in the provided method list.
+
+        Args:
+            methods: A list of method names to check.
+
+        Raises:
+            ValueError: If any required method is missing.
+        """
+        missing_methods: set[str] = self.required_methods - set(methods)
+        if missing_methods:
+            raise ValueError(
+                f"The following required methods are missing: {', '.join(missing_methods)}"
+            )
 
     def log_time_taken(self) -> None:
         """Log the time taken for each method in the dependency tree."""

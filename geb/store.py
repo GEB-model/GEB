@@ -9,13 +9,7 @@ from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Iterator,
-    Literal,
-)
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Literal, overload
 
 import geopandas as gpd
 import numpy as np
@@ -24,7 +18,8 @@ import pandas as pd
 import yaml
 from numpy.typing import NDArray
 
-from geb.workflows.io import load_geom
+from geb.geb_types import ArrayStr
+from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -52,11 +47,11 @@ class DynamicArray:
 
     def __init__(
         self,
-        input_array: npt.ArrayLike | None = None,
+        input_array: np.ndarray | None = None,
         n: int | None = None,
         max_n: int | None = None,
         extra_dims: tuple[int, ...] | None = None,
-        extra_dims_names: list[str] = [],
+        extra_dims_names: Iterable[str] | ArrayStr = [],
         dtype: npt.DTypeLike | None = None,
         fill_value: Any | None = None,
     ) -> None:
@@ -113,9 +108,13 @@ class DynamicArray:
             raise ValueError("Only one of input_array or dtype can be given")
 
         if input_array is not None:
-            assert extra_dims is None, (
-                "extra_dims cannot be given if input_array is given"
-            )
+            if (
+                input_array.ndim > 1
+                and input_array.ndim - 1 != self.extra_dims_names.size
+            ):
+                raise ValueError(
+                    "extra_dims_names must be given if input_array has extra dimensions"
+                )
             assert n is None, "n cannot be given if input_array is given"
             # assert dtype is not object
             assert input_array.dtype != object, "dtype cannot be object"
@@ -192,17 +191,22 @@ class DynamicArray:
         return self._n
 
     @property
-    def extra_dims_names(self) -> npt.NDArray[np.str_] | None:
+    def extra_dims_names(self) -> ArrayStr:
         """
         Names associated with any extra trailing dimensions.
 
         Returns:
             Array of names for extra trailing dimensions, or None.
+
+        Raises:
+            AttributeError: If `extra_dims_names` has not been set.
         """
+        if not hasattr(self, "_extra_dims_names"):
+            raise AttributeError("extra_dims_names attribute not set")
         return self._extra_dims_names
 
     @extra_dims_names.setter
-    def extra_dims_names(self, value: npt.NDArray[np.str_]) -> None:
+    def extra_dims_names(self, value: ArrayStr) -> None:
         """
         Set names for extra trailing dimensions.
 
@@ -293,7 +297,11 @@ class DynamicArray:
         elif not isinstance(inputs[0], DynamicArray):
             return result
         else:
-            return self.__class__(result, max_n=self._data.shape[0])
+            return self.__class__(
+                result,
+                extra_dims_names=self.extra_dims_names,
+                max_n=self._data.shape[0],
+            )
 
     def __array_function__(
         self,
@@ -301,7 +309,7 @@ class DynamicArray:
         types: tuple[Any],
         args: tuple[Any],
         kwargs: dict[str, Any],
-    ) -> Any:
+    ) -> Any | DynamicArray:
         """
         Delegate NumPy __array_function__ calls to the underlying NumPy array.
 
@@ -314,17 +322,29 @@ class DynamicArray:
         Returns:
             Result of calling the function on the underlying NumPy array(s).
         """
+
+        def recursive_convert(arg: Any) -> Any:
+            if isinstance(arg, DynamicArray):
+                return arg.data
+            if isinstance(arg, (list, tuple)):
+                return type(arg)(recursive_convert(x) for x in arg)
+            return arg
+
         # Explicitly call __array_function__ of the underlying NumPy array
-        modified_args: tuple = tuple(
-            arg.data if isinstance(arg, DynamicArray) else arg for arg in args
+        modified_args = tuple(recursive_convert(arg) for arg in args)
+
+        result = self._data.__array_function__(
+            func, (np.ndarray,), modified_args, kwargs
         )
-        modified_types: tuple = tuple(
-            type(arg.data) if isinstance(arg, DynamicArray) else type(arg)
-            for arg in args
-        )
-        return self._data.__array_function__(
-            func, modified_types, modified_args, kwargs
-        )
+
+        if func == np.where and len(args) == 3:
+            return self.__class__(
+                input_array=result,
+                max_n=self._data.shape[0],
+                extra_dims_names=self.extra_dims_names,
+            )
+
+        return result
 
     def __setitem__(
         self,
@@ -340,10 +360,49 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
+    @overload
+    def __getitem__(
+        self, key: tuple[slice[None, int | None, int | None], *Any]
+    ) -> DynamicArray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[slice[int, int, int], *Any]) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: slice[None, int | None, int | None]) -> DynamicArray: ...
+
+    @overload
+    def __getitem__(self, key: slice[int, int, int | None]) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: list) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: DynamicArray) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: int) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(
+        self, key: NDArray[np.integer] | NDArray[np.bool_]
+    ) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[int, ...]) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(
+        self, key: tuple[NDArray[np.integer] | NDArray[np.bool_], ...]
+    ) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[Any, ...]) -> DynamicArray | np.ndarray: ...
+
     def __getitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
-    ) -> DynamicArray | np.ndarray:
+        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_] | list,
+    ) -> DynamicArray | NDArray[Any]:
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -457,7 +516,7 @@ class DynamicArray:
             "_extra_dims_names",
             "extra_dims_names",
         ):
-            return super().__getattr__(name)
+            return object.__getattribute__(self, name)
         else:
             return getattr(self.data, name)
 
@@ -527,7 +586,11 @@ class DynamicArray:
             self.data = result
             return self
         else:
-            return self.__class__(result, max_n=self._data.shape[0])
+            return self.__class__(
+                result,
+                max_n=self._data.shape[0],
+                extra_dims_names=self.extra_dims_names,
+            )
 
     def __add__(self, other: Any) -> DynamicArray:
         """Addition operator.
@@ -770,7 +833,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: object, operation: str) -> DynamicArray:
+    def _compare(self, value: Any, operation: str) -> DynamicArray:
         """
         Helper for comparison operations.
 
@@ -782,12 +845,29 @@ class DynamicArray:
             Result of the comparison.
         """
         if isinstance(value, DynamicArray):
+            res = getattr(self.data, operation)(value.data)
+            if res is NotImplemented:
+                return NotImplemented
             return self.__class__(
-                getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
+                res, extra_dims_names=self.extra_dims_names, max_n=self._data.shape[0]
             )
-        return self.__class__(getattr(self.data, operation)(value))
+        res = getattr(self.data, operation)(value)
+        if res is NotImplemented:
+            return NotImplemented
+        return self.__class__(
+            res, extra_dims_names=self.extra_dims_names, max_n=self.max_n
+        )
 
-    def __eq__(self, value: object) -> DynamicArray:
+    @overload
+    def __eq__(self, value: DynamicArray) -> DynamicArray: ...
+
+    @overload
+    def __eq__(self, value: Any) -> DynamicArray: ...
+
+    @overload
+    def __eq__(self, value: object) -> Any: ...
+
+    def __eq__(self, value: object | DynamicArray | int) -> Any | DynamicArray:
         """Equality comparison.
 
         Args:
@@ -798,7 +878,13 @@ class DynamicArray:
         """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: object) -> DynamicArray:
+    @overload
+    def __ne__(self, value: DynamicArray) -> DynamicArray: ...
+
+    @overload
+    def __ne__(self, value: object) -> Any: ...
+
+    def __ne__(self, value: object) -> Any:
         """Inequality comparison.
 
         Args:
@@ -853,7 +939,7 @@ class DynamicArray:
         """
         return self._compare(value, "__le__")
 
-    def __and__(self, other: npt.NDArray[Any]) -> DynamicArray:
+    def __and__(self, other: npt.NDArray[Any] | DynamicArray) -> DynamicArray:
         """Bitwise and / logical and operator.
 
         Returns:
@@ -861,7 +947,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__and__")
 
-    def __or__(self, other: npt.NDArray[Any]) -> DynamicArray:
+    def __or__(self, other: npt.NDArray[Any] | DynamicArray) -> DynamicArray:
         """Bitwise or / logical or operator.
 
         Returns:
@@ -939,7 +1025,7 @@ class Bucket:
 
     """
 
-    def __init__(self, validator: Callable | None = None) -> None:
+    def __init__(self, validator: Callable[..., bool] | None = None) -> None:
         """Initialize the Bucket with an optional validator.
 
         Args:
@@ -973,7 +1059,8 @@ class Bucket:
         | str
         | dict
         | datetime
-        | Callable,
+        | Callable[..., bool]
+        | None,
     ) -> None:
         """Set an value in the bucket with optional validation, except if the name is '_validator'.
 
@@ -1054,6 +1141,10 @@ class Bucket:
                     compression_level=9,
                 )
             elif isinstance(value, (list, dict, float, int, str, datetime)):
+                if isinstance(value, np.generic):
+                    value = (
+                        value.item()
+                    )  # If it's a numpy scalar, convert to native Python type
                 with open((path / name).with_suffix(".yml"), "w") as f:
                     yaml.safe_dump(value, f, default_flow_style=False)
             elif isinstance(value, np.ndarray):
@@ -1107,7 +1198,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    load_geom(filename),
+                    read_geom(filename),
                 )
             elif filename.suffix == ".parquet":
                 setattr(
@@ -1181,7 +1272,7 @@ class Store:
             The created Bucket instance.
         """
         assert name not in self.buckets
-        bucket = Bucket(validator=validator)
+        bucket: Bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 

@@ -25,7 +25,7 @@ import xarray as xr
 from rioxarray import merge
 from tqdm import tqdm
 
-from geb.workflows.io import fetch_and_save, open_zarr, to_zarr
+from geb.workflows.io import fetch_and_save, read_zarr, write_zarr
 from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
@@ -517,16 +517,16 @@ class Fabdem(Adapter):
 
         # Convert to actual coordinates
         if ns_lat == "S":
-            lat_min: int = -lat_val - 1
-            lat_max: int = -lat_val
-        else:  # N
+            lat_min: int = -lat_val
+            lat_max: int = -lat_val + 1
+        else:
             lat_min: int = lat_val
             lat_max: int = lat_val + 1
 
         if ew_lon == "W":
-            lon_min: int = -lon_val - 1
-            lon_max: int = -lon_val
-        else:  # E
+            lon_min: int = -lon_val
+            lon_max: int = -lon_val + 1
+        else:
             lon_min: int = lon_val
             lon_max: int = lon_val + 1
 
@@ -671,7 +671,7 @@ class Fabdem(Adapter):
             da = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
             da = convert_nodata(da, np.nan)
 
-            to_zarr(da, filepath, crs=da.rio.crs)
+            write_zarr(da, filepath, crs=da.rio.crs)
 
         return self
 
@@ -685,5 +685,5 @@ class Fabdem(Adapter):
             xarray DataArray with FABDEM data.
         """
         filepath: Path = self.get_filepath(prefix)
-        da: xr.DataArray = open_zarr(filepath)
+        da: xr.DataArray = read_zarr(filepath)
         return da

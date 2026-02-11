@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import math
 from collections.abc import Hashable, Mapping
-from typing import Any, Literal, overload
+from typing import Any, Literal, cast, overload
 
-import dask
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
-import rioxarray
 import xarray
 import xarray as xr
 import xarray_regrid
@@ -26,13 +24,37 @@ from pyresample.resampler import resample_blocks
 from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
+from xarray.core.coordinates import DataArrayCoordinates
 
-from geb.types import TwoDArrayBool, TwoDArrayFloat32, TwoDArrayFloat64
+from geb.geb_types import (
+    ArrayWithScalar,
+    ThreeDArrayWithScalar,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+    TwoDArrayFloat64,
+    TwoDArrayWithScalar,
+)
+
+
+@overload
+def decompress_with_mask(
+    array: TwoDArrayWithScalar,
+    mask: TwoDArrayBool,
+    fillvalue: int | float | None = None,
+) -> ThreeDArrayWithScalar: ...
+
+
+@overload
+def decompress_with_mask(
+    array: ArrayWithScalar, mask: TwoDArrayBool, fillvalue: int | float | None = None
+) -> TwoDArrayWithScalar: ...
 
 
 def decompress_with_mask(
-    array: np.ndarray, mask: TwoDArrayBool, fillvalue: int | float | None = None
-) -> np.ndarray:
+    array: TwoDArrayWithScalar | ArrayWithScalar,
+    mask: TwoDArrayBool,
+    fillvalue: int | float | None = None,
+) -> ThreeDArrayWithScalar | TwoDArrayWithScalar:
     """Decompress array.
 
     Args:
@@ -42,20 +64,38 @@ def decompress_with_mask(
 
     Returns:
         array: Decompressed array.
+
+    Raises:
+        ValueError: If array is not 1D or 2D.
     """
     if fillvalue is None:
         if array.dtype in (np.float32, np.float64):
             fillvalue = np.nan
         else:
             fillvalue = 0
-    outmap = np.full(mask.size, fillvalue, dtype=array.dtype)
-    output_shape = mask.shape
-    if array.ndim == 2:
+    outmap_flat = np.full(mask.size, fillvalue, dtype=array.dtype)
+    if array.ndim == 1:
+        output_shape: tuple[int, int] = mask.shape
+        outmap_flat[~mask.ravel()] = array
+        outmap = outmap_flat.reshape(output_shape)
+
+    elif array.ndim == 2:
+        array = cast(TwoDArrayWithScalar[Any], array)
         assert array.shape[1] == mask.size - mask.sum()
-        outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
-        output_shape = (array.shape[0], *output_shape)
-    outmap[..., ~mask.ravel()] = array
-    return outmap.reshape(output_shape)
+        outmap_flat = np.broadcast_to(
+            outmap_flat, (array.shape[0], outmap_flat.size)
+        ).copy()
+        output_shape: tuple[int, int, int] = (
+            array.shape[0],
+            mask.shape[0],
+            mask.shape[1],
+        )
+        outmap_flat[..., ~mask.ravel()] = array
+        outmap = outmap_flat.reshape(output_shape)
+    else:
+        raise ValueError("Array must be 1D or 2D")
+
+    return outmap
 
 
 @njit(cache=True)
@@ -242,7 +282,19 @@ def coords_to_pixels(
         raise ValueError("Cannot convert rotated maps")
 
 
-def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
+@overload
+def compress(
+    array: ThreeDArrayWithScalar, mask: TwoDArrayBool
+) -> TwoDArrayWithScalar: ...
+
+
+@overload
+def compress(array: TwoDArrayWithScalar, mask: TwoDArrayBool) -> ArrayWithScalar: ...
+
+
+def compress(
+    array: ThreeDArrayWithScalar | TwoDArrayWithScalar, mask: TwoDArrayBool
+) -> TwoDArrayWithScalar | ArrayWithScalar:
     """Compress an array by applying a mask.
 
     Args:
@@ -363,7 +415,7 @@ def reclassify(
 def full_like(
     data: xr.DataArray,
     fill_value: int | float | bool,
-    nodata: int | float | bool,
+    nodata: int | float | bool | None,
     attrs: None | dict = None,
     name: str | None = None,
     *args: Any,
@@ -385,8 +437,13 @@ def full_like(
     Returns:
         A new DataArray with the same shape and coordinates as the input data,
         filled with the specified fill_value and with the specified nodata value in the attributes.
+
+    Raises:
+        ValueError: If nodata is None and fill_value is not a boolean.
     """
     assert isinstance(data, xr.DataArray)
+    if nodata is None and not isinstance(fill_value, bool):
+        raise ValueError("Nodata value must be set unless fill_value is a boolean. ")
     da: xr.DataArray = xr.full_like(data, fill_value, *args, **kwargs)
     if name is not None:
         da.name = name
@@ -428,6 +485,7 @@ def rasterize_like(
 
     Raises:
         ValueError: If both `column` and `burn_value` are provided or if neither is provided.
+        ValueError: If the CRS of the raster and GeoDataFrame do not match.
 
     """
     if (column is None and burn_value is None) or (
@@ -438,17 +496,24 @@ def rasterize_like(
     if name == "rasterized" and column is not None:
         name: str = column
 
+    if dtype == bool:
+        burn_type = np.uint8
+    else:
+        burn_type = dtype
+
     da: xr.DataArray = full_like(
         data=raster,
         fill_value=nodata,
         nodata=nodata,
         attrs=raster.attrs,
-        dtype=dtype,
+        dtype=burn_type,
         name=name,
     )
-    geoms: gpd.Geoseries = gdf.geometry
 
-    assert da.rio.crs == gdf.crs, "CRS of raster and GeoDataFrame must match"
+    geoms: gpd.GeoSeries = gdf.geometry
+
+    if not da.rio.crs == gdf.crs:
+        raise ValueError("CRS of raster and GeoDataFrame must match")
 
     if burn_value is not None:
         values = [burn_value] * len(gdf)
@@ -465,13 +530,32 @@ def rasterize_like(
         **kwargs,
     )
     da.values = out
+
+    if dtype == bool:
+        da = da.astype(bool)
+        da.attrs["_FillValue"] = None
+
     return da
 
 
+@overload
 def convert_nodata(
     da: xr.DataArray,
     new_nodata: float | int | bool,
-) -> xr.DataArray:
+) -> xr.DataArray: ...
+
+
+@overload
+def convert_nodata(
+    da: xr.Dataset,
+    new_nodata: float | int | bool,
+) -> xr.Dataset: ...
+
+
+def convert_nodata(
+    da: xr.DataArray | xr.Dataset,
+    new_nodata: float | int | bool,
+) -> xr.DataArray | xr.Dataset:
     """Convert the nodata value of a DataArray to a new nodata value.
 
     Args:
@@ -490,6 +574,26 @@ def convert_nodata(
     da_new.attrs = da.attrs.copy()
     da_new.attrs["_FillValue"] = new_nodata
     return da_new
+
+
+@overload
+def snap_to_grid(
+    ds: xr.DataArray,
+    reference: xr.DataArray | xr.Dataset,
+    relative_tolerance: float = 0.02,
+    ydim: str = "y",
+    xdim: str = "x",
+) -> xr.DataArray: ...
+
+
+@overload
+def snap_to_grid(
+    ds: xr.Dataset,
+    reference: xr.DataArray | xr.Dataset,
+    relative_tolerance: float = 0.02,
+    ydim: str = "y",
+    xdim: str = "x",
+) -> xr.Dataset: ...
 
 
 def snap_to_grid(
@@ -531,6 +635,20 @@ def snap_to_grid(
         rtol=0,
     ).all()
     return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
+
+
+@overload
+def clip_with_grid(
+    ds: xr.Dataset,
+    mask: xr.DataArray,
+) -> tuple[xr.Dataset, dict[str, slice]]: ...
+
+
+@overload
+def clip_with_grid(
+    ds: xr.DataArray,
+    mask: xr.DataArray,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
 
 
 def clip_with_grid(
@@ -584,6 +702,102 @@ def bounds_are_within(
     )
 
 
+def pad_to_grid_alignment(
+    da: xr.DataArray,
+    grid_size_multiplier: int,
+    constant_values: float | int | bool | None = None,
+) -> xr.DataArray:
+    """Pad a raster so the left and bottom edges align to a coarse grid.
+
+    The coarse grid is defined by the base resolution multiplied by
+    ``grid_size_multiplier``. The function pads the input so the left and
+    bottom edges align to multiples of the coarse grid size, and the padded
+    width/height become multiples of ``grid_size_multiplier``.
+
+    Args:
+        da: The input DataArray to pad.
+        grid_size_multiplier: The grid size multiplier for the coarse grid.
+        constant_values: The value used for padding. If None, nodata will be used
+            if it is set, and np.nan otherwise.
+
+    Returns:
+        The padded DataArray with updated coordinates and transform.
+
+    Raises:
+        ValueError: If ``grid_size_multiplier`` is not a positive integer.
+    """
+    if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
+        raise ValueError("grid_size_multiplier must be a positive integer")
+
+    array_rio = da.rio
+    x_dim: str = array_rio.x_dim
+    y_dim: str = array_rio.y_dim
+
+    x_coord: np.ndarray = da[x_dim].values
+    y_coord: np.ndarray = da[y_dim].values
+
+    if x_coord.size == 1:
+        x_step: float = array_rio.resolution()[0]
+    else:
+        x_step = float(x_coord[1] - x_coord[0])
+
+    if y_coord.size == 1:
+        y_step: float = array_rio.resolution()[1]
+    else:
+        y_step = float(y_coord[1] - y_coord[0])
+
+    abs_x_step: float = abs(x_step)
+    abs_y_step: float = abs(y_step)
+
+    left_edge: float = float(x_coord[0] - x_step / 2)
+    bottom_edge: float = float(y_coord[-1] + y_step / 2)
+
+    coarse_x_step: float = abs_x_step * grid_size_multiplier
+    coarse_y_step: float = abs_y_step * grid_size_multiplier
+
+    left_aligned: float = math.floor(left_edge / coarse_x_step) * coarse_x_step
+    bottom_aligned: float = math.floor(bottom_edge / coarse_y_step) * coarse_y_step
+
+    pad_left: int = int(round((left_edge - left_aligned) / abs_x_step))
+    pad_bottom: int = int(round((bottom_edge - bottom_aligned) / abs_y_step))
+
+    width_cells: int = array_rio.width + pad_left
+    height_cells: int = array_rio.height + pad_bottom
+
+    pad_right: int = (-width_cells) % grid_size_multiplier
+    pad_top: int = (-height_cells) % grid_size_multiplier
+
+    if constant_values is None:
+        constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
+
+    padded = da.pad(
+        pad_width={
+            x_dim: (pad_left, pad_right),
+            y_dim: (pad_top, pad_bottom),
+        },
+        constant_values=constant_values,
+    ).rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
+
+    if pad_left > 0:
+        new_left_coords = x_coord[0] + x_step * np.arange(-pad_left, 0)
+        x_coord = np.concatenate([new_left_coords, x_coord])
+    if pad_right > 0:
+        new_right_coords = x_coord[-1] + x_step * np.arange(1, pad_right + 1)
+        x_coord = np.concatenate([x_coord, new_right_coords])
+
+    if pad_top > 0:
+        new_top_coords = y_coord[0] + y_step * np.arange(-pad_top, 0)
+        y_coord = np.concatenate([new_top_coords, y_coord])
+    if pad_bottom > 0:
+        new_bottom_coords = y_coord[-1] + y_step * np.arange(1, pad_bottom + 1)
+        y_coord = np.concatenate([y_coord, new_bottom_coords])
+
+    padded[x_dim] = x_coord
+    padded[y_dim] = y_coord
+    padded.rio.write_transform(inplace=True)
+    return padded
+
+
 @overload
 def pad_xy(
     da: xr.DataArray,
@@ -592,6 +806,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -607,6 +822,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -621,6 +837,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -652,7 +869,7 @@ def pad_xy(
     data.
 
     """
-    array_rio: rioxarray.rioxarray.RioXarrayAccessor = da.rio
+    array_rio = da.rio
 
     left, bottom, right, top = array_rio._internal_bounds()
     resolution_x, resolution_y = array_rio.resolution()
@@ -699,7 +916,7 @@ def pad_xy(
             array_rio.x_dim: (x_before, x_after),
             array_rio.y_dim: (y_before, y_after),
         },
-        constant_values=constant_values,  # type: ignore
+        constant_values=constant_values,
     ).rio.set_spatial_dims(x_dim=array_rio.x_dim, y_dim=array_rio.y_dim, inplace=True)
     superset[array_rio.x_dim] = x_coord
     superset[array_rio.y_dim] = y_coord
@@ -713,16 +930,17 @@ def pad_xy(
         return superset
 
 
-def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
+def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArray:
     """Interpolate NaN values along the time dimension of a DataArray.
 
     Uses nearest neighbor interpolation in the spatial dimensions for each time slice.
 
     Args:
-        da: The input DataArray with a time dimension.
+        da: The input 3D DataArray with dimensions (dim, y, x) and NaN values to interpolate.
+        dim: The dimension along which to interpolate NaN values. Default is 'time'.
 
     Returns:
-        A new DataArray with NaN values interpolated along the time dimension.
+        A new DataArray with NaN values interpolated along the dimension.
 
     Raises:
         ValueError: If '_FillValue' attribute is missing.
@@ -749,21 +967,21 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
         if not mask.any():
             return arr
 
-        assert dims == ("time", "y", "x")
+        assert dims == (dim, "y", "x")
 
-        for time_idx in range(arr.shape[0]):
-            mask_slice = mask[time_idx]
-            time_slice = arr[time_idx]
+        for idx in range(arr.shape[0]):
+            mask_slice = mask[idx]
+            dim_slice = arr[idx]
 
-            y, x = np.indices(time_slice.shape)
+            y, x = np.indices(dim_slice.shape)
             known_x, known_y = x[~mask_slice], y[~mask_slice]
-            known_v = time_slice[~mask_slice]
+            known_v = dim_slice[~mask_slice]
             missing_x, missing_y = x[mask_slice], y[mask_slice]
 
             filled_values = griddata(
                 (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
             )
-            arr[time_idx][mask_slice] = filled_values
+            arr[idx][mask_slice] = filled_values
         return arr
 
     da = xr.apply_ufunc(
@@ -897,10 +1115,10 @@ def get_area_definition(da: xr.DataArray) -> AreaDefinition:
 
 
 def _fill_in_coords(
-    target_coords: xr.core.coordinates.DataArrayCoordinates,
-    source_coords: xr.core.coordinates.DataArrayCoordinates,
+    target_coords: DataArrayCoordinates,
+    source_coords: DataArrayCoordinates,
     data_dims: tuple[Hashable, ...],
-) -> list[xr.core.coordinates.DataArrayCoordinates]:
+) -> list[xr.DataArray]:
     """Fill in missing coordinates that are also dimensions from source except for 'x' and 'y' which are taken from target.
 
     For example useful to fill the time coordinate
@@ -960,7 +1178,7 @@ def resample_chunked(
     if target.chunks is None:
         raise ValueError("Target DataArray must be chunked for resample_chunked")
 
-    indices: dask.Array = resample_blocks(
+    indices = resample_blocks(
         gradient_resampler_indices_block,
         source_geo,
         [],
@@ -969,7 +1187,7 @@ def resample_chunked(
         dtype=np.float64,
     )
 
-    resampled_data: dask.Array = resample_blocks(
+    resampled_data = resample_blocks(
         interpolator,
         source_geo,
         [source.data],
@@ -993,7 +1211,7 @@ def resample_chunked(
 
 
 def calculate_cell_area(
-    affine_transform: Affine, shape: tuple[int, int]
+    affine_transform: Affine, height: int, width: int
 ) -> TwoDArrayFloat32:
     """Calculate the area of each cell in a grid given its affine transform.
 
@@ -1001,15 +1219,14 @@ def calculate_cell_area(
 
     Args:
         affine_transform: The affine transformation of the grid.
-        shape: The shape of the grid as (height, width).
+        height: The height of the grid (number of rows).
+        width: The width of the grid (number of columns).
 
     Returns:
         A 2D array of cell areas in square meters.
     """
     RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
     distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
-
-    height, width = shape
 
     lat_idx = np.arange(0, height).repeat(width).reshape((height, width))
     lat = (lat_idx + 0.5) * affine_transform.e + affine_transform.f
@@ -1021,7 +1238,7 @@ def calculate_cell_area(
 
 
 def clip_region(
-    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
+    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int | None
 ) -> tuple[xr.DataArray, ...]:
     """Use the given mask to clip the mask itself and the given data arrays.
 
@@ -1035,7 +1252,7 @@ def clip_region(
         *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
         align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
             the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
-            be aligned to 0.5 intervals.
+            be aligned to 0.5 intervals. If None, no alignment is done.
 
     Returns:
         A tuple containing the clipped mask and the clipped data arrays.
@@ -1056,20 +1273,26 @@ def clip_region(
 
     xres, yres = mask.rio.resolution()
 
-    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
-    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
-    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
-    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
+    if align is None:
+        mincol_aligned = mincol
+        maxcol_aligned = maxcol
+        minrow_aligned = minrow
+        maxrow_aligned = maxrow
+    else:
+        mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
+        maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
+        minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
+        maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
 
-    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
-    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
+        assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
+        assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
+        assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
+        assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
 
-    assert mincol_aligned <= mincol
-    assert maxcol_aligned >= maxcol
-    assert minrow_aligned <= minrow
-    assert maxrow_aligned >= maxrow
+        assert mincol_aligned <= mincol
+        assert maxcol_aligned >= maxcol
+        assert minrow_aligned <= minrow
+        assert maxrow_aligned >= maxrow
 
     clipped_mask = mask.isel(
         y=slice(minrow_aligned, maxrow_aligned),
@@ -1090,3 +1313,73 @@ def clip_region(
             )
         )
     return clipped_mask, *clipped_arrays
+
+
+def get_linear_indices(da: xr.DataArray) -> xr.DataArray:
+    """Get linear indices for each cell in a 2D DataArray.
+
+    A linear index is a single integer that represents the position of a cell in a flattened version of the array.
+    For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column) is calculated as:
+    `linear_index = row * nx + column`.
+
+    Args:
+        da: A 2D xarray DataArray with dimensions 'y' and 'x'.
+
+    Returns:
+        A 2D xarray DataArray of the same shape as `da`, where each cell contains its linear index.
+        The linear index is calculated as `row * number_of_columns + column`.
+
+    """
+    # Get the sizes of the spatial dimensions
+    ny, nx = da.sizes["y"], da.sizes["x"]
+
+    # Create an array of sequential integers from 0 to ny*nx - 1
+    grid_ids = np.arange(ny * nx).reshape(ny, nx)
+
+    # Create a DataArray with the same coordinates and dimensions as your spatial grid
+    grid_id_da: xr.DataArray = xr.DataArray(
+        grid_ids,
+        coords={
+            "y": da.coords["y"],
+            "x": da.coords["x"],
+        },
+        dims=["y", "x"],
+    )
+
+    return grid_id_da
+
+
+def get_neighbor_cell_ids_for_linear_indices(
+    cell_id: int, nx: int, ny: int, radius: int = 1
+) -> list[int]:
+    """Get the linear indices of the neighboring cells of a cell in a 2D grid.
+
+    Linear indices are the indices of the cells in the flattened version of an array.
+    For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column)
+    is calculated as:
+        `linear_index = row * nx + column`.
+
+    Args:
+        cell_id: The linear index of the cell for which to find neighbors.
+        nx: The number of columns in the grid.
+        ny: The number of rows in the grid.
+        radius: The radius around the cell to consider as neighbors. Default is 1.
+
+    Returns:
+        A list of linear indices of the neighboring cells.
+
+    """
+    row: int = cell_id // nx
+    col: int = cell_id % nx
+
+    neighbor_cell_ids: list[int] = []
+    for dr in range(-radius, radius + 1):
+        for dc in range(-radius, radius + 1):
+            if dr == 0 and dc == 0:
+                continue  # Skip the cell itself
+            r: int = row + dr
+            c: int = col + dc
+            if 0 <= r < ny and 0 <= c < nx:
+                neighbor_id: int = r * nx + c
+                neighbor_cell_ids.append(neighbor_id)
+    return neighbor_cell_ids

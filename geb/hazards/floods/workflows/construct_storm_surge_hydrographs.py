@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 import scipy.signal as ss
 
-from geb.workflows.io import load_geom
+from geb.workflows.io import read_geom
 
-from ....workflows.io import load_table
+from ....workflows.io import read_table
 
 warnings.filterwarnings("ignore")
 
@@ -29,13 +29,13 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
         make_plot: Whether to create plots of the hydrographs.
     """
     # read geojson file to get station ids
-    station_ids = load_geom(model.files["geom"]["gtsm/stations_coast_rp"])
+    station_ids = read_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     os.makedirs("plot/gtsm", exist_ok=True)
     percentile = 0.99
     offset = 0
-    rps = load_table(model.files["table"]["coast_rp"])
-    waterlevels = load_table(model.files["table"]["gtsm/waterlevels"])
-    surge = load_table(model.files["table"]["gtsm/surge"])
+    rps = read_table(model.files["table"]["coast_rp"])
+    waterlevels = read_table(model.files["table"]["gtsm/waterlevels"])
+    surge = read_table(model.files["table"]["gtsm/surge"])
     return_periods = [int(rp) for rp in rps.columns.tolist()]
     df_event = {}
     df_event_spring = {}
@@ -378,8 +378,8 @@ def generate_surge_hydrograph(
         (
             np.zeros(247),
             np.hstack(
-                (df_before_peak.index.values, np.flipud(df_after_peak.index.values)[1:])
-            ),
+                (df_before_peak.index.values, np.flipud(df_after_peak.index.values)[1:])  # ty:ignore[no-matching-overload]
+            ),  # ty:ignore[no-matching-overload]
             np.zeros(246),
         )
     )
@@ -518,7 +518,7 @@ def generate_storm_tide_hydrograph(
             "surge": surge,
             "twl": average_tide_signal + surge,
         },
-        index=pd.date_range(start="1/1/2000", periods=len(surge), freq="10T"),
+        index=pd.date_range(start="1/1/2000", periods=len(surge), freq="10min"),
     )
     surge_height_spring = rl - np.max(spring_tide_signal)
     surge_rise_spring = np.flip(
@@ -548,7 +548,7 @@ def generate_storm_tide_hydrograph(
             "surge": surge_spring,
             "twl": spring_tide_signal + surge_spring,
         },
-        index=pd.date_range(start="1/1/2000", periods=len(surge_spring), freq="10T"),
+        index=pd.date_range(start="1/1/2000", periods=len(surge_spring), freq="10min"),
     )
 
     # plot

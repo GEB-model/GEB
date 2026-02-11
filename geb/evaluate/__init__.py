@@ -6,6 +6,7 @@ Contains the Evaluate class which contains evaluation routines for model runs.
 
 from __future__ import annotations
 
+from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
-class Evaluate(Hydrology, MeteorologicalForecasts):
+class Evaluate:
     """The main class that implements all evaluation procedures for the GEB model.
 
     Args:
@@ -26,6 +27,8 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
     def __init__(self, model: GEBModel) -> None:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
+        self.hydrology = Hydrology(model, self)
+        self.meteorological_forecasts = MeteorologicalForecasts(model, self)
 
     def run(
         self,
@@ -33,7 +36,7 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
-        include_yearly_plots: bool = False,
+        include_yearly_plots: bool = True,
         correct_Q_obs: bool = False,
     ) -> None:
         """Run the evaluation methods.
@@ -48,14 +51,16 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
             correct_Q_obs: If True, corrects the observed discharge values.
 
         Raises:
-            ValueError: If a specified method is not implemented in the Evaluate class.
+            AttributeError: If a specified method is not implemented in the Evaluate class.
         """
         if methods is None:
             methods: list = [
-                "plot_discharge",
-                "evaluate_discharge",
-                "evaluate_hydrodynamics",
-                "evaluate_forecasts",
+                "hydrology.plot_discharge",
+                "hydrology.evaluate_discharge",
+                "hydrology.water_circle",
+                "hydrology.evaluate_hydrodynamics",
+                "hydrology.water_balance",
+                "meteriological_forecasts.evaluate_forecasts",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (
@@ -66,15 +71,10 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
             )
 
         for method in methods:
-            assert hasattr(self, method), (
-                f"Method {method} is not implemented in Evaluate class."
-            )
-
-        for method in methods:
-            if hasattr(self, method):
-                attr = getattr(self, method)
-            else:
-                raise ValueError(
+            try:
+                attr = attrgetter(method)(self)
+            except AttributeError:
+                raise AttributeError(
                     f"Method {method} is not implemented in Evaluate class."
                 )
             attr(

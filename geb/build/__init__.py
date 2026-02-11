@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
 
 import geopandas as gpd
 import networkx
@@ -18,21 +18,31 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
-import rasterio
+import rasterio.features
 import xarray as xr
 import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
-from shapely.geometry import Point
+from scipy.ndimage import binary_dilation
+from shapely.geometry import Point, shape
 
+from geb import GEB_PACKAGE_DIR
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.workflows.io import load_dict, to_dict
-from geb.workflows.raster import clip_region, full_like, repeat_grid
+from geb.workflows.io import (
+    read_params,
+    write_geom,
+    write_params,
+    write_table,
+)
+from geb.workflows.raster import clip_region, clip_with_grid, full_like, repeat_grid
 
-from ..workflows.io import open_zarr, to_zarr
+from ..workflows.io import (
+    read_zarr,
+    write_zarr,
+)
 from .modules import (
     Agents,
     Crops,
@@ -44,6 +54,7 @@ from .modules import (
 )
 from .modules.hydrography import (
     create_river_raster_from_river_lines,
+    extend_rivers_into_ocean,
 )
 
 # Set environment options for robustness
@@ -166,11 +177,12 @@ def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
     """
     print("Loading MERIT basins river network...")
 
-    river_network: pd.DataFrame = (
+    river_network = (
         data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID"])
         .set_index("COMID")
     )
+    assert isinstance(river_network, pd.DataFrame)
     assert river_network.index.name == "COMID", (
         "The index of the river network is not the COMID column"
     )
@@ -229,13 +241,14 @@ def get_subbasin_id_from_coordinate(
     # xmin == xmax and ymin == ymax
     # geoparquet uses < and >, not <= and >=, so we need to add
     # a small value to the coordinates to avoid missing the point
-    COMID: gpd.GeoDataFrame = (
+    COMID = (
         data_catalog.fetch("merit_basins_catchments")
         .read(
             bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
         )
         .set_index("COMID")
     )
+    assert isinstance(COMID, gpd.GeoDataFrame)
 
     # get only the points where the point is inside the basin
     COMID = COMID[COMID.geometry.contains(Point(lon, lat))]
@@ -327,11 +340,12 @@ def get_all_downstream_subbasins_in_geom(
     logger.info("Loading river network data...")
 
     # Get river network data to find downstream basins (NextDownID = 0)
-    river_network: pd.DataFrame = (
+    river_network = (
         data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID", "uparea"])
         .set_index("COMID")
     )
+    assert isinstance(river_network, pd.DataFrame)
 
     logger.info("Filtering for downstream subbasins (NextDownID = 0)...")
 
@@ -358,11 +372,12 @@ def get_subbasin_upstream_areas(
         Dictionary mapping COMID to upstream area in km2.
     """
     # Use filters to only read the rows we need - much faster than reading all data
-    river_network: pd.DataFrame = (
+    river_network = (
         data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "uparea"], filters=[("COMID", "in", subbasin_ids)])
         .set_index("COMID")
     )
+    assert isinstance(river_network, pd.DataFrame)
 
     # Convert to dict for faster lookup and handle missing values
     upstream_areas = river_network["uparea"].to_dict()
@@ -380,6 +395,7 @@ def cluster_subbasins_by_area_and_proximity(
     subbasin_ids: list[int],
     target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
     area_tolerance: float,
+    ocean_outlets_only: bool,
     logger: logging.Logger,
 ) -> list[list[int]]:
     """Cluster subbasins by following the coastline with performance optimizations.
@@ -395,6 +411,7 @@ def cluster_subbasins_by_area_and_proximity(
         subbasin_ids: List of downstream COMID values to cluster.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        ocean_outlets_only: If True, only consider coastal basins that intersect with coastlines.
         logger: Logger for progress tracking.
 
     Returns:
@@ -424,6 +441,32 @@ def cluster_subbasins_by_area_and_proximity(
     logger.info(
         f"Found {len(coastal_basin_ids)} coastal basins and {len(inland_basin_ids)} inland basins"
     )
+
+    if ocean_outlets_only:
+        logger.info("Filtering coastal basins to ocean outlets only...")
+        # Load coastlines
+        coastlines = data_catalog.fetch("open_street_map_coastlines").read()
+        # clip coastlines to the bounding box of the subbasins for performance
+        coastlines = coastlines.cx[
+            subbasins.total_bounds[0] : subbasins.total_bounds[2],
+            subbasins.total_bounds[1] : subbasins.total_bounds[3],
+        ]
+        # check whether coastal basins intersect with coastlines
+        # Only select candidate basins first
+        candidates = subbasins.loc[coastal_basin_ids]
+
+        # Buffer once, vectorized. Buffering by 0.1 degrees (~11km) to account for minor misalignments
+        buffered = candidates.geometry.buffer(0.1)
+
+        # Vectorized intersects
+        mask = buffered.intersects(coastlines.union_all())
+
+        # Get verified IDs
+        coastal_basin_ids = candidates.index[mask].tolist()
+
+        # remove any coastal basins that do not intersect with coastlines from subbasins
+        subbasins = subbasins.loc[coastal_basin_ids + inland_basin_ids]
+        subbasin_ids = subbasins.index.tolist()
 
     logger.info("Getting upstream areas...")
     upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasin_ids)
@@ -707,7 +750,7 @@ def cluster_subbasins_by_area_and_proximity(
 def save_clusters_to_geoparquet(
     clusters: list[list[int]],
     data_catalog: NewDataCatalog,
-    output_path: str | Path,
+    output_path: Path,
     cluster_prefix: str = "cluster",
 ) -> None:
     """Save clusters to a geoparquet file with cluster IDs.
@@ -793,7 +836,9 @@ def create_cluster_visualization_map(
 
     # Create cluster assignments with colors
     cluster_data = []
-    colors = plt.cm.Set3(np.linspace(0, 1, len(clusters)))  # Generate distinct colors
+    colors = plt.cm.Set3(  # ty:ignore[unresolved-attribute]
+        np.linspace(0, 1, len(clusters))
+    )  # Generate distinct colors
 
     for cluster_idx, cluster_subbasins in enumerate(clusters):
         cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
@@ -857,7 +902,7 @@ def create_cluster_visualization_map(
         ctx.add_basemap(
             ax,
             crs=cluster_gdf_mercator.crs,  # pass CRS object instead of string
-            source=ctx.providers.CartoDB.DarkMatter,  # Dark background
+            source=ctx.providers.CartoDB.DarkMatter,  # Dark background  # ty:ignore[unresolved-attribute]
             alpha=0.8,  # Slightly transparent to not overpower subbasins
         )
         print("Added dark CartoDB background")
@@ -942,13 +987,7 @@ def create_multi_basin_configs(
     print("Creating build.yml in large_scale directory...")
     build_config_path = working_directory / "build.yml"
     # Read build config from geul example and automatically copy it
-    geul_build_path = (
-        Path(os.environ.get("GEB_PACKAGE_DIR"))
-        / ".."
-        / "examples"
-        / "geul"
-        / "build.yml"
-    )
+    geul_build_path = GEB_PACKAGE_DIR / "examples" / "geul" / "build.yml"
 
     print(f"Reading build configuration from: {geul_build_path}")
 
@@ -1022,7 +1061,7 @@ def save_clusters_as_merged_geometries(
     clusters: list[list[int]],
     data_catalog: NewDataCatalog,
     river_graph: networkx.DiGraph,
-    output_path: str | Path,
+    output_path: Path,
     cluster_prefix: str = "cluster",
     include_upstream: bool = True,
 ) -> None:
@@ -1208,17 +1247,24 @@ def get_touching_subbasins(
 
 
 def get_coastline_nodes(
-    coastline_graph: networkx.Graph, STUDY_AREA_OUTFLOW: int, NEARBY_OUTFLOW: int
+    coastline_graph: networkx.Graph,
+    riverine_mask: xr.DataArray,
+    STUDY_AREA_OUTFLOW: int,
+    NEARBY_OUTFLOW: int,
 ) -> set:
     """Get all coastline nodes that are part of the coastline for the study area.
 
     Args:
         coastline_graph: The graph containing all coastline nodes.
+        riverine_mask: A DataArray containing the riverine mask.
         STUDY_AREA_OUTFLOW: The outflow type value for outflows within the study area.
         NEARBY_OUTFLOW: The outflow type value for outflows outside the study area, but close enough to influence the coastline.
 
     Returns:
         A set of all coastline nodes that are part of the coastline for the study area.
+
+    Raises:
+        AssertionError: If a coastal segment has both a study area outflow and a nearby outflow, but not exactly one of each.
     """
     coastline_nodes = set()
 
@@ -1312,10 +1358,40 @@ def get_coastline_nodes(
             # we divide the segment in a part that is closer to the study area outflow
             # and a part that is not
             if study_area_nodes and nearby_nodes:
-                assert len(study_area_nodes) == 1
-                study_area_node = study_area_nodes[0]
+                if len(study_area_nodes) != 1 or len(nearby_nodes) != 1:
+                    # create a diagnostic visualization grid that marks, for this coastal
+                    # segment, which cells neighbor the study area outflow, which neighbor
+                    # the nearby outflow, and which belong to neither. This is written to
+                    # disk to help debug cases where there is not exactly one study area
+                    # outflow and one nearby outflow per coastal segment.
+                    nodes_grid: xr.DataArray = riverine_mask.copy().astype(np.int32)
+                    nodes_grid.attrs["_FillValue"] = 0
+                    nodes_grid.values[:] = 0
+                    for node, node_attributes in coastal_segment.nodes(data=True):
+                        node_y, node_x = node_attributes["yx"]
+                        if node_attributes["neighbor_of_nearby_outflow"] is True:
+                            nodes_grid.values[node_y, node_x] = NEARBY_OUTFLOW
+                        elif node_attributes["neighbor_of_study_area_outflow"] is True:
+                            nodes_grid.values[node_y, node_x] = STUDY_AREA_OUTFLOW
+                        else:
+                            nodes_grid.values[node_y, node_x] = -1
 
-                assert len(nearby_nodes) == 1
+                    # clip to area of interest for smaller output
+                    nodes_grid, _ = clip_with_grid(nodes_grid, mask=nodes_grid != 0)
+
+                    debug_file = Path("debug_coastal_segment.zarr")
+                    write_zarr(
+                        nodes_grid,
+                        debug_file,
+                        crs=nodes_grid.rio.crs,
+                    )
+                    raise AssertionError(
+                        f"There should only be one study area outflow and one nearby outflow per coastal segment, "
+                        f"found {len(study_area_nodes)} study area outflows and {len(nearby_nodes)} nearby outflows. "
+                        f"Debug output written to {debug_file}."
+                    )
+
+                study_area_node = study_area_nodes[0]
                 nearby_node = nearby_nodes[0]
 
                 for node in coastal_segment.nodes:
@@ -1493,7 +1569,7 @@ class GEBModel(
     def __init__(
         self,
         logger: logging.Logger,
-        root: str | None = None,
+        root: Path,
         data_catalog: str | None = None,
         epsg: int = 4326,
         data_provider: str = "default",
@@ -1507,9 +1583,9 @@ class GEBModel(
             epsg: EPSG code for the model grid. Default is 4326 (WGS84).
             data_provider: Data provider to use for the data catalog. Default is "default".
         """
-        self.logger = logger
-        self.data_catalog = DataCatalog(
-            data_libs=[data_catalog], logger=self.logger, fallback_lib=None
+        self._logger = logger
+        self._old_data_catalog = DataCatalog(
+            data_libs=[data_catalog], logger=self._logger, fallback_lib=None
         )
 
         Hydrography.__init__(self)
@@ -1523,7 +1599,7 @@ class GEBModel(
         self.root = root
         self.epsg = epsg
         self.data_provider = data_provider
-        self.new_data_catalog = NewDataCatalog()
+        self._data_catalog = NewDataCatalog()
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
@@ -1533,13 +1609,122 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
-        self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
-        self.array: DelayedReader = DelayedReader(zarr.load)
-        self.dict: DelayedReader = DelayedReader(reader=load_dict)
-        self.other: DelayedReader = DelayedReader(reader=open_zarr)
+        self.geom = DelayedReader(reader=gpd.read_parquet)
+        self.table = DelayedReader(reader=pd.read_parquet)
+        self.array = DelayedReader(zarr.load)
+        self.params = DelayedReader(reader=read_params)
+        self.other = DelayedReader(reader=read_zarr)
+        self.files = {}
 
-    @build_method
+    @property
+    def logger(self) -> logging.Logger:
+        """Get the logger."""
+        return self._logger
+
+    @logger.setter
+    def logger(self, value: logging.Logger) -> None:
+        self._logger = value
+
+    @property
+    def old_data_catalog(self) -> DataCatalog:
+        """Get the data catalog."""
+        return self._old_data_catalog
+
+    @old_data_catalog.setter
+    def old_data_catalog(self, value: DataCatalog) -> None:
+        self._old_data_catalog: DataCatalog = value
+
+    @property
+    def data_catalog(self) -> NewDataCatalog:
+        """Get the new data catalog."""
+        return self._data_catalog
+
+    @data_catalog.setter
+    def data_catalog(self, value: NewDataCatalog) -> None:
+        self._data_catalog = value
+
+    @property
+    def grid(self) -> xr.Dataset:
+        """Get the grid."""
+        return self._grid
+
+    @grid.setter
+    def grid(self, value: xr.Dataset) -> None:
+        self._grid = value
+
+    @property
+    def subgrid(self) -> xr.Dataset:
+        """Get the subgrid."""
+        return self._subgrid
+
+    @subgrid.setter
+    def subgrid(self, value: xr.Dataset) -> None:
+        self._subgrid = value
+
+    @property
+    def region_subgrid(self) -> xr.Dataset:
+        """Get the region subgrid."""
+        return self._region_subgrid
+
+    @region_subgrid.setter
+    def region_subgrid(self, value: xr.Dataset) -> None:
+        self._region_subgrid = value
+
+    @property
+    def geom(self) -> DelayedReader:
+        """Get the geometry reader."""
+        return self._geom
+
+    @geom.setter
+    def geom(self, value: DelayedReader) -> None:
+        self._geom = value
+
+    @property
+    def table(self) -> DelayedReader:
+        """Get the table reader."""
+        return self._table
+
+    @table.setter
+    def table(self, value: DelayedReader) -> None:
+        self._table = value
+
+    @property
+    def array(self) -> DelayedReader:
+        """Get the array reader."""
+        return self._array
+
+    @array.setter
+    def array(self, value: DelayedReader) -> None:
+        self._array = value
+
+    @property
+    def params(self) -> DelayedReader:
+        """Get the params reader."""
+        return self._params
+
+    @params.setter
+    def params(self, value: DelayedReader) -> None:
+        self._params = value
+
+    @property
+    def other(self) -> DelayedReader:
+        """Get the other reader."""
+        return self._other
+
+    @other.setter
+    def other(self, value: DelayedReader) -> None:
+        self._other = value
+
+    @property
+    def files(self) -> dict:
+        """Get the files dictionary."""
+        return self._files
+
+    @files.setter
+    def files(self, value: dict) -> None:
+        self._files = value
+
+    @build_method(required=True)
     def setup_region(
         self,
         region: dict,
@@ -1576,7 +1761,7 @@ class GEBModel(
         assert subgrid_factor >= 2
 
         self.logger.info("Loading river network.")
-        river_graph = get_river_graph(self.new_data_catalog)
+        river_graph = get_river_graph(self.data_catalog)
 
         self.logger.info("Finding sinks in river network of requested region.")
         if "subbasin" in region:
@@ -1587,15 +1772,16 @@ class GEBModel(
         elif "outflow" in region:
             lat, lon = region["outflow"]["lat"], region["outflow"]["lon"]
             sink_subbasin_ids = [
-                get_subbasin_id_from_coordinate(self.new_data_catalog, lon, lat)
+                get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
             ]
         elif "geom" in region:
-            regions = self.new_data_catalog.fetch(region["geom"]["source"]).read()
+            regions = self.data_catalog.fetch(region["geom"]["source"]).read()
+            assert isinstance(regions, gpd.GeoDataFrame)
             regions = regions[
                 regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
             sink_subbasin_ids = get_sink_subbasin_id_for_geom(
-                self.new_data_catalog, regions, river_graph
+                self.data_catalog, regions, river_graph
             )
         else:
             raise ValueError(f"Region {region} not understood.")
@@ -1603,27 +1789,37 @@ class GEBModel(
         self.logger.info(
             f"Found {len(sink_subbasin_ids)} sink subbasins in region {region}."
         )
-        self.set_routing_subbasins(river_graph, sink_subbasin_ids)
-
-        subbasins = self.geom["routing/subbasins"]
-        subbasins_without_outflow_basin = subbasins[
-            ~subbasins["is_downstream_outflow_subbasin"]
-        ]
+        rivers: gpd.GeoDataFrame = self.get_rivers(river_graph, sink_subbasin_ids)
 
         buffer = 0.5  # buffer in degrees
-        xmin, ymin, xmax, ymax = subbasins_without_outflow_basin.total_bounds
+        xmin, ymin, xmax, ymax = rivers[~rivers["is_downstream_outflow"]].total_bounds
         xmin -= buffer
         ymin -= buffer
         xmax += buffer
         ymax += buffer
 
-        ldd: xr.DataArray = self.new_data_catalog.fetch(
-            "merit_hydro_dir",
-            xmin=xmin,
-            xmax=xmax,
-            ymin=ymin,
-            ymax=ymax,
-        ).read()
+        ldd = (
+            self.data_catalog.fetch(
+                "merit_hydro_dir",
+                xmin=xmin,
+                xmax=xmax,
+                ymin=ymin,
+                ymax=ymax,
+            )
+            .read()
+            .compute()
+        )
+        assert isinstance(ldd, xr.DataArray), "Expected ldd to be an xarray DataArray."
+
+        # We remove all pits that are not directly adjacent to valid flow directions
+        # Identify cells with flow directions
+        cells_with_flow_directions = (ldd.values > 0) & (ldd.values != 247)
+        # grow valid values mask by one cell
+        valid_values_and_coastline = binary_dilation(
+            cells_with_flow_directions, structure=np.ones((3, 3))
+        )
+        # and use said mask which includes valid values and its neighbors to set ldd to no data
+        ldd.values[~valid_values_and_coastline] = 247
 
         ldd_network = pyflwdir.from_array(
             ldd.values,
@@ -1631,6 +1827,8 @@ class GEBModel(
             transform=ldd.rio.transform(recalc=True),
             latlon=True,
         )
+
+        rivers: gpd.GeoDataFrame = extend_rivers_into_ocean(rivers, ldd_network)
 
         self.logger.info("Preparing 2D grid.")
         if "outflow" in region:
@@ -1642,13 +1840,68 @@ class GEBModel(
                 dtype=bool,
             )
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
+            rivers = rivers[~rivers["is_upstream_of_downstream_basin"]]
         elif "subbasin" in region or "geom" in region:
+            rivers_outlets_for_basins = rivers[~rivers["is_further_downstream_outflow"]]
+            outlet_lonlats = rivers_outlets_for_basins.geometry.apply(
+                lambda geom: geom.coords[-2]
+            ).tolist()
+            subbasins_grid = ldd_network.basins(
+                xy=(
+                    [lon for lon, lat in outlet_lonlats],
+                    [lat for lon, lat in outlet_lonlats],
+                ),
+                ids=rivers_outlets_for_basins.index,
+            ).astype(np.int32)
+
+            # we want to remove the areas upstream of the downstream outflow basins
+            # that are not part of the study area.
+            is_upstream_of_downstream_basin = rivers["is_upstream_of_downstream_basin"]
+
+            # by setting these basins to 0 in the subbasins grid, they will be removed
+            subbasins_grid[
+                np.isin(subbasins_grid, rivers[is_upstream_of_downstream_basin].index)
+            ] = 0
+
+            # and we can now remove them from the rivers geodataframe as well. They have had
+            # their purpose now.
+            rivers = rivers[~is_upstream_of_downstream_basin]
+
+            subbasins: list[tuple[dict[str, Any], float]] = list(
+                rasterio.features.shapes(
+                    subbasins_grid,
+                    mask=subbasins_grid != 0,
+                    transform=ldd_network.transform,
+                    connectivity=8,
+                )
+            )
+            subbasins: gpd.GeoDataFrame = (
+                gpd.GeoDataFrame.from_records(
+                    [
+                        {
+                            "COMID": int(value),
+                            "geometry": shape(geom),
+                        }
+                        for geom, value in subbasins
+                    ],
+                )
+                .set_index("COMID")
+                .set_crs(4326)
+            )
+            subbasins["is_downstream_outflow"] = subbasins.index.isin(
+                rivers[rivers["is_downstream_outflow"]].index
+            )
+            subbasins["is_coastal"] = subbasins.apply(
+                lambda subbasin: rivers.loc[subbasin.name, "downstream_ID"] == -1,
+                axis=1,
+            )
+
             geom = gpd.GeoDataFrame(
-                geometry=[subbasins_without_outflow_basin.union_all()],
-                crs=subbasins_without_outflow_basin.crs,
+                geometry=[subbasins[~subbasins["is_downstream_outflow"]].union_all()],
+                crs=subbasins.crs,
             )
             # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
-            # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+            # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
                 f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
@@ -1659,7 +1912,10 @@ class GEBModel(
         else:
             raise ValueError(f"Region {region} not understood.")
 
-        if include_coastal_area and subbasins["is_coastal_basin"].any():
+        self.set_geom(rivers, name="routing/rivers")
+        self.set_geom(subbasins, name="routing/subbasins")
+
+        if include_coastal_area and subbasins["is_coastal"].any():
             mask: xr.DataArray = self.extend_mask_to_coastal_area(
                 ldd, riverine_mask, subbasins
             )
@@ -1675,13 +1931,16 @@ class GEBModel(
             ldd.attrs["_FillValue"],
         )
 
-        ldd_elevation: xr.DataArray = self.new_data_catalog.fetch(
+        ldd_elevation = self.data_catalog.fetch(
             "merit_hydro_elv",
             xmin=xmin,
             xmax=xmax,
             ymin=ymin,
             ymax=ymax,
         ).read()
+        assert isinstance(ldd_elevation, xr.DataArray), (
+            "Expected ldd_elevation to be an xarray DataArray."
+        )
 
         assert ldd_elevation.shape == ldd.shape == mask.shape
 
@@ -1737,11 +1996,11 @@ class GEBModel(
             latlon=True,
         )
 
-        STUDY_AREA_OUTFLOW: int = 1
-        NEARBY_OUTFLOW: int = 2
+        STUDY_AREA_OUTFLOW: Literal[1] = 1
+        NEARBY_OUTFLOW: Literal[2] = 2
 
-        rivers: gpd.GeoDataFrame = (
-            self.new_data_catalog.fetch(
+        rivers = (
+            self.data_catalog.fetch(
                 "merit_basins_rivers",
             )
             .read(
@@ -1750,11 +2009,14 @@ class GEBModel(
             )
             .set_index("COMID")
         )
+        assert isinstance(rivers, gpd.GeoDataFrame), (
+            "Expected rivers to be a GeoDataFrame."
+        )
 
         rivers["outflow_type"] = rivers.apply(
-            lambda row: STUDY_AREA_OUTFLOW
-            if row.name in subbasins.index
-            else NEARBY_OUTFLOW,
+            lambda row: (
+                STUDY_AREA_OUTFLOW if row.name in subbasins.index else NEARBY_OUTFLOW
+            ),
             axis=1,
         )
 
@@ -1825,6 +2087,7 @@ class GEBModel(
         )
         coastline_nodes = get_coastline_nodes(
             coastline_graph,
+            riverine_mask,
             STUDY_AREA_OUTFLOW=STUDY_AREA_OUTFLOW,
             NEARBY_OUTFLOW=NEARBY_OUTFLOW,
         )
@@ -1985,7 +2248,7 @@ class GEBModel(
 
         self.set_subgrid(submask, name="mask")
 
-    @build_method
+    @build_method(required=True)
     def set_time_range(self, start_date: date, end_date: date) -> None:
         """Sets the time range for the build model.
 
@@ -1998,7 +2261,7 @@ class GEBModel(
 
         """
         assert start_date < end_date, "Start date must be before end date."
-        self.set_dict(
+        self.set_params(
             {"start_date": start_date, "end_date": end_date},
             name="model_time_range",
         )
@@ -2012,7 +2275,7 @@ class GEBModel(
         Returns:
             The start date of the model.
         """
-        start_date = self.dict["model_time_range"]["start_date"]
+        start_date = self.params["model_time_range"]["start_date"]
 
         # TODO: This can be removed in 2026
         if isinstance(start_date, str):
@@ -2028,14 +2291,14 @@ class GEBModel(
         Returns:
             The end date of the model.
         """
-        end_date = self.dict["model_time_range"]["end_date"]
+        end_date = self.params["model_time_range"]["end_date"]
 
         # TODO: This can be removed in 2026
         if isinstance(end_date, str):
             end_date = datetime.fromisoformat(end_date)
         return end_date
 
-    @build_method
+    @build_method(required=True)
     def set_ssp(self, ssp: str) -> None:
         """Sets the SSP name for the model.
 
@@ -2045,7 +2308,7 @@ class GEBModel(
         assert ssp in ["ssp1", "ssp3", "ssp5"], (
             f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
         )
-        self.set_dict({"ssp": ssp}, name="ssp")
+        self.set_params({"ssp": ssp}, name="ssp")
 
     @property
     def ssp(self) -> str:
@@ -2054,7 +2317,7 @@ class GEBModel(
         Returns:
             The SSP name. If no SSP was set, returns "ssp3" (middle of the road).
         """
-        return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
+        return self.params["ssp"]["ssp"] if "ssp" in self.params else "ssp3"
 
     @property
     def ISIMIP_ssp(self) -> str:
@@ -2080,7 +2343,8 @@ class GEBModel(
         Filters the dataset to include only stations within the model bounds,
         and ensures that the time dimension is consistent.
         """
-        water_levels = self.data_catalog.get_dataset("GTSM")
+        water_levels = self.old_data_catalog.get_dataset("GTSM")
+        assert isinstance(water_levels, xr.DataArray)
         assert (
             water_levels.time.diff("time").astype(np.int64)
             == (water_levels.time[1] - water_levels.time[0]).astype(np.int64)
@@ -2108,10 +2372,9 @@ class GEBModel(
             water_levels,
             name="waterlevels",
             time_chunksize=24 * 6,  # 10 minute data
-            byteshuffle=True,
         )
 
-    @build_method
+    @build_method(required=True)
     def setup_damage_parameters(
         self,
         parameters: dict[
@@ -2140,7 +2403,8 @@ class GEBModel(
             for asset_type, asset_parameters in hazard_parameters.items():
                 for component, asset_compontents in asset_parameters.items():
                     curve = pd.DataFrame(
-                        asset_compontents["curve"], columns=["severity", "damage_ratio"]
+                        asset_compontents["curve"],
+                        columns=np.array(["severity", "damage_ratio"]),
                     )
 
                     self.set_table(
@@ -2152,12 +2416,12 @@ class GEBModel(
                         "maximum_damage": asset_compontents["maximum_damage"]
                     }
 
-                    self.set_dict(
+                    self.set_params(
                         maximum_damage,
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
-    @build_method
+    @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors: list[tuple[float, float]]
     ) -> None:
@@ -2168,7 +2432,8 @@ class GEBModel(
                 and the corresponding scaling factor.
         """
         risk_scaling_factors_df = pd.DataFrame(
-            risk_scaling_factors, columns=["exceedance_probability", "scaling_factor"]
+            risk_scaling_factors,
+            columns=np.array(["exceedance_probability", "scaling_factor"]),
         )
         self.set_table(risk_scaling_factors_df, name="precipitation_scaling_factors")
 
@@ -2189,17 +2454,11 @@ class GEBModel(
             self.files["table"][name] = fp
 
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            # brotli is a bit slower but gives better compression,
-            # gzip is faster to read. Higher compression levels
-            # generally don't make it slower to read, therefore
-            # we use the highest compression level for gzip
-            table.to_parquet(
-                fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
-            )
+            write_table(table, fp_with_root)
 
         self.table[name] = fp_with_root
 
-    def set_array(self, data: npt.NDArray[Any], name: str, write: bool = True) -> None:
+    def set_array(self, data: np.ndarray, name: str, write: bool = True) -> None:
         """Set an array and save it to disk.
 
         Args:
@@ -2216,11 +2475,11 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["array"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            zarr.save_array(fp_with_root, data, overwrite=True)
+            zarr.save_array(fp_with_root, data, overwrite=True)  # ty:ignore[invalid-argument-type]
 
         self.array[name] = fp_with_root
 
-    def set_dict(self, data: dict, name: str, write: bool = True) -> None:
+    def set_params(self, data: dict, name: str, write: bool = True) -> None:
         """Set a dictionary and save it to disk.
 
         Args:
@@ -2237,9 +2496,9 @@ class GEBModel(
 
             self.files["dict"][name] = fp
 
-            to_dict(data, fp_with_root)
+            write_params(data, fp_with_root)
 
-        self.dict[name] = fp_with_root
+        self.params[name] = fp_with_root
 
     def set_geom(self, geom: gpd.GeoDataFrame, name: str, write: bool = True) -> None:
         """Set a geometry and save it to disk.
@@ -2257,13 +2516,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["geom"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            # brotli is a bit slower but gives better compression,
-            # gzip is faster to read. Higher compression levels
-            # generally don't make it slower to read, therefore
-            # we use the highest compression level for gzip
-            geom.to_parquet(
-                fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
-            )
+            write_geom(geom, fp_with_root)
 
         self.geom[name] = fp_with_root
 
@@ -2293,7 +2546,7 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        to_dict(file_library, self.files_path)
+        write_params(file_library, self.files_path)
 
     def read_or_create_file_library(self) -> dict:
         """Reads the file library from disk.
@@ -2317,7 +2570,7 @@ class GEBModel(
                 "other": {},
             }
         else:
-            files = load_dict(self.files_path)
+            files = read_params(self.files_path)
 
             # geoms was renamed to geom in the file library. To upgrade old models,
             # we check if "geoms" is in the files and rename it to "geom"
@@ -2341,52 +2594,52 @@ class GEBModel(
         for name, fn in self.files["table"].items():
             self.table[name] = Path(self.root, fn)
 
-    def read_dict(self) -> None:
+    def read_params(self) -> None:
         """Reads all dictionaries from disk based on the file library."""
         for name, fn in self.files["dict"].items():
-            self.dict[name] = Path(self.root, fn)
+            self.params[name] = Path(self.root, fn)
 
     def read_grid(self) -> None:
         """Reads all grid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        grid_files: dict[str, dict[str, Path]] = self.files["grid"]
+        grid_files: dict[str, Path] = self.files["grid"]
         if len(grid_files) == 0:
             return
-        mask: xr.DataArray = open_zarr(Path(self.root) / grid_files["mask"])
+        mask: xr.DataArray = read_zarr(Path(self.root) / grid_files["mask"])
         self.set_grid(mask, name="mask", write=False)
 
         for name, fn in self.files["grid"].items():
             if name == "mask":  # mask already read
                 continue
-            data: xr.DataArray = open_zarr(Path(self.root) / fn)
+            data: xr.DataArray = read_zarr(Path(self.root) / fn)
             self.set_grid(data, name=name, write=False)
 
     def read_subgrid(self) -> None:
         """Reads all subgrid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        subgrid_files: dict[str, dict[str, Path]] = self.files["subgrid"]
+        subgrid_files: dict[str, Path] = self.files["subgrid"]
         if len(subgrid_files) == 0:
             return
-        mask: xr.DataArray = open_zarr(Path(self.root) / subgrid_files["mask"])
+        mask: xr.DataArray = read_zarr(Path(self.root) / subgrid_files["mask"])
         self.set_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["subgrid"].items():
             if name == "mask":  # mask already read
                 continue
-            data: xr.DataArray = open_zarr(Path(self.root) / fn)
+            data: xr.DataArray = read_zarr(Path(self.root) / fn)
             self.set_subgrid(data, name=name, write=False)
 
     def read_region_subgrid(self) -> None:
         """Reads all region subgrid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        region_subgrid_files: dict[str, dict[str, Path]] = self.files["region_subgrid"]
+        region_subgrid_files: dict[str, Path] = self.files["region_subgrid"]
         if len(region_subgrid_files) == 0:
             return
-        mask: xr.DataArray = open_zarr(Path(self.root) / region_subgrid_files["mask"])
+        mask: xr.DataArray = read_zarr(Path(self.root) / region_subgrid_files["mask"])
         self.set_region_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["region_subgrid"].items():
             if name == "mask":  # mask already read
                 continue
-            data: xr.DataArray = open_zarr(Path(self.root) / fn)
+            data: xr.DataArray = read_zarr(Path(self.root) / fn)
             self.set_region_subgrid(data, name=name, write=False)
 
     def read_other(self) -> None:
@@ -2404,7 +2657,7 @@ class GEBModel(
             self.read_geom()
             self.read_array()
             self.read_table()
-            self.read_dict()
+            self.read_params()
 
             self.read_subgrid()
             self.read_grid()
@@ -2420,7 +2673,6 @@ class GEBModel(
         x_chunksize: int = XY_CHUNKSIZE,
         y_chunksize: int = XY_CHUNKSIZE,
         time_chunksize: int = 1,
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Set a data array that does not fit into other categories.
@@ -2439,8 +2691,7 @@ class GEBModel(
                 Defaults to XY_CHUNKSIZE.
             time_chunksize: The chunk size in the time dimension for writing to zarr.
                 Defaults to 1.
-            *args: Additional arguments to pass to to_zarr.
-            **kwargs: Additional keyword arguments to pass to to_zarr.
+            **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
             The data array that was set. If write=True, this is the data array read from
@@ -2456,14 +2707,13 @@ class GEBModel(
 
             fp_with_root: Path = Path(self.root, fp)
 
-            da: xr.DataArray = to_zarr(
+            da: xr.DataArray = write_zarr(
                 da,
                 fp_with_root,
                 x_chunksize=x_chunksize,
                 y_chunksize=y_chunksize,
                 time_chunksize=time_chunksize,
                 crs=da.rio.crs,
-                *args,
                 **kwargs,
             )
             self.other[name] = fp_with_root
@@ -2524,7 +2774,7 @@ class GEBModel(
         if write:
             fn = Path(grid_name) / (name + ".zarr")
             self.logger.info(f"Writing file {fn}")
-            data = to_zarr(
+            data = write_zarr(
                 data,
                 path=self.root / fn,
                 x_chunksize=x_chunksize,
@@ -2676,17 +2926,6 @@ class GEBModel(
         self._root = Path(root).absolute()
 
     @property
-    def preprocessing_dir(self) -> Path:
-        """Directory where preprocessing data is stored.
-
-        Used for caching data.
-
-        Returns:
-            Directory path
-        """
-        return Path(self.root).parent / "preprocessing"
-
-    @property
     def report_dir(self) -> Path:
         """Directory to save reports to for logging and checking.
 
@@ -2701,9 +2940,8 @@ class GEBModel(
         self,
         data: xr.DataArray,
         fill_value: int | float | bool,
-        nodata: int | float | bool,
+        nodata: int | float | bool | None,
         attrs: dict | None = None,
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Create a DataArray full of a specified value, with the same shape and coordinates as another DataArray.
@@ -2724,7 +2962,6 @@ class GEBModel(
             fill_value=fill_value,
             nodata=nodata,
             attrs=attrs,
-            *args,
             **kwargs,
         )
 
@@ -2837,6 +3074,8 @@ class GEBModel(
             )
         methods["setup_region"].update(region=region)
 
+        build_method.check_required_methods(methods.keys())
+
         # if not continuing, remove existing files path
         if continue_:
             self.read()
@@ -2874,72 +3113,4 @@ class GEBModel(
                 '"setup_region" can only be called when starting a new model.'
             )
 
-        self.run_methods(methods, validate_order=False and type(self) is GEBModel)
-
-    def get_linear_indices(self, da: xr.DataArray) -> xr.DataArray:
-        """Get linear indices for each cell in a 2D DataArray.
-
-        A linear index is a single integer that represents the position of a cell in a flattened version of the array.
-        For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column) is calculated as:
-        `linear_index = row * nx + column`.
-
-        Args:
-            da: A 2D xarray DataArray with dimensions 'y' and 'x'.
-
-        Returns:
-            A 2D xarray DataArray of the same shape as `da`, where each cell contains its linear index.
-            The linear index is calculated as `row * number_of_columns + column`.
-
-        """
-        # Get the sizes of the spatial dimensions
-        ny, nx = da.sizes["y"], da.sizes["x"]
-
-        # Create an array of sequential integers from 0 to ny*nx - 1
-        grid_ids = np.arange(ny * nx).reshape(ny, nx)
-
-        # Create a DataArray with the same coordinates and dimensions as your spatial grid
-        grid_id_da: xr.DataArray = xr.DataArray(
-            grid_ids,
-            coords={
-                "y": da.coords["y"],
-                "x": da.coords["x"],
-            },
-            dims=["y", "x"],
-        )
-
-        return grid_id_da
-
-    def get_neighbor_cell_ids_for_linear_indices(
-        self, cell_id: int, nx: int, ny: int, radius: int = 1
-    ) -> list[int]:
-        """Get the linear indices of the neighboring cells of a cell in a 2D grid.
-
-        Linear indices are the indices of the cells in the flattened version of an array.
-        For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column)
-        is calculated as:
-            `linear_index = row * nx + column`.
-
-        Args:
-            cell_id: The linear index of the cell for which to find neighbors.
-            nx: The number of columns in the grid.
-            ny: The number of rows in the grid.
-            radius: The radius around the cell to consider as neighbors. Default is 1.
-
-        Returns:
-            A list of linear indices of the neighboring cells.
-
-        """
-        row: int = cell_id // nx
-        col: int = cell_id % nx
-
-        neighbor_cell_ids: list[int] = []
-        for dr in range(-radius, radius + 1):
-            for dc in range(-radius, radius + 1):
-                if dr == 0 and dc == 0:
-                    continue  # Skip the cell itself
-                r: int = row + dr
-                c: int = col + dc
-                if 0 <= r < ny and 0 <= c < nx:
-                    neighbor_id: int = r * nx + c
-                    neighbor_cell_ids.append(neighbor_id)
-        return neighbor_cell_ids
+        self.run_methods(methods, validate_order=False, record_progress=False)

@@ -6,22 +6,26 @@ import pytest
 import rioxarray  # noqa: F401
 import xarray as xr
 from rasterio.transform import from_bounds
+from scipy.interpolate import RegularGridInterpolator
 from shapely.geometry import Polygon
 
 from geb.workflows.raster import (
+    clip_with_grid,
     compress,
     convert_nodata,
     coord_to_pixel,
     coords_to_pixels,
     full_like,
     interpolate_na_2d,
-    interpolate_na_along_time_dim,
+    interpolate_na_along_dim,
+    pad_to_grid_alignment,
     pad_xy,
     pixel_to_coord,
     pixels_to_coords,
     rasterize_like,
     reclassify,
     repeat_grid,
+    resample_chunked,
 )
 
 
@@ -141,7 +145,7 @@ def test_repeat_grid() -> None:
 
 
 @pytest.mark.parametrize(
-    "dtype", [np.uint8, np.int32, np.int64, np.float32, np.float64]
+    "dtype", [bool, np.uint8, np.int32, np.int64, np.float32, np.float64]
 )
 def test_rasterize_like(dtype: type) -> None:
     """Test the rasterize_like function.
@@ -161,10 +165,15 @@ def test_rasterize_like(dtype: type) -> None:
     # Create GeoDataFrame with polygons and a value column
     poly1 = Polygon([(0, 0), (4, 0), (4, 4), (0, 4)])
     poly2 = Polygon([(5, 5), (5, 8), (8, 8), (8, 5)])
-    gdf = gpd.GeoDataFrame({"value": [1, 2]}, geometry=[poly1, poly2], crs="EPSG:28992")
 
-    nodata = 255
-    result = rasterize_like(
+    if dtype is bool:
+        values = [True, True]
+    else:
+        values = [1, 2]
+    gdf = gpd.GeoDataFrame({"value": values}, geometry=[poly1, poly2], crs="EPSG:28992")
+
+    nodata = False if dtype is bool else 255
+    result: xr.DataArray = rasterize_like(
         gdf, column="value", raster=raster, dtype=dtype, nodata=nodata, all_touched=True
     )
 
@@ -172,15 +181,19 @@ def test_rasterize_like(dtype: type) -> None:
     assert result.shape == raster.shape
     assert result.dims == raster.dims
     assert result.dtype == dtype
-    assert result.attrs["_FillValue"] == nodata
     assert result.coords.equals(raster.coords)
 
-    assert np.all(result.values[0:4, 0:4] == 1)
-    assert np.all(result.values[5:8, 5:8] == 2)
-
-    # Check that areas outside polygons are nodata
-    # For example, bottom-left corner
-    assert result.values[0, -1] == nodata
+    if dtype is bool:
+        assert np.all(result.values[0:4, 0:4])
+        assert np.all(result.values[5:8, 5:8])
+        assert result.attrs["_FillValue"] == None
+    else:
+        assert result.attrs["_FillValue"] == nodata
+        assert np.all(result.values[0:4, 0:4] == 1)
+        assert np.all(result.values[5:8, 5:8] == 2)
+        # Check that areas outside polygons are nodata
+        # For example, bottom-left corner
+        assert result.values[0, -1] == nodata
 
 
 def test_rasterize_like_geographic() -> None:
@@ -317,8 +330,8 @@ def test_interpolate_na_2d() -> None:
     assert result.coords.equals(da.coords)
 
 
-def test_interpolate_na_along_time_dim() -> None:
-    """Test the interpolate_na_along_time_dim function."""
+def test_interpolate_na_along_dim() -> None:
+    """Test the interpolate_na_along_dim function."""
     # Create a 3D array (time, y, x) with NaNs in spatial dims
     data = np.array(
         [
@@ -333,7 +346,7 @@ def test_interpolate_na_along_time_dim() -> None:
         attrs={"_FillValue": np.nan},
     )
 
-    result = interpolate_na_along_time_dim(da)
+    result = interpolate_na_along_dim(da)
 
     # Check that NaNs are filled
     assert not np.isnan(result.values).any()
@@ -342,7 +355,7 @@ def test_interpolate_na_along_time_dim() -> None:
 
 
 def test_interpolate_na_alignment() -> None:
-    """Test that interpolate_na_along_time_dim aligns with interpolate_na_2d applied per slice."""
+    """Test that interpolate_na_along_dim aligns with interpolate_na_2d applied per slice."""
     # Create a 3D array (time, y, x) with NaNs
     data = np.array(
         [
@@ -358,7 +371,7 @@ def test_interpolate_na_alignment() -> None:
     )
 
     # Apply along time
-    result_along_time = interpolate_na_along_time_dim(da)
+    result_along_time = interpolate_na_along_dim(da)
 
     # Apply 2d to each slice manually
     slices = []
@@ -402,8 +415,8 @@ def test_interpolate_na_2d_integer_fillvalue() -> None:
     assert result.coords.equals(da.coords)
 
 
-def test_interpolate_na_along_time_dim_missing_fillvalue() -> None:
-    """Test that interpolate_na_along_time_dim raises ValueError when _FillValue is missing."""
+def test_interpolate_na_along_dim_missing_fillvalue() -> None:
+    """Test that interpolate_na_along_dim raises ValueError when _FillValue is missing."""
     data = np.array(
         [
             [[1.0, 2.0, np.nan], [4.0, np.nan, 6.0]],  # time 0
@@ -416,11 +429,11 @@ def test_interpolate_na_along_time_dim_missing_fillvalue() -> None:
         coords={"time": [0, 1], "y": [0, 1], "x": [0, 1, 2]},
     )
     with pytest.raises(ValueError, match="DataArray must have '_FillValue' attribute"):
-        interpolate_na_along_time_dim(da)
+        interpolate_na_along_dim(da)
 
 
-def test_interpolate_na_along_time_dim_integer_fillvalue() -> None:
-    """Test the interpolate_na_along_time_dim function with integer _FillValue."""
+def test_interpolate_na_along_dim_integer_fillvalue() -> None:
+    """Test the interpolate_na_along_dim function with integer _FillValue."""
     data = np.array(
         [
             [[1.0, 2.0, -9999.0], [4.0, -9999.0, 6.0]],  # time 0
@@ -433,7 +446,7 @@ def test_interpolate_na_along_time_dim_integer_fillvalue() -> None:
         coords={"time": [0, 1], "y": [0, 1], "x": [0, 1, 2]},
         attrs={"_FillValue": -9999},
     )
-    result = interpolate_na_along_time_dim(da)
+    result = interpolate_na_along_dim(da)
     # Check that -9999 values are filled
     assert not np.any(result.values == -9999)
     assert result.dims == da.dims
@@ -587,3 +600,175 @@ def test_pad_xy_geographical(pad_bounds: tuple[int, int, int, int]) -> None:
     mask = np.zeros(padded_da.shape, dtype=bool)
     mask[returned_slice["y"], returned_slice["x"]] = True
     assert np.allclose(padded_da.values[~mask], constant_values)
+
+
+def _edge_from_centers(values: np.ndarray) -> float:
+    step = float(values[1] - values[0]) if values.size > 1 else 0.0
+    return float(values[0] - step / 2)
+
+
+def _bottom_edge_from_centers(values: np.ndarray) -> float:
+    step = float(values[1] - values[0]) if values.size > 1 else 0.0
+    return float(values[-1] + step / 2)
+
+
+def test_pad_to_grid_alignment_projected() -> None:
+    """Test grid-aligned padding for a projected raster."""
+    da = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={
+            "y": np.arange(1.875, 0.875, -0.25),
+            "x": np.arange(0.375, 1.375, 0.25),
+        },
+    )
+    da.rio.write_crs("EPSG:28992", inplace=True)
+    da.rio.write_transform(from_bounds(0.25, 0.75, 1.25, 1.75, 4, 4), inplace=True)
+
+    padded = pad_to_grid_alignment(da, grid_size_multiplier=5, constant_values=0)
+
+    coarse_step = 0.25 * 5
+    left_edge = _edge_from_centers(padded.x.values)
+    bottom_edge = _bottom_edge_from_centers(padded.y.values)
+
+    assert np.isclose(left_edge % coarse_step, 0.0)
+    assert np.isclose(bottom_edge % coarse_step, 0.0)
+    assert padded.sizes["x"] % 5 == 0
+    assert padded.sizes["y"] % 5 == 0
+
+
+def test_pad_to_grid_alignment_geographic() -> None:
+    """Test grid-aligned padding for geographic rasters with descending y."""
+    da = xr.DataArray(
+        np.ones((6, 7)),
+        dims=["y", "x"],
+        coords={
+            "y": np.arange(50.875, 49.375, -0.25),
+            "x": np.arange(0.125, 1.875, 0.25),
+        },
+    )
+    da.rio.write_crs("EPSG:4326", inplace=True)
+    da.rio.write_transform(from_bounds(0.0, 49.25, 1.75, 51.0, 7, 6), inplace=True)
+
+    padded = pad_to_grid_alignment(da, grid_size_multiplier=4, constant_values=-1)
+
+    coarse_step = 0.25 * 4
+    left_edge = _edge_from_centers(padded.x.values)
+    bottom_edge = _bottom_edge_from_centers(padded.y.values)
+
+    assert np.isclose(left_edge % coarse_step, 0.0)
+    assert np.isclose(bottom_edge % coarse_step, 0.0)
+    assert padded.sizes["x"] % 4 == 0
+    assert padded.sizes["y"] % 4 == 0
+
+
+def test_resample_chunked() -> None:
+    """Test resample_chunked against scipy RegularGridInterpolator."""
+    # Create source grid
+    src_x = np.linspace(0, 10, 11)
+    src_y = np.linspace(0, 10, 11)
+    X, Y = np.meshgrid(src_x, src_y)
+    # Create a simple function z = x + y
+    data = (X + Y).astype(np.float32)
+
+    source = xr.DataArray(
+        data,
+        dims=("y", "x"),
+        coords={"y": src_y, "x": src_x},
+        name="test_data",
+        attrs={"_FillValue": np.nan},
+    )
+    # Add CRS (required by resample_chunked)
+    source.rio.write_crs("EPSG:4326", inplace=True)
+
+    # Create target grid (finer resolution)
+    tgt_x = np.linspace(0, 10, 21)
+    tgt_y = np.linspace(0, 10, 21)
+
+    target = xr.DataArray(
+        np.zeros((21, 21)),
+        dims=("y", "x"),
+        coords={"y": tgt_y, "x": tgt_x},
+    )
+    # Add CRS (required by resample_chunked)
+    target.rio.write_crs("EPSG:4326", inplace=True)
+
+    # Chunk the target (required by resample_chunked)
+    target = target.chunk({"y": 10, "x": 10})
+    # Chunk the source (required by resample_chunked)
+    source = source.chunk({"y": 10, "x": 10})
+
+    # Run resample_chunked
+    resampled = resample_chunked(source, target, method="bilinear")
+
+    # Run scipy RegularGridInterpolator for comparison
+    # Note: RegularGridInterpolator expects (y, x) order for points if grid is defined as (y, x)
+    interp = RegularGridInterpolator(
+        (src_y, src_x), data, method="linear", bounds_error=False, fill_value=np.nan
+    )
+
+    tgt_X, tgt_Y = np.meshgrid(tgt_x, tgt_y)
+    # Create points array of shape (N, 2) where columns are (y, x)
+    points = np.column_stack((tgt_Y.ravel(), tgt_X.ravel()))
+
+    expected_data = interp(points).reshape(21, 21)
+
+    # Compare results
+    # Allow small differences due to float precision and implementation details
+    # Also mask NaNs because pyresample might handle boundaries differently than scipy
+    mask = ~np.isnan(resampled.values) & ~np.isnan(expected_data)
+    np.testing.assert_allclose(
+        resampled.values[mask], expected_data[mask], rtol=1e-5, atol=1e-5
+    )
+
+    # Verify metadata
+    assert resampled.rio.crs == source.rio.crs
+    assert resampled.dims == target.dims
+    assert resampled.shape == target.shape
+
+
+@pytest.mark.parametrize("y_step", [-1, 1])
+@pytest.mark.parametrize("grid_size", [10, 100])
+def test_clip_with_grid(y_step: int, grid_size: int) -> None:
+    """Test clip_with_grid with positive and negative y steps and different grid sizes."""
+    # Create grid
+    ny, nx = grid_size, grid_size
+
+    # Coordinates
+    if y_step < 0:
+        ys = np.arange(ny)[::-1]  # decreasing coordinates
+    else:
+        ys = np.arange(ny)  # increasing coordinates
+
+    xs = np.arange(nx)
+
+    data = np.random.rand(ny, nx)
+    da = xr.DataArray(data, coords={"y": ys, "x": xs}, dims=("y", "x"))
+
+    # Create a mask that selects a subset
+    # For size 10: 3:7 (size 4)
+    # For size 100: 30:70 (size 40)
+    start_idx = int(0.3 * grid_size)
+    end_idx = int(0.7 * grid_size)
+
+    mask_data = np.zeros((ny, nx), dtype=bool)
+    mask_data[start_idx:end_idx, start_idx:end_idx] = True
+    mask = xr.DataArray(mask_data, coords={"y": ys, "x": xs}, dims=("y", "x"))
+
+    clipped_ds, bounds = clip_with_grid(da, mask)
+
+    # Expected bounds indices
+    assert bounds["y"] == slice(start_idx, end_idx)
+    assert bounds["x"] == slice(start_idx, end_idx)
+
+    assert clipped_ds.shape == (end_idx - start_idx, end_idx - start_idx)
+    np.testing.assert_array_equal(
+        clipped_ds.values, data[start_idx:end_idx, start_idx:end_idx]
+    )
+
+    # Check coordinates of clipped result
+    np.testing.assert_array_equal(clipped_ds.y.values, ys[start_idx:end_idx])
+    np.testing.assert_array_equal(clipped_ds.x.values, xs[start_idx:end_idx])
+
+    # Check that sum is preserved (since mask is rectangular and matches bounds)
+    assert np.isclose(clipped_ds.sum(), da.where(mask).sum())

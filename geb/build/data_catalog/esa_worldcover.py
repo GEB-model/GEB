@@ -32,9 +32,16 @@ class ESAWorldCover(Adapter):
 
         Returns:
             The ESAWorldCover adapter instance.
+
+        Raises:
+            ValueError: If the root catalog URL cannot be determined from the collection.
         """
         self.collection = pystac.Collection.from_file(url)
-        root_catalog_url = self.collection.get_parent().get_self_href()
+        parent = self.collection.get_parent()
+        assert parent is not None, "Collection has no parent catalog."
+        root_catalog_url = parent.get_self_href()
+        if not root_catalog_url:
+            raise ValueError("Could not determine root catalog URL from collection.")
         self.client = pystac_client.Client.open(root_catalog_url)
         return self
 
