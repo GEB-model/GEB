@@ -1556,6 +1556,12 @@ class Soil(Module):
 
         self.model.plantFATE[indx] = pfModel
 
+        print("Cell New")
+        print(indx)
+        print("latlong ")
+        print(self.HRU.lonlat[indx])
+
+
     def calculate_soil_water_potential_MPa(
         self,
         soil_moisture,  # [m]
