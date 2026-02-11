@@ -788,8 +788,8 @@ class SFINCSRootModel:
 
                 # Elongate the river geometry to ensure it intersects with the boundary. Since there is no downstream
                 # river segment to combine with, we create a long line segment in the direction of the last segment of the river.
-                p1: np.ndarray[tuple[Any, ...]] = np.array(river.coords[-2])
-                p2: np.ndarray[tuple[Any, ...]] = np.array(river.coords[-1])
+                p1: npt.NDArray[np.floating[Any]] = np.array(river.coords[-2])
+                p2: npt.NDArray[np.floating[Any]] = np.array(river.coords[-1])
 
                 direction = p2 - p1
                 # extent by 10 times the length of the last segment to ensure intersection with boundary
