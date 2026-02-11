@@ -91,9 +91,10 @@ def lin_detrend_wNa(
             dpi=300,
         )
 
-    result = pd.DataFrame(
-        data=detrend_y, index=data.index, columns=["sealevel_det"]
-    )  # create a pandas dataframe with the detrended time series and dates as index
+    result = pd.Series(
+        data=detrend_y,
+        index=data.index,
+    )  # create a pandas series with the detrended time series and dates as index
     return m, result
 
 
@@ -130,7 +131,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = True) -> None
             remove_means=False,
             figure_plotting=True,
         )
-
+        tidepd = result
         average_tide_signal, spring_tide_signal = generate_tide_signals(
             station, tidepd, make_plot=make_plot
         )
