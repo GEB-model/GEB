@@ -12,6 +12,7 @@ from .gadm import GADM
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .globgm import GlobGM, GlobGMDEM
+from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
@@ -559,6 +560,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "OpenStreetMap contributors",
             "license": "ODbL 1.0",
             "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "glopop-sg": {
+        "adapter": GLOPOP_SG(
+            folder="glopop_sg",
+            local_version=1,
+            filename="placeholder",
+            cache="local",
+        ),
+        "url": "https://zenodo.org/records/15680747/files/GLOPOP_SG%20(1).zip?download=1",
+        "source": {
+            "name": "GLOPOP-SG",
+            "author": "M.J. Ton et al. (2025)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.15680747",
+            "paper_doi": "10.5281/zenodo.15680747",
         },
     },
 }
