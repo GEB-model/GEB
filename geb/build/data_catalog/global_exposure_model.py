@@ -48,6 +48,7 @@ gadm_converter: dict[str, str] = {
     "PetÃ©n": "Peten",
     "SololÃ¡": "Solola",
     "Tyrol": "Tirol",
+    "Vaduz": "Valduz",
 }
 
 
