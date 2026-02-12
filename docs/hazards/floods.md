@@ -2,31 +2,63 @@
 
 ## Introduction
 
-Lorem ipsum
+The floods module in GEB uses the Super-Fast INundation of CoastS (SFINCS) hydrodynamic model to simulate floods. SFINCS is a fully automated, 2D reduced-complexity hydrodynamic model that solves simplified Saint-Venant equations of mass and momentum (Leijnse et al., 2021). It balances computational speed with physical realism, making it practical to simulate many flood scenarios across large regions. For detailed description of the model equations we refer to https://sfincs.readthedocs.io/en/latest/.
+
+SFINCS works by dividing the area of interest into a grid of cells. For each cell, it calculates water depth and flow at successive time steps based on the elevation (topography), surface roughness (manning's), and incoming water (forcing) from rain(precipitation), rivers(discharge), or the coast(surge and storm tide).
+
+Multiple flood types can be simulated:
+
+- **Fluvial (riverine)**: Flooding from river overflow when discharge exceeds river channel capacity
+- **Pluvial (precipitation)**: Surface(overland) flooding from intense rainfall overcoming local infiltration capacity
+- **Coastal**: Inundation from elevated sea levels due to storm surge and tides
+- **Return period**: Probability flood maps showing expected flooding for specific return periods (e.g., 1-in-100 year event)
 
 ## Model building
 
-Lorem ipsum
+The SFINCS model in GEB is built in two stages: creating the base model structure (required input maps) and then adding forcing data for specific flood events.
+
+When building a SFINCS model, GEB first creates a region of interest(eg., catchment boundary). This region by default is divided into grid cells (regular grid), with each cell storing information about elevation, land roughness properties, etc. The model can optionally use "subgrid", which captures fine-scale elevation details within each cell. This allows for faster simulations while still representing important features like small river channels.
+
+Rivers are represented in the model in one of two ways:
+
+- **With subgrid**: River channels are "burned" into a high-resolution subgrid, preserving their width and depth.
+- **Without subgrid**: Rivers are directly carved into the main computational grid, modifying the elevation and roughness values of affected cells.
+
+The model automatically identifies flood-prone areas inside the region using Height Above Nearest Drainage (HAND) analysis (*REF). This method calculates how high each location sits above the nearest stream or drainage channel, helping to define which areas are prione to flooding.
 
 ### Static input data
 
-Lorem ipsum
+The static components of a SFINCS model remain constant across different flood simulations and include:
+
+- **Digital Elevation Model (DEM)**: Multiple DEMs from different sources can be merged, with priority given to user defined 1st and subsequent source. For example in a riverine flood, the priority by default is given to inland elevation (FABDEM V1-2) and then if needed sometimes the outflows reach a part where topobathy is needed (2nd source: GEBCO version ?) 
+- **Manning's roughness coefficient**: Represents surface friction that slows down water flow. Different land cover types (forests, urban developed areas, cropland etc.,) have different roughness values. By Default the ESA Landcover 2021 is used.
+- **Model domain (mask)**: Defines which grid cells are active in the simulation. This is determined based on the subbasins being modeled (delineated via the hydrological part) and made faster using the aforementioned HAND method.
+- **River network**: The geometry (centerlines) by default use the MERIT-BASINS global product based on 90-m MERIT-HYDRO DEM. The width is derived in two parts, firstly satellite observed widths (resolution = 30m or larger) are given priority which comes from the MERIT-SWORD dataset (latest version 0.4)(*add ref). Secondly, whereever there is no satellite data available (<30m tributaries) a gap-filling method via the power-law equation is used ti derive widths (*add ref). The depth of rivers are derived from discharge estimates and using the Manning's open channel flow equation.
 
 ### (Dynamic) forcing data
 
-Lorem ipsum
+Dynamic forcing data varies between flood types and drives the actual inundation simulation. GEB supports multiple forcing methods that can be combined depending on the type of flood.
 
 #### Riverine forcing
 
-Lorem ipsum
+Riverine (fluvial) forcing represents water entering the model domain through rivers and streams. GEB provides two approaches:
+
+- **Accumulated Runoff forcing**: The term "accumulated" refers to the fact that all rainfall-runoff from the upstream catchment area has been collected and concentrated at these locations.
+- **All inflow point forcing**: Discharge is applied at multiple start points (headwater points) throughout the river network, including tributaries.
+
+Discharge values comes from GEB hydrological module, which simulates rainfall-runoff processes across the region. For return period mapping, synthetic design hydrographs are generated based on extreme value analysis of long-term discharge records.
 
 #### Precipitation Forcing
 
-Lorem ipsum
+Direct precipitation forcing adds rainfall directly onto the SFINCS model grid. This is particularly important for pluvial (rainfall-induced) flooding, where surface runoff and local flooding cause inundation independently of river overflow.
+
+Precipitation data can be taken from observed rainfall records, climate model outputs, or synthetic design storms. The SFINCS model routes this rainfall across the landscape based on topography and surface properties. This is an external input coming from sources outside GEB.
 
 #### Coastal forcing
 
-Lorem ipsum
+For coastal flood simulations, water level boundary conditions are applied along the coastline. These represent sea level variations due to tides and storm surges. 
+
+The model identifies coastal boundary cells based on topography and closeness to the ocean. Water levels at these boundaries can vary through time, allowing simulation of storm surge events.
 
 ### Rebuilding
 
@@ -42,11 +74,20 @@ We distinguish two parts of a SFINCS model: the static data and dynamic data:
 
 ## Model runs
 
-Lorem ipsum
+Once the SFINCS model is built and forcing data is prepared, the simulation is executed to calculate how water moves and accumulates across the region domain. The model solves equations of water moving, tracking water depth at each time step, flow velocity, and direction throughout the domain.
+
+Simulations can run on either CPU (default) or GPU (optional) hardware. GPU execution provides significant speed improvements (caution: GPU is untested at larger scales and can have instabilities) for large model domains, making it practical to simulate many flood scenarios or long time periods.
+
+The model includes a spinup period (typically 24 hours) before the main simulation begins. During spinup, the model reaches a balanced initial state, ensuring that results are not affected by artificial conditions (too extreme amounts of water entering) at the start of the simulation.
 
 ### Flood events
 
-Lorem ipsum
+Flood event simulations model specific historical or synthetic flood scenarios over a defined time period (e.g., a major storm lasting several days). These simulations use time-varying forcing data:
+
+- Rivers discharge varies according to the hydrograph for that event
+- Precipitation falls according to the rainfall pattern
+- Coastal water levels vary following observed or modeled sea level conditions
+
 
 ### Return period maps
 
