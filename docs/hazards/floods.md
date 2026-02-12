@@ -64,7 +64,16 @@ For coastal flood simulations, water level boundary conditions are applied along
   <figcaption>Overview of the HGRAPHER method pipeline. Figure reproduced from Dullaart et al..</figcaption>
 </figure>
 
-We identifies coastal boundary cells based on topography and closeness to the ocean. We 
+We identify coastal boundary cells based on topography and proximity to the ocean, then apply water level boundary conditions at those cells. For return period coastal events, GEB builds a storm tide hydrograph per coastal station and writes these time series to disk, after which the SFINCS simulation reads the relevant file and applies the forcing at the station locations.
+
+The storm tide hydrograph construction follows the HGRAPHER/COAST-RP workflow implemented in GEB:
+
+- Tide and surge are separated from GTSM water level time series, and representative tidal signals are derived for both average tide and spring tide.
+- Independent surge events are extracted with a POT approach, using a 36 h window before and after each peak.
+- Each surge event is normalized by its peak, and exceedance times for normalized surge heights are averaged to obtain a mean surge hydrograph.
+- For each return period, the surge hydrograph is scaled to the return-period water level and combined with the average or spring tide signal to produce a storm tide hydrograph.
+
+When running a coastal return period simulation, the model reads the precomputed hydrograph file (e.g., `gtsm_spring_tide_hydrograph_rp0100.csv`), aligns the station IDs with forcing locations, trims the leading and trailing timesteps, and optionally applies a sea level rise adjustment for a target year. The resulting time series are then set as coastal water level forcing with an offshore buffer so that boundary conditions are imposed outside the modeled land area.
 
 
 ### Rebuilding
