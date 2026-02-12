@@ -3,7 +3,6 @@
 Evaluate simulated flood extents by comparing them with satellite observations or other flood mapping data.
 
 ## Overview
-
 The hydrodynamics evaluation tools help you:
 
 - Compare simulated vs observed flood extents
@@ -72,7 +71,7 @@ For hydrodynamics evaluation, your model must have:
        observation_files:
          - "path/to/20210712T090000 - 20210720T090000.zarr.zarr"
    ```
-  2. **Simulated flood maps** located in output/report/{run_name}/hydrology.hydrodynamics/{event_name}/
+  2. **Simulated flood maps** located in output/evaluate/hydrdoynamics/{event_name}/
 
 ## Interpreting results 
 A CSI above 0.7 is considered good model performance [@bernhofen2018first]
