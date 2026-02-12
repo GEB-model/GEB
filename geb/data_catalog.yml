@@ -1,11 +1,3 @@
-MIRCA2000_crop_data:
-  data_type: DataFrame
-  driver: excel
-  path: MIRCA2000/crop_data.xlsx
-  meta:
-    paper_doi: 10.1016/j.jhydrol.2009.07.031
-    paper_ref: Siebert et al. (2010)
-    source_license:  Creative Commons Attribution 4.0 International 
 MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
   data_type: RasterDataset
   driver: raster
