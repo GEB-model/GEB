@@ -90,29 +90,3 @@ preferences_country:
     source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
     paper_doi: doi.org/10.1093/qje/qjy013
     paper_ref: Falk et al. (2018)
-cwatm_livestock_water_demand_{scenario}_year:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: water_demand/{scenario}_liv_year_millionm3_5min.nc
-  driver_kwargs:
-    decode_times: false
-  meta:
-    category: water
-    source_license: the Creative Commons Attribution 3.0 License
-    source_url: https://doi.org/10.5194/gmd-9-175-2016
-  placeholders:
-    scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
-cwatm_industry_water_demand_{scenario}_year:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: water_demand/{scenario}_ind_year_millionm3_5min.nc
-  driver_kwargs:
-    decode_times: false
-  meta:
-    category: water
-    source_license: the Creative Commons Attribution 3.0 License
-    source_url: https://doi.org/10.5194/gmd-9-175-2016
-  placeholders:
-    scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
