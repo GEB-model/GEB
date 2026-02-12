@@ -59,11 +59,9 @@ Precipitation data can be taken from observed rainfall records, climate model ou
 For coastal flood simulations, water level boundary conditions are applied along the coastline. These represent sea level variations due to tides and storm surges. To create storm surge hydrographs we follow the HGRAPHER method as outlined by Dullaart[@dullaart2023enabling]. To generate a hydrograph of the surge, this approach starts with extracting independent extremes from the surge time series based on the peaks-over-threshold (POT) method. For each selected surge event, the time series from 36 h before, until 36 h after the peak is extracted. Second, each 72 h surge event is normalized (i.e. dividing each surge level by the peak) such that the maximum surge value is equal to 1 (unitless). Third, the selected surge events are combined to calculate the average surge hydrograph. This is done by determining the time (relative to the peak) at which a specific surge height (from 0 to 1 with increments of 0.01) is exceeded. As an example, the figure below shows that for one surge event the exceedance time at a normalized surge height of 0.25 is 14.0 h before and 26.0 h (16.0 + 10.0) after the surge maximum occurred, as indicated by the black arrows. Then, for each normalized surge height the average exceedance time is computed, resulting in an average curve. Because the shape of the rising and falling limb of the surge can differ, the exceedance time is calculated separately for each, and they are subsequently merged into the final average surge hydrograph.
 
 
-<figure>
-  <img src="../images/hgrapher_method.png" alt="HGRAPHER method diagram">
-  <figcaption>
-    Figure 1: Overview of the HGRAPHER method pipeline. Figure reproduced from Dullaart et al..
-  </figcaption>
+<figure markdown="span">
+  ![HGRAPHER method](../images/hgrapher_method.png)
+  <figcaption>Overview of the HGRAPHER method pipeline. Figure reproduced from Dullaart et al...</figcaption>
 </figure>
 
 The model identifies coastal boundary cells based on topography and closeness to the ocean. Water levels at these boundaries can vary through time, allowing simulation of storm surge events.
