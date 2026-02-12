@@ -4,12 +4,12 @@
 
 The floods module in GEB uses the Super-Fast INundation of CoastS (SFINCS) hydrodynamic model to simulate floods. SFINCS is a fully automated, 2D reduced-complexity hydrodynamic model that solves simplified Saint-Venant equations of mass and momentum (Leijnse et al., 2021). It balances computational speed with physical realism, making it practical to simulate many flood scenarios across large regions. For detailed description of the model equations we refer to https://sfincs.readthedocs.io/en/latest/.
 
-SFINCS works by dividing the area of interest into a grid of cells. For each cell, it calculates water depth and flow at successive time steps based on the elevation (topography), surface roughness (manning's), and incoming water (forcing) from rain(precipitation), rivers(discharge), or the coast(surge and storm tide).
+SFINCS works by dividing the area of interest into a grid of cells. For each cell, it calculates water depth and flow at successive time steps based on the elevation (topography), surface roughness (manning's), and incoming water (forcing) from rain (precipitation), rivers (discharge), or the coast (surge and storm tide).
 
 Multiple flood types can be simulated:
 
 - **Fluvial (riverine)**: Flooding from river overflow when discharge exceeds river channel capacity
-- **Pluvial (precipitation)**: Surface(overland) flooding from intense rainfall overcoming local infiltration capacity
+- **Pluvial (precipitation)**: Surface (overland) flooding from intense rainfall overcoming local infiltration capacity
 - **Coastal**: Inundation from elevated sea levels due to storm surge and tides
 - **Return period**: Probability flood maps showing expected flooding for specific return periods (e.g., 1-in-100 year event)
 
@@ -17,7 +17,7 @@ Multiple flood types can be simulated:
 
 The SFINCS model in GEB is built in two stages: creating the base model structure (required input maps) and then adding forcing data for specific flood events.
 
-When building a SFINCS model, GEB first creates a region of interest(eg., catchment boundary). This region by default is divided into grid cells (regular grid), with each cell storing information about elevation, land roughness properties, etc. The model can optionally use "subgrid", which captures fine-scale elevation details within each cell. This allows for faster simulations while still representing important features like small river channels.
+When building a SFINCS model, GEB first creates a region of interest (eg., catchment boundary). This region by default is divided into grid cells (regular grid), with each cell storing information about elevation, land roughness properties, etc. The model can optionally use "subgrid", which captures fine-scale elevation details within each cell. This allows for faster simulations while still representing important features like small river channels.
 
 Rivers are represented in the model in one of two ways:
 
@@ -31,9 +31,9 @@ The model automatically identifies flood-prone areas inside the region using Hei
 The static components of a SFINCS model remain constant across different flood simulations and include:
 
 - **Digital Elevation Model (DEM)**: Multiple DEMs from different sources can be merged, with priority given to user defined 1st and subsequent source. For example in a riverine flood, the priority by default is given to inland elevation (FABDEM V1-2) and then if needed sometimes the outflows reach a part where topobathy is needed (2nd source: GEBCO version ?) 
-- **Manning's roughness coefficient**: Represents surface friction that slows down water flow. Different land cover types (forests, urban developed areas, cropland etc.,) have different roughness values. By Default the ESA Landcover 2021 is used.
+- **Manning's roughness coefficient**: Represents surface friction that slows down water flow. Different land cover types (forests, urban developed areas, cropland etc.,) have different roughness values. By default the ESA Landcover 2021 is used.
 - **Model domain (mask)**: Defines which grid cells are active in the simulation. This is determined based on the subbasins being modeled (delineated via the hydrological part) and made faster using the aforementioned HAND method.
-- **River network**: The geometry (centerlines) by default use the MERIT-BASINS global product based on 90-m MERIT-HYDRO DEM. The width is derived in two parts, firstly satellite observed widths (resolution = 30m or larger) are given priority which comes from the MERIT-SWORD dataset (latest version 0.4)(*add ref). Secondly, whereever there is no satellite data available (<30m tributaries) a gap-filling method via the power-law equation is used ti derive widths (*add ref). The depth of rivers are derived from discharge estimates and using the Manning's open channel flow equation.
+- **River network**: The geometry (centerlines) by default use the MERIT-BASINS global product based on 90-m MERIT-HYDRO DEM. The width is derived in two parts, firstly satellite observed widths (resolution = 30m or larger) are given priority which comes from the MERIT-SWORD dataset (latest version 0.4)(*add ref). Secondly, whereever there is no satellite data available (<30m tributaries) a gap-filling method via the power-law equation is used to derive widths (*add ref). The depth of rivers are derived from discharge estimates and using the Manning's open channel flow equation.
 
 ### (Dynamic) forcing data
 
