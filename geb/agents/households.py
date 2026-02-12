@@ -241,7 +241,9 @@ class Households(AgentBaseClass):
         # load household locations
         locations = read_array(self.model.files["array"]["agents/households/location"])
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
-        self.var.locations = DynamicArray(locations, max_n=self.max_n)
+        self.var.locations = DynamicArray(
+            locations, max_n=self.max_n, extra_dims_names=["lonlat"]
+        )
 
         self.var.region_id = read_array(
             self.model.files["array"]["agents/households/region_id"]
@@ -396,6 +398,9 @@ class Households(AgentBaseClass):
             crs="EPSG:4326",
         )
         self.var.household_points = household_points
+        household_points.to_parquet(
+            self.model.output_folder / "household_points.geoparquet"
+        )
 
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
@@ -454,6 +459,13 @@ class Households(AgentBaseClass):
         print(
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
+
+        # debugging
+        buildings_w_h = buildings.sjoin(households, how="left", predicate="contains")
+        buildings_w_h.to_parquet(
+            self.model.output_folder / "buildings_with_households.geoparquet"
+        )
+        print()
 
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
@@ -723,7 +735,9 @@ class Households(AgentBaseClass):
             )
             damage_probability_map.to_parquet(output_path)
 
-    def identify_flooded_buildings(self, buildings, prob_map, prob_threshold):
+    def identify_flooded_buildings(
+        self, buildings, prob_map, prob_threshold, return_series=False
+    ):
         prob_map = prob_map >= prob_threshold  # convert to boolean mask
 
         buildings["flooded"] = False  # Initialize the flooded column
@@ -743,7 +757,127 @@ class Households(AgentBaseClass):
         # Update the flood_proofed status for buildings that overlap with the flood map
         buildings.loc[buildings_mask, "flooded"] = True
 
-        return buildings
+        if return_series:
+            return buildings["flooded"].copy()
+        else:
+            return buildings
+
+    def water_level_warning_strategy3(
+        self,
+        date_time: datetime.datetime,
+        prob_threshold: float = 0.6,
+        buildings_hit_threshold: float = 0.1,
+        strategy_id: int = 1,
+    ) -> None:
+        """Implements the water level warning strategy based on flood probability maps BUCKETS PER MEASURE.
+
+        Args:
+            date_time: The forecast date time for which to implement the warning strategy.
+            prob_threshold: The probability threshold above which a warning is issued.
+            area_threshold: The area threshold (percentage of area) above which a warning is issued.
+            strategy_id: Identifier of the warning strategy (1 for water level ranges with measures).
+        """
+        # Get the range ids and initialize the warning_log
+        range_ids = list(self.var.wlranges_and_measures.keys())
+        warning_log = []
+        warnings_folder = self.model.output_folder / "warning_logs"
+        warnings_folder.mkdir(exist_ok=True, parents=True)
+
+        # Create probability maps
+        # TODO: Only create flood probability maps if they do not exist yet
+        self.create_flood_probability_maps(strategy=strategy_id, date_time=date_time)
+
+        # Load households and postal codes
+        households = self.var.household_points.copy()
+        buildings = self.var.buildings.copy()
+
+        for range_id in range_ids:
+            # Build path to probability map
+            prob_map = Path(
+                self.model.output_folder
+                / "flood_prob_maps"
+                / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
+                / f"prob_map_range{range_id}_strategy{strategy_id}.zarr"
+            )
+
+            # Open the probability map
+            prob_map = read_zarr(prob_map)
+
+            hit = self.identify_flooded_buildings(
+                buildings, prob_map, prob_threshold, return_series=True
+            )
+            buildings[f"hit_r{range_id}"] = hit
+
+        # Calculate fraction of flooded buildings per postal code
+        hit_cols = [f"hit_r{rid}" for rid in range_ids]
+        fraction_hit_per_postal_code = buildings.groupby("postcode")[hit_cols].mean()
+
+        # Save fraction of flooded buildings per postal code as a parquet file
+        postal_codes = self.postal_codes.copy()
+        fraction_hit_per_postal_code_map = postal_codes.merge(
+            fraction_hit_per_postal_code.reset_index(), on="postcode", how="right"
+        )
+        fraction_hit_per_postal_code_map.to_parquet(
+            warnings_folder
+            / f"fraction_hit_per_postcode_{date_time.isoformat().replace(':', '').replace('-', '')}.parquet"
+        )
+        print(
+            f"Fraction of buildings hit per postal code for forecast initialization date {date_time.isoformat()} saved as a parquet file."
+        )
+
+        # Iterate through each postal code and check the fraction of flooded buildings
+        for postal_code, row in fraction_hit_per_postal_code.iterrows():
+            # Initialize measures and evacuate flag
+            measures = []
+            triggered_ranges = []
+            evacuate = False
+
+            for range_id in range_ids:
+                percentage_flooded = row[f"hit_r{range_id}"]
+
+                if percentage_flooded >= buildings_hit_threshold:
+                    # Get the measures and evacuation flag from the json dictionary to use in the warning communication function
+                    triggered_ranges.append(range_id)
+                    recom_measure = self.var.wlranges_and_measures[range_id]["measure"]
+                    evacuate = (
+                        evacuate or self.var.wlranges_and_measures[range_id]["evacuate"]
+                    )
+                    if recom_measure:
+                        measures.extend(recom_measure)
+
+                    # Communicate the warning to the target households
+                    print(
+                        f"Warning triggered to postal code {postal_code} on {date_time.strftime('%d-%m-%Y T%H:%M:%S')} for range {range_id}: {percentage_flooded:.0%} of buildings hit"
+                    )
+
+            if measures or evacuate:
+                # Filter the affected households based on the postal code
+                affected_households = households[households["postcode"] == postal_code]
+
+                n_warned_households = self.warning_communication(
+                    target_households=affected_households,
+                    measures=measures,
+                    evacuate=evacuate,
+                    trigger="water_levels",
+                )
+
+                warning_log.append(
+                    {
+                        "date_time": date_time.isoformat(),
+                        "postcode": postal_code,
+                        "measures": measures,
+                        "triggered_ranges": triggered_ranges,
+                        "n_affected_households": len(affected_households),
+                        "n_warned_households": n_warned_households,
+                    }
+                )
+
+        # Save the warning log to a csv file
+        path = (
+            warnings_folder
+            / f"warning_log_water_levels_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
+        )
+        pd.DataFrame(warning_log).to_csv(path, index=False)
 
     def water_level_warning_strategy2(
         self,
@@ -811,10 +945,6 @@ class Households(AgentBaseClass):
                     percentage_flooded = len(flooded_in_postal_code) / n_total
 
                 if percentage_flooded >= buildings_hit_threshold:
-                    print(
-                        f"Warning issued to postal code {postal_code} on {date_time.strftime('%d-%m-%Y T%H:%M:%S')} for range {range_id}: {percentage_flooded:.0%} of buildings hit"
-                    )
-
                     # Filter the affected households based on the postal code
                     affected_households = households[
                         households["postcode"] == postal_code
@@ -825,7 +955,10 @@ class Households(AgentBaseClass):
                     evacuate = self.var.wlranges_and_measures[range_id]["evacuate"]
 
                     # Communicate the warning to the target households
-                    # This function should return the number of households that were warned
+                    print(
+                        f"Warning issued to postal code {postal_code} on {date_time.strftime('%d-%m-%Y T%H:%M:%S')} for range {range_id}: {percentage_flooded:.0%} of buildings hit"
+                    )
+
                     n_warned_households = self.warning_communication(
                         target_households=affected_households,
                         measures=measures,
@@ -840,7 +973,7 @@ class Households(AgentBaseClass):
                             "range": range_id,
                             "n_affected_households": len(affected_households),
                             "n_warned_households": n_warned_households,
-                            "percentage_above_threshold": f"{percentage_flooded:.2f}",
+                            "percentage_flooded_buildings": f"{percentage_flooded:.2f}",
                         }
                     )
 
@@ -1467,6 +1600,8 @@ class Households(AgentBaseClass):
                         if used_time + imp_time <= lead_time:
                             chosen_measures.append(measure)
                             used_time += imp_time
+                    if not chosen_measures:
+                        print("No measures fit within the lead time")
                     return chosen_measures
             else:
                 # Evacuation case
@@ -1545,9 +1680,7 @@ class Households(AgentBaseClass):
         Returns:
             float: Lead time in hours.
         """
-        flood_event_start_time = self.model.config["hazards"]["floods"]["events"][0][
-            "start_time"
-        ]
+        flood_event_start_time = self.model.config["hazards"]["floods"]["flood_start"]
         current_time = self.model.current_time
         lead_time = (flood_event_start_time - current_time).total_seconds() / 3600
         lead_time = max(lead_time, 0)  # Ensure non-negative lead time
@@ -1856,10 +1989,11 @@ class Households(AgentBaseClass):
 
         # TODO: Need to adjust the vulnerability curves
         # create another column (curve) in the buildings structure curve for
-        # protected buildings with sandbags
+        # protected buildings with sandbags -- only effective until 80 cm water depth
         self.buildings_structure_curve["building_with_sandbags"] = (
-            self.buildings_structure_curve["building_unprotected"] * 0.85
+            self.buildings_structure_curve["building_unprotected"]
         )
+        self.buildings_structure_curve["building_with_sandbags"].loc[0:0.8] *= 0.8
 
         # create another column (curve) in the buildings structure curve for
         # protected buildings with elevated possessions -- no effect on structure
@@ -1887,28 +2021,22 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "building_unprotected"}
         )
 
-        # create another column (curve) in the buildings content curve for protected buildings
-        self.buildings_content_curve["building_protected"] = (
-            self.buildings_content_curve["building_unprotected"] * 0.7
-        )
-
-        # TODO: need to adjust the vulnerability curves
         # create another column (curve) in the buildings content curve for
-        # protected buildings with sandbags
+        # protected buildings with sandbags -- assume no effect on contents
         self.buildings_content_curve["building_with_sandbags"] = (
-            self.buildings_content_curve["building_unprotected"] * 0.85
+            self.buildings_content_curve["building_unprotected"]
         )
 
         # create another column (curve) in the buildings content curve for
-        # protected buildings with elevated possessions
+        # protected buildings with elevated possessions -- TODO: consider make it effective only up to 2m
         self.buildings_content_curve["building_elevated_possessions"] = (
-            self.buildings_content_curve["building_unprotected"] * 0.85
+            self.buildings_content_curve["building_unprotected"] * 0.56
         )
 
         # create another column (curve) in the buildings content curve for
-        # protected buildings with both sandbags and elevated possessions
+        # protected buildings with both sandbags and elevated possessions -- only elevated possessions have an effect on contents
         self.buildings_content_curve["building_all_forecast_based"] = (
-            self.buildings_content_curve["building_unprotected"] * 0.85
+            self.buildings_content_curve["building_elevated_possessions"]
         )
 
         # create damage curves for adaptation
@@ -2247,8 +2375,8 @@ class Households(AgentBaseClass):
         gdf_content = buildings_centroid.copy()
         gdf_content["damage"] = damages_buildings_content
         category_name: str = "buildings_content"
-        filename: str = f"damage_map_{category_name}.gpkg"
-        gdf_content.to_file(damage_folder / filename, driver="GPKG")
+        filename: str = f"damage_map_{category_name}.geoparquet"
+        gdf_content.to_parquet(damage_folder / filename)
 
         print(f"damages to building content are: {total_damages_content}")
 
@@ -2267,8 +2395,8 @@ class Households(AgentBaseClass):
         gdf_structure = buildings.copy()
         gdf_structure["damage"] = damages_buildings_structure
         category_name: str = "buildings_structure"
-        filename: str = f"damage_map_{category_name}.gpkg"
-        gdf_structure.to_file(damage_folder / filename, driver="GPKG")
+        filename: str = f"damage_map_{category_name}.geoparquet"
+        gdf_structure.to_parquet(damage_folder / filename)
 
         print(
             f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
