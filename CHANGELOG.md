@@ -1,4 +1,5 @@
 # dev
+- Add build method to set up reforestation potential (and data catalog entry)
 - Add units to all data from `setup_hydrography`
 - Compute hillslope length based on drainage density
 - Fix: Also set nodata type in _FillValue when using reporter. This is now also correctly loaded with zarr.
