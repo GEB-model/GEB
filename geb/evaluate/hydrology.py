@@ -19,7 +19,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import rioxarray as rxr
 import xarray as xr
-from matplotlib.colors import LightSource
+from matplotlib.colors import LightSource, ListedColormap
 from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
 from rasterio.crs import CRS
@@ -2232,16 +2232,19 @@ class Hydrology:
         households_folder: Path = self.model.output_folder / "action_maps"
 
         def create_warning_performance_plots(
-            flooded: gpd.GeoDataFrame,
-            not_flooded: gpd.GeoDataFrame,
+            hits: gpd.GeoDataFrame,
+            misses: gpd.GeoDataFrame,
+            false_alarms: gpd.GeoDataFrame,
+            no_info: gpd.GeoDataFrame,
             HR: float,
             FAR: float,
             CSI: float,
+            postal_codes: gpd.GeoDataFrame,
+            criteria: str,
             output_folder: Path,
             initialization_date: str,
             obs_flood_extent: gpd.GeoDataFrame,
-            admin_units: gpd.GeoDataFrame,
-            use_admin_units: bool,
+            catchment_borders: gpd.GeoDataFrame,
             target_crs: str | None = None,
             visualization_type: str = "OSM",
         ) -> None:
@@ -2249,108 +2252,118 @@ class Hydrology:
             Creates a map showing the performance of the warnings for households.
 
             Args:
-                flooded: GeoDataFrame with flooded households (column 'warning_level' present).
-                not_flooded: GeoDataFrame with non-flooded households (column 'warning_level' present).
+                hits: GeoDataFrame with the postal codes hits
+                misses: GeoDataFrame with the postal codes misses
+                false_alarms: GeoDataFrame with the postal code false alarms
+                no_info: GeoDataFrame with the postal code no info
                 HR: warnings hit rate for every forecast initialization date
                 FAR: warnings false alarm ratio for every forecast initialization date
                 CSI: warnings critical success index for every forecast initialization date
+                postal_codes: GeoDataFrame with all postal codes
                 output_folder: folder to save the figure
                 initialization_date: string used in the title and filename
                 obs_flood_extent: GeoDataFrame with the observed flood extent
                 admin_units: GeoDataFrame with administrative units
-                use_admin_units: whether to use admin units for visualization
+                criteria: string indicating the criteria used for evaluation
+                catchment_borders: GeoDataFrame with the catchment borders
                 target_crs: target CRS (e.g., "EPSG:28992"). If None, uses the CRS of `flooded`.
                 visualization_type: currently only "OSM" is used (to add basemap).
             """
-            output_folder.mkdir(parents=True, exist_ok=True)
-
             # Define the target CRS
             if target_crs is None:
-                target_crs = flooded.crs
-
-            flooded = flooded.to_crs(target_crs)
-            not_flooded = not_flooded.to_crs(target_crs)
-            obs_flood_extent = obs_flood_extent.to_crs(target_crs)
-
-            # Separate categories
-            households_false_alarms = not_flooded[not_flooded["warning_level"] >= 1]
-            households_misses = flooded[flooded["warning_level"] < 1]
-            households_hits = flooded[flooded["warning_level"] >= 1]
+                target_crs = obs_flood_extent.crs
 
             # Define extent based on observed flood extent
-            minx, miny, maxx, maxy = obs_flood_extent.total_bounds
+            minx, miny, maxx, maxy = catchment_borders.total_bounds
+            margin = 2000
 
-            margin = 3000
             fig, ax = plt.subplots(figsize=(10, 10))
 
             # Plot observed flood extent
             obs_flood_extent.plot(
                 ax=ax,
-                color="blue",
-                edgecolor="blue",
+                color="dodgerblue",
+                edgecolor="dodgerblue",
                 linestyle="-",
                 linewidth=1.2,
-                zorder=1,
-                alpha=0.2,
-            )
-
-            if use_admin_units:
-                # Plot observed flood extent
-                admin_units.plot(
-                    ax=ax,
-                    color="none",
-                    edgecolor="black",
-                    linestyle="--",
-                    linewidth=1.0,
-                    zorder=5,
-                    alpha=0.7,
-                )
-
-            # Plot households
-            households_false_alarms.plot(
-                ax=ax,
-                markersize=15,
-                marker="$\u2302$",
-                color="orange",
-                alpha=0.8,
                 zorder=2,
+                alpha=0.5,
             )
 
-            households_misses.plot(
+            # Plot hits misses, false alarms, and no info for postal codes
+            postal_codes.plot(
                 ax=ax,
-                markersize=12,
-                marker="$\u2302$",  # House symbol
-                color="red",
+                color="white",
+                edgecolor="lightgrey",
+                linestyle="-",
+                linewidth=0.5,
+                zorder=1,
                 alpha=0.8,
+            )
+
+            no_info.plot(
+                ax=ax,
+                color="lightgrey",
+                edgecolor="grey",
+                linestyle="-",
+                linewidth=0.5,
                 zorder=3,
+                alpha=0.8,
             )
 
-            households_hits.plot(
+            false_alarms.plot(
                 ax=ax,
-                markersize=12,
-                marker="$\u2302$",  # House symbol
-                color="#94f944",
-                alpha=0.8,
+                color="orange",
+                edgecolor="grey",
+                linestyle="-",
+                linewidth=0.5,
                 zorder=4,
+                alpha=0.8,
+            )
+
+            misses.plot(
+                ax=ax,
+                color="red",
+                edgecolor="grey",
+                linestyle="-",
+                linewidth=0.5,
+                alpha=0.8,
+                zorder=5,
+            )
+
+            hits.plot(
+                ax=ax,
+                color="#94f944",
+                edgecolor="grey",
+                linestyle="-",
+                linewidth=0.5,
+                alpha=0.8,
+                zorder=6,
+            )
+
+            catchment_borders.plot(
+                ax=ax,
+                color="black",
+                linestyle="--",
+                linewidth=1.5,
+                zorder=7,
+                alpha=0.5,
             )
 
             # Basemap
             if visualization_type == "OSM":
-                try:
-                    ctx.add_basemap(
-                        ax,
-                        crs=target_crs,
-                        source=ctx.providers.OpenStreetMap.Mapnik,
-                        zoom=12,
-                        alpha=0.9,
-                    )
-                except Exception as e:
-                    print(f"It was not possible to add a basemap: {e}")
+                # Extent
+                ax.set_xlim(minx - margin, maxx + margin)
+                ax.set_ylim(miny - margin, maxy + margin)
+                ax.set_aspect("equal", adjustable="datalim")
 
-            # Extent
-            ax.set_xlim(minx - margin, maxx + margin)
-            ax.set_ylim(miny - margin, maxy + margin)
-            ax.set_aspect("equal", adjustable="box")
+                ctx.add_basemap(
+                    ax,
+                    crs=target_crs,
+                    source=ctx.providers.OpenStreetMap.Mapnik,
+                    zoom=12,
+                    alpha=0.9,
+                )
 
             ax.set_title(
                 f"Warnings Performance\nForecast Initialization: {initialization_date}",
@@ -2359,40 +2372,57 @@ class Hydrology:
             ax.set_xlabel("x [m]")
             ax.set_ylabel("y [m]")
 
-            # Legenda
-            green_patch = mpatches.Patch(color="#94f944", label="Hits")
-            orange_patch = mpatches.Patch(color="orange", label="False Alarms")
-            red_patch = mpatches.Patch(color="red", label="Misses")
-
-            legend_handles = [green_patch, orange_patch, red_patch]
+            # Legend
+            green_patch = mpatches.Patch(
+                facecolor="#94f944", edgecolor="grey", label="Hits"
+            )
+            orange_patch = mpatches.Patch(
+                facecolor="orange", edgecolor="grey", label="False Alarms"
+            )
+            red_patch = mpatches.Patch(
+                facecolor="red", edgecolor="grey", label="Misses"
+            )
+            white_patch = mpatches.Patch(
+                facecolor="white", edgecolor="lightgrey", label="Correct Negatives"
+            )
+            grey_patch = mpatches.Patch(
+                facecolor="lightgrey", edgecolor="grey", label="No flood observation"
+            )
 
             flood_extent_patch = mpatches.Patch(
-                facecolor="blue",
-                edgecolor="blue",
-                alpha=0.2,
+                facecolor="dodgerblue",
+                edgecolor="dodgerblue",
+                alpha=0.5,
                 label="Observed Flood Extent",
             )
-            legend_handles.append(flood_extent_patch)
 
-            if use_admin_units:
-                admin_units_patch = Line2D(
-                    [0],
-                    [0],
-                    color="black",
-                    linestyle="--",
-                    linewidth=1.0,
-                    label="Postal Codes",
-                )
-                legend_handles.append(admin_units_patch)
+            catchment_patch = Line2D(
+                [0],
+                [0],
+                color="black",
+                linestyle="--",
+                linewidth=1.5,
+                label="Catchment Border (NL)",
+            )
+
+            legend_handles = [
+                green_patch,
+                orange_patch,
+                red_patch,
+                white_patch,
+                grey_patch,
+                catchment_patch,
+                flood_extent_patch,
+            ]
 
             legend = ax.legend(handles=legend_handles, loc="upper right")
 
-            # Caixa com métricas
+            # Box with metrics
             ax.text(
                 0.02,
                 0.02,
                 (
-                    "Validation Metrics:\n"
+                    "Metrics:\n"
                     f"HR   = {HR * 100:.1f} %\n"
                     f"FAR  = {FAR * 100:.1f} %\n"
                     f"CSI  = {CSI * 100:.1f} %"
@@ -2430,8 +2460,8 @@ class Hydrology:
                 zorder=6,
             )
 
-            # Salvar figura
-            fig_name = f"warnings_performance_{initialization_date}.png"
+            # Save figure
+            fig_name = f"warnings_performance_{criteria}_{initialization_date}.png"
             fig_path = output_folder / fig_name
             fig.savefig(fig_path, dpi=300, bbox_inches="tight")
             plt.close(fig)
@@ -2440,7 +2470,7 @@ class Hydrology:
         def calculate_warning_performance_metrics(
             obs_flood_extent: gpd.GeoDataFrame,
             households_folder: Path,
-            use_admin_units: bool = False,
+            criteria: str = "fraction_buildings_flooded",
             buildings_w_postal_codes: Path | None = None,
             buildings_hit_threshold: float = 0.1,
         ) -> None:
@@ -2449,7 +2479,7 @@ class Hydrology:
             Args:
                 obs_flood_extent: GeoDataFrame containing the observed flood extent.
                 households_folder: Path to the folder containing household points GeoParquet files with the warning parameters. Must contain column of warning_level.
-                use_admin_units: If True, use administrative units (e.g., postal codes) to define validation map.
+                criteria: Criteria to define flooded admin units. Options are 'any_building_flooded' or 'fraction_buildings_flooded'.
                 buildings_w_postal_codes: GeoDataFrame of the buildings containing a column with their postal codes. Required if use_admin_units is True.
                 buildings_hit_threshold: Fraction of buildings that must be flooded in an admin unit to consider it flooded.
             """
@@ -2463,75 +2493,83 @@ class Hydrology:
             performance_folder = self.output_folder_evaluate / "warnings"
             performance_folder.mkdir(parents=True, exist_ok=True)
 
-            if use_admin_units:
-                postal_codes = gpd.read_parquet(
-                    self.model.files["geom"]["postal_codes"]
-                ).to_crs(obs_flood_extent.crs)
-                postal_codes = postal_codes.copy()
+            # Prepare validation area based on flooded buildings per postal code
+            postal_codes = gpd.read_parquet(
+                self.model.files["geom"]["postal_codes"]
+            ).to_crs(obs_flood_extent.crs)
+            flooded_postal_codes = postal_codes.copy()
+            valid_postal_codes = postal_codes.copy()
+            catchment_borders = postal_codes.dissolve().boundary
 
-                buildings = buildings_w_postal_codes.to_crs(obs_flood_extent.crs).copy()
+            buildings = buildings_w_postal_codes.to_crs(obs_flood_extent.crs).copy()
 
-                flood_union = obs_flood_extent.geometry.union_all()
-                buildings["flooded"] = buildings.geometry.intersects(flood_union)
+            flood_union = obs_flood_extent.geometry.union_all()
+            buildings["flooded"] = buildings.geometry.intersects(flood_union)
 
+            # Save the buildings with their flooded status
+            buildings.to_parquet(
+                performance_folder / "buildings_flooded_status.parquet"
+            )
+
+            if criteria == "any_building_flooded":
+                # Get postal codes with at least one flooded building
+                stats = buildings.groupby("postcode")["flooded"].any()
+
+                flooded_postal_codes["flooded"] = (
+                    flooded_postal_codes["postcode"].map(stats).fillna(False)
+                )
+
+            elif criteria == "fraction_buildings_flooded":
                 # Get the fraction of flooded buildings per postcode (mean of boolean is the fraction of True)
                 stats = buildings.groupby("postcode")["flooded"].mean()
 
                 # Mark postal codes as flooded if fraction of flooded buildings exceeds threshold
-                postal_codes["flooded"] = (
-                    postal_codes["postcode"].map(stats).fillna(0)
+                flooded_postal_codes["flooded"] = (
+                    flooded_postal_codes["postcode"].map(stats).fillna(0)
                     >= buildings_hit_threshold
                 )
 
-                # Get the validation area as the dissolved geometry of flooded postal codes
-                validation_area = postal_codes.loc[postal_codes["flooded"]].dissolve()
+            # Define validation area: postal codes that are flooded (depending on the criteria used)
+            validation_area = flooded_postal_codes[
+                flooded_postal_codes["flooded"] == True
+            ]
+            # Save it for reference
+            validation_area.to_parquet(
+                performance_folder
+                / "postal_codes_considered_flooded_by_fraction.geoparquet"
+            )
+            print(
+                "Number of flooded postal codes based on criteria:",
+                validation_area.shape[0],
+            )
 
-                # postal_codes = gpd.read_parquet(
-                #     self.model.files["geom"]["postal_codes"]
-                # )
-                # postal_codes["flooded"] = False
-                # buildings_w_postal_codes = buildings_w_postal_codes.to_crs(obs_flood_extent.crs)
+            # TODO: Check if we need to filter valid postal codes based on buildings within orthophoto boundary
+            # TODO: remove hardcoded path
+            # Now get valid postal codes within orthophoto boundary
+            ortho_boundary = gpd.read_parquet(
+                "/scistor/ivm/adq582/GEB/models/geul_new_warning/base/input/geom/geul_ortho_plus_flood.parquet"
+            )
 
-                # # Create a mask for buildings that overlap with the flood map
-                # buildings_mask = buildings_w_postal_codes.geometry.intersects(
-                #     obs_flood_extent.union_all()
-                # )
+            valid_postal_codes = gpd.sjoin(
+                valid_postal_codes, ortho_boundary, how="inner", predicate="intersects"
+            ).drop(columns="index_right")
+            print(
+                "Number of postal codes that intersect with avaliable validation data:",
+                valid_postal_codes.shape[0],
+            )
 
-                # buildings_w_postal_codes["flooded"] = False
-                # buildings_w_postal_codes.loc[buildings_mask, "flooded"] = True
+            # Save valid postal codes (PC that intersect with orthophoto boundary)
+            valid_postal_codes.to_parquet(
+                performance_folder / "valid_postal_codes.geoparquet"
+            )
 
-                # # Iterate through each postal code and check the fraction of flooded buildings
-                # for _, row in postal_codes.iterrows():
-                #     postal_code = row["postcode"]
-
-                #     # All buildings in this postal code
-                #     buildings_in_postal_code = buildings_w_postal_codes[
-                #         buildings_w_postal_codes["postcode"] == postal_code
-                #     ]
-
-                #     n_total = len(buildings_in_postal_code)
-
-                #     if n_total == 0:
-                #         percentage_flooded = 0
-                #     else:
-                #         # Flooded buildings in this postal code
-                #         flooded_in_postal_code = buildings_w_postal_codes[
-                #             (buildings_w_postal_codes["postcode"] == postal_code)
-                #             & (buildings_w_postal_codes["flooded"])
-                #         ]
-
-                #         percentage_flooded = len(flooded_in_postal_code) / n_total
-
-                #     if percentage_flooded >= buildings_hit_threshold:
-                #         postal_codes.at[_, "flooded"] = True
-
-                # validation_area = postal_codes[postal_codes["flooded"]].dissolve()
-            else:
-                validation_area = obs_flood_extent
-
+            # Evaluate each household points file at a postal code scale
             performance_log = []
             for file in files:
                 initialization_date_str = file.stem.split("_")[-1]
+                ini_date_folder = performance_folder / initialization_date_str
+                ini_date_folder.mkdir(parents=True, exist_ok=True)
+
                 household_points = gpd.read_parquet(file)
 
                 forecast_init_dt = datetime.datetime.strptime(
@@ -2541,53 +2579,123 @@ class Hydrology:
                     f"Evaluating warnings for forecast initialization date: {forecast_init_dt.isoformat()}"
                 )
 
-                household_flood_check = household_points.sjoin(
-                    validation_area, predicate="within", how="left"
+                # Evaluate the warning performance at a postal code scale
+                # For each postal code, check if any household got a warning (that means the warning reached that postal code)
+                warned_status = (
+                    household_points.groupby("postcode")["warning_reached"]
+                    .any()
+                    .rename("warned")
+                    .reset_index()
                 )
 
-                household_flood_check["flooded"] = False
-                household_flood_check["flooded"] = household_flood_check[
-                    "index_right"
-                ].notna()
-                household_flood_check = household_flood_check.drop(
-                    columns=["index_right", "fid", "DN", "wdp"],
-                    errors="ignore",
+                # Merge the warned_status information in the postal codes geodataframe
+                postal_codes_warned_status = postal_codes.merge(
+                    warned_status,
+                    on="postcode",
+                    how="left",
                 )
 
-                flooded = household_flood_check[household_flood_check["flooded"]]
-                not_flooded = household_flood_check[~household_flood_check["flooded"]]
-                print("Number of flooded households:", len(flooded))
+                # Postal codes with no household points (NaN) become not warned (False)
+                postal_codes_warned_status["warned"] = postal_codes_warned_status[
+                    "warned"
+                ].fillna(False)
 
-                hits = flooded[flooded["warning_level"] >= 1].shape[0]
-                print(f"Number of households correctly warned: {hits}")
-
-                misses = flooded[flooded["warning_level"] < 1].shape[0]
-                print(f"Number of households missed: {misses}")
-
-                false_alarms = not_flooded[not_flooded["warning_level"] >= 1].shape[0]
-                print(
-                    "Number of households warned in vain (false alarms):", false_alarms
+                # Save the postal codes with their warned status for this forecast initialization date
+                postal_codes_warned_status.to_parquet(
+                    ini_date_folder
+                    / f"warned_postal_codes_{initialization_date_str}.parquet"
                 )
 
-                HR = hits / (hits + misses)
+                # Calculate hits, misses, false alarms and no info at postal code level
+                hits_mask = (postal_codes_warned_status["warned"]) & (
+                    postal_codes_warned_status["postcode"].isin(
+                        validation_area["postcode"]
+                    )
+                )
+
+                n_hits = hits_mask.sum()
+                print(f"Number of postal codes correctly warned: {n_hits}")
+
+                misses_mask = (~postal_codes_warned_status["warned"]) & (
+                    postal_codes_warned_status["postcode"].isin(
+                        validation_area["postcode"]
+                    )
+                )
+
+                n_misses = misses_mask.sum()
+                print(f"Number of postal codes missed: {n_misses}")
+
+                false_alarms_mask = (
+                    (postal_codes_warned_status["warned"])
+                    & (
+                        ~postal_codes_warned_status["postcode"].isin(
+                            validation_area["postcode"]
+                        )
+                    )
+                    & (
+                        postal_codes_warned_status["postcode"].isin(
+                            valid_postal_codes["postcode"]
+                        )
+                    )
+                )
+
+                n_false_alarms = false_alarms_mask.sum()
+                print(f"Number of postal codes false alarms: {n_false_alarms}")
+
+                no_info_mask = ~postal_codes_warned_status["postcode"].isin(
+                    valid_postal_codes["postcode"]
+                )
+                # (postal_codes_warned_status["warned"]) & (
+                #     ~postal_codes_warned_status["postcode"].isin(
+                #         valid_postal_codes["postcode"]
+                #     )
+                # )
+                n_no_info = no_info_mask.sum()
+                print(f"Number of postal codes with no info: {n_no_info}")
+
+                # Get the geodataframes for hits, misses, false alarms and no info
+                hits = postal_codes_warned_status[hits_mask]
+                misses = postal_codes_warned_status[misses_mask]
+                false_alarms = postal_codes_warned_status[false_alarms_mask]
+                no_info = postal_codes_warned_status[no_info_mask]
+
+                # Save the geodataframes for hits, misses, false alarms and no info for this forecast initialization date
+                hits.to_parquet(
+                    ini_date_folder
+                    / f"postal_codes_hits_{initialization_date_str}.parquet"
+                )
+                misses.to_parquet(
+                    ini_date_folder
+                    / f"postal_codes_misses_{initialization_date_str}.parquet"
+                )
+                false_alarms.to_parquet(
+                    ini_date_folder
+                    / f"postal_codes_false_alarms_{initialization_date_str}.parquet"
+                )
+                no_info.to_parquet(
+                    ini_date_folder
+                    / f"postal_codes_no_info_{initialization_date_str}.parquet"
+                )
+
+                HR = n_hits / (n_hits + n_misses)
                 print(f"Overall Hit Rate: {HR:.0%}")
 
-                FAR = false_alarms / (hits + false_alarms)
+                FAR = n_false_alarms / (n_hits + n_false_alarms)
                 print(f"False Alarm Rate: {FAR:.0%}")
 
-                CSI = hits / (hits + misses + false_alarms)
+                CSI = n_hits / (n_hits + n_misses + n_false_alarms)
                 print(f"Critical Success Index: {CSI:.0%}")
 
                 performance_log.append(
                     {
                         "date_time": initialization_date_str,
-                        "n_flooded_households": len(flooded),
+                        "n_flooded_buildings": buildings["flooded"].sum(),
                         "n_warned_households": household_points[
                             household_points["warning_level"] >= 1
                         ].shape[0],
-                        "n_households_hits": hits,
-                        "n_households_misses": misses,
-                        "n_households_false_alarms": false_alarms,
+                        "n_postal_codes_hits": n_hits,
+                        "n_postal_codes_misses": n_misses,
+                        "n_postal_codes_false_alarms": n_false_alarms,
                         "HR": f"{HR:.2f}",
                         "FAR": f"{FAR:.2f}",
                         "CSI": f"{CSI:.2f}",
@@ -2595,16 +2703,19 @@ class Hydrology:
                 )
 
                 create_warning_performance_plots(
-                    flooded=flooded,
-                    not_flooded=not_flooded,
+                    hits=hits,
+                    misses=misses,
+                    false_alarms=false_alarms,
+                    no_info=no_info,
+                    catchment_borders=catchment_borders,
+                    criteria=criteria,
                     HR=HR,
                     FAR=FAR,
                     CSI=CSI,
-                    output_folder=performance_folder,
+                    postal_codes=postal_codes,
+                    output_folder=ini_date_folder,
                     initialization_date=initialization_date_str,
                     obs_flood_extent=obs_flood_extent,
-                    admin_units=validation_area,
-                    use_admin_units=use_admin_units,
                     target_crs=obs_flood_extent.crs,
                     visualization_type="OSM",
                 )
@@ -2644,6 +2755,9 @@ class Hydrology:
             flood_map_path: Path | str,
             visualization_type: str = "Hillshade",
             output_folder: Path | str = None,
+            flood_probability_map: bool = False,
+            ini_dt: str | None = None,
+            use_ortho_boundary: bool = True,
         ) -> None:
             """Calculate performance metrics for flood maps against observations.
 
@@ -2662,6 +2776,8 @@ class Hydrology:
             # # resolution of obs should match the sfincs resolution
             obs = obs.rio.write_crs(flood_map.rio.crs)
             sim = flood_map.raster.reproject_like(obs)
+            if flood_probability_map:
+                sim = sim >= 0.6
             rivers = gpd.read_parquet(
                 Path("simulation_root")
                 / run_name
@@ -2669,13 +2785,16 @@ class Hydrology:
                 / "entire_region"
                 / "rivers.geoparquet"
             )
-            region = gpd.read_file(
-                Path("simulation_root")
-                / run_name
-                / "SFINCS"
-                / "entire_region"
-                / "gis"
-                / "region.geojson"
+            # region = gpd.read_file(
+            #     Path("simulation_root")
+            #     / run_name
+            #     / "SFINCS"
+            #     / "entire_region"
+            #     / "gis"
+            #     / "region.geojson"
+            # ).to_crs(obs.rio.crs)
+            region = gpd.read_parquet(
+                "/scistor/ivm/adq582/GEB/models/geul_new_warning/base/input/geom/geul_catchment.parquet"
             ).to_crs(obs.rio.crs)
 
             # Step 2: Clip out rivers from observations and simulations
@@ -2732,10 +2851,29 @@ class Hydrology:
                 clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
 
             # Step 5: Mask water depth values
-            hmin = 0.15
+            hmin = 0.15  # TODO: check if this makes sense
             sim_extra_clipped = sim_extra_clipped.raster.reproject_like(obs_region)
             simulation_final = sim_extra_clipped > hmin
             observation_final = obs_region > 0
+
+            # Further clip to orthophoto boundary if provided
+            if use_ortho_boundary:
+                ortho_boundary = gpd.read_parquet(
+                    "/scistor/ivm/adq582/GEB/models/geul_new_warning/base/input/geom/geul_ortho_plus_flood.parquet"
+                )
+                ortho_boundary = ortho_boundary.to_crs(flood_map.rio.crs)
+
+                obs_valid = xr.DataArray(
+                    geometry_mask(
+                        ortho_boundary.geometry,
+                        out_shape=obs_region.rio.shape,
+                        transform=obs_region.rio.transform(),
+                        all_touched=True,
+                        invert=True,
+                    ),
+                    dims=obs_region.dims[-2:],  # normalmente ("y", "x")
+                    coords={"y": obs_region.y, "x": obs_region.x},
+                )
 
             xmin, ymin, xmax, ymax = region.total_bounds
             catchment_extent = [xmin, xmax, ymin, ymax]
@@ -2743,10 +2881,19 @@ class Hydrology:
             xmin, ymin, xmax, ymax = observation_final.rio.bounds()
             flood_extent = [xmin, xmax, ymin, ymax]
 
+            # Need to adjust the extent, and remove the sim area that does not intersect the orthophoto boundary before going into the hit,misses, calculations
+
             # Step 6: Calculate performance metrics
             # Compute the arrays first to get concrete values
-            sim_final_computed = simulation_final.compute()
-            obs_final_computed = observation_final.compute()
+            simulation_valid = simulation_final.where(obs_valid)
+            # observation_valid = observation_final.where(obs_valid)
+
+            sim_final_computed = (
+                simulation_valid.compute()
+            )  # antes era simulation_final.compute()
+            obs_final_computed = (
+                observation_final.compute()
+            )  # antes era observation_final.compute()
 
             hit_rate = calculate_hit_rate(sim_final_computed, obs_final_computed) * 100
             false_rate = (
@@ -2781,10 +2928,34 @@ class Hydrology:
             catchment_borders = region.boundary
 
             if simulation_final.sum() > 0:
-                misses = (observation_final == 1) & (simulation_final == 0)
-                simulation_masked = simulation_final.where(simulation_final == 1)
-                hits = simulation_masked.where(observation_final)
-                misses_masked = misses.where(misses == 1)
+                # misses = (observation_final == 1) & (simulation_final == 0)
+                # simulation_masked = simulation_final.where(simulation_final == 1)
+                # hits = simulation_masked.where(observation_final)
+                # misses_masked = misses.where(misses == 1)
+
+                # no_info = (simulation_final == 1) & (~obs_valid)
+                # no_info_masked = no_info.where(no_info == 1)
+                # --- separar área válida vs não válida ---
+                simulation_valid = (
+                    simulation_final.where(obs_valid).fillna(0).astype(bool)
+                )
+                observation_valid = (
+                    observation_final.where(obs_valid).fillna(0).astype(bool)
+                )
+
+                # --- classes dentro da área válida ---
+                hits = simulation_valid & observation_valid
+                misses = (~simulation_valid) & observation_valid
+                false_alarms = simulation_valid & (~observation_valid)
+
+                # --- classe fora da área válida (no_info) ---
+                no_info = simulation_final & (~obs_valid)
+
+                # mascarinhas pra plot (deixar só 1s)
+                hits_masked = hits.where(hits)
+                misses_masked = misses.where(misses)
+                false_alarms_masked = false_alarms.where(false_alarms)
+                no_info_masked = no_info.where(no_info)
 
                 if visualization_type == "OSM":
                     # Ensure all arrays have the same shape by squeezing extra dimensions
@@ -2792,25 +2963,26 @@ class Hydrology:
                     observation_final = observation_final.squeeze()
                     misses = misses.squeeze()
                     hits = hits.squeeze()
-                    simulation_masked = simulation_masked.squeeze()
+                    # simulation_masked = simulation_masked.squeeze()
                     misses_masked = misses_masked.squeeze()
-
-                    margin = 3000
+                    no_info = no_info.squeeze()
+                    margin = 2000
                     fig, ax = plt.subplots(figsize=(10, 10))
 
                     # clipped_out_raster.plot(
                     #     ax=ax, cmap=blue_cmap, add_colorbar=False, add_labels=False
                     # )
+                    cmap_noinfo = ListedColormap(["grey"])
 
                     ax.imshow(
-                        simulation_masked,  # False alarms
+                        false_alarms_masked,  # False alarms, antes era simulation_masked
                         extent=flood_extent,
                         # origin="lower",
                         cmap="Wistia",
                         vmin=0,
                         vmax=1,
                         interpolation="none",
-                        zorder=1,
+                        zorder=2,
                     )
                     ax.imshow(
                         misses_masked,  # Misses
@@ -2820,42 +2992,39 @@ class Hydrology:
                         vmin=0,
                         vmax=1,
                         interpolation="none",
-                        zorder=2,
+                        zorder=3,
                     )
 
                     ax.imshow(
-                        hits,
+                        hits_masked,
                         extent=flood_extent,
                         # origin="lower",
                         cmap="brg",
                         vmin=0,
                         vmax=1,
                         interpolation="none",
-                        zorder=3,
+                        zorder=4,
                     )
+                    if use_ortho_boundary:
+                        ax.imshow(
+                            no_info_masked,
+                            extent=flood_extent,
+                            # origin="lower",
+                            cmap=cmap_noinfo,
+                            vmin=0,
+                            vmax=1,
+                            interpolation="none",
+                            zorder=1,
+                        )
 
                     catchment_borders.plot(
                         ax=ax,
                         color="black",
                         linestyle="--",
                         linewidth=1.5,
-                        zorder=4,
+                        zorder=5,
                         alpha=0.5,
                     )
-                    # Add a base map
-                    ctx.add_basemap(
-                        ax,
-                        crs=target_crs,
-                        source="OpenStreetMap.Mapnik",
-                        zoom=12,
-                        zorder=0,
-                        alpha=0.9,
-                    )
-
-                    ax.set_title("Validation of the Predicted Flood Areas", fontsize=14)
-                    ax.set_xlabel("x [m]")
-                    ax.set_ylabel("y [m]")
-
                     # Set the extent based on the raster bounds
                     ax.set_xlim(
                         catchment_extent[0] - margin, catchment_extent[1] + margin
@@ -2863,11 +3032,31 @@ class Hydrology:
                     ax.set_ylim(
                         catchment_extent[2] - margin, catchment_extent[3] + margin
                     )
-                    ax.set_aspect("equal", adjustable="box")
+                    ax.set_aspect("equal", adjustable="datalim")
+
+                    # Add a base map
+                    ctx.add_basemap(
+                        ax,
+                        crs=target_crs,
+                        source="OpenStreetMap.Mapnik",
+                        zoom=12,
+                        zorder=0,
+                        alpha=0.7,
+                    )
+
+                    ax.set_title(
+                        f"Validation of the Predicted Flood Areas (Ensemble)\nForecast init. date: {ini_dt.strftime('%d-%m-%Y')}",
+                        fontsize=14,
+                    )
+                    ax.set_xlabel("x [m]")
+                    ax.set_ylabel("y [m]")
 
                     green_patch = mpatches.Patch(color="#94f944", label="Hits")
                     orange_patch = mpatches.Patch(color="orange", label="False Alarms")
                     red_patch = mpatches.Patch(color="red", label="Misses")
+                    grey_patch = mpatches.Patch(
+                        color="grey", label="No flood observations"
+                    )
 
                     catchment_patch = Line2D(
                         [0],
@@ -2882,6 +3071,7 @@ class Hydrology:
                             green_patch,
                             orange_patch,
                             red_patch,
+                            grey_patch,
                             catchment_patch,
                         ]
                     )
@@ -2893,21 +3083,39 @@ class Hydrology:
                     legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
 
                     # Add text below legend using axes coordinates
+                    # ax.annotate(
+                    #     f"Validation Metrics:\n"
+                    #     f"HR    = {hit_rate:.2f} %\n"
+                    #     f"FAR   = {false_rate:.2f} %\n"
+                    #     f"CSI   = {csi:.2f} %",
+                    #     xy=(legend_bbox_ax.x0 + 0.055, legend_bbox_ax.y0 + 0.002),
+                    #     xycoords="axes fraction",
+                    #     fontsize=10,
+                    #     bbox=dict(
+                    #         facecolor="white",
+                    #         edgecolor="grey",
+                    #         boxstyle="round,pad=0.2",
+                    #         alpha=0.8,
+                    #     ),
+                    #     verticalalignment="top",
+                    #     horizontalalignment="right",
+                    #     zorder=5,
+                    # )
                     ax.annotate(
                         f"Validation Metrics:\n"
                         f"HR    = {hit_rate:.2f} %\n"
                         f"FAR   = {false_rate:.2f} %\n"
                         f"CSI   = {csi:.2f} %",
-                        xy=(legend_bbox_ax.x0 + 0.055, legend_bbox_ax.y0 + 0.002),
+                        xy=(0.02, 0.02),  # bottom-left corner
                         xycoords="axes fraction",
                         fontsize=10,
                         bbox=dict(
                             facecolor="white",
                             edgecolor="grey",
-                            boxstyle="round,pad=0.2",
+                            boxstyle="round,pad=0.25",
                             alpha=0.8,
                         ),
-                        verticalalignment="top",
+                        verticalalignment="bottom",
                         horizontalalignment="left",
                         zorder=5,
                     )
@@ -2934,13 +3142,15 @@ class Hydrology:
                     )[0]
                     fig.savefig(
                         output_folder
+                        / f"forecast_{ini_dt.strftime('%Y%m%dT%H%M%S')}"
                         / f"{simulation_filename}_validation_floodextent_plot.png",
                         dpi=600,
                         bbox_inches="tight",
                     )
                     print(
-                        f"Figure with {visualization_type} saved as: {output_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
+                        f"Figure with {visualization_type} saved as: {output_folder / f'forecast_{ini_dt.strftime("%Y%m%dT%H%M%S")}' / f'{simulation_filename}_validation_floodextent_plot.png'}"
                     )
+                    # / f"forecast_{ini_dt.strftime('%Y%m%dT%H%M%S')}"
 
                 elif visualization_type == "Hillshade":
                     green_cmap = mcolors.ListedColormap(["green"])  # Hits
@@ -3280,18 +3490,38 @@ class Hydrology:
                 print(
                     "Forecasts use is set to false, so no forecasts are included in the evaluation."
                 )
-                flood_map_name = event_name + ".zarr"
-                flood_map_path = flood_maps_folder / flood_map_name
+                # flood_map_name = event_name + ".zarr"
+                # flood_map_path = flood_maps_folder / flood_map_name
 
-                metrics = calculate_performance_metrics(
-                    observation=self.config["floods"]["event_observation_files"][
-                        "raster"
-                    ],
-                    flood_map_path=flood_map_path,
-                    visualization_type="OSM",
-                    output_folder=event_folder,
+                # TODO: need to adjust this later
+                datetimes = pd.to_datetime(
+                    ["2021-07-11", "2021-07-12", "2021-07-13", "2021-07-14"]
                 )
-                print(f"Successfully evaluated: {flood_map_path.name}")
+
+                prob_exceedance_maps_folder = (
+                    self.model.output_folder / "flood_prob_exceedance_maps"
+                )
+                save_folder = eval_hydrodynamics_folders / "prob_exceedance_maps"
+                save_folder.mkdir(parents=True, exist_ok=True)
+
+                for dt in datetimes:
+                    flood_map_path = (
+                        prob_exceedance_maps_folder
+                        / f"forecast_{dt.strftime('%Y%m%dT%H%M%S')}"
+                        / "prob_exceedance_map_range1_strategy1.zarr"
+                    )
+
+                    metrics = calculate_performance_metrics(
+                        observation=self.config["floods"]["event_observation_files"][
+                            "raster"
+                        ],
+                        flood_map_path=flood_map_path,
+                        visualization_type="OSM",
+                        output_folder=save_folder,
+                        flood_probability_map=True,
+                        ini_dt=dt,
+                    )
+                    print(f"Successfully evaluated: {flood_map_path.name}")
 
             else:
                 print("Evaluating flood forecasts...")
