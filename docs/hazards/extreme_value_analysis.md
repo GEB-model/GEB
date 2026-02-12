@@ -40,7 +40,11 @@ GEB uses multiple diagnostic tools to evaluate the quality of the GPD fit and to
 The primary goodness-of-fit test used for threshold selection. The AD test is specifically weighted to emphasize the tail behavior, making it ideal for extreme value analysis.
 
 - **Bootstrap**: Parametric bootstrap (default: 2000 samples) is used to calculate a robust p-value
--
+<figure markdown="span">
+  ![AD test plot](../images/p-value.jpg)
+  <figcaption>Example ad test plot showing p value diagnostics.</figcaption>
+</figure>
+
 #### Mean Residual Life (MRL) Plot
 
 The MRL plot is a key diagnostic for threshold selection in GPD-POT analysis. It shows the mean excess value over each threshold.

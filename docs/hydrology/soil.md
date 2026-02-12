@@ -25,8 +25,6 @@ For each grid cell and layer, we collect the following variables from SoilGrids:
 
     Sand is not actually obtained, but implied through `100% - Silt (%) - Clay (%)`.
 
-## Derived Soil Hydraulic Properties
-
 Based on the basic soil properties (sand, clay, silt, organic carbon, bulk density), several hydraulic parameters are derived using Pedotransfer Functions (PTFs).
 
 | Parameter | Symbol | Source / Method |
