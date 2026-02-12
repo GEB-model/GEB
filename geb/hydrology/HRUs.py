@@ -139,12 +139,13 @@ def to_grid(
             output_data[i] = (values * weights).sum() / weights.sum()
         elif fn == "weightednanmean":
             values = data[prev_index:cell_index]
-            weights = land_use_ratio[prev_index:cell_index]
-            weights = weights[~np.isnan(values)]
-            values = values[~np.isnan(values)]
+            no_nan_mask = ~np.isnan(values)
+            values = values[no_nan_mask]
             if values.size == 0:
                 output_data[i] = np.nan
             else:
+                weights = land_use_ratio[prev_index:cell_index]
+                weights = weights[no_nan_mask]
                 output_data[i] = (values * weights).sum() / weights.sum()
         elif fn == "sum":
             output_data[i] = np.sum(data[prev_index:cell_index])

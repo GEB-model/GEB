@@ -254,6 +254,7 @@ class BuildModelBase(ABC):
         """Abstract method to get subgrid factor."""
         pass
 
+    @property
     @abstractmethod
     def ldd_scale_factor(self) -> int:
         """Abstract method to get LDD scale factor."""

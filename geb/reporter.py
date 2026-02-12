@@ -41,37 +41,37 @@ WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
         "_water_circle_rain": {
             "varname": ".rain_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_circle_snow": {
             "varname": ".snow_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_circle_transpiration": {
             "varname": ".transpiration_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_circle_bare_soil_evaporation": {
             "varname": ".bare_soil_evaporation_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_circle_open_water_evaporation": {
             "varname": ".open_water_evaporation_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_circle_interception_evaporation": {
             "varname": ".interception_evaporation_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_circle_sublimation_or_deposition": {
             "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
     },
     "hydrology.routing": {
@@ -119,42 +119,42 @@ WATER_BALANCE_REPORT_CONFIG = {
         "_water_balance_rain": {
             "varname": ".rain_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_balance_snow": {
             "varname": ".snow_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_balance_transpiration": {
             "varname": ".transpiration_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_balance_bare_soil_evaporation": {
             "varname": ".bare_soil_evaporation_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_balance_open_water_evaporation": {
             "varname": ".open_water_evaporation_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_balance_interception_evaporation": {
             "varname": ".interception_evaporation_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_balance_sublimation_or_deposition": {
             "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
         "_water_balance_interflow": {
             "varname": ".interflow_m",
             "type": "HRU",
-            "function": "weightedsum",
+            "function": "areaweightedsum",
         },
     },
     "hydrology.routing": {
@@ -192,7 +192,7 @@ ENERGY_BALANCE_REPORT_CONFIG = {
         "_energy_balance_soil_temperature_top_layer_C": {
             "varname": "HRU.var.soil_temperature_C[0]",
             "type": "HRU",
-            "function": "weightedmean",
+            "function": "areaweightedmean",
         },
     },
 }
@@ -987,24 +987,26 @@ class Reporter:
                     # extract the value at that index
                     value = value[..., idx]
                 elif function in (
-                    "weightedmean",
-                    "weightednanmean",
-                    "weightedsum",
-                    "weightednansum",
+                    "areaweightedmean",
+                    "areaweightednanmean",
+                    "areaweightedsum",
+                    "areaweightednansum",
                 ):
                     if type_ == "HRU":
                         cell_area = self.hydrology.HRU.var.cell_area
                     else:
                         cell_area = self.hydrology.grid.var.cell_area
-                    if function == "weightedmean":
+                    if function == "areaweightedmean":
                         value = np.average(value, weights=cell_area, axis=-1)
-                    elif function == "weightednanmean":
-                        value = np.nansum(value * cell_area, axis=-1) / np.sum(
-                            cell_area
-                        )
-                    elif function == "weightedsum":
+                    elif function == "areaweightednanmean":
+                        non_nan_mask = ~np.isnan(value)
+                        cell_area_non_nan = cell_area[non_nan_mask]
+                        value = np.nansum(
+                            value[non_nan_mask] * cell_area_non_nan, axis=-1
+                        ) / np.sum(cell_area_non_nan)
+                    elif function == "areaweightedsum":
                         value = np.sum(value * cell_area, axis=-1)
-                    elif function == "weightednansum":
+                    elif function == "areaweightednansum":
                         value = np.nansum(value * cell_area, axis=-1)
 
                 else:

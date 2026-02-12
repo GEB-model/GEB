@@ -9,6 +9,7 @@ from typing import Any, Literal, cast, overload
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
+import pyflwdir
 import xarray
 import xarray as xr
 import xarray_regrid
@@ -1383,3 +1384,121 @@ def get_neighbor_cell_ids_for_linear_indices(
                 neighbor_id: int = r * nx + c
                 neighbor_cell_ids.append(neighbor_id)
     return neighbor_cell_ids
+
+
+@njit(parallel=True)
+def _calculate_tri_numpy(dem_values: np.ndarray) -> np.ndarray:
+    """Computes Riley et al. (1999) TRI using a 3x3 moving window.
+
+    TRI = sqrt(sum((neighbor - center)^2))
+
+    This function handles NaN values by ignoring them in the sum.
+
+    Args:
+        dem_values: 2D array of elevation values.
+
+    Returns:
+        2D array of TRI values.
+    """
+    rows, cols = dem_values.shape
+    tri = np.full((rows, cols), np.nan, dtype=np.float32)
+
+    # Offsets for 8 neighbors
+    offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+
+    for r in prange(rows):  # ty:ignore[not-iterable]
+        for c in range(cols):
+            center_val = dem_values[r, c]
+            if np.isnan(center_val):
+                continue
+
+            sq_diff_sum = 0.0
+            count = 0
+
+            for dr, dc in offsets:
+                nr, nc = r + dr, c + dc
+
+                # Check bounds
+                if 0 <= nr < rows and 0 <= nc < cols:
+                    neighbor_val = dem_values[nr, nc]
+                    if not np.isnan(neighbor_val):
+                        diff = neighbor_val - center_val
+                        sq_diff_sum += diff * diff
+                        count += 1
+
+            if count > 0:
+                tri[r, c] = np.sqrt(sq_diff_sum)
+
+    return tri
+
+
+def calculate_topographic_roughness_index(
+    da: xr.DataArray,
+    scale_factor: int,
+) -> xr.DataArray:
+    """Calculate the Topographic Roughness Index (TRI) and aggregate it.
+
+    This implements the method by Riley et al. (1999).
+    TRI = sqrt(sum((x_center - x_neighbor)^2)) for the 8 neighbors.
+
+    The TRI is calculated for every pixel in the high-resolution DataArray,
+    and then averaged over the coarse grid cells defined by `scale_factor`.
+
+    Args:
+        da: The high-resolution input DataArray (e.g., elevation).
+        scale_factor: The coarsening scale factor.
+
+    Returns:
+        A DataArray containing the mean TRI for each coarse grid cell.
+    """
+    tri_values = _calculate_tri_numpy(da.values)
+
+    tri_da = xr.DataArray(tri_values, coords=da.coords, dims=da.dims, name="tri")
+
+    tri_coarse = tri_da.coarsen(x=scale_factor, y=scale_factor, boundary="exact").mean()  # ty:ignore[unresolved-attribute]
+
+    tri_coarse.attrs["_FillValue"] = np.float32(np.nan)
+    tri_coarse = tri_coarse.rio.write_crs(da.rio.crs)
+
+    return tri_coarse
+
+
+def calculate_surface_area_ratio(
+    da: xr.DataArray,
+    scale_factor: int,
+) -> xr.DataArray:
+    """Calculate the Surface Area Ratio (SAR) and aggregate it.
+
+    SAR is defined as the ratio of surface area to planar area.
+    Approximated as sqrt(1 + slope^2).
+
+    The SAR is calculated for every pixel in the high-resolution DataArray,
+    and then averaged over the coarse grid cells defined by `scale_factor`.
+
+    Args:
+        da: The high-resolution input DataArray (e.g., elevation).
+        scale_factor: The coarsening scale factor.
+
+    Returns:
+        A DataArray containing the mean SAR for each coarse grid cell.
+    """
+    # Calculate slope using pyflwdir
+    slope = pyflwdir.dem.slope(
+        da.values,
+        nodata=da.rio.nodata,
+        latlon=True,
+        transform=da.rio.transform(recalc=True),
+    )
+
+    # Calculate SAR = sqrt(1 + slope^2)
+    sar_values = np.sqrt(1 + slope**2)
+
+    sar_da = xr.DataArray(sar_values, coords=da.coords, dims=da.dims, name="sar")
+
+    # Aggregating to coarse grid
+    sar_coarse = sar_da.coarsen(x=scale_factor, y=scale_factor, boundary="exact").mean()  # ty:ignore[unresolved-attribute]
+
+    sar_coarse.attrs["_FillValue"] = np.float32(np.nan)
+    sar_coarse = sar_coarse.rio.write_crs(da.rio.crs)
+
+    return sar_coarse

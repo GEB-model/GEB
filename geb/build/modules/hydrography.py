@@ -27,7 +27,12 @@ from geb.geb_types import (
     TwoDArrayInt64,
 )
 from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.workflows.raster import rasterize_like, snap_to_grid
+from geb.workflows.raster import (
+    calculate_surface_area_ratio,
+    calculate_topographic_roughness_index,
+    rasterize_like,
+    snap_to_grid,
+)
 
 from .base import BuildModelBase
 
@@ -548,6 +553,28 @@ class Hydrography(BuildModelBase):
         self.set_grid(
             elevation_std,
             name="landsurface/elevation_standard_deviation",
+        )
+
+        topographic_roughness_index = calculate_topographic_roughness_index(
+            original_d8_elevation,
+            scale_factor=self.ldd_scale_factor,
+        )
+        topographic_roughness_index = snap_to_grid(
+            topographic_roughness_index, self.grid["mask"]
+        )
+        self.set_grid(
+            topographic_roughness_index,
+            name="landsurface/topographic_roughness_index",
+        )
+
+        surface_area_ratio = calculate_surface_area_ratio(
+            original_d8_elevation,
+            scale_factor=self.ldd_scale_factor,
+        )
+        surface_area_ratio = snap_to_grid(surface_area_ratio, self.grid["mask"])
+        self.set_grid(
+            surface_area_ratio,
+            name="landsurface/surface_area_ratio",
         )
 
         # outflow elevation

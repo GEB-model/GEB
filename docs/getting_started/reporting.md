@@ -28,10 +28,10 @@ For example, to export the total bare soil evaporation, gridded daily discharge,
 ``` yaml
 report:
     hydrology.soil:
-        actual_bare_soil_evaporation_weighted_sum:
+        actual_bare_soil_evaporation_areaweighted_sum:
             varname: .actual_bare_soil_evaporation
             type: HRU
-            function: weightednanmean
+            function: areaweightednanmean
     hydrology.routing:
         discharge_daily:
             varname: grid.var.discharge_m3_s
@@ -74,10 +74,10 @@ The following options are supported.
     - **nanmean**: The mean of the variable is calculated and reported, ignoring NaN values.
     - **sum**: The sum of the variable is calculated and reported.
     - **nansum**: The sum of the variable is calculated and reported, ignoring NaN values.
-    - **weightedmean**: The mean of the variable is calculated and reported, weighted by the grid cell area.
-    - **weightednanmean**: The mean of the variable is calculated and reported, weighted by the grid cell area, ignoring NaN values.
-    - **weightedsum**: The sum of the variable is calculated and reported, weighted by the grid cell area. This means that the variable is multiplied by the grid cell area before summing. This is (for example) useful for variables that are reported in meters, and are now converted to cubic meters.
-    - **weightednansum**: The sum of the variable is calculated and reported, weighted by the grid cell area, ignoring NaN values. This means that the variable is multiplied by the grid cell area before summing, ignoring NaN values.
+    - **areaweightedmean**: The mean of the variable is calculated and reported, areaweighted by the grid cell area.
+    - **areaweightednanmean**: The mean of the variable is calculated and reported, areaweighted by the grid cell area, ignoring NaN values.
+    - **areaweightedsum**: The sum of the variable is calculated and reported, areaweighted by the grid cell area. This means that the variable is multiplied by the grid cell area before summing. This is (for example) useful for variables that are reported in meters, and are now converted to cubic meters.
+    - **areaweightednansum**: The sum of the variable is calculated and reported, areaweighted by the grid cell area, ignoring NaN values. This means that the variable is multiplied by the grid cell area before summing, ignoring NaN values.
     - **sample_xy,[x],[y]**: Sample a specific variable at specific x,y pixel. 0,0 is the top left corner of the grid. Example is **sample_xy,1,2** to sample the variable at pixel 1,2.
     - **sample_lonlat,[lon],[lat]**: Sample a specific variable at specific coordinates using the lon,lat coordinates of the grid. The coordinates are in the same coordinate system as the grid. Example is **sample_coord,4.89,52.38** to sample the variable at coordinates latitude 52.38 and longitude 4.89 (Amsterdam). Note that when reporting discharge, it is important to make sure that the location is in the actual river you want to sample from. You can refer to the upstream area in the input files to find the actual river.
 - **frequency** (optional): The frequency at which the variable is reported. The default is **every: day** This can be one of the following:

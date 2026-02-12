@@ -10,6 +10,7 @@ from scipy.interpolate import RegularGridInterpolator
 from shapely.geometry import Polygon
 
 from geb.workflows.raster import (
+    calculate_topographic_roughness_index,
     clip_with_grid,
     compress,
     convert_nodata,
@@ -772,3 +773,119 @@ def test_clip_with_grid(y_step: int, grid_size: int) -> None:
 
     # Check that sum is preserved (since mask is rectangular and matches bounds)
     assert np.isclose(clipped_ds.sum(), da.where(mask).sum())
+
+
+def test_calculate_topographic_roughness_index():
+    # Case 1: Perfectly flat (TRI = 0)
+    scale_factor = 2
+    n = 6
+    x = np.arange(n)
+    y = np.arange(n)
+    z_flat = np.zeros((n, n))
+
+    da_flat = xr.DataArray(
+        z_flat, coords={"y": y, "x": x}, dims=("y", "x")
+    ).rio.write_crs("EPSG:4326")
+
+    tri_flat = calculate_topographic_roughness_index(da_flat, scale_factor=scale_factor)
+    assert tri_flat.shape == (3, 3)
+    assert np.allclose(tri_flat, 0.0)
+
+    # Case 2: Ramp (Constant Slope)
+    # z = x
+    z_ramp = np.tile(np.arange(n), (n, 1))
+    da_ramp = xr.DataArray(
+        z_ramp, coords={"y": y, "x": x}, dims=("y", "x")
+    ).rio.write_crs("EPSG:4326")
+
+    tri_ramp = calculate_topographic_roughness_index(da_ramp, scale_factor=scale_factor)
+    assert np.all(tri_ramp > 0)
+
+    # Case 3: Checkerboard (High roughness)
+    # 0 1 0 1
+    # 1 0 1 0
+    z_check = np.indices((n, n)).sum(axis=0) % 2
+    da_check = xr.DataArray(
+        z_check.astype(float), coords={"y": y, "x": x}, dims=("y", "x")
+    ).rio.write_crs("EPSG:4326")
+
+    tri_check = calculate_topographic_roughness_index(
+        da_check, scale_factor=scale_factor
+    )
+
+    # Check center coarse cell
+    assert np.isclose(tri_check.isel(y=1, x=1), 2.0, atol=0.2)
+
+
+def test_calculate_surface_area_ratio() -> None:
+    """Test the calculate_surface_area_ratio function."""
+    from geb.workflows.raster import calculate_surface_area_ratio
+
+    # 1. Flat area: SAR should be 1.0 everywhere (sqrt(1 + 0))
+    nx, ny = 30, 30
+    flat_data = np.zeros((ny, nx), dtype=np.float32)
+
+    # Create lat/lon coordinates
+    # Just dummy coords around equator
+    lons = np.linspace(0, 0.1, nx)
+    lats = np.linspace(0, 0.1, ny)
+
+    da_flat = xr.DataArray(
+        flat_data, coords={"y": lats, "x": lons}, dims=("y", "x"), name="elevation"
+    )
+    # Mock rio resolution
+    da_flat.rio.write_crs("EPSG:4326", inplace=True)
+    da_flat.rio.write_transform(inplace=True)
+
+    # Need "rio" accessor to return meaningful resolution, but since we are mocking,
+    # let's just make sure the function can infer it from coords or we mocking it?
+    # The function calls da.rio.resolution().
+    # With valid transform it should work.
+
+    sar_flat = calculate_surface_area_ratio(da_flat, scale_factor=3)
+    # All values should be 1.0 (or very close)
+    assert np.allclose(sar_flat.values, 1.0, atol=1e-5)
+
+    # 2. 45-degree slope approx.
+    # At equator 1 deg ~ 111km.
+    # If we want slope=1, dz/dx = 1.
+    # meters per pixel: assume some small resolution.
+    # This is hard to construct perfectly "45 degrees" in lat/lon due to earth curvature.
+    # But we can test relative behavior: SAR > 1.
+
+    ramp_data = np.zeros((ny, nx), dtype=np.float32)
+    # Gradient in x direction
+    # We'll just put numbers that increase.
+    # Let's say res is small enough that dx_m is roughly constant.
+    for i in range(nx):
+        ramp_data[:, i] = i * 1000.0  # increasing 1000m per pixel
+
+    da_ramp = xr.DataArray(
+        ramp_data,
+        coords={"y": lats, "x": lons},
+        dims=("y", "x"),
+    )
+    da_ramp.rio.write_crs("EPSG:4326", inplace=True)
+    da_ramp.rio.write_transform(inplace=True)
+
+    sar_ramp = calculate_surface_area_ratio(da_ramp, scale_factor=3)
+    assert np.all(sar_ramp.values > 1.0)
+
+    # Check NaN handling
+    nan_data = flat_data.copy()
+    nan_data[10:15, 10:15] = np.nan
+    da_nan = xr.DataArray(
+        nan_data,
+        coords={"y": lats, "x": lons},
+        dims=("y", "x"),
+    )
+    da_nan.rio.write_crs("EPSG:4326", inplace=True)
+    da_nan.rio.write_transform(inplace=True)
+
+    sar_nan = calculate_surface_area_ratio(da_nan, scale_factor=3)
+    # Should not crash, and nan input usually propagates or ignored?
+    # Function _calculate_sar_numpy skips if center is nan. So center output nan.
+    # Neighbor nans are skipped in gradient.
+    # Aggregation uses mean(), so if some subpixels are nan, mean ignores them (standard xarray).
+    # If all subpixels nan, result nan.
+    assert not np.isnan(sar_nan).all()
