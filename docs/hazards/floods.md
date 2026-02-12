@@ -61,7 +61,7 @@ For coastal flood simulations, water level boundary conditions are applied along
 
 <figure markdown="span">
   ![HGRAPHER method](../images/hgrapher_method.png)
-  <figcaption>Overview of the HGRAPHER method pipeline. Figure reproduced from Dullaart et al...</figcaption>
+  <figcaption>Overview of the HGRAPHER method pipeline. Figure reproduced from Dullaart et al.[@dullaart2023enabling]</figcaption>
 </figure>
 
 The model identifies coastal boundary cells based on topography and closeness to the ocean. Water levels at these boundaries can vary through time, allowing simulation of storm surge events.
