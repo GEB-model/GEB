@@ -39,7 +39,10 @@ $$
 
 Utility is a function of household wealth $W_x$, the amenity value of the current household location, $A_x$, current household income $I_x$, expected damage $D$ per event $i$, and adaptation costs $C^{adapt}$.
 
-Discounting and risk aversion: A time discounting factor $r$ of 3%[@tol2008climate] is applied over a time horizon $T$ of 15 years, representing the number of years a homeowner on average stays in his or her home. We assume a general utility function as a function of relative risk aversion. The model is run with slightly risk-averse households, for which the following function is used:
+Calculating utility: To calculate the utility of each strategy each household assesses their expected wealth state applying a time discounting factor $r$ of 3%[@tol2008climate] over a time horizon $T$ of 15 years, representing the number of years a homeowner on average stays in his or her home. Therefore each household is assigned an income based on their position in the income distribution as taken from a global synthetic population database [@ton2024global]. This household income ($Inc$) for is sampled from a national lognormal distribution constructed using OECD income distribution data [@oecd_data_inequality]. Each household is also assigned a wealth $W$ at time $t$ using income-to-wealth ratios per income quintile (#TODO). The household calculates the expected flood damages for their property $D$ based on depth damage curves as described in [@huizinga2017global]. Dry flood-proofing measures reduce flood damage by preventing floodwaters from entering a building. For this, we alter the depth-damage functions such that damage for inundation levels below 1 meter is reduced by 85% following [@aerts2011flood]. Inundation above 1 meter overtops the dry flood proofing, resulting in full damage.
+
+
+We assume a general utility function as a function of relative risk aversion. The model is run with slightly risk-averse households, for which the following function is used:
 
 $$
 U(x) = ln(x)
