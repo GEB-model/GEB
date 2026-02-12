@@ -1487,7 +1487,7 @@ class SFINCSSimulation:
 
         sfincs_model.setup_config(
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
-            h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster
+            # h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster, disabled by default. Enabling this may cause instability issues in the GPU runs, so use with caution.
             nc_deflate_level=9,  # compression level for netcdf output files (0-9)
             tspinup=spinup_seconds,  # spinup time in seconds
             dtout=flood_map_output_interval_seconds
