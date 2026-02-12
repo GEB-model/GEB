@@ -318,31 +318,35 @@ class GEBModel(Module, HazardDriver):
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
-                    self.multiverse(
-                        forecast_issue_datetime=forecast_datetime,
-                        return_mean_discharge=True,
-                    )  # run the multiverse for the current timestep
+                    # self.multiverse(
+                    #     forecast_issue_datetime=forecast_datetime,
+                    #     return_mean_discharge=True,
+                    # )  # run the multiverse for the current timestep
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
                         print(
-                            f"Running flood early warning system for date time {self.current_time.isoformat()}..."
+                            f"\nRunning flood early warning system for date time {self.current_time.isoformat()}..."
                         )
-                        self.agents.households.create_flood_probability_maps(
-                            date_time=self.current_time, strategy=1, exceedance=True
-                        )
-                        self.agents.households.water_level_warning_strategy(
+                        self.agents.households.water_level_warning_strategy3(
                             date_time=self.current_time
                         )
-                        self.agents.households.critical_infrastructure_warning_strategy(
-                            date_time=self.current_time
-                        )
+                        # self.agents.households.create_flood_probability_maps(
+                        #     date_time=self.current_time, strategy=1, exceedance=True
+                        # )
+                        # self.agents.households.water_level_warning_strategy(
+                        #     date_time=self.current_time
+                        # )
+                        # self.agents.households.critical_infrastructure_warning_strategy(
+                        #     date_time=self.current_time
+                        # )
                         self.agents.households.household_decision_making(
                             date_time=self.current_time
                         )
                         self.agents.households.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
+                        print()
 
         t0 = time()
         self.agents.step()
