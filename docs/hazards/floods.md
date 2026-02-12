@@ -56,22 +56,21 @@ Precipitation data can be taken from observed rainfall records, climate model ou
 
 #### Coastal forcing
 
-For coastal flood simulations, water level boundary conditions are applied along the coastline. These represent sea level variations due to tides and storm surges. To create storm surge hydrographs we follow the HGRAPHER method as outlined by Dullaart et al.[@dullaart2023enabling]. To generate a hydrograph of the surge, this approach starts with extracting independent extremes from the surge time series based on the peaks-over-threshold (POT) method. For each selected surge event, the time series from 36 h before, until 36 h after the peak is extracted. Second, each 72 h surge event is normalized (i.e. dividing each surge level by the peak) such that the maximum surge value is equal to 1 (unitless). Third, the selected surge events are combined to calculate the average surge hydrograph. This is done by determining the time (relative to the peak) at which a specific surge height (from 0 to 1 with increments of 0.01) is exceeded. As an example, the figure below shows that for one surge event the exceedance time at a normalized surge height of 0.25 is 14.0 h before and 26.0 h (16.0 + 10.0) after the surge maximum occurred, as indicated by the black arrows. Then, for each normalized surge height the average exceedance time is computed, resulting in an average curve. Because the shape of the rising and falling limb of the surge can differ, the exceedance time is calculated separately for each, and they are subsequently merged into the final average surge hydrograph.
-
+For coastal flood simulations, water level boundary conditions are applied along the coastline. These represent sea level variations due to tides and storm surges. To create storm surge hydrographs we follow the HGRAPHER method as outlined by Dullaart et al.[@dullaart2023enabling]. To generate a hydrograph of the surge, this approach starts with extracting independent extremes from the GTSM[@muis2020high] surge time series based on the peaks-over-threshold (POT) method. For each selected surge event, the time series from 36 h before, until 36 h after the peak is extracted. Second, each 72 h surge event is normalized (i.e. dividing each surge level by the peak) such that the maximum surge value is equal to 1 (unitless). Third, the selected surge events are combined to calculate the average surge hydrograph. This is done by determining the time (relative to the peak) at which a specific surge height (from 0 to 1 with increments of 0.01) is exceeded. We recombine with the average and spring tide. As an example, the figure below shows that for one surge event the exceedance time at a normalized surge height of 0.25 is 14.0 h before and 26.0 h (16.0 + 10.0) after the surge maximum occurred, as indicated by the black arrows. Then, for each normalized surge height the average exceedance time is computed, resulting in an average curve. Because the shape of the rising and falling limb of the surge can differ, the exceedance time is calculated separately for each, and they are subsequently merged into the final average surge hydrograph.
 
 <figure markdown="span">
   ![HGRAPHER method](../images/hgrapher_method.png)
   <figcaption>Overview of the HGRAPHER method pipeline. Figure reproduced from Dullaart et al..</figcaption>
 </figure>
 
-We identify coastal boundary cells based on topography and proximity to the ocean, then apply water level boundary conditions at those cells. For return period coastal events, GEB builds a storm tide hydrograph per coastal station and writes these time series to disk, after which the SFINCS simulation reads the relevant file and applies the forcing at the station locations.
-
 The storm tide hydrograph construction follows the HGRAPHER/COAST-RP workflow implemented in GEB:
-
 - Tide and surge are separated from GTSM water level time series, and representative tidal signals are derived for both average tide and spring tide.
 - Independent surge events are extracted with a POT approach, using a 36 h window before and after each peak.
 - Each surge event is normalized by its peak, and exceedance times for normalized surge heights are averaged to obtain a mean surge hydrograph.
-- For each return period, the surge hydrograph is scaled to the return-period water level and combined with the average or spring tide signal to produce a storm tide hydrograph.
+- For each return period, the surge hydrograph is scaled to the return-period water level and combined with the average or spring tide signal to produce a storm tide hydrograph. By default, the spring tide is used. 
+
+We identify coastal boundary cells based on topography and proximity to the ocean, then apply water level boundary conditions at those cells. For return period coastal events, GEB builds a storm tide hydrograph per coastal station and writes these time series to disk, after which the SFINCS simulation reads the relevant file and applies the forcing at the station locations.
+
 
 When running a coastal return period simulation, the model reads the precomputed hydrograph file (e.g., `gtsm_spring_tide_hydrograph_rp0100.csv`), aligns the station IDs with forcing locations, trims the leading and trailing timesteps, and optionally applies a sea level rise adjustment for a target year. The resulting time series are then set as coastal water level forcing with an offshore buffer so that boundary conditions are imposed outside the modeled land area.
 
@@ -156,6 +155,14 @@ Common outputs include:
 Metrics may include:
 - Comparison against observed flood extents
 - Event-based skill scores (binary class statistics)
+
+## Future Enhancements
+
+The shape of the riverine return period hydrograph will use historical hydrograph shape, currently a triangular shape is assumed based on the user input. 
+<figure markdown="span">
+  ![triangular shape](../images/hydrograph_riverine.jpg)
+  <figcaption>Example riverine return period plot.</figcaption>
+</figure>
 
 ## Code
 
