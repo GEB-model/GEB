@@ -70,7 +70,7 @@ For hydrodynamics evaluation, your model must have:
          - start_time: "2021-07-12 09:00:00"
            end_time: "2021-07-20 09:00:00"
        observation_files:
-         - "path/to/20210712T090000 - 20210720T090000.zarr.zarr"
+         - "path/to/20210712T090000 - 20210720T090000.zarr"
    ```
   2. **Simulated flood maps** located in output/evaluate/hydrodynamics/{event_name}/
 
