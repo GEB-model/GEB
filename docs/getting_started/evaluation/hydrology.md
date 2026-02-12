@@ -1,22 +1,20 @@
 # Hydrology evaluation
 
-Evaluate your hydrological model results by comparing simulated discharge with gauging station observations and analyzing water balance components.
+Evaluate hydrological model performance by comparing simulated discharge with gauging station observations and analyzing the water balance.
 
 ## Overview
 
-The hydrology evaluation tools help you:
+The hydrology evaluation module provides comprehensive tools to assess model performance:
 
-- Compare simulated vs observed discharge at gauging stations
-- Calculate performance metrics (KGE, NSE, R)
-- Visualize spatial discharge patterns
-- Analyze water balance components
-- Identify model strengths and weaknesses
+| Method | Purpose | Output |
+| --- | --- | --- |
+| `evaluate_discharge` | Compare simulated vs observed discharge at gauging stations | Performance metrics (KGE, NSE, R), timeseries plots, interactive maps |
+| `plot_discharge` | Visualize spatial patterns of mean discharge | Spatial maps showing discharge distribution |
+| `skill_score_graphs` | Summarize performance across all stations in the model domain | Boxplots of KGE, NSE, R distributions |
+| `water_circle` | Visualize water balance as flow diagram | Interactive Sankey diagram of water fluxes |
+| `water_balance` | Analyze detailed water balance components | Yearly water balance tables and plots |
 
-## Discharge evaluation
-
-### Basic usage
-
-Evaluate discharge against observations:
+To use these for the evaluation, you can run them using geb evaluate. Below, you see an example for the evaluate_discharge methodology: 
 
 ```bash
 geb evaluate --methods "evaluate_discharge" --run-name default
@@ -24,32 +22,17 @@ geb evaluate --methods "evaluate_discharge" --run-name default
 
 For more control, use additional options:
 
-```bash
-geb evaluate --methods "evaluate_discharge" \
-    --run-name default \
-    --spinup-name spinup \
-    --include-yearly-plots
-```
-
-From Python:
-
-```python
-model.evaluate.hydrology.evaluate_discharge(
-    run_name="default",
-    spinup_name="spinup",
-    include_yearly_plots=True
-)
-```
-
-### Parameters
-
-| Parameter | Description | Default |
+| Option | Description | Default |
 | --- | --- | --- |
-| `run_name` | Name of the simulation run to evaluate | `"default"` |
-| `spinup_name` | Name of the spinup run | `"spinup"` |
-| `include_spinup` | Include spinup period in evaluation | `False` |
-| `include_yearly_plots` | Create plots for each year | `True` |
-| `correct_Q_obs` | Correct observed discharge for upstream area differences | `False` |
+| `--run-name` | Name of the simulation run to evaluate | `default` |
+| `--spinup-name` | Name of the spinup run | `spinup` |
+| `--include-spinup` | Include spinup period in evaluation | `False` |
+| `--include-yearly-plots` | Create plots for each year | `False` |
+| `--correct-q-obs` | Correct observed discharge for upstream area differences | `False` |
+
+## Discharge evaluation
+
+The discharge evaluation compares simulated discharge from GEB with observed discharge data from gauging stations (GRDC global dataset or custom stations). Performance metrics are calculated for each station and visualized in plots and interactive maps.
 
 ### What it does
 
@@ -58,7 +41,7 @@ The evaluation process:
 1. Loads observed discharge from gauging stations
 2. Extracts simulated discharge at station locations
 3. Calculates performance metrics for each station
-4. Creates timeseries plots comparing observed vs simulated
+4. Creates timeseries and scatter plots comparing observed vs simulated
 5. Generates an interactive map showing station performance
 6. Saves evaluation metrics to Excel and GeoParquet files
 
@@ -72,48 +55,48 @@ Three metrics are calculated for each station:
 
 ### Outputs
 
-Results are saved to `output/evaluate/discharge/`:
+The discharge evaluation results are saved to `output/evaluate/discharge/`:
 
-**Evaluation results** (`evaluation_results/`):
+**Overall evaluation results** (`evaluation_results/`):
 - `evaluation_metrics.xlsx`: Performance metrics (KGE, NSE, R) for all stations with coordinates
 - `evaluation_metrics.geoparquet`: Same metrics in geospatial format for GIS analysis
-- `discharge_evaluation_metrics.png`: Map visualization showing spatial distribution of metrics
+- `discharge_evaluation_metrics.png`: Map showing spatial distribution of metrics
 - `discharge_evaluation_map.html`: Interactive Folium map to explore station performance
 
-**Station plots** (`plots/`):
-- `timeseries_plot_{station_id}.png`: Time series comparing observed vs simulated discharge for each station
-- `scatter_plot_{station_id}.png`: Scatter plots showing correlation between observed and simulated for each station
-- If `--include-yearly-plots` is used, additional plots are created for each year
+**Station specific plots** (`plots/`):
+- `timeseries_plot_{station_id}.png`: Time series comparing observed vs simulated discharge
+- `scatter_plot_{station_id}.png`: Scatter plots showing correlation between observed and simulated
+- Yearly plots are created when `--include-yearly-plots` is enabled
 
-## Discharge visualization
+The evaluation creates an interactive dashboard showing performance metrics across all stations:
 
-Create a spatial map of mean discharge:
+![Discharge evaluation dashboard showing timeseries comparison and station performance map](../images/discharge_evaluation_example.png)
 
-```bash
-geb evaluate --methods "plot_discharge" --run-name default
-```
+### Required input data
 
-Or from Python:
+For discharge evaluation, your model must have been build and run, in which the following files are made in your model input folder: 
 
-```python
-model.evaluate.hydrology.plot_discharge(run_name="default")
-```
+- Observed discharge data in the data catalog (`discharge/Q_obs`)
+- Gauging station locations snapped to river network (`discharge/discharge_snapped_locations`)
+- Simulated discharge output from model run (`output/report/{run_name}/hydrology.routing/discharge_daily.zarr`)
 
-Outputs:
-- `mean_discharge_m3_per_s.zarr`: Mean discharge data (m³/s)
-- `mean_discharge_m3_per_s.png`: Spatial visualization
+### Interpreting results
 
-## Skill score graphs
+**Good performance:**
 
-Create boxplots summarizing performance across all stations. This method is only available through the Python API after running discharge evaluation:
+- KGE > 0.5: Model captures main discharge patterns
+- NSE > 0.5: Predictions are better than using mean observed value
+- R > 0.7: Strong correlation between simulated and observed
 
-```python
-model.evaluate.hydrology.skill_score_graphs(export=True)
-```
+**Common issues:**
 
-Shows the distribution of KGE, NSE, and R values across all evaluated stations.
+- **Low KGE but high R**: Model timing is correct but magnitude is off (check calibration parameters)
+- **Negative NSE**: Model performs worse than using mean (check model setup and forcing data)
+- **High variation between stations**: Some areas may need region-specific parameters or better forcing data
 
 ## Water balance
+
+The water balance evaluation analyzes inflows, outflows, and storage changes across the model domain to verify water conservation and understand hydrological processes.
 
 ### Water circle
 
@@ -130,41 +113,9 @@ Shows flows between precipitation, evaporation, runoff, and storage components.
 Calculate and plot all water balance components:
 
 ```bash
-geb evaluate --methods "water_balance" --run-name default --include-spinup
+geb evaluate --methods "water_balance" --run-name default 
 ```
-
-From Python:
-
-```python
-model.evaluate.hydrology.water_balance(
-    run_name="default",
-    include_spinup=True
-)
-```
-
-Analyzes inflows, outflows, and storage changes across the model domain.
-
-## Required input data
-
-For discharge evaluation, your model must have:
-
-- Observed discharge data in the data catalog (`discharge/Q_obs`)
-- Gauging station locations snapped to river network (`discharge/discharge_snapped_locations`)
-- Simulated discharge output from a model run (`output/report/{run_name}/hydrology.routing/discharge_daily.zarr`)
-
-## Interpreting results
-
-### Good performance
-
-- KGE > 0.5: Model captures main discharge patterns
-- NSE > 0.5: Predictions are better than using mean observed value
-- R > 0.7: Strong correlation between simulated and observed
-
-### Common issues
-
-- **Low KGE but high R**: Model timing is correct but magnitude is off (check calibration)
-- **Negative NSE**: Model performs worse than using mean (check model setup)
-- **High variation between stations**: Some areas may need region-specific parameters
+Analyzes inflows, outflows, and storage changes across the model domain to verify water conservation.
 
 ## Code reference
 
