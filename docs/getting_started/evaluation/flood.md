@@ -4,6 +4,12 @@ Evaluate simulated flood extents by comparing them with satellite observations o
 
 ## Basic usage
 
+```bash
+geb evaluate --methods "evaluate_hydrodynamics" --run-name default
+```
+
+Or from Python:
+
 ```python
 model.evaluate.hydrology.evaluate_hydrodynamics(run_name="default")
 ```
