@@ -3,26 +3,36 @@
 from typing import Any
 
 from .base import Adapter
+from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
+from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
-from .fao import GMIA
-from .gadm import GADM
+from .fao import FAOSTAT, GMIA
+from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
+from .global_exposure_model import GlobalExposureModel
 from .globgm import GlobGM, GlobGMDEM
+from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
+from .gtsm import GTSM
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
+from .lisflood import LISFLOOD
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
+from .mirca2000 import MIRCA2000
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
-from .soilgrids import SoilGrids
+from .osm_data import OpenStreetMapCoastlines, OpenStreetMapLandPolygons
+from .soilgrids import SoilGridsV1, SoilGridsV2
+from .superwell import GCAMElectricityRates
 from .sword import Sword
+from .undp import HumanDevelopmentIndex
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
@@ -61,16 +71,88 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://www.ecmwf.int/en/forecasts/accessing-forecasts/licences-available",
         },
     },
-    "soilgrids": {
-        "adapter": SoilGrids(),
+    "soilgridsv1": {
+        "adapter": SoilGridsV1(),
+        "url": "https://files.isric.org/soilgrids/former/2017-03-10/data/{variable}.tif",
+        "source": {
+            "name": "SoilGrids V1",
+            "author": "ISRIC - World Soil Information",
+            "license": "CC BY 4.0",
+            "url": "https://soilgrids.org",
+            "version": "2017",
+            "paper_doi": "10.1371/journal.pone.0169748",
+        },
+    },
+    "soilgridsv2": {
+        "adapter": SoilGridsV2(),
         "url": "https://files.isric.org/soilgrids/latest/data/{variable}/{variable}_{depth}_mean.vrt",
         "source": {
-            "name": "SoilGrids",
+            "name": "SoilGrids V2",
             "author": "ISRIC - World Soil Information",
             "license": "CC BY 4.0",
             "url": "https://soilgrids.org",
             "version": "2020",
             "paper_doi": "10.5194/soil-2020-65",
+        },
+    },
+    "lisflood_crop_group_number_forest": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="cropgrpn_f_Global_03min.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/cropgrpn_f_Global_03min.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Crop Group Number (forest)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_crop_group_number_grassland_like": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="cropgrpn_o_Global_03min.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/cropgrpn_o_Global_03min.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Crop Group Number (other)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_leaf_area_index_forest": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="laif.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/laif.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Leaf Area Index (forest)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_leaf_area_index_grassland_like": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="laio.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/laio.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Leaf Area Index (other)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
         },
     },
     "why_map": {
@@ -118,6 +200,89 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use",
             "url": "https://www.gebco.net/",
             "paper_doi": "10.5285/a29c5465-b138-234d-e053-6c86abc040b9",
+        },
+    },
+    "global_exposure_model": {
+        "adapter": GlobalExposureModel(
+            folder="global_exposure_model",
+            local_version=1,
+            filename="global_exposure_model_{}.csv",
+            cache="global",
+        ),
+        "url": "https://github.com/gem/global_exposure_model",
+        "source": {
+            "name": "GEM Global Exposure Model",
+            "author": "Global Earthquake Model (GEM) Foundation",
+            "url": "https://github.com/gem/global_exposure_model",
+        },
+    },
+    "gadm_28": {
+        "adapter": GADM28(
+            folder="gadm_28",
+            local_version=1,
+            filename="gadm_28.parquet",
+            cache="global",
+        ),
+        "url": "https://geodata.ucdavis.edu/gadm/gadm2.8/gadm28_levels.shp.zip",
+        "source": {
+            "name": "GADM version 2.8",
+            "author": "GADM",
+            "version": "2.8",
+            "license": "https://gadm.org/license.html",
+        },
+    },
+    "mirca2000_unit_grid": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="unit_code.asc",
+            cache="global",
+            target_member_suffix="unit_code.asc.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/unit_code_grid.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Unit Code Grid",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
+        },
+    },
+    "mirca2000_cropping_calendar_rainfed": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="cropping_calendar_rainfed.txt",
+            cache="global",
+            target_member_suffix="cropping_calendar_rainfed.txt.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/condensed_cropping_calendars.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Condensed Cropping Calendars (Rainfed)",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
+        },
+    },
+    "mirca2000_cropping_calendar_irrigated": {
+        "adapter": MIRCA2000(
+            folder="mirca2000",
+            local_version=1,
+            filename="cropping_calendar_irrigated.txt",
+            cache="global",
+            target_member_suffix="cropping_calendar_irrigated.txt.gz",
+        ),
+        "url": "https://zenodo.org/records/7422506/files/condensed_cropping_calendars.zip?download=1",
+        "source": {
+            "name": "MIRCA2000 Condensed Cropping Calendars (Irrigated)",
+            "author": "Portmann et al. (2010)",
+            "version": "1.1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.7422506",
+            "paper_doi": "10.1029/2008GB003435",
         },
     },
     "GRDC": {
@@ -179,6 +344,36 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
             "license": "CC BY 4.0",
+        },
+    },
+    "faostat_prices": {
+        "adapter": FAOSTAT(
+            folder="faostat_prices",
+            local_version=1,
+            filename="faostat_prices.parquet",
+            cache="local",
+        ),
+        "url": "https://bulks-faostat.fao.org/production/Prices_E_All_Data.zip",
+        "source": {
+            "name": "FAOSTAT (Producer Prices)",
+            "author": "FAO",
+            "url": "https://www.fao.org/faostat/en/#data/PP",
+            "license": "CC BY 4.0",
+        },
+    },
+    "gcam_electricity_rates": {
+        "adapter": GCAMElectricityRates(
+            folder="socioeconomic/electricity_rates",
+            local_version=1,
+            filename="GCAM_Electricity_Rates.csv",
+            cache="global",
+        ),
+        "url": "https://raw.githubusercontent.com/JGCRI/superwell/main/inputs/GCAM_Electricity_Rates.csv",
+        "source": {
+            "name": "GCAM Electricity Rates",
+            "author": "JGCRI",
+            "url": "https://github.com/JGCRI/superwell",
+            "license": "MIT",
         },
     },
     "specific_yield_aquifer_globgm": {
@@ -360,9 +555,25 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
         },
     },
+    "un_hdi": {
+        "adapter": HumanDevelopmentIndex(
+            folder="un_hdi",
+            local_version=1,
+            filename="un_hdi.csv",
+            cache="global",
+        ),
+        "url": "https://ourworldindata.org/grapher/human-development-index.csv?v=1&csvType=full&useColumnShortNames=true",
+        "source": {
+            "name": "Human Development Index",
+            "author": "UNDP / Our World In Data",
+            "license": "CC BY 3.0 IGO",
+            "url": "https://ourworldindata.org/grapher/human-development-index",
+            "original_source_url": "https://hdr.undp.org",
+        },
+    },
     "esa_worldcover_2021": {
         "adapter": ESAWorldCover(),
-        "url": "https://planetarycomputer.microsoft.com/api/stac/v1",
+        "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
         "source": {
             "name": "ESA WorldCover",
             "author": "European Space Agency (ESA)",
@@ -417,6 +628,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://gadm.org/license.html",
         },
     },
+    "GlobalSoilRegolithSediment": {
+        "adapter": GlobalSoilRegolithSediment(
+            folder="global_soil_regolith_sediment",
+            local_version=1,
+            filename="global_soil_regolith_sediment.zarr",
+            cache="global",
+        ),
+        "url": "https://cmr.earthdata.nasa.gov/search/concepts/C2216864025-ORNL_CLOUD.html",
+        "source": {
+            "name": "Global 1-km Gridded Thickness of Soil, Regolith, and Sedimentary Deposit Layers",
+            "author": "Pelletier et al. (2015)",
+            "version": "1",
+            "license": "CC0",
+            "url": "https://doi.org/10.5194/essd-13-4389-2021",
+            "paper_doi": "10.1002/2015MS000526",
+        },
+    },
     "merit_basins_catchments": {
         "adapter": MeritBasinsCatchments(
             folder="merit_basins_catchments",
@@ -436,8 +664,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroDir(
             folder="merit_hydro_dir",
             local_version=1,
-            filename="merit_hydro_dir.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {
@@ -451,8 +679,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": MeritHydroElv(
             folder="merit_hydro_elv",
             local_version=1,
-            filename="merit_hydro_elv.zarr",
-            cache="local",
+            filename="tiles",
+            cache="global",
         ),
         "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
         "source": {
@@ -462,10 +690,27 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 4.0 or ODbL 1.0",
         },
     },
+    "delta_dtm": {
+        "adapter": DeltaDTM(
+            folder="delta_dtm",
+            local_version=1,
+            filename="{}.zip",
+            cache="global",
+        ),
+        "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
+        "source": {
+            "name": "Delta DTM",
+            "author": "Pronk et al. (2024)",
+            "version": "1-1",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://data.4tu.nl/datasets/1da2e70f-6c4d-4b03-86bd-b53e789cc629",
+            "paper_doi": "https://doi.org/10.1038/s41597-024-03091-9",
+        },
+    },
     "fabdem": {
         "adapter": Fabdem(
             folder="fabdem",
-            local_version=1,
+            local_version=2,
             filename="fabdem.zarr",
             cache="local",
         ),
@@ -477,6 +722,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY-NC-SA 4.0",
             "url": "https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7",
             "paper_doi": "10.1088/1748-9326/ac4d4f",
+        },
+    },
+    "gtsm": {
+        "adapter": GTSM(
+            folder="gtsm",
+            local_version=1,
+            filename="gtsm_mean_sea_level.zip",
+            cache="local",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
+        "source": {
+            "name": "Global Tide and Storm Surge Model (GTSM)",
+            "author": "Muis et al. (2022)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.24381/cds.a6d42d60",
+            "paper_doi": "10.5281/zenodo.8314503",
         },
     },
     "merit_basins_rivers": {
@@ -527,7 +788,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     "open_building_map": {
         "adapter": OpenBuildingMap(
             folder="open_building_map",
-            local_version=1,
+            local_version=2,
             filename="open_building_map.parquet",
             cache="local",
         ),
@@ -549,6 +810,52 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "OpenStreetMap contributors",
             "license": "ODbL 1.0",
             "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "open_street_map_coastlines": {
+        "adapter": OpenStreetMapCoastlines(
+            folder="open_street_map_coastlines",
+            local_version=1,
+            filename="open_street_map_coastlines.zip",
+            cache="global",
+        ),
+        "url": "https://osmdata.openstreetmap.de/download/coastlines-split-4326.zip",
+        "source": {
+            "name": "OpenStreetMap Coastlines",
+            "author": "OpenStreetMap contributors",
+            "license": "ODbL 1.0",
+            "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "open_street_map_land_polygons": {
+        "adapter": OpenStreetMapLandPolygons(
+            folder="open_street_map_land_polygons",
+            local_version=1,
+            filename="open_street_map_land_polygons.zip",
+            cache="global",
+        ),
+        "url": "https://osmdata.openstreetmap.de/download/land-polygons-split-4326.zip",
+        "source": {
+            "name": "OpenStreetMap Land Polygons",
+            "author": "OpenStreetMap contributors",
+            "license": "ODbL 1.0",
+            "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "glopop-sg": {
+        "adapter": GLOPOP_SG(
+            folder="glopop_sg",
+            local_version=1,
+            filename="placeholder",
+            cache="local",
+        ),
+        "url": "https://zenodo.org/records/15680747/files/GLOPOP_SG%20(1).zip?download=1",
+        "source": {
+            "name": "GLOPOP-SG",
+            "author": "M.J. Ton et al. (2025)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.15680747",
+            "paper_doi": "10.5281/zenodo.15680747",
         },
     },
 }

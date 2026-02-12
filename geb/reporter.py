@@ -151,6 +151,11 @@ WATER_BALANCE_REPORT_CONFIG = {
             "type": "HRU",
             "function": "weightedsum",
         },
+        "_water_balance_interflow": {
+            "varname": ".interflow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
     },
     "hydrology.routing": {
         "_water_balance_river_evaporation": {

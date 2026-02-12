@@ -1,6 +1,7 @@
 """Module containing build methods for the agents for GEB."""
 
 import math
+import unicodedata
 from datetime import datetime
 from typing import Any
 
@@ -24,12 +25,10 @@ from geb.workflows.raster import (
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
     COUNTRY_NAME_TO_ISO3,
-    GLOBIOM_NAME_TO_ISO3,
-    SUPERWELL_NAME_TO_ISO3,
+    TRADE_REGIONS,
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution
-from ..workflows.population import load_GLOPOP_S
 from .base import BuildModelBase
 
 
@@ -46,7 +45,8 @@ class Agents(BuildModelBase):
             "set_time_range",
             "setup_regions_and_land_use",
             "setup_household_characteristics",
-        ]
+        ],
+        required=True,
     )
     def setup_water_demand(self) -> None:
         """Sets up the water demand data for GEB.
@@ -71,7 +71,7 @@ class Agents(BuildModelBase):
         start_model_time = self.start_date.year
         end_model_time = self.end_date.year
 
-        municipal_water_demand = self.data_catalog.get_dataframe(
+        municipal_water_demand = self.old_data_catalog.get_dataframe(
             "AQUASTAT_municipal_withdrawal"
         )
         municipal_water_demand["ISO3"] = municipal_water_demand["Area"].map(
@@ -314,7 +314,7 @@ class Agents(BuildModelBase):
                 ssp: The SSP scenario to use.
             """
             ds_historic = xr.open_dataset(
-                self.data_catalog.get_source(f"cwatm_{file}_historical_year").path,
+                self.old_data_catalog.get_source(f"cwatm_{file}_historical_year").path,
                 decode_times=False,
             ).rename({"lat": "y", "lon": "x"})
             ds_historic = ds_historic.isel(
@@ -322,7 +322,7 @@ class Agents(BuildModelBase):
             )[variable]
 
             ds_future = xr.open_dataset(
-                self.data_catalog.get_source(f"cwatm_{file}_{ssp}_year").path,
+                self.old_data_catalog.get_source(f"cwatm_{file}_{ssp}_year").path,
                 decode_times=False,
             ).rename({"lat": "y", "lon": "x"})
             ds_future = ds_future.isel(
@@ -369,7 +369,7 @@ class Agents(BuildModelBase):
             "ssp2",
         )
 
-    @build_method
+    @build_method(required=True)
     def setup_income_distribution_parameters(self) -> None:
         """Sets up the income distributions for GEB.
 
@@ -381,7 +381,7 @@ class Agents(BuildModelBase):
         """
         income_distribution_parameters = {}
         income_distributions = {}
-        path = self.data_catalog.get_source(
+        path = self.old_data_catalog.get_source(
             "oecd_idd"
         ).path  # in future maybe replace this with an API request
         oecd_idd = pd.read_csv(path)
@@ -390,7 +390,7 @@ class Agents(BuildModelBase):
         cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         oecd_idd = oecd_idd[cols_to_keep]
         # only done to check countries in region, could probably be done more efficiently
-        countries = self.new_data_catalog.fetch("GADM_level0").read(
+        countries = self.data_catalog.fetch("GADM_level0").read(
             geom=self.region.union_all(),
         )
         # setup donor countries for country missing in oecd data
@@ -446,7 +446,9 @@ class Agents(BuildModelBase):
         )
         self.set_table(income_distributions_pd, "income/national_distribution")
 
-    @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "set_time_range"], required=True
+    )
     def setup_economic_data(self) -> None:
         """Sets up the economic data for GEB.
 
@@ -462,10 +464,10 @@ class Agents(BuildModelBase):
             The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
             'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
         """
-        inflation_rates = self.new_data_catalog.fetch("wb_inflation_rate").read()
+        inflation_rates = self.data_catalog.fetch("wb_inflation_rate").read()
         inflation_rates_country_index = inflation_rates.set_index("Country Code")
-        price_ratio = self.new_data_catalog.fetch("world_bank_price_ratio").read()
-        LCU_per_USD = self.new_data_catalog.fetch("world_bank_LCU_per_USD").read()
+        price_ratio = self.data_catalog.fetch("world_bank_price_ratio").read()
+        LCU_per_USD = self.data_catalog.fetch("world_bank_LCU_per_USD").read()
 
         def select_years_from_df(
             df: pd.DataFrame, additional_cols: list[str]
@@ -732,7 +734,7 @@ class Agents(BuildModelBase):
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 
-    @build_method
+    @build_method(required=True)
     def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
         """Sets up the irrigation sources for GEB.
 
@@ -741,7 +743,7 @@ class Agents(BuildModelBase):
         """
         self.set_params(irrigation_sources, name="agents/farmers/irrigation_sources")
 
-    @build_method(depends_on=["set_time_range", "setup_economic_data"])
+    @build_method(depends_on=["set_time_range", "setup_economic_data"], required=False)
     def setup_irrigation_prices_by_reference_year(
         self,
         operation_surface: float,
@@ -822,7 +824,7 @@ class Agents(BuildModelBase):
             # Set the calculated prices in the appropriate dictionary
             self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
-    @build_method(depends_on=["setup_economic_data"])
+    @build_method(depends_on=["setup_economic_data"], required=True)
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,
@@ -906,11 +908,7 @@ class Agents(BuildModelBase):
             # Set the calculated prices in the appropriate dictionary
             self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
-        electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
-        electricity_rates["ISO3"] = electricity_rates["Country"].map(
-            SUPERWELL_NAME_TO_ISO3
-        )
-        electricity_rates = electricity_rates.set_index("ISO3")["Rate"].to_dict()
+        electricity_rates = self.data_catalog.fetch("gcam_electricity_rates").read()
 
         electricity_rates_dict = {
             "time": list(range(start_year, end_year + 1)),
@@ -1143,7 +1141,9 @@ class Agents(BuildModelBase):
         self.set_array(farmers.index.values, name="agents/farmers/id")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    @build_method(depends_on=["setup_regions_and_land_use", "setup_cell_area"])
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "setup_cell_area"], required=True
+    )
     def setup_create_farms(
         self,
         region_id_column: str = "region_id",
@@ -1200,10 +1200,10 @@ class Agents(BuildModelBase):
         regions_shapes = self.geom["regions"]
         if data_source == "lowder":
             assert country_iso3_column in regions_shapes.columns, (
-                f"Region database must contain {country_iso3_column} column ({self.data_catalog['GADM_level1'].path})"
+                f"Region database must contain {country_iso3_column} column ({self.old_data_catalog['GADM_level1'].path})"
             )
 
-            farm_sizes_per_region = self.new_data_catalog.fetch(
+            farm_sizes_per_region = self.data_catalog.fetch(
                 "lowder_farm_size_distribution"
             ).read()
 
@@ -1610,10 +1610,124 @@ class Agents(BuildModelBase):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    def get_buildings_per_GDL_region(
+    def canon(self, string_to_normalize: str) -> str:
+        """Canonicalizes a string by normalizing it to ASCII and stripping whitespace.
+
+        Args:
+            string_to_normalize: The string to canonicalize.
+        Returns:
+            The canonicalized string.
+        """
+        return (
+            unicodedata.normalize("NFKD", string_to_normalize)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+            .strip()
+        )
+
+    def setup_building_reconstruction_costs(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns reconstruction costs (in USD) to buildings based on the global exposure model.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with reconstruction costs assigned to each building.
+        Raises:
+            ValueError: If a region in GADM level 1 is not found in the global exposure model or
+                        if some buildings do not have reconstruction costs assigned.
+        """
+        # load GADM level 1 within model domain (older version for compatibility with global exposure model)
+        gadm_level1 = self.data_catalog.fetch("gadm_28").read(
+            geom=self.region.union_all().buffer(0.1),
+        )
+        countries_in_model = gadm_level1["NAME_0"].unique().tolist()
+
+        global_exposure_model = self.data_catalog.fetch(
+            "global_exposure_model",
+            countries=countries_in_model,
+        ).read()
+
+        # append the NAME_1 column to the buildings
+        buildings["NAME_1"] = gpd.sjoin(
+            buildings,
+            gadm_level1[["NAME_1", "geometry"]],
+            how="left",
+            predicate="within",
+        )["NAME_1"].values
+
+        # assert each building has a NAME_1 value
+        if buildings["NAME_1"].isnull().any():
+            # For buildings without NAME_1 we assign them to the nearest GADM level 1 region.
+            # This happens when buildings are just outside the polygons (e.g., near coastlines).
+            # Use a spatial index to avoid an O(n*m) distance calculation over all regions.
+            buildings_no_name1 = buildings[buildings["NAME_1"].isnull()]
+            if not buildings_no_name1.empty:
+                # Precompute centroids for unmatched buildings
+                unmatched_centroids = buildings_no_name1.geometry.centroid
+                # Build spatial index over GADM level 1 geometries once
+                gadm_sindex = gadm_level1.sindex
+                for building_idx, centroid in zip(
+                    buildings_no_name1.index, unmatched_centroids
+                ):
+                    # Query nearest polygon via its bounding box to limit candidate search
+                    nearest_pos = gadm_sindex.nearest(centroid)[0]
+                    nearest_region = gadm_level1.iloc[nearest_pos]
+                    buildings.at[building_idx, "NAME_1"] = nearest_region[
+                        "NAME_1"
+                    ].values[0]
+
+        # Iterate over unique admin-1 region names to avoid redundant checks and assignments
+        buildings["NAME_1"] = buildings["NAME_1"].apply(self.canon)
+        for name_1 in gadm_level1["NAME_1"].dropna().unique():
+            # clean up name
+            name_1 = self.canon(name_1)
+            # check if region is in global exposure model
+            if name_1 not in global_exposure_model:
+                raise ValueError(
+                    f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
+                )
+            exposure_model_region = global_exposure_model[name_1]
+            for reconstruction_type in exposure_model_region:
+                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
+                    float(exposure_model_region[reconstruction_type])
+                )
+        # assert all buildings have reconstruction costs assigned (i.e., no null values in the reconstruction cost columns)
+        reconstruction_cost_columns = list(exposure_model_region.keys())
+        if buildings[reconstruction_cost_columns].isnull().any().any():
+            # get NAME_1 values for buildings with null reconstruction costs
+            buildings_with_null_costs = buildings[
+                buildings[reconstruction_cost_columns].isnull().any(axis=1)
+            ]
+            missing_name_1_values = buildings_with_null_costs["NAME_1"].unique()
+            raise ValueError(
+                f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
+            )
+        return buildings
+
+    @build_method(required=True)
+    def setup_buildings(self) -> None:
+        """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
+        # load region mask
+        mask = self.region.union_all()
+        buildings = self.data_catalog.fetch(
+            "open_building_map",
+            geom=mask,
+            prefix="assets",
+        ).read()
+        buildings = self.setup_building_reconstruction_costs(buildings)
+
+        # reset id column to avoid issues with duplicate ids
+        buildings["id"] = np.arange(len(buildings))
+
+        # write to disk
+        self.set_geom(buildings, name="assets/open_building_map")
+
+    def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
     ) -> dict[str, gpd.GeoDataFrame]:
-        """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
+        """Assigns buildings to grid cells from GLOPOP-S grid for each GDL region.
 
         Args:
             GDL_regions: A GeoDataFrame containing GDL regions within the model domain.
@@ -1621,16 +1735,7 @@ class Agents(BuildModelBase):
             A dictionary with GDLcode as keys and GeoDataFrames of buildings with grid indices as values.
         """
         output = {}
-        # load region mask
-        mask = self.region.unary_union
-        buildings = self.new_data_catalog.fetch(
-            "open_building_map",
-            geom=mask,
-            prefix="assets",
-            overwrite=True,
-        ).read()
-
-        self.set_geom(buildings, name="assets/open_building_map")
+        buildings = self.geom["assets/open_building_map"]
 
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
@@ -1638,9 +1743,9 @@ class Agents(BuildModelBase):
         buildings["lat"] = centroids.y
 
         for _, GDL_region in GDL_regions.iterrows():
-            _, GLOPOP_GRID_region = load_GLOPOP_S(
-                self.data_catalog, GDL_region["GDLcode"]
-            )
+            _, GLOPOP_GRID_region = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_region["GDLcode"]
+            ).read(GDL_region["GDLcode"])
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
             # subset buildings to those within the GLOPOP_GRID_region
@@ -1664,29 +1769,34 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method(depends_on="setup_assets")
+    @build_method(depends_on=["setup_assets", "setup_buildings"], required=True)
     def setup_household_characteristics(
-        self, maximum_age: int = 85, skip_countries_ISO3: list[str] = []
+        self,
+        maximum_age: int = 85,
+        skip_countries_ISO3: list[str] = [],
+        single_household_per_building: bool = False,
     ) -> None:
         """Sets up household characteristics for agents using GLOPOP-S data.
 
         Args:
             maximum_age: The maximum age for the head of household. Default is 85.
             skip_countries_ISO3: A list of ISO3 country codes to skip when setting up household characteristics.
+            single_household_per_building: If True, only one household will be allocated per building. Default is False.
 
         Raises:
             ValueError: If any household could not be allocated to a building.
         """
         # load GDL region within model domain
-        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
             geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
         )
 
         # setup buildings in region for household allocation
-        all_buildings_model_region = self.get_buildings_per_GDL_region(GDL_regions)
+        all_buildings_model_region = self.assign_buildings_to_grid_cells(GDL_regions)
+        # append reconstruction costs to buildings
         residential_buildings_model_region = {}
 
-        # iterate over GDL regions and filter buildings to residential
+        # iterate over GDL regions and filter buildings to residential and set damage values
         for GDL_code in all_buildings_model_region:
             buildings = all_buildings_model_region[GDL_code]
             # filter to residential buildings
@@ -1753,9 +1863,9 @@ class Agents(BuildModelBase):
             # load building database with grid idx
             buildings = residential_buildings_model_region[GDL_code]
 
-            GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
-                self.data_catalog, GDL_code
-            )
+            GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_code
+            ).read(GDL_code)
 
             GLOPOP_S_region = GLOPOP_S_region.rename(columns=rename)
 
@@ -1878,6 +1988,8 @@ class Agents(BuildModelBase):
                         n_agents_in_cell >= n_buildings_in_cell
                         and n_buildings_in_cell > 0
                     ):
+                        if single_household_per_building:
+                            n_agents_in_cell = n_buildings_in_cell
                         # first put a household in each building
                         households_to_put_in_building = np.random.choice(
                             np.arange(n_buildings_in_cell),
@@ -2029,7 +2141,7 @@ class Agents(BuildModelBase):
                 name=f"agents/households/{household_attribute}",
             )
 
-    @build_method(depends_on=["setup_create_farms"])
+    @build_method(depends_on=["setup_create_farms"], required=True)
     def setup_farmer_household_characteristics(self, maximum_age: int = 85) -> None:
         """Sets up farmer household characteristics for farmers using GLOPOP-S data.
 
@@ -2068,7 +2180,7 @@ class Agents(BuildModelBase):
         )  # convert locations to geodataframe
 
         # GLOPOP-S uses the GDL regions. So we need to get the GDL region for each farmer using their location
-        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
             geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
 
@@ -2104,7 +2216,9 @@ class Agents(BuildModelBase):
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
+            GLOPOP_S_region, _ = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_region
+            ).read(GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(
@@ -2232,15 +2346,17 @@ class Agents(BuildModelBase):
             A DataFrame containing behavioural parameters for each country, including risk aversion and discount factors.
         """
         # Risk aversion
-        preferences_country_level: pd.DataFrame = self.data_catalog.get_dataframe(
+        preferences_country_level: pd.DataFrame = self.old_data_catalog.get_dataframe(
             "preferences_country",
             variables=["country", "isocode", "patience", "risktaking"],
         ).dropna()
 
-        preferences_individual_level: pd.DataFrame = self.data_catalog.get_dataframe(
-            "preferences_individual",
-            variables=["country", "isocode", "patience", "risktaking"],
-        ).dropna()
+        preferences_individual_level: pd.DataFrame = (
+            self.old_data_catalog.get_dataframe(
+                "preferences_individual",
+                variables=["country", "isocode", "patience", "risktaking"],
+            ).dropna()
+        )
 
         def scale_to_range(x: pd.Series, new_min: float, new_max: float) -> pd.Series:
             """Scales a pandas Series to a new range [new_min, new_max].
@@ -2330,7 +2446,8 @@ class Agents(BuildModelBase):
         return preferences_country_level
 
     @build_method(
-        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"]
+        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"],
+        required=True,
     )
     def setup_farmer_characteristics(
         self,
@@ -2358,29 +2475,24 @@ class Agents(BuildModelBase):
             inplace=True,
         )
 
-        GLOBIOM_regions = self.data_catalog.get_dataframe("GLOBIOM_regions_37")
-        GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(GLOBIOM_NAME_TO_ISO3)
-        # For my personal branch
-        GLOBIOM_regions.loc[GLOBIOM_regions["Country"] == "Switzerland", "Region37"] = (
-            "EU_MidWest"
-        )
-        assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
+        ISO3_codes_region: set[str] = set(self.geom["regions"]["ISO3"].unique())
+        relevant_trade_regions: dict[str, str] = {
+            ISO3: TRADE_REGIONS[ISO3]
+            for ISO3 in ISO3_codes_region
+            if ISO3 in TRADE_REGIONS
+        }
 
-        ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
-        GLOBIOM_regions_region = GLOBIOM_regions[
-            GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
-        ]["Region37"].unique()
+        all_ISO3_across_relevant_regions: set[str] = {
+            ISO3
+            for ISO3 in ISO3_codes_region
+            if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
+        }
 
-        ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
-            GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
-        ]["ISO3"]
-
-        self.logger.info(
-            f" missing ISO3 codes in GLOBIOM regions: {set(ISO3_codes_region) - set(ISO3_codes_GLOBIOM_region)}"
-        )
-
-        donor_data = {}  # determine the donors: donors are all the countries in the GLOBIOM regions that are within our model domain(self.geoms["regions"]). Therefore, this can be a region OUTSIDE of the model domain, but within a GLOBIOM region in the model domain.
-        for ISO3 in ISO3_codes_GLOBIOM_region:
+        # determine the donors: donors are all the countries in the trade regions that are within our
+        # model domain(self.geoms["regions"]).
+        # Therefore, this can be a region OUTSIDE of the model domain, but within a trade region in the model domain.
+        donor_data = {}
+        for ISO3 in all_ISO3_across_relevant_regions:
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
@@ -2392,7 +2504,7 @@ class Agents(BuildModelBase):
                     self.data_catalog,
                     self.geom["global_countries"],
                     countries_with_preferences_data,
-                    ISO3_codes_GLOBIOM_region.to_list(),
+                    list(all_ISO3_across_relevant_regions),
                 )
 
                 donor_country = donor_countries.get(ISO3, None)
@@ -2438,7 +2550,7 @@ class Agents(BuildModelBase):
         data = donate_and_receive_crop_prices(
             donor_data,
             unique_regions,
-            GLOBIOM_regions,
+            TRADE_REGIONS,
             self.data_catalog,
             self.geom["global_countries"],
             self.geom["regions"],
@@ -2533,7 +2645,7 @@ class Agents(BuildModelBase):
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=True)
     def setup_assets(
         self,
         feature_types: str | list[str],
@@ -2550,7 +2662,7 @@ class Agents(BuildModelBase):
         if isinstance(feature_types, str):
             feature_types: list[str] = [feature_types]
 
-        all_features: dict[str, gpd.GeoDataFrame] = self.new_data_catalog.fetch(
+        all_features: dict[str, gpd.GeoDataFrame] = self.data_catalog.fetch(
             "open_street_map"
         ).read(
             self.region.unary_union,

@@ -9,6 +9,7 @@ from typing import Any
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+import yaml
 
 from geb.workflows.geometry import read_parquet_with_geom
 from geb.workflows.io import read_zarr
@@ -102,12 +103,14 @@ class Adapter:
                 catalog_root: Path = Path.home() / ".geb_cache"
 
             root = catalog_root / self.folder / f"v{self.local_version}"
-            root.mkdir(parents=True, exist_ok=True)
-            return root
         elif self.cache == "local":
-            return Path("cache") / self.folder / f"v{self.local_version}"
+            root = Path("cache") / self.folder / f"v{self.local_version}"
         else:
             raise ValueError("Cache must be either 'global' or 'local'")
+
+        # create the root directory if it doesn't exist
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     @property
     def is_ready(self) -> bool:
@@ -157,6 +160,9 @@ class Adapter:
             return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix in (".tif", ".asc"):
             return xr.open_dataarray(self.path, **kwargs)
+        elif self.path.suffix == ".yml" or self.path.suffix == ".yaml":
+            with open(self.path, "r") as file:
+                return yaml.safe_load(file)
         elif self.path.suffix == ".parquet":
             if "columns" in kwargs and "geometry" not in kwargs["columns"]:
                 return pd.read_parquet(path=self.path, **kwargs)

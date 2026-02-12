@@ -114,6 +114,6 @@ report:
     _water_circle: true
 ```
 
-## Package contents
+## Code
 
 ::: geb.reporter

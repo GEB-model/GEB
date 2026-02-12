@@ -7,7 +7,6 @@ import numpy as np
 from geb.hydrology.evapotranspiration import (
     calculate_bare_soil_evaporation,
     calculate_transpiration,
-    evapotranspirate,
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
     get_root_mass_ratios,
@@ -469,65 +468,6 @@ def test_get_critical_soil_moisture_content() -> None:
     assert np.array_equal(critical_soil_moisture_content, [0.29, 0.21, 0.15, 0.35])
 
 
-def test_evapotranspirate() -> None:
-    """Test the scalar evapotranspirate function."""
-    from geb.hydrology.landcovers import NON_PADDY_IRRIGATED
-
-    # Test data for a single cell
-    soil_is_frozen = False
-    wwp_cell = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
-    wfc_cell = np.array([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], dtype=np.float32)
-    wres_cell = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
-    soil_layer_height_cell = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
-    land_use_type = NON_PADDY_IRRIGATED
-    root_depth = np.float32(0.3)
-    crop_map = 0  # Some crop
-    natural_crop_groups = np.float32(3.0)
-    potential_transpiration = np.float32(0.002)
-    potential_bare_soil_evaporation = np.float32(0.001)
-    potential_evapotranspiration = np.float32(0.003)
-    frost_index = np.float32(0.0)
-    crop_group_number_per_group = np.array([3.0, 4.0, 5.0], dtype=np.float32)
-    w_cell = np.array(
-        [0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32
-    )  # Above field capacity
-    ws_cell = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
-    topwater = np.float32(0.0)
-    open_water_evaporation = np.float32(0.0)
-    minimum_effective_root_depth = np.float32(0.1)
-    unsaturated_hydraulic_conductivity = np.float32(0.001)
-
-    transpiration, evaporation, topwater_m = evapotranspirate(
-        soil_is_frozen=soil_is_frozen,
-        wwp_m=wwp_cell,
-        wfc_m=wfc_cell,
-        wres_m=wres_cell,
-        soil_layer_height_m=soil_layer_height_cell,
-        land_use_type=land_use_type,
-        root_depth_m=root_depth,
-        crop_map=crop_map,
-        natural_crop_groups=natural_crop_groups,
-        potential_transpiration_m=potential_transpiration,
-        potential_bare_soil_evaporation_m=potential_bare_soil_evaporation,
-        potential_evapotranspiration_m=potential_evapotranspiration,
-        frost_index=frost_index,
-        crop_group_number_per_group=crop_group_number_per_group,
-        w_m=w_cell,
-        topwater_m=topwater,
-        open_water_evaporation_m=open_water_evaporation,
-        minimum_effective_root_depth_m=minimum_effective_root_depth,
-        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
-    )
-
-    # Basic checks
-    assert isinstance(transpiration, (float, np.float32))
-    assert isinstance(evaporation, (float, np.float32))
-    assert transpiration >= 0
-    assert evaporation >= 0
-    assert transpiration <= potential_transpiration
-    assert evaporation <= potential_bare_soil_evaporation
-
-
 def test_calculate_transpiration() -> None:
     """Test the calculate_transpiration function."""
     from geb.hydrology.landcovers import NON_PADDY_IRRIGATED
@@ -541,7 +481,8 @@ def test_calculate_transpiration() -> None:
     land_use_type = NON_PADDY_IRRIGATED
     root_depth = np.float32(0.3)
     crop_map = 0  # Some crop
-    natural_crop_groups = np.float32(3.0)
+    crop_group_forest = np.float32(3.0)
+    crop_group_grassland_like = np.float32(4.0)
     potential_transpiration = np.float32(0.002)
     reference_evapotranspiration_grass_m_hour = np.float32(0.003)
     frost_index = np.float32(0.0)
@@ -561,7 +502,8 @@ def test_calculate_transpiration() -> None:
         land_use_type=land_use_type,
         root_depth_m=root_depth,
         crop_map=crop_map,
-        natural_crop_groups=natural_crop_groups,
+        crop_group_forest=crop_group_forest,
+        crop_group_grassland_like=crop_group_grassland_like,
         potential_transpiration_m=potential_transpiration,
         reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour,
         crop_group_number_per_group=crop_group_number_per_group,
@@ -668,7 +610,8 @@ def test_calculate_transpiration_frozen_soil() -> None:
         land_use_type=1,
         root_depth_m=0.3,
         crop_map=0,
-        natural_crop_groups=3.0,
+        crop_group_forest=3.0,
+        crop_group_grassland_like=3.0,
         potential_transpiration_m=0.002,
         reference_evapotranspiration_grass_m_hour=0.003,
         crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),
@@ -700,7 +643,8 @@ def test_calculate_transpiration_paddy_irrigation() -> None:
         land_use_type=PADDY_IRRIGATED,
         root_depth_m=0.3,
         crop_map=0,
-        natural_crop_groups=3.0,
+        crop_group_forest=3.0,
+        crop_group_grassland_like=3.0,
         potential_transpiration_m=0.002,
         reference_evapotranspiration_grass_m_hour=0.003,
         crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),

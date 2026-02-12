@@ -132,11 +132,11 @@ class BuildModelBase(ABC):
 
     @property
     @abstractmethod
-    def data_catalog(self) -> DataCatalog:
+    def old_data_catalog(self) -> DataCatalog:
         """Abstract property for data catalog."""
         pass
 
-    @data_catalog.setter
+    @old_data_catalog.setter
     @abstractmethod
     def data_catalog(self, value: DataCatalog) -> None:
         """Abstract setter for data catalog."""
@@ -144,13 +144,13 @@ class BuildModelBase(ABC):
 
     @property
     @abstractmethod
-    def new_data_catalog(self) -> NewDataCatalog:
+    def data_catalog(self) -> NewDataCatalog:
         """Abstract property for data catalog."""
         pass
 
-    @new_data_catalog.setter
+    @data_catalog.setter
     @abstractmethod
-    def new_data_catalog(self, value: NewDataCatalog) -> None:
+    def data_catalog(self, value: NewDataCatalog) -> None:
         """Abstract setter for data catalog."""
         pass
 

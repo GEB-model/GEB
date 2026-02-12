@@ -1,4 +1,63 @@
 # dev
+
+# v1.0.0b10
+- `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
+- Add download and processing for soil thickness data.
+- DeltaDTM is now also setup for the model region in setup_elevation. 
+- Align SFINCS mask padding to the coarse grid so left and bottom edges snap to grid-size multiples.
+- Improve inflow, outflow, flood plains and some other things to improve flood risk maps.
+- Remove DeltaDTM and GEBCO for non-coastal regions.
+- Re-indexing of OBM buildings and creating one household agent per building (per default).
+- Support multiple inflow locations.
+- (Deep) copy model config on initializing model avoiding reference issues.
+- Filter clusters in geb init-multiple based on intersection with coastline if parsed as argument.
+- Updated the GLOPOP version (from GLOPOP_SG_V2 to GLOPOP_SG_V3) to resolve missing data in some GDL regions
+- Add option for variable runoff in infiltration  
+- Simplify coastal model setup. No longer create multiple shapes of connected low elevation coastal zones.
+- Moves to new data catalog
+ - FAOSTAT
+ - GLOPOP-SG
+ - UNDP Human Development Index
+ - OSM open_street_map_land_polygons
+- Support custom DEMs
+- Read custom reservoirs and waterbodies from files instead of old data catalog.
+- Add LISFLOOD vegetation properties adapter with crop group number and leaf area index support in setup_vegetation.
+- Add required = True/False to all build_methods allowing checking of build methods at build start rather than erroring when finally running the model.
+- Combine setup_crops and setup_crops_from_source.
+- Use LAI to set interception and compute crop factors for forest and grassland.
+- Use GTSM station data to get sea level rise for creating (future) coastal flood maps.
+- Add MIRCA2000 unit grid and crop calendar entries to the new data catalog and use them in crop calendar setup.
+- Move superwell data to new data catalog.
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
+- Make trade regions inspired by globiom regions and load from file rather than data catalog.
+- Move osm land polygons to new data catalog
+- Add Global Exposure Model and GADM v2.8 to the datacatalog to assign building damages
+- Assign damages categories of the Global Exposure Model to the building geodataframe.
+- Calculate building damages both for structure and content using separate vulnerability curves for structure and content. 
+- Check which MeritHydro files are present on the shared IVM datadrive. Ignore tiles that are not present in build as these are in the ocean.
+- Adjust wind speed computation to use FAO56 specifications.
+- Added a gadm_converter dictionary mapping incorrect GADM names to corrected versions in the global exposure model data adapter.
+- Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
+- Moved setup_buildings to its own function for quicker updating building attributes after changes. 
+- Removed waterbodies from gadv28 for better matching with the global exposure model.
+
+To support this version:
+
+- Rename `setup_soil_parameters` to `setup_soil` in `build.yml`
+- Re-run `setup_soil`: `geb update -b build.yml::setup_soil` and `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics` 
+- Re-run `setup_coastal_sfincs_model_regions`: `geb update -b build.yml::setup_coastal_sfincs_model_regions`
+- Remove setup_low_elevation_coastal_zone_mask from you build.yml
+- Add setup_buildings to your build.yml
+- Models for inland regions need to be rebuild if floods need to be run
+- Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data` to regenerate `gtsm/sea_level_rise_rcp8p5` using the new GTSM station data.
+- Re-run `setup_gtsm_water_levels`: `geb update -b build.yml::setup_gtsm_water_levels`
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`
+- Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
+- Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
+- Add and run `setup_vegetation` to `build.yml`. A good place is for example after `setup_soil`.
+
+# v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
 - Add documentation for modules, variables and routing.
 - Return period maps are now calculated per subbasin rather than using the whole map and making complicated calculation groups.
@@ -15,6 +74,13 @@
 - Enable return period maps for subbasins that discharge into the ocean, including several bugfixes for this.
 - Allow exporting of hourly values from reporter
 - Add initial soil temperature. Now still simplified but better than having no soil temperature.
+- Includes soil suction into the model using an approximation of the Green-Ampt equation.
+- Use Green-Ampt rather than VIC for infiltration.
+- Implement interflow
+- Limit drainage to groundwater to conductivity of groundwater top layer
+- Fix for flood risk maps which could not be run if river was not included in grid but had upstream areas
+- Fix that downstream outflow area was not included with new subbasins
+- Renamed new_data_catalog to data_catalog and data_catalog to old_data_catalog
 
 To support this version:
 

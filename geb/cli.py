@@ -767,6 +767,12 @@ def workflow(
     type=click.Path(),
     help="Save visualization map to PNG file at this path. If not specified, saves to 'models/clusters_map.png'.",
 )
+@click.option(
+    "--ocean-outlets-only",
+    is_flag=True,
+    default=False,
+    help="If set, only include clusters that flow to the ocean (exclude endorheic basins).",
+)
 @working_directory_option
 def init_multiple(
     config: str,
@@ -782,6 +788,7 @@ def init_multiple(
     overwrite: bool,
     save_geoparquet: Path | None,
     save_map: str | None,
+    ocean_outlets_only: bool,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
 
@@ -808,6 +815,7 @@ def init_multiple(
         overwrite=overwrite,
         save_geoparquet=save_geoparquet,
         save_map=save_map,
+        ocean_outlets_only=ocean_outlets_only,
     )
 
 

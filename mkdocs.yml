@@ -89,7 +89,12 @@ nav:
   - Getting Started:
     - Installation: getting_started/installation.md
     - Configuration: getting_started/configuration.md
-    - Building a model: getting_started/building_a_model.md
+    - Building a model:
+      - Overview: getting_started/build/index.md
+      - Data catalog: getting_started/build/data_catalog.md
+      - Elevation: getting_started/build/elevation.md
+      - Landsurface: getting_started/build/landsurface.md
+      - Waterbodies: getting_started/build/waterbodies.md
     - Running the model: getting_started/running.md
     - Evaluate the model:
       - Overview: getting_started/evaluation/index.md
@@ -99,7 +104,7 @@ nav:
     - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
   - Model:
-    - Model: model/model.md
+    - Overview: model/index.md
     - Modules: model/modules.md
     - Variables: model/variables.md
   - Agents:
@@ -128,6 +133,7 @@ nav:
   - Hazards:
     - Overview: hazards/index.md
     - Floods: hazards/floods.md
+    - Windstorms: hazards/windstorms.md
   - Advanced topics:
     - Forecasts: advanced_topics/forecasts.md
     - Calibration: advanced_topics/calibration.md

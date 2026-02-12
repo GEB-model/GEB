@@ -1878,6 +1878,12 @@ class Households(AgentBaseClass):
         self.buildings_content_curve["building_protected"] = (
             self.buildings_content_curve["building_unprotected"] * 0.7
         )
+        # create another column (curve) in the buildings content curve for flood-proofed buildings
+        self.buildings_content_curve["building_flood_proofed"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.85
+        )
+
+        self.buildings_content_curve["building_flood_proofed"].loc[0:1] = 0.0
 
         # TODO: need to adjust the vulnerability curves
         # create another column (curve) in the buildings content curve for
@@ -2007,18 +2013,38 @@ class Households(AgentBaseClass):
 
             building_multicurve = buildings.copy()
             multi_curves = {
-                "damages": self.buildings_structure_curve["building_unprotected"],
-                "damages_flood_proofed": self.buildings_structure_curve[
+                "damages_structure": self.buildings_structure_curve[
+                    "building_unprotected"
+                ],
+                "damages_content": self.buildings_content_curve["building_unprotected"],
+                "damages_structure_flood_proofed": self.buildings_structure_curve[
+                    "building_flood_proofed"
+                ],
+                "damages_content_flood_proofed": self.buildings_content_curve[
                     "building_flood_proofed"
                 ],
             }
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
-                    columns={"maximum_damage_m2": "maximum_damage"}
+                    columns={
+                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
+                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
+                    }
                 ),
                 hazard=flood_map,
                 multi_curves=multi_curves,
             )
+
+            # sum structure and content damages
+            damage_buildings["damages"] = (
+                damage_buildings["damages_structure"]
+                + damage_buildings["damages_content"]
+            )
+            damage_buildings["damages_flood_proofed"] = (
+                damage_buildings["damages_structure_flood_proofed"]
+                + damage_buildings["damages_content_flood_proofed"]
+            )
+            # concatenate damages to building_multicurve
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
             )

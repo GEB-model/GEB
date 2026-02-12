@@ -58,6 +58,7 @@ def read_flood_depth(
     method: str,
     minimum_flood_depth: float,
     end_time: datetime,
+    mask: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Read the maximum flood depth from the SFINCS model results.
 
@@ -78,6 +79,7 @@ def read_flood_depth(
         method: The method to use for calculating flood depth. Options are 'max' for maximum flood depth
             and 'final' for flood depth at the final time step.
         end_time: The end time of the simulation.
+        mask: Optional xarray DataArray mask to apply to the flood depth. Defaults to None.
 
     Returns:
         The maximum flood depth downscaled to subgrid resolution.
@@ -128,6 +130,11 @@ def read_flood_depth(
             assert isinstance(water_surface_elevation, xr.DataArray)
         else:
             raise ValueError(f"Unknown method: {method}")
+
+        if mask is not None:
+            mask = mask.compute()
+            water_surface_elevation = water_surface_elevation.compute()
+            water_surface_elevation = water_surface_elevation.where(mask, np.nan)
         # read subgrid elevation
         surface_elevation: xr.DataArray = (
             xr.open_dataarray(model_root / "subgrid" / "dep_subgrid.tif")
@@ -167,6 +174,9 @@ def read_flood_depth(
         flood_depth_m: xr.DataArray = xr.where(
             flood_depth_m >= minimum_flood_depth, flood_depth_m, np.nan, keep_attrs=True
         )
+        if mask is not None:
+            flood_depth_m = flood_depth_m.where(mask.values, np.nan)
+
         flood_depth_m.attrs["_FillValue"] = np.nan
 
     print(
@@ -546,6 +556,9 @@ def get_representative_river_points(
     Returns:
         A list of tuples (x, y) representing the coordinates of the representative points.
         If no valid points are found, an empty list is returned.
+
+    Raises:
+        ValueError: If no valid xy coordinates are found for rivers.
     """
     river = rivers.loc[river_ID]
     if river["represented_in_grid"]:
@@ -553,10 +566,9 @@ def get_representative_river_points(
         if xy is not None:
             return [xy]
         else:
-            print(
-                f"Warning: No valid xy found for river {river_ID}. Skipping this river."
+            raise ValueError(
+                f"Error: No valid xy found for river {river_ID} which is represented in the grid."
             )
-            return []  # If no valid xy found, return empty list
 
     else:
         river_IDs = set([river_ID])
@@ -577,8 +589,8 @@ def get_representative_river_points(
             if xy is not None:
                 xys.append(xy)
             else:
-                print(
-                    f"Warning: No valid xy found for river {river_ID}. Skipping this river."
+                raise ValueError(
+                    f"Error: No valid xy found for river {river_ID} which is represented not in the grid. Likely because upstream rivers could not be found."
                 )
 
         return xys
@@ -613,12 +625,18 @@ def get_discharge_and_river_parameters_by_river(
         A tuple containing:
             - A pandas DataFrame with discharge time series for each river (columns are river IDs).
             - A pandas DataFrame with river parameters (index is river IDs, columns are 'river_width_alpha' and 'river_width_beta').
+
+    Raises:
+        ValueError: If no points are found for rivers or if discharge values contain NaNs.
     """
     xs: list[int] = []
     ys: list[int] = []
     for points in points_per_river:
         xs.extend([p[0] for p in points])
         ys.extend([p[1] for p in points])
+
+    if len(xs) == 0 or len(ys) == 0:
+        raise ValueError("No points found for rivers.")
 
     x_points: xr.DataArray = xr.DataArray(
         xs,
@@ -1163,12 +1181,12 @@ def assign_return_periods(
 
 
 def select_most_downstream_point(
-    river: gpd.GeoDataFrame, outflow_points: GeometryCollection
+    river: LineString, outflow_points: GeometryCollection
 ) -> Point:
     """Select the most downstream point from a collection of outflow points.
 
     Args:
-        river: GeoDataFrame containing the river geometry.
+        river: LineString of the river geometry.
         outflow_points: GeometryCollection of outflow points (can contain Points and LineStrings).
 
     Returns:
@@ -1190,11 +1208,9 @@ def select_most_downstream_point(
             )
 
     most_downstream_point: Point = points[0]
-    most_downstream_point_loc: float = line_locate_point(
-        river.geometry, most_downstream_point
-    )
+    most_downstream_point_loc: float = line_locate_point(river, most_downstream_point)
     for point in points[1:]:
-        loc = line_locate_point(river.geometry, point)
+        loc = line_locate_point(river, point)
         if loc > most_downstream_point_loc:
             most_downstream_point = point
             most_downstream_point_loc = loc
