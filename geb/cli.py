@@ -32,6 +32,7 @@ from geb.runner import (
     update_fn,
 )
 from geb.workflows.io import WorkingDirectory
+from geb.workflows.raster import rechunk_zarr_file
 
 
 @click.group()
@@ -825,6 +826,36 @@ def server() -> None:
     from geb.mcp_server import mcp
 
     mcp.run()
+
+
+@cli.group()
+def tool() -> None:
+    """Useful tools for GEB."""
+    pass
+
+
+@tool.command()
+@click.argument("input_path", type=click.Path(exists=True, path_type=Path))
+@click.argument("output_path", type=click.Path(path_type=Path))
+@click.option(
+    "--how",
+    type=click.Choice(
+        ["time-optimized", "space-optimized", "balanced"], case_sensitive=False
+    ),
+    required=True,
+    help="How to optimize the chunks.",
+)
+@click.option(
+    "--no-intermediate",
+    is_flag=False,
+    default=True,
+    help="Use intermediate rechunking step (recommended for large files).",
+)
+def rechunk(
+    input_path: Path, output_path: Path, how: str, no_intermediate: bool
+) -> None:
+    """Rechunk a Zarr file."""
+    rechunk_zarr_file(input_path, output_path, how, not no_intermediate)  # type: ignore
 
 
 if __name__ == "__main__":
