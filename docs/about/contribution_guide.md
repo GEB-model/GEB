@@ -19,7 +19,11 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 
 First of all, thank you for (thinking about) contributing to the documentation! When you are a member of the GEB repository, you can edit documentation yourself. Pull requests that only edit the documentation are automatically approved. For outside contributors, please make a pull request and we will merge it for you.
 
-We use [mkdocs](https://www.mkdocs.org) to automatically create a full website based on simple markdown files and a simple GitHub action. You can use this to test your changes locally first. For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
+We use [mkdocs](https://www.mkdocs.org) to automatically create a full website based on markdown files and a GitHub action.
+
+### Building documentation locally
+
+You can also test your changes locally first. For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
 
 ```sh
 uv run mkdocs serve
@@ -34,6 +38,30 @@ uv run mkdocs build
 Your files will end up in the folder `site`. Open `index.html` in your browser for the main page.
 
 You can also update the site index or other configuration in mkdocs.yml in the root folder of the GEB repository.
+
+### Adding citations
+
+We use bibtex to add references to the documentation. To add a reference you should do the following:
+
+1. Find the bibtex entry for the paper you want to cite. For example, on Google Scholar you can click "cite" below a paper, and then BibTex. On many scientific publishers websites you can also find the bibtex for the paper. For example, the bibtex for the original GEB paper looks like this:
+
+    ```
+    @article{debruijn2023geb,
+      title={GEB v0.1: a large-scale agent-based socio-hydrological model--simulating 10 million individual farming households in a fully distributed hydrological model},
+      author={{de Bruijn}, Jens A and Smilovic, Mikhail and Burek, Peter and Guillaumot, Luca and Wada, Yoshihide and Aerts, Jeroen CJH},
+      journal={Geoscientific Model Development},
+      volume={16},
+      number={9},
+      pages={2437--2454},
+      year={2023},
+      publisher={Copernicus Publications G{\"o}ttingen, Germany}
+    }
+    ```
+
+    The first part after `@article{` is the name of the bibtex entry, then everything after are the details such as title and author list. There are also other types of entries, such as `@techreport{` and `@misc`. Depending on the the type of entry, different data may be required. You can learn more about bibtex [here](https://www.bibtex.org).
+
+2. Add the bibtex entry to [references.bib](https://github.com/GEB-model/GEB/blob/main/docs/references.bib). It doesn't matter where in the file as long as the formatting stays correct.
+3. Then, in the documentation you write `some statement that needs a reference[@debruijn2023geb]`. Here, the `debruijn2023geb` is the name of the bibtex-entry.
 
 ## Making a release
 
