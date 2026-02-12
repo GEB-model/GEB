@@ -1,6 +1,15 @@
 # dev
+- Add units to all data from `setup_hydrography`
+- Compute hillslope length based on drainage density
+- Fix: Also set nodata type in _FillValue when using reporter. This is now also correctly loaded with zarr.
+- Add geb tool rechunk to allow rechunking of dataset to space-optimized, time-optimized or balanced. Currently using some reasonable defaults, but if needed we can expand this with custom values.
+
+To support this version:
+- Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
 
 # v1.0.0b10
+- Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
+- Fix GPU instability in SFINCS by disabling h73table parameter that was causing crashes during GPU-accelerated flood simulations.
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
 - Add download and processing for soil thickness data.
 - DeltaDTM is now also setup for the model region in setup_elevation. 

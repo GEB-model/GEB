@@ -542,7 +542,7 @@ class WaterBodies(Module):
         # especially for very small lakes with a small drainage area.
         # In such cases, we take the outflow cell with the lowest elevation.
         outflow_elevation = read_grid(
-            self.model.files["grid"]["routing/outflow_elevation"]
+            self.model.files["grid"]["landsurface/elevation_min_m"]
         )
         outflow_elevation = self.grid.compress(outflow_elevation)
 
@@ -568,7 +568,7 @@ class WaterBodies(Module):
             # especially for very small lakes with a small drainage area.
             # In such cases, we take the outflow cell with the lowest elevation.
             outflow_elevation = self.grid.compress(
-                read_grid(self.model.files["grid"]["routing/outflow_elevation"])
+                read_grid(self.model.files["grid"]["landsurface/elevation_min_m"])
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:
@@ -702,6 +702,12 @@ class WaterBodies(Module):
             outflow_to_drainage_network_m3[self.is_reservoir],
             command_area_release_m3[self.is_reservoir],
         ) = self.routing_reservoirs(n_routing_substeps, current_substep)
+
+        # Clamp outflow to not exceed storage to handle numerical precision issues
+        # between float32 outflow and float64 storage
+        outflow_to_drainage_network_m3 = np.minimum(
+            outflow_to_drainage_network_m3, self.var.storage
+        ).astype(np.float32)
 
         assert (outflow_to_drainage_network_m3 <= self.var.storage).all()
 
