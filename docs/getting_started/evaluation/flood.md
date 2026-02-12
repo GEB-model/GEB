@@ -54,8 +54,9 @@ $$\text{CSI} = \frac{\text{Hits}}{\text{Hits} + \text{False Alarms} + \text{Miss
 Results are saved to output/evaluate/hydrodynamics/{event_name}/
 
 For each event two files are generated:
-  - **start time - end time_performance_metrics.txt**: gives an overview of Hit Rate, False Alarm Ratio, Criticial Success Index, number of flooded pixels and flooded area
-  - **start time - end time_validation_floodextent_plot.png**: figure plotting the hits (green), false alarms (orange) and misses (red), together with the catchment outline and OSM map 
+
+- **start time - end time_performance_metrics.txt**: gives an overview of Hit Rate, False Alarm Ratio, Critical Success Index, number of flooded pixels and flooded area
+- **start time - end time_validation_floodextent_plot.png**: figure plotting the hits (green), false alarms (orange) and misses (red), together with the catchment outline and OSM map
 
 ## Required input data
 For hydrodynamics evaluation, your model must have:
@@ -67,11 +68,11 @@ For hydrodynamics evaluation, your model must have:
      floods:
        events:
          - start_time: "2021-07-12 09:00:00"
-            end_time: "2021-07-20 09:00:00"
+           end_time: "2021-07-20 09:00:00"
        observation_files:
-         - "path/to/20210712T090000 - 20210720T090000.zarr.zarr"
+         - "path/to/20210712T090000 - 20210720T090000.zarr"
    ```
-  2. **Simulated flood maps** located in output/evaluate/hydrdoynamics/{event_name}/
+  2. **Simulated flood maps** located in output/evaluate/hydrodynamics/{event_name}/
 
 ## Interpreting results 
 A CSI above 0.7 is considered good model performance [@bernhofen2018first]
