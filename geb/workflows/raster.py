@@ -1210,7 +1210,56 @@ def resample_chunked(
     return da
 
 
-def calculate_cell_area(
+def calculate_width_m(
+    affine_transform: Affine, height: int, width: int
+) -> TwoDArrayFloat32:
+    """Calculate the width of each cell in a grid given its affine transform.
+
+    Must be in a geographic coordinate system (degrees).
+
+    Args:
+        affine_transform: The affine transformation of the grid.
+        height: The height of the grid (number of rows).
+        width: The width of the grid (number of columns).
+
+    Returns:
+        A 2D array of cell widths in meters.
+    """
+    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
+    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
+
+    lat_idx = np.arange(0, height).repeat(width).reshape((height, width))
+    lat = (lat_idx + 0.5) * affine_transform.e + affine_transform.f
+    width_m = (
+        distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
+    )
+    return width_m.astype(np.float32)
+
+
+def calculate_height_m(
+    affine_transform: Affine, height: int, width: int
+) -> TwoDArrayFloat32:
+    """Calculate the height of each cell in a grid given its affine transform.
+
+    Must be in a geographic coordinate system (degrees).
+
+    Args:
+        affine_transform: The affine transformation of the grid.
+        height: The height of the grid (number of rows).
+        width: The width of the grid (number of columns).
+
+    Returns:
+        A 2D array of cell heights in meters.
+    """
+    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
+    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
+    height_m = distance_1_degree_latitude * abs(affine_transform.e)
+
+    # Broadcast height_m to the full grid size (height, width)
+    return np.full((height, width), height_m, dtype=np.float32)
+
+
+def calculate_cell_area_m2(
     affine_transform: Affine, height: int, width: int
 ) -> TwoDArrayFloat32:
     """Calculate the area of each cell in a grid given its affine transform.
@@ -1225,15 +1274,8 @@ def calculate_cell_area(
     Returns:
         A 2D array of cell areas in square meters.
     """
-    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
-    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
-
-    lat_idx = np.arange(0, height).repeat(width).reshape((height, width))
-    lat = (lat_idx + 0.5) * affine_transform.e + affine_transform.f
-    width_m = (
-        distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
-    )
-    height_m = distance_1_degree_latitude * abs(affine_transform.e)
+    width_m = calculate_width_m(affine_transform, height, width)
+    height_m = calculate_height_m(affine_transform, height, width)
     return (width_m * height_m).astype(np.float32)
 
 

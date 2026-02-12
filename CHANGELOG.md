@@ -1,4 +1,6 @@
 # dev
+- Add units to all data from `setup_hydrography`
+- Compute hillslope length based on drainage density
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
