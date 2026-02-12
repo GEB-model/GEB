@@ -6,6 +6,7 @@ import pytest
 import rioxarray  # noqa: F401
 import xarray as xr
 from rasterio.transform import from_bounds
+from scipy.interpolate import RegularGridInterpolator
 from shapely.geometry import Polygon
 
 from geb.workflows.raster import (
@@ -22,6 +23,7 @@ from geb.workflows.raster import (
     rasterize_like,
     reclassify,
     repeat_grid,
+    resample_chunked,
 )
 
 
@@ -141,7 +143,7 @@ def test_repeat_grid() -> None:
 
 
 @pytest.mark.parametrize(
-    "dtype", [np.uint8, np.int32, np.int64, np.float32, np.float64]
+    "dtype", [bool, np.uint8, np.int32, np.int64, np.float32, np.float64]
 )
 def test_rasterize_like(dtype: type) -> None:
     """Test the rasterize_like function.
@@ -161,10 +163,15 @@ def test_rasterize_like(dtype: type) -> None:
     # Create GeoDataFrame with polygons and a value column
     poly1 = Polygon([(0, 0), (4, 0), (4, 4), (0, 4)])
     poly2 = Polygon([(5, 5), (5, 8), (8, 8), (8, 5)])
-    gdf = gpd.GeoDataFrame({"value": [1, 2]}, geometry=[poly1, poly2], crs="EPSG:28992")
 
-    nodata = 255
-    result = rasterize_like(
+    if dtype is bool:
+        values = [True, True]
+    else:
+        values = [1, 2]
+    gdf = gpd.GeoDataFrame({"value": values}, geometry=[poly1, poly2], crs="EPSG:28992")
+
+    nodata = False if dtype is bool else 255
+    result: xr.DataArray = rasterize_like(
         gdf, column="value", raster=raster, dtype=dtype, nodata=nodata, all_touched=True
     )
 
@@ -172,15 +179,19 @@ def test_rasterize_like(dtype: type) -> None:
     assert result.shape == raster.shape
     assert result.dims == raster.dims
     assert result.dtype == dtype
-    assert result.attrs["_FillValue"] == nodata
     assert result.coords.equals(raster.coords)
 
-    assert np.all(result.values[0:4, 0:4] == 1)
-    assert np.all(result.values[5:8, 5:8] == 2)
-
-    # Check that areas outside polygons are nodata
-    # For example, bottom-left corner
-    assert result.values[0, -1] == nodata
+    if dtype is bool:
+        assert np.all(result.values[0:4, 0:4])
+        assert np.all(result.values[5:8, 5:8])
+        assert result.attrs["_FillValue"] == None
+    else:
+        assert result.attrs["_FillValue"] == nodata
+        assert np.all(result.values[0:4, 0:4] == 1)
+        assert np.all(result.values[5:8, 5:8] == 2)
+        # Check that areas outside polygons are nodata
+        # For example, bottom-left corner
+        assert result.values[0, -1] == nodata
 
 
 def test_rasterize_like_geographic() -> None:
@@ -587,3 +598,68 @@ def test_pad_xy_geographical(pad_bounds: tuple[int, int, int, int]) -> None:
     mask = np.zeros(padded_da.shape, dtype=bool)
     mask[returned_slice["y"], returned_slice["x"]] = True
     assert np.allclose(padded_da.values[~mask], constant_values)
+
+
+def test_resample_chunked() -> None:
+    """Test resample_chunked against scipy RegularGridInterpolator."""
+    # Create source grid
+    src_x = np.linspace(0, 10, 11)
+    src_y = np.linspace(0, 10, 11)
+    X, Y = np.meshgrid(src_x, src_y)
+    # Create a simple function z = x + y
+    data = (X + Y).astype(np.float32)
+
+    source = xr.DataArray(
+        data,
+        dims=("y", "x"),
+        coords={"y": src_y, "x": src_x},
+        name="test_data",
+        attrs={"_FillValue": np.nan},
+    )
+    # Add CRS (required by resample_chunked)
+    source.rio.write_crs("EPSG:4326", inplace=True)
+
+    # Create target grid (finer resolution)
+    tgt_x = np.linspace(0, 10, 21)
+    tgt_y = np.linspace(0, 10, 21)
+
+    target = xr.DataArray(
+        np.zeros((21, 21)),
+        dims=("y", "x"),
+        coords={"y": tgt_y, "x": tgt_x},
+    )
+    # Add CRS (required by resample_chunked)
+    target.rio.write_crs("EPSG:4326", inplace=True)
+
+    # Chunk the target (required by resample_chunked)
+    target = target.chunk({"y": 10, "x": 10})
+    # Chunk the source (required by resample_chunked)
+    source = source.chunk({"y": 10, "x": 10})
+
+    # Run resample_chunked
+    resampled = resample_chunked(source, target, method="bilinear")
+
+    # Run scipy RegularGridInterpolator for comparison
+    # Note: RegularGridInterpolator expects (y, x) order for points if grid is defined as (y, x)
+    interp = RegularGridInterpolator(
+        (src_y, src_x), data, method="linear", bounds_error=False, fill_value=np.nan
+    )
+
+    tgt_X, tgt_Y = np.meshgrid(tgt_x, tgt_y)
+    # Create points array of shape (N, 2) where columns are (y, x)
+    points = np.column_stack((tgt_Y.ravel(), tgt_X.ravel()))
+
+    expected_data = interp(points).reshape(21, 21)
+
+    # Compare results
+    # Allow small differences due to float precision and implementation details
+    # Also mask NaNs because pyresample might handle boundaries differently than scipy
+    mask = ~np.isnan(resampled.values) & ~np.isnan(expected_data)
+    np.testing.assert_allclose(
+        resampled.values[mask], expected_data[mask], rtol=1e-5, atol=1e-5
+    )
+
+    # Verify metadata
+    assert resampled.rio.crs == source.rio.crs
+    assert resampled.dims == target.dims
+    assert resampled.shape == target.shape

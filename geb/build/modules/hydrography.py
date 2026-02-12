@@ -1,6 +1,7 @@
 """Build methods for the hydrography for GEB."""
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import geopandas as gpd
@@ -9,18 +10,26 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
-import rasterio
+import rasterio.features
 import xarray as xr
 from pyflwdir import FlwdirRaster
-from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.types import ArrayBool, ArrayFloat32, ArrayInt32
+from geb.geb_types import (
+    ArrayBool,
+    ArrayFloat32,
+    ArrayInt32,
+    TwoDArrayFloat64,
+    TwoDArrayInt32,
+    TwoDArrayInt64,
+)
+from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import rasterize_like, snap_to_grid
+
+from .base import BuildModelBase
 
 
 def get_all_upstream_subbasin_ids(
@@ -74,7 +83,7 @@ def get_downstream_subbasins(
     return downstream_subbasins
 
 
-def get_subbasins_geometry(
+def get_rivers_geometry(
     data_catalog: NewDataCatalog, subbasin_ids: list[int]
 ) -> gpd.GeoDataFrame:
     """Get the subbasins geometry and other attributes for the given subbasin IDs.
@@ -87,69 +96,100 @@ def get_subbasins_geometry(
         A GeoDataFrame containing the subbasins geometry for the given subbasin IDs.
             The index of the GeoDataFrame is the subbasin ID (COMID).
     """
-    subbasins: gpd.GeoDataFrame = data_catalog.fetch("merit_basins_catchments").read(
+    rivers = data_catalog.fetch("merit_basins_rivers").read(
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
+        columns=[
+            "COMID",
+            "lengthkm",
+            "slope",
+            "uparea",
+            "maxup",
+            "NextDownID",
+            "geometry",
+        ],
     )
-    assert len(subbasins) == len(subbasin_ids), "Some subbasins were not found"
-    return subbasins.set_index("COMID")
+    assert isinstance(rivers, gpd.GeoDataFrame)
+    assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
 
-
-def get_rivers(
-    data_catalog: NewDataCatalog, subbasin_ids: list[int]
-) -> gpd.GeoDataFrame:
-    """Get the rivers and its attributes for the given subbasin IDs.
-
-    Assumes that the subbasin IDs match the COMID in the MERIT river dataset.
-
-    Args:
-        data_catalog: The data catalog to use for accessing the MERIT dataset.
-        subbasin_ids: The subbasin IDs to get the rivers for.
-
-    Returns:
-        A GeoDataFrame containing the rivers for the given subbasin IDs.
-    """
-    rivers: gpd.GeoDataFrame = (
-        data_catalog.fetch("merit_basins_rivers")
-        .read(
-            columns=[
-                "COMID",
-                "lengthkm",
-                "slope",
-                "uparea",
-                "maxup",
-                "NextDownID",
-                "geometry",
-            ],
-            filters=[
-                ("COMID", "in", subbasin_ids),
-            ],
-        )
-        .rename(
-            columns={
-                "NextDownID": "downstream_ID",
-            }
-        )
-    )
+    rivers: gpd.GeoDataFrame = rivers.rename(
+        columns={
+            "NextDownID": "downstream_ID",
+        }
+    ).set_index("COMID")
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
     rivers["is_headwater_catchment"] = rivers["maxup"] == 0
     rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
-    assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
+
     # reverse the river lines to have the downstream direction
     rivers["geometry"] = rivers["geometry"].apply(
         lambda x: LineString(list(x.coords)[::-1])
     )
-    return rivers.set_index("COMID")
+
+    return rivers
+
+
+def extend_rivers_into_ocean(
+    rivers: gpd.GeoDataFrame,
+    flow_raster: FlwdirRaster,
+) -> gpd.GeoDataFrame:
+    """Extend rivers that end just before the ocean into the ocean.
+
+    For some rivers that end up in oceans, the end point is not in the ocean
+    but rather stops just before the ocean. Here we extend those rivers to the downstream point
+    in the ocean, based on the flow raster downstream index.
+
+    Args:
+        rivers: A GeoDataFrame containing the river lines.
+        flow_raster: The flow raster to use for determining the downstream point.
+
+    Returns:
+        A GeoDataFrame containing the extended river lines.
+
+    Raises:
+        ValueError: If the distance between the river end point and the downstream point is too large.
+    """
+    resolution = abs(flow_raster.transform.a)
+    for river_id, river in rivers.iterrows():
+        # only select rivers that have no downstream river (i.e., end in ocean)
+        if river["downstream_ID"] == -1:
+            river_end_point = river.geometry.coords[-1]
+            lon, lat = river_end_point
+
+            # retrieve the linear index of the river end point
+            cell_index = flow_raster.index(lon, lat)
+
+            # find the linear index of the downstream point
+            downstream_index = flow_raster.idxs_ds[cell_index]
+
+            # get the lonlat of the downstream point
+            downstream_lon, downstream_lat = flow_raster.xy(downstream_index)
+
+            # check that distance between river end point and downstream point is within one cell
+            distance = np.sqrt(
+                (downstream_lon - lon) ** 2 + (downstream_lat - lat) ** 2
+            )
+            if distance > resolution * 1.5:
+                raise ValueError(
+                    f"River {river_id} end point is too far from downstream point: {distance} m"
+                )
+
+            # extend the river line to the downstream point
+            rivers.at[river_id, "geometry"] = LineString(
+                list(river.geometry.coords) + [(downstream_lon, downstream_lat)]
+            )
+
+    return rivers
 
 
 def create_river_raster_from_river_lines(
     rivers: gpd.GeoDataFrame,
     target: xr.DataArray,
     column: str | None = None,
-    index: str | None = None,
-) -> npt.NDArray[np.int32]:
+    index: bool | None = None,
+) -> TwoDArrayInt32:
     """Create a river raster from river lines.
 
     Args:
@@ -174,7 +214,7 @@ def create_river_raster_from_river_lines(
         raise ValueError(
             "Either column or index must be provided, or both must be None"
         )
-    river_raster = rasterize(
+    river_raster = rasterio.features.rasterize(
         zip(rivers.geometry, values),
         out_shape=target.shape,
         fill=-1,
@@ -187,7 +227,7 @@ def create_river_raster_from_river_lines(
 
 def get_SWORD_translation_IDs_and_lengths(
     data_catalog: NewDataCatalog, rivers: gpd.GeoDataFrame
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+) -> tuple[TwoDArrayInt64, TwoDArrayFloat64]:
     """Get the SWORD reach IDs and lengths for each river based on the MERIT basin ID.
 
     Each river can have multiple SWORD reach IDs, so the output is a 2D array of shape (N, M)
@@ -204,12 +244,15 @@ def get_SWORD_translation_IDs_and_lengths(
         - SWORD_reach_lengths: A 2D numpy array of shape (N, M) where N is the number of SWORD reaches per river
             and M is the number of rivers. Each element is the length of the SWORD reach for that river.
     """
-    MERIT_Basins_to_SWORD: xr.Dataset = (
+    MERIT_Basins_to_SWORD = (
         data_catalog.fetch("merit_sword").read().sel(mb=rivers.index.tolist())
     )
+    assert isinstance(MERIT_Basins_to_SWORD, xr.Dataset)
 
-    SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)
-    SWORD_reach_lengths = np.full(
+    SWORD_reach_IDs: TwoDArrayInt64 = np.full(
+        (40, len(rivers)), dtype=np.int64, fill_value=-1
+    )
+    SWORD_reach_lengths: TwoDArrayFloat64 = np.full(
         (40, len(rivers)), dtype=np.float64, fill_value=np.nan
     )
     for i in range(1, 41):
@@ -224,8 +267,8 @@ def get_SWORD_translation_IDs_and_lengths(
 
 
 def get_SWORD_river_widths(
-    data_catalog: NewDataCatalog, SWORD_reach_IDs: npt.NDArray[np.int64]
-) -> npt.NDArray[np.float64]:
+    data_catalog: NewDataCatalog, SWORD_reach_IDs: TwoDArrayInt64
+) -> TwoDArrayFloat64:
     """Get the river widths from the SWORD dataset based on the SWORD reach IDs.
 
     Each river can have multiple SWORD reach IDs, so the input is a 2D array of shape (N, M).
@@ -242,13 +285,11 @@ def get_SWORD_river_widths(
     """
     unique_SWORD_reach_ids = np.unique(SWORD_reach_IDs[SWORD_reach_IDs != -1])
 
-    SWORD = (
-        data_catalog.fetch("sword")
-        .read(
-            sql=f"""SELECT * FROM sword WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})"""
-        )
-        .set_index("reach_id")
+    SWORD = data_catalog.fetch("sword").read(
+        sql=f"""SELECT * FROM sword WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})"""
     )
+    assert isinstance(SWORD, pd.DataFrame)
+    SWORD = SWORD.set_index("reach_id")
 
     assert len(SWORD) == len(unique_SWORD_reach_ids), (
         "Some SWORD reaches were not found, possibly the SWORD and MERIT data version are not correct"
@@ -271,7 +312,7 @@ def get_SWORD_river_widths(
     return SWORD_river_width
 
 
-class Hydrography:
+class Hydrography(BuildModelBase):
     """Contains all build methods for the hydrography for GEB."""
 
     def __init__(self) -> None:
@@ -294,19 +335,21 @@ class Hydrography:
             The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
             `set_grid()` method.
         """
-        a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
-        a = xr.where(a < 1, a, 1, keep_attrs=True)
-        b = self.grid["routing/outflow_elevation"] / 2000
-        b = xr.where(b < 1, b, 1, keep_attrs=True)
+        a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
+            "routing/upstream_area"
+        ]
+        a: xr.DataArray = xr.where(a < 1, a, 1, keep_attrs=True)
+        b: xr.DataArray = self.grid["routing/outflow_elevation"] / 2000
+        b: xr.DataArray = xr.where(b < 1, b, 1, keep_attrs=True)
 
-        mannings = 0.025 + 0.015 * a + 0.030 * b
+        mannings: xr.DataArray = 0.025 + 0.015 * a + 0.030 * b
         mannings.attrs["_FillValue"] = np.nan
 
         self.set_grid(mannings, "routing/mannings")
 
-    def set_routing_subbasins(
+    def get_rivers(
         self, river_graph: nx.DiGraph, sink_subbasin_ids: list[int]
-    ) -> None:
+    ) -> gpd.GeoDataFrame:
         """Sets the routing subbasins for the model.
 
         For each sink subbasin, all upstream subbasins and the immediately downstream subbasins are included.
@@ -318,6 +361,9 @@ class Hydrography:
         Args:
             river_graph: The river graph to use for determining upstream and downstream subbasins.
             sink_subbasin_ids: The subbasin IDs of the sink subbasins (i.e., the outflow subbasins).
+
+        Returns:
+            A GeoDataFrame containing the subbasins geometry for the model.
         """
         # always make a list of the subbasin ids, such that the function always gets the same type of input
         if not isinstance(sink_subbasin_ids, (list, set)):
@@ -331,22 +377,32 @@ class Hydrography:
         downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
         subbasin_ids.update(downstream_subbasins)
 
-        subbasins = get_subbasins_geometry(self.new_data_catalog, subbasin_ids)
-        subbasins["is_downstream_outflow_subbasin"] = pd.Series(
-            True, index=downstream_subbasins
-        ).reindex(subbasins.index, fill_value=False)
+        # later we want to include the downstream outflow basins. However, we don't want to include
+        # other branches that are upstream of those downstream basins, but are not part
+        # of the area that we are interested in. Therefore, we also include
+        # the immediately upstream basins of the downstream basins, so that we can stop the subbasin
+        # construction there.
+        upstream_basins_of_downstream_basins = set()
+        for downstream_subbasin in downstream_subbasins.keys():
+            for upstream_basin in river_graph.predecessors(downstream_subbasin):
+                if upstream_basin not in subbasin_ids:
+                    upstream_basins_of_downstream_basins.add(upstream_basin)
 
-        subbasins["associated_upstream_basins"] = pd.Series(
-            downstream_subbasins.values(), index=downstream_subbasins
-        ).reindex(subbasins.index, fill_value=[])
+        subbasin_ids.update(upstream_basins_of_downstream_basins)
 
-        # for each basin check if the basin has any downstream neighbors
-        # if not, it is a coastal basin
-        subbasins["is_coastal_basin"] = subbasins.apply(
-            lambda row: len(list(river_graph.neighbors(row.name))) == 0, axis=1
+        rivers: gpd.GeoDataFrame = get_rivers_geometry(
+            self.data_catalog, list(subbasin_ids)
         )
 
-        self.set_geom(subbasins, name="routing/subbasins")
+        rivers["is_downstream_outflow"] = pd.Series(
+            True, index=downstream_subbasins
+        ).reindex(rivers.index, fill_value=False)
+
+        rivers["is_upstream_of_downstream_basin"] = pd.Series(
+            True, index=upstream_basins_of_downstream_basins
+        ).reindex(rivers.index, fill_value=False)
+
+        return rivers
 
     @build_method
     def setup_hydrography(
@@ -489,7 +545,7 @@ class Hydrography:
         )
 
         # flow direction
-        ldd: npt.NDArray[np.uint8] = self.full_like(
+        ldd: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=255, nodata=255, dtype=np.uint8
         )
         ldd.data = flow_raster.to_array(ftype="ldd")
@@ -542,24 +598,10 @@ class Hydrography:
             name="routing/river_slope",
         )
 
-        # river width
-        subbasin_ids: list[int] = self.geom["routing/subbasins"].index.tolist()
-
         self.logger.info("Retrieving river data")
-        rivers: gpd.GeoDataFrame = get_rivers(self.new_data_catalog, subbasin_ids)
+        rivers: gpd.GeoDataFrame = self.geom["routing/rivers"]
 
         self.logger.info("Processing river data")
-        # remove all rivers that are both shorter than 1 km and have no upstream river
-        rivers: gpd.GeoDataFrame = rivers[
-            ~((rivers["lengthkm"] < 1) & (rivers["maxup"] == 0))
-        ]
-
-        rivers: gpd.GeoDataFrame = rivers.join(
-            self.geom["routing/subbasins"][
-                ["is_downstream_outflow_subbasin", "associated_upstream_basins"]
-            ],
-            how="left",
-        )
 
         river_raster_HD: npt.NDArray[np.int32] = create_river_raster_from_river_lines(
             rivers, original_d8_elevation
@@ -580,8 +622,7 @@ class Hydrography:
 
         assert (
             rivers[
-                (~rivers["represented_in_grid"])
-                & (~rivers["is_downstream_outflow_subbasin"])
+                (~rivers["represented_in_grid"]) & (~rivers["is_downstream_outflow"])
             ]["lengthkm"]
             < 5
         ).all(), (
@@ -619,14 +660,9 @@ class Hydrography:
         ]
         xy_per_river_segment = value_indices(river_raster_HD, ignore_value=-1)
 
-        represented_rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
-
         for river_ID, river in rivers.iterrows():
             if river_ID not in xy_per_river_segment:
-                if (
-                    river["is_downstream_outflow_subbasin"]
-                    or not river["represented_in_grid"]
-                ):
+                if river["is_downstream_outflow"] or not river["represented_in_grid"]:
                     continue
                 else:
                     raise AssertionError("River xy not found, but should be found.")
@@ -636,10 +672,7 @@ class Hydrography:
             nan_mask: ArrayBool = np.isnan(upstream_area)
 
             if nan_mask.all():
-                if (
-                    river["is_downstream_outflow_subbasin"]
-                    or not river["represented_in_grid"]
-                ):
+                if river["is_downstream_outflow"] or not river["represented_in_grid"]:
                     continue
                 else:
                     raise AssertionError(
@@ -708,11 +741,11 @@ class Hydrography:
         self.set_grid(basin_ids, name="routing/basin_ids")
 
         SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lengths(
-            self.new_data_catalog, rivers
+            self.data_catalog, rivers
         )
 
         SWORD_river_widths: npt.NDArray[np.float64] = get_SWORD_river_widths(
-            self.new_data_catalog, SWORD_reach_IDs
+            self.data_catalog, SWORD_reach_IDs
         )
 
         rivers["width"] = np.nansum(
@@ -737,13 +770,13 @@ class Hydrography:
     @build_method
     def setup_global_ocean_mean_dynamic_topography(self) -> None:
         """Sets up the global ocean mean dynamic topography for the model."""
-        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+        if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
                 "No coastal basins found, skipping setup_global_ocean_mean_dynamic_topography"
             )
             return
 
-        global_ocean_mdt_fn = self.data_catalog.get_source(
+        global_ocean_mdt_fn = self.old_data_catalog.get_source(
             "global_ocean_mean_dynamic_topography"
         ).path
 
@@ -788,7 +821,7 @@ class Hydrography:
     @build_method
     def setup_low_elevation_coastal_zone_mask(self) -> None:
         """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
-        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+        if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
                 "No coastal basins found, skipping setup_low_elevation_coastal_zone_mask"
             )
@@ -833,12 +866,12 @@ class Hydrography:
     @build_method
     def setup_coastlines(self) -> None:
         """Sets up the coastlines for the model."""
-        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+        if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info("No coastal basins found, skipping setup_coastlines")
             return
 
         # load the coastline from the data catalog
-        fp_coastlines = self.data_catalog.get_source("osm_coastlines").path
+        fp_coastlines = self.old_data_catalog.get_source("osm_coastlines").path
         coastlines = gpd.read_file(fp_coastlines)
 
         # clip the coastline to overlapping with mask
@@ -865,14 +898,14 @@ class Hydrography:
         self,
     ) -> None:
         """Sets up the OSM land polygons for the model."""
-        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+        if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
                 "No coastal basins found, skipping setup_osm_land_polygons"
             )
             return
 
         # load the land polygon from the data catalog
-        fp_land_polygons = self.data_catalog.get_source("osm_land_polygons").path
+        fp_land_polygons = self.old_data_catalog.get_source("osm_land_polygons").path
         land_polygons = gpd.read_file(fp_land_polygons)
         # select only the land polygons that intersect with the region
         land_polygons = land_polygons[land_polygons.intersects(self.region.union_all())]
@@ -891,7 +924,7 @@ class Hydrography:
         self, minimum_coastal_area_deg2: float = 0.0006449015308288645
     ) -> None:
         """Sets up the coastal sfincs model regions."""
-        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+        if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
                 "No coastal basins found, skipping setup_coastal_sfincs_model_regions"
             )
@@ -1006,7 +1039,7 @@ class Hydrography:
             the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
             with any custom reservoir capacity data from the data catalog.
         """
-        waterbodies: gpd.GeoDataFrame = self.new_data_catalog.fetch("hydrolakes").read(
+        waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
             columns=[
                 "waterbody_id",
@@ -1033,7 +1066,7 @@ class Hydrography:
         )
         assert waterbodies["waterbody_type"].dtype == np.int32
 
-        water_body_id: xr.DataArray = rasterize_like(
+        waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
             column="waterbody_id",
             raster=self.grid["mask"],
@@ -1042,7 +1075,7 @@ class Hydrography:
             all_touched=True,
         )
 
-        sub_water_body_id: xr.DataArray = rasterize_like(
+        sub_waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
             column="waterbody_id",
             raster=self.subgrid["mask"],
@@ -1051,15 +1084,16 @@ class Hydrography:
             all_touched=True,
         )
 
-        self.set_grid(water_body_id, name="waterbodies/water_body_id")
-        self.set_subgrid(sub_water_body_id, name="waterbodies/sub_water_body_id")
+        self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
+        self.set_subgrid(sub_waterbody_id, name="waterbodies/sub_waterbody_id")
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         if command_areas:
-            command_areas = self.data_catalog.get_geodataframe(
+            command_areas = self.old_data_catalog.get_geodataframe(
                 command_areas, geom=self.region, predicate="intersects"
-            )
+            )  # ty:ignore[invalid-assignment]
+            assert isinstance(command_areas, gpd.GeoDataFrame)
             command_areas = command_areas[
                 ~command_areas["waterbody_id"].isnull()
             ].reset_index(drop=True)
@@ -1114,7 +1148,7 @@ class Hydrography:
             )
 
         else:
-            command_areas = self.full_like(
+            command_areas: xr.DataArray = self.full_like(
                 self.grid["mask"],
                 fill_value=-1,
                 nodata=-1,
@@ -1131,7 +1165,7 @@ class Hydrography:
             self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
 
         if custom_reservoir_capacity:
-            custom_reservoir_capacity = self.data_catalog.get_dataframe(
+            custom_reservoir_capacity = self.old_data_catalog.get_dataframe(
                 custom_reservoir_capacity
             )
             custom_reservoir_capacity = custom_reservoir_capacity[
@@ -1168,7 +1202,7 @@ class Hydrography:
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.data_catalog.get_source("GTSM").path.format(1979, "01")
+        ref_file = self.old_data_catalog.get_source("GTSM").path.format(1979, "01")  # ty:ignore[possibly-missing-attribute]
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
@@ -1195,7 +1229,7 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM").path.format(
+                f = self.old_data_catalog.get_source("GTSM").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1236,7 +1270,9 @@ class Hydrography:
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.data_catalog.get_source("GTSM_surge").path.format(1979, "01")
+        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+            1979, "01"
+        )
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
@@ -1254,7 +1290,7 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM_surge").path.format(
+                f = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1276,7 +1312,7 @@ class Hydrography:
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
 
-        fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
+        fp_coast_rp = self.old_data_catalog.get_source("COAST_RP").path
         coast_rp = pd.read_pickle(fp_coast_rp)
 
         # remove stations that are not in coast_rp index
@@ -1293,7 +1329,7 @@ class Hydrography:
     @build_method
     def setup_gtsm_station_data(self) -> None:
         """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
-        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+        if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
 
@@ -1302,3 +1338,52 @@ class Hydrography:
         self.setup_gtsm_water_levels(temporal_range)
         self.setup_gtsm_surge_levels(temporal_range)
         self.setup_coast_rp()
+
+    @build_method
+    def setup_inflow(
+        self, lon: float, lat: float, inflow_m3_per_s: float | int
+    ) -> None:
+        """Sets up a inflow hydrograph at a specified location.
+
+        Currently only a single constant inflow location at a single point is supported.
+
+        Args:
+            lon: The longitude of the inflow location.
+            lat: The latitude of the inflow location.
+            inflow_m3_per_s: The inflow in cubic meters per second.
+
+        Raises:
+            ValueError: If the inflow location is outside of the model grid or study area.
+        """
+        mask = self.grid["mask"]
+        transform = mask.rio.transform()
+
+        y, x = rasterio.transform.rowcol(transform, lon, lat)
+
+        inflow_locations = gpd.GeoDataFrame(
+            geometry=[Point(lon, lat)],
+            crs="EPSG:4326",
+            columns=["y", "x"],
+            data=[[y, x]],
+            index=[0],
+        )
+        self.set_geom(inflow_locations, name="routing/inflow_locations")
+
+        if y < 0 or y >= mask.shape[0] or x < 0 or x >= mask.shape[1]:
+            raise ValueError("Inflow location is outside of the model grid.")
+
+        if mask.values[y, x]:
+            raise ValueError("Inflow location is outside of the study area.")
+
+        inflow_df_m3_per_s = pd.DataFrame(
+            index=pd.date_range(
+                self.start_date,
+                end=self.end_date + timedelta(hours=23),
+                freq="H",
+                inclusive="both",
+            ),
+            columns=np.array([0]),
+            data=inflow_m3_per_s,
+        )
+
+        self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")

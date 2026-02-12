@@ -6,6 +6,8 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
+from geb.geb_types import ArrayFloat32
+
 from .landcovers import (
     FOREST,
     GRASSLAND_LIKE,
@@ -19,10 +21,10 @@ N_SOIL_LAYERS: Literal[6] = 6
 
 @njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(
-    p: npt.NDArray[np.float32],
-    wfc_m: npt.NDArray[np.float32],
-    wwp_m: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    p: np.float32,
+    wfc_m: ArrayFloat32,
+    wwp_m: ArrayFloat32,
+) -> ArrayFloat32:
     """Calculate the critical soil moisture content.
 
     The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -50,9 +52,9 @@ def get_critical_soil_moisture_content(
 @njit(cache=True, inline="always")
 def get_root_mass_ratios(
     root_depth_m: np.float32,
-    root_ratios: npt.NDArray[np.float32],
-    soil_layer_height_m: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    root_ratios: ArrayFloat32,
+    soil_layer_height_m: ArrayFloat32,
+) -> ArrayFloat32:
     """Calculate the root mass ratios for each soil layer assuming a triangular root distribution.
 
     Args:
@@ -373,6 +375,7 @@ def calculate_bare_soil_evaporation(
     open_water_evaporation_m: np.float32,  # [m]
     w_m: npt.NDArray[np.float32],  # [m]
     wres_m: npt.NDArray[np.float32],  # [m]
+    unsaturated_hydraulic_conductivity_m_per_hour: np.float32,  # [m/h]
 ) -> np.float32:
     """Calculate bare soil evaporation for a single soil cell.
 
@@ -383,6 +386,7 @@ def calculate_bare_soil_evaporation(
         open_water_evaporation_m: Open water evaporation [m], which is the water evaporated from open water areas.
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         wres_m: Residual soil moisture content [m], shape (N_SOIL_LAYERS,).
+        unsaturated_hydraulic_conductivity_m_per_hour: Unsaturated hydraulic conductivity of the top soil layer [m/h].
 
     Returns:
         The actual bare soil evaporation [m] for the cell.
@@ -394,9 +398,16 @@ def calculate_bare_soil_evaporation(
         and land_use_type != OPEN_WATER
         and land_use_type != SEALED
     ):
+        # Limit potential evaporation by the unsaturated hydraulic conductivity
+        # This accounts for the reduced ability of the soil to transport water to the surface
+        potential_bare_soil_evaporation_m: np.float32 = min(
+            potential_bare_soil_evaporation_m,
+            unsaturated_hydraulic_conductivity_m_per_hour,
+        )
+
         # TODO: Minor bug, this should only occur when topwater is above 0
         # fix this after completing soil module speedup
-        actual_bare_soil_evaporation = min(
+        actual_bare_soil_evaporation: np.float32 = min(
             max(
                 np.float32(0),
                 potential_bare_soil_evaporation_m - open_water_evaporation_m,
@@ -411,89 +422,6 @@ def calculate_bare_soil_evaporation(
     else:
         # if the soil is frozen, no evaporation occurs
         # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
-        actual_bare_soil_evaporation = np.float32(0)
+        actual_bare_soil_evaporation: np.float32 = np.float32(0)
 
     return actual_bare_soil_evaporation
-
-
-@njit(cache=True, inline="always")
-def evapotranspirate(
-    soil_is_frozen: bool,
-    wwp_m: npt.NDArray[np.float32],  # [m]
-    wfc_m: npt.NDArray[np.float32],  # [m]
-    wres_m: npt.NDArray[np.float32],  # [m]
-    soil_layer_height_m: npt.NDArray[np.float32],  # [m]
-    land_use_type: np.int32,
-    root_depth_m: np.float32,  # [m]
-    crop_map: np.int32,
-    natural_crop_groups: np.float32,
-    potential_transpiration_m: np.float32,  # [m]
-    potential_bare_soil_evaporation_m: np.float32,  # [m]
-    potential_evapotranspiration_m: np.float32,  # [m]
-    frost_index: np.float32,
-    crop_group_number_per_group: npt.NDArray[np.float32],
-    w_m: npt.NDArray[np.float32],  # [m]
-    topwater_m: np.float32,  # [m]
-    open_water_evaporation_m: np.float32,  # [m]
-    minimum_effective_root_depth_m: np.float32,  # [m]
-) -> tuple[np.float32, np.float32, np.float32]:
-    """Evapotranspiration calculation for a single soil cell.
-
-    Args:
-        soil_is_frozen: Boolean indicating whether the soil is frozen.
-        wwp_m: Wilting point soil moisture content [m], shape (N_SOIL_LAYERS,).
-        wfc_m: Field capacity soil moisture content [m], shape (N_SOIL_LAYERS,).
-        wres_m: Residual soil moisture content [m], shape (N_SOIL_LAYERS,).
-        soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
-        land_use_type: Land use type of the hydrological response unit.
-        root_depth_m: The root depth [m].
-        crop_map: Crop map indicating the crop type for the hydrological response unit. -1 indicates no crop.
-        natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
-        potential_transpiration_m: Potential transpiration [m].
-        potential_bare_soil_evaporation_m: Potential bare soil evaporation [m].
-        potential_evapotranspiration_m: Potential evapotranspiration [m].
-        frost_index: Frost index indicating whether the soil is frozen.
-        crop_group_number_per_group: Crop group numbers for each crop type.
-        w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
-        topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
-        open_water_evaporation_m: Open water evaporation [m], which is the water evaporated from open water areas.
-        minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
-
-    Returns:
-        A tuple containing:
-            - The actual transpiration [m] for the cell.
-            - The actual bare soil evaporation in meters for the cell.
-            - Updated topwater [m] after transpiration.
-    """
-    transpiration_m, topwater_m = calculate_transpiration(
-        soil_is_frozen,
-        wwp_m,
-        wfc_m,
-        wres_m,
-        soil_layer_height_m,
-        land_use_type,
-        root_depth_m,
-        crop_map,
-        natural_crop_groups,
-        potential_transpiration_m,
-        potential_evapotranspiration_m,
-        crop_group_number_per_group,
-        w_m,
-        topwater_m,
-        minimum_effective_root_depth_m,
-    )
-
-    actual_bare_soil_evaporation_m = calculate_bare_soil_evaporation(
-        soil_is_frozen,
-        land_use_type,
-        potential_bare_soil_evaporation_m,
-        open_water_evaporation_m,
-        w_m,
-        wres_m,
-    )
-
-    return (
-        transpiration_m,
-        actual_bare_soil_evaporation_m,
-        topwater_m,
-    )

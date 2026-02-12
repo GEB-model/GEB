@@ -13,6 +13,7 @@ import pandas as pd
 import pyflwdir
 import pytest
 
+from geb.geb_types import ArrayFloat32, ArrayInt32
 from geb.hydrology.routing import (
     Accuflux,
     KinematicWave,
@@ -21,7 +22,6 @@ from geb.hydrology.routing import (
     get_channel_ratio,
     update_node_kinematic,
 )
-from geb.types import ArrayFloat32, ArrayInt32
 
 
 def test_fill_discharge_gaps() -> None:
@@ -467,7 +467,7 @@ def test_accuflux_with_sideflow(
     )
 
 
-def test_accuflux_with_water_bodies(
+def test_accuflux_with_waterbodies(
     mask: npt.NDArray[np.bool_],
     ldd: npt.NDArray[np.uint8],
     Q_initial: npt.NDArray[np.float32],
@@ -576,7 +576,7 @@ def test_kinematic(
         river_width=np.full_like(mask, np.float32(2.0), dtype=np.float32)[mask],
         river_length=np.full_like(mask, np.float32(5.0), dtype=np.float32)[mask],
         river_alpha=np.full_like(mask, np.float32(1.0), dtype=np.float32)[mask],
-        river_beta=0.6,
+        river_beta=np.float32(0.6),
         dt=15,
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],

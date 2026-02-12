@@ -1,0 +1,61 @@
+name: Check Changed Files
+description: "Checks if changes are limited to docs/ folder or mkdocs.yml"
+inputs:
+  github_token:
+    description: "GitHub Token"
+    required: true
+outputs:
+  only_docs_changed:
+    description: "True if only docs files changed, False otherwise"
+    value: ${{ steps.check_changes.outputs.only_docs_changed }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check for changes
+      id: check_changes
+      shell: bash
+      run: |
+        # Determine changed files based on event name
+        if [ "${{ github.event_name }}" == "pull_request" ] || [ "${{ github.event_name }}" == "pull_request_target" ]; then
+          # For PRs, compare with the base branch
+          git fetch origin ${{ github.base_ref }}
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD)
+        elif [ "${{ github.event_name }}" == "push" ]; then
+           # For push, compare with previous commit (handle first commit case if needed, but assuming valid history)
+           CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+        else
+           # Fallback or error
+           echo "Unsupported event: ${{ github.event_name }}"
+           exit 1
+        fi
+        
+        echo "Changed files:"
+        echo "$CHANGED_FILES"
+        
+        ONLY_DOCS_CHANGED=true
+        
+        if [ -z "$CHANGED_FILES" ]; then
+             echo "No changed files found."
+             # If no files changed, technically 'only docs' didn't change, but usually we don't want to fail. 
+             # However, for skipping tests, we might want to skip.
+             # Let's say if no files changed, it is consistent with "no code changes".
+             ONLY_DOCS_CHANGED=true
+        fi
+        
+        while IFS= read -r file; do
+          if [[ -z "$file" ]]; then continue; fi
+          if [[ "$file" != docs/* && "$file" != "mkdocs.yml" ]]; then
+            echo "Found file outside docs/ and not mkdocs.yml: $file"
+            ONLY_DOCS_CHANGED=false
+            break
+          fi
+        done <<< "$CHANGED_FILES"
+        
+        if [ "$ONLY_DOCS_CHANGED" = true ]; then
+          echo "Only docs/ files or mkdocs.yml changed."
+          echo "only_docs_changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "Non-docs changes detected."
+          echo "only_docs_changed=false" >> $GITHUB_OUTPUT
+        fi

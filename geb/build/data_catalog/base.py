@@ -67,11 +67,19 @@ class Adapter:
 
         Returns:
             The full path to the processed data file.
+
+        Raises:
+            ValueError: If the root directory is not set.
+            ValueError: If the filename is not set.
         """
+        if self.root is None:
+            raise ValueError("Root directory is not set; cannot determine data path.")
+        if self.filename is None:
+            raise ValueError("Filename is not set; cannot determine data path.")
         return self.root / self.filename
 
     @property
-    def root(self) -> Path | None:
+    def root(self) -> Path:
         """Root directory for the dataset.
 
         If the directory does not exist, it will be created.
@@ -84,20 +92,20 @@ class Adapter:
         Raises:
             ValueError: If the cache attribute is not 'global' or 'local'.
         """
+        if self.folder is None or self.local_version is None or self.cache is None:
+            raise ValueError("Root directory is not set; cannot determine data root.")
         if self.cache == "global":
             geb_data_root: str | None = os.getenv(key="GEB_DATA_ROOT", default=None)
             if geb_data_root:
-                catalog_root = Path(geb_data_root) / ".." / "datacatalog"
+                catalog_root: Path = Path(geb_data_root) / ".." / "datacatalog"
             else:
-                catalog_root = Path.home() / ".geb_cache"
+                catalog_root: Path = Path.home() / ".geb_cache"
 
             root = catalog_root / self.folder / f"v{self.local_version}"
             root.mkdir(parents=True, exist_ok=True)
             return root
         elif self.cache == "local":
             return Path("cache") / self.folder / f"v{self.local_version}"
-        elif self.cache is None:
-            return None
         else:
             raise ValueError("Cache must be either 'global' or 'local'")
 
@@ -115,15 +123,19 @@ class Adapter:
             )
         return is_ready
 
-    def fetch(self) -> Adapter:
+    def fetch(self, *args: Any, **kwargs: Any) -> Adapter:
         """Process the data after downloading.
+
+        Args:
+            *args: Additional positional arguments for data processing.
+            **kwargs: Additional keyword arguments for data processing.
 
         Returns:
             The Adapter instance.
         """
         return self
 
-    def read(self, **kwargs: Any) -> xr.DataArray | pd.DataFrame | gpd.GeoDataFrame:
+    def read(self, *args: Any, **kwargs: Any) -> Any:
         """Read the processed data from storage.
 
         Detects the file format based on the file extension and uses the appropriate reader.

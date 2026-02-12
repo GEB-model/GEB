@@ -9,21 +9,21 @@ Contains several dictionaries to convert between different country coding system
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from geb.model import GEBModel
+import geopandas as gpd
+from hydromt.data_catalog import DataCatalog
 
 
 def setup_donor_countries(
-    geb_build_model: GEBModel,
+    data_catalog: DataCatalog,
+    global_countries: gpd.GeoDataFrame,
     countries_with_data: list[str],
-    alternative_countries: list[str] | None = None,
+    alternative_countries: list[str],
 ) -> dict[str, str]:
     """Sets up the donor countries for GEB.
 
     Args:
-        geb_build_model: The GEB build instance.
+        data_catalog: The data catalog instance.
+        global_countries: GeoDataFrame with global countries geometries.
         countries_with_data: list
             Countries (ISO3 codes) that have data available.
         alternative_countries: list, optional
@@ -33,18 +33,13 @@ def setup_donor_countries(
         A dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
     """
     # load HDI index
-    dev_index = geb_build_model.data_catalog.get_dataframe(
-        "UN_dev_index"
-    )  # Human Development Index
+    dev_index = data_catalog.get_dataframe("UN_dev_index")  # Human Development Index
     dev_index.rename(columns={"Human Development Index": "HDI"}, inplace=True)
     dev_index = (
         dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")
     )  # calculate mean HDI for each country
 
     # find potential donors
-    global_countries = geb_build_model.geom[
-        "global_countries"
-    ]  # we need this to get the centroids of the countries geoms
     potential_donors = global_countries.loc[
         global_countries.index.isin(countries_with_data)
     ]
@@ -54,12 +49,7 @@ def setup_donor_countries(
 
     potential_donors["HDI"] = dev_index.loc[potential_donors.index, "HDI"].values
 
-    # find countries in model domain(or alternative countries, e.g. all ISO3 codes within the GLOBIOM regions inside the model domain)
-    if alternative_countries is not None:
-        # if GLOBIOM regions are provided, use the globiom regions
-        region_countries = alternative_countries.copy()
-    else:
-        region_countries = geb_build_model.geom["regions"]["ISO3"].unique().tolist()
+    region_countries = alternative_countries.copy()
 
     # find countries in model domain that do not have data
     countries_without_data = list(set(region_countries) - set(countries_with_data))
@@ -70,17 +60,18 @@ def setup_donor_countries(
         # calculate the HDI of the target country
         if country not in dev_index.index:  # if the country does not have HDI data
             # take the closest country with HDI data (HDI donor)
-            region_countries_geometries = global_countries.loc[
+            region_countries_with_hdi = global_countries.loc[
                 global_countries.index.isin(region_countries)
+                & global_countries.index.isin(dev_index.index)
             ]
             current_country_geometry = global_countries.loc[country].geometry
-            distances = region_countries_geometries.distance(current_country_geometry)
+            distances = region_countries_with_hdi.distance(current_country_geometry)
             distances = distances[
                 distances > 0
             ]  # remove zero distances (self-distance)
-            closest_country = region_countries_geometries.loc[distances.idxmin()].name
+            closest_country = region_countries_with_hdi.loc[distances.idxmin()].name
 
-            geb_build_model.logger.warning(
+            print(
                 f"Country {country} does not have HDI data available, as it is not an official UN country. Taking HDI from the closest country with HDI data: {closest_country}."
             )
             hdi = dev_index.loc[closest_country, "HDI"]

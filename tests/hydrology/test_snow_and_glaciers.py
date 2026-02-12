@@ -5,6 +5,7 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 
+from geb.geb_types import ArrayFloat32
 from geb.hydrology.snow_glaciers import (
     calculate_albedo,
     calculate_melt,
@@ -16,7 +17,6 @@ from geb.hydrology.snow_glaciers import (
     snow_model,
     update_snow_temperature,
 )
-from geb.types import ArrayFloat32
 
 from ..testconfig import output_folder
 
