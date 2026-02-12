@@ -1,8 +1,45 @@
 # Soil
 
+The soil module has 6 soil layers, following the convention of the SoilGrids database[@poggio2021soilgrids].
+
+| Layer | Depth  |
+|-------|--------|
+| 1     | 0-5cm  |
+| 2     | 5-15cm |
+| 3     | 15-30cm|
+| 4     | 30-60cm|
+| 5     | 60-100cm|
+| 6     | 100-200cm|
+
+For each grid cell and layer, we collect the following variables from SoilGrids:
+
+| Variable              | Soilgrids variable |
+|-----------------------|-------------------|
+| Bulk density          | bdod              |
+| Clay                  | clay              |
+| Silt                  | silt              |
+| Sand*                 | sand              |
+| Soil organic carbon   | soc               |
+
+!!! note
+
+    Sand is not actually obtained, but implied through `100% - Silt (%) - Clay (%)`.
+
+Based on the basic soil properties (sand, clay, silt, organic carbon, bulk density), several hydraulic parameters are derived using Pedotransfer Functions (PTFs).
+
+| Parameter | Symbol | Source / Method |
+|-----------|--------|-----------------|
+| Saturated water content | $\theta_s$ | Toth et al. (2015)[@toth2015new] |
+| Residual water content | $\theta_r$ | Brakensiek et al. (1984)[@rawls1989estimation] |
+| Saturated hydraulic conductivity | $K_{sat}$ | Wösten et al. (1999)[@wosten1999development] |
+| Bubbling pressure | $h_b$ | Rawls and Brakensiek (1989)[@rawls1989estimation] |
+| Pore size distribution index | $\lambda$ | Rawls and Brakensiek (1989)[@rawls1989estimation] |
+
+Field capacity ($\theta_{fc}$ at pF 2.0) and wilting point ($\theta_{wp}$ at pF 4.2) are subsequently calculated from the soil water retention curve defined by these parameters. The top 30cm of the soil is considered topsoil, following the FAO Harmonic World Soil Database conventions.
+
 ## Infiltration and surface runoff
 
-We implement an infiltration scheme based on the Green-Ampt equation [@green1911studies], solving for infiltration capacity physically based on soil properties and moisture deficit.
+We implement an infiltration scheme based on the Green-Ampt equation[@green1911studies], solving for infiltration capacity physically based on soil properties and moisture deficit.
 
 The Green-Ampt method[@green1911studies] conceptualizes infiltration as a sharp wetting front moving downwards through the soil column. As rain falls, a saturated zone develops at the surface and extends to a depth $L$, known as the *wetting front*. Above this front, the soil is assumed to be fully saturated, while below it, the soil remains at its initial moisture content ($\theta_i$). The difference between saturation and the initial moisture is the moisture deficit $\Delta \theta$.
 
@@ -58,6 +95,42 @@ The actual infiltration for a timestep is determined by the minimum of:
 
 Any water that does not infiltrate contributes to surface runoff.
 
+## Vertical flow
+
+Redistribution of water between soil layers uses a finite volume solution to the Richards equation[@richards1931capillary]. The flux $q$ between two layers is calculated using Darcy's Law[@darcy1856fontaines]:
+
+$$
+q = -K(\theta) \left( \frac{\partial \psi}{\partial z} - 1 \right)
+$$
+
+where $z$ is the vertical coordinate (positive upwards) and the $-1$ term accounts for gravity. The hydraulic conductivity $K(\theta)$ and matric potential $\psi(\theta)$ are defined by the Van Genuchten-Mualem relationships. First, the effective saturation $S_e$ is calculated:
+
+$$
+S_e = \frac{\theta - \theta_r}{\theta_s - \theta_r}
+$$
+
+where $\theta$ is the volumetric water content, $\theta_s$ is the saturated water content, and $\theta_r$ is the residual water content. The matric potential and unsaturated hydraulic conductivity are then given by:
+
+$$
+\psi(S_e) = -\frac{1}{\alpha} \left( S_e^{-1/m} - 1 \right)^{1/n}
+$$
+
+$$
+K(S_e) = K_{s} \sqrt{S_e} \left[ 1 - \left(1 - S_e^{1/m}\right)^m \right]^2
+$$
+
+Here:
+
+* $K_s$ is the saturated hydraulic conductivity.
+* $\alpha$, $n$, and $m$ are shape parameters, where $m = 1 - 1/n$.
+* The parameter $\alpha$ is related to the bubbling pressure $h_b$ (in cm) by $\alpha = 100/h_b$ (converting to m$^{-1}$).
+
+!!! note
+
+    When there is an active wetting front, the vertical flow described here is turned off.
+
+
+
 ## Interflow
 
 Interflow, or lateral subsurface flow, is the movement of water within the soil profile parallel to the land surface. In GEB, interflow is calculated for each soil layer when the soil moisture content exceeds the field capacity. This "free water" is available to move laterally driven by gravity and the slope of the terrain, and then added to the channel in each grid cell.
@@ -86,6 +159,15 @@ $$
 *   $K_{lat}$: Lateral saturated hydraulic conductivity [m/h]
 *   $\phi_d$: Drainable porosity [-]
 *   $L_{hill}$: Hillslope length [m]
+
+## Groundwater percolation
+
+Water percolates from the bottom soil layer to the groundwater through two mechanisms:
+
+1.  Direct recharge: If the wetting front extends beyond the bottom of the soil profile (e.g., during intense rainfall), the calculated infiltration flux directly recharges the groundwater.
+2.  Gravity drainage: In the absence of an active wetting front reaching the bottom layer, water drains from the lowest soil layer driven by gravity. The drainage flux $q_{bottom}$ is assumed to be equal to the unsaturated hydraulic conductivity of the bottom layer ($K(\theta_{bottom})$), representing a unit hydraulic gradient condition.
+
+If water is rising from the groundwater, percolation is suppressed.
 
 ## Code
 
