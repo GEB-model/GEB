@@ -9,7 +9,7 @@ The evaluation module provides methods for both the hydrological and hydrodynami
 - Compare simulated discharge with gauging station observations (from the global GRDC dataset or custom stations)
 - Visualize spatial patterns of model outputs (e.g., discharge grids)
 - Generate water balance reports
-- Evaluate flood extents against satellite observations
+- Evaluate flood extents against (satellite) observations
 - Calculate performance metrics (KGE, NSE, R for discharge; CSI for flood extent) 
 
 ## Available evaluations
@@ -17,7 +17,7 @@ The evaluation module provides methods for both the hydrological and hydrodynami
 GEB supports evaluation of:
 
 - **Hydrology**: Discharge at gauging stations, water balance components, spatial patterns
-- **Floods**: Flood extent and depth against satellite observations
+- **Floods**: Flood extent against (satellite) observations
 - **Meteorological forecasts**: Forecast skill for precipitation and temperature
 
 ## Basic usage
@@ -49,7 +49,7 @@ Below, you can find an overview of all the methods currently supported by the ev
 | `hydrology.evaluate_hydrodynamics` | Evaluates flood extents against observations |
 
 ## Command options
-Different options can be appended to the geb evaluate command, such as whether or not to include the hydrological spinup period, or to automatically correct the discharg e
+Different options can be appended to the geb evaluate command, such as whether or not to include the hydrological spinup period, or to automatically correct the discharge
 ```bash
 geb evaluate --run-name default --spinup-name spinup --include-spinup --include-yearly-plots
 ```
