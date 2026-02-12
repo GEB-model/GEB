@@ -128,6 +128,7 @@ nav:
   - Hazards:
     - Overview: hazards/index.md
     - Floods: hazards/floods.md
+    - Windstorms: hazards/windstorms.md
   - Advanced topics:
     - Forecasts: advanced_topics/forecasts.md
     - Calibration: advanced_topics/calibration.md
