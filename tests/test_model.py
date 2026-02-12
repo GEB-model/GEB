@@ -529,6 +529,25 @@ def test_custom_DEM() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_setup_reforestation_potential() -> None:
+    """Test setup of forest restoration potential.
+
+    Verifies that the model can run the
+    ``setup_forest_restoration_potential`` build step with a basic
+    configuration without raising errors.
+    """
+    with WorkingDirectory(working_directory):
+        build_args = DEFAULT_BUILD_ARGS.copy()
+        del build_args["continue_"]
+
+        build_config: dict[str, dict[str, str | bool]] = {}
+        build_config["setup_forest_restoration_potential"] = {}
+        build_args["build_config"] = build_config
+
+        update_fn(**build_args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_setup_inflow() -> None:
     """Test setup of inflow hydrograph.
 
