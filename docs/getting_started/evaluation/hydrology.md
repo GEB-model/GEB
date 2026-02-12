@@ -68,9 +68,7 @@ The discharge evaluation results are saved to `output/evaluate/discharge/`:
 - `scatter_plot_{station_id}.png`: Scatter plots showing correlation between observed and simulated
 - Yearly plots are created when `--include-yearly-plots` is enabled
 
-The evaluation creates an interactive dashboard showing performance metrics across all stations:
-
-![Discharge evaluation dashboard showing timeseries comparison and station performance map](../images/discharge_evaluation_example.png)
+The evaluation creates an interactive dashboard showing performance metrics across all stations (INSERT IMAGE). 
 
 ### Required input data
 
