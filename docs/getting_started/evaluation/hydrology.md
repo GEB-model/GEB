@@ -18,13 +18,26 @@ The hydrology evaluation tools help you:
 
 Evaluate discharge against observations:
 
+```bash
+geb evaluate --methods "evaluate_discharge" --run-name default
+```
+
+For more control, use additional options:
+
+```bash
+geb evaluate --methods "evaluate_discharge" \
+    --run-name default \
+    --spinup-name spinup \
+    --include-yearly-plots
+```
+
+From Python:
+
 ```python
 model.evaluate.hydrology.evaluate_discharge(
     run_name="default",
     spinup_name="spinup",
-    include_spinup=False,
-    include_yearly_plots=True,
-    correct_Q_obs=False
+    include_yearly_plots=True
 )
 ```
 
@@ -61,14 +74,26 @@ Three metrics are calculated for each station:
 
 Results are saved to `output/evaluate/discharge/`:
 
-- `evaluation_results/evaluation_metrics.xlsx`: Performance metrics for all stations
-- `evaluation_results/evaluation_metrics.geoparquet`: Spatial file with metrics
-- `plots/`: Timeseries plots for each station (overall and yearly if requested)
-- `discharge_evaluation_map.html`: Interactive map with station performance
+**Evaluation results** (`evaluation_results/`):
+- `evaluation_metrics.xlsx`: Performance metrics (KGE, NSE, R) for all stations with coordinates
+- `evaluation_metrics.geoparquet`: Same metrics in geospatial format for GIS analysis
+- `discharge_evaluation_metrics.png`: Map visualization showing spatial distribution of metrics
+- `discharge_evaluation_map.html`: Interactive Folium map to explore station performance
+
+**Station plots** (`plots/`):
+- `timeseries_plot_{station_id}.png`: Time series comparing observed vs simulated discharge for each station
+- `scatter_plot_{station_id}.png`: Scatter plots showing correlation between observed and simulated for each station
+- If `--include-yearly-plots` is used, additional plots are created for each year
 
 ## Discharge visualization
 
 Create a spatial map of mean discharge:
+
+```bash
+geb evaluate --methods "plot_discharge" --run-name default
+```
+
+Or from Python:
 
 ```python
 model.evaluate.hydrology.plot_discharge(run_name="default")
@@ -80,7 +105,7 @@ Outputs:
 
 ## Skill score graphs
 
-Create boxplots summarizing performance across all stations:
+Create boxplots summarizing performance across all stations. This method is only available through the Python API after running discharge evaluation:
 
 ```python
 model.evaluate.hydrology.skill_score_graphs(export=True)
@@ -94,13 +119,8 @@ Shows the distribution of KGE, NSE, and R values across all evaluated stations.
 
 Visualize water balance components as a Sankey diagram:
 
-```python
-model.evaluate.hydrology.water_circle(
-    run_name="default",
-    spinup_name="spinup",
-    include_spinup=False,
-    export=True
-)
+```bash
+geb evaluate --methods "water_circle" --run-name default
 ```
 
 Shows flows between precipitation, evaporation, runoff, and storage components.
@@ -109,12 +129,16 @@ Shows flows between precipitation, evaporation, runoff, and storage components.
 
 Calculate and plot all water balance components:
 
+```bash
+geb evaluate --methods "water_balance" --run-name default --include-spinup
+```
+
+From Python:
+
 ```python
 model.evaluate.hydrology.water_balance(
     run_name="default",
-    spinup_name="spinup",
-    include_spinup=False,
-    export=True
+    include_spinup=True
 )
 ```
 
