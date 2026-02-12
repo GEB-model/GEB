@@ -346,7 +346,7 @@ class Observations(BuildModelBase):
         """Initialize the Observations class."""
         pass
 
-    @build_method(depends_on=["setup_hydrography"])
+    @build_method(depends_on=["setup_hydrography"], required=False)
     def setup_discharge_observations(
         self,
         max_uparea_difference_ratio: float = 0.3,
@@ -377,7 +377,7 @@ class Observations(BuildModelBase):
         region_mask = self.geom["mask"]
 
         # Load Q_obs dataset
-        Q_obs = self.new_data_catalog.fetch("GRDC").read()
+        Q_obs = self.data_catalog.fetch("GRDC").read()
 
         # create folders
         snapping_discharge_folder = (

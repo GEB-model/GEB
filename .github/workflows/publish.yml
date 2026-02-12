@@ -37,7 +37,7 @@ jobs:
           path: dist
       - name: Set up uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
-      - uses: astral-sh/attest-action@v0.0.4
+      - uses: astral-sh/attest-action@v0.0.5
       - name: Publish package distributions to PyPI
         run: |
           uv publish --trusted-publishing always --publish-url https://upload.pypi.org/legacy/

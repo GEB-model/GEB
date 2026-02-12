@@ -8,7 +8,7 @@ To install GEB using an LLM agent, you can use the following prompt:
 Please set up the GEB model environment for me. You can following the instructions here for the installation: https://docs.geb.sh/getting_started/installation/index.md. Ask the user whether they want to install it as a developer or the normal installation. When you install something, first check if it is not already installed. For the developer mode, note that you should clone the repository to the CURRENT folder using `git clone https://github.com/GEB-model/GEB.git .` including the `.`. For the developer mode, also include the configuration of VSCode, but do so using commands rather than using the visual interface. At the end, check if the ssh keys and the connection to GitHub are set up already. You can use "ssh -T git@github.com". If this is not working, ask the user whether they want to set this up to allow the user to contribute via GitHub. Note that the cloning itself can be done without the keys as it is a public repository.
 ```
 
-## Installation (not for development)
+## Installation with Python environment (not for development)
 
 GEB can be installed with pip, including all dependencies on Windows, Linux and Mac OS X.
 
@@ -23,6 +23,22 @@ uv pip install geb --prerelease=allow
 ```
 
 To run SFINCS (the hydrodynamic model), you also need to install Docker (on Windows) or Apptainer (on Linux and Mac OS X). To install Docker you need to obtain and install Docker from their website (https://www.docker.com/get-started) and make sure Docker or Apptainer is running.
+
+## Installation as a tool
+
+GEB can also be installed without setting up a Python environment (thanks to [uvx.sh](https://uvx.sh/)).
+
+On Mac OS X and Linux:
+
+```bash
+curl -LsSf uvx.sh/geb/install.sh | sh
+```
+
+On Windows:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://uvx.sh/geb/install.ps1 | iex"
+```
 
 ## Development installation and setup
 

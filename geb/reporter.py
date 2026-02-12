@@ -151,6 +151,11 @@ WATER_BALANCE_REPORT_CONFIG = {
             "type": "HRU",
             "function": "weightedsum",
         },
+        "_water_balance_interflow": {
+            "varname": ".interflow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
     },
     "hydrology.routing": {
         "_water_balance_river_evaporation": {
@@ -178,6 +183,16 @@ WATER_BALANCE_REPORT_CONFIG = {
         "_water_balance_livestock_water_loss": {
             "varname": ".livestock_water_loss_m3",
             "type": "scalar",
+        },
+    },
+}
+
+ENERGY_BALANCE_REPORT_CONFIG = {
+    "hydrology.landsurface": {
+        "_energy_balance_soil_temperature_top_layer_C": {
+            "varname": "HRU.var.soil_temperature_C[0]",
+            "type": "HRU",
+            "function": "weightedmean",
         },
     },
 }
@@ -525,6 +540,8 @@ class Reporter:
         - _discharge_stations: if set to True, discharge at all discharge stations is reported.
         - _outflow_points: if set to True, outflow at all outflow points is reported.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
+        - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
+        - _energy_balance: if set to True, a standard set of variables to monitor the energy balance is reported.
 
         Args:
             model: The GEB model instance.
@@ -615,6 +632,12 @@ class Reporter:
                                 report_config,
                                 WATER_BALANCE_REPORT_CONFIG,
                             )
+                    elif module_name == "_energy_balance":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                ENERGY_BALANCE_REPORT_CONFIG,
+                            )
                     else:
                         raise ValueError(
                             f"Module {module_name} is not a valid module for reporting."
@@ -665,13 +688,13 @@ class Reporter:
             if config["function"] is not None:
                 return []
             else:
-                return
+                return None
 
         elif config["type"] == "agents":
             if config["function"] is not None:
                 return []
             else:
-                return
+                return None
 
         else:
             raise ValueError(
@@ -896,15 +919,22 @@ class Reporter:
                 config["_index"] += substeps
                 return
             else:
+                # in the first timestep, we create the array that will hold the actual data
+                if value.ndim == 2:
+                    substeps: int = value.shape[0]
+                    config["substeps"] = substeps
+                else:
+                    substeps: int = 1
+
                 function, *args = config["function"].split(",")
                 if function == "mean":
-                    value = np.mean(value)
+                    value = np.mean(value, axis=-1)
                 elif function == "nanmean":
-                    value = np.nanmean(value)
+                    value = np.nanmean(value, axis=-1)
                 elif function == "sum":
-                    value = np.sum(value)
+                    value = np.sum(value, axis=-1)
                 elif function == "nansum":
-                    value = np.nansum(value)
+                    value = np.nansum(value, axis=-1)
                 elif function in ("sample_xy", "sample_lonlat"):
                     # for sample_xy, args are pixel coordinates, which we
                     # first need to convert to their pixel index in x and y
@@ -967,13 +997,15 @@ class Reporter:
                     else:
                         cell_area = self.hydrology.grid.var.cell_area
                     if function == "weightedmean":
-                        value = np.average(value, weights=cell_area)
+                        value = np.average(value, weights=cell_area, axis=-1)
                     elif function == "weightednanmean":
-                        value = np.nansum(value * cell_area) / np.sum(cell_area)
+                        value = np.nansum(value * cell_area, axis=-1) / np.sum(
+                            cell_area
+                        )
                     elif function == "weightedsum":
-                        value = np.sum(value * cell_area)
+                        value = np.sum(value * cell_area, axis=-1)
                     elif function == "weightednansum":
-                        value = np.nansum(value * cell_area)
+                        value = np.nansum(value * cell_area, axis=-1)
 
                 else:
                     raise ValueError(f"Function {function} not recognized")

@@ -307,11 +307,8 @@ def generate_surge_hydrograph(
 
     # generate storm surge hydrograph
     hours = 36
-    timesteps_before_peak = np.around(np.arange(0, 1.0001, 0.005), 3)
-    df_before_peak = pd.DataFrame(index=timesteps_before_peak)
-
-    timesteps_after_peak = np.around(np.arange(0, 1.0001, 0.005), 3)
-    df_after_peak = pd.DataFrame(index=timesteps_after_peak)
+    df_before_peak = pd.DataFrame(index=np.around(np.arange(0, 1.0001, 0.005), 3))
+    df_after_peak = pd.DataFrame(index=np.around(np.arange(0, 1.0001, 0.005), 3))
     for k in range(len(surge_peaks_POT)):
         timeseries_before_peak = surgepd.loc[
             surge_peaks_POT.iloc[k].name
@@ -380,7 +377,9 @@ def generate_surge_hydrograph(
     surge_hydrograph_height = np.concatenate(
         (
             np.zeros(247),
-            np.hstack((timesteps_before_peak, np.flipud(timesteps_after_peak)[1:])),
+            np.hstack(
+                (df_before_peak.index.values, np.flipud(df_after_peak.index.values)[1:])  # ty:ignore[no-matching-overload]
+            ),  # ty:ignore[no-matching-overload]
             np.zeros(246),
         )
     )
@@ -519,7 +518,7 @@ def generate_storm_tide_hydrograph(
             "surge": surge,
             "twl": average_tide_signal + surge,
         },
-        index=pd.date_range(start="1/1/2000", periods=len(surge), freq="10T"),
+        index=pd.date_range(start="1/1/2000", periods=len(surge), freq="10min"),
     )
     surge_height_spring = rl - np.max(spring_tide_signal)
     surge_rise_spring = np.flip(
@@ -549,7 +548,7 @@ def generate_storm_tide_hydrograph(
             "surge": surge_spring,
             "twl": spring_tide_signal + surge_spring,
         },
-        index=pd.date_range(start="1/1/2000", periods=len(surge_spring), freq="10T"),
+        index=pd.date_range(start="1/1/2000", periods=len(surge_spring), freq="10min"),
     )
 
     # plot

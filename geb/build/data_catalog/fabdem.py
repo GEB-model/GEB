@@ -517,16 +517,16 @@ class Fabdem(Adapter):
 
         # Convert to actual coordinates
         if ns_lat == "S":
-            lat_min: int = -lat_val - 1
-            lat_max: int = -lat_val
-        else:  # N
+            lat_min: int = -lat_val
+            lat_max: int = -lat_val + 1
+        else:
             lat_min: int = lat_val
             lat_max: int = lat_val + 1
 
         if ew_lon == "W":
-            lon_min: int = -lon_val - 1
-            lon_max: int = -lon_val
-        else:  # E
+            lon_min: int = -lon_val
+            lon_max: int = -lon_val + 1
+        else:
             lon_min: int = lon_val
             lon_max: int = lon_val + 1
 

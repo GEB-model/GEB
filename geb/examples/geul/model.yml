@@ -28,7 +28,7 @@ hazards:
     flood_risk: false
     gpu: auto
     ncpus: auto # can be number or 'auto', use less cpus when running on interactive session
-    force_overwrite: true
+    overwrite: auto
     coastal_only: false
     return_periods:
       - 2
@@ -41,6 +41,10 @@ report:
   hydrology.landsurface:
     bare_soil_evaporation_weighted_sum_m:
       varname: .bare_soil_evaporation_m
+      type: HRU
+      function: weightednanmean
+    runoff_m:
+      varname: .runoff_m
       type: HRU
       function: weightednanmean
   hydrology.routing:
@@ -63,6 +67,9 @@ report:
       function: mean
 
 calibration:
+  spinup_time: 1990-01-01
+  start_time: 2000-01-01
+  end_time: 2025-12-31
   calibration_targets:
     KGE_discharge: 1
   DEAP:

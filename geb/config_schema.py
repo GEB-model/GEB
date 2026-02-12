@@ -85,7 +85,6 @@ class FloodsConfig(BaseModel):
         "auto",
         description="Whether to overwrite existing flood model. True, False, 'auto'. If 'auto', it will check if a GPU is available using nvidia-smi.",
     )
-    force_overwrite: bool = Field(False, description="Whether to force overwrite.")
     coastal_only: bool = Field(
         False, description="Whether to simulate coastal floods only."
     )

@@ -29,9 +29,11 @@ setup_mannings:
   
 setup_economic_data:
 
-setup_soil_parameters:
+setup_soil:
 
 setup_land_use_parameters:
+
+setup_vegetation:
 
 setup_waterbodies:
   command_areas: null
@@ -55,14 +57,16 @@ setup_create_farms:
 
 setup_income_distribution_parameters:
 
+setup_buildings:
+
 setup_household_characteristics:
 
 setup_water_demand:
 
 setup_farmer_household_characteristics:
 
-setup_crops_from_source:
-  source: MIRCA2000
+setup_crops:
+  source_type: MIRCA2000
 
 setup_farmer_crop_calendar:
   year: 2000
@@ -374,8 +378,6 @@ setup_discharge_observations:
 setup_CO2_concentration:
 
 setup_global_ocean_mean_dynamic_topography:
-
-setup_low_elevation_coastal_zone_mask:
 
 setup_coastlines:
 

@@ -93,11 +93,21 @@ def VectorScannerMultiCurves(
         pd.DataFrame:
             A dataframe indexed by building ID (same index as input features),
             with one column per damage curve, containing damages in EUR.
+    Raises:
+        ValueError: If the curves do not share the same x-values or if required columns are missing from the features GeoDataFrame.
     """
     curve_names: list[str] = list(multi_curves.keys())
 
     # Shared x-values
     curve_x = multi_curves[curve_names[0]].index.values.astype(np.float64)
+
+    # assert all curves have the same x-values
+    for n in curve_names[1:]:
+        if not np.array_equal(curve_x, multi_curves[n].index.values.astype(np.float64)):
+            raise ValueError(
+                f"All curves must have the same x-values. Curve '{n}' does not match."
+            )
+
     curve_x = np.append(curve_x, 1e10)  # sentinel value for safe searchsorted
 
     # Stack curve y-values
@@ -137,44 +147,111 @@ def VectorScannerMultiCurves(
     inundation_parts = np.fromiter(vals, dtype=np.float64)
     coverage_parts = np.fromiter(covs, dtype=np.float64) * cell_area_m2
 
+    # Clip hazard values for stable searchsorted
+    inundation_parts = np.clip(inundation_parts, curve_x[0], curve_x[-2])
+
+    # check if maximum damage columns are present
+    if "maximum_damage_structure" not in filtered.columns:
+        raise ValueError(
+            "The features GeoDataFrame must contain a 'maximum_damage_structure' column."
+        )
+    if "maximum_damage_content" not in filtered.columns:
+        raise ValueError(
+            "The features GeoDataFrame must contain a 'maximum_damage_content' column."
+        )
+
     # Maximum damage per building-part (broadcasted)
-    max_damage_arr = np.fromiter(
+    max_damage_arr_structure = np.fromiter(
         (
             dmg
-            for len_v, dmg in zip(filtered["len_values"], filtered["maximum_damage"])
+            for len_v, dmg in zip(
+                filtered["len_values"], filtered["maximum_damage_structure"]
+            )
             for _ in range(len_v)
         ),
         dtype=np.float64,
     )
 
-    # Clip hazard values for stable searchsorted
-    inundation_parts = np.clip(inundation_parts, curve_x[0], curve_x[-2])
-
-    # Compute damages for every part
-    damage_matrix = compute_all_numba(
-        inundation_parts,
-        coverage_parts,
-        max_damage_arr,
-        curve_x,
-        curve_y,
-        curve_slopes,
+    max_damage_arr_content = np.fromiter(
+        (
+            dmg
+            for len_v, dmg in zip(
+                filtered["len_values"], filtered["maximum_damage_content"]
+            )
+            for _ in range(len_v)
+        ),
+        dtype=np.float64,
     )
 
-    # Aggregate per building (vectorized)
+    # Initiate aggregate per building (vectorized)
     lengths = filtered["len_values"].to_numpy()
     starts = np.r_[0, lengths.cumsum()[:-1]]
 
-    damage_matrix_final = np.add.reduceat(damage_matrix, starts, axis=0)
+    # Compute damages for every part
+    # only select curves relevant for structure
+    # find index of curves relevant for structure based on index searching for "structure" in curve names
+    i_curves_structure = [
+        i for i, n in enumerate(curve_names) if "structure" in n.lower()
+    ]
 
+    if not i_curves_structure:
+        # Fail fast with a clear error when no structure-related curves are available.
+        # Without at least one such curve, damage computation would proceed with empty
+        # curve arrays and likely produce incorrect results or fail deep in numba code.
+        raise ValueError(
+            "No vulnerability curves for structure damages were found. "
+            "Ensure that at least one curve name contains the substring 'structure'."
+        )
+    curve_structure = curve_y[i_curves_structure, :]
+    slopes_structure = curve_slopes[i_curves_structure, :]
+    damage_matrix_structure = compute_all_numba(
+        inundation_parts,
+        coverage_parts,
+        max_damage_arr_structure,
+        curve_x,
+        curve_structure,
+        slopes_structure,
+    )
+
+    damage_matrix_structure_final = np.add.reduceat(
+        damage_matrix_structure, starts, axis=0
+    )
     # Return as DataFrame
-    df_damage = pd.DataFrame(
-        damage_matrix_final,
-        columns=np.array(curve_names),
+    df_damage_structure = pd.DataFrame(
+        damage_matrix_structure_final,
+        columns=np.array(curve_names)[i_curves_structure],
         index=filtered.index,
     )
     # fill missing buildings with zero damage
-    df_damage = df_damage.reindex(features.index, fill_value=0.0)
-    return df_damage
+    df_damage_structure = df_damage_structure.reindex(features.index, fill_value=0.0)
+
+    # only select curves relevant for content
+    i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
+    curve_content = curve_y[i_curves_content, :]
+    slopes_content = curve_slopes[i_curves_content, :]
+    damage_matrix_content = compute_all_numba(
+        inundation_parts,
+        coverage_parts,
+        max_damage_arr_content,
+        curve_x,
+        curve_content,
+        slopes_content,
+    )
+
+    damage_matrix_content_final = np.add.reduceat(damage_matrix_content, starts, axis=0)
+
+    # Return as DataFrame
+    df_damage_content = pd.DataFrame(
+        damage_matrix_content_final,
+        columns=np.array(curve_names)[i_curves_content],
+        index=filtered.index,
+    )
+    # fill missing buildings with zero damage
+    df_damage_content = df_damage_content.reindex(features.index, fill_value=0.0)
+
+    # concat both dataframes
+    df_damage_combined = pd.concat([df_damage_structure, df_damage_content], axis=1)
+    return df_damage_combined
 
 
 def VectorScanner(

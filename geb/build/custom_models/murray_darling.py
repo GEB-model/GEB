@@ -31,10 +31,10 @@ class Agents(BaseAgents):
         * Diversions are kept as annual values. NSW total includes Murrumbidgee
         at a 0.5 weight (as in your original intent).
         """
-        inflation_rates = self.new_data_catalog.fetch("wb_inflation_rate").read()
+        inflation_rates = self.data_catalog.fetch("wb_inflation_rate").read()
         inflation_rates_country_index = inflation_rates.set_index("Country Code")
-        price_ratio = self.new_data_catalog.fetch("world_bank_price_ratio").read()
-        LCU_per_USD = self.new_data_catalog.fetch("world_bank_LCU_per_USD").read()
+        price_ratio = self.data_catalog.fetch("world_bank_price_ratio").read()
+        LCU_per_USD = self.data_catalog.fetch("world_bank_LCU_per_USD").read()
 
         def _get_observed_price_and_diversion() -> tuple[pd.DataFrame, pd.DataFrame]:
             regions_of_interest = [
@@ -358,7 +358,7 @@ class Agents(BaseAgents):
         """
         self.logger.info("Setting up drip irrigation prices by reference year")
 
-        inflation = self.new_data_catalog.fetch("wb_inflation_rate").read()
+        inflation = self.data_catalog.fetch("wb_inflation_rate").read()
         regions = list(inflation["data"].keys())
         infl_years: list[str] = [str(y) for y in inflation["time"]]
 

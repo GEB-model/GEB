@@ -179,6 +179,8 @@ report:
     compression_level: 9  # 1 (min) to 22 (max)
     chunk_target_size_bytes: 100000000  # target chunk size in bytes
   _water_circle: false
+  _water_balance: true
+  _energy_balance: true
   _discharge_stations: true
   _outflow_points: true
 
@@ -189,6 +191,7 @@ parameters:
   reservoir_release_factor: 0.1
   water_demand_multiplier_industry: 1.0
   lake_outflow_multiplier: 1.0
+  interflow_multiplier: 1.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

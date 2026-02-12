@@ -19,7 +19,7 @@ geb/examples/*/*
 libmf6.so
 ssh_script
 .gemini/
-model/
+/model/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

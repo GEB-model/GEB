@@ -25,6 +25,8 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
+from geb.geb_types import Shape
+
 from .landcovers import (
     FOREST,
     GRASSLAND_LIKE,
@@ -33,6 +35,26 @@ from .landcovers import (
     PADDY_IRRIGATED,
     SEALED,
 )
+
+
+def leaf_area_index_to_interception_capacity_m(
+    leaf_area_index: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
+    """Convert leaf area index to interception capacity in meters.
+
+    Args:
+        leaf_area_index: Leaf area index (LAI) array.
+
+    Returns:
+        interception_capacity_m: Interception capacity in meters.
+    """
+    interception_capacity_m = (
+        np.float32(0.935)
+        + np.float32(0.498) * leaf_area_index
+        - 0.00575 * (leaf_area_index) ** 2
+    ) / np.float32(1000.0)  # convert from mm to m
+    interception_capacity_m[leaf_area_index <= np.float32(0.1)] = np.float32(0.0)
+    return interception_capacity_m
 
 
 def get_interception_capacity(
