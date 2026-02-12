@@ -96,6 +96,11 @@ nav:
       - Landsurface: getting_started/build/landsurface.md
       - Waterbodies: getting_started/build/waterbodies.md
     - Running the model: getting_started/running.md
+    - Evaluate the model:
+      - Overview: getting_started/evaluation/index.md
+      - Hydrology evaluation: getting_started/evaluation/hydrology.md
+      - Flood evaluation: getting_started/evaluation/flood.md
+    
     - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
   - Model:
@@ -128,6 +133,8 @@ nav:
   - Hazards:
     - Overview: hazards/index.md
     - Floods: hazards/floods.md
+    - Windstorms: hazards/windstorms.md
+    - Extreme Value Analysis: hazards/extreme_value_analysis.md
   - Advanced topics:
     - Forecasts: advanced_topics/forecasts.md
     - Calibration: advanced_topics/calibration.md

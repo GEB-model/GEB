@@ -54,7 +54,7 @@ from geb.workflows.io import (
 )
 from geb.workflows.methods import get_utm_zone
 from geb.workflows.raster import (
-    calculate_cell_area,
+    calculate_cell_area_m2,
     clip_region,
     coord_to_pixel,
     pad_to_grid_alignment,
@@ -1062,7 +1062,7 @@ class SFINCSRootModel:
                 self.elevation, np.nan, dtype=np.float32
             )
             height, width = self.shape
-            cell_area.values = calculate_cell_area(
+            cell_area.values = calculate_cell_area_m2(
                 self.elevation.rio.transform(), height, width
             )
             return cell_area
@@ -2067,7 +2067,7 @@ class SFINCSSimulation:
                 self.sfincs_model.grid["dep"], np.nan, dtype=np.float32
             )
             height, width = self.sfincs_model.grid["dep"].shape
-            cell_area.values = calculate_cell_area(
+            cell_area.values = calculate_cell_area_m2(
                 self.sfincs_model.grid["dep"].rio.transform(), height, width
             )
         else:

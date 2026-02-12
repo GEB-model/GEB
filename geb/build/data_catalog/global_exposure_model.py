@@ -47,6 +47,8 @@ gadm_converter: dict[str, str] = {
     "Ciudad de México": "Distrito Federal",
     "PetÃ©n": "Peten",
     "SololÃ¡": "Solola",
+    "Tyrol": "Tirol",
+    "Vaduz": "Valduz",
 }
 
 
