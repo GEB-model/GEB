@@ -156,6 +156,14 @@ Metrics may include:
 - Comparison against observed flood extents
 - Event-based skill scores (binary class statistics)
 
+## Future Enhancements
+
+The shape of the riverine return period hydrograph will use historical hydrograph shape, currently a triangular shape is assumed based on the user input. 
+<figure markdown="span">
+  ![triangular shape](../images/hydrograph_riverine.jpg)
+  <figcaption>Example riverine return period plot.</figcaption>
+</figure>
+
 ## Code
 
 ::: geb.hazards.floods.sfincs
