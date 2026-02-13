@@ -3,6 +3,7 @@
 from typing import Any
 
 from .base import Adapter
+from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
@@ -381,7 +382,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "gcam_electricity_rates": {
         "adapter": GCAMElectricityRates(
-            folder="socioeconomic/electricity_rates",
+            folder="gcam/electricity_rates",
             local_version=1,
             filename="GCAM_Electricity_Rates.csv",
             cache="global",
@@ -875,6 +876,42 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://doi.org/10.5281/zenodo.15680747",
             "paper_doi": "10.5281/zenodo.15680747",
         },
+    },
+    **{
+        f"cwatm_industry_water_demand_{scenario}_year": {
+            "adapter": CWATMIndustryWaterDemand(
+                folder="cwatm_water_demand",
+                filename=f"{scenario}_ind_year_millionm3_5min.nc",
+                local_version=1,
+                cache="global",
+            ),
+            "url": None,
+            "source": {
+                "name": f"CWATM Industry Water Demand {scenario}",
+                "author": "Burek et al. (2016)",
+                "license": "CC BY 3.0",
+                "url": "https://doi.org/10.5194/gmd-9-175-2016",
+            },
+        }
+        for scenario in ["historical", "ssp1", "ssp2", "ssp3", "ssp5"]
+    },
+    **{
+        f"cwatm_livestock_water_demand_{scenario}_year": {
+            "adapter": CWATMLivestockWaterDemand(
+                folder="cwatm_water_demand",
+                filename=f"{scenario}_liv_year_millionm3_5min.nc",
+                local_version=1,
+                cache="global",
+            ),
+            "url": None,
+            "source": {
+                "name": f"CWATM Livestock Water Demand {scenario}",
+                "author": "Burek et al. (2016)",
+                "license": "CC BY 3.0",
+                "url": "https://doi.org/10.5194/gmd-9-175-2016",
+            },
+        }
+        for scenario in ["historical", "ssp1", "ssp2", "ssp3", "ssp5"]
     },
 }
 
