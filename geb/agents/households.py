@@ -585,6 +585,14 @@ class Households(AgentBaseClass):
             np.full(self.n, 0, np.int32), max_n=self.max_n
         )
 
+        buildings_copy = self.buildings.copy()
+        projected_crs = buildings_copy.estimate_utm_crs()
+        buildings_copy = buildings_copy.to_crs(projected_crs)
+        self.buildings["area_m2"] = buildings_copy.geometry.area
+        self.buildings["maximum_damage_content_m2"] = (
+            self.var.max_dam_buildings_content / self.buildings["area_m2"]
+        )
+
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
@@ -1867,10 +1875,6 @@ class Households(AgentBaseClass):
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
-        self.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
-        self.buildings_centroid["object_type"] = (
-            "building_unprotected"  # before it was "building_content"
-        )
 
         # Load roads
         self.roads = gpd.read_parquet(self.model.files["geom"]["assets/roads"]).rename(
@@ -1898,7 +1902,9 @@ class Households(AgentBaseClass):
                 ]
             )["maximum_damage"]
         )
-        self.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
+        self.buildings["maximum_damage_structure_m2"] = (
+            self.var.max_dam_buildings_structure
+        )
 
         max_dam_buildings_content = read_params(
             self.model.files["dict"][
@@ -1908,7 +1914,6 @@ class Households(AgentBaseClass):
         self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
-        self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         self.var.max_dam_rail = float(
             read_params(
@@ -2093,7 +2098,6 @@ class Households(AgentBaseClass):
         self.buildings_structure_curve["building_wetproofed"] = (
             self.buildings_structure_curve_wetproofed["building_wetproofed"]
         )
-        print(self.buildings_structure_curve)
         self.buildings_content_curve["building_dryproofed"] = (
             self.buildings_content_curve_dryproofed["building_dryproofed"]
         )
@@ -2273,11 +2277,9 @@ class Households(AgentBaseClass):
 
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
-            # print(
-            #     self.buildings_structure_curve["building_dryproofed"],
-            # )
+
             building_multicurve = buildings.copy()
-            multi_curves = {
+            multi_curves_setup = {
                 "damages_structure": self.buildings_structure_curve[
                     "building_unprotected"
                 ],
@@ -2288,25 +2290,29 @@ class Households(AgentBaseClass):
                 "damages_content_flood_proofed": self.buildings_content_curve[
                     "building_flood_proofed"
                 ],
-                "damages": self.buildings_structure_curve["building_unprotected"],
-                "damages_dryproofed": self.buildings_structure_curve[
+                "damages_structure_dryproofed": self.buildings_structure_curve[
                     "building_dryproofed"
                 ],
-                "damages_wetproofed": self.buildings_structure_curve[
+                "damages_content_dryproofed": self.buildings_content_curve[
+                    "building_dryproofed"
+                ],
+                "damages_structure_wetproofed": self.buildings_structure_curve[
+                    "building_wetproofed"
+                ],
+                "damages_content_wetproofed": self.buildings_content_curve[
                     "building_wetproofed"
                 ],
             }
-            # print(multi_curves)
 
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
                     columns={
-                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
+                        "maximum_damage_structure_m2": "maximum_damage_structure",
+                        "maximum_damage_content_m2": "maximum_damage_content",
                     }
                 ),
                 hazard=flood_map,
-                multi_curves=multi_curves,
+                multi_curves=multi_curves_setup,
             )
 
             # sum structure and content damages
@@ -2317,6 +2323,14 @@ class Households(AgentBaseClass):
             damage_buildings["damages_flood_proofed"] = (
                 damage_buildings["damages_structure_flood_proofed"]
                 + damage_buildings["damages_content_flood_proofed"]
+            )
+            damage_buildings["damages_dryproofed"] = (
+                damage_buildings["damages_structure_dryproofed"]
+                + damage_buildings["damages_content_dryproofed"]
+            )
+            damage_buildings["damages_wetproofed"] = (
+                damage_buildings["damages_structure_wetproofed"]
+                + damage_buildings["damages_content_wetproofed"]
             )
             # concatenate damages to building_multicurve
             building_multicurve = pd.concat(
@@ -2519,9 +2533,9 @@ class Households(AgentBaseClass):
                 how="left",
             )  # now merge to get flood proofed status
 
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+            # buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
 
-            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+            # buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
             buildings["object_type"] = buildings[
                 "flood_proofed"
@@ -2545,18 +2559,14 @@ class Households(AgentBaseClass):
                 "building_protected"
             )
 
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            buildings_centroid["object_type"] = buildings_centroid[
-                "protect_building"
-            ].apply(lambda x: "building_protected" if x else "building_unprotected")
-            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
         # Create the folder to save damage maps if it doesn't exist
         damage_folder: Path = self.model.output_folder / "damage_maps"
         damage_folder.mkdir(parents=True, exist_ok=True)
 
         damages_buildings_content = VectorScanner(
-            features=buildings_centroid,
+            features=buildings.rename(
+                columns={"maximum_damage_content_m2": "maximum_damage"}
+            ),
             hazard=flood_depth,
             vulnerability_curves=self.buildings_content_curve,
         )
@@ -2564,24 +2574,26 @@ class Households(AgentBaseClass):
         total_damages_content = damages_buildings_content.sum()
 
         # save it to a gpkg file
-        gdf_content = buildings_centroid.copy()
+        gdf_content = buildings.copy()
         gdf_content["damage"] = damages_buildings_content
         category_name: str = "buildings_content"
         filename: str = f"damage_map_{category_name}.gpkg"
         gdf_content.to_file(damage_folder / filename, driver="GPKG")
 
-        print(f"damages to building content are: {total_damages_content}")
+        print(f"damages to building content are: €{total_damages_content:,.0f}")
 
         # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
-            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
+            features=buildings.rename(
+                columns={"maximum_damage_structure_m2": "maximum_damage"}
+            ),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
             vulnerability_curves=self.buildings_structure_curve,
         )
 
         total_damage_structure = damages_buildings_structure.sum()
 
-        print(f"damages to building structure are: {total_damage_structure}")
+        print(f"damages to building structure are: €{total_damage_structure:,.0f}")
 
         # save it to a gpkg file
         gdf_structure = buildings.copy()
@@ -2591,7 +2603,7 @@ class Households(AgentBaseClass):
         gdf_structure.to_file(damage_folder / filename, driver="GPKG")
 
         print(
-            f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
+            f"Total damages to buildings are: €{total_damages_content + total_damage_structure:,.0f}"
         )
 
         agriculture = from_landuse_raster_to_polygon(
@@ -2610,7 +2622,7 @@ class Households(AgentBaseClass):
             vulnerability_curves=self.var.agriculture_curve,
         )
         total_damages_agriculture = damages_agriculture.sum()
-        print(f"damages to agriculture are: {total_damages_agriculture}")
+        print(f"damages to agriculture are: €{total_damages_agriculture:,.0f}")
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
@@ -2629,7 +2641,7 @@ class Households(AgentBaseClass):
             vulnerability_curves=self.var.forest_curve,
         )
         total_damages_forest = damages_forest.sum()
-        print(f"damages to forest are: {total_damages_forest}")
+        print(f"damages to forest are: €{total_damages_forest:,.0f}")
 
         roads = self.roads.to_crs(flood_depth.rio.crs)
         damages_roads = VectorScanner(
@@ -2638,7 +2650,7 @@ class Households(AgentBaseClass):
             vulnerability_curves=self.var.road_curves,
         )
         total_damages_roads = damages_roads.sum()
-        print(f"damages to roads are: {total_damages_roads} ")
+        print(f"damages to roads are: €{total_damages_roads:,.0f}")
 
         rail = self.rail.to_crs(flood_depth.rio.crs)
         damages_rail = VectorScanner(
@@ -2647,7 +2659,7 @@ class Households(AgentBaseClass):
             vulnerability_curves=self.var.rail_curve,
         )
         total_damages_rail = damages_rail.sum()
-        print(f"damages to rail are: {total_damages_rail}")
+        print(f"damages to rail are: €{total_damages_rail:,.0f}")
 
         total_flood_damages = (
             total_damage_structure
@@ -2657,7 +2669,7 @@ class Households(AgentBaseClass):
             + total_damages_forest
             + total_damages_agriculture
         )
-        print(f"the total flood damages are: {total_flood_damages}")
+        print(f"the total flood damages are: €{total_flood_damages:,.0f}")
 
         return total_flood_damages
 
