@@ -96,7 +96,7 @@ def get_resources(cluster_name):
     if partition_index == 0:
         partition = "defq"
         partition_arg = ""  # defq is the default queue
-        memory_mb = 240000  # 240 GB (limit ~251 GB)
+        memory_mb = 300000  # 300 GB (limit ~251 GB)
     elif partition_index == 1:
         partition = "ivm"
         partition_arg = "--partition=ivm"
