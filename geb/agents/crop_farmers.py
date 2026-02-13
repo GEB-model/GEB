@@ -349,7 +349,7 @@ class CropFarmers(AgentBaseClass):
 
         self.irrigation_reduction = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
-        ]["adaptation_sprinkler"]["allocation_reduction"]
+        ]["adaptation_sprinkler"]["irrigation_limit_reduction"]
 
         if self.model.in_spinup:
             self.spinup()
@@ -3714,21 +3714,21 @@ class CropFarmers(AgentBaseClass):
 
         SEUT_adaptation_decision = initial_mask
 
-        # cap = int(np.floor(0.05 * best_option_SEUT.size))
-        # n_true = int(initial_mask.sum())
-        # if n_true <= cap:
-        #     SEUT_adaptation_decision = initial_mask
-        # else:
-        #     denom = np.maximum(np.abs(SEUT_do_nothing), 1e-12)
-        #     pct_diff = (best_option_SEUT - SEUT_do_nothing) / denom
+        cap = int(np.floor(0.10 * best_option_SEUT.size))
+        n_true = int(initial_mask.sum())
+        if n_true <= cap:
+            SEUT_adaptation_decision = initial_mask
+        else:
+            denom = np.maximum(np.abs(SEUT_do_nothing), 1e-12)
+            pct_diff = (best_option_SEUT - SEUT_do_nothing) / denom
 
-        #     idx_true = np.flatnonzero(initial_mask)
-        #     scores = pct_diff[idx_true]
-        #     top_k_rel = np.argpartition(scores, -cap)[-cap:]
-        #     keep_idx = idx_true[top_k_rel]
+            idx_true = np.flatnonzero(initial_mask)
+            scores = pct_diff[idx_true]
+            top_k_rel = np.argpartition(scores, -cap)[-cap:]
+            keep_idx = idx_true[top_k_rel]
 
-        #     SEUT_adaptation_decision = np.zeros_like(initial_mask, dtype=bool)
-        #     SEUT_adaptation_decision[keep_idx] = True
+            SEUT_adaptation_decision = np.zeros_like(initial_mask, dtype=bool)
+            SEUT_adaptation_decision[keep_idx] = True
 
         # Protect against full loss of rotation
         switch = SEUT_adaptation_decision.copy()
