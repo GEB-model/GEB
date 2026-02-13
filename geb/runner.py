@@ -5,15 +5,16 @@ import importlib
 import logging
 import os
 import platform
+import pstats
 import shutil
 import subprocess
 import sys
 import tempfile
 import zipfile
+from collections.abc import Callable
 from operator import attrgetter
 from pathlib import Path
-from pstats import Stats
-from typing import Any
+from typing import Any, TypeVar
 
 import geopandas as gpd
 import yaml
@@ -43,6 +44,8 @@ DATA_ROOT_DEFAULT: Path = Path(
     )
 )
 ALTER_FROM_MODEL_DEFAULT: Path = Path("../base")
+
+ResultType = TypeVar("ResultType")
 
 
 class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
@@ -209,44 +212,73 @@ def run_model_with_method(
         command: list[str] = [sys.executable, "-O"] + sys.argv
         raise SystemExit(subprocess.run(command).returncode)
 
-    with WorkingDirectory(working_directory):
-        config: dict[str, Any] = parse_config(config)
-
-        # TODO: This can be removed in 2026
-        if not Path("input/files.yml").exists() and Path("input/files.json").exists():
-            # convert input/files.json to input/files.yml
-            json_files: dict[str, Any] = read_params(
-                Path("input/files.json"),
-            )
-            write_params(json_files, Path("input/files.yml"))
-
+    def run_operation() -> GEBModel:
+        config_parsed: dict[str, Any] = parse_config(config)
         files: dict[str, Any] = parse_config(
             read_params(Path("input/files.yml"))
-            if "files" not in config["general"]
-            else config["general"]["files"]
+            if "files" not in config_parsed["general"]
+            else config_parsed["general"]["files"]
         )
 
-        if profiling:
-            profile = cProfile.Profile()
-            profile.enable()
-
-        geb = GEBModel(config=config, files=files, timing=timing)
+        geb = GEBModel(config=config_parsed, files=files, timing=timing)
         if method is not None:
             getattr(geb, method)(**method_args)
         if close_after_run:
             geb.close()
 
-        if profiling:
-            profile.disable()
-            with open("profiling_stats.cprof", "w") as stream:
-                stats = Stats(profile, stream=stream)
-                stats.strip_dirs()
-                stats.sort_stats("cumtime")
-                stats.dump_stats(".prof_stats")
-                stats.print_stats()
-            profile.dump_stats("profile.prof")
-
         return geb
+
+    with WorkingDirectory(working_directory):
+        return _run_with_optional_profiling(profiling, run_operation, name="run")
+
+
+def _dump_profile(profile: cProfile.Profile, name: str) -> None:
+    """
+    Persist profiling statistics to disk in both binary and human-readable formats.
+
+    Args:
+        profile: Profile instance containing execution statistics.
+        name: Identifier used for naming the output files.
+    """
+    profiling_folder = Path("profiling")
+    profiling_folder.mkdir(exist_ok=True)
+
+    # Save binary data for visualization in tools like SnakeViz or RunSnakeRun
+    binary_path = profiling_folder / f"{name}.prof"
+    profile.dump_stats(binary_path)
+
+    # Save human-readable summary
+    text_path = profiling_folder / f"{name}_summary.txt"
+    with open(text_path, "w", encoding="utf-8") as stream:
+        stats = pstats.Stats(profile, stream=stream)
+        stats.strip_dirs().sort_stats("cumtime").print_stats()
+
+
+def _run_with_optional_profiling(
+    profiling: bool, operation: Callable[[], ResultType], name: str
+) -> ResultType:
+    """Run an operation with optional profiling.
+
+    Args:
+        profiling: Whether profiling should be enabled.
+        operation: Callable containing the operation to execute.
+        name: Name of the operation being executed, used for profiling output.
+
+    Returns:
+        Return value from the operation.
+    """
+    if not profiling:
+        return operation()
+
+    profile = cProfile.Profile()
+    profile.enable()
+    try:
+        result = operation()
+    finally:
+        profile.disable()
+        _dump_profile(profile, name)
+
+    return result
 
 
 def get_model_builder_class(custom_model: None | str) -> type:
@@ -515,6 +547,7 @@ def build_fn(
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: Path = DATA_ROOT_DEFAULT,
     continue_: bool = False,
+    profiling: bool = PROFILING_DEFAULT,
 ) -> None:
     """Build model.
 
@@ -526,19 +559,24 @@ def build_fn(
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
         continue_: Continue previous build if it was interrupted or failed.
+        profiling: If True, run the build with profiling.
     """
-    with WorkingDirectory(working_directory):
-        build_config = parse_config(build_config)
+    build_config_input: Path | dict[str, Any] = build_config
+
+    def build_operation() -> None:
+        parsed_build_config = parse_config(build_config_input)
         model = get_builder(
             config,
             data_catalog,
-            build_config["_custom_model"] if "_custom_model" in build_config else None,
+            parsed_build_config["_custom_model"]
+            if "_custom_model" in parsed_build_config
+            else None,
             data_provider,
             data_root,
         )
         methods = {
             method: args
-            for method, args in build_config.items()
+            for method, args in parsed_build_config.items()
             if not method.startswith("_")
         }
         model.build(
@@ -546,6 +584,9 @@ def build_fn(
             region=parse_config(config)["general"]["region"],
             continue_=continue_,
         )
+
+    with WorkingDirectory(working_directory):
+        _run_with_optional_profiling(profiling, build_operation, name="build")
 
 
 def alter_fn(
@@ -556,6 +597,7 @@ def alter_fn(
     from_model: Path = ALTER_FROM_MODEL_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: Path = DATA_ROOT_DEFAULT,
+    profiling: bool = PROFILING_DEFAULT,
 ) -> None:
     """Create alternative version from base model with only changed files.
 
@@ -572,10 +614,12 @@ def alter_fn(
         from_model: Folder for the existing model.
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
+        profiling: If True, run the alter flow with profiling.
     """
     from_model: Path = Path(from_model)
+    build_config_input: Path | dict[str, Any] = build_config
 
-    with WorkingDirectory(working_directory):
+    def alter_operation() -> None:
         original_config: Path = from_model / config
 
         # if config does not exist, create a new config that inherits from the original model
@@ -629,23 +673,28 @@ def alter_fn(
         with open(input_folder / "files.yml", "w") as f:
             yaml.dump(original_files, f, default_flow_style=False)
 
-        build_config = parse_config(build_config)
+        parsed_build_config = parse_config(build_config_input)
         model = get_builder(
             config,
             data_catalog,
-            build_config["_custom_model"] if "_custom_model" in build_config else None,
+            parsed_build_config["_custom_model"]
+            if "_custom_model" in parsed_build_config
+            else None,
             data_provider,
             data_root,
         )
         methods = {
             method: args
-            for method, args in build_config.items()
+            for method, args in parsed_build_config.items()
             if not method.startswith("_")
         }
 
         model.update(
             methods=methods,
         )
+
+    with WorkingDirectory(working_directory):
+        _run_with_optional_profiling(profiling, alter_operation, name="alter")
 
 
 def update_fn(
@@ -655,6 +704,7 @@ def update_fn(
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: Path = DATA_ROOT_DEFAULT,
+    profiling: bool = PROFILING_DEFAULT,
 ) -> None:
     """Update model.
 
@@ -665,19 +715,17 @@ def update_fn(
         working_directory: Working directory for the model.
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
-
-    Raises:
-        FileNotFoundError: if the build config file is not found.
-        KeyError: if the specified method is not found in the build config file.
-        ValueError: if build_config is not a str or dict.
+        profiling: If True, run the update flow with profiling.
     """
-    with WorkingDirectory(working_directory):
-        if isinstance(build_config, Path):
-            build_config_list: list[str] = str(build_config).split("::")
+    build_config_input: Path | dict[str, Any] = build_config
+
+    def update_operation() -> None:
+        if isinstance(build_config_input, Path):
+            build_config_list: list[str] = str(build_config_input).split("::")
             build_config_file: Path = Path(build_config_list[0])
 
             try:
-                build_config: dict[str, Any] = parse_config(build_config_file)
+                parsed_build_config: dict[str, Any] = parse_config(build_config_file)
             except FileNotFoundError:
                 if ":" in str(build_config_file) and "::" not in str(build_config_file):
                     raise FileNotFoundError(
@@ -687,7 +735,7 @@ def update_fn(
 
             methods = {
                 method: args
-                for method, args in build_config.items()
+                for method, args in parsed_build_config.items()
                 if not method.startswith("_")
             }
 
@@ -733,10 +781,11 @@ def update_fn(
                 else:
                     methods = {build_config_function: methods[build_config_function]}
 
-        elif isinstance(build_config, dict):
+        elif isinstance(build_config_input, dict):
+            parsed_build_config = build_config_input
             methods = {
                 method: args
-                for method, args in build_config.items()
+                for method, args in parsed_build_config.items()
                 if not method.startswith("_")
             }
 
@@ -746,12 +795,17 @@ def update_fn(
         model = get_builder(
             config,
             data_catalog,
-            build_config["_custom_model"] if "_custom_model" in build_config else None,
+            parsed_build_config["_custom_model"]
+            if "_custom_model" in parsed_build_config
+            else None,
             data_provider,
             data_root,
         )
 
         model.update(methods=methods)
+
+    with WorkingDirectory(working_directory):
+        _run_with_optional_profiling(profiling, update_operation, name="update")
 
 
 def share_fn(
