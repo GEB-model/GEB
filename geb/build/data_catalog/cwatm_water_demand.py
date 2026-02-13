@@ -24,11 +24,7 @@ FILES: dict[str, dict[str, str]] = {
 
 
 class CWATMWaterDemand(Adapter):
-    """The CWATM Water Demand adapter for downloading water demand data.
-
-    Args:
-        Adapter: The base Adapter class.
-    """
+    """The CWATM Water Demand adapter for downloading water demand data."""
 
     def __init__(self, variable: str, *args: Any, **kwargs: Any) -> None:
         """Initialize the CWATMWaterDemand adapter.
@@ -88,11 +84,7 @@ class CWATMWaterDemand(Adapter):
 
 
 class CWATMLivestockWaterDemand(CWATMWaterDemand):
-    """The CWATM Livestock Water Demand adapter.
-
-    Args:
-        CWATMWaterDemand: The base CWATMWaterDemand class.
-    """
+    """The CWATM Livestock Water Demand adapter."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the CWATMLivestockWaterDemand adapter."""
@@ -100,11 +92,7 @@ class CWATMLivestockWaterDemand(CWATMWaterDemand):
 
 
 class CWATMIndustryWaterDemand(CWATMWaterDemand):
-    """The CWATM Industry Water Demand adapter.
-
-    Args:
-        CWATMWaterDemand: The base CWATMWaterDemand class.
-    """
+    """The CWATM Industry Water Demand adapter."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the CWATMIndustryWaterDemand adapter."""

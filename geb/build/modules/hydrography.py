@@ -455,6 +455,7 @@ class Hydrography(BuildModelBase):
         hillslope_length = xr.where(
             hillslope_length < 1000, hillslope_length, 1000
         )  # cap hill slope length at 1000 m
+        hillslope_length.attrs["_FillValue"] = np.nan
         self.set_grid(hillslope_length, name="drainage/hillslope_length_m")
 
     @build_method(required=False)
