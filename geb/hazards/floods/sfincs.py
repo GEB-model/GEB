@@ -274,7 +274,7 @@ class SFINCSRootModel:
 
         # we need this later to exclude these subbasins from the area of interest
         subbasins_of_interest = subbasins[
-            (~subbasins["is_downstream_outflow"])
+            (~subbasins["is_downstream_outflow"].astype(bool))
         ].index.tolist()
 
         self.subbasins, subbasins_burned = self.burn_and_align_subbasins(
