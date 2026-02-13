@@ -874,6 +874,31 @@ class SFINCSRootModel:
                 outflow_point: Point | MultiPoint | GeometryCollection = (
                     river.intersection(boundary)
                 )
+
+                # while there is no intersection point, we elongate the river geometry to ensure it intersects with the boundary. \
+                # Since there is no downstream river segment, we extend the last segment of the river
+                if outflow_point.is_empty and downstream_river_idx == -1:
+                    iteration = 0
+                    while outflow_point.is_empty and iteration < 10:
+                        p1: npt.NDArray[np.floating[Any]] = np.array(river.coords[-2])
+                        p2: npt.NDArray[np.floating[Any]] = np.array(river.coords[-1])
+
+                        direction = p2 - p1
+                        # extent by 10 times the length of the last segment to ensure intersection with boundary
+                        extended_point = (
+                            p2[0] + direction[0] * 10,
+                            p2[1] + direction[1] * 10,
+                        )
+                        # create a long line from the last point of the river to the extended point
+                        long_line = LineString([tuple(p2), extended_point])
+
+                        # combine the river geometry with the long line to ensure intersection with the boundary
+                        river = LineString(river.coords[:] + long_line.coords[:])
+                        outflow_point: Point | MultiPoint | GeometryCollection = (
+                            river.intersection(boundary)
+                        )
+                        iteration += 1
+
                 if not isinstance(outflow_point, Point):
                     export_diagnostics(outflow_point)
                     # if the intersection is not a single point, select the most downstream point
