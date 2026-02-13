@@ -629,7 +629,10 @@ class SFINCSRootModel:
         mask.name = "mask"
 
         # for in case the first DEM does not cover the entire area, we first pad the mask to the subbasins bounds
-        minx, miny, maxx, maxy = subbasins.to_crs(mask.rio.crs).total_bounds
+        # added a small buffer to ensure we don't have issues with rounding errors in the bounds and the mask alignment
+        minx, miny, maxx, maxy = (
+            subbasins.buffer(0.01).to_crs(mask.rio.crs).total_bounds
+        )
         mask = pad_xy(
             mask,
             minx=minx,
