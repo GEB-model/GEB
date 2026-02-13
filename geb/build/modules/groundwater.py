@@ -45,7 +45,7 @@ class GroundWater(BuildModelBase):
             force_one_layer: If True, the model will be forced to use only one layer. Default is True.
         """
         aquifer_top_elevation = convert_nodata(
-            self.grid["landsurface/elevation"], new_nodata=np.nan
+            self.grid["landsurface/elevation_m"], new_nodata=np.nan
         )
         aquifer_top_elevation = self.set_grid(
             aquifer_top_elevation, name="groundwater/aquifer_top_elevation"
@@ -224,7 +224,9 @@ class GroundWater(BuildModelBase):
             dem_globgm = dem_globgm.isel(
                 get_window(dem_globgm.x, dem_globgm.y, self.bounds, buffer=2)
             )
-            dem = convert_nodata(self.grid["landsurface/elevation"], new_nodata=np.nan)
+            dem = convert_nodata(
+                self.grid["landsurface/elevation_m"], new_nodata=np.nan
+            )
 
             # heads
             head_upper_layer = self.data_catalog.fetch("head_upper_layer_globgm").read()

@@ -54,7 +54,7 @@ from geb.workflows.io import (
 )
 from geb.workflows.methods import get_utm_zone
 from geb.workflows.raster import (
-    calculate_cell_area,
+    calculate_cell_area_m2,
     clip_region,
     coord_to_pixel,
     pad_to_grid_alignment,
@@ -1062,7 +1062,7 @@ class SFINCSRootModel:
                 self.elevation, np.nan, dtype=np.float32
             )
             height, width = self.shape
-            cell_area.values = calculate_cell_area(
+            cell_area.values = calculate_cell_area_m2(
                 self.elevation.rio.transform(), height, width
             )
             return cell_area
@@ -1506,7 +1506,7 @@ class SFINCSSimulation:
 
         sfincs_model.setup_config(
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
-            h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster
+            # h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster, disabled by default. Enabling this may cause instability issues in the GPU runs, so use with caution.
             nc_deflate_level=9,  # compression level for netcdf output files (0-9)
             tspinup=spinup_seconds,  # spinup time in seconds
             dtout=flood_map_output_interval_seconds
@@ -2086,7 +2086,7 @@ class SFINCSSimulation:
                 self.sfincs_model.grid["dep"], np.nan, dtype=np.float32
             )
             height, width = self.sfincs_model.grid["dep"].shape
-            cell_area.values = calculate_cell_area(
+            cell_area.values = calculate_cell_area_m2(
                 self.sfincs_model.grid["dep"].rio.transform(), height, width
             )
         else:
