@@ -2265,12 +2265,6 @@ class Households(AgentBaseClass):
             self.flood_maps[self.return_periods[0]].rio.crs
         )
 
-        # Verify that maximum_damage_content_m2 column exists
-        if "maximum_damage_content_m2" not in buildings.columns:
-            raise ValueError(
-                "Column 'maximum_damage_content_m2' not found in buildings dataframe"
-            )
-
         # create a pandas data array for assigning damage to the agents:
         agent_df = pd.DataFrame(
             {"building_id_of_household": self.var.building_id_of_household}
