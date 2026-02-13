@@ -272,6 +272,12 @@ def click_build_options(
             default=Path(DATA_ROOT_DEFAULT),
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
+        @click.option(
+            "--profiling",
+            is_flag=True,
+            default=PROFILING_DEFAULT,
+            help="Run with profiling. If this option is used, profiling stats are saved in the profiling directory.",
+        )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for build options.
