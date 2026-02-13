@@ -74,7 +74,7 @@ from .workflows.utils import (
     make_relative_paths,
     read_flood_depth,
     run_sfincs_simulation,
-    select_most_downstream_point,
+    select_most_upstream_point,
     to_sfincs_datetime,
 )
 
@@ -833,8 +833,8 @@ class SFINCSRootModel:
                         )
                     )
                     if not isinstance(outflow_point, Point):
-                        # if the intersection is not a single point, select the most downstream point
-                        outflow_point: Point = select_most_downstream_point(
+                        # if the intersection is not a single point, select the most upstream point
+                        outflow_point: Point = select_most_upstream_point(
                             river, outflow_point
                         )
 
@@ -901,8 +901,8 @@ class SFINCSRootModel:
 
                 if not isinstance(outflow_point, Point):
                     export_diagnostics(outflow_point)
-                    # if the intersection is not a single point, select the most downstream point
-                    outflow_point: Point = select_most_downstream_point(
+                    # if the intersection is not a single point, select the most upstream point
+                    outflow_point: Point = select_most_upstream_point(
                         river, outflow_point
                     )
 
@@ -924,8 +924,8 @@ class SFINCSRootModel:
                         )
                     )
                     if not isinstance(outflow_point, Point):
-                        # if the intersection is not a single point, select the most downstream point
-                        outflow_point: Point = select_most_downstream_point(
+                        # if the intersection is not a single point, select the most upstream point
+                        outflow_point: Point = select_most_upstream_point(
                             river, outflow_point
                         )
 
