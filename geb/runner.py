@@ -229,7 +229,11 @@ def run_model_with_method(
         return geb
 
     with WorkingDirectory(working_directory):
-        return _run_with_optional_profiling(profiling, run_operation, name="run")
+        return _run_with_optional_profiling(
+            profiling,
+            run_operation,
+            name=f"run_{method if method is not None else 'wo_method'}",
+        )
 
 
 def _dump_profile(profile: cProfile.Profile, name: str) -> None:
