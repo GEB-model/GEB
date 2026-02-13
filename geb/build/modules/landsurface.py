@@ -11,7 +11,7 @@ from pyflwdir.dem import fill_depressions
 from geb.build.methods import build_method
 from geb.workflows.io import get_window, parse_and_set_zarr_CRS
 from geb.workflows.raster import (
-    calculate_cell_area,
+    calculate_cell_area_m2,
     convert_nodata,
     interpolate_na_2d,
     interpolate_na_along_dim,
@@ -57,7 +57,7 @@ class LandSurface(BuildModelBase):
         )
 
         height, width = cell_area.shape
-        cell_area.data = calculate_cell_area(
+        cell_area.data = calculate_cell_area_m2(
             mask.rio.transform(recalc=True), height, width
         )
         cell_area = cell_area.where(~mask, cell_area.attrs["_FillValue"])
@@ -83,7 +83,7 @@ class LandSurface(BuildModelBase):
         )
 
         height, width = region_subgrid_cell_area.shape
-        region_subgrid_cell_area.data = calculate_cell_area(
+        region_subgrid_cell_area.data = calculate_cell_area_m2(
             region_subgrid_cell_area.rio.transform(recalc=True),
             height,
             width,
@@ -659,3 +659,38 @@ class LandSurface(BuildModelBase):
             self.set_other(
                 leaf_area_index, name=f"vegetation/leaf_area_index_{vegetation_type}"
             )
+
+    @build_method(depends_on=[], required=False)
+    def setup_forest_restoration_potential(self) -> None:
+        """Sets up the forest restoration potential data for the model.
+
+        Source data is in percentage, which is converted to ratio.
+        """
+        forest_restoration_potential_percentage = self.data_catalog.fetch(
+            "forest_restoration_potential"
+        ).read()
+        assert isinstance(forest_restoration_potential_percentage, xr.DataArray)
+        forest_restoration_potential_percentage = (
+            forest_restoration_potential_percentage.isel(
+                get_window(
+                    forest_restoration_potential_percentage.x,
+                    forest_restoration_potential_percentage.y,
+                    self.bounds,
+                    buffer=2,
+                ),
+            ).compute()
+        )
+
+        forest_restoration_potential_percentage = interpolate_na_2d(
+            forest_restoration_potential_percentage
+        )
+        forest_restoration_potential_percentage = resample_like(
+            forest_restoration_potential_percentage, self.grid["mask"]
+        )
+        forest_restoration_potential_ratio = (
+            forest_restoration_potential_percentage / 100
+        )  # convert from percentage to ratio
+        self.set_grid(
+            forest_restoration_potential_ratio,
+            name="landsurface/forest_restoration_potential_ratio",
+        )
