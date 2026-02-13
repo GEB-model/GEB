@@ -472,8 +472,6 @@ class Households(AgentBaseClass):
         )
         self.var.household_points = household_points
 
-        # initiate array with adaptation costs for dry-proofing, eur 2024 values, article Aerts (2018)
-
         # We need the circumference of each house for dry-proofing costs
         buildings = self.buildings.copy()
 
@@ -563,6 +561,8 @@ class Households(AgentBaseClass):
                 / ((1 + r_loan) ** loan_duration - 1)
             )
         )
+
+        # initiate array with adaptation costs for dry-proofing, eur 2024 values, article Aerts (2018)
         self.var.adaptation_costs_dryproofing = DynamicArray(
             annual_adaptation_costs_dryproofing, max_n=self.max_n
         )
