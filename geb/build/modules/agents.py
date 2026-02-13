@@ -1254,7 +1254,9 @@ class Agents(BuildModelBase):
                     region["district_n"],
                     region["sub_dist_1"],
                 )
-                self.logger.info(f"Processing region ({i + 1}/{len(regions_shapes)})")
+                self.logger.info(
+                    f"Processing region, {region.VARNAME_1}, ({i + 1}/{len(regions_shapes)})"
+                )
 
             cultivated_land_region_total_cells = (
                 ((region_ids == UID) & (cultivated_land)).sum().compute()

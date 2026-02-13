@@ -2589,6 +2589,10 @@ class GEBModel(
         mask, ldd, ldd_elevation = clip_region(
             mask, ldd, ldd_elevation, align=30 / 60 / 60
         )
+        # mask = mask.load()
+        # mask1 = mask1.load()
+        # ldd_elevation = ldd_elevation.load()
+        # ldd = ldd.load()
         self.set_other(ldd_elevation, name="drainage/original_d8_elevation")
 
         ldd: xr.DataArray = xr.where(
@@ -2651,9 +2655,9 @@ class GEBModel(
         )
 
         rivers["outflow_type"] = rivers.apply(
-            lambda row: STUDY_AREA_OUTFLOW
-            if row.name in subbasins.index
-            else NEARBY_OUTFLOW,
+            lambda row: (
+                STUDY_AREA_OUTFLOW if row.name in subbasins.index else NEARBY_OUTFLOW
+            ),
             axis=1,
         )
 
