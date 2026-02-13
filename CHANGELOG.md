@@ -4,9 +4,12 @@
 - Compute hillslope length based on drainage density
 - Fix: Also set nodata type in _FillValue when using reporter. This is now also correctly loaded with zarr.
 - Add geb tool rechunk to allow rechunking of dataset to space-optimized, time-optimized or balanced. Currently using some reasonable defaults, but if needed we can expand this with custom values.
+- Add CWatM water demand to new data catalog (and remove from the old one).
+- Add `--profiling` option to `geb build/update/alter`.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
+- Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.

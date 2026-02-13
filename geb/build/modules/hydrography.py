@@ -420,7 +420,7 @@ class Hydrography(BuildModelBase):
         pass
 
     @build_method(depends_on=["setup_hydrography", "setup_cell_area"], required=True)
-    def setup_mannings(self) -> None:
+    def setup_geomorphology(self) -> None:
         """Sets up the Manning's coefficient for the model.
 
         Notes:
@@ -446,6 +446,24 @@ class Hydrography(BuildModelBase):
         mannings.attrs["_FillValue"] = np.nan
 
         self.set_grid(mannings, "routing/mannings")
+
+        drainage_density = (
+            self.grid["drainage/streams_length_m"] / self.grid["cell_area"]
+        )
+
+        hillslope_length = 1 / (2 * drainage_density)
+        hillslope_length = xr.where(
+            hillslope_length < 1000, hillslope_length, 1000
+        )  # cap hill slope length at 1000 m
+        hillslope_length.attrs["_FillValue"] = np.nan
+        self.set_grid(hillslope_length, name="drainage/hillslope_length_m")
+
+    @build_method(required=False)
+    def setup_mannings(self) -> None:
+        """Removed method, use setup_geomorphology instead."""
+        raise NotImplementedError(
+            "The setup_mannings method is removed, use setup_geomorphology instead"
+        )
 
     def get_rivers(
         self, river_graph: nx.DiGraph, sink_subbasin_ids: list[int]
@@ -622,15 +640,10 @@ class Hydrography(BuildModelBase):
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
+        streams_length_low_res.attrs["_FillValue"] = np.nan
         streams_length_low_res = snap_to_grid(streams_length_low_res, self.grid["mask"])
 
-        drainage_density = streams_length_low_res / self.grid["cell_area"]
-
-        hillslope_length = 1 / (2 * drainage_density)
-        hillslope_length = xr.where(
-            hillslope_length < 1000, hillslope_length, 1000
-        )  # cap hill slope length at 1000 m
-        self.set_grid(hillslope_length, name="drainage/hillslope_length_m")
+        self.set_grid(streams_length_low_res, name="drainage/streams_length_m")
 
         elevation_coarsened = original_d8_elevation.coarsen(
             x=self.ldd_scale_factor,
