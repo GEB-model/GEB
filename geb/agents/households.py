@@ -2538,10 +2538,6 @@ class Households(AgentBaseClass):
                 "flood_proofed"
             ]  # object_type is equal to the flood proofed status (building_unprotected, building_dryproofed, building_wetproofed)
 
-            buildings_centroid["object_type"] = buildings_centroid[
-                "flood_proofed"
-            ]  # object_type is equal to the flood proofed status (building_unprotected, building_dryproofed, building_wetproofed)
-
         else:
             household_points["protect_building"] = False
 

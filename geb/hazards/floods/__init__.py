@@ -635,8 +635,11 @@ class Floods(Module):
                     / "hydrology.routing"
                     / "discharge_daily.zarr"
                 )
+                discharge_combined: xr.DataArray = xr.concat(
+                    [self.discharge_spinup_ds, discharge_run], dim="time"
+                ).sortby("time")
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge=discharge_run,
+                    discharge=discharge_combined,
                     return_periods=self.config["return_periods"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
