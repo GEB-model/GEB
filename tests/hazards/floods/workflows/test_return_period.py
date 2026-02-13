@@ -9,9 +9,13 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import genpareto
 from shapely.geometry import LineString
 
-from geb.hazards.floods.workflows.return_periods import assign_return_periods
+from geb.hazards.floods.workflows.return_periods import (
+    assign_return_periods,
+    fit_gpd_mle,
+)
 
 
 def test_assign_return_periods_basic() -> None:
@@ -274,3 +278,34 @@ def test_assign_return_periods_multiple_rivers() -> None:
         q20 = result.loc[river_id, "Q_20"]
         q50 = result.loc[river_id, "Q_50"]
         assert q5 <= q20 <= q50
+
+
+def test_fit_gpd_mle_fixes() -> None:
+    """Test fit_gpd_mle with fixed parameters."""
+    # Generate data from GPD(xi=0.5, scale=2.0)
+    # y = x - u. We simulate y directly.
+    np.random.seed(42)
+    xi_true = 0.5
+    sigma_true = 2.0
+    # genpareto args: c (shape), loc=0, scale
+    y = genpareto.rvs(c=xi_true, scale=sigma_true, size=100)
+
+    # 1. Test default fitting (no fixes)
+    sigma_hat, xi_hat = fit_gpd_mle(y)
+    # Tolerances can be loose due to sample size
+    assert abs(xi_hat - xi_true) < 0.2
+    assert abs(sigma_hat - sigma_true) < 0.5
+
+    # 2. Test fixed shape = 0 (Exponential / Gumbel-like)
+    sigma_hat_0, xi_hat_0 = fit_gpd_mle(y, fixed_shape=0.0)
+    assert xi_hat_0 == 0.0
+
+    # 3. Test fixed shape = 0.5 (True value)
+    sigma_hat_fixed, xi_hat_fixed = fit_gpd_mle(y, fixed_shape=0.5)
+    assert xi_hat_fixed == 0.5
+    assert abs(sigma_hat_fixed - sigma_true) < 0.3
+
+    # 4. Test fixed scale = 2.0
+    sigma_hat_scale, xi_hat_scale = fit_gpd_mle(y, fixed_scale=2.0)
+    assert sigma_hat_scale == 2.0
+    assert abs(xi_hat_scale - xi_true) < 0.2

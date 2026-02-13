@@ -7,14 +7,40 @@ from scipy.stats import genpareto, kstest
 from tqdm import tqdm
 
 
-def fit_gpd_mle(exceedances: np.ndarray) -> tuple[float, float]:
+def fit_gpd_mle(
+    exceedances: np.ndarray,
+    fixed_shape: float | None = None,
+    fixed_scale: float | None = None,
+) -> tuple[float, float]:
     """Fit GPD to positive exceedances using Maximum Likelihood Estimation.
 
     Fits a Generalized Pareto Distribution to exceedances (y = x - u) using
-    scipy's genpareto.fit with location parameter fixed at 0.
+    scipy's genpareto.fit.
+
+    The Generalized Pareto Distribution is defined by three parameters:
+        1. **Location** (u or loc): The threshold parameter. For exceedances (y = x - u),
+           this parameter is always fixed to 0. This is because we model the *excess*
+           over the threshold u. The threshold u itself is determined before fitting
+           (e.g., via mean residual life plot or automated threshold selection).
+        2. **Scale** (sigma): The scale parameter, describing the spread of the
+           distribution.
+        3. **Shape** (xi): The shape parameter, describing the tail behavior.
+           - xi > 0: Heavy tail (Fréchet-like).
+           - xi = 0: Light tail (Gumbel-like). In the GPD context, standard Gumbel
+             behaviour corresponds to an Exponential distribution.
+           - xi < 0: Bounded tail (Weibull-like).
+
+    Options are provided to fix shape and scale. The location parameter is always fixed
+    to 0, consistent with fitting to exceedances.
+
+    To fix the fit to a Gumbel distribution (i.e. Exponential exceedances),
+    set `fixed_shape=0`.
 
     Args:
         exceedances: Positive exceedance values above threshold (dimensionless).
+        fixed_shape: Value to fix the shape parameter (xi) (dimensionless). If None, it is fitted.
+            Set to 0 to force a Gumbel (Exponential) distribution.
+        fixed_scale: Value to fix the scale parameter (sigma) (dimensionless). If None, it is fitted.
 
     Returns:
         Tuple of (sigma, xi) where sigma is the scale parameter and xi is
@@ -23,10 +49,20 @@ def fit_gpd_mle(exceedances: np.ndarray) -> tuple[float, float]:
     Raises:
         ValueError: If fewer than 6 exceedances provided for reliable fit.
     """
+    if fixed_shape is not None and fixed_scale is not None:
+        raise ValueError("Cannot fix both shape and scale parameters simultaneously.")
+
     y = np.asarray(exceedances, dtype=float)
     if len(y) < 6:
         raise ValueError("Too few exceedances for reliable fit")
-    c_hat, loc_hat, scale_hat = genpareto.fit(y, floc=0.0)
+
+    kwargs = {}
+    if fixed_shape is not None:
+        kwargs["fc"] = fixed_shape
+    if fixed_scale is not None:
+        kwargs["fscale"] = fixed_scale
+
+    c_hat, loc_hat, scale_hat = genpareto.fit(y, floc=0.0, **kwargs)
     return float(scale_hat), float(c_hat)  # sigma, xi
 
 
@@ -162,27 +198,35 @@ def gpd_pot_ad_auto(
     mrl_grid_q: np.ndarray | None = None,
     mrl_top_fraction: float = 0.75,
     random_seed: int = 123,
+    fixed_shape: float | None = None,
+    fixed_scale: float | None = None,
 ) -> dict:
     """Automated GPD-POT analysis with threshold selection using Anderson-Darling test.
 
-    Performs automated Generalized Pareto Distribution Peaks-Over-Threshold analysis
-    by scanning multiple threshold candidates and selecting the optimal threshold based
-    on Anderson-Darling goodness-of-fit testing with bootstrap p-values.
+    Performs automated Generalized Pareto Distribution (GPD) Peaks-Over-Threshold (POT) 
+    analysis. The function iterates through candidate thresholds $u$, calculates the 
+    excesses $y = x - u$, and fits the GPD to these excesses. 
+
+    The location parameter is implicitly fixed at 0.0 because the distribution is 
+    fitted to the magnitude of the exceedance above the threshold, not the absolute 
+    river stage/discharge value.
 
     Args:
-        series: Time series data with DatetimeIndex (dimensionless).
-        quantile_start: Starting quantile for threshold scan (dimensionless).
-        quantile_end: Ending quantile for threshold scan (dimensionless).
-        quantile_step: Step size between quantiles (dimensionless).
-        min_exceed: Minimum number of exceedances required for fitting (dimensionless).
-        nboot: Number of bootstrap samples for p-value calculation (dimensionless).
-        return_periods: Array of return periods in years for return level calculation (years).
-        mrl_grid_q: Quantiles for mean residual life plot baseline (dimensionless).
-        mrl_top_fraction: Fraction of top quantiles to use for linear fit in mean residual life plot (dimensionless).
-        random_seed: Random seed for reproducibility (dimensionless).
+        series: Time series data with DatetimeIndex.
+        quantile_start: Starting quantile for threshold scan.
+        quantile_end: Ending quantile for threshold scan.
+        quantile_step: Step size between quantiles.
+        min_exceed: Minimum number of exceedances required for fitting.
+        nboot: Number of bootstrap samples for AD p-value calculation.
+        return_periods: Array of return periods in years for RL calculation.
+        mrl_grid_q: Quantiles for mean residual life plot baseline.
+        mrl_top_fraction: Fraction of top quantiles for MRL linear fit.
+        random_seed: Random seed for reproducibility.
+        fixed_shape: Value to fix the shape parameter ($\xi$). If 0, forces Exponential tail.
+        fixed_scale: Value to fix the scale parameter ($\sigma$).
 
     Returns:
-        Dictionary containing daily maxima, diagnostics DataFrame, chosen parameters,
+        Dictionary containing daily maxima, diagnostics, chosen parameters, 
         and return level table.
 
     Raises:
@@ -201,11 +245,12 @@ def gpd_pot_ad_auto(
     if not isinstance(s.index, pd.DatetimeIndex):
         raise TypeError("Series must have a DatetimeIndex.")
 
+    # Resample to daily maxima to ensure independence of observations (de-clustering)
     daily_max = s.resample("D").max().dropna()
     total_days = (daily_max.index.max() - daily_max.index.min()).days + 1
     years = total_days / 365.25
 
-    # Create candidate thresholds based on quantiles of daily maxima
+    # Create candidate thresholds $u$ based on quantiles of daily maxima
     q_grid = np.arange(quantile_start, quantile_end + 1e-9, quantile_step)
     u_candidates = np.quantile(daily_max.values, q_grid)
 
@@ -221,7 +266,6 @@ def gpd_pot_ad_auto(
 
     diagnostics = []
 
-    # Scan through candidate thresholds, fit GPD, compute AD statistic and p-value, and store diagnostics
     for u in u_candidates:
         exceed = daily_max[daily_max > u]
         n_exc = exceed.size
@@ -232,18 +276,16 @@ def gpd_pot_ad_auto(
             )
             continue
 
+        # Calculate excesses $y$. This shifts the data origin to 0.
+        # Consequently, the GPD location parameter $\mu$ is effectively 0.
         y = exceed.values - u
 
-        try:
-            sigma, xi = fit_gpd_mle(y)
-        except Exception as e:
-            print(
-                f"Exception in fit_gpd_mle(y) for threshold u={u}: {type(e).__name__}: {e}"
-            )
-            diagnostics.append(
-                (u, np.nan, np.nan, n_exc, np.nan, np.nan, np.nan, np.nan)
-            )
-            continue
+        # Fit GPD to the excesses. Implementation assumes loc=0.
+        sigma, xi = fit_gpd_mle(
+            y,
+            fixed_shape=fixed_shape,
+            fixed_scale=fixed_scale,
+        )
 
         u_vals = gpd_cdf(y, sigma, xi)
         A_R2 = right_tail_ad_from_uniforms(np.sort(u_vals))
@@ -252,6 +294,7 @@ def gpd_pot_ad_auto(
 
         ks_p = np.nan
         if n_exc >= 20:
+            # Here, 0.0 is passed as the location parameter for the KS test
             _, ks_p = kstest(y, "genpareto", args=(xi, 0.0, sigma))
 
         idx = np.argmin(np.abs(mrl_grid_u - u))
@@ -263,7 +306,6 @@ def gpd_pot_ad_auto(
 
         diagnostics.append((u, sigma, xi, n_exc, p_ad, ks_p, mrl_err, A_R2))
 
-    # Compile diagnostics into DataFrame for analysis and threshold selection
     diag_df = (
         pd.DataFrame(
             diagnostics,
@@ -276,15 +318,12 @@ def gpd_pot_ad_auto(
     )
 
     diag_df["xi_step"] = diag_df["xi"].diff().abs().bfill()
-    # Pick threshold candidates with stable xi estimates (small xi_step) and good AD p-values
     valid = diag_df.dropna(subset=["p_ad"])
 
-    # If no valid thresholds (e.g., too few exceedances / bootstrap failed),
-    # return a safe structure with NaN RLs so upstream code can handle it.
     if valid.empty:
         raise ValueError("No valid thresholds found for GPD-POT fitting.")
 
-    # Pick threshold with largest AD p-value
+    # Selection based on the best Anderson-Darling fit
     best = valid.loc[valid["p_ad"].idxmax()]
 
     u_star = float(best["u"])
@@ -296,20 +335,17 @@ def gpd_pot_ad_auto(
     lambda_per_year = n_star / years
     pct = (daily_max < u_star).mean() * 100
 
+    # Calculate return levels. Note that u_star is passed to re-add the 
+    # threshold offset to the estimated excesses.
     water_level_for_return_periods = gpd_return_level(
         u_star, sigma_star, xi_star, lambda_per_year, return_periods
     )
+    
     water_level_for_return_periods_table = pd.DataFrame(
         {
             "T_years": return_periods.astype(int),
             "GPD_POT_RL": water_level_for_return_periods,
         }
-    )
-    print(
-        "Automatic threshold selection for exceedances done (checked by Anderson-Darling goodness-of-fit parameter test)."
-    )
-    print(
-        f"Chosen threshold corresponds to approximately the {pct:.2f}th percentile of daily maxima of discharge."
     )
 
     return {
@@ -336,6 +372,8 @@ def assign_return_periods(
     prefix: str = "Q",
     min_exceed: int = 30,
     nboot: int = 2000,
+    fixed_shape: float | None = None,
+    fixed_scale: float | None = None,
 ) -> gpd.GeoDataFrame:
     """Assign return periods to rivers using GPD-POT analysis.
 
@@ -354,6 +392,9 @@ def assign_return_periods(
         prefix: Column prefix for output return level columns. Defaults to "Q".
         min_exceed: Minimum number of exceedances required for reliable GPD fit. Defaults to 30.
         nboot: Number of bootstrap samples for Anderson-Darling threshold selection. Defaults to 2000.
+        fixed_shape: Value to fix the shape parameter (xi) (dimensionless). If None, it is fitted.
+            Set to 0 to force a Gumbel (Exponential) distribution.
+        fixed_scale: Value to fix the scale parameter (sigma) (dimensionless). If None, it is fitted.
 
     Returns:
         Updated rivers GeoDataFrame with return level columns added (m³/s).
@@ -387,6 +428,8 @@ def assign_return_periods(
             return_periods=return_periods_arr,
             min_exceed=min_exceed,
             nboot=nboot,
+            fixed_shape=fixed_shape,
+            fixed_scale=fixed_scale,
         )
         print(f"GPD-POT analysis completed for river {idx}.")
 
