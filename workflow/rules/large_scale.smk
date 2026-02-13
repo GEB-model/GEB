@@ -50,56 +50,62 @@ def get_basin_area_km2(cluster_name):
         _basin_area_cache[cluster_name] = 30000.0
         return 30000.0  # Default area
 
-def get_resources(cluster_name, phase="build"):
-    """Get both memory allocation and SLURM partition based on basin size and balanced distribution."""
+def get_resources(cluster_name):
+    """Get memory allocation, SLURM partition, and partition arg based on basin size.
+
+    Memory strategy: MAXIMIZE memory allocation to prevent OOM crashes.
+    Job failures are extremely costly (hours of lost compute time), so we
+    allocate near-maximum memory for each partition.
+
+    Partition limits and our allocations:
+      - defq:    limit ~251 GB → allocate 240 GB
+      - ivm:     limit ~110 GB → allocate 105 GB
+      - ivm-fat: limit ~755 GB → allocate 400 GB
+
+    Routing strategy: Minimize use of memory-constrained `ivm` partition.
+    Only the smallest basins (<100k km²) go to ivm; everything else goes
+    to defq or ivm-fat where we have ample memory headroom.
+
+    Args:
+        cluster_name: Name of the cluster directory (e.g. "Europe_007").
+
+    Returns:
+        Tuple of (memory_mb, partition_name, partition_arg_string).
+    """
     area_km2 = get_basin_area_km2(cluster_name)
-    
-    # Memory allocation based on basin size
-    if area_km2 < 200000:  # Smaller basins
-        memory_mb = 60000   # 60GB
-    else:  # Larger basins
-        memory_mb = 200000  # 200GB
-    
-    # Get cluster index for balanced distribution
+
+    # Get cluster index for balanced distribution across partitions
     try:
         cluster_index = CLUSTER_NAMES.index(cluster_name)
     except ValueError:
         cluster_index = 0
-    
-    # IMPROVED BALANCED DISTRIBUTION STRATEGY:
-    # Distribute jobs more evenly across partitions to avoid bottlenecks
-    # Priority: spread large jobs across defq and ivm-fat, minimize ivm usage
-    
-    if area_km2 >= 650000:  # Largest basins (>650k km²) - split between defq and ivm-fat
-        # Alternate the biggest basins between defq and ivm-fat to spread load
+
+    # Partition assignment: minimize ivm usage due to its ~110 GB memory limit
+    if area_km2 >= 500000:
+        # Very large basins: alternate defq / ivm-fat for load balancing
         partition_index = 0 if (cluster_index % 2 == 0) else 2
-    elif area_km2 >= 400000:  # Large basins (400k-650k km²) - favor defq with some ivm-fat
-        # Most go to defq (has good capacity), some to ivm-fat
-        if cluster_index % 3 == 0:
-            partition_index = 2  # ivm-fat
-        else:
-            partition_index = 0  # defq
-    elif area_km2 >= 200000:  # Medium basins (200k-400k km²) - defq and ivm
-        # Alternate between defq and ivm (avoid overloading ivm-fat)
-        partition_index = 0 if (cluster_index % 2 == 0) else 1
-    else:  # Small basins (<200k km²) - mainly ivm with some defq
-        # Small jobs can go to ivm (less resource contention) with some defq
-        partition_index = 1 if (cluster_index % 3 != 0) else 0
-    
+    elif area_km2 >= 100000:
+        # Medium/large basins: alternate defq / ivm-fat (avoid ivm entirely)
+        partition_index = 0 if (cluster_index % 2 == 0) else 2
+    else:
+        # Small basins (<100k km²): can use ivm, but still prefer defq
+        # Only 1 in 3 small basins go to ivm to minimize risk
+        partition_index = 1 if (cluster_index % 3 == 0) else 0
+
+    # Allocate near-maximum memory for each partition
     if partition_index == 0:
         partition = "defq"
-        partition_arg = ""  # defq uses default queue (no partition specified)
-        # For defq, always use 200GB (since defq handles any memory size)
-        memory_mb = 200000  # This overrides the basin-size based allocation!
+        partition_arg = ""  # defq is the default queue
+        memory_mb = 240000  # 240 GB (limit ~251 GB)
     elif partition_index == 1:
         partition = "ivm"
         partition_arg = "--partition=ivm"
+        memory_mb = 105000  # 105 GB (limit ~110 GB)
     else:  # partition_index == 2
         partition = "ivm-fat"
         partition_arg = "--partition=ivm-fat"
-        # Ensure ivm-fat gets enough memory
-        memory_mb = max(memory_mb, 200000)
-    
+        memory_mb = 400000  # 400 GB (limit ~755 GB)
+
     return memory_mb, partition, partition_arg
 
 # Dynamically discover cluster directories (run only once)
@@ -186,7 +192,7 @@ rule spinup_cluster:
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
-        cpus=4,
+        cpus=6,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
@@ -209,11 +215,11 @@ rule run_cluster:
     log:
         LARGE_SCALE_DIR + "/{cluster}/base/logs/run.log"
     resources:
-        mem_mb=lambda wildcards: get_resources(wildcards.cluster, 56000)[0],
+        mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
-        cpus=6,
-        slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 56000)[1],
-        partition_arg=lambda wildcards: get_resources(wildcards.cluster, 56000)[2],
+        cpus=8,
+        slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
+        partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
     shell:
         """
