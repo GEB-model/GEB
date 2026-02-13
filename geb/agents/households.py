@@ -473,28 +473,19 @@ class Households(AgentBaseClass):
         self.var.household_points = household_points
 
         # initiate array with adaptation costs for dry-proofing, eur 2024 values, article Aerts (2018)
+
         # We need the circumference of each house for dry-proofing costs
         buildings = self.buildings.copy()
-        # buildings["id"].duplicated().sum()
-        buildings.to_file("buildings.gpkg", driver="GPKG")
 
         household_points_copy = self.var.household_points.copy()
         household_points_copy["building_id"] = self.var.building_id_of_household
 
-        # print(len(household_points_copy))
-
-        print(household_points_copy["building_id"].value_counts().head())
-        print(buildings["id"].value_counts().head())
-        household_points_copy.to_file("household_points.gpkg", driver="GPKG")
-
         household_points_copy = household_points_copy.merge(
-            buildings[["id", "geometry"]],
+            buildings[["id", "geometry", "occupancy"]],
             left_on="building_id",
             right_on="id",
             how="left",
         )
-
-        # print(len(household_points_copy))
 
         projected_crs = buildings.estimate_utm_crs()
         household_points_copy = household_points_copy.set_geometry("geometry_y")
@@ -523,7 +514,30 @@ class Households(AgentBaseClass):
             max_n=self.max_n,
         )
 
-        # initiate array with property values which equal the maximum flood damage
+        if self.config["include_VVEs_and_woningcorporaties"]:
+            # Calculate number of households based on occupancy type and building area
+            # For RES2: y = 0.0258 * x - 0.3354 (where x is building area)
+            # For other occupancy types: 1 household
+            household_points_copy["number_of_households"] = np.where(
+                household_points_copy["occupancy"] == "RES2",
+                np.maximum(0.0258 * household_points_copy["building_area"] - 0.3354, 1),
+                1,
+            )
+
+            self.var.number_of_households = DynamicArray(
+                household_points_copy["number_of_households"].values.astype(np.int32),
+                max_n=self.max_n,
+            )
+
+            # Multiply wealth and income by the number of households
+            self.var.income.data = (
+                self.var.income.data * self.var.number_of_households.data
+            ).astype(self.var.income.data.dtype)
+            self.var.wealth.data = (
+                self.var.wealth.data * self.var.number_of_households.data
+            ).astype(self.var.wealth.data.dtype)
+
+        # initiate array with property values which equals the maximum flood damage
         self.var.property_value = DynamicArray(
             (
                 self.var.household_building_area.data
