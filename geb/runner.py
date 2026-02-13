@@ -24,7 +24,7 @@ from geb import GEB_PACKAGE_DIR
 from geb.build import GEBModel as GEBModelBuild
 from geb.build.methods import build_method
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, read_params, write_params
+from geb.workflows.io import WorkingDirectory, read_params
 from geb.workflows.methods import multi_level_merge
 
 PROFILING_DEFAULT: bool = False
@@ -650,19 +650,6 @@ def alter_fn(
         input_folder: Path = Path(config_from_original_model["general"]["input_folder"])
 
         original_input_path: Path = from_model / input_folder
-
-        # TODO: This can be removed in 2026
-        if (
-            not (original_input_path / "files.yml").exists()
-            and (original_input_path / "files.json").exists()
-        ):
-            # convert input/files.json to input/files.yml
-            json_files: dict[str, Any] = read_params(
-                (original_input_path / "files.json"),
-            )
-            write_params(json_files, original_input_path / "files.yml")
-            # remove the original json file
-            (original_input_path / "files.json").unlink()
 
         original_files = read_params(original_input_path / "files.yml")
 
