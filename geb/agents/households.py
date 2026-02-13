@@ -585,14 +585,6 @@ class Households(AgentBaseClass):
             np.full(self.n, 0, np.int32), max_n=self.max_n
         )
 
-        buildings_copy = self.buildings.copy()
-        projected_crs = buildings_copy.estimate_utm_crs()
-        buildings_copy = buildings_copy.to_crs(projected_crs)
-        self.buildings["area_m2"] = buildings_copy.geometry.area
-        self.buildings["maximum_damage_content_m2"] = (
-            self.var.max_dam_buildings_content / self.buildings["area_m2"]
-        )
-
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
@@ -1977,6 +1969,15 @@ class Households(AgentBaseClass):
             )["maximum_damage"]
         )
 
+        # Calculate maximum damage content per m2
+        buildings_copy = self.buildings.copy()
+        projected_crs = buildings_copy.estimate_utm_crs()
+        buildings_copy = buildings_copy.to_crs(projected_crs)
+        self.buildings["area_m2"] = buildings_copy.geometry.area
+        self.buildings["maximum_damage_content_m2"] = (
+            self.var.max_dam_buildings_content / self.buildings["area_m2"]
+        )
+
     def load_damage_curves(self) -> None:
         """Load damage curves from model files and store them in the model variables."""
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
@@ -2264,6 +2265,12 @@ class Households(AgentBaseClass):
             self.flood_maps[self.return_periods[0]].rio.crs
         )
 
+        # Verify that maximum_damage_content_m2 column exists
+        if "maximum_damage_content_m2" not in buildings.columns:
+            raise ValueError(
+                "Column 'maximum_damage_content_m2' not found in buildings dataframe"
+            )
+
         # create a pandas data array for assigning damage to the agents:
         agent_df = pd.DataFrame(
             {"building_id_of_household": self.var.building_id_of_household}
@@ -2532,10 +2539,6 @@ class Households(AgentBaseClass):
                 right_on="id",
                 how="left",
             )  # now merge to get flood proofed status
-
-            # buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-
-            # buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
             buildings["object_type"] = buildings[
                 "flood_proofed"
