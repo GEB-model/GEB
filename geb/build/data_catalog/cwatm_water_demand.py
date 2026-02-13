@@ -1,15 +1,12 @@
 """Data adapter for CWATM water demand data."""
 
-import re
-from pathlib import Path
 from typing import Any
 
-import requests
+import rioxarray  # noqa: F401
 import xarray as xr
 
-from geb.workflows.io import fetch_and_save
-
 from .base import Adapter
+from .workflows.google_drive import download_from_google_drive
 
 FILES: dict[str, dict[str, str]] = {
     "industry": {
@@ -44,25 +41,7 @@ class CWATMWaterDemand(Adapter):
         self.variable = variable
         super().__init__(*args, **kwargs)
 
-    def check_quota(self, text: str, file_path: Path | None = None) -> None:
-        """Check if the Google Drive quota has been exceeded.
-
-        Args:
-            text: The HTML text to check.
-            file_path: The path to the file. If the quota is exceeded, the file will be deleted.
-                If None, no file will be deleted.
-
-        Raises:
-            ValueError: If the quota has been exceeded.
-        """
-        if "Google Drive - Quota exceeded" in text:
-            if file_path and file_path.exists():
-                file_path.unlink()  # remove the incomplete file
-            raise ValueError(
-                "Too many users have viewed or downloaded this file recently. Please try accessing the file again later. If the file you are trying to access is particularly large or is shared with many people, it may take up to 24 hours to be able to view or download the file."
-            )
-
-    def fetch(self, url: str) -> Adapter:
+    def fetch(self, url: str | None = None) -> Adapter:
         """Download the CWATM water demand file from Google Drive.
 
         Args:
@@ -88,64 +67,7 @@ class CWATMWaterDemand(Adapter):
                 )
 
             file_id = FILES[self.variable][scenario]
-            if file_id == "PLACEHOLDER":
-                raise ValueError(
-                    f"File ID for {self.variable} {scenario} is missing (PLACEHOLDER)."
-                )
-
-            download_path: Path = self.path.parent
-            download_path.mkdir(parents=True, exist_ok=True)
-            file_path = self.path
-
-            session: requests.Session = requests.Session()
-
-            if not file_path.exists():
-                response = session.get(
-                    f"https://drive.google.com/uc?export=download&id={file_id}",
-                    stream=True,
-                )
-
-                # Check if we got a direct file download or an HTML page
-                content_type = response.headers.get("content-type", "").lower()
-                is_html = "text/html" in content_type
-
-                if is_html:
-                    # Likely a confirmation page or error
-                    # We can read the text because it's small
-                    html = response.text
-                    self.check_quota(html)
-
-                    # Regex-based parse of hidden inputs for large file confirmation
-                    inputs = dict(re.findall(r'name="([^"]+)" value="([^"]+)"', html))
-
-                    if "id" in inputs and "confirm" in inputs:
-                        action_url_match = re.search(r'form[^>]+action="([^"]+)"', html)
-                        assert action_url_match, (
-                            "Could not find form action URL, perhaps Google changed their HTML?"
-                        )
-                        action_url = action_url_match.group(1)
-                        fetch_and_save(
-                            url=action_url,
-                            file_path=file_path,
-                            params=inputs,
-                            session=session,
-                        )
-
-                        # if file is less than 100KB, it is probably an error page
-                        if file_path.stat().st_size < 100_000:
-                            with open(file_path, "r") as f:
-                                text = f.read()
-                            if "Google Drive - Quota exceeded" in text:
-                                self.check_quota(text, file_path)
-                    else:
-                        # Unknown HTML response
-                        pass
-                else:
-                    # Direct download
-                    with open(file_path, "wb") as f:
-                        for chunk in response.iter_content(chunk_size=32768):
-                            if chunk:
-                                f.write(chunk)
+            download_from_google_drive(file_id=file_id, file_path=self.path)
 
         return self
 

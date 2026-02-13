@@ -1,6 +1,5 @@
 """Data adapter for HydroLAKES data."""
 
-import re
 import tempfile
 from pathlib import Path
 from time import sleep
@@ -11,9 +10,8 @@ import pandas as pd
 import requests
 from pyarrow.parquet import SortingColumn
 
-from geb.workflows.io import fetch_and_save
-
 from .base import Adapter
+from .workflows.google_drive import download_from_google_drive
 
 FILES: dict[str, dict[str, dict[str, str]]] = {
     "cat": {
@@ -158,29 +156,11 @@ class MeritBasins(Adapter):
         self.variable = variable
         super().__init__(*args, **kwargs)
 
-    def check_quota(self, text: str, file_path: Path | None = None) -> None:
-        """Check if the Google Drive quota has been exceeded.
-
-        Args:
-            text: The HTML text to check.
-            file_path: The path to the file. If the quota is exceeded, the file will be deleted.
-                If None, no file will be deleted.
-
-        Raises:
-            ValueError: If the quota has been exceeded.
-        """
-        if "Google Drive - Quota exceeded" in text:
-            if file_path and file_path.exists():
-                file_path.unlink()  # remove the incomplete file
-            raise ValueError(
-                "Too many users have viewed or downloaded this file recently. Please try accessing the file again later. If the file you are trying to access is particularly large or is shared with many people, it may take up to 24 hours to be able to view or download the file."
-            )
-
-    def fetch(self, url: str) -> Adapter:
+    def fetch(self, url: str | None = None) -> Adapter:
         """Process HydroLAKES zip file to extract and convert to parquet.
 
         Args:
-            url: The URL to download the HydroLAKES zip file from.
+            url: The URL to download the HydroLAKES zip file from (unused).
 
         Returns:
             Path to the processed parquet file.
@@ -200,53 +180,9 @@ class MeritBasins(Adapter):
                         / f"merit_basins_{self.variable}_{continent}.{ext}"
                     )
 
-                    if not file_path.exists():
-                        response = session.get(
-                            f"https://drive.google.com/uc?export=download&id={file_id}",
-                        )
-
-                        self.check_quota(response.text)
-
-                        # Case 1: small file → direct content
-                        if (
-                            "content-disposition"
-                            in response.headers.get("content-type", "").lower()
-                            or "Content-Disposition" in response.headers
-                        ):
-                            # Just write the file
-                            with open(file_path, "wb") as f:
-                                f.write(response.content)
-
-                        else:
-                            # Case 2: large file → parse HTML form
-                            html = response.text
-
-                            # Regex-based parse of hidden inputs
-                            inputs = dict(
-                                re.findall(r'name="([^"]+)" value="([^"]+)"', html)
-                            )
-
-                            if "id" in inputs and "confirm" in inputs:
-                                action_url_match = re.search(
-                                    r'form[^>]+action="([^"]+)"', html
-                                )
-                                assert action_url_match, (
-                                    "Could not find form action URL, perhaps Google changed their HTML?"
-                                )
-                                action_url = action_url_match.group(1)
-                                fetch_and_save(
-                                    url=action_url,
-                                    file_path=file_path,
-                                    params=inputs,
-                                    session=session,
-                                )
-
-                                # if file is less than 100KB, it is probably an error page
-                                if file_path.stat().st_size < 100_000:
-                                    with open(file_path, "r") as f:
-                                        text = f.read()
-                                    if "Google Drive - Quota exceeded" in text:
-                                        self.check_quota(text, file_path)
+                    download_from_google_drive(
+                        file_id=file_id, file_path=file_path, session=session
+                    )
 
                     if ext == "shp":
                         downloaded_shp_files.append(file_path)
