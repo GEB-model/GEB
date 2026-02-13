@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString
 
-from geb.hazards.floods.workflows.utils import assign_return_periods
+from geb.hazards.floods.workflows.return_periods import assign_return_periods
 
 
 def test_assign_return_periods_basic() -> None:
@@ -155,17 +155,13 @@ def test_assign_return_periods_extreme_values() -> None:
 
     return_periods = [1000]  # High return period likely to trigger warning
 
-    result = assign_return_periods(
-        rivers=rivers,
-        discharge_dataframe=discharge_df,
-        return_periods=return_periods,
-        nboot=50,
-    )
-
-    # The value should give an error if it exceeds 400,000
-    q_value = result.loc[1, "Q_1000"]
-
-    assert q_value <= 400_000
+    with pytest.raises(ValueError):
+        result = assign_return_periods(
+            rivers=rivers,
+            discharge_dataframe=discharge_df,
+            return_periods=return_periods,
+            nboot=50,
+        )
 
 
 def test_assign_return_periods_insufficient_data() -> None:
@@ -188,18 +184,14 @@ def test_assign_return_periods_insufficient_data() -> None:
 
     return_periods = [2, 10]
 
-    result = assign_return_periods(
-        rivers=rivers,
-        discharge_dataframe=discharge_df,
-        return_periods=return_periods,
-        min_exceed=40,  # Require more exceedances than available
-        nboot=50,
-    )
-
-    # Should handle gracefully - either assign NaN or reasonable values
-    for T in return_periods:
-        value = result.loc[1, f"Q_{T}"]
-        assert pd.isna(value) or (value >= 0)
+    with pytest.raises(ValueError):
+        result = assign_return_periods(
+            rivers=rivers,
+            discharge_dataframe=discharge_df,
+            return_periods=return_periods,
+            min_exceed=40,  # Require more exceedances than available
+            nboot=50,
+        )
 
 
 def test_assign_return_periods_invalid_datetime_index() -> None:

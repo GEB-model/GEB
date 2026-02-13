@@ -41,6 +41,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
+from geb.hazards.floods.workflows.return_periods import assign_return_periods
 from geb.hydrology.routing import get_river_width
 from geb.workflows.io import (
     create_hash_from_parameters,
@@ -65,7 +66,6 @@ from geb.workflows.raster import (
 from .workflows import get_river_depth, get_river_manning
 from .workflows.outflow import create_outflow_in_mask
 from .workflows.utils import (
-    assign_return_periods,
     create_hourly_hydrograph,
     export_rivers,
     get_discharge_and_river_parameters_by_river,
