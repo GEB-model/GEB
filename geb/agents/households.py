@@ -561,8 +561,6 @@ class Households(AgentBaseClass):
                 / ((1 + r_loan) ** loan_duration - 1)
             )
         )
-
-        # initiate array with adaptation costs for dry-proofing, eur 2024 values, article Aerts (2018)
         self.var.adaptation_costs_dryproofing = DynamicArray(
             annual_adaptation_costs_dryproofing, max_n=self.max_n
         )
@@ -577,7 +575,6 @@ class Households(AgentBaseClass):
                 / ((1 + r_loan) ** loan_duration - 1)
             )
         )
-        # wet floodproofing
         self.var.adaptation_costs_wetproofing = DynamicArray(
             np.full(self.n, annual_adaptation_costs_wetproofing, np.float32),
             max_n=self.max_n,
