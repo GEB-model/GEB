@@ -3,7 +3,7 @@
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from scipy.stats import genpareto, kstest
+from scipy.stats import genpareto, kstest, lmoment
 from tqdm import tqdm
 
 
@@ -64,6 +64,71 @@ def fit_gpd_mle(
 
     c_hat, loc_hat, scale_hat = genpareto.fit(y, floc=0.0, **kwargs)
     return float(scale_hat), float(c_hat)  # sigma, xi
+
+
+def fit_gpd_lmom(
+    exceedances: np.ndarray,
+    fixed_shape: float | None = None,
+    fixed_scale: float | None = None,
+) -> tuple[float, float]:
+    r"""Fit GPD to positive exceedances using L-Moments.
+
+    Estimates GPD parameters using the method of L-Moments (Hosking & Wallis, 1997).
+    The location parameter is fixed at 0 (for exceedances).
+
+    The L-moments ($l_1, l_2$) are robust summary statistics based on linear
+    combinations of order statistics. For a GPD with shape $\xi$ and scale $\sigma$:
+    $$ l_1 = \frac{\sigma}{1 - \xi} $$
+    $$ l_2 = \frac{\sigma}{(1 - \xi)(2 - \xi)} $$
+
+    From these relations:
+    - Standard fit uses both $l_1$ and $l_2$ to solve for $\xi$ and $\sigma$.
+    - Fixed shape uses only $l_1$ (mean) to estimate $\sigma$.
+    - Fixed scale uses only $l_1$ (mean) to estimate $\xi$.
+
+    Args:
+        exceedances: Positive exceedance values above threshold (dimensionless).
+        fixed_shape: Value to fix the shape parameter (xi) (dimensionless). If None, it is fitted.
+            Set to 0 to force a Gumbel (Exponential) distribution.
+        fixed_scale: Value to fix the scale parameter (sigma) (dimensionless). If None, it is fitted.
+
+    Returns:
+        Tuple of (sigma, xi) where sigma is the scale parameter and xi is
+        the shape parameter of the fitted GPD.
+
+    Raises:
+        ValueError: If fewer than 6 exceedances provided or parameters invalid.
+    """
+    if fixed_shape is not None and fixed_scale is not None:
+        raise ValueError("Cannot fix both shape and scale parameters simultaneously.")
+
+    y = np.asarray(exceedances, dtype=float)
+    n = len(y)
+    if n < 6:
+        raise ValueError("Too few exceedances for reliable fit")
+
+    # Sample L-moments using scipy.stats.lmoment
+    l1, l2 = lmoment(y, order=[1, 2])
+
+    if fixed_shape is not None:
+        xi = fixed_shape
+        # Use l1 to estimate sigma: sigma = l1 * (1 - xi)
+        sigma = l1 * (1.0 - xi)
+    elif fixed_scale is not None:
+        sigma = fixed_scale
+        # Use l1 to estimate xi: l1 = sigma / (1 - xi) -> 1 - xi = sigma / l1 -> xi = 1 - sigma / l1
+        if abs(l1) < 1e-12:
+            raise ValueError("Mean exceedance is 0, cannot fit with fixed scale.")
+        xi = 1.0 - sigma / l1
+    else:
+        if abs(l2) < 1e-12:
+            # If l2 is extremely small, the data may be nearly constant.
+            raise ValueError("L2 moment is (almost) 0, cannot fit GPD.")
+
+        xi = 2.0 - l1 / l2
+        sigma = l1 * (1.0 - xi)
+
+    return float(sigma), float(xi)
 
 
 def gpd_cdf(y: np.ndarray | float, sigma: float, xi: float) -> np.ndarray | float:
@@ -200,15 +265,16 @@ def gpd_pot_ad_auto(
     random_seed: int = 123,
     fixed_shape: float | None = None,
     fixed_scale: float | None = None,
+    fit_method: str = "mle",
 ) -> dict:
-    """Automated GPD-POT analysis with threshold selection using Anderson-Darling test.
+    r"""Automated GPD-POT analysis with threshold selection using Anderson-Darling test.
 
-    Performs automated Generalized Pareto Distribution (GPD) Peaks-Over-Threshold (POT) 
-    analysis. The function iterates through candidate thresholds $u$, calculates the 
-    excesses $y = x - u$, and fits the GPD to these excesses. 
+    Performs automated Generalized Pareto Distribution (GPD) Peaks-Over-Threshold (POT)
+    analysis. The function iterates through candidate thresholds $u$, calculates the
+    excesses $y = x - u$, and fits the GPD to these excesses.
 
-    The location parameter is implicitly fixed at 0.0 because the distribution is 
-    fitted to the magnitude of the exceedance above the threshold, not the absolute 
+    The location parameter is implicitly fixed at 0.0 because the distribution is
+    fitted to the magnitude of the exceedance above the threshold, not the absolute
     river stage/discharge value.
 
     Args:
@@ -224,9 +290,10 @@ def gpd_pot_ad_auto(
         random_seed: Random seed for reproducibility.
         fixed_shape: Value to fix the shape parameter ($\xi$). If 0, forces Exponential tail.
         fixed_scale: Value to fix the scale parameter ($\sigma$).
+        fit_method: Method to fit GPD parameters. 'mle' (Maximum Likelihood) or 'lmom' (L-Moments).
 
     Returns:
-        Dictionary containing daily maxima, diagnostics, chosen parameters, 
+        Dictionary containing daily maxima, diagnostics, chosen parameters,
         and return level table.
 
     Raises:
@@ -259,10 +326,7 @@ def gpd_pot_ad_auto(
     mrl_vals = mean_residual_life(daily_max.values, mrl_grid_u)
 
     top_idx = int(len(mrl_vals) * mrl_top_fraction)
-    if np.sum(~np.isnan(mrl_vals[top_idx:])) >= 3:
-        a_lin, b_lin = np.polyfit(mrl_grid_u[top_idx:], mrl_vals[top_idx:], 1)
-    else:
-        a_lin, b_lin = 0.0, 0.0
+    a_lin, b_lin = np.polyfit(mrl_grid_u[top_idx:], mrl_vals[top_idx:], 1)
 
     diagnostics = []
 
@@ -280,12 +344,22 @@ def gpd_pot_ad_auto(
         # Consequently, the GPD location parameter $\mu$ is effectively 0.
         y = exceed.values - u
 
-        # Fit GPD to the excesses. Implementation assumes loc=0.
-        sigma, xi = fit_gpd_mle(
-            y,
-            fixed_shape=fixed_shape,
-            fixed_scale=fixed_scale,
-        )
+        if fit_method == "lmom":
+            sigma, xi = fit_gpd_lmom(
+                y,
+                fixed_shape=fixed_shape,
+                fixed_scale=fixed_scale,
+            )
+        elif fit_method == "mle":
+            sigma, xi = fit_gpd_mle(
+                y,
+                fixed_shape=fixed_shape,
+                fixed_scale=fixed_scale,
+            )
+        else:
+            raise ValueError(
+                f"Unknown fit_method: {fit_method}, must be 'mle' or 'lmom'."
+            )
 
         u_vals = gpd_cdf(y, sigma, xi)
         A_R2 = right_tail_ad_from_uniforms(np.sort(u_vals))
@@ -335,12 +409,12 @@ def gpd_pot_ad_auto(
     lambda_per_year = n_star / years
     pct = (daily_max < u_star).mean() * 100
 
-    # Calculate return levels. Note that u_star is passed to re-add the 
+    # Calculate return levels. Note that u_star is passed to re-add the
     # threshold offset to the estimated excesses.
     water_level_for_return_periods = gpd_return_level(
         u_star, sigma_star, xi_star, lambda_per_year, return_periods
     )
-    
+
     water_level_for_return_periods_table = pd.DataFrame(
         {
             "T_years": return_periods.astype(int),
@@ -374,6 +448,7 @@ def assign_return_periods(
     nboot: int = 2000,
     fixed_shape: float | None = None,
     fixed_scale: float | None = None,
+    fit_method: str = "mle",
 ) -> gpd.GeoDataFrame:
     """Assign return periods to rivers using GPD-POT analysis.
 
@@ -395,6 +470,7 @@ def assign_return_periods(
         fixed_shape: Value to fix the shape parameter (xi) (dimensionless). If None, it is fitted.
             Set to 0 to force a Gumbel (Exponential) distribution.
         fixed_scale: Value to fix the scale parameter (sigma) (dimensionless). If None, it is fitted.
+        fit_method: Method to fit GPD parameters. 'mle' (Maximum Likelihood) or 'lmom' (L-Moments).
 
     Returns:
         Updated rivers GeoDataFrame with return level columns added (m³/s).
@@ -430,6 +506,7 @@ def assign_return_periods(
             nboot=nboot,
             fixed_shape=fixed_shape,
             fixed_scale=fixed_scale,
+            fit_method=fit_method,
         )
         print(f"GPD-POT analysis completed for river {idx}.")
 

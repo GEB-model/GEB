@@ -14,6 +14,7 @@ from shapely.geometry import LineString
 
 from geb.hazards.floods.workflows.return_periods import (
     assign_return_periods,
+    fit_gpd_lmom,
     fit_gpd_mle,
 )
 
@@ -309,3 +310,85 @@ def test_fit_gpd_mle_fixes() -> None:
     sigma_hat_scale, xi_hat_scale = fit_gpd_mle(y, fixed_scale=2.0)
     assert sigma_hat_scale == 2.0
     assert abs(xi_hat_scale - xi_true) < 0.2
+
+
+def test_fit_gpd_lmom_fixes() -> None:
+    """Test fit_gpd_lmom with fixed parameters."""
+    # Generate data from GPD(xi=0.2, scale=10.0)
+    # L-moments are generally robust but let's use a decent sample size
+    np.random.seed(42)
+    xi_true = 0.2
+    sigma_true = 10.0
+    n = 1000
+    y = genpareto.rvs(c=xi_true, scale=sigma_true, size=n)
+
+    # 1. Test standard fitting (no fixes)
+    sigma_lmom, xi_lmom = fit_gpd_lmom(y)
+    # L-moments should be quite accurate for this sample size and shape > -0.5
+    assert abs(xi_lmom - xi_true) < 0.1
+    assert abs(sigma_lmom - sigma_true) < 1.0
+
+    # 2. Test fixed shape = 0.0 (Gumbel-like)
+    # We fit to the same data (which is NOT Gumbel), so fit will be biased but
+    # parameter should be fixed.
+    sigma_0, xi_0 = fit_gpd_lmom(y, fixed_shape=0.0)
+    assert xi_0 == 0.0
+    # For xi=0, sigma estimate via L-moments is l1 * (1 - xi) = l1 * 1 = mean
+    assert abs(sigma_0 - np.mean(y)) < 1e-9
+
+    # 3. Test fixed shape = 0.2 (True value)
+    sigma_fixed, xi_fixed = fit_gpd_lmom(y, fixed_shape=0.2)
+    assert xi_fixed == 0.2
+    assert abs(sigma_fixed - sigma_true) < 0.5
+
+    # 4. Test fixed scale = 10.0
+    sigma_scale, xi_scale = fit_gpd_lmom(y, fixed_scale=10.0)
+    assert sigma_scale == 10.0
+    assert abs(xi_scale - xi_true) < 0.1
+
+    # 5. Test with exponential data (xi=0) to verify shape convergence
+    y_exp = np.random.exponential(scale=5.0, size=1000)
+    sigma_exp, xi_exp = fit_gpd_lmom(y_exp)
+    assert abs(xi_exp - 0.0) < 0.1
+    assert abs(sigma_exp - 5.0) < 0.5
+
+
+def test_assign_return_periods_lmom() -> None:
+    """Test assign_return_periods using L-moments method."""
+    # Create simple river data
+    idx = ["river1"]
+    geom = [LineString([(0, 0), (1, 1)])]
+    rivers = gpd.GeoDataFrame({"geometry": geom}, index=idx, crs="EPSG:4326")
+
+    # Generate discharge with GPD tail
+    np.random.seed(123)
+    n_days = 365 * 10
+    dates = pd.date_range("2000-01-01", periods=n_days, freq="D")
+
+    # Base flow + random exceeding term
+    # Most days low, occasional peaks
+    base = np.random.uniform(10, 20, size=n_days)
+    peaks = genpareto.rvs(c=0.1, loc=0, scale=50, size=n_days)
+    # Only keep peaks occasionally
+    # Make a series where most are just base, some are base+peak
+    mask = np.random.random(n_days) > 0.95
+    flow = base.copy()
+    flow[mask] += peaks[mask]
+
+    discharge_df = pd.DataFrame({"river1": flow}, index=dates)
+
+    return_periods = [10, 100]
+
+    # Run assignment with L-moments
+    result = assign_return_periods(
+        rivers=rivers.copy(),
+        discharge_dataframe=discharge_df,
+        return_periods=return_periods,
+        fit_method="lmom",
+        nboot=10,  # fast test
+    )
+
+    assert "Q_10" in result.columns
+    assert "Q_100" in result.columns
+    assert result.loc["river1", "Q_10"] > 0
+    assert result.loc["river1", "Q_100"] > result.loc["river1", "Q_10"]
