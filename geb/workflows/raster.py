@@ -1329,6 +1329,22 @@ def clip_region(
         maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
         minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
         maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
+        if mincol_aligned < 0:
+            raise ValueError(
+                f"Aligned min column index is out of bounds: {mincol_aligned}"
+            )
+        if maxcol_aligned >= mask.x.size:
+            raise ValueError(
+                f"Aligned max column index is out of bounds: {maxcol_aligned}"
+            )
+        if minrow_aligned < 0:
+            raise ValueError(
+                f"Aligned min row index is out of bounds: {minrow_aligned}"
+            )
+        if maxrow_aligned >= mask.y.size:
+            raise ValueError(
+                f"Aligned max row index is out of bounds: {maxrow_aligned}"
+            )
 
         assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
         assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
