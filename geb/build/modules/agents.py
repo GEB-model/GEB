@@ -1199,10 +1199,12 @@ class Agents(BuildModelBase):
         else:
             assert size_class_boundaries is not None
 
-        cultivated_land = self.region_subgrid["landsurface/full_region_cultivated_land"]
+        cultivated_land = self.region_subgrid[
+            "landsurface/full_region_cultivated_land"
+        ].compute()
         assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
-        region_ids = self.region_subgrid["region_ids"]
-        cell_area = self.region_subgrid["cell_area"]
+        region_ids = self.region_subgrid["region_ids"].compute()
+        cell_area = self.region_subgrid["cell_area"].compute()
 
         regions_shapes = self.geom["regions"]
         if data_source == "lowder":
