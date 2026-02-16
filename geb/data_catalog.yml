@@ -63,22 +63,3 @@ AQUASTAT_municipal_withdrawal:
   path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
   meta:
     source_license: CC BY 4.0
-preferences_individual:
-  path: socioeconomic/social/cleaned_individual_data.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
-    category: time and risk preferences
-    source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
-    paper_doi: doi.org/10.1093/qje/qjy013
-    paper_ref: Falk et al. (2018)
-    source_license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (non-profit only)
-preferences_country:
-  path: socioeconomic/social/cleaned_country_data.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
-    category: time and risk preferences
-    source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
-    paper_doi: doi.org/10.1093/qje/qjy013
-    paper_ref: Falk et al. (2018)

@@ -16,6 +16,7 @@ from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
+from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
@@ -528,6 +529,42 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Radboud University",
             "license": "https://globaldatalab.org/termsofuse/",
             "url": "https://globaldatalab.org/mygdl/downloads/shapefiles/",
+        },
+    },
+    "global_preferences_survey_country": {
+        "adapter": GlobalPreferencesSurvey(
+            zip_filename="GPS_dataset_country_level.zip",
+            zip_member_path="country.dta",
+            folder="global_preferences_survey_country",
+            local_version=1,
+            filename="country.csv",
+            cache="global",
+        ),
+        "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        "source": {
+            "name": "Global Preferences Survey - Country Level",
+            "author": "Falk et al. (2018)",
+            "paper_doi": "10.1093/qje/qjy013",
+            "license": "CCC BY-NC-SA 4.0",
+            "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        },
+    },
+    "global_preferences_survey_individual": {
+        "adapter": GlobalPreferencesSurvey(
+            zip_filename="GPS_dataset_individual_level.zip",
+            zip_member_path="individual_new.dta",
+            folder="global_preferences_survey_individual",
+            local_version=1,
+            filename="individual_new.csv",
+            cache="global",
+        ),
+        "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        "source": {
+            "name": "Global Preferences Survey - Individual Level",
+            "author": "Falk et al. (2018)",
+            "paper_doi": "10.1093/qje/qjy013",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
         },
     },
     "wb_inflation_rate": {

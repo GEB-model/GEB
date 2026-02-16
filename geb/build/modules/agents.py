@@ -2341,16 +2341,13 @@ class Agents(BuildModelBase):
             A DataFrame containing behavioural parameters for each country, including risk aversion and discount factors.
         """
         # Risk aversion
-        preferences_country_level: pd.DataFrame = self.old_data_catalog.get_dataframe(
-            "preferences_country",
-            variables=["country", "isocode", "patience", "risktaking"],
-        ).dropna()
-
-        preferences_individual_level: pd.DataFrame = (
-            self.old_data_catalog.get_dataframe(
-                "preferences_individual",
-                variables=["country", "isocode", "patience", "risktaking"],
-            ).dropna()
+        preferences_country_level = self.data_catalog.fetch(
+            "global_preferences_survey_country"
+        ).read()[["country", "isocode", "patience", "risktaking"]]
+        preferences_individual_level = (
+            self.data_catalog.fetch("global_preferences_survey_individual")
+            .read()[["country", "isocode", "patience", "risktaking"]]
+            .dropna()
         )
 
         def scale_to_range(x: pd.Series, new_min: float, new_max: float) -> pd.Series:
