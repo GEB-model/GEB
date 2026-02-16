@@ -1745,14 +1745,14 @@ class Agents(BuildModelBase):
             5: (35, 44),
             6: (45, 54),
             7: (55, 64),
-            8: (66, maximum_age + 1),
+            8: (65, maximum_age + 1),
         }
 
         allocated_agents = pd.DataFrame()
         households_not_allocated = 0
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
-            GDL_code = GDL_region["GDLcode"]
+            # GDL_code = GDL_region["GDLcode"]
             self.logger.info(
                 f"Setting up household characteristics for {GDL_region['GDLcode']} ({i + 1}/{len(GDL_regions)})"
             )
@@ -1800,7 +1800,20 @@ class Agents(BuildModelBase):
                 GLOPOP_S_region["GRID_CELL"].isin(unique_grid_cells)
             ]
 
-            # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefor we combine these.)
+            ## Fixes for MKDr101 ##
+            # Set WEALTH to -1 when INCOME is available to avoid double-counting
+            GLOPOP_S_region.loc[GLOPOP_S_region["INCOME"] != -1, "WEALTH"] = -1
+
+            # Check for 0 values in WEALTH column and convert to 1
+            wealth_zero_count = (GLOPOP_S_region["WEALTH"] == 0).sum()
+            if wealth_zero_count > 0:
+                self.logger.warning(
+                    f"Found {wealth_zero_count} households with WEALTH=0 in {GDL_code}. Converting to WEALTH=1. Tim is in contact with Marijn to correct this in the GLOPOP dataset"
+                )
+                GLOPOP_S_region.loc[GLOPOP_S_region["WEALTH"] == 0, "WEALTH"] = 1
+
+            ## Fixes for MKDr101 done ##
+            # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefore, we combine these.)
             GLOPOP_S_region["wealth_index"] = (
                 GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
             )
@@ -1833,6 +1846,12 @@ class Agents(BuildModelBase):
             )
 
             # calculate age:
+            ## fixes for MKDr101 ##
+            GLOPOP_S_region.loc[GLOPOP_S_region["AGE"] == 0, "AGE"] = (
+                1  # check if age is sometimes 0, if so, set to 1 (otherwise creates issues)
+            )
+            ## fixes for MKDr101 done ##
+
             GLOPOP_S_region["age_household_head"] = np.uint16(np.iinfo(np.uint16).max)
             for age_class in age_class_to_age:
                 age_range = age_class_to_age[age_class]

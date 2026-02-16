@@ -703,7 +703,9 @@ class WaterBodies(Module):
             command_area_release_m3[self.is_reservoir],
         ) = self.routing_reservoirs(n_routing_substeps, current_substep)
 
-        assert (outflow_to_drainage_network_m3 <= self.var.storage).all()
+        assert (
+            outflow_to_drainage_network_m3 - 1e-8 <= self.var.storage
+        ).all()  # allow for a very small numerical tolerance
 
         if __debug__:
             balance_check(
