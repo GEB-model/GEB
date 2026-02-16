@@ -387,32 +387,28 @@ def get_farm_distribution(
     else:
         growth_factor: float = 1
 
-        start_from_bottom: bool = True
+        dist_low = (n * mean + offset) - x0 * n
+        dist_high = x1 * n - (n * mean + offset)
+
+        if dist_low < dist_high:
+            start_from_bottom: bool = True
+        else:
+            start_from_bottom: bool = False
+
+        prev_growth_factor: float = -1.0
+        prev_estimated_area: float = -1.0
+
         while True:
             if start_from_bottom:
-                estimate: np.ndarray = np.zeros(n_farm_sizes, dtype=np.float64)
+                estimate = np.full(n_farm_sizes, growth_factor, dtype=np.float64)
                 estimate[0] = 1
-                for i in range(1, estimate.size):
-                    estimate[i] = estimate[i - 1] * growth_factor
-                estimate /= estimate.sum() / n
+                estimate = np.cumprod(estimate)
+            else:
+                estimate = np.full(n_farm_sizes, 1.0 / growth_factor, dtype=np.float64)
+                estimate[0] = 1
+                estimate = np.cumprod(estimate)[::-1]
 
-            # when there are only some farms at the top of the farm size distribution, the growth factor can become very large and the estimate can become very small.
-            # is can lead to NaNs in the estimate. In this case we can start from the top of the farm size distribution.
-            if np.isnan(estimate).any() or not start_from_bottom:
-                if (
-                    start_from_bottom
-                ):  # reset growth factor, but only first time this code is run
-                    start_from_bottom = False
-                    growth_factor = 1
-                if logger is not None:
-                    logger.warning(
-                        f"estimate contains NaNs; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}, start from the top"
-                    )
-                estimate = np.zeros(n_farm_sizes, dtype=np.float64)
-                estimate[-1] = 1
-                for i in range(estimate.size - 2, -1, -1):
-                    estimate[i] = estimate[i + 1] * growth_factor
-                estimate /= estimate.sum() / n
+            estimate /= estimate.sum() / n
 
             assert (estimate >= 0).all(), (
                 f"Some numbers are negative; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}"
@@ -424,11 +420,23 @@ def get_farm_distribution(
             if abs(absolute_difference) < 1e-3:
                 break
 
-            difference: float = (target_area / estimated_area) ** (
-                1 / (n_farm_sizes - 1)
-            )
+            # Calculate adaptive exponent based on secant method in log-log space
+            exponent: float = 1.0 / (n_farm_sizes - 1)
+
+            if prev_growth_factor > 0 and prev_estimated_area > 0:
+                log_g_diff = np.log(growth_factor) - np.log(prev_growth_factor)
+                log_A_diff = np.log(estimated_area) - np.log(prev_estimated_area)
+                exponent = log_g_diff / log_A_diff
+
+            # Update history
+            prev_growth_factor = growth_factor
+            prev_estimated_area = estimated_area
+
+            difference: float = (target_area / estimated_area) ** exponent
+
             if difference == 1:
                 break
+
             growth_factor *= difference
 
         n_farms, farm_sizes = fit_n_farms_to_sizes(
