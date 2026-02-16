@@ -36,6 +36,558 @@ from ..workflows.crop_calendars import (
 from ..workflows.farmers import get_farm_locations
 from .base import BuildModelBase
 
+# CROP_DATA from Siebert et al. (2010)
+# source doi: 10.1016/j.jhydrol.2009.07.031
+# license: Creative Commons Attribution 4.0 International
+CROP_DATA = [
+    {
+        "name": "wheat",
+        "id": 0,
+        "is_paddy": False,
+        "a": 0.9885,
+        "b": 0.1103,
+        "P0": 0.1,
+        "P1": 0.25,
+        "l_ini": 15.0,
+        "l_dev": 25.0,
+        "l_mid": 40,
+        "l_late": 20,
+        "kc_initial": 0.4,
+        "kc_mid": 1.15,
+        "kc_end": 0.3,
+        "rd_irr": 1.25,
+        "rd_rain": 1.6,
+        "reference_yield_kg_m2": 1.0,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/whtfra.dat",
+    },
+    {
+        "name": "maize",
+        "id": 1,
+        "is_paddy": False,
+        "a": 1.2929,
+        "b": -0.0798,
+        "P0": 0.1,
+        "P1": 0.4,
+        "l_ini": 17.0,
+        "l_dev": 28.000000000000004,
+        "l_mid": 33,
+        "l_late": 22,
+        "kc_initial": 0.3,
+        "kc_mid": 1.2,
+        "kc_end": 0.4,
+        "rd_irr": 1.0,
+        "rd_rain": 1.6,
+        "reference_yield_kg_m2": 2.4,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/maiz.w41",
+    },
+    {
+        "name": "rice",
+        "id": 2,
+        "is_paddy": True,
+        "a": 1.0,
+        "b": -0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 17.0,
+        "l_dev": 18.0,
+        "l_mid": 44,
+        "l_late": 21,
+        "kc_initial": 1.05,
+        "kc_mid": 1.2,
+        "kc_end": 0.75,
+        "rd_irr": 0.5,
+        "rd_rain": 1.0,
+        "reference_yield_kg_m2": 1.2,
+        "crop_group_number": 3.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/ric501.cab",
+    },
+    {
+        "name": "barley",
+        "id": 3,
+        "is_paddy": False,
+        "a": 1.478,
+        "b": -0.4288,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 15.0,
+        "l_dev": 25.0,
+        "l_mid": 40,
+        "l_late": 20,
+        "kc_initial": 0.3,
+        "kc_mid": 1.15,
+        "kc_end": 0.25,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.8,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/bar301.cab",
+    },
+    {
+        "name": "rye",
+        "id": 4,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 10.0,
+        "l_dev": 60.0,
+        "l_mid": 20,
+        "l_late": 10,
+        "kc_initial": 0.4,
+        "kc_mid": 1.15,
+        "kc_end": 0.3,
+        "rd_irr": 1.25,
+        "rd_rain": 1.6,
+        "reference_yield_kg_m2": 0.75,
+        "crop_group_number": 3.0,
+        "crop_group_number_reference": "grass: https://edepot.wur.nl/336784",
+    },
+    {
+        "name": "millet",
+        "id": 5,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 14.000000000000002,
+        "l_dev": 22.0,
+        "l_mid": 40,
+        "l_late": 24,
+        "kc_initial": 0.3,
+        "kc_mid": 1.0,
+        "kc_end": 0.3,
+        "rd_irr": 1.0,
+        "rd_rain": 1.8,
+        "reference_yield_kg_m2": 0.8,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/millet.w41",
+    },
+    {
+        "name": "sorghum",
+        "id": 6,
+        "is_paddy": False,
+        "a": 0.8681,
+        "b": 0.2753,
+        "P0": 0.1,
+        "P1": 0.3,
+        "l_ini": 15.0,
+        "l_dev": 28.000000000000004,
+        "l_mid": 33,
+        "l_late": 24,
+        "kc_initial": 0.3,
+        "kc_mid": 1.1,
+        "kc_end": 0.55,
+        "rd_irr": 1.0,
+        "rd_rain": 1.8,
+        "reference_yield_kg_m2": 1.5,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/sorghum.w41",
+    },
+    {
+        "name": "soybeans",
+        "id": 7,
+        "is_paddy": False,
+        "a": 0.8373,
+        "b": 0.208,
+        "P0": 0.1,
+        "P1": 0.4,
+        "l_ini": 15.0,
+        "l_dev": 20.0,
+        "l_mid": 45,
+        "l_late": 20,
+        "kc_initial": 0.4,
+        "kc_mid": 1.15,
+        "kc_end": 0.5,
+        "rd_irr": 0.6,
+        "rd_rain": 1.3,
+        "reference_yield_kg_m2": 0.4,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/soy0901.cab",
+    },
+    {
+        "name": "sunflower",
+        "id": 8,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 19.0,
+        "l_dev": 27.0,
+        "l_mid": 35,
+        "l_late": 19,
+        "kc_initial": 0.35,
+        "kc_mid": 1.1,
+        "kc_end": 0.25,
+        "rd_irr": 0.8,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.4,
+        "crop_group_number": 3.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/sun1101.cab",
+    },
+    {
+        "name": "potatoes",
+        "id": 9,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 20.0,
+        "l_dev": 25.0,
+        "l_mid": 35,
+        "l_late": 20,
+        "kc_initial": 0.35,
+        "kc_mid": 1.15,
+        "kc_end": 0.5,
+        "rd_irr": 0.4,
+        "rd_rain": 0.6,
+        "reference_yield_kg_m2": 7.0,
+        "crop_group_number": 3.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/pot701.cab",
+    },
+    {
+        "name": "cassava",
+        "id": 10,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.15,
+        "P1": 0.5,
+        "l_ini": 10.0,
+        "l_dev": 20.0,
+        "l_mid": 43,
+        "l_late": 27,
+        "kc_initial": 0.3,
+        "kc_mid": 0.95,
+        "kc_end": 0.4,
+        "rd_irr": 0.6,
+        "rd_rain": 0.9,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/cassava.w41",
+    },
+    {
+        "name": "sugar cane",
+        "id": 11,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": -0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 0.0,
+        "kc_mid": 0.9,
+        "kc_end": 0.0,
+        "rd_irr": 1.2,
+        "rd_rain": 1.8,
+        "reference_yield_kg_m2": 15.0,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/sugrcane.w41",
+    },
+    {
+        "name": "sugar beets",
+        "id": 12,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 20.0,
+        "l_dev": 25.0,
+        "l_mid": 35,
+        "l_late": 20,
+        "kc_initial": 0.35,
+        "kc_mid": 1.2,
+        "kc_end": 0.8,
+        "rd_irr": 0.7,
+        "rd_rain": 1.2,
+        "reference_yield_kg_m2": 9.0,
+        "crop_group_number": 2.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/sug0601.cab",
+    },
+    {
+        "name": "oil palm",
+        "id": 13,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 0.0,
+        "kc_mid": 1.0,
+        "kc_end": 0.0,
+        "rd_irr": 0.7,
+        "rd_rain": 1.1,
+        "reference_yield_kg_m2": 3.2,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "similar to olive: https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "rapeseed",
+        "id": 14,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 30.0,
+        "l_dev": 25.0,
+        "l_mid": 30,
+        "l_late": 15,
+        "kc_initial": 0.35,
+        "kc_mid": 1.1,
+        "kc_end": 0.35,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.5,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/rap1001.cab",
+    },
+    {
+        "name": "groundnuts",
+        "id": 15,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 22.0,
+        "l_dev": 28.000000000000004,
+        "l_mid": 30,
+        "l_late": 20,
+        "kc_initial": 0.4,
+        "kc_mid": 1.15,
+        "kc_end": 0.6,
+        "rd_irr": 0.5,
+        "rd_rain": 1.0,
+        "reference_yield_kg_m2": 0.85,
+        "crop_group_number": 4.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/gr_nut.w41",
+    },
+    {
+        "name": "pulses",
+        "id": 16,
+        "is_paddy": False,
+        "a": 1.3,
+        "b": -0.2,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 18.0,
+        "l_dev": 27.0,
+        "l_mid": 35,
+        "l_late": 20,
+        "kc_initial": 0.45,
+        "kc_mid": 1.1,
+        "kc_end": 0.6,
+        "rd_irr": 0.55,
+        "rd_rain": 0.85,
+        "reference_yield_kg_m2": 0.6,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/pigeopea.w41; https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/chickpea.w41",
+    },
+    {
+        "name": "citrus",
+        "id": 17,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.15,
+        "P1": 0.5,
+        "l_ini": 16.0,
+        "l_dev": 25.0,
+        "l_mid": 33,
+        "l_late": 26,
+        "kc_initial": 0.8,
+        "kc_mid": 0.8,
+        "kc_end": 0.8,
+        "rd_irr": 1.0,
+        "rd_rain": 1.3,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 4.0,
+        "crop_group_number_reference": "https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "date palm",
+        "id": 18,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.05,
+        "P1": 0.3,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 0.95,
+        "kc_mid": 0.95,
+        "kc_end": 0.95,
+        "rd_irr": 1.5,
+        "rd_rain": 2.2,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "similar to olive: https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "grapes",
+        "id": 19,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.15,
+        "P0": 0.05,
+        "P1": 0.3,
+        "l_ini": 30.0,
+        "l_dev": 14.000000000000002,
+        "l_mid": 20,
+        "l_late": 36,
+        "kc_initial": 0.3,
+        "kc_mid": 0.8,
+        "kc_end": 0.3,
+        "rd_irr": 1.0,
+        "rd_rain": 1.8,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 3.0,
+        "crop_group_number_reference": "https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "cotton",
+        "id": 20,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.1,
+        "P1": 0.2,
+        "l_ini": 17.0,
+        "l_dev": 33.0,
+        "l_mid": 25,
+        "l_late": 25,
+        "kc_initial": 0.35,
+        "kc_mid": 1.18,
+        "kc_end": 0.6,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.55,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/cotton.w41",
+    },
+    {
+        "name": "cocoa",
+        "id": 21,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.15,
+        "P1": 0.6,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 1.05,
+        "kc_mid": 1.05,
+        "kc_end": 1.05,
+        "rd_irr": 0.7,
+        "rd_rain": 1.0,
+        "reference_yield_kg_m2": 0.15,
+        "crop_group_number": 2.5,
+        "crop_group_number_reference": "similar to banana, pepper: https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "coffee",
+        "id": 22,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.15,
+        "P1": 0.6,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 1.0,
+        "kc_mid": 1.0,
+        "kc_end": 1.0,
+        "rd_irr": 0.9,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.6,
+        "crop_group_number": 2.5,
+        "crop_group_number_reference": "similar to banana, pepper: https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "others perennial",
+        "id": 23,
+        "is_paddy": False,
+        "a": 1.2,
+        "b": -0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 0.0,
+        "kc_mid": 0.8,
+        "kc_end": 0.0,
+        "rd_irr": 0.8,
+        "rd_rain": 1.2,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 4.0,
+        "crop_group_number_reference": "mixed group, thus impossible to say. However most perennials are quite adapted to droughts, thus 4",
+    },
+    {
+        "name": "fodder grasses",
+        "id": 24,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.05,
+        "P1": 0.2,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 1.0,
+        "kc_mid": 1.0,
+        "kc_end": 1.0,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 10.0,
+        "crop_group_number": 3.0,
+        "crop_group_number_reference": "grass: https://edepot.wur.nl/336784",
+    },
+    {
+        "name": "others annual",
+        "id": 25,
+        "is_paddy": False,
+        "a": 1.2,
+        "b": -0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 15.0,
+        "l_dev": 25.0,
+        "l_mid": 40,
+        "l_late": 20,
+        "kc_initial": 0.4,
+        "kc_mid": 1.05,
+        "kc_end": 0.5,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 5.0,
+        "crop_group_number": 2.5,
+        "crop_group_number_reference": "Many similar, taking the average",
+    },
+]
+
 
 class Crops(BuildModelBase):
     """Contains all build methods for setting up crops for GEB."""
@@ -44,11 +596,11 @@ class Crops(BuildModelBase):
         """Initialize the Crops module."""
         pass
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=True)
     def setup_crops(
         self,
-        crop_data: dict,
-        type: str = "MIRCA2000",
+        crop_data: dict | None = None,
+        source_type: str = "MIRCA2000",
     ) -> None:
         """Validate and set crop data used by the model.
 
@@ -73,100 +625,99 @@ class Crops(BuildModelBase):
 
         Args:
             crop_data: Dictionary keyed by crop id with metadata for each crop.
-            type: Source/type of crop parameters ('MIRCA2000' or 'GAEZ').
+            source_type: Source/type of crop parameters ('MIRCA2000' or 'GAEZ').
 
+        Raises:
+            ValueError: If source_type is not recognized or required fields are missing.
         """
-        assert type in ("MIRCA2000", "GAEZ")
-        for crop_id, crop_values in crop_data.items():
-            assert "name" in crop_values
-            assert "reference_yield_kg_m2" in crop_values
-            assert "is_paddy" in crop_values
-            assert "rd_rain" in crop_values  # root depth rainfed crops
-            assert "rd_irr" in crop_values  # root depth irrigated crops
-            assert (
-                "crop_group_number" in crop_values
-            )  # adaptation level to drought (see WOFOST: https://wofost.readthedocs.io/en/7.2/)
-            assert 5 >= crop_values["crop_group_number"] >= 0
-            assert (
-                crop_values["rd_rain"] >= crop_values["rd_irr"]
-            )  # root depth rainfed crops should be larger than irrigated crops
+        if crop_data is None:
+            if source_type != "MIRCA2000":
+                raise ValueError(
+                    f"crop_variables_source {source_type} not understood, must be 'MIRCA2000'"
+                )
 
-            if type == "GAEZ":
-                crop_values["l_ini"] = crop_values["d1"]
-                crop_values["l_dev"] = crop_values["d2a"] + crop_values["d2b"]
-                crop_values["l_mid"] = crop_values["d3a"] + crop_values["d3b"]
-                crop_values["l_late"] = crop_values["d4"]
+            crop_data = {
+                "data": (
+                    pd.DataFrame(CROP_DATA).set_index("id").to_dict(orient="index")
+                ),
+                "type": "MIRCA2000",
+            }
 
-                assert "KyT" in crop_values
-                assert "Ky1" in crop_values
-                assert "Ky2a" in crop_values
-                assert "Ky2b" in crop_values
-                assert "Ky3a" in crop_values
-                assert "Ky3b" in crop_values
-                assert "Ky4" in crop_values
+            crop_data["data"] = dict(sorted(crop_data["data"].items()))
+            self.set_params(crop_data, name="crops/crop_data")
 
-            elif type == "MIRCA2000":
-                assert "a" in crop_values
-                assert "b" in crop_values
-                assert "P0" in crop_values
-                assert "P1" in crop_values
-                assert "l_ini" in crop_values
-                assert "l_dev" in crop_values
-                assert "l_mid" in crop_values
-                assert "l_late" in crop_values
-                assert "kc_initial" in crop_values
-                assert "kc_mid" in crop_values
-                assert "kc_end" in crop_values
+        else:
+            if source_type not in ["MIRCA2000", "GAEZ"]:
+                raise ValueError(
+                    f"crop_variables_source {source_type} not understood, must be 'MIRCA2000' or 'GAEZ'"
+                )
+            for crop_id, crop_values in crop_data.items():
+                assert "name" in crop_values
+                assert "reference_yield_kg_m2" in crop_values
+                assert "is_paddy" in crop_values
+                assert "rd_rain" in crop_values  # root depth rainfed crops
+                assert "rd_irr" in crop_values  # root depth irrigated crops
+                assert (
+                    "crop_group_number" in crop_values
+                )  # adaptation level to drought (see WOFOST: https://wofost.readthedocs.io/en/7.2/)
+                assert 5 >= crop_values["crop_group_number"] >= 0
+                assert (
+                    crop_values["rd_rain"] >= crop_values["rd_irr"]
+                )  # root depth rainfed crops should be larger than irrigated crops
 
-            assert (
-                crop_values["l_ini"]
-                + crop_values["l_dev"]
-                + crop_values["l_mid"]
-                + crop_values["l_late"]
-                == 100
-            ), "Sum of l_ini, l_dev, l_mid, and l_late must be 100[%]"
+                if source_type == "GAEZ":
+                    crop_values["l_ini"] = crop_values["d1"]
+                    crop_values["l_dev"] = crop_values["d2a"] + crop_values["d2b"]
+                    crop_values["l_mid"] = crop_values["d3a"] + crop_values["d3b"]
+                    crop_values["l_late"] = crop_values["d4"]
 
-        crop_data = {
-            "data": crop_data,
-            "type": type,
-        }
+                    assert "KyT" in crop_values
+                    assert "Ky1" in crop_values
+                    assert "Ky2a" in crop_values
+                    assert "Ky2b" in crop_values
+                    assert "Ky3a" in crop_values
+                    assert "Ky3b" in crop_values
+                    assert "Ky4" in crop_values
 
-        self.set_params(crop_data, name="crops/crop_data")
+                elif source_type == "MIRCA2000":
+                    assert "a" in crop_values
+                    assert "b" in crop_values
+                    assert "P0" in crop_values
+                    assert "P1" in crop_values
+                    assert "l_ini" in crop_values
+                    assert "l_dev" in crop_values
+                    assert "l_mid" in crop_values
+                    assert "l_late" in crop_values
+                    assert "kc_initial" in crop_values
+                    assert "kc_mid" in crop_values
+                    assert "kc_end" in crop_values
 
-    @build_method(depends_on=[])
+                assert (
+                    crop_values["l_ini"]
+                    + crop_values["l_dev"]
+                    + crop_values["l_mid"]
+                    + crop_values["l_late"]
+                    == 100
+                ), "Sum of l_ini, l_dev, l_mid, and l_late must be 100[%]"
+
+            crop_data = {
+                "data": crop_data,
+                "type": source_type,
+            }
+
+            self.set_params(crop_data, name="crops/crop_data")
+
+    @build_method(depends_on=[], required=False)
     def setup_crops_from_source(
         self,
         source: str | None = "MIRCA2000",
-        crop_specifier: str | None = None,
     ) -> None:
         """Sets up the crops data for the model."""
         self.logger.info("Preparing crops data")
 
-        assert source in ("MIRCA2000",), (
-            f"crop_variables_source {source} not understood, must be 'MIRCA2000'"
+        raise NotImplementedError(
+            "setup_crops_from_source is removed, use setup_crops instead."
         )
-        if crop_specifier is None:
-            crop_data = {
-                "data": (
-                    self.old_data_catalog.get_dataframe("MIRCA2000_crop_data")
-                    .set_index("id")
-                    .to_dict(orient="index")
-                ),
-                "type": "MIRCA2000",
-            }
-        else:
-            crop_data = {
-                "data": (
-                    self.old_data_catalog.get_dataframe(
-                        f"MIRCA2000_crop_data_{crop_specifier}"
-                    )
-                    .set_index("id")
-                    .to_dict(orient="index")
-                ),
-                "type": "MIRCA2000",
-            }
-
-        self.set_params(crop_data, name="crops/crop_data")
 
     def process_crop_data(
         self,
@@ -627,7 +1178,7 @@ class Crops(BuildModelBase):
 
         return data
 
-    @build_method(depends_on=["set_time_range"])
+    @build_method(depends_on=["set_time_range"], required=False)
     def setup_cultivation_costs(
         self,
         cultivation_costs: str | int | float = 0,
@@ -653,9 +1204,10 @@ class Crops(BuildModelBase):
             "set_time_range",
             "setup_regions_and_land_use",
             "setup_economic_data",
-            "setup_crops_from_source",
+            "setup_crops",
             "setup_farmer_crop_calendar",
-        ]
+        ],
+        required=True,
     )
     def setup_crop_prices(
         self,
@@ -678,7 +1230,7 @@ class Crops(BuildModelBase):
         self.set_params(parsed_crop_prices, name="crops/crop_prices")
         self.set_params(parsed_crop_prices, name="crops/cultivation_costs")
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=False)
     def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:
         """This method is removed. You can remove it entirely.
 
@@ -833,7 +1385,7 @@ class Crops(BuildModelBase):
 
         return all_years_fraction_da, all_years_irrigated_fraction_da
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=False)
     def setup_farmer_crop_calendar_multirun(
         self,
         reduce_crops: bool = False,
@@ -1012,7 +1564,7 @@ class Crops(BuildModelBase):
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
-    @build_method(depends_on=["setup_create_farms"])
+    @build_method(depends_on=["setup_create_farms"], required=True)
     def setup_farmer_crop_calendar(
         self,
         year: int = 2000,

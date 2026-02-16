@@ -3,6 +3,7 @@
 from typing import Any
 
 from .base import Adapter
+from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
@@ -10,16 +11,19 @@ from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
+from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
 from .gtsm import GTSM
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
+from .lisflood import LISFLOOD
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -94,6 +98,83 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "10.5194/soil-2020-65",
         },
     },
+    "forest_restoration_potential": {
+        "adapter": ForestRestorationPotential(
+            folder="forest_restoration_potential",
+            local_version=1,
+            filename="restoration_potential.tif",
+            cache="global",
+        ),
+        "url": "https://www.research-collection.ethz.ch/bitstreams/77c1863d-b9b0-417e-8e49-d13079fb7825/download",
+        "source": {
+            "name": "Forest Restoration Potential",
+            "author": "Bastin, Jean-François et al.",
+            "url": "https://www.research-collection.ethz.ch/entities/researchdata/7234f0a1-e37d-4362-99e9-d0e6e75793dc",
+            "license": "In Copyright - Non-Commercial Use Permitted",
+            "doi": "10.3929/ethz-b-000350258",
+            "year": "2019",
+        },
+    },
+    "lisflood_crop_group_number_forest": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="cropgrpn_f_Global_03min.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/cropgrpn_f_Global_03min.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Crop Group Number (forest)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_crop_group_number_grassland_like": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="cropgrpn_o_Global_03min.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/cropgrpn_o_Global_03min.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Crop Group Number (other)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_leaf_area_index_forest": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="laif.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/laif.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Leaf Area Index (forest)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "lisflood_leaf_area_index_grassland_like": {
+        "adapter": LISFLOOD(
+            folder="lisflood",
+            local_version=1,
+            filename="laio.nc",
+            cache="global",
+        ),
+        "url": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/LISFLOOD_static_and_parameter_maps_for_GloFAS/Vegetation_properties/laio.nc",
+        "source": {
+            "name": "LISFLOOD Vegetation Properties - Leaf Area Index (other)",
+            "author": "European Commission, Joint Research Centre (JRC)",
+            "license": "CC BY 4.0",
+            "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
     "why_map": {
         "adapter": WhyMap(
             folder="why_map",
@@ -144,9 +225,9 @@ data_catalog: dict[str, dict[str, Any]] = {
     "global_exposure_model": {
         "adapter": GlobalExposureModel(
             folder="global_exposure_model",
-            local_version=2,
-            filename="global_exposure_model.yml",
-            cache="local",
+            local_version=1,
+            filename="global_exposure_model_{}.csv",
+            cache="global",
         ),
         "url": "https://github.com/gem/global_exposure_model",
         "source": {
@@ -302,7 +383,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "gcam_electricity_rates": {
         "adapter": GCAMElectricityRates(
-            folder="socioeconomic/electricity_rates",
+            folder="gcam/electricity_rates",
             local_version=1,
             filename="GCAM_Electricity_Rates.csv",
             cache="global",
@@ -448,6 +529,42 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Radboud University",
             "license": "https://globaldatalab.org/termsofuse/",
             "url": "https://globaldatalab.org/mygdl/downloads/shapefiles/",
+        },
+    },
+    "global_preferences_survey_country": {
+        "adapter": GlobalPreferencesSurvey(
+            zip_filename="GPS_dataset_country_level.zip",
+            zip_member_path="country.dta",
+            folder="global_preferences_survey_country",
+            local_version=1,
+            filename="country.csv",
+            cache="global",
+        ),
+        "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        "source": {
+            "name": "Global Preferences Survey - Country Level",
+            "author": "Falk et al. (2018)",
+            "paper_doi": "10.1093/qje/qjy013",
+            "license": "CCC BY-NC-SA 4.0",
+            "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        },
+    },
+    "global_preferences_survey_individual": {
+        "adapter": GlobalPreferencesSurvey(
+            zip_filename="GPS_dataset_individual_level.zip",
+            zip_member_path="individual_new.dta",
+            folder="global_preferences_survey_individual",
+            local_version=1,
+            filename="individual_new.csv",
+            cache="global",
+        ),
+        "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        "source": {
+            "name": "Global Preferences Survey - Individual Level",
+            "author": "Falk et al. (2018)",
+            "paper_doi": "10.1093/qje/qjy013",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
         },
     },
     "wb_inflation_rate": {
@@ -796,6 +913,42 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://doi.org/10.5281/zenodo.15680747",
             "paper_doi": "10.5281/zenodo.15680747",
         },
+    },
+    **{
+        f"cwatm_industry_water_demand_{scenario}_year": {
+            "adapter": CWATMIndustryWaterDemand(
+                folder="cwatm_water_demand",
+                filename=f"{scenario}_ind_year_millionm3_5min.nc",
+                local_version=1,
+                cache="global",
+            ),
+            "url": None,
+            "source": {
+                "name": f"CWATM Industry Water Demand {scenario}",
+                "author": "Burek et al. (2016)",
+                "license": "CC BY 3.0",
+                "url": "https://doi.org/10.5194/gmd-9-175-2016",
+            },
+        }
+        for scenario in ["historical", "ssp1", "ssp2", "ssp3", "ssp5"]
+    },
+    **{
+        f"cwatm_livestock_water_demand_{scenario}_year": {
+            "adapter": CWATMLivestockWaterDemand(
+                folder="cwatm_water_demand",
+                filename=f"{scenario}_liv_year_millionm3_5min.nc",
+                local_version=1,
+                cache="global",
+            ),
+            "url": None,
+            "source": {
+                "name": f"CWATM Livestock Water Demand {scenario}",
+                "author": "Burek et al. (2016)",
+                "license": "CC BY 3.0",
+                "url": "https://doi.org/10.5194/gmd-9-175-2016",
+            },
+        }
+        for scenario in ["historical", "ssp1", "ssp2", "ssp3", "ssp5"]
     },
 }
 

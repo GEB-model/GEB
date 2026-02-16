@@ -1,30 +1,3 @@
-MIRCA2000_crop_data:
-  data_type: DataFrame
-  driver: excel
-  path: MIRCA2000/crop_data.xlsx
-  meta:
-    paper_doi: 10.1016/j.jhydrol.2009.07.031
-    paper_ref: Siebert et al. (2010)
-    source_license:  Creative Commons Attribution 4.0 International 
-MIRCA2000_crop_data_variants:
-  data_type: DataFrame
-  driver: excel
-  path: MIRCA2000/crop_data_variants.xlsx
-  meta:
-    paper_doi: adjusted from 10.1016/j.jhydrol.2009.07.031
-    paper_ref: Siebert et al. (2010)
-    source_license:  Creative Commons Attribution 4.0 International 
-MIRCA-OS_cropping_calendar_{irrigated_or_rainfed}_{year}:
-  data_type: Dataset
-  path: agriculture/MIRCA-OS/Crop Calendar/MIRCA-OS_{year}_{irrigated_or_rainfed}.csv
-  meta:
-    paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
-    paper_ref: Kebede et al. (2024) (preprint)
-    source_license: CC BY 4.0
-    source_url: https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/
-  placeholders:
-    irrigated_or_rainfed: [irrigated, rainfed]
-    year: ['2000', '2005', '2010', '2015']
 MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
   data_type: RasterDataset
   driver: raster
@@ -75,27 +48,6 @@ COAST_RP:
     category: extreme water levels
     paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
     paper_ref: Dullaart et al. (2023)
-cwatm_soil_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: cwatm_input_5min/soil/{variable}.nc
-  meta:
-    source_license: GNU General Public License V3
-    source_url: https://cwatm.iiasa.ac.at/license.html
-cwatm_forest_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: cwatm_input_5min/landcover/forest/{variable}.nc
-  meta:
-    source_license: GNU General Public License V3
-    source_url: https://cwatm.iiasa.ac.at/license.html
-cwatm_grassland_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: cwatm_input_5min/landcover/grassland/{variable}.nc
 oecd_idd:
   meta:
     category: economics
@@ -111,48 +63,3 @@ AQUASTAT_municipal_withdrawal:
   path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
   meta:
     source_license: CC BY 4.0
-preferences_individual:
-  path: socioeconomic/social/cleaned_individual_data.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
-    category: time and risk preferences
-    source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
-    paper_doi: doi.org/10.1093/qje/qjy013
-    paper_ref: Falk et al. (2018)
-    source_license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (non-profit only)
-preferences_country:
-  path: socioeconomic/social/cleaned_country_data.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
-    category: time and risk preferences
-    source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
-    paper_doi: doi.org/10.1093/qje/qjy013
-    paper_ref: Falk et al. (2018)
-cwatm_livestock_water_demand_{scenario}_year:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: water_demand/{scenario}_liv_year_millionm3_5min.nc
-  driver_kwargs:
-    decode_times: false
-  meta:
-    category: water
-    source_license: the Creative Commons Attribution 3.0 License
-    source_url: https://doi.org/10.5194/gmd-9-175-2016
-  placeholders:
-    scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
-cwatm_industry_water_demand_{scenario}_year:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: water_demand/{scenario}_ind_year_millionm3_5min.nc
-  driver_kwargs:
-    decode_times: false
-  meta:
-    category: water
-    source_license: the Creative Commons Attribution 3.0 License
-    source_url: https://doi.org/10.5194/gmd-9-175-2016
-  placeholders:
-    scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
