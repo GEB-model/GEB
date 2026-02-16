@@ -603,19 +603,48 @@ class Reporter:
                             {"hydrology.routing": station_reporters},
                         )
                     elif module_name == "_outflow_points" and module_values is True:
-                        outflow_rivers = self.model.hydrology.routing.outflow_rivers
+                        routing = self.model.hydrology.routing
+                        outflow_rivers = routing.outflow_rivers
+                        all_rivers = routing.rivers
 
                         outflow_reporters = {}
+
+                        def get_upstream_represented_xys(
+                            river_id: int,
+                        ) -> list[tuple[int, int]]:
+                            """Recursively find the nearest represented upstream rivers.
+
+                            Args:
+                                river_id: The ID of the river to find the upstream represented rivers for.
+
+                            Returns:
+                                A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
+                            """
+                            river = all_rivers.loc[river_id]
+                            if river["represented_in_grid"]:
+                                return [river["hydrography_xy"][-1]]
+
+                            upstream_rivers = all_rivers[
+                                all_rivers["downstream_ID"] == river_id
+                            ]
+                            xys = []
+                            for idx, _ in upstream_rivers.iterrows():
+                                xys.extend(get_upstream_represented_xys(idx))
+                            return xys
+
                         for river_ID, river in outflow_rivers.iterrows():
-                            xy = river["hydrography_xy"][-1]  # last point is outflow
-                            outflow_reporters[
-                                f"river_outflow_hourly_m3_per_s_{river_ID}"
-                            ] = {
-                                "varname": f"grid.var.discharge_m3_s_per_substep",
-                                "type": "grid",
-                                "function": f"sample_xy,{xy[0]},{xy[1]}",
-                                "substeps": 24,
-                            }
+                            xys = get_upstream_represented_xys(river_ID)
+                            for i, xy in enumerate(xys):
+                                # if there are multiple branches, we append a suffix to the name
+                                suffix = f"_{i}" if len(xys) > 1 else ""
+                                outflow_reporters[
+                                    f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
+                                ] = {
+                                    "varname": "grid.var.discharge_m3_s_per_substep",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{xy[0]},{xy[1]}",
+                                    "substeps": 24,
+                                }
                         report_config = multi_level_merge(
                             report_config,
                             {"hydrology.routing": outflow_reporters},
