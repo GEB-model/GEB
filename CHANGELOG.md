@@ -43,6 +43,8 @@
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
 - Added a water level boundary for coastal rivers (for now set to zero).
 - Included detrending of tide data in estimation of hydrograph shape. 
+- Moved Global dynamic ocean topography to the new data catalog.
+- Implemented a padding of cells with values in Global dynamic ocean topography to extent the data to the coastline based on extrapolation.
 
 To support this version:
 
