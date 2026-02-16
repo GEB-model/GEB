@@ -1501,8 +1501,15 @@ class MultipleSFINCSSimulations:
                 True, False, or 'auto' to automatically detect GPU availability.
             overwrite_result: Whether to overwrite existing simulation results. Defaults to False.
         """
+
         for simulation in self.simulations:
-            if overwrite_result or not simulation.sfincs_model.results:
+            model: SfincsModel = simulation.sfincs_model
+
+            if not overwrite_result:
+                # Ensure results are loaded before checking
+                model.read_results()
+
+            if overwrite_result or not model.results:
                 simulation.run(ncpus=ncpus, gpu=gpu)
 
     def read_max_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
