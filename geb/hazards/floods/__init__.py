@@ -630,6 +630,7 @@ class Floods(Module):
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
                     discharge=self.discharge_spinup_ds,
                     return_periods=self.config["return_periods"],
+                    write_figures=self.config.get("write_figures", False),
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
