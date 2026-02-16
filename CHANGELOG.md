@@ -7,6 +7,7 @@
 - Add CWatM water demand to new data catalog (and remove from the old one).
 - Add `--profiling` option to `geb build/update/alter`.
 - Fix: fix for farm sizes that are all on the high end of the distribution.
+- Fix: fix for regions with very large coastal areas beyond the riverine grid
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
