@@ -256,7 +256,7 @@ rule evaluate_cluster:
         """
         mkdir -p $(dirname {log})
         cd {params.cluster_dir}
-        geb evaluate --methods {params.methods} &> {log}
+        geb evaluate --methods {params.methods} --include-spinup &> {log}
         touch {output}
         """
 

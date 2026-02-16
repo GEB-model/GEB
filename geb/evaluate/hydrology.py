@@ -849,7 +849,7 @@ class Hydrology:
             colormap_kge.add_to(m)
             colormap_nse.add_to(m)
 
-            if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().all():
+            if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().any():
                 colormap_upstream = cm.LinearColormap(
                     colors=[
                         "red",
@@ -942,7 +942,7 @@ class Hydrology:
                     popup=popup_nse,
                 ).add_to(layer_nse)
 
-                if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().all():
+                if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().any():
                     # Add Upstream Area Ratio layer
                     color_upstream = colormap_upstream(
                         float(row["Q_obs_to_GEB_upstream_area_ratio"])
@@ -973,7 +973,7 @@ class Hydrology:
             colormap_nse.add_to(m)
 
             # add upstream area (if not ONLY nans)
-            if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().all():
+            if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().any():
                 layer_upstream.add_to(m)
                 colormap_upstream.add_to(m)
 
