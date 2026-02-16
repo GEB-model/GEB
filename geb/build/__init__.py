@@ -2427,7 +2427,7 @@ class GEBModel(
         )
         rivers: gpd.GeoDataFrame = self.get_rivers(river_graph, sink_subbasin_ids)
 
-        buffer = 0.5  # buffer in degrees
+        buffer = 1.0  # buffer in degrees
         xmin, ymin, xmax, ymax = rivers[~rivers["is_downstream_outflow"]].total_bounds
         xmin -= buffer
         ymin -= buffer
