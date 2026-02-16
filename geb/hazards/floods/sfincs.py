@@ -1486,7 +1486,12 @@ class MultipleSFINCSSimulations:
         """
         self.simulations = simulations
 
-    def run(self, ncpus: int | str = "auto", gpu: bool | str = "auto") -> None:
+    def run(
+        self,
+        ncpus: int | str = "auto",
+        gpu: bool | str = "auto",
+        overwrite_result: bool = False,
+    ) -> None:
         """Runs all contained SFINCS simulations.
 
         Args:
@@ -1494,9 +1499,11 @@ class MultipleSFINCSSimulations:
                 an integer or 'auto' to automatically detect available cores.
             gpu: Whether to use GPU acceleration for the simulations. Can be
                 True, False, or 'auto' to automatically detect GPU availability.
+            overwrite_result: Whether to overwrite existing simulation results. Defaults to False.
         """
         for simulation in self.simulations:
-            simulation.run(ncpus=ncpus, gpu=gpu)
+            if overwrite_result or not simulation.sfincs_model.results:
+                simulation.run(ncpus=ncpus, gpu=gpu)
 
     def read_max_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
