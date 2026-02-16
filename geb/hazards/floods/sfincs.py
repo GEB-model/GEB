@@ -1102,6 +1102,7 @@ class SFINCSRootModel:
         discharge: xr.DataArray,
         rising_limb_hours: int = 72,
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
+        write_figures: bool = False,
     ) -> None:
         """Estimate discharge for specified return periods and create hydrographs.
 
@@ -1109,6 +1110,7 @@ class SFINCSRootModel:
             discharge: xr.DataArray containing the discharge data
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
+            write_figures: Whether to save diagnostic plots for GPD-POT analysis. Defaults to False.
         """
         recession_limb_hours: int = rising_limb_hours
 
@@ -1129,7 +1131,11 @@ class SFINCSRootModel:
             discharge=discharge,
         )
         rivers_with_return_period: gpd.GeoDataFrame = assign_return_periods(
-            rivers_with_return_period, discharge_by_river, return_periods=return_periods
+            rivers_with_return_period,
+            discharge_by_river,
+            return_periods=return_periods,
+            model_root=self._root / self._name if write_figures else None,
+            write_figures=write_figures,
         )
 
         for return_period in return_periods:
