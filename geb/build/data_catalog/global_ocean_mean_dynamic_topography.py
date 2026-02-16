@@ -11,6 +11,101 @@ import xarray as xr
 from .base import Adapter
 
 
+def _extrapolate_into_nodata(
+    data: xr.DataArray,
+    pad_cells: int,
+) -> xr.DataArray:
+    """Extrapolate values into adjacent no-data cells without changing extent.
+
+    Notes:
+        Each iteration fills NaN cells that have two valid neighbors in a straight
+        line (left, right, up, down). Extrapolation uses a linear step based on
+        the two adjacent values.
+
+    Args:
+        data: 2D raster data to fill.
+        pad_cells: Number of cells to extrapolate outward (cells).
+
+    Returns:
+        Raster with NaN cells filled near valid data.
+
+    Raises:
+        ValueError: If `data` is not 2D or `pad_cells` is negative.
+    """
+    if data.ndim != 2:
+        raise ValueError("data must be 2D to apply extrapolation.")
+    if pad_cells < 0:
+        raise ValueError("pad_cells must be non-negative.")
+
+    if pad_cells == 0:
+        return data
+
+    values: np.ndarray = data.to_numpy().copy()
+
+    for _ in range(pad_cells):
+        nan_mask: np.ndarray = np.isnan(values)
+        if not nan_mask.any():
+            break
+
+        sum_values: np.ndarray = np.zeros_like(values, dtype=np.float64)
+        count_values: np.ndarray = np.zeros_like(values, dtype=np.int32)
+
+        right1: np.ndarray = np.full_like(values, np.nan)
+        right2: np.ndarray = np.full_like(values, np.nan)
+        right1[:, :-1] = values[:, 1:]
+        right2[:, :-2] = values[:, 2:]
+        right_mask: np.ndarray = nan_mask & ~np.isnan(right1) & ~np.isnan(right2)
+        right_extrap: np.ndarray = right1 + (right1 - right2)
+        sum_values[right_mask] += right_extrap[right_mask]
+        count_values[right_mask] += 1
+
+        left1: np.ndarray = np.full_like(values, np.nan)
+        left2: np.ndarray = np.full_like(values, np.nan)
+        left1[:, 1:] = values[:, :-1]
+        left2[:, 2:] = values[:, :-2]
+        left_mask: np.ndarray = nan_mask & ~np.isnan(left1) & ~np.isnan(left2)
+        left_extrap: np.ndarray = left1 + (left1 - left2)
+        sum_values[left_mask] += left_extrap[left_mask]
+        count_values[left_mask] += 1
+
+        up1: np.ndarray = np.full_like(values, np.nan)
+        up2: np.ndarray = np.full_like(values, np.nan)
+        up1[1:, :] = values[:-1, :]
+        up2[2:, :] = values[:-2, :]
+        up_mask: np.ndarray = nan_mask & ~np.isnan(up1) & ~np.isnan(up2)
+        up_extrap: np.ndarray = up1 + (up1 - up2)
+        sum_values[up_mask] += up_extrap[up_mask]
+        count_values[up_mask] += 1
+
+        down1: np.ndarray = np.full_like(values, np.nan)
+        down2: np.ndarray = np.full_like(values, np.nan)
+        down1[:-1, :] = values[1:, :]
+        down2[:-2, :] = values[2:, :]
+        down_mask: np.ndarray = nan_mask & ~np.isnan(down1) & ~np.isnan(down2)
+        down_extrap: np.ndarray = down1 + (down1 - down2)
+        sum_values[down_mask] += down_extrap[down_mask]
+        count_values[down_mask] += 1
+
+        fill_mask: np.ndarray = nan_mask & (count_values > 0)
+        if not fill_mask.any():
+            break
+
+        values[fill_mask] = sum_values[fill_mask] / count_values[fill_mask]
+
+    filled: xr.DataArray = xr.DataArray(
+        values,
+        coords=data.coords,
+        dims=data.dims,
+        name=data.name,
+        attrs=data.attrs,
+    )
+
+    if data.rio.crs is not None:
+        filled = filled.rio.write_crs(data.rio.crs)
+
+    return filled
+
+
 class GlobalOceanMeanDynamicTopography(Adapter):
     """Downloader for Global Ocean Mean Dynamic Topography netcdf."""
 
@@ -45,7 +140,11 @@ class GlobalOceanMeanDynamicTopography(Adapter):
         """Read the Global Ocean Mean Dynamic Topography data."""
 
         # read the global_ocean_mdt data
-        global_ocean_mdt = xr.open_rasterio(self.path)
+        global_ocean_mdt_dataset = xr.open_dataset(self.path)
+        if "mdt" not in global_ocean_mdt_dataset:
+            raise ValueError("Expected 'mdt' variable in global ocean MDT dataset.")
+        global_ocean_mdt = global_ocean_mdt_dataset["mdt"]
+        global_ocean_mdt = global_ocean_mdt.squeeze(drop=True)
 
         # reproject global_ocean_mdt to 0.008333 grid (~1km)
         global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
@@ -59,10 +158,12 @@ class GlobalOceanMeanDynamicTopography(Adapter):
             maxy=max_lat,
         )
 
+        # extrapolate 3 cells into nodata regions to reach the coastline
+        global_ocean_mdt = _extrapolate_into_nodata(global_ocean_mdt, pad_cells=5)
+
         # write crs
         global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
         # drop unused columns
-        global_ocean_mdt = global_ocean_mdt.squeeze(drop=True)
         # set datatype to float32 and set fillvalue to np.nan
         global_ocean_mdt = global_ocean_mdt.astype(np.float32)
         global_ocean_mdt.encoding["_FillValue"] = np.nan
