@@ -1,72 +1,14 @@
 """Functions for fitting GPD-POT models and assigning return periods to rivers."""
 
-import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import genpareto, kstest, lmoment
-from tqdm import tqdm
+from scipy.stats import genpareto, lmoment
+
+from geb.geb_types import ArrayFloat64
 
 
-def fit_gpd_mle(
-    exceedances: np.ndarray,
-    fixed_shape: float | None = None,
-    fixed_scale: float | None = None,
-) -> tuple[float, float]:
-    """Fit GPD to positive exceedances using Maximum Likelihood Estimation.
-
-    Fits a Generalized Pareto Distribution to exceedances (y = x - u) using
-    scipy's genpareto.fit.
-
-    The Generalized Pareto Distribution is defined by three parameters:
-        1. **Location** (u or loc): The threshold parameter. For exceedances (y = x - u),
-           this parameter is always fixed to 0. This is because we model the *excess*
-           over the threshold u. The threshold u itself is determined before fitting
-           (e.g., via mean residual life plot or automated threshold selection).
-        2. **Scale** (sigma): The scale parameter, describing the spread of the
-           distribution.
-        3. **Shape** (xi): The shape parameter, describing the tail behavior.
-           - xi > 0: Heavy tail (Fréchet-like).
-           - xi = 0: Light tail (Gumbel-like). In the GPD context, standard Gumbel
-             behaviour corresponds to an Exponential distribution.
-           - xi < 0: Bounded tail (Weibull-like).
-
-    Options are provided to fix shape and scale. The location parameter is always fixed
-    to 0, consistent with fitting to exceedances.
-
-    To fix the fit to a Gumbel distribution (i.e. Exponential exceedances),
-    set `fixed_shape=0`.
-
-    Args:
-        exceedances: Positive exceedance values above threshold (dimensionless).
-        fixed_shape: Value to fix the shape parameter (xi) (dimensionless). If None, it is fitted.
-            Set to 0 to force a Gumbel (Exponential) distribution.
-        fixed_scale: Value to fix the scale parameter (sigma) (dimensionless). If None, it is fitted.
-
-    Returns:
-        Tuple of (sigma, xi) where sigma is the scale parameter and xi is
-        the shape parameter of the fitted GPD.
-
-    Raises:
-        ValueError: If fewer than 6 exceedances provided for reliable fit.
-    """
-    if fixed_shape is not None and fixed_scale is not None:
-        raise ValueError("Cannot fix both shape and scale parameters simultaneously.")
-
-    y = np.asarray(exceedances, dtype=float)
-    if len(y) < 6:
-        raise ValueError("Too few exceedances for reliable fit")
-
-    kwargs = {}
-    if fixed_shape is not None:
-        kwargs["fc"] = fixed_shape
-    if fixed_scale is not None:
-        kwargs["fscale"] = fixed_scale
-
-    c_hat, loc_hat, scale_hat = genpareto.fit(y, floc=0.0, **kwargs)
-    return float(scale_hat), float(c_hat)  # sigma, xi
-
-
-def fit_gpd_lmom(
+def fit_gpd_lmoments(
     exceedances: np.ndarray,
     fixed_shape: float | None = None,
     fixed_scale: float | None = None,
@@ -107,20 +49,20 @@ def fit_gpd_lmom(
     if n < 6:
         raise ValueError("Too few exceedances for reliable fit")
 
-    # Sample L-moments using scipy.stats.lmoment
-    l1, l2 = lmoment(y, order=[1, 2])
-
     if fixed_shape is not None:
+        l1 = lmoment(y, order=[1], standardize=False)
         xi = fixed_shape
         # Use l1 to estimate sigma: sigma = l1 * (1 - xi)
         sigma = l1 * (1.0 - xi)
     elif fixed_scale is not None:
+        l1 = lmoment(y, order=[1], standardize=False)
         sigma = fixed_scale
         # Use l1 to estimate xi: l1 = sigma / (1 - xi) -> 1 - xi = sigma / l1 -> xi = 1 - sigma / l1
         if abs(l1) < 1e-12:
             raise ValueError("Mean exceedance is 0, cannot fit with fixed scale.")
         xi = 1.0 - sigma / l1
     else:
+        l1, l2 = lmoment(y, order=[1, 2], standardize=False)
         if abs(l2) < 1e-12:
             # If l2 is extremely small, the data may be nearly constant.
             raise ValueError("L2 moment is (almost) 0, cannot fit GPD.")
@@ -131,7 +73,7 @@ def fit_gpd_lmom(
     return float(sigma), float(xi)
 
 
-def gpd_cdf(y: np.ndarray | float, sigma: float, xi: float) -> np.ndarray | float:
+def gpd_cdf(y: np.ndarray | float, sigma: float, xi: float) -> ArrayFloat64:
     """GPD CDF for exceedance y>=0 with loc=0.
 
     Args:
@@ -144,11 +86,16 @@ def gpd_cdf(y: np.ndarray | float, sigma: float, xi: float) -> np.ndarray | floa
     """
     y = np.asarray(y, float)
     if abs(xi) < 1e-12:
-        return 1 - np.exp(-y / sigma)
-    return 1 - (1 + xi * y / sigma) ** (-1.0 / xi)
+        return np.maximum(0.0, 1.0 - np.exp(-np.maximum(y, 0.0) / sigma))
+
+    # For xi < 0, the distribution has an upper bound at -sigma/xi.
+    # We use np.maximum(..., 0) to handle values above the upper bound (result 1.0).
+    val = 1.0 + xi * y / sigma
+    cdf = 1.0 - np.power(np.maximum(val, 0.0), -1.0 / xi)
+    return np.clip(cdf, 0.0, 1.0)
 
 
-def right_tail_ad_from_uniforms(u_sorted: np.ndarray) -> float:
+def right_tail_ad_from_uniforms(u_sorted: ArrayFloat64) -> float:
     """Right-tail weighted Anderson-Darling statistic for uniform data.
 
     Computes the right-tail weighted AD statistic:
@@ -156,18 +103,22 @@ def right_tail_ad_from_uniforms(u_sorted: np.ndarray) -> float:
     where u_sorted are uniforms in ascending order.
     This emphasizes misfit in the right tail (large exceedances).
 
+    Notes:
+        The uniforms are clipped to (0, 1) to avoid numerical issues with log.
+
     Args:
         u_sorted: Uniform random variables sorted in ascending order (dimensionless).
 
     Returns:
         Right-tail Anderson-Darling statistic (dimensionless).
     """
-    u = np.asarray(u_sorted, dtype=float)
-    n = u.size
+    n = u_sorted.size
     if n < 1:
         return np.nan
+    # Avoid log(0)
+    u_safe = np.clip(u_sorted, 1e-15, 1.0 - 1e-15)
     i = np.arange(1, n + 1)
-    s_tail = np.sum((2 * i - 1) * np.log(1.0 - u[::-1]))
+    s_tail = np.sum((2 * i - 1) * np.log(1.0 - u_safe[::-1]))
     a_r2 = -n - s_tail / n
     return float(a_r2)
 
@@ -177,54 +128,65 @@ def bootstrap_pvalue_for_ad(
     n: int,
     sigma_hat: float,
     xi_hat: float,
-    nboot: int = 2000,
-    random_seed: int = 123,
+    nboot: int = 1000,
+    random_seed: int = 42,
+    fixed_shape: float | None = None,
+    fixed_scale: float | None = None,
+    min_boot: int = 200,
+    p_tol: float = 0.01,
 ) -> float:
     """Parametric bootstrap p-value for right-tail Anderson-Darling statistic.
 
-    Simulates n exceedances from GPD(sigma_hat, xi_hat) nboot times,
-    computes AD statistic on transformed uniforms for each simulation,
-    and returns the proportion of simulated statistics >= observed statistic.
+    Simulates n exceedances from GPD(sigma_hat, xi_hat) nboot times.
+    To correctly test the composite hypothesis (where parameters are estimated),
+    each bootstrap sample is RE-FITTED using L-moments before calculating
+    the AD statistic.
 
     Args:
         observed_stat: Observed Anderson-Darling statistic (dimensionless).
         n: Number of exceedances to simulate (dimensionless).
-        sigma_hat: Fitted GPD scale parameter (dimensionless).
-        xi_hat: Fitted GPD shape parameter (dimensionless).
+        sigma_hat: Fitted GPD scale parameter used as ground truth for simulation (dimensionless).
+        xi_hat: Fitted GPD shape parameter used as ground truth for simulation (dimensionless).
         nboot: Number of bootstrap samples (dimensionless).
         random_seed: Random seed for reproducibility (dimensionless).
+        fixed_shape: Fixed shape parameter if used during original fit (dimensionless).
+        fixed_scale: Fixed scale parameter if used during original fit (dimensionless).
+        min_boot: Minimum number of bootstrap samples before checking for convergence (dimensionless).
+        p_tol: Tolerance for p-value stabilization. Stopping occurs if the p-value
+            fluctuates by less than this amount over 100 iterations (dimensionless).
 
     Returns:
         Bootstrap p-value as proportion of simulated stats >= observed (dimensionless).
     """
-    rng = np.random.default_rng(random_seed)
-    sim_stats = np.empty(nboot, dtype=float)
-    for k in range(nboot):
-        ysim = genpareto.rvs(c=xi_hat, scale=sigma_hat, size=n, random_state=rng)
-        u_sim = gpd_cdf(ysim, sigma_hat, xi_hat)
-        sim_stats[k] = right_tail_ad_from_uniforms(np.sort(u_sim))
-    pval = np.mean(sim_stats >= observed_stat)
-    return float(pval)
-
-
-def mean_residual_life(data: np.ndarray, u_grid: np.ndarray) -> np.ndarray:
-    """Calculate mean residual life for threshold values.
-
-    Computes the mean excess over threshold u for each threshold in u_grid.
-    This is used for mean residual life plots to assess threshold selection.
-
-    Args:
-        data: Array of observed values (dimensionless).
-        u_grid: Array of threshold values to evaluate (dimensionless).
-
-    Returns:
-        Array of mean residual life values, one for each threshold (dimensionless).
-        Returns NaN for thresholds with no exceedances.
-    """
-    x = np.asarray(data, dtype=float)
-    return np.array(
-        [(x[x > u] - u).mean() if np.sum(x > u) > 0 else np.nan for u in u_grid]
+    count_exceeds = 0
+    y_sim_all = genpareto.rvs(
+        c=xi_hat, scale=sigma_hat, size=(nboot, n), random_state=random_seed
     )
+    prev_p = -1.0
+    i = 0
+    for i in range(nboot):
+        if (i + 1) % 10 == 0:
+            print(f"Bootstrap iteration {i + 1}/{nboot}", end="\r")
+
+        y_sim = np.sort(y_sim_all[i])
+        # Refit on simulated data to get the null distribution of the *fitted* AD statistic.
+        # Using the same constraints (fixed shape/scale) as the original fit.
+        s_s, x_s = fit_gpd_lmoments(
+            y_sim, fixed_shape=fixed_shape, fixed_scale=fixed_scale
+        )
+        u_sim = gpd_cdf(y_sim, s_s, x_s)
+        sim_val = right_tail_ad_from_uniforms(u_sim)
+        if sim_val >= observed_stat:
+            count_exceeds += 1
+
+        # Check for convergence every 100 iterations after min_boot
+        if i >= min_boot and (i + 1) % 100 == 0:
+            current_p = count_exceeds / (i + 1)
+            if prev_p >= 0 and abs(current_p - prev_p) < p_tol:
+                break
+            prev_p = current_p
+
+    return float(count_exceeds / (i + 1))
 
 
 def gpd_return_level(
@@ -252,281 +214,627 @@ def gpd_return_level(
     return u + (sigma / xi) * (LT**xi - 1.0)
 
 
-def gpd_pot_ad_auto(
-    series: pd.Series,
-    quantile_start: float = 0.80,
-    quantile_end: float = 0.99,
-    quantile_step: float = 0.01,
-    min_exceed: int = 30,
-    nboot: int = 2000,
-    return_periods: np.ndarray | None = None,
-    mrl_grid_q: np.ndarray | None = None,
-    mrl_top_fraction: float = 0.75,
-    random_seed: int = 123,
-    fixed_shape: float | None = None,
-    fixed_scale: float | None = None,
-    fit_method: str = "mle",
-) -> dict:
-    r"""Automated GPD-POT analysis with threshold selection using Anderson-Darling test.
+class ReturnPeriodModel:
+    """Class for Generalized Pareto Distribution Peaks-Over-Threshold (GPD-POT) analysis.
 
-    Performs automated Generalized Pareto Distribution (GPD) Peaks-Over-Threshold (POT)
-    analysis. The function iterates through candidate thresholds $u$, calculates the
-    excesses $y = x - u$, and fits the GPD to these excesses.
-
-    The location parameter is implicitly fixed at 0.0 because the distribution is
-    fitted to the magnitude of the exceedance above the threshold, not the absolute
-    river stage/discharge value.
-
-    Args:
-        series: Time series data with DatetimeIndex.
-        quantile_start: Starting quantile for threshold scan.
-        quantile_end: Ending quantile for threshold scan.
-        quantile_step: Step size between quantiles.
-        min_exceed: Minimum number of exceedances required for fitting.
-        nboot: Number of bootstrap samples for AD p-value calculation.
-        return_periods: Array of return periods in years for RL calculation.
-        mrl_grid_q: Quantiles for mean residual life plot baseline.
-        mrl_top_fraction: Fraction of top quantiles for MRL linear fit.
-        random_seed: Random seed for reproducibility.
-        fixed_shape: Value to fix the shape parameter ($\xi$). If 0, forces Exponential tail.
-        fixed_scale: Value to fix the scale parameter ($\sigma$).
-        fit_method: Method to fit GPD parameters. 'mle' (Maximum Likelihood) or 'lmom' (L-Moments).
-
-    Returns:
-        Dictionary containing daily maxima, diagnostics, chosen parameters,
-        and return level table.
-
-    Raises:
-        TypeError: If series does not have a DatetimeIndex.
-        ValueError: If no valid thresholds found for GPD-POT fitting.
+    Fits a GPD model to extremes and provides methods for return level estimation
+    and diagnostic plotting.
     """
-    if return_periods is None:
-        return_periods = np.array(
-            [2, 5, 10, 25, 50, 100, 200, 250, 500, 1000, 10000], float
-        )
 
-    if mrl_grid_q is None:
-        mrl_grid_q = np.linspace(0.70, 0.995, 80)
+    def __init__(
+        self,
+        series: pd.Series,
+        return_periods: np.ndarray | list[int | float] | None = None,
+        quantile_start: float = 0.80,
+        quantile_end: float = 0.99,
+        quantile_step: float = 0.01,
+        min_exceed: int = 30,
+        nboot: int = 2000,
+        random_seed: int = 42,
+        fixed_shape: float | None = None,
+        fixed_scale: float | None = None,
+        p_value_threshold: float = 0.10,
+        selection_strategy: str = "first_significant",
+        min_boot: int = 300,
+        p_tol: float = 0.01,
+    ) -> None:
+        """Initialize and fit the GPD-POT model.
 
-    s = series.dropna().sort_index()
-    if not isinstance(s.index, pd.DatetimeIndex):
-        raise TypeError("Series must have a DatetimeIndex.")
+        Args:
+            series: Time series data with DatetimeIndex.
+            return_periods: Array of return periods in years for RL calculation.
+            quantile_start: Starting quantile for threshold scan.
+            quantile_end: Ending quantile for threshold scan.
+            quantile_step: Step size between quantiles.
+            min_exceed: Minimum number of exceedances required for fitting.
+            nboot: Number of bootstrap samples for AD p-value calculation.
+            random_seed: Random seed for reproducibility.
+            fixed_shape: Value to fix the shape parameter (xi). If 0, forces Exponential tail.
+            fixed_scale: Value to fix the scale parameter (sigma).
+            p_value_threshold: Anderson-Darling p-value threshold for early stopping.
+            selection_strategy: Strategy for selecting the best threshold.
+                'first_significant' or 'best_fit'.
+            min_boot: Minimum number of bootstrap samples for p-value stabilization check.
+            p_tol: Tolerance for p-value stabilization early stopping.
 
-    # Resample to daily maxima to ensure independence of observations (de-clustering)
-    daily_max = s.resample("D").max().dropna()
-    total_days = (daily_max.index.max() - daily_max.index.min()).days + 1
-    years = total_days / 365.25
-
-    # Create candidate thresholds $u$ based on quantiles of daily maxima
-    q_grid = np.arange(quantile_start, quantile_end + 1e-9, quantile_step)
-    u_candidates = np.quantile(daily_max.values, q_grid)
-
-    # ---- MRL baseline ----
-    mrl_grid_u = np.quantile(daily_max.values, mrl_grid_q)
-    mrl_vals = mean_residual_life(daily_max.values, mrl_grid_u)
-
-    top_idx = int(len(mrl_vals) * mrl_top_fraction)
-    a_lin, b_lin = np.polyfit(mrl_grid_u[top_idx:], mrl_vals[top_idx:], 1)
-
-    diagnostics = []
-
-    for u in u_candidates:
-        exceed = daily_max[daily_max > u]
-        n_exc = exceed.size
-
-        if n_exc < min_exceed:
-            diagnostics.append(
-                (u, np.nan, np.nan, n_exc, np.nan, np.nan, np.nan, np.nan)
+        Raises:
+            TypeError: If series index is not DatetimeIndex.
+            ValueError: If no valid thresholds found for fitting.
+        """
+        if return_periods is None:
+            return_periods = np.array(
+                [2, 5, 10, 25, 50, 100, 200, 250, 500, 1000, 10000], float
             )
-            continue
-
-        # Calculate excesses $y$. This shifts the data origin to 0.
-        # Consequently, the GPD location parameter $\mu$ is effectively 0.
-        y = exceed.values - u
-
-        if fit_method == "lmom":
-            sigma, xi = fit_gpd_lmom(
-                y,
-                fixed_shape=fixed_shape,
-                fixed_scale=fixed_scale,
-            )
-        elif fit_method == "mle":
-            sigma, xi = fit_gpd_mle(
-                y,
-                fixed_shape=fixed_shape,
-                fixed_scale=fixed_scale,
-            )
-        else:
+        self.return_periods = np.asarray(return_periods, float)
+        if series.isnull().any():
             raise ValueError(
-                f"Unknown fit_method: {fit_method}, must be 'mle' or 'lmom'."
+                "Input series contains NaN values. Handle missing data before fitting."
             )
 
-        u_vals = gpd_cdf(y, sigma, xi)
-        A_R2 = right_tail_ad_from_uniforms(np.sort(u_vals))
+        self.series = series
 
-        p_ad = bootstrap_pvalue_for_ad(A_R2, n_exc, sigma, xi, nboot, random_seed)
+        if not isinstance(self.series.index, pd.DatetimeIndex):
+            raise TypeError("Series must have a DatetimeIndex.")
 
-        ks_p = np.nan
-        if n_exc >= 20:
-            # Here, 0.0 is passed as the location parameter for the KS test
-            _, ks_p = kstest(y, "genpareto", args=(xi, 0.0, sigma))
+        # Resample to daily maxima to ensure independence of observations (de-clustering)
+        peaks = self.series.resample("D").max()
+        peaks = peaks.dropna()
+        total_days = (peaks.index.max() - peaks.index.min()).days + 1
+        self.years = total_days / 365.25
+        self.peaks = peaks.sort_values()
 
-        idx = np.argmin(np.abs(mrl_grid_u - u))
-        mrl_err = (
-            np.nan
-            if np.isnan(mrl_vals[idx])
-            else abs(mrl_vals[idx] - (a_lin * mrl_grid_u[idx] + b_lin))
-        )
+        # Create candidate thresholds u based on quantiles of daily maxima
+        # Start from upper quantile, so that we start evaluation with the most extreme thresholds
+        q_grid = np.arange(quantile_end, quantile_start - 1e-9, -quantile_step)
+        u_candidates = np.quantile(self.peaks.values, q_grid)
 
-        diagnostics.append((u, sigma, xi, n_exc, p_ad, ks_p, mrl_err, A_R2))
+        best_candidate = None
+        candidates_list = []  # store valid fits if none exceed threshold
 
-    diag_df = (
-        pd.DataFrame(
-            diagnostics,
-            columns=np.array(
-                ["u", "sigma", "xi", "n_exc", "p_ad", "ks_p", "mrl_err", "A_R2"]
-            ),
-        )
-        .sort_values("u")
-        .reset_index(drop=True)
-    )
+        for u in u_candidates:
+            exceed = self.peaks[self.peaks > u]
+            n_exc = exceed.size
 
-    diag_df["xi_step"] = diag_df["xi"].diff().abs().bfill()
-    valid = diag_df.dropna(subset=["p_ad"])
+            if n_exc < min_exceed:
+                continue
 
-    if valid.empty:
-        raise ValueError("No valid thresholds found for GPD-POT fitting.")
+            # Calculate excesses y.
+            y = exceed.values - u
 
-    # Selection based on the best Anderson-Darling fit
-    best = valid.loc[valid["p_ad"].idxmax()]
+            try:
+                sigma, xi = fit_gpd_lmoments(
+                    y, fixed_shape=fixed_shape, fixed_scale=fixed_scale
+                )
+            except (RuntimeError, ValueError):
+                continue
 
-    u_star = float(best["u"])
-    sigma_star = float(best["sigma"])
-    xi_star = float(best["xi"])
-    p_star = float(best["p_ad"])
-    n_star = int(best["n_exc"])
-
-    lambda_per_year = n_star / years
-    pct = (daily_max < u_star).mean() * 100
-
-    # Calculate return levels. Note that u_star is passed to re-add the
-    # threshold offset to the estimated excesses.
-    water_level_for_return_periods = gpd_return_level(
-        u_star, sigma_star, xi_star, lambda_per_year, return_periods
-    )
-
-    water_level_for_return_periods_table = pd.DataFrame(
-        {
-            "T_years": return_periods.astype(int),
-            "GPD_POT_RL": water_level_for_return_periods,
-        }
-    )
-
-    return {
-        "daily_max": daily_max,
-        "years": years,
-        "diag_df": diag_df,
-        "chosen": {
-            "u": u_star,
-            "sigma": sigma_star,
-            "xi": xi_star,
-            "p_ad": p_star,
-            "n_exc": n_star,
-            "lambda_per_year": lambda_per_year,
-            "pct": pct,
-        },
-        "rl_table": water_level_for_return_periods_table,
-    }
-
-
-def assign_return_periods(
-    rivers: gpd.GeoDataFrame,
-    discharge_dataframe: pd.DataFrame,
-    return_periods: list[int | float],
-    prefix: str = "Q",
-    min_exceed: int = 30,
-    nboot: int = 2000,
-    fixed_shape: float | None = None,
-    fixed_scale: float | None = None,
-    fit_method: str = "mle",
-) -> gpd.GeoDataFrame:
-    """Assign return periods to rivers using GPD-POT analysis.
-
-    Based on https://doi.org/10.1002/2016WR019426
-
-    Uses Generalized Pareto Distribution Peaks-Over-Threshold method with:
-        - Daily maxima resampling from input time series
-        - GPD-POT exceedance model fitting above threshold
-        - Anderson-Darling bootstrap p-value threshold selection
-        - Return level estimation for specified return periods
-
-    Args:
-        rivers: GeoDataFrame with river IDs as index that must match columns in discharge_dataframe.
-        discharge_dataframe: Time series DataFrame with datetime index containing discharge data for all rivers (m³/s).
-        return_periods: List of return periods in years to compute return levels for.
-        prefix: Column prefix for output return level columns. Defaults to "Q".
-        min_exceed: Minimum number of exceedances required for reliable GPD fit. Defaults to 30.
-        nboot: Number of bootstrap samples for Anderson-Darling threshold selection. Defaults to 2000.
-        fixed_shape: Value to fix the shape parameter (xi) (dimensionless). If None, it is fitted.
-            Set to 0 to force a Gumbel (Exponential) distribution.
-        fixed_scale: Value to fix the scale parameter (sigma) (dimensionless). If None, it is fitted.
-        fit_method: Method to fit GPD parameters. 'mle' (Maximum Likelihood) or 'lmom' (L-Moments).
-
-    Returns:
-        Updated rivers GeoDataFrame with return level columns added (m³/s).
-
-    Raises:
-        TypeError: If discharge series does not have a DatetimeIndex.
-        ValueError: If return periods contain non-positive values.
-    """
-    assert isinstance(return_periods, list)
-    if not all((isinstance(T, (int, float)) and T > 0) for T in return_periods):
-        raise ValueError("All return periods must be positive numbers (years > 0).")
-    return_periods_arr = np.asarray(return_periods, float)
-
-    for idx in tqdm(rivers.index, total=len(rivers), desc="GPD-POT Return Periods"):
-        discharge = discharge_dataframe[idx].dropna()
-
-        # If all values are zero, assign zeros
-        if (discharge < 1e-10).all():
-            print(f"Discharge all zero for river {idx}, assigning zeros.")
-            for T in return_periods:
-                rivers.loc[idx, f"{prefix}_{T}"] = 0.0
-            continue
-
-        if not isinstance(discharge.index, pd.DatetimeIndex):
-            raise TypeError(
-                f"Discharge series for river {idx} must have a DatetimeIndex."
+            u_vals = gpd_cdf(y, sigma, xi)
+            A_R2 = right_tail_ad_from_uniforms(u_vals)
+            p_ad = bootstrap_pvalue_for_ad(
+                A_R2,
+                n_exc,
+                sigma,
+                xi,
+                nboot,
+                random_seed,
+                fixed_shape=fixed_shape,
+                fixed_scale=fixed_scale,
+                min_boot=min_boot,
+                p_tol=p_tol,
             )
 
-        result = gpd_pot_ad_auto(
-            series=discharge,
-            return_periods=return_periods_arr,
-            min_exceed=min_exceed,
-            nboot=nboot,
-            fixed_shape=fixed_shape,
-            fixed_scale=fixed_scale,
-            fit_method=fit_method,
-        )
-        print(f"GPD-POT analysis completed for river {idx}.")
+            current_candidate = {
+                "u": u,
+                "sigma": sigma,
+                "xi": xi,
+                "n_exc": n_exc,
+                "p_ad": p_ad,
+                "A_R2": A_R2,
+            }
+            candidates_list.append(current_candidate)
 
-        # Assign and check return levels for each return period, with error handling for non-finite or extreme values
+            # Early stopping: if we seek the first significant threshold, we can stop here.
+            # Note: This will truncate the diagnostic plots (threshold stability).
+            if selection_strategy == "first_significant" and p_ad > p_value_threshold:
+                best_candidate = current_candidate
+                break
+
+        self.candidates_df = pd.DataFrame(candidates_list)
+
+        if best_candidate is None:
+            if not candidates_list:
+                raise ValueError("No valid thresholds found for GPD-POT fitting.")
+            # If no significant one found, or strategy is best_fit, pick the best p-value
+            best_candidate = max(candidates_list, key=lambda x: x["p_ad"])
+
+        self.u = best_candidate["u"]
+        self.sigma = best_candidate["sigma"]
+        self.xi = best_candidate["xi"]
+        self.n_exc = best_candidate["n_exc"]
+        self.p_ad = best_candidate["p_ad"]
+        self.lambda_per_year = self.n_exc / self.years
+        self.pct = (self.peaks < self.u).mean() * 100
+
+        self.water_level_for_return_periods = gpd_return_level(
+            self.u, self.sigma, self.xi, self.lambda_per_year, self.return_periods
+        )
+
+        self.rl_table = pd.DataFrame(
+            {
+                "T_years": self.return_periods.astype(int),
+                "GPD_POT_RL": self.water_level_for_return_periods,
+            }
+        )
+
+        # Check return levels for each return period, with error handling for non-finite or extreme values
         MAX_Q = 400_000
-        for return_period, return_water_level in (
-            result["rl_table"].set_index("T_years")["GPD_POT_RL"].items()
-        ):
+        for _, row in self.rl_table.iterrows():
+            T = row["T_years"]
+            RL = row["GPD_POT_RL"]
             # If infinite or NaN, raise an error to flag potential issues with fit or threshold selection
-            if not np.isfinite(return_water_level) or np.isnan(return_water_level):
+            if not np.isfinite(RL) or np.isnan(RL):
                 raise ValueError(
-                    f"Computed return level for T={return_period} years for river {idx} is non-finite or nan ({return_water_level}). This likely indicates an issue with the GPD fit or threshold selection. Consider reviewing the diagnostics for this river."
+                    f"Computed return level for T={T} years is non-finite or nan ({RL}). "
+                    "This likely indicates an issue with the GPD fit or threshold selection. "
+                    "Consider reviewing the diagnostics for this series."
                 )
 
             # Return levels above MAX_Q are likely unreliable and can cause issues in downstream analysis, so raise an error
-            if return_water_level > MAX_Q:
+            if RL > MAX_Q:
                 raise ValueError(
-                    f"Computed return level for T={return_period} years for river {idx} ({return_water_level:.3g}) exceeds maximum cap {MAX_Q}. This likely indicates an unreliable fit or extreme extrapolation. Consider reviewing the GPD fit diagnostics for this river."
+                    f"Computed return level for T={T} years ({RL:.3g}) exceeds maximum cap {MAX_Q}. "
+                    "This likely indicates an unreliable fit or extreme extrapolation. "
+                    "Consider reviewing the GPD fit diagnostics for this series."
                 )
 
-            rivers.loc[idx, f"{prefix}_{return_period}"] = return_water_level
+    def plot_fit(
+        self,
+        ax: plt.Axes | None = None,
+        label_prefix: str = "Q",
+        color: str = "C0",
+    ) -> plt.Axes:
+        """Plot GPD-POT return-period curve for this series.
 
-    return rivers
+        Includes the fitted curve, POT points, annual maxima, and threshold u.
+
+        Args:
+            ax: Matplotlib axes to plot on. If None, creates a new figure.
+            label_prefix: Prefix for labels in legend.
+            color: Color for plotting.
+
+        Returns:
+            The matplotlib axes with the plot.
+        """
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Plot fitted curve
+        ax.plot(
+            self.rl_table["T_years"],
+            self.rl_table["GPD_POT_RL"],
+            label=f"{label_prefix} (fit)",
+            linewidth=1.5,
+            marker="o",
+            color=color,
+        )
+
+        # Plot POT points
+        peaks = self.peaks[self.peaks > self.u]
+        if not peaks.empty:
+            peaks_sorted = peaks.sort_values(ascending=False)
+            n_peaks = len(peaks_sorted)
+            ranks = np.arange(1, n_peaks + 1)
+            p_conditional_exceed = (ranks - 0.44) / (n_peaks + 0.12)
+            T_empirical = 1.0 / (self.lambda_per_year * p_conditional_exceed)
+            ax.scatter(
+                T_empirical,
+                peaks_sorted.values,
+                label=f"{label_prefix} (POT)",
+                color=color,
+                alpha=0.6,
+                s=20,
+                marker="x",
+            )
+
+        # Plot Ignored points (below threshold but above 80th quantile)
+        threshold_low = self.peaks.quantile(0.8)
+        candidates_all = (
+            self.peaks[self.peaks > threshold_low].sort_values(ascending=False).values
+        )
+        ranks_all = np.arange(1, len(candidates_all) + 1)
+        T_candidates = (self.years + 0.12) / (ranks_all - 0.44)
+
+        mask_ignored = candidates_all <= self.u
+        if np.any(mask_ignored):
+            ax.scatter(
+                T_candidates[mask_ignored],
+                candidates_all[mask_ignored],
+                label=f"{label_prefix} (ignored < u)",
+                color=color,
+                alpha=0.5,
+                s=15,
+                marker=".",
+            )
+
+        # Plot AM points
+        am_series = self.series.resample("YE").max().dropna()
+        am_sorted = am_series.sort_values(ascending=False)
+        n_am = len(am_sorted)
+        if n_am > 0:
+            ranks_am = np.arange(1, n_am + 1)
+            p_am = (ranks_am - 0.44) / (n_am + 0.12)
+            T_am = 1.0 / p_am
+            ax.scatter(
+                T_am,
+                am_sorted.values,
+                label=f"{label_prefix} (Annual Maxima)",
+                color=color,
+                alpha=0.6,
+                s=20,
+                marker="^",
+            )
+
+        # Plot threshold u
+        ax.axhline(
+            self.u,
+            linestyle="--",
+            color=color,
+            alpha=0.5,
+            linewidth=1,
+            label=f"{label_prefix} (u)",
+        )
+
+        # Add text box
+        text_str = (
+            f"{label_prefix} Params:\n"
+            f"u={self.u:.2f}\n"
+            f"σ={self.sigma:.2f}\n"
+            f"ξ={self.xi:.2f}\n"
+            f"λ={self.lambda_per_year:.2f}"
+        )
+        # Position boxes side-by-side in bottom right to avoid overlap
+        x_pos = 0.55 if label_prefix == "Q_obs" else 0.78
+        ax.text(
+            x_pos,
+            0.03,
+            text_str,
+            transform=ax.transAxes,
+            fontsize=8,
+            verticalalignment="bottom",
+            horizontalalignment="left",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, edgecolor=color),
+        )
+
+        ax.set_xscale("log")
+        ax.set_xlabel("Return period [years]")
+        ax.set_ylabel("Discharge [m3/s]")
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(loc="upper left", fontsize="small")
+
+        return ax
+
+    def plot_gof(
+        self,
+        axes: np.ndarray | None = None,
+        figsize: tuple[int, int] = (15, 5),
+    ) -> np.ndarray:
+        """Plot QQ, PP, and Density diagnostic plots for the chosen threshold.
+
+        Args:
+            axes: Array of 3 matplotlib axes to plot on. If None, creates a new figure.
+            figsize: Figure size as (width, height) in inches.
+
+        Returns:
+            The array of 3 matplotlib axes.
+        """
+        # Get exceedances at chosen threshold
+        exceed = self.peaks[self.peaks > self.u]
+        y = exceed.values - self.u
+        y_sorted = np.sort(y)
+        n = len(y)
+
+        if axes is None:
+            fig, axes = plt.subplots(1, 3, figsize=figsize)
+            fig.suptitle(
+                f"Goodness-of-Fit Diagnostics (u={self.u:.2f}, σ={self.sigma:.2f}, ξ={self.xi:.3f})",
+                fontsize=14,
+                fontweight="bold",
+            )
+        else:
+            axes = np.asarray(axes).flatten()
+
+        # QQ Plot (Quantile-Quantile)
+        ax = axes[0]
+        # Empirical quantiles
+        empirical_probs = (np.arange(1, n + 1) - 0.44) / (n + 0.12)
+        empirical_quantiles = y_sorted
+
+        # Theoretical quantiles from fitted GPD
+        theoretical_quantiles = genpareto.ppf(
+            empirical_probs, c=self.xi, scale=self.sigma
+        )
+
+        ax.scatter(theoretical_quantiles, empirical_quantiles, alpha=0.6, s=20)
+
+        # 45-degree reference line
+        min_val = min(theoretical_quantiles.min(), empirical_quantiles.min())
+        max_val = max(theoretical_quantiles.max(), empirical_quantiles.max())
+        ax.plot(
+            [min_val, max_val], [min_val, max_val], "r--", linewidth=2, label="1:1 line"
+        )
+
+        ax.set_xlabel("Theoretical Quantiles (GPD)")
+        ax.set_ylabel("Empirical Quantiles")
+        ax.set_title("Quantile-Quantile (QQ) Plot")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+        # PP Plot (Probability-Probability)
+        ax = axes[1]
+        # Empirical CDF
+        empirical_cdf = empirical_probs
+
+        # Theoretical CDF from fitted GPD
+        theoretical_cdf = gpd_cdf(y_sorted, self.sigma, self.xi)
+
+        ax.scatter(theoretical_cdf, empirical_cdf, alpha=0.6, s=20, color="green")
+        ax.plot([0, 1], [0, 1], "r--", linewidth=2, label="1:1 line")
+
+        ax.set_xlabel("Theoretical CDF (GPD)")
+        ax.set_ylabel("Empirical CDF")
+        ax.set_title("Probability-Probability (PP) Plot")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+        # Density Plot (Histogram vs fitted density)
+        ax = axes[2]
+        # Histogram
+        ax.hist(
+            y,
+            bins=30,
+            density=True,
+            alpha=0.6,
+            color="skyblue",
+            edgecolor="black",
+            label="Empirical",
+        )
+
+        # Fitted GPD density
+        y_range = np.linspace(0, y.max(), 200)
+        fitted_density = genpareto.pdf(y_range, c=self.xi, scale=self.sigma)
+        ax.plot(
+            y_range,
+            fitted_density,
+            "r-",
+            linewidth=2,
+            label=f"GPD(σ={self.sigma:.2f}, ξ={self.xi:.3f})",
+        )
+
+        ax.set_xlabel("Exceedance (y = x - u)")
+        ax.set_ylabel("Density")
+        ax.set_title("Density Plot")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+        return axes
+
+    def plot_selection_diagnostics(
+        self,
+        axes: np.ndarray | None = None,
+        figsize: tuple[int, int] = (12, 10),
+    ) -> np.ndarray:
+        """Plot diagnostics across all candidate thresholds.
+
+        Shows how parameters and goodness-of-fit vary with the choice of threshold u.
+
+        Args:
+            axes: Array of 4 matplotlib axes to plot on. If None, creates a new figure.
+            figsize: Figure size as (width, height) in inches.
+
+        Returns:
+            The array of 4 matplotlib axes.
+
+        Raises:
+            ValueError: If no candidates found to plot diagnostics.
+        """
+        if self.candidates_df.empty:
+            raise ValueError("No candidates found to plot diagnostics.")
+
+        diag = self.candidates_df.sort_values("u")
+
+        if axes is None:
+            fig, axes = plt.subplots(2, 2, figsize=figsize)
+            fig.suptitle(
+                "GPD-POT Threshold Selection Diagnostics",
+                fontsize=14,
+                fontweight="bold",
+            )
+        else:
+            axes = np.asarray(axes).flatten()
+
+        # AD p-value vs threshold
+        ax = axes[0]
+        ax.plot(diag["u"], diag["p_ad"], "b.-", linewidth=1.5, markersize=3)
+        ax.axvline(
+            self.u,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            label=f"Chosen u={self.u:.2f}",
+        )
+        ax.axhline(
+            0.05, color="orange", linestyle="--", linewidth=1, alpha=0.5, label="α=0.05"
+        )
+        ax.set_xlabel("Threshold (u)")
+        ax.set_ylabel("AD p-value")
+        ax.set_title(f"Anderson-Darling p-value (chosen p={self.p_ad:.3f})")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+        # Shape parameter (xi) vs threshold
+        ax = axes[1]
+        ax.plot(diag["u"], diag["xi"], "g.-", linewidth=1.5, markersize=3)
+        ax.axvline(self.u, color="red", linestyle="--", linewidth=2)
+        ax.axhline(self.xi, color="red", linestyle=":", linewidth=1, alpha=0.5)
+        ax.set_xlabel("Threshold (u)")
+        ax.set_ylabel("Shape parameter (ξ)")
+        ax.set_title(f"Shape Parameter stability (chosen ξ={self.xi:.3f})")
+        ax.grid(True, alpha=0.3)
+
+        # Scale parameter (sigma) vs threshold
+        ax = axes[2]
+        ax.plot(diag["u"], diag["sigma"], "m.-", linewidth=1.5, markersize=3)
+        ax.axvline(self.u, color="red", linestyle="--", linewidth=2)
+        ax.axhline(self.sigma, color="red", linestyle=":", linewidth=1, alpha=0.5)
+        ax.set_xlabel("Threshold (u)")
+        ax.set_ylabel("Scale parameter (σ)")
+        ax.set_title(f"Scale Parameter stability (chosen σ={self.sigma:.2f})")
+        ax.grid(True, alpha=0.3)
+
+        # Number of exceedances vs threshold
+        ax = axes[3]
+        ax.plot(diag["u"], diag["n_exc"], "r.-", linewidth=1.5, markersize=3)
+        ax.axvline(self.u, color="red", linestyle="--", linewidth=2)
+        ax.axhline(self.n_exc, color="red", linestyle=":", linewidth=1, alpha=0.5)
+        ax.set_xlabel("Threshold (u)")
+        ax.set_ylabel("Number of Exceedances")
+        ax.set_title(f"Number of exceedances (chosen n={self.n_exc})")
+        ax.grid(True, alpha=0.3)
+
+        return axes
+
+    def plot_threshold_stability(
+        self,
+        axes: np.ndarray | None = None,
+        return_periods: list[int] | None = None,
+        figsize: tuple[int, int] = (12, 8),
+    ) -> np.ndarray:
+        """Plot return level stability across different thresholds.
+
+        Args:
+            axes: Array of 4 matplotlib axes to plot on. If None, creates a new figure.
+            return_periods: List of return periods to plot. If None, uses defaults [10, 50, 100, 500].
+            figsize: Figure size as (width, height) in inches.
+
+        Returns:
+            The array of 4 matplotlib axes.
+
+        Raises:
+            ValueError: If no candidates found to plot diagnostics.
+        """
+        if self.candidates_df.empty:
+            raise ValueError("No candidates found to plot diagnostics.")
+
+        if return_periods is None:
+            return_periods = [10, 50, 100, 500]
+
+        diag = self.candidates_df.sort_values("u").copy()
+
+        # Calculate return levels for each threshold in the candidates
+        for T in return_periods:
+            diag[f"RL_{T}"] = [
+                gpd_return_level(
+                    row["u"],
+                    row["sigma"],
+                    row["xi"],
+                    row["n_exc"] / self.years,
+                    float(T),
+                )
+                for _, row in diag.iterrows()
+            ]
+
+        if axes is None:
+            fig, axes = plt.subplots(2, 2, figsize=figsize)
+            fig.suptitle(
+                "Threshold Stability: Return Levels vs Threshold",
+                fontsize=14,
+                fontweight="bold",
+            )
+        else:
+            axes = np.asarray(axes).flatten()
+
+        colors = ["blue", "green", "red", "purple"]
+
+        for idx, (T, color) in enumerate(zip(return_periods, colors)):
+            ax = axes[idx]
+            ax.plot(
+                diag["u"],
+                diag[f"RL_{T}"],
+                ".-",
+                color=color,
+                linewidth=1.5,
+                markersize=4,
+            )
+            ax.axvline(
+                self.u,
+                color="red",
+                linestyle="--",
+                linewidth=2,
+                label=f"Chosen u={self.u:.2f}",
+            )
+
+            # Add chosen return level for this T as horizontal line if it's in our rl_table
+            if T in self.rl_table["T_years"].values:
+                chosen_rl = self.rl_table.loc[
+                    self.rl_table["T_years"] == T, "GPD_POT_RL"
+                ].values[0]
+                ax.axhline(
+                    chosen_rl, color="red", linestyle=":", linewidth=1, alpha=0.5
+                )
+
+            ax.set_xlabel("Threshold (u)")
+            ax.set_ylabel(f"{T}-year RL")
+            ax.set_title(f"Return Period: {T} years")
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=8)
+
+        return axes
+
+    def plot_diagnostics(self, figsize: tuple[int, int] = (20, 15)) -> plt.Figure:
+        """Create a master diagnostic figure combining all fit, GOF, and stability plots.
+
+        Returns:
+            Matplotlib Figure with 13 panels.
+        """
+        fig = plt.figure(figsize=figsize)
+        # 4 rows, 4 columns grid
+        gs = fig.add_gridspec(4, 4)
+
+        # 1. Main Fit (top-left, 2x2 spans)
+        ax_fit = fig.add_subplot(gs[0:2, 0:2])
+        self.plot_fit(ax=ax_fit)
+        ax_fit.set_title("Return Level Fit", fontweight="bold")
+
+        # 2-4. GOF Plots (top-right area)
+        ax_gof = [
+            fig.add_subplot(gs[0, 2]),
+            fig.add_subplot(gs[0, 3]),
+            fig.add_subplot(gs[1, 2]),
+        ]
+        self.plot_gof(axes=ax_gof)
+
+        # 5-8. Selection Diagnostics (middle rows)
+        ax_sel = [
+            fig.add_subplot(gs[1, 3]),
+            fig.add_subplot(gs[2, 0]),
+            fig.add_subplot(gs[2, 1]),
+            fig.add_subplot(gs[2, 2]),
+        ]
+        self.plot_selection_diagnostics(axes=ax_sel)
+
+        # 9-12. Threshold Stability (bottom row)
+        ax_stab = [
+            fig.add_subplot(gs[2, 3]),
+            fig.add_subplot(gs[3, 0]),
+            fig.add_subplot(gs[3, 1]),
+            fig.add_subplot(gs[3, 2]),
+        ]
+        self.plot_threshold_stability(axes=ax_stab)
+
+        fig.suptitle(
+            f"Master Diagnostic Plot: {self.n_exc} exceedances above u={self.u:.2f}",
+            fontsize=16,
+            fontweight="bold",
+        )
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        return fig

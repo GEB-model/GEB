@@ -308,6 +308,9 @@ class Floods(Module):
             if "routing/custom_rivers" in self.model.files["geom"]
             else None,
             overwrite=self.config["overwrite"],
+            p_value_threshold=self.config["p_value_threshold"],
+            selection_strategy=self.config["selection_strategy"],
+            write_figures=self.config["write_figures"],
         )
 
         return sfincs_model
@@ -630,7 +633,9 @@ class Floods(Module):
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
                     discharge=self.discharge_spinup_ds,
                     return_periods=self.config["return_periods"],
-                    write_figures=self.config.get("write_figures", False),
+                    p_value_threshold=self.config["p_value_threshold"],
+                    selection_strategy=self.config["selection_strategy"],
+                    write_figures=self.config["write_figures"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 

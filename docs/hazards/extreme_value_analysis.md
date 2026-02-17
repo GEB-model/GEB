@@ -127,17 +127,21 @@ The GPD-POT analysis has several tunable parameters (defaults are typically appr
 
 ## Implementation Details
 
-The GPD-POT analysis is implemented in two main functions:
+The GPD-POT analysis is implemented using the **`ReturnPeriodModel`** class which handles fitting, calculation, and diagnostic plotting.
 
-1. **`gpd_pot_ad_auto`**: Performs the automated threshold selection and GPD fitting
-2. **`assign_return_periods`**: Applies the analysis to multiple rivers and creates hydrographs
+Key helper functions and methods:
 
-Key helper functions:
+- **`fit_gpd_lmom`**: Fits GPD using Method of L-moments (L-MOM) for robust parameter estimation.
+- **`bootstrap_pvalue_for_ad`**: Calculates bootstrap p-values using the right-tail Anderson-Darling test.
+- **`ReturnPeriodModel.plot()`**: Generates a standard diagnostic plot showing the fitted curve, POT points, and annual maxima.
+- **`SFINCSRootModel.assign_return_periods`**: Applies the analysis to multiple rivers and creates hydrographs.
 
-- **`fit_gpd_mle`**: Fits GPD using Maximum Likelihood Estimation
-- **`bootstrap_pvalue_for_ad`**: Calculates bootstrap p-values for goodness-of-fit
-- **`mean_residual_life`**: Diagnostic tool for threshold selection
-- **`gpd_return_level`**: Calculates return levels from fitted parameters
+## Selection Strategies
+
+The model supports two strategies for selecting the best threshold:
+
+- **`first_significant`** (default): Selects the first threshold (moving from high to low) where the Anderson-Darling p-value exceeds the threshold (e.g., 0.05). This prioritizes higher thresholds with better theoretical validity of the GPD.
+- **`best_fit`**: Scans all candidate thresholds and selects the one with the highest p-value.
 
 ## When It's Used
 
@@ -150,7 +154,7 @@ model.estimate_return_periods()
 This method:
 
 1. Extracts discharge time series for all river segments
-2. Applies GPD-POT analysis to estimate return levels
+2. Applies GPD-POT analysis via `ReturnPeriodModel` to estimate return levels
 3. Creates synthetic hydrographs for each return period
 4. Runs SFINCS flood simulations for each return period
 5. Generates flood maps for the specified return periods
@@ -160,19 +164,19 @@ This method:
 The analysis produces:
 
 - **Return level estimates** for each river segment (stored in river attributes as `Q_2`, `Q_10`, `Q_100`, etc.)
-- **Diagnostic information** including:
+- **Diagnostic information** available via the `ReturnPeriodModel` object:
     - Selected threshold value
     - Fitted GPD parameters (σ, ξ)
     - Anderson-Darling p-value
     - Number of exceedances
     - Percentile of the threshold
-- **Hydrographs** for each return period with rising and recession limbs
+- **Diagnostic Plotting**: Visual verification of the fit against empirical data points (POT and Annual Maxima).
 
 ## Limitations and Assumptions
 
 1. **Data Requirements**: Needs at least 30 exceedances above the threshold for reliable results. Longer time series produce more reliable estimates.
 
-2. **Independence**: Assumes daily maxima are approximately independent. If the underlying data has strong temporal correlation, consider using declustering methods.
+2. **Independence**: Uses daily maxima resampling for de-clustering to ensure approximately independent observations.
 
 3. **Stationarity**: Assumes the statistical properties of extremes don't change over time. Climate change and land use changes can violate this assumption.
 
@@ -185,14 +189,11 @@ The analysis produces:
 The method includes several automatic safeguards:
 
 - **Zero discharge**: If all discharge values are near zero, return levels are set to zero
-- **Extreme values**: Return levels exceeding 400,000 m³/s (example amazon river has this discharge) are capped with a warning
+- **Extreme values**: Return levels exceeding 400,000 m³/s (approximate peak discharge of the Amazon) are capped with a warning
 
 ## References
 
-The implementation is based on standard extreme value theory:
+The implementation is based on standard extreme value theory and robust L-moment estimation:
 
 - Solari, S., Egüen, M., Polo, M. J., & Losada, M. A. (2017). Peaks Over Threshold (POT): A methodology for automatic threshold estimation using goodness of fit p-value. *Water Resources Research*, 53(4), 2833-2849. https://doi.org/10.1002/2016WR019426
-
-## Future Enhancements
-
-Diagnostic plotting capabilities (including MRL plots, parameter stability plots, Q-Q plots, and k-test) are planned for future releases when `diagnostic_plotting` is enabled in the configuration. Additional goodness-of-fit tests and the method of L-moments may be incorporated following recommendations from Solari et al. (2017).
+- Hosking, J. R. M., & Wallis, J. R. (1997). *Regional Frequency Analysis: An Approach Based on L-Moments*. Cambridge University Press.
