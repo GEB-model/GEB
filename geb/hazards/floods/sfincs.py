@@ -120,6 +120,17 @@ class SFINCSRootModel:
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
+    @property
+    def figures_path(self) -> Path:
+        """Gets the directory for the SFINCS model diagnostic figures.
+
+        Returns:
+            The path to the SFINCS model figures directory.
+        """
+        folder: Path = self.path / "figures"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
     def exists(self) -> bool:
         """Checks if the SFINCS model already exists in the model root directory.
 
@@ -483,7 +494,7 @@ class SFINCSRootModel:
                     fixed_shape=fixed_shape,
                     selection_strategy=selection_strategy,
                     write_figures=write_figures,
-                    output_directory=self.path / "figures" / "bankfull_estimation",
+                    output_directory=self.figures_path / "bankfull_estimation",
                 )
 
                 river_width_unknown_mask = rivers_to_burn["width"].isnull()
@@ -604,7 +615,7 @@ class SFINCSRootModel:
         )
 
         sf.plot_basemap(
-            fn_out="basemap.png",
+            fn_out=str(self.figures_path / "basemap.png"),
             vmin=math.floor(self.elevation.min()),
             vmax=max(
                 math.ceil(self.elevation.max()), 1
@@ -759,7 +770,7 @@ class SFINCSRootModel:
         # in coastal areas, there may be no active rivers
         if not self.active_rivers.empty:
             self.active_rivers.plot(ax=ax, color="blue")
-        plt.savefig(self.path / "gis" / "rivers.png")
+        plt.savefig(self.figures_path / "rivers.png")
 
     def calculate_outflow_conditions(self, area: gpd.GeoDataFrame) -> None:
         """Calculates outflow elevation and coordinates for all rivers.
@@ -1260,7 +1271,7 @@ class SFINCSRootModel:
             fixed_shape=fixed_shape,
             selection_strategy=selection_strategy,
             write_figures=write_figures,
-            output_directory=self.path / "figures" / "return_periods",
+            output_directory=self.figures_path / "return_periods",
         )
 
         for return_period in return_periods:
@@ -1675,9 +1686,11 @@ class SFINCSSimulation:
         self.sfincs_model.write_config()
 
         if self.write_figures:
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+            self.sfincs_model.plot_forcing(
+                fn_out=str(self.figures_path / "forcing.png")
+            )
             self.sfincs_model.plot_basemap(
-                fn_out="basemap.png",
+                fn_out=str(self.figures_path / "basemap.png"),
                 vmin=math.floor(self.root_model.elevation.min()),
                 vmax=max(
                     math.ceil(self.root_model.elevation.max()), 1
@@ -1895,13 +1908,15 @@ class SFINCSSimulation:
 
         if self.write_figures:
             self.sfincs_model.plot_basemap(
-                fn_out="src_points_check.png",
+                fn_out=str(self.figures_path / "src_points_check.png"),
                 vmin=math.floor(self.root_model.elevation.min()),
                 vmax=max(
                     math.ceil(self.root_model.elevation.max()), 1
                 ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
             )
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+            self.sfincs_model.plot_forcing(
+                fn_out=str(self.figures_path / "forcing.png")
+            )
 
     def set_accumulated_runoff_forcing(
         self,
@@ -2225,6 +2240,13 @@ class SFINCSSimulation:
     def path(self) -> Path:
         """Returns the root directory for the SFINCS simulation files."""
         folder: Path = self.root_path / "simulations" / self.name
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def figures_path(self) -> Path:
+        """Returns the directory for the SFINCS simulation diagnostic figures."""
+        folder: Path = self.path / "figures"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 

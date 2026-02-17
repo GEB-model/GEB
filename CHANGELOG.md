@@ -8,6 +8,7 @@
 - Add `--profiling` option to `geb build/update/alter`.
 - Fix: fix for farm sizes that are all on the high end of the distribution.
 - Fix: fix for regions with very large coastal areas beyond the riverine grid
+- Use figures path for sfincs model to save all figures
 - Switch to hourly values for extreme value statistics
 - Use maximum of one flood peak per week
 
