@@ -25,15 +25,15 @@ GEB supports evaluation of:
 Run all evaluation methods:
 
 ```bash
-geb evaluate
+geb evaluate --method hydrology.evaluate_discharge
 ```
 
-This runs the default methods: `plot_discharge`, `evaluate_discharge`, `evaluate_hydrodynamics`, `water_balance`, `water_circle`
+This runs the default method: `hydrology.evaluate_discharge`.
 
 Run specific methods only:
 
 ```bash
-geb evaluate --methods "plot_discharge,evaluate_discharge"
+geb evaluate --method hydrology.plot_discharge
 ```
 
 ## All available methods
@@ -56,7 +56,7 @@ geb evaluate --run-name default --spinup-name spinup --include-spinup --include-
 
 | Option | Description | Default |
 | --- | --- | --- |
-| `--methods` | Comma-separated list of methods to run | All methods |
+| `--method` | Single evaluation method to run | `hydrology.evaluate_discharge` |
 | `--run-name` | Name of the simulation run to evaluate | `default` |
 | `--spinup-name` | Name of the spinup run | `spinup` |
 | `--include-spinup` | Include spinup period in evaluation | `False` |

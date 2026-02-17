@@ -33,6 +33,7 @@ from rioxarray.merge import merge_arrays
 from scipy.ndimage import binary_dilation, value_indices
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point
+from tqdm import tqdm
 
 from geb.geb_types import (
     ArrayInt64,
@@ -41,6 +42,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
+from geb.hazards.floods.workflows.return_periods import ReturnPeriodModel
 from geb.hydrology.routing import get_river_width
 from geb.workflows.io import (
     create_hash_from_parameters,
@@ -65,7 +67,6 @@ from geb.workflows.raster import (
 from .workflows import get_river_depth, get_river_manning
 from .workflows.outflow import create_outflow_in_mask
 from .workflows.utils import (
-    assign_return_periods,
     create_hourly_hydrograph,
     export_rivers,
     get_discharge_and_river_parameters_by_river,
@@ -170,6 +171,10 @@ class SFINCSRootModel:
         initial_water_level: float | None = 0.0,
         custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
         overwrite: bool | Literal["auto"] = True,
+        p_value_threshold: float = 0.05,
+        selection_strategy: str = "first_significant",
+        fixed_shape: float | None = 0.0,
+        write_figures: bool = False,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.
 
@@ -197,6 +202,12 @@ class SFINCSRootModel:
             custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
                 dataframe must contain 'width' and 'depth' columns.
             overwrite: Whether to overwrite the existing model if it exists. If 'auto', the model is only rebuilt if the input parameters or code have changed.
+            p_value_threshold: Anderson-Darling p-value threshold for threshold selection. Defaults to 0.05.
+            selection_strategy: Strategy for selecting the best threshold.
+                'first_significant': Selects the first threshold (ordered high-to-low) with p_ad > p_value_threshold.
+                'best_fit': Evaluates all thresholds and selects the one with the highest p-value.
+            fixed_shape: Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted. Defaults to 0.0.
+            write_figures: Whether to generate and save diagnostic figures.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -464,8 +475,15 @@ class SFINCSRootModel:
                         "Custom rivers to burn must have a 'depth' column when using custom rivers"
                     )
             else:
-                rivers_to_burn = assign_return_periods(
-                    self.active_rivers, discharge_by_river, return_periods=[2]
+                rivers_to_burn = self.assign_return_periods(
+                    self.active_rivers,
+                    discharge_by_river,
+                    return_periods=[2],
+                    p_value_threshold=p_value_threshold,
+                    fixed_shape=fixed_shape,
+                    selection_strategy=selection_strategy,
+                    write_figures=write_figures,
+                    output_directory=self.path / "figures" / "bankfull_estimation",
                 )
 
                 river_width_unknown_mask = rivers_to_burn["width"].isnull()
@@ -1197,11 +1215,111 @@ class SFINCSRootModel:
                 * self.sfincs_model.grid["msk"].rio.resolution()[1]
             )
 
+    @staticmethod
+    def assign_return_periods(
+        rivers: gpd.GeoDataFrame,
+        discharge_dataframe: pd.DataFrame,
+        return_periods: list[int | float],
+        prefix: str = "Q",
+        min_exceed: int = 30,
+        nboot: int = 2000,
+        fixed_shape: float | None = None,
+        fixed_scale: float | None = None,
+        p_value_threshold: float = 0.05,
+        selection_strategy: str = "first_significant",
+        write_figures: bool = False,
+        output_directory: Path | None = None,
+    ) -> gpd.GeoDataFrame:
+        """Assign return periods to rivers using GPD-POT analysis.
+
+        Based on https://doi.org/10.1002/2016WR019426
+
+        Uses Generalized Pareto Distribution Peaks-Over-Threshold method with:
+            - Daily maxima resampling from input time series
+            - GPD-POT exceedance model fitting above threshold
+            - Anderson-Darling bootstrap p-value threshold selection
+            - Return level estimation for specified return periods
+
+        Args:
+            rivers: GeoDataFrame with river IDs as index that must match columns in discharge_dataframe.
+            discharge_dataframe: Time series DataFrame with datetime index containing discharge data for all rivers (m³/s).
+            return_periods: List of return periods in years to compute return levels for.
+            prefix: Column prefix for output return level columns. Defaults to "Q".
+            min_exceed: Minimum number of exceedances required for reliable GPD fit. Defaults to 30.
+            nboot: Number of bootstrap samples for Anderson-Darling threshold selection. Defaults to 2000.
+            fixed_shape: Value to fix the shape parameter (xi) (dimensionless). If None, it is fitted.
+                Set to 0 to force a Gumbel (Exponential) distribution.
+            fixed_scale: Value to fix the scale parameter (sigma) (dimensionless). If None, it is fitted.
+            p_value_threshold: Anderson-Darling p-value threshold for threshold selection. Defaults to 0.05.
+            selection_strategy: Strategy for selecting the best threshold.
+                'first_significant': Selects the first threshold (ordered high-to-low) with p_ad > p_value_threshold.
+                'best_fit': Evaluates all thresholds and selects the one with the highest p-value.
+            write_figures: Whether to generate and save diagnostic figures for each river.
+            output_directory: Directory to save the generated figures.
+
+        Returns:
+            Updated rivers GeoDataFrame with return level columns added (m³/s).
+
+        Raises:
+            TypeError: If discharge series does not have a DatetimeIndex.
+            ValueError: If return periods contain non-positive values.
+        """
+        assert isinstance(return_periods, list)
+        if not all((isinstance(T, (int, float)) and T > 0) for T in return_periods):
+            raise ValueError("All return periods must be positive numbers (years > 0).")
+        return_periods_arr = np.asarray(return_periods, float)
+
+        if write_figures and output_directory:
+            output_directory.mkdir(parents=True, exist_ok=True)
+
+        for idx in tqdm(rivers.index, total=len(rivers), desc="GPD-POT Return Periods"):
+            discharge = discharge_dataframe[idx].dropna()
+
+            # If all values are zero, assign zeros
+            if (discharge < 1e-10).all():
+                print(f"Discharge all zero for river {idx}, assigning zeros.")
+                for T in return_periods:
+                    rivers.loc[idx, f"{prefix}_{T}"] = 0.0
+                continue
+
+            if not isinstance(discharge.index, pd.DatetimeIndex):
+                raise TypeError(
+                    f"Discharge series for river {idx} must have a DatetimeIndex."
+                )
+
+            model = ReturnPeriodModel(
+                series=discharge,
+                return_periods=return_periods_arr,
+                min_exceed=min_exceed,
+                nboot=nboot,
+                fixed_shape=fixed_shape,
+                fixed_scale=fixed_scale,
+                p_value_threshold=p_value_threshold,
+                selection_strategy=selection_strategy,
+            )
+            print(f"GPD-POT analysis completed for river {idx}.")
+
+            if write_figures and output_directory:
+                fig = model.plot_diagnostics()
+                fig.savefig(output_directory / f"return_period_river_{idx}.svg")
+                plt.close(fig)
+
+            for return_period, return_water_level in model.rl_table.set_index(
+                "T_years"
+            )["GPD_POT_RL"].items():
+                rivers.loc[idx, f"{prefix}_{return_period}"] = return_water_level
+
+        return rivers
+
     def estimate_discharge_for_return_periods(
         self,
         discharge: xr.DataArray,
         rising_limb_hours: int = 72,
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
+        p_value_threshold: float = 0.05,
+        selection_strategy: str = "first_significant",
+        fixed_shape: float | None = 0.0,
+        write_figures: bool = False,
     ) -> None:
         """Estimate discharge for specified return periods and create hydrographs.
 
@@ -1209,6 +1327,12 @@ class SFINCSRootModel:
             discharge: xr.DataArray containing the discharge data
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
+            p_value_threshold: Anderson-Darling p-value threshold for threshold selection. Defaults to 0.05.
+            selection_strategy: Strategy for selecting the best threshold.
+                'first_significant': Selects the first threshold (ordered high-to-low) with p_ad > p_value_threshold.
+                'best_fit': Evaluates all thresholds and selects the one with the highest p-value.
+            fixed_shape: Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted. Defaults to 0.0.
+            write_figures: Whether to generate and save diagnostic figures.
         """
         recession_limb_hours: int = rising_limb_hours
 
@@ -1228,8 +1352,15 @@ class SFINCSRootModel:
             river_representative_points,
             discharge=discharge,
         )
-        rivers_with_return_period: gpd.GeoDataFrame = assign_return_periods(
-            rivers_with_return_period, discharge_by_river, return_periods=return_periods
+        rivers_with_return_period: gpd.GeoDataFrame = self.assign_return_periods(
+            rivers_with_return_period,
+            discharge_by_river,
+            return_periods=return_periods,
+            p_value_threshold=p_value_threshold,
+            fixed_shape=fixed_shape,
+            selection_strategy=selection_strategy,
+            write_figures=write_figures,
+            output_directory=self.path / "figures" / "return_periods",
         )
 
         for return_period in return_periods:
