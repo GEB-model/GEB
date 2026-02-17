@@ -173,6 +173,7 @@ class SFINCSRootModel:
         overwrite: bool | Literal["auto"] = True,
         p_value_threshold: float = 0.05,
         selection_strategy: str = "first_significant",
+        fixed_shape: float | None = 0.0,
         write_figures: bool = False,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.
@@ -205,6 +206,7 @@ class SFINCSRootModel:
             selection_strategy: Strategy for selecting the best threshold.
                 'first_significant': Selects the first threshold (ordered high-to-low) with p_ad > p_value_threshold.
                 'best_fit': Evaluates all thresholds and selects the one with the highest p-value.
+            fixed_shape: Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted. Defaults to 0.0.
             write_figures: Whether to generate and save diagnostic figures.
 
         Returns:
@@ -478,6 +480,7 @@ class SFINCSRootModel:
                     discharge_by_river,
                     return_periods=[2],
                     p_value_threshold=p_value_threshold,
+                    fixed_shape=fixed_shape,
                     selection_strategy=selection_strategy,
                     write_figures=write_figures,
                     output_directory=self.path / "figures" / "bankfull_estimation",
@@ -1215,6 +1218,7 @@ class SFINCSRootModel:
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
         p_value_threshold: float = 0.05,
         selection_strategy: str = "first_significant",
+        fixed_shape: float | None = 0.0,
         write_figures: bool = False,
     ) -> None:
         """Estimate discharge for specified return periods and create hydrographs.
@@ -1227,6 +1231,7 @@ class SFINCSRootModel:
             selection_strategy: Strategy for selecting the best threshold.
                 'first_significant': Selects the first threshold (ordered high-to-low) with p_ad > p_value_threshold.
                 'best_fit': Evaluates all thresholds and selects the one with the highest p-value.
+            fixed_shape: Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted. Defaults to 0.0.
             write_figures: Whether to generate and save diagnostic figures.
         """
         recession_limb_hours: int = rising_limb_hours
@@ -1252,6 +1257,7 @@ class SFINCSRootModel:
             discharge_by_river,
             return_periods=return_periods,
             p_value_threshold=p_value_threshold,
+            fixed_shape=fixed_shape,
             selection_strategy=selection_strategy,
             write_figures=write_figures,
             output_directory=self.path / "figures" / "return_periods",

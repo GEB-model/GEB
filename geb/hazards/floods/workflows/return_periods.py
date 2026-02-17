@@ -301,12 +301,9 @@ class ReturnPeriodModel:
             # Calculate excesses y.
             y = exceed.values - u
 
-            try:
-                sigma, xi = fit_gpd_lmoments(
-                    y, fixed_shape=fixed_shape, fixed_scale=fixed_scale
-                )
-            except (RuntimeError, ValueError):
-                continue
+            sigma, xi = fit_gpd_lmoments(
+                y, fixed_shape=fixed_shape, fixed_scale=fixed_scale
+            )
 
             u_vals = gpd_cdf(y, sigma, xi)
             A_R2 = right_tail_ad_from_uniforms(u_vals)
