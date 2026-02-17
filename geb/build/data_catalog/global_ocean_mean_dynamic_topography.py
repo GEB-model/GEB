@@ -118,8 +118,18 @@ class GlobalOceanMeanDynamicTopography(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url=None):
-        """Fetch the Global Ocean Mean Dynamic Topography data."""
+    def fetch(self, url: str | None = None) -> GlobalOceanMeanDynamicTopography:
+        """Fetch the Global Ocean Mean Dynamic Topography data.
+
+        Because login is required to download the data, the user enter
+        their login credentials in the terminal to download the data.
+        Args:
+            url: The URL to download the data from. This parameter is not used
+                 because the data is downloaded using the copernicusmarine library,
+                 which handles the URL internally. It is included in the method signature for consistency with the Adapter interface.
+        Returns:
+            GlobalOceanMeanDynamicTopography: The adapter instance with the data fetched and saved to disk.
+        """
         if not self.is_ready:
             copernicusmarine.subset(
                 dataset_id="cnes_obs-sl_glo_phy-mdt_my_0.125deg_P20Y",
@@ -137,8 +147,19 @@ class GlobalOceanMeanDynamicTopography(Adapter):
         return self
 
     def read(self, model_bounds: tuple[float, float, float, float]) -> xr.DataArray:
-        """Read the Global Ocean Mean Dynamic Topography data."""
+        """Read the Global Ocean Mean Dynamic Topography data.
 
+        This method reads the netCDF file containing the global ocean mean dynamic
+        topography data, processes it by clipping to the specified model bounds and
+        extrapolating values into no-data regions, and returns it as an xarray DataArray.
+        Args:
+            model_bounds: A tuple containing the minimum longitude, minimum latitude,
+                          maximum longitude, and maximum latitude (min_lon, min_lat, max_lon, max_lat) that define the bounding box to which the data should be clipped.
+        Returns:
+            xr.DataArray: The processed global ocean mean dynamic topography data, clipped to the specified model bounds and with values extrapolated into no-data regions.
+        Raises:
+            ValueError: If the expected 'mdt' variable is not found in the dataset.
+        """
         # read the global_ocean_mdt data
         global_ocean_mdt_dataset = xr.open_dataset(self.path)
         if "mdt" not in global_ocean_mdt_dataset:
