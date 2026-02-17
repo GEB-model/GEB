@@ -151,6 +151,7 @@ def build_sfincs(
         if "routing/custom_rivers" in geb_model.files["geom"]
         else None,
         overwrite="auto",
+        write_figures=True,
     )
     geb_model.close()
 
