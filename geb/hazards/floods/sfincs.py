@@ -416,7 +416,14 @@ class SFINCSRootModel:
                     ],
                     crs=self.mask.rio.crs,
                 )
-                assert len(area) == 1
+                if len(area) > 1:
+                    # remove isolated cells by keeping only the largest polygon
+                    area["area"] = area.geometry.area
+                    area = area.sort_values("area", ascending=False).iloc[0:1]
+                    area = area.drop(columns=["area"])
+                    # raise ValueError(
+                    #     "Calculated outflow area is not a single polygon, cannot calculate outflow conditions"
+                    # )
 
                 self.calculate_outflow_conditions(area=area)
 
