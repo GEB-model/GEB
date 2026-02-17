@@ -332,12 +332,12 @@ def test_accuflux(
         dtype=np.float32,
     )[mask]
 
-    # --- NEW: empty retention arrays for "no retention" case ---
+    # Empty retention arrays for "no retention" case
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_node_id = np.full_like(
-        mask[mask], -1, dtype=np.int32
-    )  # all cells: no retention
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     (
         Q_new,
@@ -348,7 +348,7 @@ def test_accuflux(
         outflow_at_pits_m3,
         retention_storage_m3_out,
         retention_inflow_m3,
-        retention_outflow_m3,
+        # retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
@@ -358,6 +358,8 @@ def test_accuflux(
         retention_storage_m3=retention_storage_m3,
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     assert (
@@ -377,7 +379,7 @@ def test_accuflux(
     # check that retention arrays are empty ---
     assert retention_storage_m3_out.size == 0
     assert retention_inflow_m3.size == 0
-    assert retention_outflow_m3.size == 0
+    # assert retention_outflow_m3.size == 0
 
 
 def test_accuflux_with_retention_basins(
@@ -403,18 +405,19 @@ def test_accuflux_with_retention_basins(
 
     sideflow = np.zeros(mask.sum(), dtype=np.float32)
 
-    # --- define retention nodes ---
-    def flat_idx(row: int, col: int) -> int:
-        return np.flatnonzero(mask)[row * mask.shape[1] + col]
-
-    # Let's say cells 1 and 3 are retention nodes
-    retention_node_id = np.full(mask.sum(), -1, dtype=np.int32)
-    retention_node_id[flat_idx(1, 2)] = 0  # retention basin 0 at cell (1,1)
-    retention_node_id[flat_idx(2, 1)] = 1  # retention basin 1 at cell (2,1)
+    retention_raster = -1 * np.ones_like(Q_initial, dtype=np.int32)
+    retention_raster[2, 3] = 0  # controlled basin, where Q_new is 2
+    retention_raster[3, 1] = 1  # uncontrolled basin, where Q_new is 1
+    # flatten according to mask
+    retention_node_id = retention_raster[mask]
 
     # --- set initial storage and max storage ---
     retention_storage_m3 = np.zeros(2, dtype=np.float32)  # two retention basins
-    retention_max_storage_m3 = np.array([2.0, 3.0], dtype=np.float32)  # max storage
+    retention_max_storage_m3 = np.array([2, 3], dtype=np.float32)  # max storage
+    controlled_retention = np.array([True, False])  # 1 basin are controlled
+    retention_activation_threshold_m3_s = np.array(
+        [1.0, 0.0], dtype=np.float32
+    )  # activation thresholds
 
     (
         Q_new,
@@ -425,7 +428,7 @@ def test_accuflux_with_retention_basins(
         outflow_at_pits_m3,
         retention_storage_m3_out,
         retention_inflow_m3,
-        retention_outflow_m3,
+        # retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
@@ -435,14 +438,17 @@ def test_accuflux_with_retention_basins(
         retention_storage_m3=retention_storage_m3,
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     # make sure retention storage is smaller than max storage
     assert (retention_storage_m3_out <= retention_max_storage_m3).all()
     # make sure retention outflow is 0 (no outflow currently implemented)
-    assert (retention_outflow_m3 == 0).all()
+    # assert (retention_outflow_m3 == 0).all()
     # make sure that water is actually flowing into the basins
     assert retention_storage_m3_out.sum() > 0.0
+    assert (retention_storage_m3_out > 0.0).all()
     # make sure that there is discharge in next timestep (Qnew)
     assert Q_new.sum() > 0.0
     # make sure that mass balance is maintained: total initial flow should equal total flow after routing (Qnew + retention storage + outflow at pits)
@@ -480,12 +486,12 @@ def test_accuflux_with_longer_dt(
         dtype=np.float32,
     )[mask]
 
-    # --- NEW: empty retention arrays for "no retention" case ---
+    # Empty retention arrays for "no retention" case
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_node_id = np.full_like(
-        mask[mask], -1, dtype=np.int32
-    )  # all cells: no retention
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     (
         Q_new,
@@ -496,7 +502,7 @@ def test_accuflux_with_longer_dt(
         outflow_at_pits_m3,
         retention_storage_m3_out,
         retention_inflow_m3,
-        retention_outflow_m3,
+        # retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
@@ -506,6 +512,8 @@ def test_accuflux_with_longer_dt(
         retention_storage_m3=retention_storage_m3,
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     assert (
@@ -554,9 +562,9 @@ def test_accuflux_with_sideflow(
     # --- NEW: empty retention arrays for "no retention" case ---
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_node_id = np.full_like(
-        mask[mask], -1, dtype=np.int32
-    )  # all cells: no retention
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     (
         Q_new,
@@ -567,7 +575,7 @@ def test_accuflux_with_sideflow(
         outflow_at_pits_m3,
         retention_storage_m3_out,
         retention_inflow_m3,
-        retention_outflow_m3,
+        # retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
@@ -577,6 +585,8 @@ def test_accuflux_with_sideflow(
         retention_storage_m3=retention_storage_m3,
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     assert (
@@ -650,12 +660,12 @@ def test_accuflux_with_waterbodies(
 
     waterbody_storage_m3_pre = waterbody_storage_m3.copy()
 
-    # --- NEW: empty retention arrays for "no retention" case ---
+    # Empty retention arrays for "no retention" case
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_node_id = np.full_like(
-        mask[mask], -1, dtype=np.int32
-    )  # all cells: no retention
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     (
         Q_new,
@@ -666,7 +676,7 @@ def test_accuflux_with_waterbodies(
         outflow_at_pits_m3,
         retention_storage_m3_out,
         retention_inflow_m3,
-        retention_outflow_m3,
+        # retention_outflow_m3,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
@@ -676,6 +686,8 @@ def test_accuflux_with_waterbodies(
         retention_storage_m3=retention_storage_m3,
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     np.testing.assert_array_equal(

@@ -749,12 +749,12 @@ class Accuflux(Router):
     """Accuflux routing algorithm.
 
     In each step, the algorithm calculates the new discharge for each cell
-    based on the inflow from upstream cells, sideflow, and waterbody outflow.
+    based on the inflow from upstream cells, sideflow, waterbody outflow, and retention basins.
 
     The algorithm works as follows:
 
     1. For each cell, it calculates the inflow from upstream cells.
-    2. It adds the sideflow and waterbody outflow to the inflow.
+    2. It adds the sideflow and waterbody outflow to the inflow and subtracts water volumes stored per retention basin.
     3. It calculates the new discharge for each cell based on the inflow.
     4. It updates the waterbody storage based on the outflow.
     """
@@ -812,13 +812,15 @@ class Accuflux(Router):
         retention_storage_m3: ArrayFloat32,  # new for retention logic
         retention_max_storage_m3: ArrayFloat32,  # new for retention logic
         retention_node_id: ArrayInt32,  # new for retention logic
+        controlled_retention: ArrayBool,  # new for retention logic/controlled=yes/no
+        retention_activation_threshold_m3_s: ArrayFloat32,  # new for retention logic
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
-        ArrayFloat32,  # retention outflow
         ArrayFloat32,  # retention inflow
+        # ArrayFloat32,  # retention outflow
     ]:
         """Accuflux routing.
 
@@ -839,6 +841,9 @@ class Accuflux(Router):
             retention_storage_m3: Storage of each retention node in m3.
             retention_max_storage_m3: Maximum storage of each retention node in m3.
             retention_node_id: A 1D array with the same shape as the grid, which is the retention node ID for each cell. -1 indicates no retention node.
+            controlled_retention: A 1D boolean array with the same shape as the grid, which is True for retention nodes with controlled operation.
+            retention_activation_threshold_m3_s: A 1D array with the same shape as the grid, which is the activation threshold for retention nodes in m3.
+                If river discharge at the (controlled) retention node exceeds this threshold, it starts to fill until it reaches the maximum storage.
 
 
         Returns:
@@ -863,9 +868,9 @@ class Accuflux(Router):
         waterbody_inflow_m3: ArrayFloat32 = np.zeros_like(
             waterbody_storage_m3, dtype=np.float32
         )
-        # NEW: initialize retention inflow/outflow arrays
+        # Initialize retention inflow/outflow arrays
         retention_inflow_m3 = np.zeros_like(retention_storage_m3, dtype=np.float32)
-        retention_outflow_m3 = np.zeros_like(retention_storage_m3, dtype=np.float32)
+        # retention_outflow_m3 = np.zeros_like(retention_storage_m3, dtype=np.float32)
 
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
             node = idxs_up_to_downstream[i]
@@ -907,20 +912,37 @@ class Accuflux(Router):
 
             node_waterbody_id = waterbody_id[node]
 
-            # --- NEW: retention node diversion ---
+            # Retention node diversion
             node_retention_id = retention_node_id[node]
             if node_retention_id != -1:
+                # Compute discharge before diversion into ret. basins to check against activation threshold
+                Q_before_diversion = inflow_volume / dt
+
                 # How much can we still store?
                 available_storage = (
                     retention_max_storage_m3[node_retention_id]
                     - retention_storage_m3[node_retention_id]
                 )
+
+                if controlled_retention[node_retention_id]:
+                    # if retention is controlled, check activation threshold
+                    threshold = retention_activation_threshold_m3_s[node_retention_id]
+
+                    if Q_before_diversion > threshold:
+                        diverted_volume = min(inflow_volume, available_storage)
+                    else:
+                        diverted_volume = np.float32(0.0)
+                else:
+                    # If retention is uncontrolled, divert all available volume
+                    diverted_volume = min(inflow_volume, available_storage)
+
                 # Divert as much as possible without exceeding capacity
-                diverted_volume = min(inflow_volume, available_storage)
-                retention_storage_m3[node_retention_id] += diverted_volume
-                retention_inflow_m3[node_retention_id] += diverted_volume
-                # Reduce the flow remaining to the river
-                inflow_volume -= diverted_volume
+                if diverted_volume > 0.0:
+                    retention_storage_m3[node_retention_id] += diverted_volume
+                    retention_inflow_m3[node_retention_id] += diverted_volume
+                    # retention_outflow_m3[node_retention_id] += diverted_volume
+                    # Reduce the flow remaining to the river
+                    inflow_volume -= diverted_volume
 
             if node_waterbody_id != -1:
                 waterbody_storage_m3[node_waterbody_id] += inflow_volume
@@ -939,7 +961,6 @@ class Accuflux(Router):
             over_abstraction_m3,
             waterbody_inflow_m3,
             retention_inflow_m3,
-            retention_outflow_m3,
         )
 
     def step(
@@ -952,6 +973,8 @@ class Accuflux(Router):
         retention_storage_m3: ArrayFloat32,
         retention_max_storage_m3: ArrayFloat32,
         retention_node_id: ArrayInt32,
+        retention_activation_threshold_m3_s: ArrayFloat32,
+        controlled_retention: ArrayBool,
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat32,
@@ -961,7 +984,7 @@ class Accuflux(Router):
         np.float32,
         ArrayFloat32,
         ArrayFloat32,
-        ArrayFloat32,
+        # ArrayFloat32,
     ]:
         """Perform a routing step using the simple accumulation algorithm.
 
@@ -1001,7 +1024,7 @@ class Accuflux(Router):
             over_abstraction_m3,
             waterbody_inflow_m3,
             retention_inflow_m3,
-            retention_outflow_m3,
+            # retention_outflow_m3,
         ) = self._step(
             dt=self.dt,
             Qold=Q_prev_m3_s,
@@ -1013,9 +1036,11 @@ class Accuflux(Router):
             idxs_up_to_downstream=self.idxs_up_to_downstream,
             is_waterbody_outflow=self.is_waterbody_outflow,
             waterbody_id=self.waterbody_id,
-            retention_storage_m3=retention_storage_m3,  # local variable
-            retention_max_storage_m3=retention_max_storage_m3,  # local variable
-            retention_node_id=retention_node_id,  # local variable
+            retention_storage_m3=retention_storage_m3,  # new retention logic
+            retention_max_storage_m3=retention_max_storage_m3,  # new retention logic
+            retention_node_id=retention_node_id,  # new retention logic
+            controlled_retention=controlled_retention,  # new retention logic
+            retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,  # new retention logic
         )
 
         return (
@@ -1027,7 +1052,6 @@ class Accuflux(Router):
             outflow_at_pits_m3,
             retention_storage_m3,
             retention_inflow_m3,
-            retention_outflow_m3,
         )
 
     def get_total_storage(self, Q: ArrayFloat32) -> ArrayFloat32:
