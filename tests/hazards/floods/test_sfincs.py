@@ -234,8 +234,8 @@ def create_sfincs_models(
 @pytest.mark.parametrize(
     ["split", "geographic", "subgrid"],
     [
-        # (False, True, False),
-        # (True, True, False),
+        (False, True, False),
+        (True, True, False),
         (False, False, False),
         (False, False, True),
     ],
