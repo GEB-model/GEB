@@ -1,6 +1,7 @@
 """Workflow helpers used in the GEB."""
 
 from time import time
+from typing import Any, Literal, overload
 
 import numpy as np
 
@@ -56,6 +57,7 @@ class TimingModule:
         return to_print
 
 
+@overload
 def balance_check(
     name: str,
     how: str = "cellwise",
@@ -70,7 +72,45 @@ def balance_check(
     tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
-) -> bool:
+    return_max_imbalance_index: Literal[False] = False,
+) -> bool: ...
+
+
+@overload
+def balance_check(
+    name: str,
+    how: str = "cellwise",
+    influxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    prestorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    poststorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    tolerance: float = 1e-10,
+    error_identifiers: dict = {},
+    raise_on_error: bool = False,
+    return_max_imbalance_index: Literal[True] = ...,
+) -> tuple[Literal[False], int] | tuple[Literal[True] | None]: ...
+
+
+def balance_check(
+    name: str,
+    how: str = "cellwise",
+    influxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    prestorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    poststorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    tolerance: float = 1e-10,
+    error_identifiers: dict = {},
+    raise_on_error: bool = False,
+    return_max_imbalance_index: bool = False,
+) -> bool | tuple[Literal[False], int] | tuple[Literal[True] | None]:
     """Check the balance of a system, usually for water.
 
     Essentially checks that influxes + prestorages = outfluxes + poststorages,
@@ -88,6 +128,8 @@ def balance_check(
             Can only be used with how='cellwise'.
             When an error is found, the values of these identifiers at the location of the maximum error will be printed.
         raise_on_error: Whether to raise an error if the balance check fails.
+        return_max_imbalance_index: Whether to return the maximum imbalance instead of a boolean.
+            Only applicable when how='cellwise'.
 
     Returns:
         True if the balance check passes, False otherwise.
@@ -95,6 +137,7 @@ def balance_check(
     Raises:
         ValueError: If NaN values are found in the balance calculation.
         AssertionError: If the balance check fails and raise_on_error is True.
+        ValueError: If return_max_imbalance_index is True when using 'sum' method.
     """
     income = 0
     out = 0
@@ -127,11 +170,21 @@ def balance_check(
                 print(text)
             if raise_on_error:
                 raise AssertionError(text)
-            return False
+            if return_max_imbalance_index:
+                return False, index
+            else:
+                return False
         else:
-            return True
+            if return_max_imbalance_index:
+                return True, None
+            else:
+                return True
 
     elif how == "sum":
+        if return_max_imbalance_index:
+            raise ValueError(
+                "return_max_imbalance_index cannot be True when using 'sum' method."
+            )
         assert not error_identifiers, (
             "Error identifiers not supported for 'sum' method."
         )

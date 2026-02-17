@@ -1,4 +1,5 @@
 # dev
+- Improve landsurface error diagnostic by isolating the failing cell in the error snapshot while preserving data dimensions.
 - Add build method to set up reforestation potential (and data catalog entry)
 - Add units to all data from `setup_hydrography`
 - Compute hillslope length based on drainage density

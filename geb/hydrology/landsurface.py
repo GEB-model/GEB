@@ -927,6 +927,7 @@ class LandSurface(Module):
         wetting_front_suction_head_prev: ArrayFloat32,
         wetting_front_moisture_deficit_prev: ArrayFloat32,
         green_ampt_active_layer_idx_prev: ArrayInt32,
+        index: int,
     ) -> LandSurfaceInputs:
         """Build a snapshot of land surface inputs for error reproduction.
 
@@ -943,22 +944,45 @@ class LandSurface(Module):
             wetting_front_suction_head_prev: Pre-call wetting front suction head (m).
             wetting_front_moisture_deficit_prev: Pre-call wetting front moisture deficit (-).
             green_ampt_active_layer_idx_prev: Pre-call Green-Ampt active layer index (-).
+            index: Index to slice all inputs for (isolates a single cell).
 
         Returns:
             Snapshot of model inputs that reproduces the failure context.
         """
+        # isolate the failing cell while keeping original ranks (dimensions)
+        sliced_fields = {}
+        for field in land_surface_inputs._fields:
+            val = getattr(land_surface_inputs, field)
+            if isinstance(val, np.ndarray):
+                if val.ndim == 1:
+                    sliced_fields[field] = val[index : index + 1]
+                elif val.ndim == 2:
+                    sliced_fields[field] = val[:, index : index + 1]
+                else:
+                    sliced_fields[field] = val
+            else:
+                sliced_fields[field] = val
+
+        land_surface_inputs = LandSurfaceInputs(**sliced_fields)
+
         error_inputs: LandSurfaceInputs = land_surface_inputs._replace(
-            w=w_prev,
-            topwater_m=topwater_m_prev,
-            snow_water_equivalent_m=snow_water_equivalent_prev,
-            liquid_water_in_snow_m=liquid_water_in_snow_prev,
-            snow_temperature_C=snow_temperature_C_prev,
-            interception_storage_m=interception_storage_prev,
-            soil_temperature_C=soil_temperature_C_prev,
-            wetting_front_depth_m=wetting_front_depth_prev,
-            wetting_front_suction_head_m=wetting_front_suction_head_prev,
-            wetting_front_moisture_deficit=wetting_front_moisture_deficit_prev,
-            green_ampt_active_layer_idx=green_ampt_active_layer_idx_prev,
+            w=w_prev[:, index : index + 1],
+            topwater_m=topwater_m_prev[index : index + 1],
+            snow_water_equivalent_m=snow_water_equivalent_prev[index : index + 1],
+            liquid_water_in_snow_m=liquid_water_in_snow_prev[index : index + 1],
+            snow_temperature_C=snow_temperature_C_prev[index : index + 1],
+            interception_storage_m=interception_storage_prev[index : index + 1],
+            soil_temperature_C=soil_temperature_C_prev[:, index : index + 1],
+            wetting_front_depth_m=wetting_front_depth_prev[index : index + 1],
+            wetting_front_suction_head_m=wetting_front_suction_head_prev[
+                index : index + 1
+            ],
+            wetting_front_moisture_deficit=wetting_front_moisture_deficit_prev[
+                index : index + 1
+            ],
+            green_ampt_active_layer_idx=green_ampt_active_layer_idx_prev[
+                index : index + 1
+            ],
         )
         return error_inputs
 
@@ -1416,7 +1440,7 @@ class LandSurface(Module):
             potential_transpiration_m,
         ) = land_surface_model(**land_surface_inputs._asdict())
 
-        if not balance_check(
+        balance_check_pass, imbalance_index = balance_check(
             name="land surface 1",
             how="cellwise",
             influxes=[
@@ -1451,7 +1475,9 @@ class LandSurface(Module):
             ],
             tolerance=1e-5,
             raise_on_error=False,
-        ):
+            return_max_imbalance_index=True,
+        )
+        if not balance_check_pass:
             error_inputs: LandSurfaceInputs = self._snapshot_land_surface_inputs_for_error(
                 land_surface_inputs=land_surface_inputs,
                 w_prev=w_prev,
@@ -1465,12 +1491,18 @@ class LandSurface(Module):
                 wetting_front_suction_head_prev=wetting_front_suction_head_prev,
                 wetting_front_moisture_deficit_prev=wetting_front_moisture_deficit_prev,
                 green_ampt_active_layer_idx_prev=green_ampt_active_layer_idx_prev,
+                index=imbalance_index,
             )
             np.savez(
                 self.model.diagnostics_folder / "landsurface_model_error.npz",
                 **error_inputs._asdict(),
             )
-            raise AssertionError("Land surface water balance check failed.")
+            # Re-run the model for the failing cell with the isolated inputs to confirm that the error can be reproduced
+            land_surface_model(**error_inputs._asdict())
+
+            raise AssertionError(
+                f"Land surface water balance check failed at HRU index {imbalance_index}."
+            )
 
         actual_evapotranspiration_m = (
             interception_evaporation_m
