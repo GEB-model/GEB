@@ -983,15 +983,21 @@ class LandSurface(Module):
             0.0, dtype=np.float32
         )
 
+        slope_m_per_m = self.hydrology.grid.load(
+            self.model.files["grid"]["landsurface/slope_m_per_m"], layer=None
+        )
+
         self.HRU.var.slope_m_per_m = self.hydrology.to_HRU(
-            data=self.hydrology.grid.load(
-                self.model.files["grid"]["landsurface/slope"]
-            ),
+            data=slope_m_per_m,
             fn=None,
         )
 
+        hillslope_length_m = self.hydrology.grid.load(
+            self.model.files["grid"]["drainage/hillslope_length_m"], layer=None
+        )
+
         self.HRU.var.hillslope_length_m = self.hydrology.to_HRU(
-            data=self.grid.var.cell_area**0.5, fn=None
+            data=hillslope_length_m, fn=None
         )
 
         leaf_area_index_forest = self.grid.compress(

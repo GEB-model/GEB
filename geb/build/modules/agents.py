@@ -313,18 +313,14 @@ class Agents(BuildModelBase):
                 name: The name to set the forcing data as.
                 ssp: The SSP scenario to use.
             """
-            ds_historic = xr.open_dataset(
-                self.old_data_catalog.get_source(f"cwatm_{file}_historical_year").path,
-                decode_times=False,
-            ).rename({"lat": "y", "lon": "x"})
+            ds_historic = self.data_catalog.fetch(
+                f"cwatm_{file}_historical_year"
+            ).read()
             ds_historic = ds_historic.isel(
                 get_window(ds_historic.x, ds_historic.y, self.bounds, buffer=2)
             )[variable]
 
-            ds_future = xr.open_dataset(
-                self.old_data_catalog.get_source(f"cwatm_{file}_{ssp}_year").path,
-                decode_times=False,
-            ).rename({"lat": "y", "lon": "x"})
+            ds_future = self.data_catalog.fetch(f"cwatm_{file}_{ssp}_year").read()
             ds_future = ds_future.isel(
                 get_window(ds_future.x, ds_future.y, self.bounds, buffer=2)
             )[variable]
@@ -334,7 +330,6 @@ class Agents(BuildModelBase):
             )
 
             ds = xr.concat([ds_historic, ds_future], dim="time")
-            ds = ds.rio.write_crs(4326)
             # assert dataset in monotonicically increasing
             assert (ds.time.diff("time") == 1).all(), "not all years are there"
 
@@ -1192,10 +1187,12 @@ class Agents(BuildModelBase):
         else:
             assert size_class_boundaries is not None
 
-        cultivated_land = self.region_subgrid["landsurface/full_region_cultivated_land"]
+        cultivated_land = self.region_subgrid[
+            "landsurface/full_region_cultivated_land"
+        ].compute()
         assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
-        region_ids = self.region_subgrid["region_ids"]
-        cell_area = self.region_subgrid["cell_area"]
+        region_ids = self.region_subgrid["region_ids"].compute()
+        cell_area = self.region_subgrid["cell_area"].compute()
 
         regions_shapes = self.geom["regions"]
         if data_source == "lowder":
@@ -2346,16 +2343,13 @@ class Agents(BuildModelBase):
             A DataFrame containing behavioural parameters for each country, including risk aversion and discount factors.
         """
         # Risk aversion
-        preferences_country_level: pd.DataFrame = self.old_data_catalog.get_dataframe(
-            "preferences_country",
-            variables=["country", "isocode", "patience", "risktaking"],
-        ).dropna()
-
-        preferences_individual_level: pd.DataFrame = (
-            self.old_data_catalog.get_dataframe(
-                "preferences_individual",
-                variables=["country", "isocode", "patience", "risktaking"],
-            ).dropna()
+        preferences_country_level = self.data_catalog.fetch(
+            "global_preferences_survey_country"
+        ).read()[["country", "isocode", "patience", "risktaking"]]
+        preferences_individual_level = (
+            self.data_catalog.fetch("global_preferences_survey_individual")
+            .read()[["country", "isocode", "patience", "risktaking"]]
+            .dropna()
         )
 
         def scale_to_range(x: pd.Series, new_min: float, new_max: float) -> pd.Series:

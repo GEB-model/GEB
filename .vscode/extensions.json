@@ -3,7 +3,6 @@
         "charliermarsh.ruff",
         "astral-sh.ty",
         "github.copilot-chat",
-        "github.copilot",
         "ms-python.debugpy",
         "ms-python.vscode-python-envs",
         "njpwerner.autodocstring",

@@ -1139,7 +1139,7 @@ class Routing(Module):
 
         """
         self.grid.var.upstream_area = self.grid.load(
-            self.model.files["grid"]["routing/upstream_area"]
+            self.model.files["grid"]["routing/upstream_area_m2"]
         )
         if "routing/upstream_area_n_cells" in self.model.files["grid"]:
             self.grid.var.upstream_area_n_cells = self.grid.load(
@@ -1163,7 +1163,7 @@ class Routing(Module):
 
         # Channel length [meters]
         self.grid.var.river_length = self.grid.load(
-            self.model.files["grid"]["routing/river_length"]
+            self.model.files["grid"]["routing/river_length_m"]
         )
 
         # where there is a pit, the river length is set to distance to the center of the cell,
@@ -1177,7 +1177,7 @@ class Routing(Module):
 
         # Channel bottom width [meters]
         self.grid.var.average_river_width = self.grid.load(
-            self.model.files["grid"]["routing/river_width"]
+            self.model.files["grid"]["routing/river_width_m"]
         )
 
         # for a river, the wetted perimeter can be approximated by the channel width
@@ -1190,7 +1190,7 @@ class Routing(Module):
         # Channel gradient (fraction, dy/dx)
         minimum_river_slope = 0.0001
         river_slope = np.maximum(
-            self.grid.load(self.model.files["grid"]["routing/river_slope"]),
+            self.grid.load(self.model.files["grid"]["routing/river_slope_m_per_m"]),
             minimum_river_slope,
         )
 
