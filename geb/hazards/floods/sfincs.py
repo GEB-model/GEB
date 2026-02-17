@@ -361,7 +361,7 @@ class SFINCSRootModel:
             # setup the coastal boundary conditions
             sf.setup_mask_bounds(
                 btype="waterlevel",
-                zmax=2,  # maximum elevation for valid boundary cells
+                zmax=3,  # maximum elevation for valid boundary cells
                 exclude_mask=coastal_boundary_exclude_mask,
                 all_touched=True,
             )
@@ -1353,8 +1353,6 @@ class SFINCSRootModel:
         timeseries.columns = range(len(timeseries.columns))
         locations_copy.index = range(len(locations_copy.index))
 
-        timeseries = timeseries.iloc[250:-250]  # trim the first and last 250 rows
-
         simulation: SFINCSSimulation = self.create_simulation(
             simulation_name=f"rp_{return_period}_coastal",
             start_time=timeseries.index[0],
@@ -1490,7 +1488,6 @@ class MultipleSFINCSSimulations:
         self,
         ncpus: int | str = "auto",
         gpu: bool | str = "auto",
-        overwrite_result: bool = False,
     ) -> None:
         """Runs all contained SFINCS simulations.
 
@@ -1499,18 +1496,9 @@ class MultipleSFINCSSimulations:
                 an integer or 'auto' to automatically detect available cores.
             gpu: Whether to use GPU acceleration for the simulations. Can be
                 True, False, or 'auto' to automatically detect GPU availability.
-            overwrite_result: Whether to overwrite existing simulation results. Defaults to False.
         """
-
         for simulation in self.simulations:
-            model: SfincsModel = simulation.sfincs_model
-
-            if not overwrite_result:
-                # Ensure results are loaded before checking
-                model.read_results()
-
-            if overwrite_result or not model.results:
-                simulation.run(ncpus=ncpus, gpu=gpu)
+            simulation.run(ncpus=ncpus, gpu=gpu)
 
     def read_max_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
