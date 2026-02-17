@@ -1216,6 +1216,40 @@ class Agents(BuildModelBase):
                 "lowder_farm_size_distribution"
             ).read()
 
+            # Remove countries with average farm size below subgrid resolution in smallest class
+            subgrid_cell_area_ha: float = (1e6 / (self.subgrid_factor**2)) / 1e4
+            subgrid_cell_area_ha *= 0.95  # substract 5 %, just so that Lithuania stays inside the dataset. No problems there, as the subgrid is not exactly 1km2 (but smaller due to high latitude)
+            countries_to_remove: list[str] = []
+
+            for iso3, country_data in farm_sizes_per_region.groupby(
+                "ISO3"
+            ):  # start removal of countries with small farms
+                holdings = country_data[
+                    country_data["Holdings/ agricultural area"] == "Holdings"
+                ]
+                area = country_data[
+                    country_data["Holdings/ agricultural area"]
+                    == "Agricultural area (Ha)"
+                ]
+
+                if len(holdings) == 1 and len(area) == 1:
+                    n_holdings = (
+                        holdings["< 1 Ha"].replace("..", np.nan).astype(float).iloc[0]
+                    )
+                    area_ha = area["< 1 Ha"].replace("..", np.nan).astype(float).iloc[0]
+
+                    if pd.notna(n_holdings) and n_holdings > 0 and pd.notna(area_ha):
+                        if (area_ha / n_holdings) < subgrid_cell_area_ha:
+                            countries_to_remove.append(iso3)
+
+            if countries_to_remove:
+                self.logger.warning(
+                    f"Removed {len(countries_to_remove)} countries with avg farm size < {subgrid_cell_area_ha:.2f} ha: {countries_to_remove}"
+                )
+                farm_sizes_per_region = farm_sizes_per_region[
+                    ~farm_sizes_per_region["ISO3"].isin(countries_to_remove)
+                ]
+
             farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
             farm_size_donor_country = setup_donor_countries(
                 self.data_catalog,
