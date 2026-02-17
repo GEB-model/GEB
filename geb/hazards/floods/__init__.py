@@ -310,6 +310,7 @@ class Floods(Module):
             overwrite=self.config["overwrite"],
             p_value_threshold=self.config["p_value_threshold"],
             selection_strategy=self.config["selection_strategy"],
+            fixed_shape=self.config["fixed_shape"],
             write_figures=self.config["write_figures"],
         )
 
@@ -635,6 +636,7 @@ class Floods(Module):
                     return_periods=self.config["return_periods"],
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
+                    fixed_shape=self.config["fixed_shape"],
                     write_figures=self.config["write_figures"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
@@ -772,18 +774,18 @@ class Floods(Module):
             / "report"
             / "spinup"
             / "hydrology.routing"
-            / "discharge_daily.zarr"
+            / "discharge_hourly.zarr"
         )
 
-        start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)
-        da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))
+        # start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)
+        # da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))
 
-        # make sure there is at least 20 years of data
-        if len(da.time) == 0 or len(da.time.groupby(da.time.dt.year).groups) < 20:
-            raise ValueError(
-                """Not enough data available for reliable spinup, should be at least 20 years of data left.
-                Please run the model for at least 30 years (10 years of data is discarded)."""
-            )
+        # # make sure there is at least 20 years of data
+        # if len(da.time) == 0 or len(da.time.groupby(da.time.dt.year).groups) < 20:
+        #     raise ValueError(
+        #         """Not enough data available for reliable spinup, should be at least 20 years of data left.
+        #         Please run the model for at least 30 years (10 years of data is discarded)."""
+        #     )
 
         return da
 

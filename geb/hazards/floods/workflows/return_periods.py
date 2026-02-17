@@ -1,8 +1,11 @@
 """Functions for fitting GPD-POT models and assigning return periods to rivers."""
 
+import math
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.signal import find_peaks
 from scipy.stats import genpareto, lmoment
 
 from geb.geb_types import ArrayFloat64
@@ -165,9 +168,6 @@ def bootstrap_pvalue_for_ad(
     prev_p = -1.0
     i = 0
     for i in range(nboot):
-        if (i + 1) % 10 == 0:
-            print(f"Bootstrap iteration {i + 1}/{nboot}", end="\r")
-
         y_sim = np.sort(y_sim_all[i])
         # Refit on simulated data to get the null distribution of the *fitted* AD statistic.
         # Using the same constraints (fixed shape/scale) as the original fit.
@@ -271,35 +271,49 @@ class ReturnPeriodModel:
                 "Input series contains NaN values. Handle missing data before fitting."
             )
 
-        self.series = series
-
-        if not isinstance(self.series.index, pd.DatetimeIndex):
+        if not isinstance(series.index, pd.DatetimeIndex):
             raise TypeError("Series must have a DatetimeIndex.")
 
-        # Resample to daily maxima to ensure independence of observations (de-clustering)
-        peaks = self.series.resample("D").max()
-        peaks = peaks.dropna()
-        total_days = (peaks.index.max() - peaks.index.min()).days + 1
-        self.years = total_days / 365.25
-        self.peaks = peaks.sort_values()
+        series = series.reindex(
+            pd.date_range(
+                start=series.index.min(),
+                end=series.index.max(),
+                freq=pd.infer_freq(series.index),
+            )
+        )
+        assert len(series) >= 2, "Series must have at least 2 data points."
+        timestep_size = series.index[1] - series.index[0]
+        n_data_points_per_week = math.ceil(pd.Timedelta("7D") / timestep_size)
 
-        # Create candidate thresholds u based on quantiles of daily maxima
+        self.series = series
+        # Resample to daily maxima to ensure independence of observations (de-clustering)
+        total_days = (self.series.index.max() - self.series.index.min()).days + 1
+        self.years = total_days / 365.25
+
+        # Create candidate thresholds u based on quantiles
         # Start from upper quantile, so that we start evaluation with the most extreme thresholds
         q_grid = np.arange(quantile_end, quantile_start - 1e-9, -quantile_step)
-        u_candidates = np.quantile(self.peaks.values, q_grid)
+        u_candidates = np.quantile(self.series.values, q_grid)
+
+        # Find all independent peaks above the lowest candidate threshold once
+        u_min = u_candidates.min()
+        _, properties_all = find_peaks(
+            self.series.values, height=u_min, distance=n_data_points_per_week
+        )
+        self.all_peaks = properties_all["peak_heights"]
 
         best_candidate = None
         candidates_list = []  # store valid fits if none exceed threshold
 
         for u in u_candidates:
-            exceed = self.peaks[self.peaks > u]
-            n_exc = exceed.size
+            peaks_u = self.all_peaks[self.all_peaks > u]
+            n_exc = peaks_u.size
 
             if n_exc < min_exceed:
                 continue
 
             # Calculate excesses y.
-            y = exceed.values - u
+            y = peaks_u - u
 
             sigma, xi = fit_gpd_lmoments(
                 y, fixed_shape=fixed_shape, fixed_scale=fixed_scale
@@ -350,7 +364,6 @@ class ReturnPeriodModel:
         self.n_exc = best_candidate["n_exc"]
         self.p_ad = best_candidate["p_ad"]
         self.lambda_per_year = self.n_exc / self.years
-        self.pct = (self.peaks < self.u).mean() * 100
 
         self.water_level_for_return_periods = gpd_return_level(
             self.u, self.sigma, self.xi, self.lambda_per_year, self.return_periods
@@ -415,17 +428,21 @@ class ReturnPeriodModel:
             color=color,
         )
 
+        # Plot de-clustered peaks
+        # Using the same set of independent peaks found in __init__ for consistency
+        all_peaks_sorted = np.sort(self.all_peaks)[::-1]
+        n_all_peaks = len(all_peaks_sorted)
+        ranks_all = np.arange(1, n_all_peaks + 1)
+        T_all = (self.years + 0.12) / (ranks_all - 0.44)
+
+        mask_pot = all_peaks_sorted > self.u
+        mask_ignored = all_peaks_sorted <= self.u
+
         # Plot POT points
-        peaks = self.peaks[self.peaks > self.u]
-        if not peaks.empty:
-            peaks_sorted = peaks.sort_values(ascending=False)
-            n_peaks = len(peaks_sorted)
-            ranks = np.arange(1, n_peaks + 1)
-            p_conditional_exceed = (ranks - 0.44) / (n_peaks + 0.12)
-            T_empirical = 1.0 / (self.lambda_per_year * p_conditional_exceed)
+        if np.any(mask_pot):
             ax.scatter(
-                T_empirical,
-                peaks_sorted.values,
+                T_all[mask_pot],
+                all_peaks_sorted[mask_pot],
                 label=f"{label_prefix} (POT)",
                 color=color,
                 alpha=0.6,
@@ -433,19 +450,11 @@ class ReturnPeriodModel:
                 marker="x",
             )
 
-        # Plot Ignored points (below threshold but above 80th quantile)
-        threshold_low = self.peaks.quantile(0.8)
-        candidates_all = (
-            self.peaks[self.peaks > threshold_low].sort_values(ascending=False).values
-        )
-        ranks_all = np.arange(1, len(candidates_all) + 1)
-        T_candidates = (self.years + 0.12) / (ranks_all - 0.44)
-
-        mask_ignored = candidates_all <= self.u
+        # Plot Ignored points
         if np.any(mask_ignored):
             ax.scatter(
-                T_candidates[mask_ignored],
-                candidates_all[mask_ignored],
+                T_all[mask_ignored],
+                all_peaks_sorted[mask_ignored],
                 label=f"{label_prefix} (ignored < u)",
                 color=color,
                 alpha=0.5,
@@ -524,9 +533,9 @@ class ReturnPeriodModel:
         Returns:
             The array of 3 matplotlib axes.
         """
-        # Get exceedances at chosen threshold
-        exceed = self.peaks[self.peaks > self.u]
-        y = exceed.values - self.u
+        # Get de-clustered exceedances at chosen threshold
+        peaks_u = self.all_peaks[self.all_peaks > self.u]
+        y = peaks_u - self.u
         y_sorted = np.sort(y)
         n = len(y)
 
