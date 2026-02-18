@@ -304,65 +304,75 @@ class Agents(BuildModelBase):
 
         self.logger.info("Setting up other water demands")
 
-        def set_demand(file: str, variable: str, name: str, ssp: str) -> None:
+        def parse_demand(file: str, variable: str, ssp: str) -> xr.DataArray:
             """Sets up the water demand data for a given demand type.
 
             Args:
                 file: The file name of the dataset.
                 variable: The variable name in the dataset.
-                name: The name to set the forcing data as.
                 ssp: The SSP scenario to use.
+
+            Returns:
+                An xarray DataArray containing the water demand data for the specified demand type and SSP scenario.
             """
             ds_historic = self.data_catalog.fetch(
                 f"cwatm_{file}_historical_year"
             ).read()
-            ds_historic = ds_historic.isel(
+            da_historic = ds_historic.isel(
                 get_window(ds_historic.x, ds_historic.y, self.bounds, buffer=2)
             )[variable]
 
             ds_future = self.data_catalog.fetch(f"cwatm_{file}_{ssp}_year").read()
-            ds_future = ds_future.isel(
+            da_future = ds_future.isel(
                 get_window(ds_future.x, ds_future.y, self.bounds, buffer=2)
             )[variable]
 
-            ds_future = ds_future.sel(
-                time=slice(ds_historic.time[-1] + 1, ds_future.time[-1])
+            da_future = da_future.sel(
+                time=slice(da_historic.time[-1] + 1, da_future.time[-1])
             )
 
-            ds = xr.concat([ds_historic, ds_future], dim="time")
-            # assert dataset in monotonicically increasing
-            assert (ds.time.diff("time") == 1).all(), "not all years are there"
+            da = xr.concat([da_historic, da_future], dim="time")
+            # assert dataset is monotonically increasing
+            assert (da.time.diff("time") == 1).all(), "not all years are there"
 
-            ds["time"] = pd.date_range(
+            da["time"] = pd.date_range(
                 start=datetime(1901, 1, 1)
-                + relativedelta(years=int(ds.time[0].data.item())),
-                periods=len(ds.time),
+                + relativedelta(years=int(da.time[0].data.item())),
+                periods=len(da.time),
                 freq="YS",
             )
 
-            assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
-            ds = ds.sel(time=slice(self.start_date, self.end_date))
-            ds.attrs["_FillValue"] = np.nan
-            self.set_other(ds, name=f"water_demand/{name}")
+            assert (da.time.dt.year.diff("time") == 1).all(), "not all years are there"
 
-        set_demand(
+            # Reindex to the model time range, filling missing years with backward/forward fill
+            time_range: pd.DatetimeIndex = pd.date_range(
+                start=datetime(self.start_date.year, 1, 1),
+                end=datetime(self.end_date.year, 1, 1),
+                freq="YS",
+            )
+            da = da.reindex(time=time_range).ffill("time").bfill("time")
+            da.attrs["_FillValue"] = np.nan
+            return da
+
+        da = parse_demand(
             "industry_water_demand",
             "indWW",
-            "industry_water_demand",
             self.ssp,
         )
-        set_demand(
+
+        self.set_other(da, name=f"water_demand/industry_water_demand")
+        da = parse_demand(
             "industry_water_demand",
             "indCon",
-            "industry_water_consumption",
             self.ssp,
         )
-        set_demand(
+        self.set_other(da, name=f"water_demand/industry_water_consumption")
+        da = parse_demand(
             "livestock_water_demand",
             "livestockConsumption",
-            "livestock_water_consumption",
             "ssp2",
         )
+        self.set_other(da, name=f"water_demand/livestock_water_consumption")
 
     @build_method(required=True)
     def setup_income_distribution_parameters(self) -> None:
