@@ -98,7 +98,7 @@ def gpd_cdf(y: np.ndarray | float, sigma: float, xi: float) -> ArrayFloat64:
     return np.clip(cdf, 0.0, 1.0)
 
 
-def right_tail_ad_from_uniforms(u_sorted: ArrayFloat64) -> float:
+def right_tail_ad_from_uniforms(u: ArrayFloat64) -> float:
     """Right-tail weighted Anderson-Darling statistic for uniform data.
 
     Computes the right-tail weighted AD statistic:
@@ -110,11 +110,13 @@ def right_tail_ad_from_uniforms(u_sorted: ArrayFloat64) -> float:
         The uniforms are clipped to (0, 1) to avoid numerical issues with log.
 
     Args:
-        u_sorted: Uniform random variables sorted in ascending order (dimensionless).
+        u: Uniform random variables (dimensionless).
 
     Returns:
         Right-tail Anderson-Darling statistic (dimensionless).
     """
+    # np sort, sorts the array in ascending order
+    u_sorted = np.sort(u)
     n = u_sorted.size
     if n < 1:
         return np.nan
@@ -263,37 +265,46 @@ class ReturnPeriodModel:
         """
         if return_periods is None:
             return_periods = np.array(
-                [2, 5, 10, 25, 50, 100, 200, 250, 500, 1000, 10000], float
+                [2, 5, 10, 25, 50, 100, 200, 250, 500, 1000, 10000], np.float32
             )
-        self.return_periods = np.asarray(return_periods, float)
-        if series.isnull().any():
-            raise ValueError(
-                "Input series contains NaN values. Handle missing data before fitting."
-            )
+        self.return_periods = np.asarray(return_periods, np.float32)
 
         if not isinstance(series.index, pd.DatetimeIndex):
             raise TypeError("Series must have a DatetimeIndex.")
 
-        series = series.reindex(
-            pd.date_range(
-                start=series.index.min(),
-                end=series.index.max(),
-                freq=pd.infer_freq(series.index),
+        if not series.index.is_monotonic_increasing:
+            raise ValueError(
+                "Series must have regular time steps and a monotonic increasing DateTimeIndex."
             )
-        )
-        assert len(series) >= 2, "Series must have at least 2 data points."
-        timestep_size = series.index[1] - series.index[0]
-        n_data_points_per_week = math.ceil(pd.Timedelta("7D") / timestep_size)
+
+        if series.index.freq is None:
+            raise ValueError(
+                "Series index must have a regular frequency (e.g. hourly, daily)."
+            )
+
+        self.nanmask = series.isnull()
+        self.n_nan = self.nanmask.sum()
+        self.n_non_nan = (~self.nanmask).sum()
+        if self.n_non_nan < min_exceed:
+            raise ValueError(
+                f"Series must have at least {min_exceed} non-NaN values for fitting. Found only {self.n_non_nan}."
+            )
+
+        series = series.fillna(0)
+
+        n_data_points_per_week = math.ceil(pd.Timedelta("7D") / series.index.freq)
 
         self.series = series
         # Resample to daily maxima to ensure independence of observations (de-clustering)
         total_days = (self.series.index.max() - self.series.index.min()).days + 1
-        self.years = total_days / 365.25
+        self.years_non_nan = (
+            (self.n_non_nan * self.series.index.freq) / pd.Timedelta(days=1)
+        ) / 365.2425
 
         # Create candidate thresholds u based on quantiles
         # Start from upper quantile, so that we start evaluation with the most extreme thresholds
         q_grid = np.arange(quantile_end, quantile_start - 1e-9, -quantile_step)
-        u_candidates = np.quantile(self.series.values, q_grid)
+        u_candidates = np.quantile(self.series[~self.nanmask], q_grid)
 
         # Find all independent peaks above the lowest candidate threshold once
         u_min = u_candidates.min()
@@ -363,7 +374,7 @@ class ReturnPeriodModel:
         self.xi = best_candidate["xi"]
         self.n_exc = best_candidate["n_exc"]
         self.p_ad = best_candidate["p_ad"]
-        self.lambda_per_year = self.n_exc / self.years
+        self.lambda_per_year = self.n_exc / self.years_non_nan
 
         self.water_level_for_return_periods = gpd_return_level(
             self.u, self.sigma, self.xi, self.lambda_per_year, self.return_periods
@@ -433,7 +444,7 @@ class ReturnPeriodModel:
         all_peaks_sorted = np.sort(self.all_peaks)[::-1]
         n_all_peaks = len(all_peaks_sorted)
         ranks_all = np.arange(1, n_all_peaks + 1)
-        T_all = (self.years + 0.12) / (ranks_all - 0.44)
+        T_all = (self.years_non_nan + 0.12) / (ranks_all - 0.44)
 
         mask_pot = all_peaks_sorted > self.u
         mask_ignored = all_peaks_sorted <= self.u
@@ -743,7 +754,7 @@ class ReturnPeriodModel:
                     row["u"],
                     row["sigma"],
                     row["xi"],
-                    row["n_exc"] / self.years,
+                    row["n_exc"] / self.years_non_nan,
                     float(T),
                 )
                 for _, row in diag.iterrows()

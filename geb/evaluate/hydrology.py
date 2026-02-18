@@ -37,13 +37,40 @@ from geb.hazards.floods.workflows.return_periods import (
 from geb.workflows.io import read_zarr, write_zarr
 
 
+def regularize_discharge_timeseries(discharge: pd.DataFrame) -> pd.DataFrame:
+    """Regularize the discharge timeseries to ensure consistent time steps.
+
+    This function checks if the time steps in the discharge timeseries are regular (i.e. all time steps are multiples of the minimum time step). If they are not regular, it raises a ValueError. If they are regular, it reindexes the timeseries to have a consistent frequency based on the minimum time step, filling any missing values with NaN.
+
+    Args:
+        discharge: DataFrame with a DateTimeIndex representing the discharge timeseries.
+
+    Returns:
+        Regularized DataFrame with a consistent DateTimeIndex frequency.
+
+    Raises:
+        ValueError: If the time steps in the discharge timeseries are not regular.
+    """
+    steps = np.diff(discharge.index)
+    minimum_step = steps.min()
+    # check if all time steps are multiples of the minimum step (i.e. regular time steps)
+    if not (steps % minimum_step == pd.Timedelta(0)).all():
+        raise ValueError(
+            "Q_obs time steps are not regular. Please ensure the index is a regular time series."
+        )
+    discharge = discharge.asfreq(
+        pd.to_timedelta(minimum_step)
+    )  # reindex to regular time steps, filling missing values with NaN
+    return discharge
+
+
 def create_validation_df(
     output_folder: Path,
     run_name: str,
     ID: str | int,
     include_spinup: bool,
     spinup_name: str,
-    discharge_Q_obs_df: pd.DataFrame,
+    observed_discharge: pd.Series,
     correct_Q_obs: bool,
     Q_obs_to_GEB_upstream_area_ratio: float,
 ) -> pd.DataFrame:
@@ -56,7 +83,7 @@ def create_validation_df(
         ID: ID of the station to create the validation dataframe for.
         include_spinup: Whether to include the spinup run in the evaluation.
         spinup_name: Name of the spinup run to include in the evaluation.
-        discharge_Q_obs_df: DataFrame with the Q_obs discharge observations for the selected station.
+        observed_discharge: Series with the Q_obs discharge observations for the selected station.
         correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference in upstream
             area between the Q_obs station and the discharge from GEB.
         Q_obs_to_GEB_upstream_area_ratio: The ratio of the upstream area of the Q_obs station to the upstream area of the GEB discharge grid cell. This is used to correct
@@ -66,6 +93,7 @@ def create_validation_df(
 
     Raises:
         FileNotFoundError: If the hydrology routing directory does not exist.
+        ValueError: If NaN values are found in the GEB discharge data after loading.
     """
     # Check if the hydrology.routing directory exists
     routing_dir = output_folder / "report" / run_name / "hydrology.routing"
@@ -78,82 +106,88 @@ def create_validation_df(
     station_file_name = f"discharge_hourly_m3_per_s_{ID}.csv"
     station_file_path = routing_dir / station_file_name
 
-    # Check if the station file exists
-    if not station_file_path.exists():
-        print(
-            f"WARNING: Station file {station_file_path} does not exist. Skipping station {ID}."
+    # Load the individual station discharge timeseries
+    simulated_discharge = pd.read_csv(station_file_path, index_col=0, parse_dates=True)[
+        f"discharge_hourly_m3_per_s_{ID}"
+    ]
+
+    if np.isnan(simulated_discharge.values).any():
+        raise ValueError(
+            f"NaN values found in GEB discharge data for station {ID}. Please check the station file {station_file_path}."
         )
-        return pd.DataFrame()
 
-    try:
-        # Load the individual station discharge timeseries
-        GEB_discharge_station = pd.read_csv(
-            station_file_path, index_col=0, parse_dates=True
+    # Handle spinup data if needed
+    if include_spinup:
+        spinup_station_file_path = (
+            output_folder
+            / "report"
+            / spinup_name
+            / "hydrology.routing"
+            / station_file_name
         )
-        GEB_discharge_station = (
-            GEB_discharge_station.squeeze()
-        )  # Convert to Series if only one column
-
-        if np.isnan(GEB_discharge_station.values).all():
-            print(
-                f"WARNING: Station {ID} has only NaN values in the GEB discharge simulation. Skipping."
+        if spinup_station_file_path.exists():
+            simulated_discharge_spinup = pd.read_csv(
+                spinup_station_file_path, index_col=0, parse_dates=True
+            )[f"discharge_hourly_m3_per_s_{ID}"]
+            if np.isnan(simulated_discharge_spinup.values).any():
+                raise ValueError(
+                    f"NaN values found in spinup GEB discharge data for station {ID}. Please check the spinup station file {spinup_station_file_path}."
+                )
+            # Concatenate the spinup and main run data
+            simulated_discharge = pd.concat(
+                [simulated_discharge_spinup, simulated_discharge]
             )
-            return pd.DataFrame()
-
-        # Handle spinup data if needed
-        if include_spinup:
-            spinup_station_file_path = (
-                output_folder
-                / "report"
-                / spinup_name
-                / "hydrology.routing"
-                / station_file_name
-            )
-            if spinup_station_file_path.exists():
-                GEB_discharge_station_spinup = pd.read_csv(
-                    spinup_station_file_path, index_col=0, parse_dates=True
-                )
-                GEB_discharge_station_spinup = GEB_discharge_station_spinup.squeeze()
-                # Concatenate the spinup and main run data
-                GEB_discharge_station = pd.concat(
-                    [GEB_discharge_station_spinup, GEB_discharge_station]
-                )
-                print(f"Loaded spinup data for station {ID}")
-            else:
-                print(
-                    f"WARNING: Spinup file for station {ID} not found, using only main run data"
-                )
-
-        discharge_sim_station_series: pd.Series = GEB_discharge_station.squeeze()
-        if isinstance(discharge_Q_obs_df, pd.DataFrame):
-            discharge_obs_station_series: pd.Series = discharge_Q_obs_df.squeeze()
+            print(f"Loaded spinup data for station {ID}")
         else:
-            discharge_obs_station_series = discharge_Q_obs_df
-
-        if correct_Q_obs:
-            """Correct observed discharge by upstream-area ratio when requested."""
-            discharge_obs_station_series = (
-                discharge_obs_station_series * Q_obs_to_GEB_upstream_area_ratio
+            print(
+                f"WARNING: Spinup file for station {ID} not found, using only main run data"
             )
 
-        # Keep the full observation time window for plotting.
-        # We explicitly avoid interpolation, so NaNs in observations remain NaN.
-        # Simulated values are aligned to the same timestamps using exact index matching.
-        validation_df = pd.DataFrame(
-            {
-                "Q_obs": discharge_obs_station_series,
-                "Q_sim": discharge_sim_station_series.reindex(
-                    discharge_obs_station_series.index
-                ),
-            },
-            index=discharge_obs_station_series.index,
+    simulated_discharge = simulated_discharge.asfreq(
+        pd.infer_freq(simulated_discharge.index)
+    )
+
+    if correct_Q_obs:
+        """Correct observed discharge by upstream-area ratio when requested."""
+        simulated_discharge = simulated_discharge * Q_obs_to_GEB_upstream_area_ratio
+
+    if not observed_discharge.index.is_monotonic_increasing:
+        raise ValueError(
+            "Observed discharge index must be a regular time series with a monotonic increasing DateTimeIndex."
+        )
+    # check if simulated discharge is at least as frequent as observed discharge, and if multiple of observed discharge frequency
+    if simulated_discharge.index.freq > observed_discharge.index.freq:
+        raise ValueError(
+            "Simulated discharge frequency is lower than observed discharge frequency. Please ensure the simulated discharge is at least as frequent as the observed discharge."
+        )
+    if (
+        observed_discharge.index.freq.nanos % simulated_discharge.index.freq.nanos
+    ) != 0:
+        raise ValueError(
+            "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
         )
 
-        return validation_df
+    # resample simulated discharge to match the frequency of observed discharge if needed
+    simulated_discharge = simulated_discharge.resample(
+        observed_discharge.index.freq
+    ).mean()
 
-    except Exception as e:
-        print(f"ERROR loading station file {station_file_path}: {e}")
-        return pd.DataFrame()
+    # cut both observed and simulated discharge to the same time range
+    start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
+    end_time = min(observed_discharge.index.max(), simulated_discharge.index.max())
+    observed_discharge = observed_discharge.loc[start_time:end_time]
+    simulated_discharge = simulated_discharge.loc[start_time:end_time]
+
+    # Create a combined dataframe with the union of all timestamps.
+    # Values will be NaN where data is missing in either series.
+    validation_df = pd.DataFrame(
+        {
+            "Q_obs": observed_discharge,
+            "Q_sim": simulated_discharge,
+        }
+    )
+
+    return validation_df
 
 
 def _calculate_discharge_validation_metrics(
@@ -207,14 +241,19 @@ def _plot_validation_return_periods(
     fixed_shape = None  # 0.0 is Gumbel distribution for better stability in validation
 
     obs_model = ReturnPeriodModel(
-        series=validation_df["Q_obs"].dropna(),
+        series=validation_df["Q_obs"],
         return_periods=return_periods_years,
         fixed_shape=fixed_shape,
         selection_strategy=strategy,
     )
 
+    # For the simulated series, we want to ensure that we only
+    # include values where there are corresponding observed values
+    simulated_series: pd.Series = validation_df["Q_sim"].copy()
+    simulated_series[validation_df["Q_obs"].isna()] = np.nan
+
     sim_model = ReturnPeriodModel(
-        series=validation_df["Q_sim"].dropna(),
+        series=simulated_series,
         return_periods=return_periods_years,
         fixed_shape=fixed_shape,
         selection_strategy=strategy,
@@ -1071,9 +1110,14 @@ class Hydrology:
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 
         # load input data files
-        Q_obs = pd.read_parquet(
+        Q_obs: pd.DataFrame = pd.read_parquet(
             self.model.files["table"]["discharge/Q_obs"]
         )  # load the Q_obs discharge data
+
+        Q_obs: pd.DataFrame = regularize_discharge_timeseries(
+            Q_obs
+        )  # ensure regular daily time steps
+
         region_shapefile = gpd.read_parquet(
             self.model.files["geom"]["mask"]
         )  # load the region shapefile
@@ -1083,52 +1127,6 @@ class Hydrology:
         snapped_locations = gpd.read_parquet(
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )
-
-        if len(snapped_locations) == 0:
-            print(
-                "No discharge stations found in the basin. Creating empty evaluation datasets."
-            )
-
-            # Create empty evaluation dataframe with proper structure
-            empty_evaluation_df = pd.DataFrame(
-                columns=np.array(
-                    [
-                        "station_name",
-                        "x",
-                        "y",
-                        "Q_obs_to_GEB_upstream_area_ratio",
-                        "KGE",
-                        "NSE",
-                        "R",
-                    ]
-                )
-            ).set_index(pd.Index([], name="station_ID"))
-
-            # Save empty evaluation metrics as Excel file
-            empty_evaluation_df.to_excel(
-                eval_result_folder / "evaluation_metrics.xlsx",
-                index=True,
-            )
-
-            # Create empty GeoDataFrame and save as parquet
-            empty_evaluation_gdf = gpd.GeoDataFrame(
-                empty_evaluation_df,
-                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
-                crs="EPSG:4326",
-            )
-            empty_evaluation_gdf.to_parquet(
-                eval_result_folder / "evaluation_metrics.geoparquet",
-            )
-
-            outflow_plot_count: int = _plot_outflow_discharge_timeseries(
-                output_folder=self.model.output_folder,
-                run_name=run_name,
-                eval_plot_folder=eval_plot_folder,
-                include_spinup=include_spinup,
-                spinup_name=spinup_name,
-            )
-            print(f"Created {outflow_plot_count} outflow discharge plots.")
-            return
 
         GEB_discharge = read_zarr(
             self.model.output_folder
@@ -1218,47 +1216,89 @@ class Hydrology:
                 }
             )
 
-        evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
-        evaluation_df.to_excel(
-            eval_result_folder / "evaluation_metrics.xlsx",
-            index=True,
-        )
+        if len(evaluation_per_station) == 0:
+            # Create empty evaluation dataframe with proper structure
+            empty_evaluation_df = pd.DataFrame(
+                columns=np.array(
+                    [
+                        "station_name",
+                        "x",
+                        "y",
+                        "Q_obs_to_GEB_upstream_area_ratio",
+                        "KGE",
+                        "NSE",
+                        "R",
+                    ]
+                )
+            ).set_index(pd.Index([], name="station_ID"))
 
-        # Save evaluation metrics as as excel and parquet file
-        evaluation_gdf = gpd.GeoDataFrame(
-            evaluation_df,
-            geometry=gpd.points_from_xy(evaluation_df.x, evaluation_df.y),
-            crs="EPSG:4326",
-        )  # create a geodataframe from the evaluation dataframe
-        evaluation_gdf.to_parquet(
-            eval_result_folder / "evaluation_metrics.geoparquet",
-        )
+            # Save empty evaluation metrics as Excel file
+            empty_evaluation_df.to_excel(
+                eval_result_folder / "evaluation_metrics.xlsx",
+                index=True,
+            )
 
-        _plot_discharge_validation_map(
-            evaluation_gdf=evaluation_gdf,
-            region_shapefile=region_shapefile,
-            rivers=rivers,
-            eval_result_folder=eval_result_folder,
-        )
+            # Create empty GeoDataFrame and save as parquet
+            empty_evaluation_gdf = gpd.GeoDataFrame(
+                empty_evaluation_df,
+                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
+                crs="EPSG:4326",
+            )
+            empty_evaluation_gdf.to_parquet(
+                eval_result_folder / "evaluation_metrics.geoparquet",
+            )
 
-        _create_discharge_folium_map(
-            evaluation_gdf=evaluation_gdf,
-            eval_plot_folder=eval_plot_folder,
-            eval_result_folder=eval_result_folder,
-            region_shapefile=region_shapefile,
-            rivers=rivers,
-        )
+            outflow_plot_count: int = _plot_outflow_discharge_timeseries(
+                output_folder=self.model.output_folder,
+                run_name=run_name,
+                eval_plot_folder=eval_plot_folder,
+                include_spinup=include_spinup,
+                spinup_name=spinup_name,
+            )
+            print(f"Created {outflow_plot_count} outflow discharge plots.")
 
-        outflow_plot_count: int = _plot_outflow_discharge_timeseries(
-            output_folder=self.model.output_folder,
-            run_name=run_name,
-            eval_plot_folder=eval_plot_folder,
-            include_spinup=include_spinup,
-            spinup_name=spinup_name,
-        )
-        print(f"Created {outflow_plot_count} outflow discharge plots.")
+        else:
+            evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
+            evaluation_df.to_excel(
+                eval_result_folder / "evaluation_metrics.xlsx",
+                index=True,
+            )
 
-        print("Discharge evaluation dashboard created.")
+            # Save evaluation metrics as as excel and parquet file
+            evaluation_gdf = gpd.GeoDataFrame(
+                evaluation_df,
+                geometry=gpd.points_from_xy(evaluation_df.x, evaluation_df.y),
+                crs="EPSG:4326",
+            )  # create a geodataframe from the evaluation dataframe
+            evaluation_gdf.to_parquet(
+                eval_result_folder / "evaluation_metrics.geoparquet",
+            )
+
+            _plot_discharge_validation_map(
+                evaluation_gdf=evaluation_gdf,
+                region_shapefile=region_shapefile,
+                rivers=rivers,
+                eval_result_folder=eval_result_folder,
+            )
+
+            _create_discharge_folium_map(
+                evaluation_gdf=evaluation_gdf,
+                eval_plot_folder=eval_plot_folder,
+                eval_result_folder=eval_result_folder,
+                region_shapefile=region_shapefile,
+                rivers=rivers,
+            )
+
+            outflow_plot_count: int = _plot_outflow_discharge_timeseries(
+                output_folder=self.model.output_folder,
+                run_name=run_name,
+                eval_plot_folder=eval_plot_folder,
+                include_spinup=include_spinup,
+                spinup_name=spinup_name,
+            )
+            print(f"Created {outflow_plot_count} outflow discharge plots.")
+
+            print("Discharge evaluation dashboard created.")
 
     def skill_score_graphs(
         self,

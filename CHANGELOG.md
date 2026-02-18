@@ -11,6 +11,7 @@
 - Use figures path for sfincs model to save all figures
 - Switch to hourly values for extreme value statistics
 - Use maximum of one flood peak per week
+- In evaluate make a dataframe without missing timesteps and ensure that return periods are esimated on the same data for observed and simulated for comparison.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
