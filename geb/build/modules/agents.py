@@ -332,7 +332,7 @@ class Agents(BuildModelBase):
             )
 
             da = xr.concat([da_historic, da_future], dim="time")
-            # assert dataset in monotonicically increasing
+            # assert dataset is monotonically increasing
             assert (da.time.diff("time") == 1).all(), "not all years are there"
 
             da["time"] = pd.date_range(
