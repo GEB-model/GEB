@@ -23,6 +23,7 @@ import pandas as pd
 import pyflwdir
 import rasterio
 import rasterio.features
+from shapely.ops import nearest_points
 import xarray as xr
 from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect
@@ -814,25 +815,18 @@ class SFINCSRootModel:
                 # continue  # skip rivers that flow into ocean, as they don't have an outflow point on the grid
                 river = river.geometry
 
-                # Elongate the river geometry to ensure it intersects with the boundary. Since there is no downstream
-                # river segment to combine with, we create a long line segment in the direction of the last segment of the river.
-                p1: npt.NDArray[np.floating[Any]] = np.array(river.coords[-2])
-                p2: npt.NDArray[np.floating[Any]] = np.array(river.coords[-1])
+                # Last point of river
+                end_point = Point(river.coords[-1])
 
-                direction = p2 - p1
-                # extent by 10 times the length of the last segment to ensure intersection with boundary
-                extended_point = (
-                    p2[0] + direction[0] * 10,
-                    p2[1] + direction[1] * 10,
-                )
-                # create a long line from the last point of the river to the extended point
-                long_line = LineString([tuple(p2), extended_point])
+                # Compute nearest points between end_point and boundary
+                _, nearest_boundary_point = nearest_points(end_point, boundary)
 
-                # combine the river geometry with the long line to ensure intersection with the boundary
-                river = LineString(river.coords[:] + long_line.coords[:])
-                outflow_point: Point | MultiPoint | GeometryCollection = (
-                    river.intersection(boundary)
+                # Extend river directly to that location
+                river = LineString(
+                    list(river.coords) + [nearest_boundary_point.coords[0]]
                 )
+
+                outflow_point = nearest_boundary_point
 
                 if not isinstance(outflow_point, Point):
                     export_diagnostics(outflow_point)
@@ -903,26 +897,18 @@ class SFINCSRootModel:
                 # while there is no intersection point, we elongate the river geometry to ensure it intersects with the boundary. \
                 # Since there is no downstream river segment, we extend the last segment of the river
                 if outflow_point.is_empty and downstream_river_idx == -1:
-                    iteration = 0
-                    while outflow_point.is_empty and iteration < 10:
-                        p1: npt.NDArray[np.floating[Any]] = np.array(river.coords[-2])
-                        p2: npt.NDArray[np.floating[Any]] = np.array(river.coords[-1])
+                    # Last point of river
+                    end_point = Point(river.coords[-1])
 
-                        direction = p2 - p1
-                        # extent by 10 times the length of the last segment to ensure intersection with boundary
-                        extended_point = (
-                            p2[0] + direction[0] * 10,
-                            p2[1] + direction[1] * 10,
-                        )
-                        # create a long line from the last point of the river to the extended point
-                        long_line = LineString([tuple(p2), extended_point])
+                    # Compute nearest points between end_point and boundary
+                    _, nearest_boundary_point = nearest_points(end_point, boundary)
 
-                        # combine the river geometry with the long line to ensure intersection with the boundary
-                        river = LineString(river.coords[:] + long_line.coords[:])
-                        outflow_point: Point | MultiPoint | GeometryCollection = (
-                            river.intersection(boundary)
-                        )
-                        iteration += 1
+                    # Extend river directly to that location
+                    river = LineString(
+                        list(river.coords) + [nearest_boundary_point.coords[0]]
+                    )
+
+                    outflow_point = nearest_boundary_point
 
                 if not isinstance(outflow_point, Point):
                     export_diagnostics(outflow_point)
