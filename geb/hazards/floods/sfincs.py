@@ -23,7 +23,6 @@ import pandas as pd
 import pyflwdir
 import rasterio
 import rasterio.features
-from shapely.ops import nearest_points
 import xarray as xr
 from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect
@@ -34,6 +33,7 @@ from rioxarray.merge import merge_arrays
 from scipy.ndimage import binary_dilation, value_indices
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point
+from shapely.ops import nearest_points
 from tqdm import tqdm
 
 from geb.geb_types import (
