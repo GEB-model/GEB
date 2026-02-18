@@ -10,7 +10,7 @@ GEB uses the **Generalized Pareto Distribution Peaks-Over-Threshold (GPD-POT)** 
 
 ### Step 1: Prepare the Data
 
-We start with a time series of discharge data (e.g., hourly outputs from GEB hydrological module). The time series is converted to **daily maximum values** to remove temporal correlation and focus on extreme events.
+We start with a time series of discharge data (e.g., daily mean outputs from GEB hydrological module). The daily mean time series is taken instead of hourly data to remove temporal correlation and focus on extreme events. Reference for using daily mean for calculation of river channel geometry (https://pubs.usgs.gov/pp/0252/report.pdf, page 8 topic THE HYDRAULIC GEOMETRY OF STREAM CHANNELS, CONCEPT OF FREQUENCY OF DISCHARGE)
 
 ### Step 2: Select a Threshold (Automated selection)
 
