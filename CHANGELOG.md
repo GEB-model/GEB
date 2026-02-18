@@ -64,6 +64,7 @@ To support this version:
 - Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
+- Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
 
 To support this version:
 
