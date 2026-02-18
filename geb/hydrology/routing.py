@@ -1404,7 +1404,7 @@ class Routing(Module):
             assert (
                 outflow_per_waterbody_m3
                 <= self.hydrology.waterbodies.var.storage.astype(np.float32)
-            ).all(), "outflow cannot be smaller or equal to storage"
+            ).all(), "outflow cannot be greater than storage"
 
             side_flow_channel_m3_per_hour = (
                 total_runoff_m3
