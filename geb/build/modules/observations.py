@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from io import StringIO
 from pathlib import Path
 from typing import Literal
 
@@ -19,6 +20,7 @@ from tqdm import tqdm
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+from geb.workflows.timeseries import regularize_discharge_timeseries
 
 from .base import BuildModelBase
 
@@ -188,15 +190,14 @@ def add_station_Q_obs(
 
 
 def process_station_data(
-    station: str, Q_station: pd.DataFrame, dt_format: str, startrow: int
+    station: str, Q_station_path: Path, dt_format: str
 ) -> tuple[pd.DataFrame, tuple[float, float]]:
     """Parse and preprocess a station CSV read into a DataFrame.
 
     Args:
         station: Filename or identifier of the station (used in error messages).
-        Q_station: Raw station DataFrame where the first row contains coordinates and data starts at row index `startrow`.
+        Q_station_path: Raw station DataFrame where the first row contains coordinates and data starts at row index `startrow`.
         dt_format: Datetime format string for parsing the date column.
-        startrow: Row index where time series data begins (0-based).
 
     Returns:
         A tuple with the cleaned station DataFrame indexed by time and a tuple with station (lon, lat) as floats.
@@ -205,25 +206,35 @@ def process_station_data(
         ValueError: If the processed station DataFrame does not contain exactly one data column (expected 'Q'),
                     or if the first row does not contain exactly two coordinates (longitude and latitude) that can be parsed as floats.
     """
-    # process data
-    station_coords = Q_station.iloc[
-        0
-    ].tolist()  # get the coordinates from the first row
+    Q_station = Q_station_path.read_text().splitlines()
+    lon_str, lat_str = Q_station[0].split(",")
+    station_coords = (float(lon_str), float(lat_str))
 
-    station_coords = [float(i) for i in station_coords]  # convert to float
-
-    Q_station = Q_station.iloc[startrow:]  # remove the first rows
-    Q_station.rename(
-        columns={
-            Q_station.columns[0]: "date",
-            Q_station.columns[1]: "Q",
-        },
-        inplace=True,
+    Q_station = pd.read_csv(
+        StringIO("\n".join(Q_station[2:])), delimiter=",", index_col=0, parse_dates=True
     )
-    Q_station["date"] = pd.to_datetime(Q_station["date"], format=dt_format)
-    Q_station.set_index("date", inplace=True)
-    Q_station["Q"] = Q_station["Q"].astype(float)  # convert to float
-    Q_station = Q_station.resample("D", label="left").mean()
+
+    Q_station["Q"] = Q_station["Q"].astype(np.float32)  # convert to float
+
+    Q_station = regularize_discharge_timeseries(
+        Q_station
+    )  # regularize the time series to ensure consistent time steps
+
+    # Resample to hourly if frequency is higher than hourly (e.g., 15 min -> 1 h).
+    # If frequency is already hourly or lower (e.g., daily), keep as is.
+    if Q_station.index.freq < pd.Timedelta(hours=1):
+        Q_station = Q_station.resample("h", label="left").mean()
+    elif Q_station.index.freq > pd.Timedelta(
+        hours=1
+    ) and Q_station.index.freq < pd.Timedelta(days=1):
+        Q_station = Q_station.resample("D", label="left").mean()
+    elif Q_station.index.freq > pd.Timedelta(days=1):
+        raise ValueError(
+            f"Time step of station {station} is larger than 1 day. Please ensure the time step is hourly or daily."
+        )
+    else:
+        pass  # keep original frequency if it's already hourly or daily
+
     Q_station.index.name = "time"  # rename index to time
 
     # delete missing values in the dataframe
@@ -400,14 +411,15 @@ class Observations(BuildModelBase):
                         raise ValueError(
                             f"Path {Path(self.root).parent / Path(custom_river_stations)} does not exist or is not a directory. Create this directory if you want to use custom discharge stations, or set custom_river_stations to None"
                         )
-                    Q_station = pd.read_csv(
-                        Path(self.root).parent / Path(custom_river_stations) / station,
-                        header=None,
-                        delimiter=",",
-                    )  # read the csv file with no header and comma delimiter
+
+                    Q_station_path = (
+                        Path(self.root).parent / Path(custom_river_stations) / station
+                    )
 
                     Q_station, station_coords = process_station_data(
-                        station, Q_station, dt_format="%Y-%m-%d %H:%M:%S", startrow=3
+                        station,
+                        Q_station_path,
+                        dt_format="%Y-%m-%d %H:%M:%S",
                     )
                     # Check for missing or invalid dates
                     if Q_station.index.isnull().any():
@@ -468,7 +480,8 @@ class Observations(BuildModelBase):
 
             # Create empty discharge table
             empty_discharge_df = pd.DataFrame()
-            self.set_table(empty_discharge_df, name="discharge/Q_obs")
+            self.set_table(empty_discharge_df, name="discharge/Q_obs_hourly")
+            self.set_table(empty_discharge_df, name="discharge/Q_obs_daily")
 
             # Create empty snapped locations geometry
             empty_geom: gpd.GeoDataFrame = gpd.GeoDataFrame(
@@ -689,9 +702,44 @@ class Observations(BuildModelBase):
         # drop the columns that have not associated snapped stations
         discharge_df = discharge_df[discharge_snapping_gdf.index]
 
-        self.set_table(
-            discharge_df, name="discharge/Q_obs"
-        )  # save the discharge data as a table
+        # Separate into hourly and daily tables based on their median time step
+        hourly_ids = []
+        daily_ids = []
+
+        for station_id in discharge_df.columns:
+            # Check the frequency of the non-missing values
+            series = discharge_df[station_id].dropna()
+            if len(series) > 1:
+                median_dt = series.index.to_series().diff().median()
+                if median_dt <= pd.Timedelta(hours=1):
+                    hourly_ids.append(station_id)
+                else:
+                    daily_ids.append(station_id)
+            else:
+                # Default to daily if not enough points to determine frequency
+                daily_ids.append(station_id)
+
+        # Save the separated tables
+        if hourly_ids:
+            self.set_table(
+                discharge_df[hourly_ids].dropna(how="all"),
+                name="discharge/Q_obs_hourly",
+            )
+        else:
+            self.set_table(pd.DataFrame(), name="discharge/Q_obs_hourly")
+
+        if daily_ids:
+            # Resample daily stations to a daily index to remove hourly timestamps
+            # This ensures the daily table remains compact
+            daily_df = (
+                discharge_df[daily_ids]
+                .resample("D", label="left")
+                .mean()
+                .dropna(how="all")
+            )
+            self.set_table(daily_df, name="discharge/Q_obs_daily")
+        else:
+            self.set_table(pd.DataFrame(), name="discharge/Q_obs_daily")
 
         self.set_geom(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
