@@ -21,6 +21,8 @@
 - Market module can skip tracking when farmer count changes, it resumes after next harvest cycle
 
 # dev
+- Allow model to run from 1960 onwards (raise clear error if earlier than 1960 is requested).
+- Update `parse_demand` in `agents.py` to backward and forward fill water demand data if it doesn't cover the entire model time range.
 - Add build method to set up reforestation potential (and data catalog entry)
 - Add units to all data from `setup_hydrography`
 - Compute hillslope length based on drainage density
@@ -30,6 +32,12 @@
 - Add `--profiling` option to `geb build/update/alter`.
 - Fix: fix for farm sizes that are all on the high end of the distribution.
 - Fix: fix for regions with very large coastal areas beyond the riverine grid
+- Use figures path for sfincs model to save all figures
+- Switch to hourly values for extreme value statistics
+- Use maximum of one flood peak per week
+- In evaluate make a dataframe without missing timesteps and ensure that return periods are esimated on the same data for observed and simulated for comparison.
+- Fix: fix for regions with very large coastal areas beyond the riverine grid.
+- Fix: waterbody outflow is larger than waterbody storage (due to floating point imprecision).
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
