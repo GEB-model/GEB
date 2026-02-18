@@ -233,6 +233,11 @@ class LandSurface(BuildModelBase):
 
             elif DEM["name"] == "gebco":
                 DEM_raster: xr.DataArray = self.data_catalog.fetch("gebco").read()
+                # set maximum values for DEM_raster if zmax is set for the DEM
+                if "zmax" in DEM:
+                    DEM_raster = DEM_raster.where(
+                        DEM_raster <= DEM["zmax"], DEM["zmax"]
+                    )
 
             else:
                 # custom DEMs must have a path
