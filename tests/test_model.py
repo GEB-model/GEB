@@ -427,7 +427,7 @@ def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "methods": ["hydrology.water_circle"],
+            "method": "hydrology.water_circle",
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
@@ -444,7 +444,8 @@ def test_evaluate() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "methods": ["hydrology.plot_discharge", "hydrology.evaluate_discharge"],
+            "method": "hydrology.evaluate_discharge",
+            "include_yearly_plots": False,
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
