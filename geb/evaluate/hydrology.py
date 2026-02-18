@@ -35,159 +35,7 @@ from geb.hazards.floods.workflows.return_periods import (
     ReturnPeriodModel,
 )
 from geb.workflows.io import read_zarr, write_zarr
-
-
-def regularize_discharge_timeseries(discharge: pd.DataFrame) -> pd.DataFrame:
-    """Regularize the discharge timeseries to ensure consistent time steps.
-
-    This function checks if the time steps in the discharge timeseries are regular (i.e. all time steps are multiples of the minimum time step). If they are not regular, it raises a ValueError. If they are regular, it reindexes the timeseries to have a consistent frequency based on the minimum time step, filling any missing values with NaN.
-
-    Args:
-        discharge: DataFrame with a DateTimeIndex representing the discharge timeseries.
-
-    Returns:
-        Regularized DataFrame with a consistent DateTimeIndex frequency.
-
-    Raises:
-        ValueError: If the time steps in the discharge timeseries are not regular.
-    """
-    steps = np.diff(discharge.index)
-    minimum_step = steps.min()
-    # check if all time steps are multiples of the minimum step (i.e. regular time steps)
-    if not (steps % minimum_step == pd.Timedelta(0)).all():
-        raise ValueError(
-            "Q_obs time steps are not regular. Please ensure the index is a regular time series."
-        )
-    discharge = discharge.asfreq(
-        pd.to_timedelta(minimum_step)
-    )  # reindex to regular time steps, filling missing values with NaN
-    return discharge
-
-
-def create_validation_df(
-    output_folder: Path,
-    run_name: str,
-    ID: str | int,
-    include_spinup: bool,
-    spinup_name: str,
-    observed_discharge: pd.Series,
-    correct_Q_obs: bool,
-    Q_obs_to_GEB_upstream_area_ratio: float,
-) -> pd.DataFrame:
-    """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
-
-    Args:
-        output_folder: Path to the model output folder.
-        run_name: Name of the simulation run to evaluate. Must correspond to an existing run directory
-            in the model output folder.
-        ID: ID of the station to create the validation dataframe for.
-        include_spinup: Whether to include the spinup run in the evaluation.
-        spinup_name: Name of the spinup run to include in the evaluation.
-        observed_discharge: Series with the Q_obs discharge observations for the selected station.
-        correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference in upstream
-            area between the Q_obs station and the discharge from GEB.
-        Q_obs_to_GEB_upstream_area_ratio: The ratio of the upstream area of the Q_obs station to the upstream area of the GEB discharge grid cell. This is used to correct
-
-    Returns:
-        DataFrame with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
-
-    Raises:
-        FileNotFoundError: If the hydrology routing directory does not exist.
-        ValueError: If NaN values are found in the GEB discharge data after loading.
-    """
-    # Check if the hydrology.routing directory exists
-    routing_dir = output_folder / "report" / run_name / "hydrology.routing"
-    if not routing_dir.exists():
-        raise FileNotFoundError(
-            f"Hydrology routing directory does not exist: {routing_dir}"
-        )
-
-    # Construct the path to the individual station discharge file
-    station_file_name = f"discharge_hourly_m3_per_s_{ID}.csv"
-    station_file_path = routing_dir / station_file_name
-
-    # Load the individual station discharge timeseries
-    simulated_discharge = pd.read_csv(station_file_path, index_col=0, parse_dates=True)[
-        f"discharge_hourly_m3_per_s_{ID}"
-    ]
-
-    if np.isnan(simulated_discharge.values).any():
-        raise ValueError(
-            f"NaN values found in GEB discharge data for station {ID}. Please check the station file {station_file_path}."
-        )
-
-    # Handle spinup data if needed
-    if include_spinup:
-        spinup_station_file_path = (
-            output_folder
-            / "report"
-            / spinup_name
-            / "hydrology.routing"
-            / station_file_name
-        )
-        if spinup_station_file_path.exists():
-            simulated_discharge_spinup = pd.read_csv(
-                spinup_station_file_path, index_col=0, parse_dates=True
-            )[f"discharge_hourly_m3_per_s_{ID}"]
-            if np.isnan(simulated_discharge_spinup.values).any():
-                raise ValueError(
-                    f"NaN values found in spinup GEB discharge data for station {ID}. Please check the spinup station file {spinup_station_file_path}."
-                )
-            # Concatenate the spinup and main run data
-            simulated_discharge = pd.concat(
-                [simulated_discharge_spinup, simulated_discharge]
-            )
-            print(f"Loaded spinup data for station {ID}")
-        else:
-            print(
-                f"WARNING: Spinup file for station {ID} not found, using only main run data"
-            )
-
-    simulated_discharge = simulated_discharge.asfreq(
-        pd.infer_freq(simulated_discharge.index)
-    )
-
-    if correct_Q_obs:
-        """Correct observed discharge by upstream-area ratio when requested."""
-        simulated_discharge = simulated_discharge * Q_obs_to_GEB_upstream_area_ratio
-
-    if not observed_discharge.index.is_monotonic_increasing:
-        raise ValueError(
-            "Observed discharge index must be a regular time series with a monotonic increasing DateTimeIndex."
-        )
-    # check if simulated discharge is at least as frequent as observed discharge, and if multiple of observed discharge frequency
-    if simulated_discharge.index.freq > observed_discharge.index.freq:
-        raise ValueError(
-            "Simulated discharge frequency is lower than observed discharge frequency. Please ensure the simulated discharge is at least as frequent as the observed discharge."
-        )
-    if (
-        observed_discharge.index.freq.nanos % simulated_discharge.index.freq.nanos
-    ) != 0:
-        raise ValueError(
-            "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
-        )
-
-    # resample simulated discharge to match the frequency of observed discharge if needed
-    simulated_discharge = simulated_discharge.resample(
-        observed_discharge.index.freq
-    ).mean()
-
-    # cut both observed and simulated discharge to the same time range
-    start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
-    end_time = min(observed_discharge.index.max(), simulated_discharge.index.max())
-    observed_discharge = observed_discharge.loc[start_time:end_time]
-    simulated_discharge = simulated_discharge.loc[start_time:end_time]
-
-    # Create a combined dataframe with the union of all timestamps.
-    # Values will be NaN where data is missing in either series.
-    validation_df = pd.DataFrame(
-        {
-            "Q_obs": observed_discharge,
-            "Q_sim": simulated_discharge,
-        }
-    )
-
-    return validation_df
+from geb.workflows.timeseries import regularize_discharge_timeseries
 
 
 def _calculate_discharge_validation_metrics(
@@ -197,7 +45,7 @@ def _calculate_discharge_validation_metrics(
 
     Args:
         validation_df: Validation dataframe with observed and simulated discharge
-            columns named `Q_obs` and `Q_sim` (m3/s).
+            columns named `discharge_observations` and `discharge_simulations` (m3/s).
 
     Returns:
         Tuple containing:
@@ -205,12 +53,14 @@ def _calculate_discharge_validation_metrics(
             - Nash-Sutcliffe efficiency (dimensionless).
             - Pearson correlation coefficient (dimensionless).
     """
-    valid_pairs_df: pd.DataFrame = validation_df[["Q_obs", "Q_sim"]].dropna()
+    valid_pairs_df: pd.DataFrame = validation_df[
+        ["discharge_observations", "discharge_simulations"]
+    ].dropna()
     if valid_pairs_df.shape[0] < 2:
         return np.nan, np.nan, np.nan
 
-    y_true: np.ndarray = valid_pairs_df["Q_obs"].values
-    y_pred: np.ndarray = valid_pairs_df["Q_sim"].values
+    y_true: np.ndarray = valid_pairs_df["discharge_observations"].values
+    y_pred: np.ndarray = valid_pairs_df["discharge_simulations"].values
     evaluator: RegressionMetric = RegressionMetric(y_true, y_pred)
 
     kge: float = float(evaluator.kling_gupta_efficiency())
@@ -225,23 +75,25 @@ def _plot_validation_return_periods(
     station_id: Any,
     station_name: str,
     eval_plot_folder: Path,
+    frequency: str,
 ) -> None:
     """Plot overlaid GPD-POT return-period curves and side-by-side diagnostics.
 
     Args:
-        validation_df: Validation dataframe containing `Q_obs` and `Q_sim` (m3/s).
+        validation_df: Validation dataframe containing `discharge_observations` and `discharge_simulations` (m3/s).
         station_id: Station identifier used in output file names.
         station_name: Human-readable station name.
         eval_plot_folder: Output directory for generated plots.
+        frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
     """
     return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
 
     # Use first_significant strategy for consistent evaluation
     strategy = "first_significant"
-    fixed_shape = None  # 0.0 is Gumbel distribution for better stability in validation
+    fixed_shape = 0.0  # 0.0 is Gumbel distribution for better stability in validation
 
     obs_model = ReturnPeriodModel(
-        series=validation_df["Q_obs"],
+        series=validation_df["discharge_observations"],
         return_periods=return_periods_years,
         fixed_shape=fixed_shape,
         selection_strategy=strategy,
@@ -249,8 +101,8 @@ def _plot_validation_return_periods(
 
     # For the simulated series, we want to ensure that we only
     # include values where there are corresponding observed values
-    simulated_series: pd.Series = validation_df["Q_sim"].copy()
-    simulated_series[validation_df["Q_obs"].isna()] = np.nan
+    simulated_series: pd.Series = validation_df["discharge_simulations"].copy()
+    simulated_series[validation_df["discharge_observations"].isna()] = np.nan
 
     sim_model = ReturnPeriodModel(
         series=simulated_series,
@@ -270,7 +122,7 @@ def _plot_validation_return_periods(
     obs_model.plot_fit(ax=ax_fit, label_prefix="Observed", color="C0")
     sim_model.plot_fit(ax=ax_fit, label_prefix="Simulated", color="C1")
     ax_fit.set_title(
-        f"GPD-POT Return Periods: {station_name} (ID: {station_id})",
+        f"GPD-POT Return Periods ({frequency}): {station_name} (ID: {station_id})",
         fontsize=16,
         fontweight="bold",
     )
@@ -316,8 +168,7 @@ def _plot_validation_return_periods(
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     plt.savefig(
-        eval_plot_folder / f"return_period_validation_{station_id}.png",
-        dpi=200,
+        eval_plot_folder / f"return_period_validation_{station_id}.svg",
         bbox_inches="tight",
     )
     plt.close()
@@ -328,6 +179,7 @@ def _plot_outflow_return_period(
     outlet_id: str,
     outflow_plot_folder: Path,
     outflow_file_stem: str,
+    frequency: str,
 ) -> None:
     """Plot complete GPD-POT diagnostics for one outflow time series.
 
@@ -336,6 +188,7 @@ def _plot_outflow_return_period(
         outlet_id: Outflow outlet identifier.
         outflow_plot_folder: Output directory for outflow plots.
         outflow_file_stem: Base filename stem used to save the figure.
+        frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
     """
     return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
     model = ReturnPeriodModel(
@@ -346,183 +199,17 @@ def _plot_outflow_return_period(
     )
 
     fig = model.plot_diagnostics(figsize=(18, 14))
-    fig.suptitle(f"Outflow Diagnostics: {outlet_id}", fontsize=16, fontweight="bold")
-
-    plt.savefig(
-        outflow_plot_folder / f"{outflow_file_stem}_return_period.png",
-        dpi=200,
-        bbox_inches="tight",
-    )
-    plt.close()
-
-
-def _plot_discharge_validation_graphs(
-    station_id: Any,
-    validation_df: pd.DataFrame,
-    station_name: str,
-    upstream_area_ratio: float,
-    kge: float,
-    nse: float,
-    r_value: float,
-    eval_plot_folder: Path,
-    include_yearly_plots: bool,
-) -> None:
-    """Plot station-level scatter, full timeseries, and optional yearly timeseries.
-
-    Args:
-        station_id: Station identifier used in output file names.
-        validation_df: Validation dataframe containing `Q_obs` and `Q_sim` (m3/s).
-        station_name: Human-readable station name.
-        upstream_area_ratio: Ratio between observed and modeled upstream area
-            (dimensionless).
-        kge: Kling-Gupta efficiency (dimensionless).
-        nse: Nash-Sutcliffe efficiency (dimensionless).
-        r_value: Pearson correlation coefficient (dimensionless).
-        eval_plot_folder: Output directory for generated plots.
-        include_yearly_plots: Whether to generate per-year timeseries plots.
-    """
-    valid_pairs_df: pd.DataFrame = validation_df[["Q_obs", "Q_sim"]].dropna()
-
-    fig, ax = plt.subplots()
-    if valid_pairs_df.shape[0] >= 2:
-        ax.scatter(valid_pairs_df["Q_obs"], valid_pairs_df["Q_sim"])
-    ax.set_xlabel("Q_obs Discharge observations [m3/s] (%s)" % station_name)
-    ax.set_ylabel("GEB discharge simulation [m3/s]")
-    ax.set_title("GEB vs observations (discharge)")
-    if valid_pairs_df.shape[0] >= 2:
-        m, b = np.polyfit(valid_pairs_df["Q_obs"], valid_pairs_df["Q_sim"], 1)
-        ax.plot(
-            valid_pairs_df["Q_obs"],
-            m * valid_pairs_df["Q_obs"] + b,
-            color="red",
-        )
-    else:
-        ax.text(
-            0.02,
-            0.9,
-            "Insufficient overlapping observed/simulated values",
-            transform=ax.transAxes,
-        )
-
-    if np.isfinite(r_value):
-        ax.text(0.02, 0.85, f"$R$ = {r_value:.2f}", transform=ax.transAxes)
-        ax.text(0.02, 0.8, f"KGE = {kge:.2f}", transform=ax.transAxes)
-        ax.text(0.02, 0.75, f"NSE = {nse:.2f}", transform=ax.transAxes)
-    ax.text(
-        0.02,
-        0.7,
-        f"Q_obs to GEB upstream area ratio: {upstream_area_ratio:.2f}",
-        transform=ax.transAxes,
+    fig.suptitle(
+        f"Outflow Diagnostics ({frequency}): {outlet_id}",
+        fontsize=16,
+        fontweight="bold",
     )
 
     plt.savefig(
-        eval_plot_folder / f"scatter_plot_{station_id}.png",
-        dpi=300,
+        outflow_plot_folder / f"{outflow_file_stem}_return_period.svg",
         bbox_inches="tight",
     )
-    plt.show()
     plt.close()
-
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(
-        validation_df.index,
-        validation_df["Q_sim"],
-        label="GEB simulation",
-        linewidth=0.5,
-    )
-    ax.plot(
-        validation_df.index,
-        validation_df["Q_obs"],
-        label="Q_obs observations",
-        linewidth=0.5,
-    )
-    ax.set_ylabel("Discharge [m3/s]")
-    ax.set_xlabel("Time")
-    ax.set_ylim(0, None)
-    ax.legend()
-
-    if np.isfinite(r_value):
-        ax.text(0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12)
-        ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
-        ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
-    else:
-        ax.text(
-            0.02,
-            0.9,
-            "No overlapping values for score metrics",
-            transform=ax.transAxes,
-            fontsize=12,
-        )
-    ax.text(
-        0.02,
-        0.75,
-        f"Mean={validation_df['Q_sim'].dropna().mean():.2f}",
-        transform=ax.transAxes,
-        fontsize=12,
-    )
-    ax.text(
-        0.02,
-        0.70,
-        f"Q_obs to GEB upstream area ratio: {upstream_area_ratio:.2f}",
-        transform=ax.transAxes,
-        fontsize=12,
-    )
-    plt.title(f"GEB discharge vs observations for station {station_name}")
-    plt.savefig(
-        eval_plot_folder / f"timeseries_plot_{station_id}.png",
-        dpi=300,
-        bbox_inches="tight",
-    )
-    plt.show()
-    plt.close()
-
-    if include_yearly_plots:
-        years_to_plot: list[int] = sorted(validation_df.index.year.unique())  # ty:ignore[possibly-missing-attribute]
-        print("yearly plots!!!")
-        print(years_to_plot)
-        for year in years_to_plot:
-            one_year_df: pd.DataFrame = validation_df[validation_df.index.year == year]  # ty:ignore[possibly-missing-attribute]
-            if one_year_df.empty:
-                print(f"No data available for year {year}, skipping.")
-                continue
-
-            fig, ax = plt.subplots(figsize=(7, 4))
-            ax.plot(one_year_df.index, one_year_df["Q_sim"], label="GEB simulation")
-            ax.plot(one_year_df.index, one_year_df["Q_obs"], label="Q_obs observations")
-            ax.set_ylabel("Discharge [m3/s]")
-            ax.set_xlabel("Time")
-            ax.legend()
-
-            ax.text(
-                0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12
-            )
-            ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
-            ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
-            ax.text(
-                0.02,
-                0.75,
-                f"Q_obs to GEB upstream area ratio: {upstream_area_ratio:.2f}",
-                transform=ax.transAxes,
-                fontsize=12,
-            )
-
-            plt.title(
-                f"GEB discharge vs observations for {year} at station {station_name}"
-            )
-            plt.savefig(
-                eval_plot_folder / f"timeseries_plot_{station_id}_{year}.png",
-                dpi=300,
-                bbox_inches="tight",
-            )
-            plt.show()
-            plt.close()
-
-    _plot_validation_return_periods(
-        validation_df=validation_df,
-        station_id=station_id,
-        station_name=station_name,
-        eval_plot_folder=eval_plot_folder,
-    )
 
 
 def _plot_outflow_discharge_timeseries(
@@ -613,8 +300,7 @@ def _plot_outflow_discharge_timeseries(
             ax.set_title(f"GEB river outflow for outlet {outlet_id}")
 
             plt.savefig(
-                outflow_plot_folder / f"{outflow_file.stem}.png",
-                dpi=300,
+                outflow_plot_folder / f"{outflow_file.stem}.svg",
                 bbox_inches="tight",
             )
             plt.show()
@@ -756,8 +442,7 @@ def _plot_discharge_validation_map(
 
     plt.tight_layout()
     plt.savefig(
-        eval_result_folder / "discharge_evaluation_metrics.png",
-        dpi=300,
+        eval_result_folder / "discharge_evaluation_metrics.svg",
         bbox_inches="tight",
     )
     plt.show()
@@ -814,11 +499,19 @@ def _create_discharge_folium_map(
 
     layer_upstream: folium.FeatureGroup | None = None
     colormap_upstream: cm.LinearColormap | None = None
-    if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().all():
+    if (
+        not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
+        .isna()
+        .all()
+    ):
         colormap_upstream = cm.LinearColormap(
             colors=["red", "orange", "yellow", "blue", "green"],
-            vmin=evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].min(),
-            vmax=evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].max(),
+            vmin=evaluation_gdf[
+                "discharge_observations_to_GEB_upstream_area_ratio"
+            ].min(),
+            vmax=evaluation_gdf[
+                "discharge_observations_to_GEB_upstream_area_ratio"
+            ].max(),
             caption="Upstream Area Ratio",
         )
         colormap_upstream.add_to(m)
@@ -843,17 +536,17 @@ def _create_discharge_folium_map(
             )
 
         popup_html = f"""
-                <b>Station Name:</b> {station_name}<br>
-                <b>R:</b> {row["R"]:.2f}<br>
-                <b>KGE:</b> {row["KGE"]:.2f}<br>
-                <b>NSE:</b> {row["NSE"]:.2f}<br>
-                <b>Upstream Area Ratio:</b> {row["Q_obs_to_GEB_upstream_area_ratio"]:.2f}<br>
-                <img src="data:image/png;base64,{encoded_image_scatter}" width="500">
-                <img src="data:image/png;base64,{encoded_image_time_series}" width="500">
-                """
+<b>Station Name:</b> {station_name}<br>
+<b>R:</b> {row["R"]:.2f}<br>
+<b>KGE:</b> {row["KGE"]:.2f}<br>
+<b>NSE:</b> {row["NSE"]:.2f}<br>
+<b>Upstream Area Ratio:</b> {row["discharge_observations_to_GEB_upstream_area_ratio"]:.2f}<br>
+<img src="data:image/png;base64,{encoded_image_scatter}" width="100%">
+<img src="data:image/png;base64,{encoded_image_time_series}" width="100%">
+"""
 
         color_r = colormap_r(row["R"])
-        popup_r = folium.Popup(popup_html, max_width=400)
+        popup_r = folium.Popup(popup_html, max_width=800)
         folium.CircleMarker(
             location=coords,
             radius=10,
@@ -865,7 +558,7 @@ def _create_discharge_folium_map(
         ).add_to(layer_r)
 
         color_kge = colormap_kge(row["KGE"])
-        popup_kge = folium.Popup(popup_html, max_width=400)
+        popup_kge = folium.Popup(popup_html, max_width=800)
         folium.CircleMarker(
             location=coords,
             radius=10,
@@ -890,7 +583,7 @@ def _create_discharge_folium_map(
 
         if layer_upstream is not None and colormap_upstream is not None:
             color_upstream = colormap_upstream(
-                float(row["Q_obs_to_GEB_upstream_area_ratio"])
+                float(row["discharge_observations_to_GEB_upstream_area_ratio"])
             )
             if not isinstance(color_upstream, str) or color_upstream == "nan":
                 continue
@@ -937,6 +630,339 @@ def _create_discharge_folium_map(
     folium.LayerControl().add_to(m)
     m.save(eval_result_folder / "discharge_evaluation_map.html")
     return m
+
+
+def create_validation_df(
+    output_folder: Path,
+    run_name: str,
+    ID: str | int,
+    include_spinup: bool,
+    spinup_name: str,
+    observed_discharge: pd.Series,
+    correct_discharge_observations: bool,
+    discharge_observations_to_GEB_upstream_area_ratio: float,
+) -> pd.DataFrame:
+    """Create a validation dataframe with the discharge observations and the GEB discharge simulation for the selected station.
+
+    Args:
+        output_folder: Path to the model output folder.
+        run_name: Name of the simulation run to evaluate. Must correspond to an existing run directory
+            in the model output folder.
+        ID: ID of the station to create the validation dataframe for.
+        include_spinup: Whether to include the spinup run in the evaluation.
+        spinup_name: Name of the spinup run to include in the evaluation.
+        observed_discharge: Series with the discharge observations for the selected station.
+        correct_discharge_observations: Whether to correct the discharge_observations discharge timeseries for the difference in upstream
+            area between the discharge_observations station and the discharge from GEB.
+        discharge_observations_to_GEB_upstream_area_ratio: The ratio of the upstream area of the discharge_observations station to the upstream area of the GEB discharge grid cell. This is used to correct
+
+    Returns:
+        DataFrame with the discharge observations and the GEB discharge simulation for the selected station.
+
+    Raises:
+        FileNotFoundError: If the hydrology routing directory does not exist.
+        ValueError: If NaN values are found in the GEB discharge data after loading.
+    """
+    # Check if the hydrology.routing directory exists
+    routing_dir = output_folder / "report" / run_name / "hydrology.routing"
+    if not routing_dir.exists():
+        raise FileNotFoundError(
+            f"Hydrology routing directory does not exist: {routing_dir}"
+        )
+
+    # Construct the path to the individual station discharge file
+    station_file_name = f"discharge_hourly_m3_per_s_{ID}.csv"
+    station_file_path = routing_dir / station_file_name
+
+    # Load the individual station discharge timeseries
+    simulated_discharge = pd.read_csv(station_file_path, index_col=0, parse_dates=True)[
+        f"discharge_hourly_m3_per_s_{ID}"
+    ]
+
+    if np.isnan(simulated_discharge.values).any():
+        raise ValueError(
+            f"NaN values found in GEB discharge data for station {ID}. Please check the station file {station_file_path}."
+        )
+
+    # Handle spinup data if needed
+    if include_spinup:
+        spinup_station_file_path = (
+            output_folder
+            / "report"
+            / spinup_name
+            / "hydrology.routing"
+            / station_file_name
+        )
+        if spinup_station_file_path.exists():
+            simulated_discharge_spinup = pd.read_csv(
+                spinup_station_file_path, index_col=0, parse_dates=True
+            )[f"discharge_hourly_m3_per_s_{ID}"]
+            if np.isnan(simulated_discharge_spinup.values).any():
+                raise ValueError(
+                    f"NaN values found in spinup GEB discharge data for station {ID}. Please check the spinup station file {spinup_station_file_path}."
+                )
+            # Concatenate the spinup and main run data
+            simulated_discharge = pd.concat(
+                [simulated_discharge_spinup, simulated_discharge]
+            )
+            print(f"Loaded spinup data for station {ID}")
+        else:
+            print(
+                f"WARNING: Spinup file for station {ID} not found, using only main run data"
+            )
+
+    simulated_discharge = simulated_discharge.asfreq(
+        pd.infer_freq(simulated_discharge.index)
+    )
+
+    if correct_discharge_observations:
+        """Correct observed discharge by upstream-area ratio when requested."""
+        simulated_discharge = (
+            simulated_discharge * discharge_observations_to_GEB_upstream_area_ratio
+        )
+
+    if not observed_discharge.index.is_monotonic_increasing:
+        raise ValueError(
+            "Observed discharge index must be a regular time series with a monotonic increasing DateTimeIndex."
+        )
+
+    assert observed_discharge.index.freq is not None, (  # ty:ignore[possibly-missing-attribute]
+        "Observed discharge index must have a defined frequency."
+    )
+    # check if simulated discharge is at least as frequent as observed discharge, and if multiple of observed discharge frequency
+    if simulated_discharge.index.freq > observed_discharge.index.freq:  # ty:ignore[possibly-missing-attribute]
+        raise ValueError(
+            "Simulated discharge frequency is lower than observed discharge frequency. Please ensure the simulated discharge is at least as frequent as the observed discharge."
+        )
+    if (
+        observed_discharge.index.freq.nanos % simulated_discharge.index.freq.nanos  # ty:ignore[possibly-missing-attribute]
+    ) != 0:
+        raise ValueError(
+            "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
+        )
+
+    # resample simulated discharge to match the frequency of observed discharge if needed
+    simulated_discharge = simulated_discharge.resample(
+        observed_discharge.index.freq  # ty:ignore[possibly-missing-attribute]
+    ).mean()
+
+    # cut both observed and simulated discharge to the same time range
+    start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
+    end_time = min(observed_discharge.index.max(), simulated_discharge.index.max())
+    observed_discharge = observed_discharge.loc[start_time:end_time]
+    simulated_discharge = simulated_discharge.loc[start_time:end_time]
+
+    # Create a combined dataframe with the union of all timestamps.
+    # Values will be NaN where data is missing in either series.
+    validation_df = pd.DataFrame(
+        {
+            "discharge_observations": observed_discharge,
+            "discharge_simulations": simulated_discharge,
+        }
+    )
+
+    return validation_df
+
+
+def _plot_discharge_validation_graphs(
+    station_id: Any,
+    validation_df: pd.DataFrame,
+    station_name: str,
+    upstream_area_ratio: float,
+    kge: float,
+    nse: float,
+    r_value: float,
+    eval_plot_folder: Path,
+    include_yearly_plots: bool,
+    frequency: str,
+) -> None:
+    """Plot station-level scatter, full timeseries, and optional yearly timeseries.
+
+    Args:
+        station_id: Station identifier used in output file names.
+        validation_df: Validation dataframe containing `discharge_observations` and `discharge_simulations` (m3/s).
+        station_name: Human-readable station name.
+        upstream_area_ratio: Ratio between observed and modeled upstream area
+            (dimensionless).
+        kge: Kling-Gupta efficiency (dimensionless).
+        nse: Nash-Sutcliffe efficiency (dimensionless).
+        r_value: Pearson correlation coefficient (dimensionless).
+        eval_plot_folder: Output directory for generated plots.
+        include_yearly_plots: Whether to generate per-year timeseries plots.
+        frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
+    """
+    valid_pairs_df: pd.DataFrame = validation_df[
+        ["discharge_observations", "discharge_simulations"]
+    ].dropna()
+
+    fig, ax = plt.subplots()
+    if valid_pairs_df.shape[0] >= 2:
+        ax.scatter(
+            valid_pairs_df["discharge_observations"],
+            valid_pairs_df["discharge_simulations"],
+            alpha=0.1,
+            edgecolor="none",
+            s=1,
+        )
+    ax.set_xlabel(
+        "Discharge observations [m3/s] (%s)" % station_name
+    )
+    ax.set_ylabel("GEB discharge simulation [m3/s]")
+    ax.set_title("GEB vs observations (discharge)")
+    if valid_pairs_df.shape[0] >= 2:
+        m, b = np.polyfit(
+            valid_pairs_df["discharge_observations"],
+            valid_pairs_df["discharge_simulations"],
+            1,
+        )
+        ax.plot(
+            valid_pairs_df["discharge_observations"],
+            m * valid_pairs_df["discharge_observations"] + b,
+            color="red",
+        )
+    else:
+        ax.text(
+            0.02,
+            0.9,
+            "Insufficient overlapping observed/simulated values",
+            transform=ax.transAxes,
+        )
+
+    if np.isfinite(r_value):
+        ax.text(0.02, 0.85, f"$R$ = {r_value:.2f}", transform=ax.transAxes)
+        ax.text(0.02, 0.8, f"KGE = {kge:.2f}", transform=ax.transAxes)
+        ax.text(0.02, 0.75, f"NSE = {nse:.2f}", transform=ax.transAxes)
+    ax.text(
+        0.02,
+        0.7,
+        f"upstream area ratio: {upstream_area_ratio:.2f}",
+        transform=ax.transAxes,
+    )
+
+    plt.savefig(
+        eval_plot_folder / f"scatter_plot_{station_id}.svg",
+        bbox_inches="tight",
+    )
+    plt.savefig(
+        eval_plot_folder / f"scatter_plot_{station_id}.png",
+        bbox_inches="tight",
+        dpi=100,
+    )
+    plt.show()
+    plt.close()
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(
+        validation_df.index,
+        validation_df["discharge_simulations"],
+        label="GEB simulation",
+        linewidth=0.5,
+    )
+    ax.plot(
+        validation_df.index,
+        validation_df["discharge_observations"],
+        label="observations",
+        linewidth=0.5,
+    )
+    ax.set_ylabel("Discharge [m3/s]")
+    ax.set_xlabel("Time")
+    ax.set_ylim(0, None)
+    ax.legend()
+
+    if np.isfinite(r_value):
+        ax.text(0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12)
+        ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
+        ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
+    else:
+        ax.text(
+            0.02,
+            0.9,
+            "No overlapping values for score metrics",
+            transform=ax.transAxes,
+            fontsize=12,
+        )
+    ax.text(
+        0.02,
+        0.75,
+        f"Mean={validation_df['discharge_simulations'].dropna().mean():.2f}",
+        transform=ax.transAxes,
+        fontsize=12,
+    )
+    ax.text(
+        0.02,
+        0.70,
+        f"upstream area ratio: {upstream_area_ratio:.2f}",
+        transform=ax.transAxes,
+        fontsize=12,
+    )
+    plt.title(f"GEB discharge vs observations for station {station_name}")
+    plt.savefig(
+        eval_plot_folder / f"timeseries_plot_{station_id}.svg",
+        bbox_inches="tight",
+    )
+    plt.savefig(
+        eval_plot_folder / f"timeseries_plot_{station_id}.png",
+        bbox_inches="tight",
+        dpi=100,
+    )
+    plt.show()
+    plt.close()
+
+    if include_yearly_plots:
+        years_to_plot: list[int] = sorted(validation_df.index.year.unique())  # ty:ignore[possibly-missing-attribute]
+        print("yearly plots!!!")
+        print(years_to_plot)
+        for year in years_to_plot:
+            one_year_df: pd.DataFrame = validation_df[validation_df.index.year == year]  # ty:ignore[possibly-missing-attribute]
+            if one_year_df.empty:
+                print(f"No data available for year {year}, skipping.")
+                continue
+
+            fig, ax = plt.subplots(figsize=(7, 4))
+            ax.plot(
+                one_year_df.index,
+                one_year_df["discharge_simulations"],
+                label="GEB simulation",
+            )
+            ax.plot(
+                one_year_df.index,
+                one_year_df["discharge_observations"],
+                label="observations",
+            )
+            ax.set_ylabel("Discharge [m3/s]")
+            ax.set_xlabel("Time")
+            ax.legend()
+
+            ax.text(
+                0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12
+            )
+            ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
+            ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
+            ax.text(
+                0.02,
+                0.75,
+                f"upstream area ratio: {upstream_area_ratio:.2f}",
+                transform=ax.transAxes,
+                fontsize=12,
+            )
+
+            plt.title(
+                f"GEB discharge vs observations for {year} at station {station_name}"
+            )
+            plt.savefig(
+                eval_plot_folder / f"timeseries_plot_{station_id}_{year}.svg",
+                bbox_inches="tight",
+            )
+            plt.show()
+            plt.close()
+
+    _plot_validation_return_periods(
+        validation_df=validation_df,
+        station_id=station_id,
+        station_name=station_name,
+        eval_plot_folder=eval_plot_folder,
+        frequency=frequency,
+    )
 
 
 def calculate_hit_rate(model: xr.DataArray, observations: xr.DataArray) -> float:
@@ -1071,9 +1097,9 @@ class Hydrology:
         run_name: str = "default",
         include_spinup: bool = False,
         include_yearly_plots: bool = True,
-        correct_Q_obs: bool = False,
+        correct_discharge_observations: bool = False,
     ) -> None:
-        """Evaluate the discharge grid from GEB against observations from the Q_obs database.
+        """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
         Compares simulated discharge from the GEB model with observed discharge data from
         gauging stations. Calculates performance metrics (KGE, NSE, R) and creates
@@ -1090,8 +1116,8 @@ class Hydrology:
                 existing run directory in the model output folder.
             include_spinup: Whether to include the spinup run in the evaluation.
             include_yearly_plots: Whether to create plots for every year showing the evaluation.
-            correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference
-                in upstream area between the Q_obs station and the discharge from GEB.
+            correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
+                in upstream area between the discharge observations station and the discharge from GEB.
 
         Raises:
             FileNotFoundError: If the run folder does not exist in the report directory.
@@ -1110,13 +1136,21 @@ class Hydrology:
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 
         # load input data files
-        Q_obs: pd.DataFrame = pd.read_parquet(
-            self.model.files["table"]["discharge/Q_obs"]
-        )  # load the Q_obs discharge data
+        discharge_observations_hourly: pd.DataFrame = pd.read_parquet(
+            self.model.files["table"]["discharge/discharge_observations_hourly"]
+        )
+        discharge_observations_daily: pd.DataFrame = pd.read_parquet(
+            self.model.files["table"]["discharge/discharge_observations_daily"]
+        )
 
-        Q_obs: pd.DataFrame = regularize_discharge_timeseries(
-            Q_obs
-        )  # ensure regular daily time steps
+        if not discharge_observations_hourly.empty:
+            discharge_observations_hourly = regularize_discharge_timeseries(
+                discharge_observations_hourly
+            )
+        if not discharge_observations_daily.empty:
+            discharge_observations_daily = regularize_discharge_timeseries(
+                discharge_observations_daily
+            )
 
         region_shapefile = gpd.read_parquet(
             self.model.files["geom"]["mask"]
@@ -1146,75 +1180,93 @@ class Hydrology:
         evaluation_per_station: list = []
 
         print("Starting discharge evaluation...")
-        for ID in tqdm(Q_obs.columns):
-            # create a discharge timeseries dataframe
-            discharge_Q_obs_df = Q_obs[ID]
-            discharge_Q_obs_df.columns = ["Q"]
-            discharge_Q_obs_df.name = "Q"
+        for freq_label, discharge_observations_df in zip(
+            ["hourly", "daily"],
+            [
+                discharge_observations_hourly,
+                discharge_observations_daily,
+            ],
+            strict=True,
+        ):
+            if discharge_observations_df.empty:
+                continue
+            for ID in tqdm(discharge_observations_df.columns):
+                # create a discharge timeseries dataframe
+                discharge_obs_series = discharge_observations_df[ID]
+                if isinstance(discharge_obs_series, pd.DataFrame):
+                    discharge_obs_series.columns = ["Q"]
+                discharge_obs_series.name = "Q"
 
-            # check if there is data in the model time period
-            start_date = GEB_discharge.time.min().values
-            end_date = GEB_discharge.time.max().values
-            data_check = discharge_Q_obs_df[
-                (discharge_Q_obs_df.index >= start_date)
-                & (discharge_Q_obs_df.index <= end_date)
-            ].dropna()  # filter the dataframe to the model time period
-            if len(data_check) < 365:
-                print(
-                    f"Station {ID} has only {len(data_check)} days of data, less than 1 year. Skipping."
+                # check if there is data in the model time period
+                start_date = GEB_discharge.time.min().values
+                end_date = GEB_discharge.time.max().values
+                data_check = discharge_obs_series[
+                    (discharge_obs_series.index >= start_date)
+                    & (discharge_obs_series.index <= end_date)
+                ].dropna()  # filter the dataframe to the model time period
+                if len(data_check) < 365:
+                    print(
+                        f"Station {ID} has only {len(data_check)} days of data, less than 1 year. Skipping."
+                    )
+                    continue
+
+                # extract the properties from the snapping dataframe
+                discharge_observations_station_name = snapped_locations.loc[
+                    ID
+                ].discharge_observations_station_name
+                snapped_xy_coords = snapped_locations.loc[ID].snapped_grid_pixel_xy
+                discharge_observations_station_coords = snapped_locations.loc[
+                    ID
+                ].discharge_observations_station_coords
+                discharge_observations_to_GEB_upstream_area_ratio = (
+                    snapped_locations.loc[
+                        ID
+                    ].discharge_observations_to_GEB_upstream_area_ratio
                 )
-                continue
 
-            # extract the properties from the snapping dataframe
-            Q_obs_station_name = snapped_locations.loc[ID].Q_obs_station_name
-            snapped_xy_coords = snapped_locations.loc[ID].snapped_grid_pixel_xy
-            Q_obs_station_coords = snapped_locations.loc[ID].Q_obs_station_coords
-            Q_obs_to_GEB_upstream_area_ratio = snapped_locations.loc[
-                ID
-            ].Q_obs_to_GEB_upstream_area_ratio
+                validation_df = create_validation_df(
+                    self.model.output_folder,
+                    run_name,
+                    ID,
+                    include_spinup,
+                    spinup_name,
+                    discharge_obs_series,
+                    correct_discharge_observations,
+                    discharge_observations_to_GEB_upstream_area_ratio,
+                )
 
-            validation_df = create_validation_df(
-                self.model.output_folder,
-                run_name,
-                ID,
-                include_spinup,
-                spinup_name,
-                discharge_Q_obs_df,
-                correct_Q_obs,
-                Q_obs_to_GEB_upstream_area_ratio,
-            )
+                # Check if validation_df is empty (station was skipped due to all NaN values)
+                if validation_df.empty:
+                    continue
 
-            # Check if validation_df is empty (station was skipped due to all NaN values)
-            if validation_df.empty:
-                continue
+                KGE, NSE, R = _calculate_discharge_validation_metrics(validation_df)
 
-            KGE, NSE, R = _calculate_discharge_validation_metrics(validation_df)
+                _plot_discharge_validation_graphs(
+                    station_id=ID,
+                    validation_df=validation_df,
+                    station_name=discharge_observations_station_name,
+                    upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                    kge=KGE,
+                    nse=NSE,
+                    r_value=R,
+                    eval_plot_folder=eval_plot_folder,
+                    include_yearly_plots=include_yearly_plots,
+                    frequency=freq_label,
+                )
 
-            _plot_discharge_validation_graphs(
-                station_id=ID,
-                validation_df=validation_df,
-                station_name=Q_obs_station_name,
-                upstream_area_ratio=Q_obs_to_GEB_upstream_area_ratio,
-                kge=KGE,
-                nse=NSE,
-                r_value=R,
-                eval_plot_folder=eval_plot_folder,
-                include_yearly_plots=include_yearly_plots,
-            )
-
-            # attach to the evaluation dataframe
-            evaluation_per_station.append(
-                {
-                    "station_ID": ID,
-                    "station_name": Q_obs_station_name,
-                    "x": Q_obs_station_coords[0],
-                    "y": Q_obs_station_coords[1],
-                    "Q_obs_to_GEB_upstream_area_ratio": Q_obs_to_GEB_upstream_area_ratio,
-                    "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
-                    "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
-                    "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
-                }
-            )
+                # attach to the evaluation dataframe
+                evaluation_per_station.append(
+                    {
+                        "station_ID": ID,
+                        "station_name": discharge_observations_station_name,
+                        "x": discharge_observations_station_coords[0],
+                        "y": discharge_observations_station_coords[1],
+                        "discharge_observations_to_GEB_upstream_area_ratio": discharge_observations_to_GEB_upstream_area_ratio,
+                        "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
+                        "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
+                        "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
+                    }
+                )
 
         if len(evaluation_per_station) == 0:
             # Create empty evaluation dataframe with proper structure
@@ -1224,7 +1276,7 @@ class Hydrology:
                         "station_name",
                         "x",
                         "y",
-                        "Q_obs_to_GEB_upstream_area_ratio",
+                        "discharge_observations_to_GEB_upstream_area_ratio",
                         "KGE",
                         "NSE",
                         "R",
@@ -1247,15 +1299,6 @@ class Hydrology:
             empty_evaluation_gdf.to_parquet(
                 eval_result_folder / "evaluation_metrics.geoparquet",
             )
-
-            outflow_plot_count: int = _plot_outflow_discharge_timeseries(
-                output_folder=self.model.output_folder,
-                run_name=run_name,
-                eval_plot_folder=eval_plot_folder,
-                include_spinup=include_spinup,
-                spinup_name=spinup_name,
-            )
-            print(f"Created {outflow_plot_count} outflow discharge plots.")
 
         else:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
@@ -1396,8 +1439,8 @@ class Hydrology:
 
         # Save the plot
         if export:
-            boxplot_path = eval_result_folder / "evaluation_boxplots_simple.png"
-            plt.savefig(boxplot_path, dpi=300, bbox_inches="tight")
+            boxplot_path = eval_result_folder / "evaluation_boxplots_simple.svg"
+            plt.savefig(boxplot_path, bbox_inches="tight")
             print(f"Boxplots saved to: {boxplot_path}")
 
         plt.show()
@@ -1694,7 +1737,7 @@ class Hydrology:
 
         if export:
             water_circle.write_image(
-                self.evaluator.output_folder_evaluate / "water_circle.png", scale=5
+                self.evaluator.output_folder_evaluate / "water_circle.svg", scale=5
             )
 
         return water_circle
@@ -1867,7 +1910,7 @@ class Hydrology:
             # Mask water depth values
             hmin: float = self.config["floods"]["minimum_flood_depth"]
 
-            sim_extra_clipped = sim_extra_clipped.raster.reproject_like(obs_region)
+            sim_extra_clipped = sim_extra_clipped.rio.reproject_like(obs_region)
             simulation_final = sim_extra_clipped > hmin
             observation_final = obs_region > 0
 

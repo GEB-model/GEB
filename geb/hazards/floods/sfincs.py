@@ -475,6 +475,10 @@ class SFINCSRootModel:
                 )
             )
 
+            # resample to daily frequency because this is the frequency for the river
+            # width and depth estimation formulas.
+            discharge_by_river = discharge_by_river.resample("D", label="left").mean()
+
             if custom_rivers_to_burn is not None:
                 rivers_to_burn = custom_rivers_to_burn.to_crs(sf.crs)
                 if "width" not in rivers_to_burn.columns:
