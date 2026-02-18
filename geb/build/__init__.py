@@ -2255,12 +2255,23 @@ class GEBModel(
         This time range is used to ensure that all datasets with a time dimension
         cover at least this time range.
 
+        Start date must be on or after 1960, because of data availability. End date can be in the future.
+
         Args:
             start_date: The start date of the model.
             end_date: The end date of the model.
 
+        Raises:
+            ValueError: If the start date is not before the end date.
+            ValueError: If the start date is before 1960, because of data availability.
         """
-        assert start_date < end_date, "Start date must be before end date."
+        if not start_date < end_date:
+            raise ValueError("Start date must be before end date.")
+
+        if start_date.year < 1960:
+            raise ValueError(
+                "Start date must be after 1960, because of data availability."
+            )
         self.set_params(
             {"start_date": start_date, "end_date": end_date},
             name="model_time_range",
