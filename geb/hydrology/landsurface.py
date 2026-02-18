@@ -1058,13 +1058,12 @@ class LandSurface(Module):
         soc_path = self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"]
         bd_path = self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"]
 
-        logger.info("\n" + "=" * 80)
         logger.info("LOADING SOIL DATA IN HYDROLOGY MODULE")
-        logger.info("=" * 80)
+
         logger.info(f"Loading SOC from: {soc_path}")
         logger.info(f"Loading bulk density from: {bd_path}")
 
-        if "forest_modified" in str(soc_path) or "forest_modified" in str(bd_path):
+        if "_modified" in str(soc_path) or "_modified" in str(bd_path):
             logger.info("Using MODIFIED soil maps for forest planting scenario")
             print(
                 "\n[HYDROLOGY] Loading MODIFIED soil maps (forest planting scenario)",
@@ -1073,7 +1072,7 @@ class LandSurface(Module):
         else:
             logger.info("Using original soil maps")
             print(
-                "\n[HYDROLOGY] Loading original soil maps, no forest planting scenario yet implemented",
+                "[HYDROLOGY] Loading original soil maps, no scenario yet implemented",
                 flush=True,
             )
 
