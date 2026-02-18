@@ -698,14 +698,17 @@ class WaterBodies(Module):
         outflow_to_drainage_network_m3[self.is_lake] = self.routing_lakes(
             routing_step_length_seconds
         )
+
         (
             outflow_to_drainage_network_m3[self.is_reservoir],
             command_area_release_m3[self.is_reservoir],
         ) = self.routing_reservoirs(n_routing_substeps, current_substep)
 
         assert (
-            outflow_to_drainage_network_m3 - 1e-8 <= self.var.storage
-        ).all()  # allow for a very small numerical tolerance
+            outflow_to_drainage_network_m3 <= self.var.storage.astype(np.float32)
+        ).all(), (
+            f"Outflow exceeds storage: {outflow_to_drainage_network_m3.max()} > {self.var.storage.max()}"
+        )
 
         if __debug__:
             balance_check(
