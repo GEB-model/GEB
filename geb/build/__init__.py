@@ -2270,7 +2270,7 @@ class GEBModel(
 
         if start_date.year < 1960:
             raise ValueError(
-                "Start date must be after 1960, because of data availability."
+                "Start date must be on or after 1960, because of data availability."
             )
         self.set_params(
             {"start_date": start_date, "end_date": end_date},
