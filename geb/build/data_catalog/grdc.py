@@ -69,9 +69,9 @@ class GRDC(Adapter):
 
                 # Open dataset from temporary file
                 # Load the dataset into memory to avoid issues with closed files
-                Q_obs: xr.Dataset = xr.open_dataset(tmp_file_path).load()
+                discharge_observations: xr.Dataset = xr.open_dataset(tmp_file_path).load()
 
         # rename geo_x and geo_y to x and y
-        Q_obs: xr.Dataset = Q_obs.rename({"geo_x": "x", "geo_y": "y"})
+        discharge_observations: xr.Dataset = discharge_observations.rename({"geo_x": "x", "geo_y": "y"})
 
-        return Q_obs
+        return discharge_observations

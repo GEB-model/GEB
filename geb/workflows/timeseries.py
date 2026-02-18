@@ -23,7 +23,7 @@ def regularize_discharge_timeseries(discharge: pd.DataFrame) -> pd.DataFrame:
     # check if all time steps are multiples of the minimum step (i.e. regular time steps)
     if not (steps % minimum_step == pd.Timedelta(0)).all():
         raise ValueError(
-            "Q_obs time steps are not regular. Please ensure the index is a regular time series."
+            "discharge_observations time steps are not regular. Please ensure the index is a regular time series."
         )
     discharge = discharge.asfreq(
         pd.to_timedelta(minimum_step)

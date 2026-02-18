@@ -1,4 +1,7 @@
 # dev
+- Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
+- Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.
+- Add frequency labels (hourly/daily) to extreme value analysis and validation plot titles.
 - Allow model to run from 1960 onwards (raise clear error if earlier than 1960 is requested).
 - Update `parse_demand` in `agents.py` to backward and forward fill water demand data if it doesn't cover the entire model time range.
 - Update discharge observation processing to support hourly data and separate observations into hourly and daily tables.
@@ -22,6 +25,7 @@
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
 - Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`
+- Re-run `setup_discharge_observations`: `geb update -b build.yml::setup_discharge_observations`
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
