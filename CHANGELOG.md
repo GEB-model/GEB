@@ -1,4 +1,6 @@
 # dev
+- Allow model to run from 1960 onwards (raise clear error if earlier than 1960 is requested).
+- Update `parse_demand` in `agents.py` to backward and forward fill water demand data if it doesn't cover the entire model time range.
 - Add build method to set up reforestation potential (and data catalog entry)
 - Add units to all data from `setup_hydrography`
 - Compute hillslope length based on drainage density
