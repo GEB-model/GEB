@@ -23,7 +23,6 @@ from geb.workflows.raster import (
 )
 
 from ..workflows.conversions import (
-    AQUASTAT_NAME_TO_ISO3,
     COUNTRY_NAME_TO_ISO3,
     TRADE_REGIONS,
     setup_donor_countries,
@@ -63,27 +62,29 @@ class Agents(BuildModelBase):
             monthly time step, but is assumed to be constant over the year.
 
             The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
-
-        Raises:
-            ValueError: If required data is missing in the data sources.
-
         """
         start_model_time = self.start_date.year
         end_model_time = self.end_date.year
 
-        municipal_water_demand = self.old_data_catalog.get_dataframe(
-            "AQUASTAT_municipal_withdrawal"
+        municipal_water_demand_m3_per_capita_per_year = self.data_catalog.fetch(
+            "aquastat"
+        ).read(
+            indicator="Municipal water withdrawal per capita (total population) [m3/inhab/year]"
         )
-        municipal_water_demand["ISO3"] = municipal_water_demand["Area"].map(
-            AQUASTAT_NAME_TO_ISO3
-        )
-        municipal_water_demand = municipal_water_demand.set_index("ISO3")
 
         # Filter the data for the model time
-        municipal_water_demand = municipal_water_demand[
-            (municipal_water_demand["Year"] >= start_model_time)
-            & (municipal_water_demand["Year"] <= end_model_time)
-        ]
+        municipal_water_demand_m3_per_capita_per_year = (
+            municipal_water_demand_m3_per_capita_per_year[
+                (
+                    municipal_water_demand_m3_per_capita_per_year["Year"]
+                    >= start_model_time
+                )
+                & (
+                    municipal_water_demand_m3_per_capita_per_year["Year"]
+                    <= end_model_time
+                )
+            ]
+        )
 
         municipal_water_demand_per_capita = np.full_like(
             self.array["agents/households/region_id"],
@@ -91,25 +92,25 @@ class Agents(BuildModelBase):
             dtype=np.float32,
         )
 
-        municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
+        municipal_water_demand_m3_per_capita_per_day_multiplier = pd.DataFrame()
         for _, region in self.geom["regions"].iterrows():
             ISO3 = region["ISO3"]
             region_id = region["region_id"]
 
-            def load_water_demand_and_pop_data(
+            def load_water_demand_data(
                 ISO3: str,
-            ) -> tuple[pd.DataFrame, pd.DataFrame]:
-                """Load municipal water demand and population data for a given ISO3 code.
+            ) -> pd.DataFrame:
+                """Load municipal water demand data for a given ISO3 code.
 
                 Args:
                     ISO3: The ISO3 code of the region.
 
                 Returns:
-                    A tuple containing two DataFrames: municipal water withdrawal and population.
+                    The municipal water withdrawal data for the given ISO3 code.
                 """
                 # Load the municipal water demand data for the given ISO3 code
-                if ISO3 not in municipal_water_demand.index:
-                    countries_with_data = municipal_water_demand.index.unique().tolist()
+                if ISO3 not in municipal_water_demand_m3_per_capita_per_year.index:
+                    countries_with_data = municipal_water_demand_m3_per_capita_per_year.index.unique().tolist()
                     donor_countries = setup_donor_countries(
                         self.data_catalog,
                         self.geom["global_countries"],
@@ -124,34 +125,25 @@ class Agents(BuildModelBase):
                         f"Country {region['ISO3']} not present in municipal water demand data, using donor country {ISO3}"
                     )
 
-                municipal_water_demand_region = municipal_water_demand.loc[ISO3]
-                population = municipal_water_demand_region[
-                    municipal_water_demand_region["Variable"] == "Total population"
-                ]
-                population = population.set_index("Year")
-                population = population["Value"] * 1000
+                # now that we have data for a single country, we can set the index to year and return the value column
+                municipal_water_demand_m3_per_capita_per_year_country = (
+                    municipal_water_demand_m3_per_capita_per_year.loc[ISO3]
+                ).set_index("Year")["Value"]
 
-                municipal_water_withdrawal = municipal_water_demand_region[
-                    municipal_water_demand_region["Variable"]
-                    == "Municipal water withdrawal"
-                ]
-                return municipal_water_withdrawal, population
+                municipal_water_demand_m3_per_capita_per_day_country = (
+                    municipal_water_demand_m3_per_capita_per_year_country / 365.2425
+                )
+                return municipal_water_demand_m3_per_capita_per_day_country
 
-            municipal_water_withdrawal, population = load_water_demand_and_pop_data(
-                ISO3
+            municipal_water_demand_m3_per_capita_per_day_country = (
+                load_water_demand_data(ISO3)
             )
 
-            if population.isna().any() or len(population) == 0:
-                raise ValueError(
-                    f"Missing population data for {ISO3}. Please check the population dataset."
-                )
-            if len(municipal_water_withdrawal) == 0:
+            if len(municipal_water_demand_m3_per_capita_per_day_country) == 0:
                 countries_with_water_withdrawal_data = (
-                    municipal_water_demand[
-                        municipal_water_demand["Variable"]
-                        == "Municipal water withdrawal"
-                    ]
-                    .dropna(axis=0, how="any")
+                    municipal_water_demand_m3_per_capita_per_year.dropna(
+                        axis=0, how="any"
+                    )
                     .index.unique()
                     .tolist()
                 )
@@ -168,40 +160,26 @@ class Agents(BuildModelBase):
                 self.logger.info(
                     f"Missing municipal water withdrawal data for {ISO3}, filling with donor country {donor_country}"
                 )
-                municipal_water_withdrawal, population = load_water_demand_and_pop_data(
-                    donor_country
+                municipal_water_demand_m3_per_capita_per_day_country = (
+                    load_water_demand_data(donor_country)
                 )
 
-            assert len(municipal_water_withdrawal) > 0, (
+            assert len(municipal_water_demand_m3_per_capita_per_day_country) > 0, (
                 f"Missing municipal water withdrawal data for {ISO3}"
             )
 
-            municipal_water_withdrawal = municipal_water_withdrawal.set_index("Year")
-            municipal_water_withdrawal = municipal_water_withdrawal["Value"] * 10e9
-
-            municipal_water_withdrawal_m3_per_capita_per_day = (
-                municipal_water_withdrawal / population / 365.2425
-            )
-
-            if municipal_water_withdrawal_m3_per_capita_per_day.isna().any():
-                missing_years = municipal_water_withdrawal_m3_per_capita_per_day[
-                    municipal_water_withdrawal_m3_per_capita_per_day.isna()
+            if municipal_water_demand_m3_per_capita_per_day_country.isna().any():
+                missing_years = municipal_water_demand_m3_per_capita_per_day_country[
+                    municipal_water_demand_m3_per_capita_per_day_country.isna()
                 ].index.tolist()
-                # filter out years that are not in the model time
-                missing_years = [year for year in missing_years]
-                # get all the countries with data for these years
-                municipal_water_withdrawal_insert = municipal_water_demand[
-                    municipal_water_demand["Variable"] == "Municipal water withdrawal"
-                ]
-                # countries wirth data for ALL the missing years
-                countries_with_data = (
-                    municipal_water_withdrawal_insert.loc[
-                        municipal_water_withdrawal_insert["Year"].isin(missing_years)
-                    ]
-                    .dropna(axis=0, how="any")
-                    .index.unique()
-                    .tolist()
-                )
+                # Find countries that have data for all the missing years
+                countries_with_data: set[str] = set()
+                for (
+                    country,
+                    group,
+                ) in municipal_water_demand_m3_per_capita_per_year.groupby(level=0):
+                    if np.isin(missing_years, group["Year"]).all():
+                        countries_with_data.add(country)
 
                 # fill the municipal water withdrawal data for missing years from donor countries
                 donor_countries = setup_donor_countries(
@@ -214,35 +192,24 @@ class Agents(BuildModelBase):
                 )
                 donor_country = donor_countries[ISO3]
                 self.logger.info(
-                    f"Missing municipal water withdrawal data for {ISO3}, using donor country {donor_country}"
+                    f"Missing municipal water demand data for {ISO3}, using donor country {donor_country}"
                 )
-                municipal_water_withdrawal_donor, population_donor = (
-                    load_water_demand_and_pop_data(donor_country)
-                )
-
-                municipal_water_withdrawal_donor = (
-                    municipal_water_withdrawal_donor.set_index("Year")
-                )
-                municipal_water_withdrawal_donor = (
-                    municipal_water_withdrawal_donor["Value"] * 10e9
-                )
-
-                municipal_water_withdrawal_m3_per_capita_per_day_donor = (
-                    municipal_water_withdrawal_donor / population_donor / 365.2425
+                municipal_water_demand_m3_per_capita_per_day_donor = (
+                    load_water_demand_data(donor_country)
                 )
 
                 # use the donor country data to fill the missing values
                 for year in missing_years:
-                    municipal_water_withdrawal_m3_per_capita_per_day.loc[year] = (
-                        municipal_water_withdrawal_m3_per_capita_per_day_donor.loc[year]
+                    municipal_water_demand_m3_per_capita_per_day_country.loc[year] = (
+                        municipal_water_demand_m3_per_capita_per_day_donor.loc[year]
                     )
 
-            municipal_water_withdrawal_m3_per_capita_per_day = (
-                municipal_water_withdrawal_m3_per_capita_per_day
-            ).dropna()
+            assert (
+                not municipal_water_demand_m3_per_capita_per_day_country.isna().any()
+            ), f"Missing municipal water demand data for {ISO3} after donor filling"
 
-            municipal_water_withdrawal_m3_per_capita_per_day: pd.DataFrame = (
-                municipal_water_withdrawal_m3_per_capita_per_day.reindex(
+            municipal_water_demand_m3_per_capita_per_day: pd.DataFrame = (
+                municipal_water_demand_m3_per_capita_per_day_country.reindex(
                     list(
                         range(
                             self.start_date.year,
@@ -254,25 +221,23 @@ class Agents(BuildModelBase):
                 .bfill()
             )  # interpolate also extrapolates forward with constant values
 
-            assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
-                f"Too large water withdrawal data for {ISO3}"
+            assert municipal_water_demand_m3_per_capita_per_day.max() < 10, (
+                f"Too large water demand data for {ISO3}"
             )
 
             # set baseline year for municipal water demand
-            if 2000 not in municipal_water_withdrawal_m3_per_capita_per_day.index:
+            if 2000 not in municipal_water_demand_m3_per_capita_per_day.index:
                 # get first year with data
-                first_year = municipal_water_withdrawal_m3_per_capita_per_day.index[0]
+                first_year = municipal_water_demand_m3_per_capita_per_day.index[0]
                 self.logger.warning(
                     f"Missing 2000 data for {ISO3}, using first year {first_year} as baseline"
                 )
                 municipal_water_demand_baseline_m3_per_capita_per_day = (
-                    municipal_water_withdrawal_m3_per_capita_per_day.loc[
-                        first_year
-                    ].item()
+                    municipal_water_demand_m3_per_capita_per_day.loc[first_year].item()
                 )
             # use the 2000 as baseline (default)
             municipal_water_demand_baseline_m3_per_capita_per_day: pd.DataFrame = (
-                municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
+                municipal_water_demand_m3_per_capita_per_day.loc[2000].item()
             )
 
             municipal_water_demand_per_capita[
@@ -281,8 +246,8 @@ class Agents(BuildModelBase):
 
             # scale municipal water demand table to use baseline as 1.00 and scale other values
             # relatively
-            municipal_water_withdrawal_m3_per_capita_per_day_multiplier[region_id] = (
-                municipal_water_withdrawal_m3_per_capita_per_day
+            municipal_water_demand_m3_per_capita_per_day_multiplier[region_id] = (
+                municipal_water_demand_m3_per_capita_per_day
                 / municipal_water_demand_baseline_m3_per_capita_per_day
             )
 
@@ -290,8 +255,8 @@ class Agents(BuildModelBase):
         # so instead we use a baseline (2000 for easy reasoning), and scale
         # the other years relatively to the baseline
         self.set_table(
-            municipal_water_withdrawal_m3_per_capita_per_day_multiplier,
-            name="municipal_water_withdrawal_m3_per_capita_per_day_multiplier",
+            municipal_water_demand_m3_per_capita_per_day_multiplier,
+            name="municipal_water_demand_m3_per_capita_per_day_multiplier",
         )
 
         assert not np.isnan(municipal_water_demand_per_capita).any(), (
