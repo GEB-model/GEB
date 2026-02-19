@@ -72,6 +72,7 @@ To support this version:
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
 - Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
+- Update damagescanner to v1.0.0b1
 
 To support this version:
 
@@ -87,6 +88,7 @@ To support this version:
 - Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 - Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
 - Add and run `setup_vegetation` to `build.yml`. A good place is for example after `setup_soil`.
+- Run uv sync to update damagescanner
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 
