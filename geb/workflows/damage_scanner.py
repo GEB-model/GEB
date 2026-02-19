@@ -287,7 +287,7 @@ def VectorScanner(
         "All unique object_types in the features GeoDataFrame must be present as columns in the vulnerability_curves DataFrame."
     )
     features_index = features.index.copy()
-    features = VectorScannerDS(
+    features_with_damages = VectorScannerDS(
         feature_file=features,
         hazard_file=hazard,
         curve_path=vulnerability_curves,
@@ -295,4 +295,4 @@ def VectorScanner(
         disable_progress=disable_progress,
     )["damage"]
     # Fill missing features with zero damage
-    return features.reindex(features_index, fill_value=0.0)
+    return features_with_damages.reindex(features_index, fill_value=0.0)
