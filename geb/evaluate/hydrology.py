@@ -804,9 +804,7 @@ def _plot_discharge_validation_graphs(
             edgecolor="none",
             s=1,
         )
-    ax.set_xlabel(
-        "Discharge observations [m3/s] (%s)" % station_name
-    )
+    ax.set_xlabel("Discharge observations [m3/s] (%s)" % station_name)
     ax.set_ylabel("GEB discharge simulation [m3/s]")
     ax.set_title("GEB vs observations (discharge)")
     if valid_pairs_df.shape[0] >= 2:
