@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from .aquastat import AQUASTAT
 from .base import Adapter
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
@@ -221,6 +222,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use",
             "url": "https://www.gebco.net/",
             "paper_doi": "10.5285/a29c5465-b138-234d-e053-6c86abc040b9",
+        },
+    },
+    "aquastat": {
+        "adapter": AQUASTAT(
+            folder="aquastat",
+            local_version=1,
+            filename="aquastat.parquet",
+            cache="global",
+        ),
+        "url": "https://storage.googleapis.com/810c63d8-3fde-4ecd-9882-14d62e3058be/static/sites/aquastat/bulk/bulk_eng(in).csv",
+        "source": {
+            "name": "AQUASTAT",
+            "author": "FAO",
+            "url": "https://data.apps.fao.org/aquastat",
+            "license": "CC BY-NC- SA 3.0 IGO",
         },
     },
     "global_exposure_model": {

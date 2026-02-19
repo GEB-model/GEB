@@ -43,9 +43,3 @@ oecd_idd:
     socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
   driver: csv
   data_type: DataFrame
-AQUASTAT_municipal_withdrawal:
-  data_type: DataFrame
-  driver: excel
-  path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
-  meta:
-    source_license: CC BY 4.0
