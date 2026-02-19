@@ -510,7 +510,7 @@ class ReturnPeriodModel:
             f"λ={self.lambda_per_year:.2f}"
         )
         # Position boxes side-by-side in bottom right to avoid overlap
-        x_pos = 0.55 if label_prefix == "Q_obs" else 0.78
+        x_pos = 0.55 if label_prefix == "discharge_observations" else 0.78
         ax.text(
             x_pos,
             0.03,

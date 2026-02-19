@@ -37,7 +37,7 @@ class Evaluate:
         run_name: str = "default",
         include_spinup: bool = False,
         include_yearly_plots: bool = True,
-        correct_Q_obs: bool = False,
+        correct_discharge_observations: bool = False,
     ) -> None:
         """Run a single evaluation method.
 
@@ -48,7 +48,7 @@ class Evaluate:
             run_name: Name of the run to evaluate. Defaults to "default".
             include_spinup: If True, includes the spinup run in the evaluation.
             include_yearly_plots: If True, creates plots for every year showing the evaluation
-            correct_Q_obs: If True, corrects the observed discharge values.
+            correct_discharge_observations: If True, corrects the observed discharge values.
 
         Raises:
             AttributeError: If the specified method is not implemented in the Evaluate class.
@@ -69,7 +69,7 @@ class Evaluate:
             run_name=run_name,
             include_spinup=include_spinup,
             include_yearly_plots=include_yearly_plots,
-            correct_Q_obs=correct_Q_obs,
+            correct_discharge_observations=correct_discharge_observations,
         )
 
     @property

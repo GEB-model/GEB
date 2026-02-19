@@ -122,6 +122,7 @@ TRADE_REGIONS: dict[str, str] = {
     "ISL": "ROWE",
     "NOR": "ROWE",
     "CHE": "EU_MidWest",  # Switzerland is grouped with EU_MidWest
+    "LIE": "EU_MidWest",  # Liechtenstein is grouped with EU_MidWest
     "BOL": "RSAM",
     "CHL": "RSAM",
     "COL": "RSAM",

@@ -664,6 +664,7 @@ def get_discharge_and_river_parameters_by_river(
         river_width_beta_per_point = None
 
     discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
+    discharge_df.index.freq = "H"  # ty:ignore[invalid-assignment]
     river_parameters: pd.DataFrame = pd.DataFrame(
         index=np.array(river_IDs),
         columns=np.array(

@@ -1,6 +1,11 @@
 # dev
+- Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
+- Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.
+- Add frequency labels (hourly/daily) to extreme value analysis and validation plot titles.
 - Allow model to run from 1960 onwards (raise clear error if earlier than 1960 is requested).
 - Update `parse_demand` in `agents.py` to backward and forward fill water demand data if it doesn't cover the entire model time range.
+- Update discharge observation processing to support hourly data and separate observations into hourly and daily tables.
+- Update hydrology evaluation to support both hourly and daily observation datasets.
 - Add build method to set up reforestation potential (and data catalog entry)
 - Add units to all data from `setup_hydrography`
 - Compute hillslope length based on drainage density
@@ -16,10 +21,12 @@
 - In evaluate make a dataframe without missing timesteps and ensure that return periods are esimated on the same data for observed and simulated for comparison.
 - Fix: fix for regions with very large coastal areas beyond the riverine grid.
 - Fix: waterbody outflow is larger than waterbody storage (due to floating point imprecision).
+- Fix: Added Liechtenstein to trade regions list which allows the model to be built in the Rhine basin
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
 - Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`
+- Re-run `setup_discharge_observations`: `geb update -b build.yml::setup_discharge_observations`
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
