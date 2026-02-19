@@ -451,9 +451,9 @@ def update(*args: Any, **kwargs: Any) -> None:
 @cli.command()
 @click_run_options()
 @click.option(
-    "--methods",
-    default="plot_discharge,evaluate_discharge,evaluate_hydrodynamics,water_balance",
-    help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
+    "--method",
+    default="hydrology.evaluate_discharge",
+    help="Single evaluation method to run, e.g. 'hydrology.evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
@@ -470,18 +470,18 @@ def update(*args: Any, **kwargs: Any) -> None:
     help="Create yearly plots in evaluation.",
 )
 @click.option(
-    "--correct-q-obs",
+    "--correct-discharge-observations",
     is_flag=True,
     default=False,
-    help="correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the difference in upstream area between the Q_obs station and the simulated discharge",
+    help="correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries for the difference in upstream area between the discharge_observations station and the simulated discharge",
 )
 def evaluate(
-    methods: str,
+    method: str,
     spinup_name: str,
     run_name: str,
     include_spinup: bool,
     include_yearly_plots: bool,
-    correct_q_obs: bool,
+    correct_discharge_observations: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     config: dict[str, Any] | Path = CONFIG_DEFAULT,
     profiling: bool = PROFILING_DEFAULT,
@@ -491,34 +491,29 @@ def evaluate(
     """Evaluate model, for example by comparing observed and simulated discharge.
 
     Args:
-        methods: Comma-seperated list of methods to evaluate. Currently supported methods: '
-            'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.
+        method: Single evaluation method to run, e.g. `hydrology.evaluate_discharge`.
         spinup_name: Name of the evaluation run.
         run_name: Name of the run to evaluate.
         include_spinup: Include spinup in evaluation.
         include_yearly_plots: Create yearly plots in evaluation.
-        correct_q_obs: correct_Q_obs can be flagged to correct the Q_obs discharge timeseries
-            for the difference in upstream area between the Q_obs station and the simulated discharge.
+        correct_discharge_observations: correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries
+            for the difference in upstream area between the discharge_observations station and the simulated discharge.
         working_directory: Working directory for the model.
         config: Path to the model configuration file or a dict with the config.
         profiling: If True, run the model with profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
         timing: If True, run the model with timing, printing the time taken for specific methods
     """
-    # If no methods are provided, pass None to run_model_with_method
-    methods_list: list[str] = methods.split(",")
-    methods_list: list[str] = [
-        method.replace("-", "_").strip() for method in methods_list
-    ]
+    method_name = method.replace("-", "_").strip()
     run_model_with_method(
         method="evaluate",
         method_args={
-            "methods": methods_list,
+            "method": method_name,
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,
             "include_yearly_plots": include_yearly_plots,
-            "correct_Q_obs": correct_q_obs,
+            "correct_discharge_observations": correct_discharge_observations,
         },
         working_directory=working_directory,
         config=config,
