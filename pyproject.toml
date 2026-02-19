@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b11"
+version = "1.0.0b12"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -38,7 +38,7 @@ dependencies = [
     "hydromt-sfincs>=1.2.0",
     "mcp",
     "networkx",
-    "numba>=0.63.0",
+    "numba>=0.64.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
     "pandas>=2.3.0,<3.0.0", # we get some errors with pandas 3.0
@@ -50,9 +50,8 @@ dependencies = [
     "pytest",
     "python-dotenv>=1.0.1",
     "pyyaml>=6.0.2",
-    "rasterio==1.4.3", # there are issues loading stac data with 1.4.4
-    "rasterstats>=0.20.0",
-    "rioxarray>=0.17.0",
+    "rasterio>=1.5.0",
+    "rioxarray>=0.21.0",
     "s3fs>=2023.6.0",
     "SALib>=1.4.8", # for sensitivity analysis
     "scipy>=1.16",
@@ -66,7 +65,7 @@ dependencies = [
     "zarr>=3.1.5",
     "plotly>=6.2.0",
     "kaleido>=1.0.0",
-    "ty==0.0.13",
+    "ty>=0.0.13",
     "pystac>=1.14.1",
     "xpystac>=0.4.0",
     "odc-stac>=0.4.0",
@@ -84,7 +83,7 @@ dependencies = [
     "seaborn>=0.13.2",
     "cdsapi>=0.7.7",
 ]
-requires-python = ">=3.13, <3.14"
+requires-python = ">=3.14, <3.15"
 readme = "README.md"
 classifiers = [
     "Development Status :: 4 - Beta",
