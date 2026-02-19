@@ -21,6 +21,7 @@
 - In evaluate make a dataframe without missing timesteps and ensure that return periods are esimated on the same data for observed and simulated for comparison.
 - Fix: fix for regions with very large coastal areas beyond the riverine grid.
 - Fix: waterbody outflow is larger than waterbody storage (due to floating point imprecision).
+- Fix: Added Liechtenstein to trade regions list which allows the model to be built in the Rhine basin
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
