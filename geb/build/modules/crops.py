@@ -26,6 +26,7 @@ from geb.workflows.raster import (
     get_neighbor_cell_ids_for_linear_indices,
     interpolate_na_2d,
     sample_from_map,
+    snap_to_grid,
 )
 
 from ..workflows.conversions import TRADE_REGIONS
@@ -1290,29 +1291,33 @@ class Crops(BuildModelBase):
         # Initialize a dictionary to store datasets
         crop_data = {}
 
+        # the datasets have slightly different grids, so we need to snap them to the same grid. We take the first one as reference and snap the others to it
+        first_crop_map_for_alignment = None
+
         for year in years:
             crop_data[year] = {}
             for crop in crops:
                 crop_data[year][crop] = {}
                 for irrigation in irrigation_types:
                     dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
+                    new_dataset_name = f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
-                    crop_map = xr.open_dataarray(
-                        self.old_data_catalog.get_source(dataset_name).path
-                    )
+                    crop_map = self.data_catalog.fetch(new_dataset_name).read()
+
                     crop_map = crop_map.isel(
-                        {
-                            **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
-                            **{"band": 0},
-                        },
+                        get_window(crop_map.x, crop_map.y, self.bounds, buffer=2)
                     )
 
                     crop_map = crop_map.fillna(0)
 
-                    crop_data[year][crop][irrigation] = crop_map.assign_coords(
-                        x=np.round(crop_map.coords["x"].values, decimals=6),
-                        y=np.round(crop_map.coords["y"].values, decimals=6),
-                    )
+                    # do the snapping unless it is the first dataset, then we take this one as reference for the others
+                    # see above comment for more info
+                    if first_crop_map_for_alignment is None:
+                        first_crop_map_for_alignment = crop_map
+                    else:
+                        crop_map = snap_to_grid(crop_map, first_crop_map_for_alignment)
+
+                    crop_data[year][crop][irrigation] = crop_map
 
             # Initialize variables for total calculations
             total_cropped_area = None

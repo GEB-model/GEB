@@ -29,6 +29,7 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
+from .mirca_os import MIRCAOS
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
 from .osm_data import OpenStreetMapCoastlines, OpenStreetMapLandPolygons
@@ -949,6 +950,51 @@ data_catalog: dict[str, dict[str, Any]] = {
             },
         }
         for scenario in ["historical", "ssp1", "ssp2", "ssp3", "ssp5"]
+    },
+    **{
+        f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}": {
+            "adapter": MIRCAOS(
+                folder="mirca_os",
+                filename=f"Annual Harvested Area Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{irrigation}.tif",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/data/contents/Annual%20Harvested%20Area%20Grids/Annual_Harvested_Area_Grids.rar",
+            "source": {
+                "name": "MIRCA-OS",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://doi.org/10.4211/hs.60a890eb841c460192c03bb590687145",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
+        for resolution in ["5-arcminute", "30-arcminute"]
+        for crop in [
+            "Wheat",
+            "Maize",
+            "Rice",
+            "Barley",
+            "Rye",
+            "Millet",
+            "Sorghum",
+            "Soybeans",
+            "Sunflower",
+            "Potatoes",
+            "Cassava",
+            "Sugar_cane",
+            "Sugar_beet",
+            "Oil_palm",
+            "Rapeseed",
+            "Groundnuts",
+            "Others_perennial",
+            "Fodder",
+            "Others_annual",
+            "Cocoa",
+            "Coffee",
+            "Cotton",
+            "Pulses",
+        ]
+        for irrigation in ["ir", "rf"]
     },
 }
 
