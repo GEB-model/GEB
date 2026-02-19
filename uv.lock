@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = "==3.13.*"
 resolution-markers = [
     "platform_machine == 'ARM64' and sys_platform == 'win32'",
@@ -775,25 +775,24 @@ wheels = [
 
 [[package]]
 name = "damagescanner"
-version = "0.9b21"
+version = "1.0.0b1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "exactextract" },
     { name = "geopandas" },
+    { name = "matplotlib" },
     { name = "numpy" },
-    { name = "pandas" },
+    { name = "openpyxl" },
     { name = "pyproj" },
-    { name = "pyyaml" },
     { name = "rasterio" },
     { name = "rioxarray" },
-    { name = "scipy" },
-    { name = "shapely" },
     { name = "tqdm" },
     { name = "xarray" },
+    { name = "xlrd" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/29/ff/82d6d94a6c0ef03ac5ecd3e8ceb5569fe6c9207c2e3cb3a09bf9937913ab/damagescanner-0.9b21.tar.gz", hash = "sha256:684177fae86269e9d78242bca464bcaf2be95b6f6904349842425420a6ab2e98", size = 33463, upload-time = "2025-07-14T10:26:39.846Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/5f/6e2647a469075cd038217224d3da020cc1c01340fa428d2fc12e1d6edce8/damagescanner-1.0.0b1.tar.gz", hash = "sha256:5bd7ee96438b08f4f3e390b2c9a4334bc169b7be69c3d98b38a07fd590ccfa73", size = 28841, upload-time = "2026-02-17T07:21:38.876Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2d/56/59882fb2d31238a5e83dc4dfba095c3ccef427508d43bf8cb77f6fa5cd3d/damagescanner-0.9b21-py3-none-any.whl", hash = "sha256:8ceb89b0db41f327f5032390e6ba3a4754f9977b1635dac6356a55b77cdc9fb6", size = 31383, upload-time = "2025-07-14T10:26:38.83Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/ff/1e4ee788afd80a4c5341216135285bb1acb192a33b6592f631613fee90f6/damagescanner-1.0.0b1-py3-none-any.whl", hash = "sha256:dc301cbff2940a1a91333ad827dc63de5249ec6db3b0393f130b2ec369463f49", size = 31827, upload-time = "2026-02-17T07:21:37.424Z" },
 ]
 
 [[package]]
@@ -1306,7 +1305,7 @@ requires-dist = [
     { name = "contextily", specifier = ">=1.6.2" },
     { name = "cppimport", marker = "extra == 'plantfate'", specifier = ">=22.8.2" },
     { name = "daft-pgm", marker = "extra == 'fairstream'", specifier = ">=0.1.4" },
-    { name = "damagescanner", specifier = "==0.9b21" },
+    { name = "damagescanner", specifier = "==1.0.0b1" },
     { name = "dask" },
     { name = "deap", specifier = ">=1.4.1" },
     { name = "ecmwf-api-client", specifier = ">=1.6.5" },
@@ -5472,6 +5471,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/96/9f/d9914a7b8df842832850b1a18e5f47aaa071c217cdd1da2ae9deb291018b/xgboost-3.2.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:852eabc6d3b3702a59bf78dbfdcd1cb9c4d3a3b6e5ed1f8781d8b9512354fdd2", size = 131100954, upload-time = "2026-02-10T11:02:42.704Z" },
     { url = "https://files.pythonhosted.org/packages/79/98/679de17c2caa4fd3b0b4386ecf7377301702cb0afb22930a07c142fcb1d8/xgboost-3.2.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:99b4a6bbcb47212fec5cf5fbe12347215f073c08967431b0122cfbd1ee70312c", size = 131748579, upload-time = "2026-02-10T10:54:40.424Z" },
     { url = "https://files.pythonhosted.org/packages/1f/3d/1661dd114a914a67e3f7ab66fa1382e7599c2a8c340f314ad30a3e2b4d08/xgboost-3.2.0-py3-none-win_amd64.whl", hash = "sha256:0d169736fd836fc13646c7ab787167b3a8110351c2c6bc770c755ee1618f0442", size = 101681668, upload-time = "2026-02-10T10:59:31.202Z" },
+]
+
+[[package]]
+name = "xlrd"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/5a/377161c2d3538d1990d7af382c79f3b2372e880b65de21b01b1a2b78691e/xlrd-2.0.2.tar.gz", hash = "sha256:08b5e25de58f21ce71dc7db3b3b8106c1fa776f3024c54e45b45b374e89234c9", size = 100167, upload-time = "2025-06-14T08:46:39.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/62/c8d562e7766786ba6587d09c5a8ba9f718ed3fa8af7f4553e8f91c36f302/xlrd-2.0.2-py2.py3-none-any.whl", hash = "sha256:ea762c3d29f4cca48d82df517b6d89fbce4db3107f9d78713e48cd321d5c9aa9", size = 96555, upload-time = "2025-06-14T08:46:37.766Z" },
 ]
 
 [[package]]
