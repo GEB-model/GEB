@@ -10,3 +10,9 @@ when reviewing a pull request, please consider the following guidelines:
 - When a new feature is added or a bug is fixed, the changelog in `CHANGELOG.md` must be updated accordingly.
 - When adding a new feature that requires user documentation, the relevant documentation files must be updated accordingly.
 - When adding or removing authors, ensure that pyproject.toml and docs/about/developers.md are synchronized.
+
+## Forbidden packages
+
+Don't use these packages
+
+- Rasterstats

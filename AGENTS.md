@@ -79,3 +79,9 @@ Raises:
 ## Type annotations
 
 - Code can be type checked using ty: `uv run ty check`
+
+## Forbidden packages
+
+Don't use these packages
+
+- Rasterstats
