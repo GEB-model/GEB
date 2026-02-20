@@ -4,6 +4,7 @@ from typing import Any
 
 from .aquastat import AQUASTAT
 from .base import Adapter
+from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
@@ -658,6 +659,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "OECD",
             "license": "CC BY 4.0",
             "url": "https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov",
+        },
+    },
+    "coast_rp": {
+        "adapter": CoastRP(
+            folder="coast_rp",
+            local_version=1,
+            filename="COAST-RP.pkl",
+            cache="global",
+        ),
+        "url": "https://raw.githubusercontent.com/jobdullaart/HGRAPHER/refs/tags/v0.1/COAST-RP.pkl",
+        "source": {
+            "name": "COAST-RP",
+            "author": "Dullaart et al. (2023)",
+            "license": "Other (Open)",
+            "url": "https://zenodo.org/records/7912730",
         },
     },
     "esa_worldcover_2021": {
