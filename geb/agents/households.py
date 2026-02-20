@@ -13,9 +13,8 @@ import osmnx as ox
 import pandas as pd
 import xarray as xr
 from pyproj import CRS
-from rasterio.features import shapes
+from rasterio.features import rasterize, shapes
 from rasterio.transform import Affine
-from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
@@ -869,7 +868,7 @@ class Households(AgentBaseClass):
 
         for range_id in range_ids:
             # Build path to probability map
-            prob_map = Path(
+            prob_path = Path(
                 self.model.output_folder
                 / "prob_maps"
                 / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
@@ -877,38 +876,34 @@ class Households(AgentBaseClass):
             )
 
             # Open the probability map
-            prob_map = read_zarr(prob_map)
-            affine = prob_map.rio.transform()
-            prob_map = np.asarray(prob_map.values)
+            prob_da = read_zarr(prob_path)
 
-            # Get the pixel values for each postal code
-            stats = zonal_stats(
-                postal_codes,
-                prob_map,
-                affine=affine,
-                raster_out=True,
+            if postal_codes.crs != prob_da.rio.crs:
+                postal_codes = postal_codes.to_crs(prob_da.rio.crs)
+
+            # Rasterize postal codes to the same grid as the probability map
+            pc_mask = rasterize(
+                ((geom, i) for i, geom in enumerate(postal_codes.geometry)),
+                out_shape=(prob_da.rio.height, prob_da.rio.width),
+                transform=prob_da.rio.transform(),
                 all_touched=True,
-                nodata=np.nan,
+                fill=-1,
             )
 
             # Iterate through each postal code and check how many pixels exceed the threshold
-            for i, postalcode in enumerate(stats):
-                pixel_values = postalcode["mini_raster_array"]
-                postal_code = postal_codes.iloc[i]["postcode"]
+            for i, pc_row in postal_codes.iterrows():
+                postal_code = pc_row["postcode"]
 
-                # Only get the values that are within the postal code
-                postalcode_pixels = pixel_values[~pixel_values.mask]
+                # Get the values for this postal code from the probability map
+                valid_pixels = prob_da.values.squeeze()[pc_mask == i]
 
-                # Calculate the number of pixels with flood prob above the threshold
-                n_above = np.sum(postalcode_pixels >= prob_threshold)
-
-                # Calculate the total number of pixels within the postal code
-                n_total = len(postalcode_pixels)
+                n_total = len(valid_pixels)
 
                 if n_total == 0:
                     print(f"No valid pixels found for postal code {postal_code}")
-                    continue
+                    percentage = 0
                 else:
+                    n_above = np.sum(valid_pixels >= prob_threshold)
                     percentage = n_above / n_total
 
                 if percentage >= area_threshold:
@@ -1216,14 +1211,11 @@ class Households(AgentBaseClass):
 
         # Open the probability map
         prob_map = read_zarr(prob_energy_hit_path)
-        affine = prob_map.rio.transform()
-        prob_array = np.asarray(prob_map.values)
 
         # Sample the probability map at the substations locations
-        sampled_probs = point_query(
-            substations, prob_array, affine=affine, interpolate="nearest"
-        )
-        substations["probability"] = sampled_probs
+        x = xr.DataArray(substations.geometry.x.values, dims="z")
+        y = xr.DataArray(substations.geometry.y.values, dims="z")
+        substations["probability"] = prob_map.sel(x=x, y=y, method="nearest").values
 
         # Filter substations that have a flood hit probability > threshold
         critical_hits_energy = substations[substations["probability"] >= prob_threshold]
@@ -1259,19 +1251,14 @@ class Households(AgentBaseClass):
 
         # Open the probability map
         prob_map = read_zarr(prob_critical_facilities_hit_path)
-        affine = prob_map.rio.transform()
-        prob_array = np.asarray(prob_map.values)
 
         # Sample the probability map at the facilities locations using their centroid (can be improved later to use whole area of the polygon)
         critical_facilities = critical_facilities.copy()
-
-        sampled_probs = point_query(
-            critical_facilities.geometry.centroid,
-            prob_array,
-            affine=affine,
-            interpolate="nearest",
-        )
-        critical_facilities["probability"] = sampled_probs
+        x = xr.DataArray(critical_facilities.geometry.centroid.x.values, dims="z")
+        y = xr.DataArray(critical_facilities.geometry.centroid.y.values, dims="z")
+        critical_facilities["probability"] = prob_map.sel(
+            x=x, y=y, method="nearest"
+        ).values
 
         # Filter facilities that have a flood hit probability > threshold
         critical_hits_facilities = critical_facilities[

@@ -877,7 +877,7 @@ class GEBModel(Module):
                     if hasattr(forcing_loader, "reader"):
                         forcing_loader.reader.close()
 
-    def __enter__(self) -> "GEBModel":
+    def __enter__(self) -> GEBModel:
         """Enters the context of the model.
 
         Returns:
