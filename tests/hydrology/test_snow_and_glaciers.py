@@ -1404,7 +1404,7 @@ def _plot_scenario_results(
     axs[4].legend()
     axs[4].grid(True)
     axs[4].axhline(0, color="black", linestyle="-", linewidth=0.8)
-    #
+
     axs[-1].set_xlabel("Time (hours)")
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plot_path = (
