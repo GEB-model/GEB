@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Hashable, Mapping
+import tempfile
+from collections.abc import Generator, Hashable, Mapping
+from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import Any, Literal, cast, overload
 
 import geopandas as gpd
@@ -34,6 +37,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayWithScalar,
 )
+from geb.workflows.io import read_zarr, write_zarr
 
 
 @overload
@@ -930,16 +934,17 @@ def pad_xy(
         return superset
 
 
-def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
+def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArray:
     """Interpolate NaN values along the time dimension of a DataArray.
 
     Uses nearest neighbor interpolation in the spatial dimensions for each time slice.
 
     Args:
-        da: The input DataArray with a time dimension.
+        da: The input 3D DataArray with dimensions (dim, y, x) and NaN values to interpolate.
+        dim: The dimension along which to interpolate NaN values. Default is 'time'.
 
     Returns:
-        A new DataArray with NaN values interpolated along the time dimension.
+        A new DataArray with NaN values interpolated along the dimension.
 
     Raises:
         ValueError: If '_FillValue' attribute is missing.
@@ -966,21 +971,21 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
         if not mask.any():
             return arr
 
-        assert dims == ("time", "y", "x")
+        assert dims == (dim, "y", "x")
 
-        for time_idx in range(arr.shape[0]):
-            mask_slice = mask[time_idx]
-            time_slice = arr[time_idx]
+        for idx in range(arr.shape[0]):
+            mask_slice = mask[idx]
+            dim_slice = arr[idx]
 
-            y, x = np.indices(time_slice.shape)
+            y, x = np.indices(dim_slice.shape)
             known_x, known_y = x[~mask_slice], y[~mask_slice]
-            known_v = time_slice[~mask_slice]
+            known_v = dim_slice[~mask_slice]
             missing_x, missing_y = x[mask_slice], y[mask_slice]
 
             filled_values = griddata(
                 (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
             )
-            arr[time_idx][mask_slice] = filled_values
+            arr[idx][mask_slice] = filled_values
         return arr
 
     da = xr.apply_ufunc(
@@ -1209,7 +1214,56 @@ def resample_chunked(
     return da
 
 
-def calculate_cell_area(
+def calculate_width_m(
+    affine_transform: Affine, height: int, width: int
+) -> TwoDArrayFloat32:
+    """Calculate the width of each cell in a grid given its affine transform.
+
+    Must be in a geographic coordinate system (degrees).
+
+    Args:
+        affine_transform: The affine transformation of the grid.
+        height: The height of the grid (number of rows).
+        width: The width of the grid (number of columns).
+
+    Returns:
+        A 2D array of cell widths in meters.
+    """
+    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
+    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
+
+    lat_idx = np.arange(0, height).repeat(width).reshape((height, width))
+    lat = (lat_idx + 0.5) * affine_transform.e + affine_transform.f
+    width_m = (
+        distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
+    )
+    return width_m.astype(np.float32)
+
+
+def calculate_height_m(
+    affine_transform: Affine, height: int, width: int
+) -> TwoDArrayFloat32:
+    """Calculate the height of each cell in a grid given its affine transform.
+
+    Must be in a geographic coordinate system (degrees).
+
+    Args:
+        affine_transform: The affine transformation of the grid.
+        height: The height of the grid (number of rows).
+        width: The width of the grid (number of columns).
+
+    Returns:
+        A 2D array of cell heights in meters.
+    """
+    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
+    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
+    height_m = distance_1_degree_latitude * abs(affine_transform.e)
+
+    # Broadcast height_m to the full grid size (height, width)
+    return np.full((height, width), height_m, dtype=np.float32)
+
+
+def calculate_cell_area_m2(
     affine_transform: Affine, height: int, width: int
 ) -> TwoDArrayFloat32:
     """Calculate the area of each cell in a grid given its affine transform.
@@ -1224,15 +1278,8 @@ def calculate_cell_area(
     Returns:
         A 2D array of cell areas in square meters.
     """
-    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
-    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
-
-    lat_idx = np.arange(0, height).repeat(width).reshape((height, width))
-    lat = (lat_idx + 0.5) * affine_transform.e + affine_transform.f
-    width_m = (
-        distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
-    )
-    height_m = distance_1_degree_latitude * abs(affine_transform.e)
+    width_m = calculate_width_m(affine_transform, height, width)
+    height_m = calculate_height_m(affine_transform, height, width)
     return (width_m * height_m).astype(np.float32)
 
 
@@ -1398,3 +1445,126 @@ def get_neighbor_cell_ids_for_linear_indices(
                 neighbor_id: int = r * nx + c
                 neighbor_cell_ids.append(neighbor_id)
     return neighbor_cell_ids
+
+
+@contextmanager
+def create_temp_zarr(
+    da: xr.DataArray,
+    name: str = "temp",
+    x_chunksize: int = 350,
+    y_chunksize: int = 350,
+    time_chunksize: int = 1,
+    time_chunks_per_shard: int | None = 30,
+) -> Generator[xr.DataArray, None, None]:
+    """Create a DataArray to a temporary Zarr file with specified chunks.
+
+    This context manager writes the DataArray to a temporary Zarr file and yields
+    the lazily opened DataArray. The temporary file is cleaned up when the context exits.
+
+    Args:
+        da: The DataArray to create.
+        name: Name suffix for the temporary file.
+        x_chunksize: Chunk size for x dimension.
+        y_chunksize: Chunk size for y dimension.
+        time_chunksize: Chunk size for time dimension.
+        time_chunks_per_shard: Time chunks per shard.
+
+    Yields:
+        The created DataArray opened from the temporary Zarr file.
+
+    Raises:
+        ValueError: If the input DataArray does not have a CRS defined.
+    """
+    if da.rio.crs is None:
+        raise ValueError("DataArray must have a CRS defined to use create_temp_zarr")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / f"{name}.zarr"
+        temp_da = write_zarr(
+            da,
+            tmp_path,
+            crs=da.rio.crs,
+            x_chunksize=x_chunksize,
+            y_chunksize=y_chunksize,
+            time_chunksize=time_chunksize,
+            time_chunks_per_shard=time_chunks_per_shard,
+            progress=True,
+        )
+        yield temp_da
+
+
+def rechunk_zarr_file(
+    input_path: Path | str,
+    output_path: Path | str,
+    how: Literal["time-optimized", "space-optimized", "balanced"],
+    intermediate: bool = True,
+) -> None:
+    """Rechunk a Zarr file to a new Zarr file with optimized chunking.
+
+    Args:
+        input_path: Path to the input Zarr file.
+        output_path: Path to the output Zarr file.
+        how: How to rechunk the file. Options:
+            - "time-optimized": Optimized for time series access (small x/y, large time).
+            - "space-optimized": Optimized for spatial access (large x/y, small time).
+            - "balanced": Balanced access (medium chunks).
+        intermediate: Whether to use an intermediate rechunking step (recommended for large files).
+            This may be somewhat slower but drastically reduces memory usage and can prevent out-of-memory errors.
+
+    Raises:
+        ValueError: If `how` is not one of the specified options.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    da: xr.DataArray = read_zarr(input_path)
+
+    # Determine chunks based on strategy
+    if how == "time-optimized":
+        x_chunk, y_chunk, time_chunk = 10, 10, da.sizes.get("time", 1)
+        shards = None
+    elif how == "space-optimized":
+        x_chunk, y_chunk, time_chunk = 350, 350, 1
+        shards = 30
+    elif how == "balanced":
+        x_chunk, y_chunk, time_chunk = 50, 50, 50
+        shards = None
+    else:
+        raise ValueError(
+            f"Unknown rechunking strategy: {how}, must be 'time-optimized', 'space-optimized', or 'balanced'"
+        )
+
+    if intermediate:
+        # Check if immediate chunking is beneficial (if strategies are very different)
+        # For simplicity, we use balanced 50x50x50 as intermediate if target is not balanced
+        # Or just always use balanced intermediate
+        print(
+            "Creating intermediate rechunked Zarr with 50x50 spatial chunks and 50 time chunks..."
+        )
+        ctx = create_temp_zarr(
+            da,
+            name="intermediate",
+            x_chunksize=50,
+            y_chunksize=50,
+            time_chunksize=50,
+            time_chunks_per_shard=None,
+        )
+    else:
+        # No intermediate step, directly rechunk from source to target
+        # Null context that just yields the original DataArray
+        ctx: nullcontext[xr.DataArray] = nullcontext(da)
+
+    with ctx as source_da:
+        print(
+            f"Rechunking Zarr with strategy '{how}' (x_chunk={x_chunk}, y_chunk={y_chunk}, time_chunk={time_chunk}, shards={shards})..."
+        )
+        write_zarr(
+            source_da,
+            output_path,
+            crs=da.rio.crs,
+            x_chunksize=x_chunk,
+            y_chunksize=y_chunk,
+            time_chunksize=time_chunk,
+            time_chunks_per_shard=shards,
+            progress=True,
+        )

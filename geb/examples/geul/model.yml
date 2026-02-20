@@ -5,7 +5,7 @@ inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2021-01-01
+  start_time: 2000-01-01
   ###
   # model end time (YYYY-MM-DD).
   end_time: 2024-12-30
@@ -14,7 +14,7 @@ general:
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
   # spinup_time: 1980-01-01
-  spinup_time: 1990-01-01
+  spinup_time: 1960-01-01
   # spinup_time: 2020-01-01
   ###
   # base folder where to report output data to

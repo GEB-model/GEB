@@ -1,6 +1,7 @@
 """Module containing build methods for the agents for GEB."""
 
 import math
+import unicodedata
 from datetime import datetime
 from typing import Any
 
@@ -22,7 +23,6 @@ from geb.workflows.raster import (
 )
 
 from ..workflows.conversions import (
-    AQUASTAT_NAME_TO_ISO3,
     COUNTRY_NAME_TO_ISO3,
     TRADE_REGIONS,
     setup_donor_countries,
@@ -44,7 +44,8 @@ class Agents(BuildModelBase):
             "set_time_range",
             "setup_regions_and_land_use",
             "setup_household_characteristics",
-        ]
+        ],
+        required=True,
     )
     def setup_water_demand(self) -> None:
         """Sets up the water demand data for GEB.
@@ -61,27 +62,29 @@ class Agents(BuildModelBase):
             monthly time step, but is assumed to be constant over the year.
 
             The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
-
-        Raises:
-            ValueError: If required data is missing in the data sources.
-
         """
         start_model_time = self.start_date.year
         end_model_time = self.end_date.year
 
-        municipal_water_demand = self.old_data_catalog.get_dataframe(
-            "AQUASTAT_municipal_withdrawal"
+        municipal_water_demand_m3_per_capita_per_year = self.data_catalog.fetch(
+            "aquastat"
+        ).read(
+            indicator="Municipal water withdrawal per capita (total population) [m3/inhab/year]"
         )
-        municipal_water_demand["ISO3"] = municipal_water_demand["Area"].map(
-            AQUASTAT_NAME_TO_ISO3
-        )
-        municipal_water_demand = municipal_water_demand.set_index("ISO3")
 
         # Filter the data for the model time
-        municipal_water_demand = municipal_water_demand[
-            (municipal_water_demand["Year"] >= start_model_time)
-            & (municipal_water_demand["Year"] <= end_model_time)
-        ]
+        municipal_water_demand_m3_per_capita_per_year = (
+            municipal_water_demand_m3_per_capita_per_year[
+                (
+                    municipal_water_demand_m3_per_capita_per_year["Year"]
+                    >= start_model_time
+                )
+                & (
+                    municipal_water_demand_m3_per_capita_per_year["Year"]
+                    <= end_model_time
+                )
+            ]
+        )
 
         municipal_water_demand_per_capita = np.full_like(
             self.array["agents/households/region_id"],
@@ -89,25 +92,25 @@ class Agents(BuildModelBase):
             dtype=np.float32,
         )
 
-        municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
+        municipal_water_demand_m3_per_capita_per_day_multiplier = pd.DataFrame()
         for _, region in self.geom["regions"].iterrows():
             ISO3 = region["ISO3"]
             region_id = region["region_id"]
 
-            def load_water_demand_and_pop_data(
+            def load_water_demand_data(
                 ISO3: str,
-            ) -> tuple[pd.DataFrame, pd.DataFrame]:
-                """Load municipal water demand and population data for a given ISO3 code.
+            ) -> pd.DataFrame:
+                """Load municipal water demand data for a given ISO3 code.
 
                 Args:
                     ISO3: The ISO3 code of the region.
 
                 Returns:
-                    A tuple containing two DataFrames: municipal water withdrawal and population.
+                    The municipal water withdrawal data for the given ISO3 code.
                 """
                 # Load the municipal water demand data for the given ISO3 code
-                if ISO3 not in municipal_water_demand.index:
-                    countries_with_data = municipal_water_demand.index.unique().tolist()
+                if ISO3 not in municipal_water_demand_m3_per_capita_per_year.index:
+                    countries_with_data = municipal_water_demand_m3_per_capita_per_year.index.unique().tolist()
                     donor_countries = setup_donor_countries(
                         self.data_catalog,
                         self.geom["global_countries"],
@@ -122,34 +125,25 @@ class Agents(BuildModelBase):
                         f"Country {region['ISO3']} not present in municipal water demand data, using donor country {ISO3}"
                     )
 
-                municipal_water_demand_region = municipal_water_demand.loc[ISO3]
-                population = municipal_water_demand_region[
-                    municipal_water_demand_region["Variable"] == "Total population"
-                ]
-                population = population.set_index("Year")
-                population = population["Value"] * 1000
+                # now that we have data for a single country, we can set the index to year and return the value column
+                municipal_water_demand_m3_per_capita_per_year_country = (
+                    municipal_water_demand_m3_per_capita_per_year.loc[ISO3]
+                ).set_index("Year")["Value"]
 
-                municipal_water_withdrawal = municipal_water_demand_region[
-                    municipal_water_demand_region["Variable"]
-                    == "Municipal water withdrawal"
-                ]
-                return municipal_water_withdrawal, population
+                municipal_water_demand_m3_per_capita_per_day_country = (
+                    municipal_water_demand_m3_per_capita_per_year_country / 365.2425
+                )
+                return municipal_water_demand_m3_per_capita_per_day_country
 
-            municipal_water_withdrawal, population = load_water_demand_and_pop_data(
-                ISO3
+            municipal_water_demand_m3_per_capita_per_day_country = (
+                load_water_demand_data(ISO3)
             )
 
-            if population.isna().any() or len(population) == 0:
-                raise ValueError(
-                    f"Missing population data for {ISO3}. Please check the population dataset."
-                )
-            if len(municipal_water_withdrawal) == 0:
+            if len(municipal_water_demand_m3_per_capita_per_day_country) == 0:
                 countries_with_water_withdrawal_data = (
-                    municipal_water_demand[
-                        municipal_water_demand["Variable"]
-                        == "Municipal water withdrawal"
-                    ]
-                    .dropna(axis=0, how="any")
+                    municipal_water_demand_m3_per_capita_per_year.dropna(
+                        axis=0, how="any"
+                    )
                     .index.unique()
                     .tolist()
                 )
@@ -166,40 +160,26 @@ class Agents(BuildModelBase):
                 self.logger.info(
                     f"Missing municipal water withdrawal data for {ISO3}, filling with donor country {donor_country}"
                 )
-                municipal_water_withdrawal, population = load_water_demand_and_pop_data(
-                    donor_country
+                municipal_water_demand_m3_per_capita_per_day_country = (
+                    load_water_demand_data(donor_country)
                 )
 
-            assert len(municipal_water_withdrawal) > 0, (
+            assert len(municipal_water_demand_m3_per_capita_per_day_country) > 0, (
                 f"Missing municipal water withdrawal data for {ISO3}"
             )
 
-            municipal_water_withdrawal = municipal_water_withdrawal.set_index("Year")
-            municipal_water_withdrawal = municipal_water_withdrawal["Value"] * 10e9
-
-            municipal_water_withdrawal_m3_per_capita_per_day = (
-                municipal_water_withdrawal / population / 365.2425
-            )
-
-            if municipal_water_withdrawal_m3_per_capita_per_day.isna().any():
-                missing_years = municipal_water_withdrawal_m3_per_capita_per_day[
-                    municipal_water_withdrawal_m3_per_capita_per_day.isna()
+            if municipal_water_demand_m3_per_capita_per_day_country.isna().any():
+                missing_years = municipal_water_demand_m3_per_capita_per_day_country[
+                    municipal_water_demand_m3_per_capita_per_day_country.isna()
                 ].index.tolist()
-                # filter out years that are not in the model time
-                missing_years = [year for year in missing_years]
-                # get all the countries with data for these years
-                municipal_water_withdrawal_insert = municipal_water_demand[
-                    municipal_water_demand["Variable"] == "Municipal water withdrawal"
-                ]
-                # countries wirth data for ALL the missing years
-                countries_with_data = (
-                    municipal_water_withdrawal_insert.loc[
-                        municipal_water_withdrawal_insert["Year"].isin(missing_years)
-                    ]
-                    .dropna(axis=0, how="any")
-                    .index.unique()
-                    .tolist()
-                )
+                # Find countries that have data for all the missing years
+                countries_with_data: set[str] = set()
+                for (
+                    country,
+                    group,
+                ) in municipal_water_demand_m3_per_capita_per_year.groupby(level=0):
+                    if np.isin(missing_years, group["Year"]).all():
+                        countries_with_data.add(country)
 
                 # fill the municipal water withdrawal data for missing years from donor countries
                 donor_countries = setup_donor_countries(
@@ -212,35 +192,24 @@ class Agents(BuildModelBase):
                 )
                 donor_country = donor_countries[ISO3]
                 self.logger.info(
-                    f"Missing municipal water withdrawal data for {ISO3}, using donor country {donor_country}"
+                    f"Missing municipal water demand data for {ISO3}, using donor country {donor_country}"
                 )
-                municipal_water_withdrawal_donor, population_donor = (
-                    load_water_demand_and_pop_data(donor_country)
-                )
-
-                municipal_water_withdrawal_donor = (
-                    municipal_water_withdrawal_donor.set_index("Year")
-                )
-                municipal_water_withdrawal_donor = (
-                    municipal_water_withdrawal_donor["Value"] * 10e9
-                )
-
-                municipal_water_withdrawal_m3_per_capita_per_day_donor = (
-                    municipal_water_withdrawal_donor / population_donor / 365.2425
+                municipal_water_demand_m3_per_capita_per_day_donor = (
+                    load_water_demand_data(donor_country)
                 )
 
                 # use the donor country data to fill the missing values
                 for year in missing_years:
-                    municipal_water_withdrawal_m3_per_capita_per_day.loc[year] = (
-                        municipal_water_withdrawal_m3_per_capita_per_day_donor.loc[year]
+                    municipal_water_demand_m3_per_capita_per_day_country.loc[year] = (
+                        municipal_water_demand_m3_per_capita_per_day_donor.loc[year]
                     )
 
-            municipal_water_withdrawal_m3_per_capita_per_day = (
-                municipal_water_withdrawal_m3_per_capita_per_day
-            ).dropna()
+            assert (
+                not municipal_water_demand_m3_per_capita_per_day_country.isna().any()
+            ), f"Missing municipal water demand data for {ISO3} after donor filling"
 
-            municipal_water_withdrawal_m3_per_capita_per_day: pd.DataFrame = (
-                municipal_water_withdrawal_m3_per_capita_per_day.reindex(
+            municipal_water_demand_m3_per_capita_per_day: pd.DataFrame = (
+                municipal_water_demand_m3_per_capita_per_day_country.reindex(
                     list(
                         range(
                             self.start_date.year,
@@ -252,25 +221,23 @@ class Agents(BuildModelBase):
                 .bfill()
             )  # interpolate also extrapolates forward with constant values
 
-            assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
-                f"Too large water withdrawal data for {ISO3}"
+            assert municipal_water_demand_m3_per_capita_per_day.max() < 10, (
+                f"Too large water demand data for {ISO3}"
             )
 
             # set baseline year for municipal water demand
-            if 2000 not in municipal_water_withdrawal_m3_per_capita_per_day.index:
+            if 2000 not in municipal_water_demand_m3_per_capita_per_day.index:
                 # get first year with data
-                first_year = municipal_water_withdrawal_m3_per_capita_per_day.index[0]
+                first_year = municipal_water_demand_m3_per_capita_per_day.index[0]
                 self.logger.warning(
                     f"Missing 2000 data for {ISO3}, using first year {first_year} as baseline"
                 )
                 municipal_water_demand_baseline_m3_per_capita_per_day = (
-                    municipal_water_withdrawal_m3_per_capita_per_day.loc[
-                        first_year
-                    ].item()
+                    municipal_water_demand_m3_per_capita_per_day.loc[first_year].item()
                 )
             # use the 2000 as baseline (default)
             municipal_water_demand_baseline_m3_per_capita_per_day: pd.DataFrame = (
-                municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
+                municipal_water_demand_m3_per_capita_per_day.loc[2000].item()
             )
 
             municipal_water_demand_per_capita[
@@ -279,8 +246,8 @@ class Agents(BuildModelBase):
 
             # scale municipal water demand table to use baseline as 1.00 and scale other values
             # relatively
-            municipal_water_withdrawal_m3_per_capita_per_day_multiplier[region_id] = (
-                municipal_water_withdrawal_m3_per_capita_per_day
+            municipal_water_demand_m3_per_capita_per_day_multiplier[region_id] = (
+                municipal_water_demand_m3_per_capita_per_day
                 / municipal_water_demand_baseline_m3_per_capita_per_day
             )
 
@@ -288,8 +255,8 @@ class Agents(BuildModelBase):
         # so instead we use a baseline (2000 for easy reasoning), and scale
         # the other years relatively to the baseline
         self.set_table(
-            municipal_water_withdrawal_m3_per_capita_per_day_multiplier,
-            name="municipal_water_withdrawal_m3_per_capita_per_day_multiplier",
+            municipal_water_demand_m3_per_capita_per_day_multiplier,
+            name="municipal_water_demand_m3_per_capita_per_day_multiplier",
         )
 
         assert not np.isnan(municipal_water_demand_per_capita).any(), (
@@ -302,72 +269,77 @@ class Agents(BuildModelBase):
 
         self.logger.info("Setting up other water demands")
 
-        def set_demand(file: str, variable: str, name: str, ssp: str) -> None:
+        def parse_demand(file: str, variable: str, ssp: str) -> xr.DataArray:
             """Sets up the water demand data for a given demand type.
 
             Args:
                 file: The file name of the dataset.
                 variable: The variable name in the dataset.
-                name: The name to set the forcing data as.
                 ssp: The SSP scenario to use.
+
+            Returns:
+                An xarray DataArray containing the water demand data for the specified demand type and SSP scenario.
             """
-            ds_historic = xr.open_dataset(
-                self.old_data_catalog.get_source(f"cwatm_{file}_historical_year").path,
-                decode_times=False,
-            ).rename({"lat": "y", "lon": "x"})
-            ds_historic = ds_historic.isel(
+            ds_historic = self.data_catalog.fetch(
+                f"cwatm_{file}_historical_year"
+            ).read()
+            da_historic = ds_historic.isel(
                 get_window(ds_historic.x, ds_historic.y, self.bounds, buffer=2)
             )[variable]
 
-            ds_future = xr.open_dataset(
-                self.old_data_catalog.get_source(f"cwatm_{file}_{ssp}_year").path,
-                decode_times=False,
-            ).rename({"lat": "y", "lon": "x"})
-            ds_future = ds_future.isel(
+            ds_future = self.data_catalog.fetch(f"cwatm_{file}_{ssp}_year").read()
+            da_future = ds_future.isel(
                 get_window(ds_future.x, ds_future.y, self.bounds, buffer=2)
             )[variable]
 
-            ds_future = ds_future.sel(
-                time=slice(ds_historic.time[-1] + 1, ds_future.time[-1])
+            da_future = da_future.sel(
+                time=slice(da_historic.time[-1] + 1, da_future.time[-1])
             )
 
-            ds = xr.concat([ds_historic, ds_future], dim="time")
-            ds = ds.rio.write_crs(4326)
-            # assert dataset in monotonicically increasing
-            assert (ds.time.diff("time") == 1).all(), "not all years are there"
+            da = xr.concat([da_historic, da_future], dim="time")
+            # assert dataset is monotonically increasing
+            assert (da.time.diff("time") == 1).all(), "not all years are there"
 
-            ds["time"] = pd.date_range(
+            da["time"] = pd.date_range(
                 start=datetime(1901, 1, 1)
-                + relativedelta(years=int(ds.time[0].data.item())),
-                periods=len(ds.time),
+                + relativedelta(years=int(da.time[0].data.item())),
+                periods=len(da.time),
                 freq="YS",
             )
 
-            assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
-            ds = ds.sel(time=slice(self.start_date, self.end_date))
-            ds.attrs["_FillValue"] = np.nan
-            self.set_other(ds, name=f"water_demand/{name}")
+            assert (da.time.dt.year.diff("time") == 1).all(), "not all years are there"
 
-        set_demand(
+            # Reindex to the model time range, filling missing years with backward/forward fill
+            time_range: pd.DatetimeIndex = pd.date_range(
+                start=datetime(self.start_date.year, 1, 1),
+                end=datetime(self.end_date.year, 1, 1),
+                freq="YS",
+            )
+            da = da.reindex(time=time_range).ffill("time").bfill("time")
+            da.attrs["_FillValue"] = np.nan
+            return da
+
+        da = parse_demand(
             "industry_water_demand",
             "indWW",
-            "industry_water_demand",
             self.ssp,
-        )
-        set_demand(
-            "industry_water_demand",
-            "indCon",
-            "industry_water_consumption",
-            self.ssp,
-        )
-        set_demand(
-            "livestock_water_demand",
-            "livestockConsumption",
-            "livestock_water_consumption",
-            "ssp2",
         )
 
-    @build_method
+        self.set_other(da, name=f"water_demand/industry_water_demand")
+        da = parse_demand(
+            "industry_water_demand",
+            "indCon",
+            self.ssp,
+        )
+        self.set_other(da, name=f"water_demand/industry_water_consumption")
+        da = parse_demand(
+            "livestock_water_demand",
+            "livestockConsumption",
+            "ssp2",
+        )
+        self.set_other(da, name=f"water_demand/livestock_water_consumption")
+
+    @build_method(required=True)
     def setup_income_distribution_parameters(self) -> None:
         """Sets up the income distributions for GEB.
 
@@ -379,14 +351,13 @@ class Agents(BuildModelBase):
         """
         income_distribution_parameters = {}
         income_distributions = {}
-        path = self.old_data_catalog.get_source(
-            "oecd_idd"
-        ).path  # in future maybe replace this with an API request
-        oecd_idd = pd.read_csv(path)
+
+        oecd_idd = self.data_catalog.fetch("oecd_idd").read()
 
         # clean data
-        cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
-        oecd_idd = oecd_idd[cols_to_keep]
+        oecd_idd = oecd_idd[
+            ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
+        ]
         # get GDL regions to use their iso_code for consistent country mapping
         GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
             geom=self.region.union_all()
@@ -449,6 +420,7 @@ class Agents(BuildModelBase):
                 np.random.lognormal(mu, sd, 15_000).astype(np.int32)
             )
             income_distributions[country] = income_distribution
+
         # store to model table
         income_distribution_parameters_pd = pd.DataFrame(income_distribution_parameters)
         income_distributions_pd = pd.DataFrame(income_distributions)
@@ -457,7 +429,9 @@ class Agents(BuildModelBase):
         )
         self.set_table(income_distributions_pd, "income/national_distribution")
 
-    @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "set_time_range"], required=True
+    )
     def setup_economic_data(self) -> None:
         """Sets up the economic data for GEB.
 
@@ -743,7 +717,7 @@ class Agents(BuildModelBase):
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 
-    @build_method
+    @build_method(required=True)
     def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
         """Sets up the irrigation sources for GEB.
 
@@ -752,7 +726,7 @@ class Agents(BuildModelBase):
         """
         self.set_params(irrigation_sources, name="agents/farmers/irrigation_sources")
 
-    @build_method(depends_on=["set_time_range", "setup_economic_data"])
+    @build_method(depends_on=["set_time_range", "setup_economic_data"], required=False)
     def setup_irrigation_prices_by_reference_year(
         self,
         operation_surface: float,
@@ -833,7 +807,7 @@ class Agents(BuildModelBase):
             # Set the calculated prices in the appropriate dictionary
             self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
-    @build_method(depends_on=["setup_economic_data"])
+    @build_method(depends_on=["setup_economic_data"], required=True)
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,
@@ -1150,7 +1124,9 @@ class Agents(BuildModelBase):
         self.set_array(farmers.index.values, name="agents/farmers/id")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    @build_method(depends_on=["setup_regions_and_land_use", "setup_cell_area"])
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "setup_cell_area"], required=True
+    )
     def setup_create_farms(
         self,
         region_id_column: str = "region_id",
@@ -1655,10 +1631,124 @@ class Agents(BuildModelBase):
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    def get_buildings_per_GDL_region(
+    def canon(self, string_to_normalize: str) -> str:
+        """Canonicalizes a string by normalizing it to ASCII and stripping whitespace.
+
+        Args:
+            string_to_normalize: The string to canonicalize.
+        Returns:
+            The canonicalized string.
+        """
+        return (
+            unicodedata.normalize("NFKD", string_to_normalize)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+            .strip()
+        )
+
+    def setup_building_reconstruction_costs(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns reconstruction costs (in USD) to buildings based on the global exposure model.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with reconstruction costs assigned to each building.
+        Raises:
+            ValueError: If a region in GADM level 1 is not found in the global exposure model or
+                        if some buildings do not have reconstruction costs assigned.
+        """
+        # load GADM level 1 within model domain (older version for compatibility with global exposure model)
+        gadm_level1 = self.data_catalog.fetch("gadm_28").read(
+            geom=self.region.union_all().buffer(0.1),
+        )
+        countries_in_model = gadm_level1["NAME_0"].unique().tolist()
+
+        global_exposure_model = self.data_catalog.fetch(
+            "global_exposure_model",
+            countries=countries_in_model,
+        ).read()
+
+        # append the NAME_1 column to the buildings
+        buildings["NAME_1"] = gpd.sjoin(
+            buildings,
+            gadm_level1[["NAME_1", "geometry"]],
+            how="left",
+            predicate="within",
+        )["NAME_1"].values
+
+        # assert each building has a NAME_1 value
+        if buildings["NAME_1"].isnull().any():
+            # For buildings without NAME_1 we assign them to the nearest GADM level 1 region.
+            # This happens when buildings are just outside the polygons (e.g., near coastlines).
+            # Use a spatial index to avoid an O(n*m) distance calculation over all regions.
+            buildings_no_name1 = buildings[buildings["NAME_1"].isnull()]
+            if not buildings_no_name1.empty:
+                # Precompute centroids for unmatched buildings
+                unmatched_centroids = buildings_no_name1.geometry.centroid
+                # Build spatial index over GADM level 1 geometries once
+                gadm_sindex = gadm_level1.sindex
+                for building_idx, centroid in zip(
+                    buildings_no_name1.index, unmatched_centroids
+                ):
+                    # Query nearest polygon via its bounding box to limit candidate search
+                    nearest_pos = gadm_sindex.nearest(centroid)[0]
+                    nearest_region = gadm_level1.iloc[nearest_pos]
+                    buildings.at[building_idx, "NAME_1"] = nearest_region[
+                        "NAME_1"
+                    ].values[0]
+
+        # Iterate over unique admin-1 region names to avoid redundant checks and assignments
+        buildings["NAME_1"] = buildings["NAME_1"].apply(self.canon)
+        for name_1 in gadm_level1["NAME_1"].dropna().unique():
+            # clean up name
+            name_1 = self.canon(name_1)
+            # check if region is in global exposure model
+            if name_1 not in global_exposure_model:
+                raise ValueError(
+                    f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
+                )
+            exposure_model_region = global_exposure_model[name_1]
+            for reconstruction_type in exposure_model_region:
+                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
+                    float(exposure_model_region[reconstruction_type])
+                )
+        # assert all buildings have reconstruction costs assigned (i.e., no null values in the reconstruction cost columns)
+        reconstruction_cost_columns = list(exposure_model_region.keys())
+        if buildings[reconstruction_cost_columns].isnull().any().any():
+            # get NAME_1 values for buildings with null reconstruction costs
+            buildings_with_null_costs = buildings[
+                buildings[reconstruction_cost_columns].isnull().any(axis=1)
+            ]
+            missing_name_1_values = buildings_with_null_costs["NAME_1"].unique()
+            raise ValueError(
+                f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
+            )
+        return buildings
+
+    @build_method(required=True)
+    def setup_buildings(self) -> None:
+        """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
+        # load region mask
+        mask = self.region.union_all()
+        buildings = self.data_catalog.fetch(
+            "open_building_map",
+            geom=mask,
+            prefix="assets",
+        ).read()
+        buildings = self.setup_building_reconstruction_costs(buildings)
+
+        # reset id column to avoid issues with duplicate ids
+        buildings["id"] = np.arange(len(buildings))
+
+        # write to disk
+        self.set_geom(buildings, name="assets/open_building_map")
+
+    def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
     ) -> dict[str, gpd.GeoDataFrame]:
-        """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
+        """Assigns buildings to grid cells from GLOPOP-S grid for each GDL region.
 
         Args:
             GDL_regions: A GeoDataFrame containing GDL regions within the model domain.
@@ -1666,19 +1756,7 @@ class Agents(BuildModelBase):
             A dictionary with GDLcode as keys and GeoDataFrames of buildings with grid indices as values.
         """
         output = {}
-        # load region mask
-        mask = self.region.unary_union
-        buildings = self.data_catalog.fetch(
-            "open_building_map",
-            geom=mask,
-            prefix="assets",
-        ).read()
-
-        # reset id column to avoid issues with duplicate ids
-        buildings["id"] = np.arange(len(buildings))
-
-        # write to disk
-        self.set_geom(buildings, name="assets/open_building_map")
+        buildings = self.geom["assets/open_building_map"]
 
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
@@ -1712,7 +1790,7 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method(depends_on="setup_assets")
+    @build_method(depends_on=["setup_assets", "setup_buildings"], required=True)
     def setup_household_characteristics(
         self,
         maximum_age: int = 85,
@@ -1735,10 +1813,11 @@ class Agents(BuildModelBase):
         )
 
         # setup buildings in region for household allocation
-        all_buildings_model_region = self.get_buildings_per_GDL_region(GDL_regions)
+        all_buildings_model_region = self.assign_buildings_to_grid_cells(GDL_regions)
+        # append reconstruction costs to buildings
         residential_buildings_model_region = {}
 
-        # iterate over GDL regions and filter buildings to residential
+        # iterate over GDL regions and filter buildings to residential and set damage values
         for GDL_code in all_buildings_model_region:
             buildings = all_buildings_model_region[GDL_code]
             # filter to residential buildings
@@ -2102,7 +2181,7 @@ class Agents(BuildModelBase):
                 name=f"agents/households/{household_attribute}",
             )
 
-    @build_method(depends_on=["setup_create_farms"])
+    @build_method(depends_on=["setup_create_farms"], required=True)
     def setup_farmer_household_characteristics(self, maximum_age: int = 85) -> None:
         """Sets up farmer household characteristics for farmers using GLOPOP-S data.
 
@@ -2307,16 +2386,13 @@ class Agents(BuildModelBase):
             A DataFrame containing behavioural parameters for each country, including risk aversion and discount factors.
         """
         # Risk aversion
-        preferences_country_level: pd.DataFrame = self.old_data_catalog.get_dataframe(
-            "preferences_country",
-            variables=["country", "isocode", "patience", "risktaking"],
-        ).dropna()
-
-        preferences_individual_level: pd.DataFrame = (
-            self.old_data_catalog.get_dataframe(
-                "preferences_individual",
-                variables=["country", "isocode", "patience", "risktaking"],
-            ).dropna()
+        preferences_country_level = self.data_catalog.fetch(
+            "global_preferences_survey_country"
+        ).read()[["country", "isocode", "patience", "risktaking"]]
+        preferences_individual_level = (
+            self.data_catalog.fetch("global_preferences_survey_individual")
+            .read()[["country", "isocode", "patience", "risktaking"]]
+            .dropna()
         )
 
         def scale_to_range(x: pd.Series, new_min: float, new_max: float) -> pd.Series:
@@ -2407,7 +2483,8 @@ class Agents(BuildModelBase):
         return preferences_country_level
 
     @build_method(
-        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"]
+        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"],
+        required=True,
     )
     def setup_farmer_characteristics(
         self,
@@ -2598,7 +2675,7 @@ class Agents(BuildModelBase):
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
-    @build_method(depends_on=[])
+    @build_method(depends_on=[], required=True)
     def setup_assets(
         self,
         feature_types: str | list[str],

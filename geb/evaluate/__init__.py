@@ -32,58 +32,45 @@ class Evaluate:
 
     def run(
         self,
-        methods: list,
+        method: str = "hydrology.evaluate_discharge",
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
         include_yearly_plots: bool = True,
-        correct_Q_obs: bool = False,
+        correct_discharge_observations: bool = False,
     ) -> None:
-        """Run the evaluation methods.
+        """Run a single evaluation method.
 
         Args:
-            methods: List of method names to run. Defaults to
-                ["plot_discharge", "evaluate_discharge"].
+            method: Fully-qualified method name to run, for example
+                `hydrology.evaluate_discharge`.
             spinup_name: Name of the spinup run. Defaults to "spinup".
             run_name: Name of the run to evaluate. Defaults to "default".
             include_spinup: If True, includes the spinup run in the evaluation.
             include_yearly_plots: If True, creates plots for every year showing the evaluation
-            correct_Q_obs: If True, corrects the observed discharge values.
+            correct_discharge_observations: If True, corrects the observed discharge values.
 
         Raises:
-            AttributeError: If a specified method is not implemented in the Evaluate class.
+            AttributeError: If the specified method is not implemented in the Evaluate class.
+            TypeError: If method is not a string.
         """
-        if methods is None:
-            methods: list = [
-                "hydrology.plot_discharge",
-                "hydrology.evaluate_discharge",
-                "hydrology.water_circle",
-                "hydrology.evaluate_hydrodynamics",
-                "hydrology.water_balance",
-                "meteorological_forecasts.evaluate_forecasts",
-            ]
-        else:
-            assert isinstance(methods, (list, tuple)), (
-                "Methods should be a list or tuple."
-            )
-            assert all(isinstance(method, str) for method in methods), (
-                "All methods should be strings."
-            )
+        if not isinstance(method, str):
+            raise TypeError("Method should be a string.")
 
-        for method in methods:
-            try:
-                attr = attrgetter(method)(self)
-            except AttributeError:
-                raise AttributeError(
-                    f"Method {method} is not implemented in Evaluate class."
-                )
-            attr(
-                spinup_name=spinup_name,
-                run_name=run_name,
-                include_spinup=include_spinup,
-                include_yearly_plots=include_yearly_plots,
-                correct_Q_obs=correct_Q_obs,
-            )  # this calls the method and executes them
+        try:
+            attr = attrgetter(method)(self)
+        except AttributeError as exc:
+            raise AttributeError(
+                f"Method {method} is not implemented in Evaluate class."
+            ) from exc
+
+        attr(
+            spinup_name=spinup_name,
+            run_name=run_name,
+            include_spinup=include_spinup,
+            include_yearly_plots=include_yearly_plots,
+            correct_discharge_observations=correct_discharge_observations,
+        )
 
     @property
     def output_folder_evaluate(self) -> Path:

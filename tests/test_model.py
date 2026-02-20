@@ -238,9 +238,7 @@ def test_update_with_dict() -> None:
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "method",
-    [
-        "setup_hydrography",
-    ],
+    ["setup_hydrography", "setup_vegetation", "setup_water_demand"],
 )
 def test_update_with_method(method: str) -> None:
     """Test updating model configuration using different methods.
@@ -429,7 +427,7 @@ def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "methods": ["hydrology.water_circle"],
+            "method": "hydrology.water_circle",
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
@@ -446,7 +444,8 @@ def test_evaluate() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "methods": ["hydrology.plot_discharge", "hydrology.evaluate_discharge"],
+            "method": "hydrology.evaluate_discharge",
+            "include_yearly_plots": False,
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
@@ -526,6 +525,25 @@ def test_custom_DEM() -> None:
         build_config["setup_elevation"]["DEMs"][0]["path"] = str(
             Path("data") / "Geul_Filled_DEM_EPSG28992.tif"
         )
+
+        update_fn(**build_args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_setup_reforestation_potential() -> None:
+    """Test setup of forest restoration potential.
+
+    Verifies that the model can run the
+    ``setup_forest_restoration_potential`` build step with a basic
+    configuration without raising errors.
+    """
+    with WorkingDirectory(working_directory):
+        build_args = DEFAULT_BUILD_ARGS.copy()
+        del build_args["continue_"]
+
+        build_config: dict[str, dict[str, str | bool]] = {}
+        build_config["setup_forest_restoration_potential"] = {}
+        build_args["build_config"] = build_config
 
         update_fn(**build_args)
 

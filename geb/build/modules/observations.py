@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from io import StringIO
 from pathlib import Path
 from typing import Literal
 
@@ -19,6 +20,7 @@ from tqdm import tqdm
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+from geb.workflows.timeseries import regularize_discharge_timeseries
 
 from .base import BuildModelBase
 
@@ -28,7 +30,7 @@ def plot_snapping(
     output_folder: Path,
     rivers: gpd.GeoDataFrame,
     upstream_area: xr.DataArray,
-    Q_obs_station_coords: tuple[float, float],
+    discharge_observations_coords: tuple[float, float],
     closest_point_coords: tuple[float, float],
     closest_river_segment: gpd.GeoDataFrame,
     grid_pixel_coords: tuple[float, float],
@@ -50,7 +52,7 @@ def plot_snapping(
         output_folder: Path to the directory where the PNG file will be saved.
         rivers: GeoDataFrame containing river centerlines used for plotting.
         upstream_area: xarray DataArray with upstream area values used for background plotting.
-        Q_obs_station_coords: Tuple (lon, lat) of the original observed station coordinates.
+        discharge_observations_coords: Tuple (lon, lat) of the original observed station coordinates.
         closest_point_coords: Tuple (lon, lat) of the closest point on the river centerline to the station.
         closest_river_segment: GeoDataFrame containing the selected river segment to highlight.
         grid_pixel_coords: Tuple (lon, lat) of the snapped grid pixel coordinates.
@@ -68,10 +70,10 @@ def plot_snapping(
     # Set the extent to zoom in around the gauge location
     buffer = 0.05  # Adjust this value to control the zoom level
 
-    xmin = Q_obs_station_coords[0] - buffer
-    xmax = Q_obs_station_coords[0] + buffer
-    ymin = Q_obs_station_coords[1] - buffer
-    ymax = Q_obs_station_coords[1] + buffer
+    xmin = discharge_observations_coords[0] - buffer
+    xmax = discharge_observations_coords[0] + buffer
+    ymin = discharge_observations_coords[1] - buffer
+    ymax = discharge_observations_coords[1] + buffer
 
     ax.set_extent(  # ty:ignore[unresolved-attribute]
         [
@@ -84,8 +86,8 @@ def plot_snapping(
     )
 
     ax.scatter(
-        Q_obs_station_coords[0],
-        Q_obs_station_coords[1],
+        discharge_observations_coords[0],
+        discharge_observations_coords[1],
         color="red",
         marker="o",
         s=30,
@@ -149,54 +151,15 @@ def plot_snapping(
     plt.close()
 
 
-# add external stations to Q_obs
-def add_station_Q_obs(
-    station_id: int,
-    station_name: str,
-    Q_obs: xr.Dataset,
-    station_coords: tuple[float, float],
-    station_dataframe: pd.DataFrame,
-) -> xr.Dataset:
-    """This function adds a new station to the Q_obs dataset (in this case GRDC).
-
-    The new station .csv file should be loaded as a dataframe with the first row being (lon, lat), and discharge data should start at index 3 (row4).
-
-    Returns:
-        The updated dataset with discharge observations with the new station added.
-    """
-    # Convert the pandas DataFrame to an xarray Dataset
-    new_station_ds = xr.Dataset(
-        {
-            "runoff_mean": (
-                ["time"],
-                station_dataframe["Q"].values,
-            ),  # Add the 'Q' column as runoff_mean
-            "station_name": ("id", [station_name]),  # Station name
-            "x": ("id", [station_coords[0]]),  # Longitude
-            "y": ("id", [station_coords[1]]),  # Latitude
-        },
-        coords={
-            "time": station_dataframe.index,  # Use the index as the time dimension
-            "id": [station_id],  # Assign the station ID
-        },
-    )
-
-    # Add the new station to the Q_obs dataset
-    Q_obs_merged = xr.concat([Q_obs, new_station_ds], dim="id")
-
-    return Q_obs_merged
-
-
 def process_station_data(
-    station: str, Q_station: pd.DataFrame, dt_format: str, startrow: int
+    station: str, Q_station_path: Path, dt_format: str
 ) -> tuple[pd.DataFrame, tuple[float, float]]:
     """Parse and preprocess a station CSV read into a DataFrame.
 
     Args:
         station: Filename or identifier of the station (used in error messages).
-        Q_station: Raw station DataFrame where the first row contains coordinates and data starts at row index `startrow`.
+        Q_station_path: Raw station DataFrame where the first row contains coordinates and data starts at row index `startrow`.
         dt_format: Datetime format string for parsing the date column.
-        startrow: Row index where time series data begins (0-based).
 
     Returns:
         A tuple with the cleaned station DataFrame indexed by time and a tuple with station (lon, lat) as floats.
@@ -205,25 +168,36 @@ def process_station_data(
         ValueError: If the processed station DataFrame does not contain exactly one data column (expected 'Q'),
                     or if the first row does not contain exactly two coordinates (longitude and latitude) that can be parsed as floats.
     """
-    # process data
-    station_coords = Q_station.iloc[
-        0
-    ].tolist()  # get the coordinates from the first row
+    Q_station = Q_station_path.read_text().splitlines()
+    lon_str, lat_str = Q_station[0].split(",")
+    station_coords = (float(lon_str), float(lat_str))
 
-    station_coords = [float(i) for i in station_coords]  # convert to float
-
-    Q_station = Q_station.iloc[startrow:]  # remove the first rows
-    Q_station.rename(
-        columns={
-            Q_station.columns[0]: "date",
-            Q_station.columns[1]: "Q",
-        },
-        inplace=True,
+    Q_station = pd.read_csv(
+        StringIO("\n".join(Q_station[2:])), delimiter=",", index_col=0, parse_dates=True
     )
-    Q_station["date"] = pd.to_datetime(Q_station["date"], format=dt_format)
-    Q_station.set_index("date", inplace=True)
-    Q_station["Q"] = Q_station["Q"].astype(float)  # convert to float
-    Q_station = Q_station.resample("D", label="left").mean()
+
+    Q_station["Q"] = Q_station["Q"].astype(np.float32)  # convert to float
+
+    Q_station = regularize_discharge_timeseries(
+        Q_station
+    )  # regularize the time series to ensure consistent time steps
+
+    # Resample to hourly if frequency is higher than hourly (e.g., 15 min -> 1 h).
+    # If frequency is already hourly or lower (e.g., daily), keep as is.
+    assert Q_station.index.freq is not None  # ty:ignore[possibly-missing-attribute]
+    if Q_station.index.freq < pd.Timedelta(hours=1):  # ty:ignore[possibly-missing-attribute]
+        Q_station = Q_station.resample("h", label="left").mean()
+    elif Q_station.index.freq > pd.Timedelta(  # ty:ignore[possibly-missing-attribute]
+        hours=1
+    ) and Q_station.index.freq < pd.Timedelta(days=1):  # ty:ignore[possibly-missing-attribute]
+        Q_station = Q_station.resample("D", label="left").mean()
+    elif Q_station.index.freq > pd.Timedelta(days=1):  # ty:ignore[possibly-missing-attribute]
+        raise ValueError(
+            f"Time step of station {station} is larger than 1 day. Please ensure the time step is hourly or daily."
+        )
+    else:
+        pass  # keep original frequency if it's already hourly or daily
+
     Q_station.index.name = "time"  # rename index to time
 
     # delete missing values in the dataframe
@@ -240,90 +214,62 @@ def process_station_data(
     return Q_station, (station_coords[0], station_coords[1])
 
 
-def clip_Q_obs(Q_obs_merged: xr.Dataset, region_mask: gpd.GeoDataFrame) -> xr.Dataset:
-    """
-    Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries.
-
-    Args:
-        Q_obs_merged:
-            Dataset with discharge observations.
-        region_mask:
-            Geometry of the region to clip the Q_obs stations to.
-
-    Returns:
-        The clipped discharge observations dataset with only stations within the region shapefile.
-    """
-    # Convert Q_obs points to GeoDataFrame
-    Q_obs_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {
-            "id": Q_obs_merged.id.values,
-            "x": Q_obs_merged.x.values,
-            "y": Q_obs_merged.y.values,
-        },
-        geometry=gpd.points_from_xy(Q_obs_merged.x.values, Q_obs_merged.y.values),
-        crs="EPSG:4326",
-    )
-
-    # Filter Q_obs stations that are in the region shapefile
-    Q_obs_gdf: gpd.GeoDataFrame = Q_obs_gdf[
-        Q_obs_gdf.geometry.within(region_mask.geometry.unary_union)
-    ]
-
-    # select the Q_obs stations from the Q_obs dataset that are in the region shapefile
-    Q_obs_merged = Q_obs_merged.sel(id=Q_obs_gdf.id.values)
-
-    return Q_obs_merged
-
-
 def get_distance_to_stations(
-    rivers: shapely.geometry.base.BaseGeometry, Q_obs_location: gpd.GeoDataFrame
+    rivers: shapely.geometry.base.BaseGeometry,
+    discharge_observations_location: gpd.GeoDataFrame,
 ) -> float:
     """This function returns the distance of each river section to the station.
 
     Args:
         rivers: A row of the rivers GeoDataFrame (a shapely geometry object).
-        Q_obs_location: A GeoDataFrame containing the station location as a Point geometry.
+        discharge_observations_location: A GeoDataFrame containing the station location as a Point geometry.
 
     Returns:
         Distance in degrees between the river section and the station.
     """
-    return float(rivers.distance(Q_obs_location).values.item())
+    return float(rivers.distance(discharge_observations_location).values.item())
 
 
 def select_river_segment(
     max_uparea_difference_ratio: float,
     max_spatial_difference_degrees: float,
-    Q_obs_uparea_m2: float,
+    discharge_observations_uparea_m2: float,
     rivers_sorted: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame | Literal[False]:
-    """This function selects the closest river segment to the Q_obs station based on the spatial distance.
+    """This function selects the closest river segment to the discharge observations station based on the spatial distance.
 
     It returns false if the spatial distance is larger than the max_spatial_difference_degrees.
     If the difference between the upstream area from MERIT (from the river centerlines)
-    and the Q_obs upstream area is larger than the max_uparea_difference_ratio,
+    and the discharge observations upstream area is larger than the max_uparea_difference_ratio,
     it will select the closest river segment within the correct upstream area range.
 
     Args:
-        max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area.
-        max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment.
-        Q_obs_uparea_m2 : Upstream area reported for the observational station (in m2). Used to compare against river segment upstream areas to enforce the upstream area ratio criterion.
+        max_uparea_difference_ratio: The maximum allowed difference in upstream area between the discharge observations station and the GEB river segment, as a ratio of the discharge observations upstream area.
+        max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the discharge observations station and the GEB river segment.
+        discharge_observations_uparea_m2 : Upstream area reported for the observational station (in m2). Used to compare against river segment upstream areas to enforce the upstream area ratio criterion.
         rivers_sorted: GeoDataFrame of river segments sorted by spatial distance to the station; must contain the 'uparea_m2' attribute and will be filtered/queried to find the matching segment.
 
     Returns:
-        The closest river segment to the Q_obs station that meets the criteria or False if no segment is found.
+        The closest river segment to the discharge observations station that meets the criteria or False if no segment is found.
     """
     if np.isnan(
-        Q_obs_uparea_m2
-    ):  # if Q_obs upstream area is NaN, only just select the closest river segment
+        discharge_observations_uparea_m2
+    ):  # if discharge observations upstream area is NaN, only just select the closest river segment
         closest_river_segment = rivers_sorted.head(1)
     else:
         # add upstream area criteria
         upstream_area_diff = (
-            max_uparea_difference_ratio * Q_obs_uparea_m2
+            max_uparea_difference_ratio * discharge_observations_uparea_m2
         )  # 30% difference
         closest_river_segment = rivers_sorted[
-            (rivers_sorted["uparea_m2"] > (Q_obs_uparea_m2 - upstream_area_diff))
-            & (rivers_sorted["uparea_m2"] < (Q_obs_uparea_m2 + upstream_area_diff))
+            (
+                rivers_sorted["uparea_m2"]
+                > (discharge_observations_uparea_m2 - upstream_area_diff)
+            )
+            & (
+                rivers_sorted["uparea_m2"]
+                < (discharge_observations_uparea_m2 + upstream_area_diff)
+            )
         ].head(1)
 
         if closest_river_segment.empty:
@@ -346,118 +292,153 @@ class Observations(BuildModelBase):
         """Initialize the Observations class."""
         pass
 
-    @build_method(depends_on=["setup_hydrography"])
+    @build_method(depends_on=["setup_hydrography"], required=False)
     def setup_discharge_observations(
         self,
         max_uparea_difference_ratio: float = 0.3,
         max_spatial_difference_degrees: float = 0.1,
         custom_river_stations: str | None = None,
     ) -> None:
-        """setup_discharge_observations is responsible for setting up discharge observations from the Q_obs dataset.
+        """setup_discharge_observations is responsible for setting up discharge observations from the discharge observations dataset.
 
-        It clips Q_obs to the basin area, and snaps the Q_obs locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in Q_obs.
+        It clips discharge observations to the basin area, and snaps the discharge observations locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in the discharge observations.
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
         Additional stations can be added as csv files in the custom_stations folder in the GEB data catalog.
 
         Args:
-            max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area. Default is 0.3 (30%).
-            max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment. Default is 0.1 degrees.
+            max_uparea_difference_ratio: The maximum allowed difference in upstream area between the discharge observations station and the GEB river segment, as a ratio of the discharge observations upstream area. Default is 0.3 (30%).
+            max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the discharge observations station and the GEB river segment. Default is 0.1 degrees.
             custom_river_stations: Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
-
-        Raises:
-            ValueError: If no discharge stations are found in the region shapefile.
-            ValueError: If a custom station file does not have the correct format (2 coordinates in the first row, data starting from the fourth row).
         """
         # load data
         upstream_area = self.grid[
-            "routing/upstream_area"
+            "routing/upstream_area_m2"
         ].compute()  # we need to use this one many times, so we compute it once
-        upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
+        upstream_area_subgrid = self.other["drainage/original_d8_upstream_area_m2"]
         rivers = self.geom["routing/rivers"]
         region_mask = self.geom["mask"]
 
-        # Load Q_obs dataset
-        Q_obs = self.data_catalog.fetch("GRDC").read()
+        # Load discharge observations dataset
+        discharge_observations = self.data_catalog.fetch("GRDC").read()
 
         # create folders
-        snapping_discharge_folder = (
-            Path(self.root).parent / "output" / "build" / "snapping_discharge"
-        )
+        snapping_discharge_folder = Path(self.report_dir) / "snapping_discharge"
         snapping_discharge_folder.mkdir(parents=True, exist_ok=True)
 
-        Q_obs_merged = Q_obs.copy()  # Ensure Q_obs_merged is always defined
+        # Initialize discharge observation DataFrames
+        obs_hourly = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
+        obs_daily = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
+
+        # Initialize metadata GeoDataFrame from GRDC
+        obs_metadata = gpd.GeoDataFrame(
+            {
+                "discharge_observations_station_ID": discharge_observations.id.values,
+                "discharge_observations_station_name": discharge_observations.station_name.values,
+                "x": discharge_observations.x.values,
+                "y": discharge_observations.y.values,
+                "discharge_observations_upstream_area_m2": discharge_observations.area.values
+                * 1e6,  # convert km2 to m2
+                "discharge_observations_river_name": discharge_observations.river_name.values,
+            },
+            geometry=gpd.points_from_xy(
+                discharge_observations.x.values, discharge_observations.y.values
+            ),
+            crs="EPSG:4326",
+        )
+
+        # Assume GRDC is daily and extract it
+        if "runoff_mean" in discharge_observations.data_vars:
+            obs_daily = (
+                discharge_observations.runoff_mean.astype(np.float32)
+                .to_dataframe()
+                .reset_index()
+                .pivot(index="time", columns="id", values="runoff_mean")
+            )
+            obs_daily.index.name = "time"
+            # Replace -999 with NaN in GRDC data
+            obs_daily = obs_daily.replace(-999, np.nan)
+
+        # Track which IDs belong to which frequency
+        hourly_ids = set()
+        daily_ids = set(obs_daily.columns.tolist())
 
         if custom_river_stations is not None:
             for station in os.listdir(Path(self.root).parent / custom_river_stations):
                 if not station.endswith(".csv"):
-                    # raise error
-                    raise ValueError(f"File {station} is not a csv file")
+                    continue
+
+                station_name = station[:-4]
+                Q_station_path = (
+                    Path(self.root).parent / Path(custom_river_stations) / station
+                )
+
+                Q_station, station_coords = process_station_data(
+                    station,
+                    Q_station_path,
+                    dt_format="%Y-%m-%d %H:%M:%S",
+                )
+
+                # Assign a unique ID for custom stations
+                station_id = int(
+                    max(obs_metadata["discharge_observations_station_ID"].max(), 0) + 1
+                )
+
+                # Add metadata
+                new_meta = pd.DataFrame(
+                    [
+                        {
+                            "discharge_observations_station_ID": station_id,
+                            "discharge_observations_station_name": station_name,
+                            "x": station_coords[0],
+                            "y": station_coords[1],
+                            "discharge_observations_upstream_area_m2": np.nan,  # Not provided in basic CSV
+                            "discharge_observations_river_name": "Unknown",
+                        }
+                    ]
+                )
+                new_meta_gdf = gpd.GeoDataFrame(
+                    new_meta,
+                    geometry=gpd.points_from_xy(
+                        [station_coords[0]], [station_coords[1]]
+                    ),
+                    crs="EPSG:4326",
+                )
+                obs_metadata = pd.concat(
+                    [obs_metadata, new_meta_gdf], ignore_index=True
+                )
+
+                # Add data to the correct DataFrame
+                if Q_station.index.to_series().diff().median() <= pd.Timedelta(hours=1):
+                    obs_hourly[station_id] = Q_station["Q"]
+                    hourly_ids.add(station_id)
                 else:
-                    station_name = station[:-4]
-                    if not (
-                        Path(self.root).parent / Path(custom_river_stations)
-                    ).is_dir():
-                        raise ValueError(
-                            f"Path {Path(self.root).parent / Path(custom_river_stations)} does not exist or is not a directory. Create this directory if you want to use custom discharge stations, or set custom_river_stations to None"
-                        )
-                    Q_station = pd.read_csv(
-                        Path(self.root).parent / Path(custom_river_stations) / station,
-                        header=None,
-                        delimiter=",",
-                    )  # read the csv file with no header and comma delimiter
+                    obs_daily[station_id] = Q_station["Q"]
+                    daily_ids.add(station_id)
 
-                    Q_station, station_coords = process_station_data(
-                        station, Q_station, dt_format="%Y-%m-%d %H:%M:%S", startrow=3
-                    )
-                    # Check for missing or invalid dates
-                    if Q_station.index.isnull().any():
-                        raise ValueError(
-                            "Datetime parsing failed. Found Nan values in the index."
-                        )
+        # Filter metadata by region
+        obs_metadata = obs_metadata[
+            obs_metadata.geometry.within(region_mask.geometry.unary_union)
+        ]
 
-                    # add station to Q_obs if station is not already in Q_obs
-                    if station_name not in Q_obs.station_name.values:
-                        station_id = int(
-                            Q_obs_merged.id.max() + 1
-                        )  # ID for the new station
-                        Q_obs_merged = add_station_Q_obs(
-                            station_id,
-                            station_name,
-                            Q_obs_merged,
-                            station_coords,
-                            Q_station,
-                        )  # name, coordinates, dataframe
-
-                    else:
-                        station_id = int(
-                            Q_obs.id.values[Q_obs.station_name.values == station_name][
-                                0
-                            ]
-                        )  # get the id of the station in the Q_obs dataset
-
-        Q_obs_clipped = clip_Q_obs(
-            Q_obs_merged, region_mask
-        )  # filter Q_obs stations based on the region shapefile
-
-        if len(Q_obs_clipped.id) == 0:
+        if obs_metadata.empty:
             # No stations found - create empty files
             self.logger.warning(
                 "No discharge stations found in the region. Creating empty files"
             )
             # Create empty snapping results Excel file with proper columns
             empty_cols = [
-                "Q_obs_station_name",
-                "Q_obs_station_ID",
-                "Q_obs_river_name",
-                "Q_obs_upstream_area_m2",
-                "Q_obs_station_coords",
+                "discharge_observations_station_name",
+                "discharge_observations_station_ID",
+                "discharge_observations_river_name",
+                "discharge_observations_upstream_area_m2",
+                "discharge_observations_station_coords",
                 "closest_point_coords",
                 "subgrid_pixel_coords",
                 "snapped_grid_pixel_lonlat",
                 "snapped_grid_pixel_xy",
                 "GEB_upstream_area_from_subgrid",
                 "GEB_upstream_area_from_grid",
-                "Q_obs_to_GEB_upstream_area_ratio",
+                "discharge_observations_to_GEB_upstream_area_ratio",
                 "snapping_distance_degrees",
             ]
             discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
@@ -468,85 +449,62 @@ class Observations(BuildModelBase):
 
             # Create empty discharge table
             empty_discharge_df = pd.DataFrame()
-            self.set_table(empty_discharge_df, name="discharge/Q_obs")
+            self.set_table(
+                empty_discharge_df, name="discharge/discharge_observations_hourly"
+            )
+            self.set_table(
+                empty_discharge_df, name="discharge/discharge_observations_daily"
+            )
 
             # Create empty snapped locations geometry
             empty_geom: gpd.GeoDataFrame = gpd.GeoDataFrame(
                 discharge_snapping_df,
                 geometry=gpd.GeoSeries([], crs="EPSG:4326"),
                 crs="EPSG:4326",
-            ).set_index(pd.Index([], name="Q_obs_station_ID"))  # ty:ignore[invalid-assignment]
+            ).set_index(pd.Index([], name="discharge_observations_station_ID"))  # ty:ignore[invalid-assignment]
             self.set_geom(empty_geom, name="discharge/discharge_snapped_locations")
 
             self.logger.info("Empty discharge datasets created")
 
             return
-        # convert all the -999 values to NaN
-        Q_obs_clipped = Q_obs_clipped.where(Q_obs_clipped != -999, np.nan)
 
-        # check if there are any NaN values in the Q_obs dataset
-        discharge_df = Q_obs_clipped.runoff_mean.to_dataframe().reset_index()
-        discharge_df.rename(
-            columns={
-                "time": "time",
-                "id": "station_ID",
-                "runoff_mean": "discharge",
-            },
-            inplace=True,
-        )
-        discharge_df = discharge_df.pivot(
-            index="time", columns="station_ID", values="discharge"
-        )
-        discharge_df.dropna(how="all", inplace=True)  # remove rows that are all nan
-        if len(Q_obs_clipped.id.values) == 0:
-            self.logger.warning(
-                "No discharge stations found in basin area. Skipping discharge snapping."
-            )
-            return  # Exit the method early
-
-        # Snapping to river and validation of discharges
-        # create list for results of snapping
+        # Snapping to river
         discharge_snapping_results = []
 
-        # start looping over the Q_obs stations
-        for station_id in tqdm(Q_obs_clipped.id.values):
-            # create Q_obs variables
-            Q_obs_station = Q_obs_clipped.sel(
-                id=station_id
-            )  # select the station from the Q_obs dataset
-            Q_obs_station_name = str(
-                Q_obs_station.station_name.values
-            )  # get the name of the station
-            Q_obs_station_coords = tuple(
-                (
-                    float(Q_obs_station.x.values),
-                    float(Q_obs_station.y.values),
-                )
-            )  # get the coordinates of the station
-            Q_obs_location = gpd.GeoDataFrame(
-                geometry=[shapely.geometry.Point(Q_obs_station_coords)],
-                crs=rivers.crs,
-            )  # create a point geometry for the station
-            Q_obs_uparea_m2 = (
-                Q_obs_station.area.values.item()
-            ) * 1e6  # get the upstream area of the station
-            Q_obs_rivername = Q_obs_station.river_name.values.item()
+        for _, station_row in tqdm(obs_metadata.iterrows(), total=len(obs_metadata)):
+            station_id = station_row["discharge_observations_station_ID"]
+            station_name = station_row["discharge_observations_station_name"]
+            station_coords = (station_row["x"], station_row["y"])
 
-            # find river section closest to the Q_obs station
+            discharge_observations_location = gpd.GeoDataFrame(
+                geometry=[shapely.geometry.Point(station_coords)],
+                crs=rivers.crs,
+            )
+
+            discharge_observations_uparea_m2 = station_row[
+                "discharge_observations_upstream_area_m2"
+            ]
+            discharge_observations_rivername = station_row[
+                "discharge_observations_river_name"
+            ]
+
+            # find river section closest
             rivers["station_distance"] = rivers.geometry.apply(
-                lambda geom: get_distance_to_stations(geom, Q_obs_location)
-            )  # distance in degrees
+                lambda geom: get_distance_to_stations(
+                    geom, discharge_observations_location
+                )
+            )
             rivers_sorted = rivers.sort_values(by="station_distance")
 
             closest_river_segment = select_river_segment(
                 max_uparea_difference_ratio=max_uparea_difference_ratio,
                 max_spatial_difference_degrees=max_spatial_difference_degrees,
-                Q_obs_uparea_m2=Q_obs_uparea_m2,
+                discharge_observations_uparea_m2=discharge_observations_uparea_m2,
                 rivers_sorted=rivers_sorted,
             )
             if closest_river_segment is False:
                 self.logger.warning(
-                    f"No river segment found within the max_uparea_difference_ratio ({max_uparea_difference_ratio}) and max_spatial_difference_degrees ({max_spatial_difference_degrees}) for station {Q_obs_station_name} with upstream area {Q_obs_uparea_m2} m2. Skipping this station."
+                    f"No river segment found within the max_uparea_difference_ratio ({max_uparea_difference_ratio}) and max_spatial_difference_degrees ({max_spatial_difference_degrees}) for station {station_name} with upstream area {discharge_observations_uparea_m2} m2. Skipping this station."
                 )
                 continue
 
@@ -554,7 +512,7 @@ class Observations(BuildModelBase):
                 closest_river_segment.iloc[0].geometry
             )
             closest_point_on_riverline = nearest_points(
-                Q_obs_location, closest_river_segment_linestring
+                discharge_observations_location, closest_river_segment_linestring
             )[1].geometry.iloc[0]  # find closest point to this nearest river segment
 
             # Read the upstream area from the subgrid at this point
@@ -590,7 +548,7 @@ class Observations(BuildModelBase):
 
             if xy_tuples.size == 0:
                 self.logger.warning(
-                    f"River not found in hydrography_xy for station {Q_obs_station_name} with river id {closest_river_segment.iloc[0].name}. Skipping this station."
+                    f"River not found in hydrography_xy for station {station_name} with river id {closest_river_segment.iloc[0].name}. Skipping this station."
                 )
                 continue
 
@@ -630,11 +588,11 @@ class Observations(BuildModelBase):
 
             discharge_snapping_results.append(
                 {
-                    "Q_obs_station_name": Q_obs_station_name,
-                    "Q_obs_station_ID": int(station_id),
-                    "Q_obs_river_name": Q_obs_rivername,
-                    "Q_obs_upstream_area_m2": Q_obs_uparea_m2,
-                    "Q_obs_station_coords": Q_obs_station_coords,
+                    "discharge_observations_station_name": station_name,
+                    "discharge_observations_station_ID": station_id,
+                    "discharge_observations_river_name": discharge_observations_rivername,
+                    "discharge_observations_upstream_area_m2": discharge_observations_uparea_m2,
+                    "discharge_observations_station_coords": station_coords,
                     "closest_point_coords": closest_point_coords,
                     "subgrid_pixel_coords": subgrid_pixel_coords,
                     "snapped_grid_pixel_lonlat": grid_pixel_coords,
@@ -643,9 +601,12 @@ class Observations(BuildModelBase):
                         GEB_upstream_area_from_subgrid
                     ),
                     "GEB_upstream_area_from_grid": float(GEB_upstream_area_from_grid),
-                    "Q_obs_to_GEB_upstream_area_ratio": float(
-                        GEB_upstream_area_from_subgrid / Q_obs_uparea_m2
-                    ),
+                    "discharge_observations_to_GEB_upstream_area_ratio": float(
+                        GEB_upstream_area_from_subgrid
+                        / discharge_observations_uparea_m2
+                    )
+                    if not np.isnan(discharge_observations_uparea_m2)
+                    else np.nan,
                     "snapping_distance_degrees": closest_river_segment.station_distance.iloc[
                         0
                     ],
@@ -657,13 +618,14 @@ class Observations(BuildModelBase):
                 self.report_dir / "snapping_discharge",
                 rivers,
                 upstream_area,
-                Q_obs_station_coords,
+                station_coords,
                 closest_point_coords,
                 closest_river_segment,
                 grid_pixel_coords,
             )
 
         self.logger.info("Discharge snapping done for all stations")
+        # ... (rest of results saving logic)
 
         discharge_snapping_df = pd.DataFrame(discharge_snapping_results)
 
@@ -684,14 +646,36 @@ class Observations(BuildModelBase):
                 ),
             ),
             crs="EPSG:4326",  # Set the coordinate reference system
-        ).set_index("Q_obs_station_ID")  # ty:ignore[invalid-assignment]
+        ).set_index("discharge_observations_station_ID")  # ty:ignore[invalid-assignment]
 
-        # drop the columns that have not associated snapped stations
-        discharge_df = discharge_df[discharge_snapping_gdf.index]
+        # Filter the tables based on snapped stations and ensure columns exist even if empty
+        snapped_ids = set(discharge_snapping_df["discharge_observations_station_ID"])
 
-        self.set_table(
-            discharge_df, name="discharge/Q_obs"
-        )  # save the discharge data as a table
+        # Prepare final hourly table
+        final_hourly_cols = sorted([id for id in hourly_ids if id in snapped_ids])
+        obs_hourly_final = obs_hourly.reindex(columns=final_hourly_cols).dropna(
+            how="all"
+        )
+        if obs_hourly_final.empty:
+            obs_hourly_final = pd.DataFrame(columns=final_hourly_cols)
+            obs_hourly_final.index.name = "time"
+        self.set_table(obs_hourly_final, name="discharge/discharge_observations_hourly")
+
+        # Prepare final daily table
+        final_daily_cols = sorted([id for id in daily_ids if id in snapped_ids])
+        # Resample daily stations to a daily index to remove hourly timestamps if any
+        obs_daily_final = obs_daily.reindex(columns=final_daily_cols)
+        if not obs_daily_final.empty:
+            # Ensure frequency is strictly daily
+            obs_daily_final = (
+                obs_daily_final.resample("D", label="left").mean().dropna(how="all")
+            )
+
+        if obs_daily_final.empty:
+            obs_daily_final = pd.DataFrame(columns=final_daily_cols)
+            obs_daily_final.index.name = "time"
+
+        self.set_table(obs_daily_final, name="discharge/discharge_observations_daily")
 
         self.set_geom(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"

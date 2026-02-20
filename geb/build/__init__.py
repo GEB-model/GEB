@@ -2360,7 +2360,7 @@ class GEBModel(
     def files(self, value: dict) -> None:
         self._files = value
 
-    @build_method
+    @build_method(required=True)
     def setup_region(
         self,
         region: dict,
@@ -2889,19 +2889,30 @@ class GEBModel(
 
         self.set_subgrid(submask, name="mask")
 
-    @build_method
+    @build_method(required=True)
     def set_time_range(self, start_date: date, end_date: date) -> None:
         """Sets the time range for the build model.
 
         This time range is used to ensure that all datasets with a time dimension
         cover at least this time range.
 
+        Start date must be on or after 1960, because of data availability. End date can be in the future.
+
         Args:
             start_date: The start date of the model.
             end_date: The end date of the model.
 
+        Raises:
+            ValueError: If the start date is not before the end date.
+            ValueError: If the start date is before 1960, because of data availability.
         """
-        assert start_date < end_date, "Start date must be before end date."
+        if not start_date < end_date:
+            raise ValueError("Start date must be before end date.")
+
+        if start_date.year < 1960:
+            raise ValueError(
+                "Start date must be on or after 1960, because of data availability."
+            )
         self.set_params(
             {"start_date": start_date, "end_date": end_date},
             name="model_time_range",
@@ -2939,7 +2950,7 @@ class GEBModel(
             end_date = datetime.fromisoformat(end_date)
         return end_date
 
-    @build_method
+    @build_method(required=True)
     def set_ssp(self, ssp: str) -> None:
         """Sets the SSP name for the model.
 
@@ -3015,7 +3026,7 @@ class GEBModel(
             time_chunksize=24 * 6,  # 10 minute data
         )
 
-    @build_method
+    @build_method(required=True)
     def setup_damage_parameters(
         self,
         parameters: dict[
@@ -3062,7 +3073,7 @@ class GEBModel(
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
-    @build_method
+    @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors: list[tuple[float, float]]
     ) -> None:
@@ -3714,6 +3725,8 @@ class GEBModel(
                 '"setup_region" must be present in methods when building a new model.'
             )
         methods["setup_region"].update(region=region)
+
+        build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
         if continue_:

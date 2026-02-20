@@ -17,7 +17,7 @@ from geb.workflows.raster import (
     coords_to_pixels,
     full_like,
     interpolate_na_2d,
-    interpolate_na_along_time_dim,
+    interpolate_na_along_dim,
     pad_to_grid_alignment,
     pad_xy,
     pixel_to_coord,
@@ -330,8 +330,8 @@ def test_interpolate_na_2d() -> None:
     assert result.coords.equals(da.coords)
 
 
-def test_interpolate_na_along_time_dim() -> None:
-    """Test the interpolate_na_along_time_dim function."""
+def test_interpolate_na_along_dim() -> None:
+    """Test the interpolate_na_along_dim function."""
     # Create a 3D array (time, y, x) with NaNs in spatial dims
     data = np.array(
         [
@@ -346,7 +346,7 @@ def test_interpolate_na_along_time_dim() -> None:
         attrs={"_FillValue": np.nan},
     )
 
-    result = interpolate_na_along_time_dim(da)
+    result = interpolate_na_along_dim(da)
 
     # Check that NaNs are filled
     assert not np.isnan(result.values).any()
@@ -355,7 +355,7 @@ def test_interpolate_na_along_time_dim() -> None:
 
 
 def test_interpolate_na_alignment() -> None:
-    """Test that interpolate_na_along_time_dim aligns with interpolate_na_2d applied per slice."""
+    """Test that interpolate_na_along_dim aligns with interpolate_na_2d applied per slice."""
     # Create a 3D array (time, y, x) with NaNs
     data = np.array(
         [
@@ -371,7 +371,7 @@ def test_interpolate_na_alignment() -> None:
     )
 
     # Apply along time
-    result_along_time = interpolate_na_along_time_dim(da)
+    result_along_time = interpolate_na_along_dim(da)
 
     # Apply 2d to each slice manually
     slices = []
@@ -415,8 +415,8 @@ def test_interpolate_na_2d_integer_fillvalue() -> None:
     assert result.coords.equals(da.coords)
 
 
-def test_interpolate_na_along_time_dim_missing_fillvalue() -> None:
-    """Test that interpolate_na_along_time_dim raises ValueError when _FillValue is missing."""
+def test_interpolate_na_along_dim_missing_fillvalue() -> None:
+    """Test that interpolate_na_along_dim raises ValueError when _FillValue is missing."""
     data = np.array(
         [
             [[1.0, 2.0, np.nan], [4.0, np.nan, 6.0]],  # time 0
@@ -429,11 +429,11 @@ def test_interpolate_na_along_time_dim_missing_fillvalue() -> None:
         coords={"time": [0, 1], "y": [0, 1], "x": [0, 1, 2]},
     )
     with pytest.raises(ValueError, match="DataArray must have '_FillValue' attribute"):
-        interpolate_na_along_time_dim(da)
+        interpolate_na_along_dim(da)
 
 
-def test_interpolate_na_along_time_dim_integer_fillvalue() -> None:
-    """Test the interpolate_na_along_time_dim function with integer _FillValue."""
+def test_interpolate_na_along_dim_integer_fillvalue() -> None:
+    """Test the interpolate_na_along_dim function with integer _FillValue."""
     data = np.array(
         [
             [[1.0, 2.0, -9999.0], [4.0, -9999.0, 6.0]],  # time 0
@@ -446,7 +446,7 @@ def test_interpolate_na_along_time_dim_integer_fillvalue() -> None:
         coords={"time": [0, 1], "y": [0, 1], "x": [0, 1, 2]},
         attrs={"_FillValue": -9999},
     )
-    result = interpolate_na_along_time_dim(da)
+    result = interpolate_na_along_dim(da)
     # Check that -9999 values are filled
     assert not np.any(result.values == -9999)
     assert result.dims == da.dims
