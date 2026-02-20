@@ -1482,13 +1482,12 @@ class Hydrography(BuildModelBase):
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
+
+        coast_rp = self.data_catalog.fetch("coast_rp").read()
+
         stations = gpd.read_parquet(
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
-
-        fp_coast_rp = self.old_data_catalog.get_source("COAST_RP").path
-        coast_rp = pd.read_pickle(fp_coast_rp)
-
         # remove stations that are not in coast_rp index
         stations = stations[
             stations["station_id"].astype(int).isin(coast_rp.index)
