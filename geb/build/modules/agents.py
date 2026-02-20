@@ -2441,16 +2441,9 @@ class Agents(BuildModelBase):
             for ISO3 in ISO3_codes_region
             if ISO3 in TRADE_REGIONS
         }
+        all_ISO3_across_relevant_regions: set[str] = set(relevant_trade_regions.keys())
 
-        all_ISO3_across_relevant_regions: set[str] = {
-            ISO3
-            for ISO3 in ISO3_codes_region
-            if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
-        }
-
-        # determine the donors: donors are all the countries in the trade regions that are within our
-        # model domain(self.geoms["regions"]).
-        # Therefore, this can be a region OUTSIDE of the model domain, but within a trade region in the model domain.
+        # The model now only uses ISO3 codes that are within the trade regions that are within the model domain. Countries not in the trade region dataset (e.g. Kosovo) are NOT considered now even though they can have preferences data. 
         donor_data = {}
         for ISO3 in all_ISO3_across_relevant_regions:
             region_risk_aversion_data = preferences_global[
@@ -2482,7 +2475,7 @@ class Agents(BuildModelBase):
                     key for key, val in COUNTRY_NAME_TO_ISO3.items() if val == ISO3
                 ]
                 region_risk_aversion_data["ISO3"] = ISO3
-
+    
             region_risk_aversion_data = region_risk_aversion_data[
                 [
                     "Country",
