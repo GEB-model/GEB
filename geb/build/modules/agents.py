@@ -1172,7 +1172,7 @@ class Agents(BuildModelBase):
         regions_shapes = self.geom["regions"]
         if data_source == "lowder":
             assert country_iso3_column in regions_shapes.columns, (
-                f"Region database must contain {country_iso3_column} column ({self.old_data_catalog['GADM_level1'].path})"
+                f"Region database must contain {country_iso3_column} column"
             )
 
             farm_sizes_per_region = self.data_catalog.fetch(
