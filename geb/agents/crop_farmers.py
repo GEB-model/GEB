@@ -5568,7 +5568,9 @@ class CropFarmers(AgentBaseClass):
             "Farmer index must be less than the number of agents."
         )
 
-        del self.var.activation_order_by_elevation_fixed
+        # Delete cached activation order if it exists
+        if hasattr(self.var, "activation_order_by_elevation_fixed"):
+            del self.var.activation_order_by_elevation_fixed
 
         last_farmer_HRUs = get_farmer_HRUs(
             self.var.field_indices, self.var.field_indices_by_farmer.data, -1
