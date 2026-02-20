@@ -775,7 +775,7 @@ wheels = [
 
 [[package]]
 name = "damagescanner"
-version = "1.0.0b3"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "exactextract" },
@@ -790,9 +790,9 @@ dependencies = [
     { name = "xarray" },
     { name = "xlrd" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/98/f2/d64531ac7367358637adf0129ae6727dc08abbd603add9cc8c86b3aa46c9/damagescanner-1.0.0b3.tar.gz", hash = "sha256:30b50524378cdd582a4d791e70b9a6e57c49d68e7891d27885e4e3c04fb2d555", size = 30338, upload-time = "2026-02-19T16:53:39.622Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/db/4a/d727d01f62d1fe189933ff4ac3c9416a67202591a4beb1cd62b008917928/damagescanner-1.0.0.tar.gz", hash = "sha256:d1f84555fb6bb0910ce2d3d70993dd5f99f1df883c24c0be17abcfbe7b48cb1f", size = 30330, upload-time = "2026-02-20T07:53:17.287Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/4f/ab15a4350806820ccee9b141aa2a8e7acb4975e95b0c08e58a6086990708/damagescanner-1.0.0b3-py3-none-any.whl", hash = "sha256:bd3dd43959091a58c0c46289c27f4fc369580b6f0211411e67c58eabe9c66843", size = 33142, upload-time = "2026-02-19T16:53:38.179Z" },
+    { url = "https://files.pythonhosted.org/packages/67/51/3c066f6b3bb7a0bf045fad49a14452605fa450fc6ba0547a5f954a58cb36/damagescanner-1.0.0-py3-none-any.whl", hash = "sha256:b87b89e809f583fe2784fcb489ec5602a85962fc7a68155f52db861218f94316", size = 33102, upload-time = "2026-02-20T07:53:18.578Z" },
 ]
 
 [[package]]
@@ -1305,7 +1305,7 @@ requires-dist = [
     { name = "contextily", specifier = ">=1.6.2" },
     { name = "cppimport", marker = "extra == 'plantfate'", specifier = ">=22.8.2" },
     { name = "daft-pgm", marker = "extra == 'fairstream'", specifier = ">=0.1.4" },
-    { name = "damagescanner", specifier = "==1.0.0b3" },
+    { name = "damagescanner", specifier = ">=1.0.0" },
     { name = "dask" },
     { name = "deap", specifier = ">=1.4.1" },
     { name = "ecmwf-api-client", specifier = ">=1.6.5" },

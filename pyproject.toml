@@ -28,7 +28,7 @@ dependencies = [
     "cfgrib>=0.9.14",
     "click>=8.1.8",
     "contextily>=1.6.2",
-    "damagescanner==1.0.0b3",
+    "damagescanner>=1.0.0",
     "dask",
     "deap>=1.4.1",
     "flopy>=3.8.0",
