@@ -30,6 +30,7 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
+from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
 from .osm_data import OpenStreetMapCoastlines, OpenStreetMapLandPolygons
@@ -641,6 +642,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 3.0 IGO",
             "url": "https://ourworldindata.org/grapher/human-development-index",
             "original_source_url": "https://hdr.undp.org",
+        },
+    },
+    "oecd_idd": {
+        "adapter": OECD(
+            folder="oecd_idd",
+            local_version=1,
+            filename="oecd_idd.csv",
+            cache="global",
+        ),
+        "url": "https://sdmx.oecd.org/public/rest/data/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0/.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR.?startPeriod=2010&dimensionAtObservation=AllDimensions&format=csvfilewithlabels",
+        "source": {
+            "name": "OECD Income Distribution Database",
+            "author": "OECD",
+            "license": "CC BY 4.0",
+            "url": "https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov",
         },
     },
     "esa_worldcover_2021": {

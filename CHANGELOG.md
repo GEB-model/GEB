@@ -23,6 +23,7 @@
 - Fix: waterbody outflow is larger than waterbody storage (due to floating point imprecision).
 - Fix: Added Liechtenstein to trade regions list which allows the model to be built in the Rhine basin
 - Move aquastat to new data catalog.
+- Add OECD Income Distribution Database (IDD) to the new data catalog.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
