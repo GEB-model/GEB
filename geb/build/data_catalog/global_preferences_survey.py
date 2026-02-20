@@ -70,7 +70,8 @@ class GlobalPreferencesSurvey(Adapter):
                         f"Expected file {self.zip_member_path} not found in {zip_path}."
                     )
                 with zip_ref.open(self.zip_member_path) as stata_file:
-                    dataframe: pd.DataFrame = pd.read_stata(stata_file)
+                    dataframe = pd.read_stata(stata_file)
+                    assert isinstance(dataframe, pd.DataFrame)
 
             dataframe.to_csv(self.path, index=False)
 

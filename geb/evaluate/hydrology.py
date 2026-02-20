@@ -311,6 +311,7 @@ def _plot_outflow_discharge_timeseries(
                 outlet_id=outlet_id,
                 outflow_plot_folder=outflow_plot_folder,
                 outflow_file_stem=outflow_file.stem,
+                frequency="hourly",
             )
             plots_created += 1
         except Exception as e:

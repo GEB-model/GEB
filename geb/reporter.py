@@ -200,7 +200,7 @@ ENERGY_BALANCE_REPORT_CONFIG = {
 
 
 def get_fill_value(
-    data: np.ndarray[Any],
+    data: np.ndarray[Any] | DynamicArray,
 ) -> tuple[int | float | None, Any]:
     """Get the fill value for a zarr array based on the data type.
 
@@ -642,6 +642,7 @@ class Reporter:
                             return xys
 
                         for river_ID, river in outflow_rivers.iterrows():
+                            assert isinstance(river_ID, int)
                             xys = get_upstream_represented_xys(river_ID)
                             for i, xy in enumerate(xys):
                                 # if there are multiple branches, we append a suffix to the name

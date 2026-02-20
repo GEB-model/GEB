@@ -1228,6 +1228,13 @@ class _ProgressReader:
 class MeritHydro(Adapter):
     """Dataset adapter for MERIT Hydro variables."""
 
+    _xmin: float
+    _xmax: float
+    _ymin: float
+    _ymax: float
+    _source_nodata: int | float | bool
+    _target_nodata: int | float | bool
+
     def __init__(self, variable: str, *args: Any, **kwargs: Any) -> None:
         """Initialize the adapter for a specific MERIT Hydro variable.
 
@@ -1238,12 +1245,6 @@ class MeritHydro(Adapter):
             **kwargs: Additional keyword arguments passed to the base Adapter class.
         """
         self.variable = variable
-        self._xmin: float | None = None
-        self._xmax: float | None = None
-        self._ymin: float | None = None
-        self._ymax: float | None = None
-        self._source_nodata: int | float | bool | None = None
-        self._target_nodata: int | float | bool | None = None
         super().__init__(*args, **kwargs)
 
     @property
@@ -1510,13 +1511,6 @@ class MeritHydro(Adapter):
             requests.RequestException: If repeated HTTP errors occur.
             tarfile.ReadError: If tar parsing repeatedly fails.
         """
-        self._xmin = xmin
-        self._xmax = xmax
-        self._ymin = ymin
-        self._ymax = ymax
-        self._source_nodata = source_nodata
-        self._target_nodata = target_nodata
-
         username = os.getenv("MERIT_USERNAME")
         password = os.getenv("MERIT_PASSWORD")
         if not username or not password:
@@ -1692,7 +1686,14 @@ class MeritHydro(Adapter):
         Raises:
             ValueError: If fetch() has not been called.
         """
-        if self._xmin is None:
+        if (
+            not hasattr(self, "_xmin")
+            or not hasattr(self, "_xmax")
+            or not hasattr(self, "_ymin")
+            or not hasattr(self, "_ymax")
+            or not hasattr(self, "_source_nodata")
+            or not hasattr(self, "_target_nodata")
+        ):
             raise ValueError(
                 "fetch() must be called before read() to set the bounding box."
             )
