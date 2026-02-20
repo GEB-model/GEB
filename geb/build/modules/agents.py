@@ -351,14 +351,13 @@ class Agents(BuildModelBase):
         """
         income_distribution_parameters = {}
         income_distributions = {}
-        path = self.old_data_catalog.get_source(
-            "oecd_idd"
-        ).path  # in future maybe replace this with an API request
-        oecd_idd = pd.read_csv(path)
+
+        oecd_idd = self.data_catalog.fetch("oecd_idd").read()
 
         # clean data
-        cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
-        oecd_idd = oecd_idd[cols_to_keep]
+        oecd_idd = oecd_idd[
+            ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
+        ]
         # only done to check countries in region, could probably be done more efficiently
         countries = self.data_catalog.fetch("GADM_level0").read(
             geom=self.region.union_all(),
@@ -408,6 +407,7 @@ class Agents(BuildModelBase):
                 np.random.lognormal(mu, sd, 15_000).astype(np.int32)
             )
             income_distributions[country] = income_distribution
+
         # store to model table
         income_distribution_parameters_pd = pd.DataFrame(income_distribution_parameters)
         income_distributions_pd = pd.DataFrame(income_distributions)
