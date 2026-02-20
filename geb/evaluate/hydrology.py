@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from geb.evaluate import Evaluate
     from geb.model import GEBModel
 
-from geb.hazards.floods.workflows.return_periods import (
+from geb.workflows.extreme_value_analysis import (
     ReturnPeriodModel,
 )
 from geb.workflows.io import read_zarr, write_zarr

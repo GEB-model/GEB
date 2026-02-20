@@ -134,8 +134,8 @@ nav:
     - Overview: hazards/index.md
     - Floods: hazards/floods.md
     - Windstorms: hazards/windstorms.md
-    - Extreme Value Analysis: hazards/extreme_value_analysis.md
   - Advanced topics:
+    - Extreme value analysis: advanced_topics/extreme_value_analysis.md
     - Forecasts: advanced_topics/forecasts.md
     - Calibration: advanced_topics/calibration.md
     - PlantFATE: advanced_topics/plantFATE.md

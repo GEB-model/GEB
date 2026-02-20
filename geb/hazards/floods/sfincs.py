@@ -42,8 +42,8 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
-from geb.hazards.floods.workflows.return_periods import ReturnPeriodModel
 from geb.hydrology.routing import get_river_width
+from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
     create_hash_from_parameters,
     get_window,
