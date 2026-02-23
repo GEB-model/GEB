@@ -1511,6 +1511,13 @@ class MeritHydro(Adapter):
             requests.RequestException: If repeated HTTP errors occur.
             tarfile.ReadError: If tar parsing repeatedly fails.
         """
+        self._xmin = xmin
+        self._xmax = xmax
+        self._ymin = ymin
+        self._ymax = ymax
+        self._source_nodata = source_nodata
+        self._target_nodata = target_nodata
+
         username = os.getenv("MERIT_USERNAME")
         password = os.getenv("MERIT_PASSWORD")
         if not username or not password:
