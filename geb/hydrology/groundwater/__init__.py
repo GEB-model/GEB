@@ -95,7 +95,7 @@ class GroundWater(Module):
         # )
 
         self.grid.var.elevation = self.hydrology.grid.load(
-            self.model.files["grid"]["landsurface/elevation"]
+            self.model.files["grid"]["landsurface/elevation_m"]
         )
 
         assert (

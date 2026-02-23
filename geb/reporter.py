@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import zarr.storage
 from dateutil.relativedelta import relativedelta
+from xarray.backends.zarr import FillValueCoder
 from zarr.codecs import ZstdCodec
 
 from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
@@ -199,34 +200,36 @@ ENERGY_BALANCE_REPORT_CONFIG = {
 
 
 def get_fill_value(
-    data: np.ndarray[Any] | int | float | bool | np.floating | np.integer,
-) -> int | float | None:
+    data: np.ndarray[Any] | DynamicArray,
+) -> tuple[int | float | None, Any]:
     """Get the fill value for a zarr array based on the data type.
 
     Args:
         data: The data array.
 
     Returns:
-        fill_value: The fill value for the zarr array.
+        A tuple containing the fill value and the encoded fill value for the zarr array.
 
     Raises:
         ValueError: If the data type is not recognized.
     """
-    if isinstance(data, float):
-        fill_value = np.nan
-    elif isinstance(data, int):
-        fill_value = -1
-    elif isinstance(data, bool):
-        fill_value = None
-    elif np.issubdtype(data.dtype, np.floating):
+    if np.issubdtype(data.dtype, np.floating):
+        kind = np.dtype(data.dtype)
         fill_value: int | float = np.nan
     elif np.issubdtype(data.dtype, np.integer):
+        kind = np.dtype(data.dtype)
         fill_value = -1
     elif data.dtype == bool:
         fill_value = None
     else:
         raise ValueError(f"Value dtype {data.dtype} not recognized.")
-    return fill_value
+
+    if fill_value is not None:
+        encoded_fill_value = FillValueCoder.encode(fill_value, kind)
+    else:
+        encoded_fill_value = None
+
+    return fill_value, encoded_fill_value
 
 
 def get_time_chunk_size(
@@ -357,14 +360,12 @@ def prepare_gridded_group(
         shape=lat.shape,
         dtype=lat.dtype,
         dimension_names=["y"],
-    )
-    y_group[:] = lat
-    y_group.attrs.update(
-        {
+        attributes={
             "standard_name": "latitude",
             "units": "degrees_north",
-        }
+        },
     )
+    y_group[:] = lat
 
     # Create the x coordinate array
     x_group = root_group.create_array(
@@ -372,14 +373,12 @@ def prepare_gridded_group(
         shape=lon.shape,
         dtype=lon.dtype,
         dimension_names=["x"],
-    )
-    x_group[:] = lon
-    x_group.attrs.update(
-        {
+        attributes={
             "standard_name": "longitude",
             "units": "degrees_east",
-        }
+        },
     )
+    x_group[:] = lon
 
     # Create the time coordinate array
     time_group = root_group.create_array(
@@ -387,15 +386,25 @@ def prepare_gridded_group(
         shape=time.shape,
         dtype=time.dtype,
         dimension_names=["time"],
-    )
-    time_group[:] = time
-    time_group.attrs.update(
-        {
+        attributes={
             "standard_name": "time",
             "units": "seconds since 1970-01-01T00:00:00",
             "calendar": "gregorian",
-        }
+        },
     )
+    time_group[:] = time
+
+    fill_value, encoded_fill_value = get_fill_value(example_value)
+
+    attributes = {
+        "grid_mapping": "crs",
+        "coordinates": "time y x",
+        "units": "unknown",
+        "long_name": name,
+        "_CRS": {"wkt": crs},
+    }
+    if encoded_fill_value is not None:
+        attributes["_FillValue"] = encoded_fill_value
 
     # Create the variable array
     variable_data: zarr.Array[Any] = root_group.create_array(
@@ -416,19 +425,11 @@ def prepare_gridded_group(
                 level=compression_level,
             ),
         ),
-        fill_value=get_fill_value(example_value),
+        fill_value=fill_value,
         dimension_names=["time", "y", "x"],
+        attributes=attributes,
     )
 
-    variable_data.attrs.update(
-        {
-            "grid_mapping": "crs",
-            "coordinates": "time y x",
-            "units": "unknown",
-            "long_name": name,
-            "_CRS": {"wkt": crs},
-        }
-    )
     # Pre-allocate the writing buffer for the chunks
     config["_chunk_data"] = np.full(
         (chunk_size, lat.size, lon.size),
@@ -463,16 +464,13 @@ def prepare_agent_group(
         shape=time.shape,
         dtype=time.dtype,
         dimension_names=["time"],
-    )
-    time_group[:] = time
-
-    time_group.attrs.update(
-        {
+        attributes={
             "standard_name": "time",
             "units": "seconds since 1970-01-01T00:00:00",
             "calendar": "gregorian",
-        }
+        },
     )
+    time_group[:] = time
 
     # Determine chunk size and shape based on example value
     if isinstance(example_value, (float, int)):
@@ -484,8 +482,10 @@ def prepare_agent_group(
         )
         if isinstance(example_value, float):
             dtype_ = np.float32
+            example_value = np.array(example_value, dtype=np.float32)
         else:
             dtype_ = np.int32
+            example_value = np.array(example_value, dtype=np.int32)
         chunk_size = min(chunk_size, time_group.size)
         chunks = (chunk_size,)
         compressors = None
@@ -507,7 +507,15 @@ def prepare_agent_group(
         )
         array_dimensions = ["time", "agents"]
 
-    fill_value = get_fill_value(example_value)
+    fill_value, encoded_fill_value = get_fill_value(example_value)
+    attributes = {
+        "coordinates": "time",
+        "units": "unknown",
+        "long_name": name,
+    }
+    if encoded_fill_value is not None:
+        attributes["_FillValue"] = encoded_fill_value
+
     root_group.create_array(
         name,
         shape=shape,
@@ -516,6 +524,7 @@ def prepare_agent_group(
         compressors=compressors,
         fill_value=fill_value,
         dimension_names=array_dimensions,
+        attributes=attributes,
     )
     # Pre-allocate the writing buffer for the chunks
     if isinstance(example_value, (float, int)):
@@ -614,19 +623,49 @@ class Reporter:
                             {"hydrology.routing": station_reporters},
                         )
                     elif module_name == "_outflow_points" and module_values is True:
-                        outflow_rivers = self.model.hydrology.routing.outflow_rivers
+                        routing = self.model.hydrology.routing
+                        outflow_rivers = routing.outflow_rivers
+                        all_rivers = routing.rivers
 
                         outflow_reporters = {}
+
+                        def get_upstream_represented_xys(
+                            river_id: int,
+                        ) -> list[tuple[int, int]]:
+                            """Recursively find the nearest represented upstream rivers.
+
+                            Args:
+                                river_id: The ID of the river to find the upstream represented rivers for.
+
+                            Returns:
+                                A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
+                            """
+                            river = all_rivers.loc[river_id]
+                            if river["represented_in_grid"]:
+                                return [river["hydrography_xy"][-1]]
+
+                            upstream_rivers = all_rivers[
+                                all_rivers["downstream_ID"] == river_id
+                            ]
+                            xys = []
+                            for idx, _ in upstream_rivers.iterrows():
+                                xys.extend(get_upstream_represented_xys(idx))
+                            return xys
+
                         for river_ID, river in outflow_rivers.iterrows():
-                            xy = river["hydrography_xy"][-1]  # last point is outflow
-                            outflow_reporters[
-                                f"river_outflow_hourly_m3_per_s_{river_ID}"
-                            ] = {
-                                "varname": f"grid.var.discharge_m3_s_per_substep",
-                                "type": "grid",
-                                "function": f"sample_xy,{xy[0]},{xy[1]}",
-                                "substeps": 24,
-                            }
+                            assert isinstance(river_ID, int)
+                            xys = get_upstream_represented_xys(river_ID)
+                            for i, xy in enumerate(xys):
+                                # if there are multiple branches, we append a suffix to the name
+                                suffix = f"_{i}" if len(xys) > 1 else ""
+                                outflow_reporters[
+                                    f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
+                                ] = {
+                                    "varname": "grid.var.discharge_m3_s_per_substep",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{xy[0]},{xy[1]}",
+                                    "substeps": 24,
+                                }
                         report_config = multi_level_merge(
                             report_config,
                             {"hydrology.routing": outflow_reporters},
@@ -1051,7 +1090,7 @@ class Reporter:
                         value.data if isinstance(value, DynamicArray) else value,
                         (0, value_store_array.shape[0] - value.size),
                         mode="constant",
-                        constant_values=get_fill_value(value) or False,
+                        constant_values=get_fill_value(value)[0] or False,
                     )
 
                 buffer = config["_chunk_data"]

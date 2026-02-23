@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
 
 import geopandas as gpd
 import networkx
@@ -25,6 +25,7 @@ import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
+from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
 
 from geb import GEB_PACKAGE_DIR
@@ -36,7 +37,7 @@ from geb.workflows.io import (
     write_params,
     write_table,
 )
-from geb.workflows.raster import clip_region, full_like, repeat_grid
+from geb.workflows.raster import clip_region, clip_with_grid, full_like, repeat_grid
 
 from ..workflows.io import (
     read_zarr,
@@ -394,6 +395,7 @@ def cluster_subbasins_by_area_and_proximity(
     subbasin_ids: list[int],
     target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
     area_tolerance: float,
+    ocean_outlets_only: bool,
     logger: logging.Logger,
 ) -> list[list[int]]:
     """Cluster subbasins by following the coastline with performance optimizations.
@@ -409,6 +411,7 @@ def cluster_subbasins_by_area_and_proximity(
         subbasin_ids: List of downstream COMID values to cluster.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        ocean_outlets_only: If True, only consider coastal basins that intersect with coastlines.
         logger: Logger for progress tracking.
 
     Returns:
@@ -438,6 +441,32 @@ def cluster_subbasins_by_area_and_proximity(
     logger.info(
         f"Found {len(coastal_basin_ids)} coastal basins and {len(inland_basin_ids)} inland basins"
     )
+
+    if ocean_outlets_only:
+        logger.info("Filtering coastal basins to ocean outlets only...")
+        # Load coastlines
+        coastlines = data_catalog.fetch("open_street_map_coastlines").read()
+        # clip coastlines to the bounding box of the subbasins for performance
+        coastlines = coastlines.cx[
+            subbasins.total_bounds[0] : subbasins.total_bounds[2],
+            subbasins.total_bounds[1] : subbasins.total_bounds[3],
+        ]
+        # check whether coastal basins intersect with coastlines
+        # Only select candidate basins first
+        candidates = subbasins.loc[coastal_basin_ids]
+
+        # Buffer once, vectorized. Buffering by 0.1 degrees (~11km) to account for minor misalignments
+        buffered = candidates.geometry.buffer(0.1)
+
+        # Vectorized intersects
+        mask = buffered.intersects(coastlines.union_all())
+
+        # Get verified IDs
+        coastal_basin_ids = candidates.index[mask].tolist()
+
+        # remove any coastal basins that do not intersect with coastlines from subbasins
+        subbasins = subbasins.loc[coastal_basin_ids + inland_basin_ids]
+        subbasin_ids = subbasins.index.tolist()
 
     logger.info("Getting upstream areas...")
     upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasin_ids)
@@ -1218,17 +1247,24 @@ def get_touching_subbasins(
 
 
 def get_coastline_nodes(
-    coastline_graph: networkx.Graph, STUDY_AREA_OUTFLOW: int, NEARBY_OUTFLOW: int
+    coastline_graph: networkx.Graph,
+    riverine_mask: xr.DataArray,
+    STUDY_AREA_OUTFLOW: int,
+    NEARBY_OUTFLOW: int,
 ) -> set:
     """Get all coastline nodes that are part of the coastline for the study area.
 
     Args:
         coastline_graph: The graph containing all coastline nodes.
+        riverine_mask: A DataArray containing the riverine mask.
         STUDY_AREA_OUTFLOW: The outflow type value for outflows within the study area.
         NEARBY_OUTFLOW: The outflow type value for outflows outside the study area, but close enough to influence the coastline.
 
     Returns:
         A set of all coastline nodes that are part of the coastline for the study area.
+
+    Raises:
+        AssertionError: If a coastal segment has both a study area outflow and a nearby outflow, but not exactly one of each.
     """
     coastline_nodes = set()
 
@@ -1322,10 +1358,40 @@ def get_coastline_nodes(
             # we divide the segment in a part that is closer to the study area outflow
             # and a part that is not
             if study_area_nodes and nearby_nodes:
-                assert len(study_area_nodes) == 1
-                study_area_node = study_area_nodes[0]
+                if len(study_area_nodes) != 1 or len(nearby_nodes) != 1:
+                    # create a diagnostic visualization grid that marks, for this coastal
+                    # segment, which cells neighbor the study area outflow, which neighbor
+                    # the nearby outflow, and which belong to neither. This is written to
+                    # disk to help debug cases where there is not exactly one study area
+                    # outflow and one nearby outflow per coastal segment.
+                    nodes_grid: xr.DataArray = riverine_mask.copy().astype(np.int32)
+                    nodes_grid.attrs["_FillValue"] = 0
+                    nodes_grid.values[:] = 0
+                    for node, node_attributes in coastal_segment.nodes(data=True):
+                        node_y, node_x = node_attributes["yx"]
+                        if node_attributes["neighbor_of_nearby_outflow"] is True:
+                            nodes_grid.values[node_y, node_x] = NEARBY_OUTFLOW
+                        elif node_attributes["neighbor_of_study_area_outflow"] is True:
+                            nodes_grid.values[node_y, node_x] = STUDY_AREA_OUTFLOW
+                        else:
+                            nodes_grid.values[node_y, node_x] = -1
 
-                assert len(nearby_nodes) == 1
+                    # clip to area of interest for smaller output
+                    nodes_grid, _ = clip_with_grid(nodes_grid, mask=nodes_grid != 0)
+
+                    debug_file = Path("debug_coastal_segment.zarr")
+                    write_zarr(
+                        nodes_grid,
+                        debug_file,
+                        crs=nodes_grid.rio.crs,
+                    )
+                    raise AssertionError(
+                        f"There should only be one study area outflow and one nearby outflow per coastal segment, "
+                        f"found {len(study_area_nodes)} study area outflows and {len(nearby_nodes)} nearby outflows. "
+                        f"Debug output written to {debug_file}."
+                    )
+
+                study_area_node = study_area_nodes[0]
                 nearby_node = nearby_nodes[0]
 
                 for node in coastal_segment.nodes:
@@ -1658,7 +1724,7 @@ class GEBModel(
     def files(self, value: dict) -> None:
         self._files = value
 
-    @build_method
+    @build_method(required=True)
     def setup_region(
         self,
         region: dict,
@@ -1725,21 +1791,35 @@ class GEBModel(
         )
         rivers: gpd.GeoDataFrame = self.get_rivers(river_graph, sink_subbasin_ids)
 
-        buffer = 0.5  # buffer in degrees
+        buffer = 1.0  # buffer in degrees
         xmin, ymin, xmax, ymax = rivers[~rivers["is_downstream_outflow"]].total_bounds
         xmin -= buffer
         ymin -= buffer
         xmax += buffer
         ymax += buffer
 
-        ldd = self.data_catalog.fetch(
-            "merit_hydro_dir",
-            xmin=xmin,
-            xmax=xmax,
-            ymin=ymin,
-            ymax=ymax,
-        ).read()
+        ldd = (
+            self.data_catalog.fetch(
+                "merit_hydro_dir",
+                xmin=xmin,
+                xmax=xmax,
+                ymin=ymin,
+                ymax=ymax,
+            )
+            .read()
+            .compute()
+        )
         assert isinstance(ldd, xr.DataArray), "Expected ldd to be an xarray DataArray."
+
+        # We remove all pits that are not directly adjacent to valid flow directions
+        # Identify cells with flow directions
+        cells_with_flow_directions = (ldd.values > 0) & (ldd.values != 247)
+        # grow valid values mask by one cell
+        valid_values_and_coastline = binary_dilation(
+            cells_with_flow_directions, structure=np.ones((3, 3))
+        )
+        # and use said mask which includes valid values and its neighbors to set ldd to no data
+        ldd.values[~valid_values_and_coastline] = 247
 
         ldd_network = pyflwdir.from_array(
             ldd.values,
@@ -1762,7 +1842,8 @@ class GEBModel(
             riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
             rivers = rivers[~rivers["is_upstream_of_downstream_basin"]]
         elif "subbasin" in region or "geom" in region:
-            outlet_lonlats = rivers.geometry.apply(
+            rivers_outlets_for_basins = rivers[~rivers["is_further_downstream_outflow"]]
+            outlet_lonlats = rivers_outlets_for_basins.geometry.apply(
                 lambda geom: geom.coords[-2]
             ).tolist()
             subbasins_grid = ldd_network.basins(
@@ -1770,7 +1851,7 @@ class GEBModel(
                     [lon for lon, lat in outlet_lonlats],
                     [lat for lon, lat in outlet_lonlats],
                 ),
-                ids=rivers.index,
+                ids=rivers_outlets_for_basins.index,
             ).astype(np.int32)
 
             # we want to remove the areas upstream of the downstream outflow basins
@@ -1820,7 +1901,7 @@ class GEBModel(
                 crs=subbasins.crs,
             )
             # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
-            # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+            # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
                 f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
@@ -1915,8 +1996,8 @@ class GEBModel(
             latlon=True,
         )
 
-        STUDY_AREA_OUTFLOW: int = 1
-        NEARBY_OUTFLOW: int = 2
+        STUDY_AREA_OUTFLOW: Literal[1] = 1
+        NEARBY_OUTFLOW: Literal[2] = 2
 
         rivers = (
             self.data_catalog.fetch(
@@ -1933,9 +2014,9 @@ class GEBModel(
         )
 
         rivers["outflow_type"] = rivers.apply(
-            lambda row: STUDY_AREA_OUTFLOW
-            if row.name in subbasins.index
-            else NEARBY_OUTFLOW,
+            lambda row: (
+                STUDY_AREA_OUTFLOW if row.name in subbasins.index else NEARBY_OUTFLOW
+            ),
             axis=1,
         )
 
@@ -2006,6 +2087,7 @@ class GEBModel(
         )
         coastline_nodes = get_coastline_nodes(
             coastline_graph,
+            riverine_mask,
             STUDY_AREA_OUTFLOW=STUDY_AREA_OUTFLOW,
             NEARBY_OUTFLOW=NEARBY_OUTFLOW,
         )
@@ -2166,19 +2248,30 @@ class GEBModel(
 
         self.set_subgrid(submask, name="mask")
 
-    @build_method
+    @build_method(required=True)
     def set_time_range(self, start_date: date, end_date: date) -> None:
         """Sets the time range for the build model.
 
         This time range is used to ensure that all datasets with a time dimension
         cover at least this time range.
 
+        Start date must be on or after 1960, because of data availability. End date can be in the future.
+
         Args:
             start_date: The start date of the model.
             end_date: The end date of the model.
 
+        Raises:
+            ValueError: If the start date is not before the end date.
+            ValueError: If the start date is before 1960, because of data availability.
         """
-        assert start_date < end_date, "Start date must be before end date."
+        if not start_date < end_date:
+            raise ValueError("Start date must be before end date.")
+
+        if start_date.year < 1960:
+            raise ValueError(
+                "Start date must be on or after 1960, because of data availability."
+            )
         self.set_params(
             {"start_date": start_date, "end_date": end_date},
             name="model_time_range",
@@ -2216,7 +2309,7 @@ class GEBModel(
             end_date = datetime.fromisoformat(end_date)
         return end_date
 
-    @build_method
+    @build_method(required=True)
     def set_ssp(self, ssp: str) -> None:
         """Sets the SSP name for the model.
 
@@ -2292,7 +2385,7 @@ class GEBModel(
             time_chunksize=24 * 6,  # 10 minute data
         )
 
-    @build_method
+    @build_method(required=True)
     def setup_damage_parameters(
         self,
         parameters: dict[
@@ -2339,7 +2432,7 @@ class GEBModel(
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
-    @build_method
+    @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors: list[tuple[float, float]]
     ) -> None:
@@ -2991,6 +3084,8 @@ class GEBModel(
                 '"setup_region" must be present in methods when building a new model.'
             )
         methods["setup_region"].update(region=region)
+
+        build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
         if continue_:

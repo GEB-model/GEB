@@ -542,7 +542,7 @@ class WaterBodies(Module):
         # especially for very small lakes with a small drainage area.
         # In such cases, we take the outflow cell with the lowest elevation.
         outflow_elevation = read_grid(
-            self.model.files["grid"]["routing/outflow_elevation"]
+            self.model.files["grid"]["landsurface/elevation_min_m"]
         )
         outflow_elevation = self.grid.compress(outflow_elevation)
 
@@ -568,7 +568,7 @@ class WaterBodies(Module):
             # especially for very small lakes with a small drainage area.
             # In such cases, we take the outflow cell with the lowest elevation.
             outflow_elevation = self.grid.compress(
-                read_grid(self.model.files["grid"]["routing/outflow_elevation"])
+                read_grid(self.model.files["grid"]["landsurface/elevation_min_m"])
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:
@@ -698,12 +698,17 @@ class WaterBodies(Module):
         outflow_to_drainage_network_m3[self.is_lake] = self.routing_lakes(
             routing_step_length_seconds
         )
+
         (
             outflow_to_drainage_network_m3[self.is_reservoir],
             command_area_release_m3[self.is_reservoir],
         ) = self.routing_reservoirs(n_routing_substeps, current_substep)
 
-        assert (outflow_to_drainage_network_m3 <= self.var.storage).all()
+        assert (
+            outflow_to_drainage_network_m3 <= self.var.storage.astype(np.float32)
+        ).all(), (
+            f"Outflow exceeds storage: {outflow_to_drainage_network_m3.max()} > {self.var.storage.max()}"
+        )
 
         if __debug__:
             balance_check(

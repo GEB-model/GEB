@@ -32,6 +32,7 @@ from geb.runner import (
     update_fn,
 )
 from geb.workflows.io import WorkingDirectory
+from geb.workflows.raster import rechunk_zarr_file
 
 
 @click.group()
@@ -271,6 +272,12 @@ def click_build_options(
             default=Path(DATA_ROOT_DEFAULT),
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
+        @click.option(
+            "--profiling",
+            is_flag=True,
+            default=PROFILING_DEFAULT,
+            help="Run with profiling. If this option is used, profiling stats are saved in the profiling directory.",
+        )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for build options.
@@ -444,9 +451,9 @@ def update(*args: Any, **kwargs: Any) -> None:
 @cli.command()
 @click_run_options()
 @click.option(
-    "--methods",
-    default="plot_discharge,evaluate_discharge,evaluate_hydrodynamics,water_balance",
-    help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
+    "--method",
+    default="hydrology.evaluate_discharge",
+    help="Single evaluation method to run, e.g. 'hydrology.evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
@@ -463,18 +470,18 @@ def update(*args: Any, **kwargs: Any) -> None:
     help="Create yearly plots in evaluation.",
 )
 @click.option(
-    "--correct-q-obs",
+    "--correct-discharge-observations",
     is_flag=True,
     default=False,
-    help="correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the difference in upstream area between the Q_obs station and the simulated discharge",
+    help="correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries for the difference in upstream area between the discharge_observations station and the simulated discharge",
 )
 def evaluate(
-    methods: str,
+    method: str,
     spinup_name: str,
     run_name: str,
     include_spinup: bool,
     include_yearly_plots: bool,
-    correct_q_obs: bool,
+    correct_discharge_observations: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     config: dict[str, Any] | Path = CONFIG_DEFAULT,
     profiling: bool = PROFILING_DEFAULT,
@@ -484,34 +491,29 @@ def evaluate(
     """Evaluate model, for example by comparing observed and simulated discharge.
 
     Args:
-        methods: Comma-seperated list of methods to evaluate. Currently supported methods: '
-            'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.
+        method: Single evaluation method to run, e.g. `hydrology.evaluate_discharge`.
         spinup_name: Name of the evaluation run.
         run_name: Name of the run to evaluate.
         include_spinup: Include spinup in evaluation.
         include_yearly_plots: Create yearly plots in evaluation.
-        correct_q_obs: correct_Q_obs can be flagged to correct the Q_obs discharge timeseries
-            for the difference in upstream area between the Q_obs station and the simulated discharge.
+        correct_discharge_observations: correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries
+            for the difference in upstream area between the discharge_observations station and the simulated discharge.
         working_directory: Working directory for the model.
         config: Path to the model configuration file or a dict with the config.
         profiling: If True, run the model with profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
         timing: If True, run the model with timing, printing the time taken for specific methods
     """
-    # If no methods are provided, pass None to run_model_with_method
-    methods_list: list[str] = methods.split(",")
-    methods_list: list[str] = [
-        method.replace("-", "_").strip() for method in methods_list
-    ]
+    method_name = method.replace("-", "_").strip()
     run_model_with_method(
         method="evaluate",
         method_args={
-            "methods": methods_list,
+            "method": method_name,
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,
             "include_yearly_plots": include_yearly_plots,
-            "correct_Q_obs": correct_q_obs,
+            "correct_discharge_observations": correct_discharge_observations,
         },
         working_directory=working_directory,
         config=config,
@@ -767,6 +769,12 @@ def workflow(
     type=click.Path(),
     help="Save visualization map to PNG file at this path. If not specified, saves to 'models/clusters_map.png'.",
 )
+@click.option(
+    "--ocean-outlets-only",
+    is_flag=True,
+    default=False,
+    help="If set, only include clusters that flow to the ocean (exclude endorheic basins).",
+)
 @working_directory_option
 def init_multiple(
     config: str,
@@ -782,6 +790,7 @@ def init_multiple(
     overwrite: bool,
     save_geoparquet: Path | None,
     save_map: str | None,
+    ocean_outlets_only: bool,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
 
@@ -808,6 +817,7 @@ def init_multiple(
         overwrite=overwrite,
         save_geoparquet=save_geoparquet,
         save_map=save_map,
+        ocean_outlets_only=ocean_outlets_only,
     )
 
 
@@ -817,6 +827,36 @@ def server() -> None:
     from geb.mcp_server import mcp
 
     mcp.run()
+
+
+@cli.group()
+def tool() -> None:
+    """Useful tools for GEB."""
+    pass
+
+
+@tool.command()
+@click.argument("input_path", type=click.Path(exists=True, path_type=Path))
+@click.argument("output_path", type=click.Path(path_type=Path))
+@click.option(
+    "--how",
+    type=click.Choice(
+        ["time-optimized", "space-optimized", "balanced"], case_sensitive=False
+    ),
+    required=True,
+    help="How to optimize the chunks.",
+)
+@click.option(
+    "--no-intermediate",
+    is_flag=False,
+    default=True,
+    help="Use intermediate rechunking step (recommended for large files).",
+)
+def rechunk(
+    input_path: Path, output_path: Path, how: str, no_intermediate: bool
+) -> None:
+    """Rechunk a Zarr file."""
+    rechunk_zarr_file(input_path, output_path, how, not no_intermediate)  # type: ignore
 
 
 if __name__ == "__main__":

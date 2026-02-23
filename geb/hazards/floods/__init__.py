@@ -22,7 +22,7 @@ from geb.geb_types import (
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.module import Module
 from geb.store import Bucket
-from geb.workflows.io import read_geom
+from geb.workflows.io import read_geom, read_table
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
 from ...workflows.io import (
@@ -245,7 +245,7 @@ class Floods(Module):
         self,
         name: str,
         rivers: gpd.GeoDataFrame,
-        subbbasins: gpd.GeoDataFrame,
+        subbasins: gpd.GeoDataFrame,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
@@ -259,7 +259,7 @@ class Floods(Module):
 
         Args:
             name: Name of the SFINCS model (used for the model root directory).
-            subbbasins: The subbbasins to build the SFINCS model for. If None, the entire model subbbasins is used.
+            subbasins: The subbasins to build the SFINCS model for. If None, the entire model subbasins is used.
             rivers: The rivers to include in the SFINCS model.
             coastal: Whether to only include coastal areas in the model.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
@@ -276,7 +276,7 @@ class Floods(Module):
             ).to_dataset(name="elevtn")
 
         sfincs_model.build(
-            subbbasins=subbbasins,
+            subbasins=subbasins,
             DEMs=self.DEM_config,
             rivers=rivers,
             discharge=self.discharge_spinup_ds,
@@ -308,6 +308,10 @@ class Floods(Module):
             if "routing/custom_rivers" in self.model.files["geom"]
             else None,
             overwrite=self.config["overwrite"],
+            p_value_threshold=self.config["p_value_threshold"],
+            selection_strategy=self.config["selection_strategy"],
+            fixed_shape=self.config["fixed_shape"],
+            write_figures=self.config["write_figures"],
         )
 
         return sfincs_model
@@ -444,8 +448,9 @@ class Floods(Module):
         """
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         rivers = self.model.hydrology.routing.rivers
+        simulation_rivers = rivers[~rivers["is_further_downstream_outflow"]]
 
-        river_graph = create_river_graph(rivers, subbasins)
+        river_graph = create_river_graph(simulation_rivers, subbasins)
         grouped_subbasins = group_subbasins(
             river_graph=river_graph,
             max_area_m2=1e20,  # very large to force single group only
@@ -454,15 +459,16 @@ class Floods(Module):
         assert len(grouped_subbasins) == 1, "currently only single group supported"
         for group_id, group in grouped_subbasins.items():
             group = set(group) | set(
-                rivers.loc[rivers.index.isin(group)]["downstream_ID"]
+                simulation_rivers.loc[simulation_rivers.index.isin(group)][
+                    "downstream_ID"
+                ]
             )
             subbasins_group = subbasins[subbasins.index.isin(group)]
-            rivers_group = rivers[rivers.index.isin(group)]
 
             sfincs_root_model = self.build(
                 f"group_{group_id}",
-                rivers=rivers_group,
-                subbbasins=subbasins_group,
+                rivers=rivers,
+                subbasins=subbasins_group,
             )  # build or read the model
             sfincs_simulation = self.set_forcing(  # set the forcing
                 sfincs_root_model, start_time, end_time
@@ -494,7 +500,9 @@ class Floods(Module):
         if self.model.multiverse_name is None:
             if self.model.config["general"]["forecasts"]["use"]:
                 print("Multiverse no longer active, now compute flood damages...")
-            self.model.agents.households.flood(flood_depth=flood_depth)
+            # Check if damage simulation is enabled before calculating damages
+            if self.model.config["hazards"]["damage"]["simulate"]:
+                self.model.agents.households.flood(flood_depth=flood_depth)
 
     def get_return_period_maps(self) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
@@ -552,6 +560,8 @@ class Floods(Module):
                 coastal_subbasins,
                 how="difference",
             )
+            low_elevation_coastal_zone_mask["is_downstream_outflow"] = False
+            low_elevation_coastal_zone_mask["COMID"] = 0  # 0 is not used. -1 is nan
             coastal_subbasins = pd.concat(
                 [coastal_subbasins, low_elevation_coastal_zone_mask],
                 ignore_index=False,
@@ -575,9 +585,14 @@ class Floods(Module):
                 ]
             ).rio.write_crs("EPSG:4326")
 
+            # load sea level rise data
+            sea_level_rise_rcp8p5: pd.DataFrame = read_table(
+                self.model.files["table"]["gtsm/sea_level_rise_rcp8p5"]
+            )
+
             sfincs_coastal_root_model: SFINCSRootModel = self.build(
                 name=model_name,
-                subbbasins=coastal_subbasins,
+                subbasins=coastal_subbasins,
                 coastal=True,
                 rivers=rivers[rivers.intersects(coastal_subbasins.union_all())],
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
@@ -614,13 +629,17 @@ class Floods(Module):
 
                 sfincs_inland_root_model = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
-                    subbbasins=region_subbasins,
+                    subbasins=region_subbasins,
                     rivers=region_rivers,
                     coastal=False,
                 )
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
                     discharge=self.discharge_spinup_ds,
                     return_periods=self.config["return_periods"],
+                    p_value_threshold=self.config["p_value_threshold"],
+                    selection_strategy=self.config["selection_strategy"],
+                    fixed_shape=self.config["fixed_shape"],
+                    write_figures=self.config["write_figures"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
@@ -630,7 +649,11 @@ class Floods(Module):
             if coastal:
                 sfincs_coastal_simulation: SFINCSSimulation = (
                     sfincs_coastal_root_model.create_coastal_return_period_simulation(
-                        return_period, coastal_forcing_locations, offset=coastal_offset
+                        return_period,
+                        coastal_forcing_locations,
+                        offset=coastal_offset,
+                        sea_level_rise=sea_level_rise_rcp8p5,
+                        year=self.model.current_time.year,
                     )
                 )
                 simulations.append(sfincs_coastal_simulation)
@@ -753,7 +776,7 @@ class Floods(Module):
             / "report"
             / "spinup"
             / "hydrology.routing"
-            / "discharge_daily.zarr"
+            / "discharge_hourly.zarr"
         )
 
         start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)

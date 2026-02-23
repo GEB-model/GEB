@@ -81,3 +81,15 @@ class GEBCO(Adapter):
                 (self.root / path).unlink()  # remove extracted .tif files
 
         return self
+
+    def read(self, *args: Any, **kwargs: Any) -> xr.DataArray:
+        """Read the processed GEBCO data from storage.
+
+        Args:
+            *args: Additional positional arguments to pass to the reader function.
+            **kwargs: Additional keyword arguments to pass to the reader function.
+
+        Returns:
+            The processed GEBCO data as an xarray DataArray.
+        """
+        return super().read(*args, **kwargs)

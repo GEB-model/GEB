@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
-import zarr
-import zarr.storage
 from numba import njit, prange  # noqa: F401
 
 from geb.geb_types import (
     ArrayFloat32,
     ArrayInt32,
-    ThreeDArrayFloat32,
     TwoDArrayBool,
     TwoDArrayFloat32,
 )
@@ -25,7 +23,11 @@ from .evapotranspiration import (
     calculate_bare_soil_evaporation,
     calculate_transpiration,
 )
-from .interception import get_interception_capacity, interception
+from .interception import (
+    get_interception_capacity,
+    interception,
+    leaf_area_index_to_interception_capacity_m,
+)
 from .landcovers import SEALED
 from .potential_evapotranspiration import (
     get_CO2_induced_crop_factor_adustment,
@@ -56,6 +58,32 @@ if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
 
+def map_date_to_dekad(dt: datetime) -> int:
+    """Map a date to a dekadal index (0-35).
+
+    Args:
+        dt: Date to map.
+
+    Returns:
+        Dekadal index (0-35).
+    """
+    month: int = dt.month
+    day: int = dt.day
+
+    # find dekadal index for start of month
+    dekadal_index = (month - 1) * 3
+
+    # adjust for day of month
+    if day <= 10:
+        dekadal_index += 0
+    elif day <= 20:
+        dekadal_index += 1
+    else:
+        dekadal_index += 2
+
+    return dekadal_index
+
+
 @njit(parallel=True, cache=True)
 def land_surface_model(
     land_use_type: ArrayInt32,
@@ -72,7 +100,7 @@ def land_surface_model(
     soil_layer_height: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     root_depth_m: ArrayFloat32,
     topwater_m: ArrayFloat32,
-    arno_shape_parameter: ArrayFloat32,
+    variable_runoff_shape_beta: ArrayFloat32,
     snow_water_equivalent_m: ArrayFloat32,
     liquid_water_in_snow_m: ArrayFloat32,
     snow_temperature_C: ArrayFloat32,
@@ -99,7 +127,8 @@ def land_surface_model(
     green_ampt_active_layer_idx: ArrayInt32,
     lambda_pore_size_distribution: ArrayFloat32,
     bubbling_pressure_cm: ArrayFloat32,
-    natural_crop_groups: ArrayFloat32,
+    crop_group_forest: ArrayFloat32,
+    crop_group_grassland_like: ArrayFloat32,
     crop_group_number_per_group: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
     interflow_multiplier: np.float32,
@@ -128,7 +157,7 @@ def land_surface_model(
     This function coordinates the vertical water balance for each grid cell, including:
     - Snow accumulation and melt
     - Interception
-    - Infiltration (Green-Ampt with Arno/Xinanjiang runoff)
+    - Infiltration (Green-Ampt with variable infiltration capacity runoff)
     - Soil moisture redistribution (Richards equation / Darcy's Law)
     - Evapotranspiration
 
@@ -149,7 +178,7 @@ def land_surface_model(
         topwater_m: Topwater in meters, which is >=0 for paddy and 0 for non-paddy. Within
             this function topwater is used to add water from natural infiltration and
             irrigation and to calculate open water evaporation.
-        arno_shape_parameter: Arno runoff model shape parameter for the cell.
+        variable_runoff_shape_beta: Variable infiltration capacity runoff model shape parameter for the cell.
         snow_water_equivalent_m: Snow water equivalent in meters.
         liquid_water_in_snow_m: Liquid water in snow in meters.
         snow_temperature_C: Snow temperature in Celsius.
@@ -176,7 +205,8 @@ def land_surface_model(
         groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
         bubbling_pressure_cm: Bubbling pressure in cm.
-        natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
+        crop_group_forest: Crop group numbers for forests (see WOFOST 6.0).
+        crop_group_grassland_like: Crop group numbers for grassland-like areas (see WOFOST 6.0).
         crop_group_number_per_group: Crop group numbers for each crop type.
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
         interflow_multiplier: Calibration factor for interflow calculation.
@@ -398,15 +428,19 @@ def land_surface_model(
                 saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
                     :, i
                 ],
+                groundwater_toplayer_conductivity_m_per_timestep=groundwater_toplayer_conductivity_m_per_hour[
+                    i
+                ],
                 land_use_type=land_use_type[i],
                 soil_is_frozen=soil_is_frozen,
                 w=w[:, i],
                 topwater_m=topwater_m[i],
+                capillary_rise_from_groundwater_m=capillar_rise_m[i],
                 wetting_front_depth_m=wetting_front_depth_m[i],
                 wetting_front_suction_head_m=wetting_front_suction_head_m[i],
                 wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
                 green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
-                arno_shape_parameter=arno_shape_parameter[i],
+                variable_runoff_shape_beta=variable_runoff_shape_beta[i],
                 bubbling_pressure_cm=bubbling_pressure_cm[:, i],
                 soil_layer_height_m=soil_layer_height[:, i],
                 lambda_pore_size_distribution=lambda_pore_size_distribution[:, i],
@@ -433,26 +467,30 @@ def land_surface_model(
                 )
             )
 
-            # We assume that the bottom layer is draining under gravity
-            # i.e., assuming homogeneous soil water potential below
-            # bottom layer all the way to groundwater
-            # Assume draining under gravity. If there is capillary rise from groundwater, there will be no
-            # percolation to the groundwater. A potential capillary rise from
-            # the groundwater is already accounted for in rise_from_groundwater
-            flux: np.float32 = unsaturated_hydraulic_conductivity_m_per_hour * (
-                capillar_rise_m[i] <= np.float32(0)
-            )
-            # Limit flux by the saturated hydraulic conductivity of groundwater top layer
-            flux = min(flux, groundwater_toplayer_conductivity_m_per_hour[i])
+            # Percolation from bottom soil layer to groundwater.
+            # This is the original bottom-layer drainage implementation. It is turned off
+            # when the Green-Ampt infiltration routine already produced groundwater recharge
+            # for this hour to avoid double counting.
+            if groundwater_recharge_from_infiltraton_m <= np.float32(0.0):
+                # We assume that the bottom layer is draining under gravity
+                # i.e., assuming homogeneous soil water potential below
+                # bottom layer all the way to groundwater.
+                # If there is capillary rise from groundwater, we assume no simultaneous
+                # percolation to groundwater.
+                flux: np.float32 = unsaturated_hydraulic_conductivity_m_per_hour * (
+                    capillar_rise_m[i] <= np.float32(0)
+                )
+                # Limit flux by the saturated hydraulic conductivity of groundwater top layer
+                flux = min(flux, groundwater_toplayer_conductivity_m_per_hour[i])
 
-            # Limit flux by available water in the bottom layer
-            available_water_source: np.float32 = (
-                w[bottom_layer, i] - wres[bottom_layer, i]
-            )
-            flux = min(flux, available_water_source)
-            w[bottom_layer, i] -= flux
-            w[bottom_layer, i] = max(w[bottom_layer, i], wres[bottom_layer, i])
-            groundwater_recharge_m[i] += flux
+                # Limit flux by available water in the bottom layer
+                available_water_source: np.float32 = (
+                    w[bottom_layer, i] - wres[bottom_layer, i]
+                )
+                flux = min(flux, available_water_source)
+                w[bottom_layer, i] -= flux
+                w[bottom_layer, i] = max(w[bottom_layer, i], wres[bottom_layer, i])
+                groundwater_recharge_m[i] += flux
 
             # Calculate interflow from bottom layer
             interflow_cell_hour: np.float32 = get_interflow(
@@ -595,7 +633,8 @@ def land_surface_model(
                 land_use_type=land_use_type[i],
                 root_depth_m=root_depth_m[i],
                 crop_map=crop_map[i],
-                natural_crop_groups=natural_crop_groups[i],
+                crop_group_forest=crop_group_forest[i],
+                crop_group_grassland_like=crop_group_grassland_like[i],
                 potential_transpiration_m=potential_transpiration_m_cell_hour,
                 reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour_cell,
                 crop_group_number_per_group=crop_group_number_per_group,
@@ -674,7 +713,7 @@ class LandSurfaceInputs(NamedTuple):
     soil_layer_height: TwoDArrayFloat32
     root_depth_m: ArrayFloat32
     topwater_m: ArrayFloat32
-    arno_shape_parameter: ArrayFloat32
+    variable_runoff_shape_beta: ArrayFloat32
     snow_water_equivalent_m: ArrayFloat32
     liquid_water_in_snow_m: ArrayFloat32
     snow_temperature_C: ArrayFloat32
@@ -701,7 +740,8 @@ class LandSurfaceInputs(NamedTuple):
     green_ampt_active_layer_idx: ArrayInt32
     lambda_pore_size_distribution: TwoDArrayFloat32
     bubbling_pressure_cm: TwoDArrayFloat32
-    natural_crop_groups: ArrayFloat32
+    crop_group_forest: ArrayFloat32
+    crop_group_grassland_like: ArrayFloat32
     crop_group_number_per_group: ArrayFloat32
     minimum_effective_root_depth_m: np.float32
     interflow_multiplier: np.float32
@@ -719,7 +759,7 @@ class LandSurfaceVariables(Bucket):
     liquid_water_in_snow_m: ArrayFloat32
     snow_temperature_C: ArrayFloat32
     interception_storage_m: ArrayFloat32
-    arno_shape_parameter: TwoDArrayFloat32
+    variable_runoff_shape_beta: TwoDArrayFloat32
     crop_map: ArrayInt32
     minimum_effective_root_depth_m: np.float32
     green_ampt_active_layer_idx: ArrayInt32
@@ -836,7 +876,7 @@ class LandSurface(Module):
             soil_layer_height=self.HRU.var.soil_layer_height_m,
             root_depth_m=root_depth_m,
             topwater_m=self.HRU.var.topwater_m,
-            arno_shape_parameter=self.HRU.var.arno_shape_parameter,
+            variable_runoff_shape_beta=self.HRU.var.variable_runoff_shape_beta,
             snow_water_equivalent_m=self.HRU.var.snow_water_equivalent_m,
             liquid_water_in_snow_m=self.HRU.var.liquid_water_in_snow_m,
             snow_temperature_C=self.HRU.var.snow_temperature_C,
@@ -863,7 +903,8 @@ class LandSurface(Module):
             green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
             lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
             bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
-            natural_crop_groups=self.HRU.var.natural_crop_groups,
+            crop_group_forest=self.HRU.var.crop_group_number_forest,
+            crop_group_grassland_like=self.HRU.var.crop_group_number_grassland_like,
             crop_group_number_per_group=crop_group_number_per_group,
             minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
             interflow_multiplier=self.model.config["parameters"][
@@ -938,83 +979,57 @@ class LandSurface(Module):
             0.0, dtype=np.float32
         )
 
-        self.HRU.var.arno_shape_parameter = self.HRU.full_compressed(
+        self.HRU.var.variable_runoff_shape_beta = self.HRU.full_compressed(
             0.0, dtype=np.float32
         )
 
+        slope_m_per_m: ArrayFloat32 = self.hydrology.grid.load(
+            self.model.files["grid"]["landsurface/slope_m_per_m"]
+        )
+
         self.HRU.var.slope_m_per_m = self.hydrology.to_HRU(
-            data=self.hydrology.grid.load(
-                self.model.files["grid"]["landsurface/slope"]
-            ),
+            data=slope_m_per_m,
             fn=None,
         )
 
+        hillslope_length_m: ArrayFloat32 = self.hydrology.grid.load(
+            self.model.files["grid"]["drainage/hillslope_length_m"]
+        )
+
         self.HRU.var.hillslope_length_m = self.hydrology.to_HRU(
-            data=self.grid.var.cell_area**0.5, fn=None
+            data=hillslope_length_m, fn=None
         )
 
-        store = zarr.storage.LocalStore(
-            self.model.files["grid"]["landcover/forest/interception_capacity"],
-            read_only=True,
+        leaf_area_index_forest = self.grid.compress(
+            read_grid(
+                self.model.files["other"]["vegetation/leaf_area_index_forest"],
+                layer=None,
+            )
+        )
+        self.HRU.var.leaf_area_index_forest = self.hydrology.to_HRU(
+            data=leaf_area_index_forest, fn=None
         )
 
-        interception_capacity_forest_group = zarr.open_group(store, mode="r")[
-            "interception_capacity"
-        ]
-        assert isinstance(interception_capacity_forest_group, zarr.Array)
-        interception_capacity_forest_array = interception_capacity_forest_group[:]
-        assert isinstance(interception_capacity_forest_array, np.ndarray)
-        # fmt: off
-        interception_capacity_forest_array: ThreeDArrayFloat32 = (
-            interception_capacity_forest_array
-        )  # ty:ignore[invalid-assignment]
-        # fmt: on
-
-        self.grid.var.interception_capacity_forest: TwoDArrayFloat32 = (
-            self.grid.compress(interception_capacity_forest_array)
+        leaf_area_index_grassland_like = self.grid.compress(
+            read_grid(
+                self.model.files["other"]["vegetation/leaf_area_index_grassland_like"],
+                layer=None,
+            )
+        )
+        self.HRU.var.leaf_area_index_grassland_like = self.hydrology.to_HRU(
+            data=leaf_area_index_grassland_like, fn=None
         )
 
-        store = zarr.storage.LocalStore(
-            self.model.files["grid"]["landcover/grassland/interception_capacity"],
-            read_only=True,
+        self.HRU.var.interception_capacity_forest_m = (
+            leaf_area_index_to_interception_capacity_m(
+                self.HRU.var.leaf_area_index_forest
+            )
         )
 
-        interception_capacity_grassland_group = zarr.open_group(store, mode="r")[
-            "interception_capacity"
-        ]
-        assert isinstance(interception_capacity_grassland_group, zarr.Array)
-        interception_capacity_grassland_array = interception_capacity_grassland_group[:]
-        assert isinstance(interception_capacity_grassland_array, np.ndarray)
-
-        # fmt: off
-        interception_capacity_grassland_array: ThreeDArrayFloat32 = (
-            interception_capacity_grassland_array
-        )  # ty:ignore[invalid-assignment]
-        # fmt: on
-
-        self.grid.var.interception_capacity_grassland: TwoDArrayFloat32 = (
-            self.grid.compress(interception_capacity_grassland_array)
-        )
-
-        store = zarr.storage.LocalStore(
-            self.model.files["grid"]["landcover/forest/crop_coefficient"],
-            read_only=True,
-        )
-        forest_crop_factor_per_10_days_group = zarr.open_group(store, mode="r")[
-            "crop_coefficient"
-        ]
-        assert isinstance(forest_crop_factor_per_10_days_group, zarr.Array)
-        forest_crop_factor_per_10_days_group_array = (
-            forest_crop_factor_per_10_days_group[:]
-        )
-        # fmt: off
-        forest_crop_factor_per_10_days_group_array: ThreeDArrayFloat32 = (
-            forest_crop_factor_per_10_days_group_array
-        )  # ty:ignore[invalid-assignment]
-        # fmt: on
-
-        self.grid.var.forest_crop_factor_per_10_days = (
-            forest_crop_factor_per_10_days_group_array
+        self.HRU.var.interception_capacity_grassland_like_m = (
+            leaf_area_index_to_interception_capacity_m(
+                self.HRU.var.leaf_area_index_grassland_like
+            )
         )
 
         # Default follows AQUACROP recommendation, see reference manual for AquaCrop v7.1 – Chapter 3
@@ -1189,11 +1204,18 @@ class LandSurface(Module):
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        natural_crop_groups: ArrayFloat32 = self.hydrology.grid.load(
-            self.model.files["grid"]["soil/crop_group"]
+        crop_group_forest: ArrayFloat32 = self.hydrology.grid.load(
+            self.model.files["grid"]["vegetation/crop_group_number_forest"]
         )
-        self.HRU.var.natural_crop_groups: ArrayFloat32 = self.hydrology.to_HRU(
-            data=natural_crop_groups
+        self.HRU.var.crop_group_number_forest: ArrayFloat32 = self.hydrology.to_HRU(
+            data=crop_group_forest
+        )
+
+        crop_group_number_grassland_like: ArrayFloat32 = self.hydrology.grid.load(
+            self.model.files["grid"]["vegetation/crop_group_number_grassland_like"]
+        )
+        self.HRU.var.crop_group_number_grassland_like = self.hydrology.to_HRU(
+            data=crop_group_number_grassland_like
         )
 
     def step(
@@ -1256,15 +1278,6 @@ class LandSurface(Module):
             )
             w_prev: TwoDArrayFloat32 = self.HRU.var.w.copy()
 
-        forest_crop_factor = self.hydrology.to_HRU(
-            data=self.grid.compress(
-                self.grid.var.forest_crop_factor_per_10_days[
-                    (self.model.current_day_of_year - 1) // 10
-                ]
-            ),
-            fn=None,
-        )
-
         crop_stage_lenghts = np.column_stack(
             [
                 self.model.agents.crop_farmers.var.crop_data["l_ini"],
@@ -1308,9 +1321,14 @@ class LandSurface(Module):
             ]
         )
 
+        dekad: int = map_date_to_dekad(self.model.current_time)
+
         crop_factor, root_depth_m, crop_sub_stage = get_crop_factors_and_root_depths(
             land_use_map=self.HRU.var.land_use_type,
-            crop_factor_forest_map=forest_crop_factor,
+            leaf_area_index_forest=self.HRU.var.leaf_area_index_forest[dekad],
+            leaf_area_index_grassland_like=self.HRU.var.leaf_area_index_grassland_like[
+                dekad
+            ],
             crop_map=self.HRU.var.crop_map,
             crop_age_days_map=self.HRU.var.crop_age_days_map,
             crop_harvest_age_days=self.HRU.var.crop_harvest_age_days,
@@ -1325,23 +1343,14 @@ class LandSurface(Module):
             "crop_factor_multiplier"
         ]  # calibration parameter
 
-        interception_capacity_m_forest_HRU = self.hydrology.to_HRU(
-            data=self.grid.var.interception_capacity_forest[
-                (self.model.current_day_of_year - 1) // 10
-            ],
-            fn=None,
-        )
-        interception_capacity_m_grassland_HRU = self.hydrology.to_HRU(
-            data=self.grid.var.interception_capacity_grassland[
-                (self.model.current_day_of_year - 1) // 10
-            ],
-            fn=None,
-        )
-
         interception_capacity_m: ArrayFloat32 = get_interception_capacity(
             land_use_type=self.HRU.var.land_use_type,
-            interception_capacity_m_forest_HRU=interception_capacity_m_forest_HRU,
-            interception_capacity_m_grassland_HRU=interception_capacity_m_grassland_HRU,
+            interception_capacity_m_forest_HRU=self.HRU.var.interception_capacity_forest_m[
+                dekad
+            ],
+            interception_capacity_m_grassland_HRU=self.HRU.var.interception_capacity_grassland_like_m[
+                dekad
+            ],
         )
 
         pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s

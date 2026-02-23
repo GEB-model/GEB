@@ -6,7 +6,7 @@ import logging
 from logging import Logger
 from pathlib import Path
 from time import time
-from typing import Any
+from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -28,13 +28,29 @@ class _build_method:
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
         self.tree = nx.DiGraph()
+        self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
 
     def __call__(
         self,
+        required: bool,
         func: NamedCallable | None = None,
         depends_on: str | list[str] | None = None,
     ) -> NamedCallable:
+        """Decorator to mark a method as a build method.
+
+        Args:
+            required: Whether the method is required to run.
+            func: The function to decorate.
+            depends_on: A method name or list of build_method that this method depends on.
+
+        Returns:
+            The decorated function.
+
+        Raises:
+            TypeError: if the decorator is used without parentheses.
+        """
+
         def partial_decorator(func: NamedCallable) -> NamedCallable:
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -65,14 +81,18 @@ class _build_method:
                 else:
                     raise ValueError("depends_on must be a string or a list of strings")
 
+            if required:
+                self.required_methods.add(func.__name__)
+
             setattr(wrapper, "__is_build_method__", True)
             return wrapper
 
         if func is None:
             return partial_decorator
         else:
-            f: NamedCallable = partial_decorator(func)
-            return f
+            raise TypeError(
+                "Use @build_method() rather than @build_method without parentheses."
+            )
 
     def add_tree_node(self, func: NamedCallable) -> None:
         """Add a node to the dependency tree."""
@@ -266,6 +286,21 @@ class _build_method:
         with open(progress_path, "r") as f:
             completed_methods: list[str] = f.read().splitlines()
         return completed_methods
+
+    def check_required_methods(self, methods: Iterable[str]) -> None:
+        """Check that all required methods are present in the provided method list.
+
+        Args:
+            methods: A list of method names to check.
+
+        Raises:
+            ValueError: If any required method is missing.
+        """
+        missing_methods: set[str] = self.required_methods - set(methods)
+        if missing_methods:
+            raise ValueError(
+                f"The following required methods are missing: {', '.join(missing_methods)}"
+            )
 
     def log_time_taken(self) -> None:
         """Log the time taken for each method in the dependency tree."""

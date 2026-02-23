@@ -68,12 +68,12 @@ class DeltaDTM(Adapter):
         """Get the DeltaDTM tiles that intersect with the model bounds. This function uses the DeltaDTM tiles geopackage.
 
         Args:
-            xmin (float): Minimum x-coordinate (longitude) of the model bounds.
-            xmax (float): Maximum x-coordinate (longitude) of the model bounds.
-            ymin (float): Minimum y-coordinate (latitude) of the model bounds.
-            ymax (float): Maximum y-coordinate (latitude) of the model bounds.
+            xmin: Minimum x-coordinate (longitude) of the model bounds.
+            xmax: Maximum x-coordinate (longitude) of the model bounds.
+            ymin: Minimum y-coordinate (latitude) of the model bounds.
+            ymax: Maximum y-coordinate (latitude) of the model bounds.
         Returns:
-            tuple[list[str], list[str]]: A tuple containing:
+            A tuple containing:
                 - A list of tile filenames that intersect with the model bounds.
                 - A list of continent ZIP filenames to download.
         Raises:
@@ -106,7 +106,7 @@ class DeltaDTM(Adapter):
         """Download DeltaDTM tiles for the specified continents.
 
         Args:
-            continents_to_download (list[str]): List of continent ZIP filenames to download.
+            continents_to_download: List of continent ZIP filenames to download.
         Raises:
             RuntimeError: If downloading any of the continent ZIP files fails.
         """
@@ -124,14 +124,15 @@ class DeltaDTM(Adapter):
 
     def unpack_and_merge_tiles(
         self, continents_to_download: list[str], tile_names: list[str]
-    ) -> xr.Dataset:
-        """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
+    ) -> xr.DataArray:
+        """Unpack and merge DeltaDTM tiles into a single dataarray.
 
         Args:
-            continents_to_download (list[str]): List of continent ZIP filenames to extract from.
-            tile_names (list[str]): List of tile filenames to unpack and merge.
+            continents_to_download: List of continent ZIP filenames to extract from.
+            tile_names: List of tile filenames to unpack and merge.
+
         Returns:
-            xarray.Dataset: Merged dataset of the specified tiles.
+            Merged dataarray of the specified tiles.
         """
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
@@ -143,13 +144,14 @@ class DeltaDTM(Adapter):
         da = convert_nodata(da, np.nan)
         return da
 
-    def _merge_tiles(self, tile_paths: list[Path]) -> xr.Dataset:
-        """Merge extracted DeltaDTM tiles into a single xarray Dataset.
+    def _merge_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
+        """Merge extracted DeltaDTM tiles into a single xarray DataArray.
 
         Args:
-            tile_paths (list[Path]): List of paths to the extracted tile files.
+            tile_paths: List of paths to the extracted tile files.
+
         Returns:
-            xarray.Dataset: Merged dataset of the specified tiles.
+            Merged dataset of the specified tiles.
         """
         das: list[xr.DataArray] = [rxr.open_rasterio(path) for path in tile_paths]  # ty: ignore[invalid-assignment]
         das = [da.sel(band=1) for da in das]
@@ -162,11 +164,11 @@ class DeltaDTM(Adapter):
         """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
 
         Args:
-            continents_to_download (list[str]): List of continent ZIP filenames to extract from.
-            tile_names (list[str]): List of tile filenames to unpack and merge.
-            temp_dir (Path): Temporary directory to extract tiles into.
+            continents_to_download: List of continent ZIP filenames to extract from.
+            tile_names: List of tile filenames to unpack and merge.
+            temp_dir: Temporary directory to extract tiles into.
         Returns:
-            xarray.Dataset: Merged dataset of the specified tiles.
+            Merged dataset of the specified tiles.
         """
         extracted_paths: list[Path] = []
         for continent in continents_to_download:
@@ -182,26 +184,26 @@ class DeltaDTM(Adapter):
         """Construct the file path for a given continent ZIP file.
 
         Args:
-            continent (str): The continent ZIP filename.
+            continent: The continent ZIP filename.
         Returns:
-            Path: The constructed file path for the continent ZIP file.
+            The constructed file path for the continent ZIP file.
 
         """
         return Path(str(self.path).format(continent))
 
     def fetch(
-        self, xmin: float, xmax: float, ymin: float, ymax: float, url: str = None
+        self, xmin: float, xmax: float, ymin: float, ymax: float, url: str | None = None
     ) -> DeltaDTM:
         """Fetch DeltaDTM tiles for the specified bounding box.
 
         Args:
-            xmin (float): Minimum x-coordinate (longitude) of the bounding box.
-            xmax (float): Maximum x-coordinate (longitude) of the bounding box.
-            ymin (float): Minimum y-coordinate (latitude) of the bounding box.
-            ymax (float): Maximum y-coordinate (latitude) of the bounding box.
-            url (str, optional): URL to download DeltaDTM data from. Defaults to None.
+            xmin: Minimum x-coordinate (longitude) of the bounding box.
+            xmax: Maximum x-coordinate (longitude) of the bounding box.
+            ymin: Minimum y-coordinate (latitude) of the bounding box.
+            ymax: Maximum y-coordinate (latitude) of the bounding box.
+            url: URL to download DeltaDTM data from. Defaults to None.
         Returns:
-            DeltaDTM: The DeltaDTM adapter instance with the downloaded data.
+            The DeltaDTM adapter instance with the downloaded data.
         """
         self.tile_names, self.continents_to_download = self.get_tiles_in_model_bounds(
             xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax
@@ -209,11 +211,11 @@ class DeltaDTM(Adapter):
         self.download_deltadtm(self.continents_to_download)
         return self
 
-    def read(self) -> xr.Dataset:
+    def read(self) -> xr.DataArray:
         """Read and unpack the downloaded DeltaDTM data.
 
         Returns:
-            xarray.Dataset: The downloaded DeltaDTM data.
+            The downloaded DeltaDTM data.
         """
         da = self.unpack_and_merge_tiles(self.continents_to_download, self.tile_names)
         return da

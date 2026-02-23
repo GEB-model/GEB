@@ -711,6 +711,8 @@ def fill_discharge_gaps(
     """
     filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
     for river_id, river in rivers.iterrows():
+        if river["is_further_downstream_outflow"]:
+            continue  # skip rivers that are further downstream
         # iterate from upstream to downstream
         valid_discharge: np.float32 = np.float32(np.nan)
         for idx in river["hydrography_linear"]:
@@ -1045,20 +1047,26 @@ class Routing(Module):
             inflow_per_location: pd.DataFrame = read_table(
                 self.model.files["table"]["routing/inflow_m3_per_s"]
             )
+            # select the right time steps from the inflow data
+            expected_time_steps = pd.date_range(
+                start=self.model.simulation_start,
+                end=self.model.simulation_end + self.model.timestep_length,
+                freq="H",
+            )
+            inflow_per_location = inflow_per_location.loc[expected_time_steps]
+
             inflow_locations: gpd.GeoDataFrame = read_geom(
                 self.model.files["geom"]["routing/inflow_locations"]
-            )
+            ).set_index("ID")  # ty:ignore[invalid-assignment]
             for inflow_id, inflow in inflow_per_location.items():
                 location: pd.Series = inflow_locations.loc[inflow_id]
                 y: int = location["y"]
                 x: int = location["x"]
                 self.inflow[(y, x)] = inflow.to_numpy(dtype=np.float32)
 
-            # find the index for the current time step
-            # and store it for later use. Should be incremented each time step
-            time_index = np.where(inflow.index == self.model.current_time)[0]
-            assert time_index.size == 1
-            self.inflow_idx = time_index[0]
+            assert self.model.current_time == inflow_per_location.index[0]
+            # initialize inflow index
+            self.inflow_idx = 0
 
         if self.model.in_spinup:
             self.spinup()
@@ -1131,7 +1139,7 @@ class Routing(Module):
 
         """
         self.grid.var.upstream_area = self.grid.load(
-            self.model.files["grid"]["routing/upstream_area"]
+            self.model.files["grid"]["routing/upstream_area_m2"]
         )
         if "routing/upstream_area_n_cells" in self.model.files["grid"]:
             self.grid.var.upstream_area_n_cells = self.grid.load(
@@ -1155,7 +1163,7 @@ class Routing(Module):
 
         # Channel length [meters]
         self.grid.var.river_length = self.grid.load(
-            self.model.files["grid"]["routing/river_length"]
+            self.model.files["grid"]["routing/river_length_m"]
         )
 
         # where there is a pit, the river length is set to distance to the center of the cell,
@@ -1169,7 +1177,7 @@ class Routing(Module):
 
         # Channel bottom width [meters]
         self.grid.var.average_river_width = self.grid.load(
-            self.model.files["grid"]["routing/river_width"]
+            self.model.files["grid"]["routing/river_width_m"]
         )
 
         # for a river, the wetted perimeter can be approximated by the channel width
@@ -1182,7 +1190,7 @@ class Routing(Module):
         # Channel gradient (fraction, dy/dx)
         minimum_river_slope = 0.0001
         river_slope = np.maximum(
-            self.grid.load(self.model.files["grid"]["routing/river_slope"]),
+            self.grid.load(self.model.files["grid"]["routing/river_slope_m_per_m"]),
             minimum_river_slope,
         )
 
@@ -1394,8 +1402,9 @@ class Routing(Module):
             )
 
             assert (
-                outflow_per_waterbody_m3 <= self.hydrology.waterbodies.var.storage
-            ).all(), "outflow cannot be smaller or equal to storage"
+                outflow_per_waterbody_m3
+                <= self.hydrology.waterbodies.var.storage.astype(np.float32)
+            ).all(), "outflow cannot be greater than storage"
 
             side_flow_channel_m3_per_hour = (
                 total_runoff_m3
@@ -1612,7 +1621,26 @@ class Routing(Module):
         """
         rivers: gpd.GeoDataFrame = self.rivers
         rivers = rivers[~rivers["is_downstream_outflow"]]
+
+        # TODO: Remove the if statement in March 2026. The part selection behind the statement
+        # should always be done when it is removed.
+        if "is_further_downstream_outflow" in rivers.columns:
+            rivers = rivers[~rivers["is_further_downstream_outflow"]]
         outflow_rivers: gpd.GeoDataFrame = rivers[
             ~rivers["downstream_ID"].isin(rivers.index)
         ]
         return outflow_rivers
+
+    @property
+    def active_rivers(self) -> gpd.GeoDataFrame:
+        """Get the active rivers (rivers that are not water bodies).
+
+        Returns:
+            A GeoDataFrame containing the active rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        active_rivers = rivers[
+            (~rivers["is_downstream_outflow"])
+            & (~rivers["is_further_downstream_outflow"])
+        ]
+        return active_rivers

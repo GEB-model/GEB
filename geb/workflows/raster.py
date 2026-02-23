@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Hashable, Mapping
+import tempfile
+from collections.abc import Generator, Hashable, Mapping
+from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import Any, Literal, cast, overload
 
 import geopandas as gpd
@@ -34,6 +37,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayWithScalar,
 )
+from geb.workflows.io import read_zarr, write_zarr
 
 
 @overload
@@ -637,6 +641,20 @@ def snap_to_grid(
     return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
 
 
+@overload
+def clip_with_grid(
+    ds: xr.Dataset,
+    mask: xr.DataArray,
+) -> tuple[xr.Dataset, dict[str, slice]]: ...
+
+
+@overload
+def clip_with_grid(
+    ds: xr.DataArray,
+    mask: xr.DataArray,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
+
+
 def clip_with_grid(
     ds: xr.Dataset | xr.DataArray, mask: xr.DataArray
 ) -> tuple[xr.Dataset | xr.DataArray, dict[str, slice]]:
@@ -688,6 +706,102 @@ def bounds_are_within(
     )
 
 
+def pad_to_grid_alignment(
+    da: xr.DataArray,
+    grid_size_multiplier: int,
+    constant_values: float | int | bool | None = None,
+) -> xr.DataArray:
+    """Pad a raster so the left and bottom edges align to a coarse grid.
+
+    The coarse grid is defined by the base resolution multiplied by
+    ``grid_size_multiplier``. The function pads the input so the left and
+    bottom edges align to multiples of the coarse grid size, and the padded
+    width/height become multiples of ``grid_size_multiplier``.
+
+    Args:
+        da: The input DataArray to pad.
+        grid_size_multiplier: The grid size multiplier for the coarse grid.
+        constant_values: The value used for padding. If None, nodata will be used
+            if it is set, and np.nan otherwise.
+
+    Returns:
+        The padded DataArray with updated coordinates and transform.
+
+    Raises:
+        ValueError: If ``grid_size_multiplier`` is not a positive integer.
+    """
+    if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
+        raise ValueError("grid_size_multiplier must be a positive integer")
+
+    array_rio = da.rio
+    x_dim: str = array_rio.x_dim
+    y_dim: str = array_rio.y_dim
+
+    x_coord: np.ndarray = da[x_dim].values
+    y_coord: np.ndarray = da[y_dim].values
+
+    if x_coord.size == 1:
+        x_step: float = array_rio.resolution()[0]
+    else:
+        x_step = float(x_coord[1] - x_coord[0])
+
+    if y_coord.size == 1:
+        y_step: float = array_rio.resolution()[1]
+    else:
+        y_step = float(y_coord[1] - y_coord[0])
+
+    abs_x_step: float = abs(x_step)
+    abs_y_step: float = abs(y_step)
+
+    left_edge: float = float(x_coord[0] - x_step / 2)
+    bottom_edge: float = float(y_coord[-1] + y_step / 2)
+
+    coarse_x_step: float = abs_x_step * grid_size_multiplier
+    coarse_y_step: float = abs_y_step * grid_size_multiplier
+
+    left_aligned: float = math.floor(left_edge / coarse_x_step) * coarse_x_step
+    bottom_aligned: float = math.floor(bottom_edge / coarse_y_step) * coarse_y_step
+
+    pad_left: int = int(round((left_edge - left_aligned) / abs_x_step))
+    pad_bottom: int = int(round((bottom_edge - bottom_aligned) / abs_y_step))
+
+    width_cells: int = array_rio.width + pad_left
+    height_cells: int = array_rio.height + pad_bottom
+
+    pad_right: int = (-width_cells) % grid_size_multiplier
+    pad_top: int = (-height_cells) % grid_size_multiplier
+
+    if constant_values is None:
+        constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
+
+    padded = da.pad(
+        pad_width={
+            x_dim: (pad_left, pad_right),
+            y_dim: (pad_top, pad_bottom),
+        },
+        constant_values=constant_values,
+    ).rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
+
+    if pad_left > 0:
+        new_left_coords = x_coord[0] + x_step * np.arange(-pad_left, 0)
+        x_coord = np.concatenate([new_left_coords, x_coord])
+    if pad_right > 0:
+        new_right_coords = x_coord[-1] + x_step * np.arange(1, pad_right + 1)
+        x_coord = np.concatenate([x_coord, new_right_coords])
+
+    if pad_top > 0:
+        new_top_coords = y_coord[0] + y_step * np.arange(-pad_top, 0)
+        y_coord = np.concatenate([new_top_coords, y_coord])
+    if pad_bottom > 0:
+        new_bottom_coords = y_coord[-1] + y_step * np.arange(1, pad_bottom + 1)
+        y_coord = np.concatenate([y_coord, new_bottom_coords])
+
+    padded[x_dim] = x_coord
+    padded[y_dim] = y_coord
+    padded.rio.write_transform(inplace=True)
+    return padded
+
+
 @overload
 def pad_xy(
     da: xr.DataArray,
@@ -696,6 +810,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -711,6 +826,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -725,6 +841,7 @@ def pad_xy(
     maxx: float,
     maxy: float,
     constant_values: float
+    | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
@@ -817,16 +934,17 @@ def pad_xy(
         return superset
 
 
-def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
+def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArray:
     """Interpolate NaN values along the time dimension of a DataArray.
 
     Uses nearest neighbor interpolation in the spatial dimensions for each time slice.
 
     Args:
-        da: The input DataArray with a time dimension.
+        da: The input 3D DataArray with dimensions (dim, y, x) and NaN values to interpolate.
+        dim: The dimension along which to interpolate NaN values. Default is 'time'.
 
     Returns:
-        A new DataArray with NaN values interpolated along the time dimension.
+        A new DataArray with NaN values interpolated along the dimension.
 
     Raises:
         ValueError: If '_FillValue' attribute is missing.
@@ -853,21 +971,21 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
         if not mask.any():
             return arr
 
-        assert dims == ("time", "y", "x")
+        assert dims == (dim, "y", "x")
 
-        for time_idx in range(arr.shape[0]):
-            mask_slice = mask[time_idx]
-            time_slice = arr[time_idx]
+        for idx in range(arr.shape[0]):
+            mask_slice = mask[idx]
+            dim_slice = arr[idx]
 
-            y, x = np.indices(time_slice.shape)
+            y, x = np.indices(dim_slice.shape)
             known_x, known_y = x[~mask_slice], y[~mask_slice]
-            known_v = time_slice[~mask_slice]
+            known_v = dim_slice[~mask_slice]
             missing_x, missing_y = x[mask_slice], y[mask_slice]
 
             filled_values = griddata(
                 (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
             )
-            arr[time_idx][mask_slice] = filled_values
+            arr[idx][mask_slice] = filled_values
         return arr
 
     da = xr.apply_ufunc(
@@ -1096,7 +1214,56 @@ def resample_chunked(
     return da
 
 
-def calculate_cell_area(
+def calculate_width_m(
+    affine_transform: Affine, height: int, width: int
+) -> TwoDArrayFloat32:
+    """Calculate the width of each cell in a grid given its affine transform.
+
+    Must be in a geographic coordinate system (degrees).
+
+    Args:
+        affine_transform: The affine transformation of the grid.
+        height: The height of the grid (number of rows).
+        width: The width of the grid (number of columns).
+
+    Returns:
+        A 2D array of cell widths in meters.
+    """
+    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
+    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
+
+    lat_idx = np.arange(0, height).repeat(width).reshape((height, width))
+    lat = (lat_idx + 0.5) * affine_transform.e + affine_transform.f
+    width_m = (
+        distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
+    )
+    return width_m.astype(np.float32)
+
+
+def calculate_height_m(
+    affine_transform: Affine, height: int, width: int
+) -> TwoDArrayFloat32:
+    """Calculate the height of each cell in a grid given its affine transform.
+
+    Must be in a geographic coordinate system (degrees).
+
+    Args:
+        affine_transform: The affine transformation of the grid.
+        height: The height of the grid (number of rows).
+        width: The width of the grid (number of columns).
+
+    Returns:
+        A 2D array of cell heights in meters.
+    """
+    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
+    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
+    height_m = distance_1_degree_latitude * abs(affine_transform.e)
+
+    # Broadcast height_m to the full grid size (height, width)
+    return np.full((height, width), height_m, dtype=np.float32)
+
+
+def calculate_cell_area_m2(
     affine_transform: Affine, height: int, width: int
 ) -> TwoDArrayFloat32:
     """Calculate the area of each cell in a grid given its affine transform.
@@ -1111,20 +1278,13 @@ def calculate_cell_area(
     Returns:
         A 2D array of cell areas in square meters.
     """
-    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
-    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
-
-    lat_idx = np.arange(0, height).repeat(width).reshape((height, width))
-    lat = (lat_idx + 0.5) * affine_transform.e + affine_transform.f
-    width_m = (
-        distance_1_degree_latitude * np.cos(np.radians(lat)) * abs(affine_transform.a)
-    )
-    height_m = distance_1_degree_latitude * abs(affine_transform.e)
+    width_m = calculate_width_m(affine_transform, height, width)
+    height_m = calculate_height_m(affine_transform, height, width)
     return (width_m * height_m).astype(np.float32)
 
 
 def clip_region(
-    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
+    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int | None
 ) -> tuple[xr.DataArray, ...]:
     """Use the given mask to clip the mask itself and the given data arrays.
 
@@ -1138,7 +1298,7 @@ def clip_region(
         *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
         align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
             the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
-            be aligned to 0.5 intervals.
+            be aligned to 0.5 intervals. If None, no alignment is done.
 
     Returns:
         A tuple containing the clipped mask and the clipped data arrays.
@@ -1159,20 +1319,42 @@ def clip_region(
 
     xres, yres = mask.rio.resolution()
 
-    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
-    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
-    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
-    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
+    if align is None:
+        mincol_aligned = mincol
+        maxcol_aligned = maxcol
+        minrow_aligned = minrow
+        maxrow_aligned = maxrow
+    else:
+        mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
+        maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
+        minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
+        maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
+        if mincol_aligned < 0:
+            raise ValueError(
+                f"Aligned min column index is out of bounds: {mincol_aligned}"
+            )
+        if maxcol_aligned >= mask.x.size:
+            raise ValueError(
+                f"Aligned max column index is out of bounds: {maxcol_aligned}"
+            )
+        if minrow_aligned < 0:
+            raise ValueError(
+                f"Aligned min row index is out of bounds: {minrow_aligned}"
+            )
+        if maxrow_aligned >= mask.y.size:
+            raise ValueError(
+                f"Aligned max row index is out of bounds: {maxrow_aligned}"
+            )
 
-    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
-    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
+        assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
+        assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
+        assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
+        assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
 
-    assert mincol_aligned <= mincol
-    assert maxcol_aligned >= maxcol
-    assert minrow_aligned <= minrow
-    assert maxrow_aligned >= maxrow
+        assert mincol_aligned <= mincol
+        assert maxcol_aligned >= maxcol
+        assert minrow_aligned <= minrow
+        assert maxrow_aligned >= maxrow
 
     clipped_mask = mask.isel(
         y=slice(minrow_aligned, maxrow_aligned),
@@ -1263,3 +1445,126 @@ def get_neighbor_cell_ids_for_linear_indices(
                 neighbor_id: int = r * nx + c
                 neighbor_cell_ids.append(neighbor_id)
     return neighbor_cell_ids
+
+
+@contextmanager
+def create_temp_zarr(
+    da: xr.DataArray,
+    name: str = "temp",
+    x_chunksize: int = 350,
+    y_chunksize: int = 350,
+    time_chunksize: int = 1,
+    time_chunks_per_shard: int | None = 30,
+) -> Generator[xr.DataArray, None, None]:
+    """Create a DataArray to a temporary Zarr file with specified chunks.
+
+    This context manager writes the DataArray to a temporary Zarr file and yields
+    the lazily opened DataArray. The temporary file is cleaned up when the context exits.
+
+    Args:
+        da: The DataArray to create.
+        name: Name suffix for the temporary file.
+        x_chunksize: Chunk size for x dimension.
+        y_chunksize: Chunk size for y dimension.
+        time_chunksize: Chunk size for time dimension.
+        time_chunks_per_shard: Time chunks per shard.
+
+    Yields:
+        The created DataArray opened from the temporary Zarr file.
+
+    Raises:
+        ValueError: If the input DataArray does not have a CRS defined.
+    """
+    if da.rio.crs is None:
+        raise ValueError("DataArray must have a CRS defined to use create_temp_zarr")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / f"{name}.zarr"
+        temp_da = write_zarr(
+            da,
+            tmp_path,
+            crs=da.rio.crs,
+            x_chunksize=x_chunksize,
+            y_chunksize=y_chunksize,
+            time_chunksize=time_chunksize,
+            time_chunks_per_shard=time_chunks_per_shard,
+            progress=True,
+        )
+        yield temp_da
+
+
+def rechunk_zarr_file(
+    input_path: Path | str,
+    output_path: Path | str,
+    how: Literal["time-optimized", "space-optimized", "balanced"],
+    intermediate: bool = True,
+) -> None:
+    """Rechunk a Zarr file to a new Zarr file with optimized chunking.
+
+    Args:
+        input_path: Path to the input Zarr file.
+        output_path: Path to the output Zarr file.
+        how: How to rechunk the file. Options:
+            - "time-optimized": Optimized for time series access (small x/y, large time).
+            - "space-optimized": Optimized for spatial access (large x/y, small time).
+            - "balanced": Balanced access (medium chunks).
+        intermediate: Whether to use an intermediate rechunking step (recommended for large files).
+            This may be somewhat slower but drastically reduces memory usage and can prevent out-of-memory errors.
+
+    Raises:
+        ValueError: If `how` is not one of the specified options.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    da: xr.DataArray = read_zarr(input_path)
+
+    # Determine chunks based on strategy
+    if how == "time-optimized":
+        x_chunk, y_chunk, time_chunk = 10, 10, da.sizes.get("time", 1)
+        shards = None
+    elif how == "space-optimized":
+        x_chunk, y_chunk, time_chunk = 350, 350, 1
+        shards = 30
+    elif how == "balanced":
+        x_chunk, y_chunk, time_chunk = 50, 50, 50
+        shards = None
+    else:
+        raise ValueError(
+            f"Unknown rechunking strategy: {how}, must be 'time-optimized', 'space-optimized', or 'balanced'"
+        )
+
+    if intermediate:
+        # Check if immediate chunking is beneficial (if strategies are very different)
+        # For simplicity, we use balanced 50x50x50 as intermediate if target is not balanced
+        # Or just always use balanced intermediate
+        print(
+            "Creating intermediate rechunked Zarr with 50x50 spatial chunks and 50 time chunks..."
+        )
+        ctx = create_temp_zarr(
+            da,
+            name="intermediate",
+            x_chunksize=50,
+            y_chunksize=50,
+            time_chunksize=50,
+            time_chunks_per_shard=None,
+        )
+    else:
+        # No intermediate step, directly rechunk from source to target
+        # Null context that just yields the original DataArray
+        ctx: nullcontext[xr.DataArray] = nullcontext(da)
+
+    with ctx as source_da:
+        print(
+            f"Rechunking Zarr with strategy '{how}' (x_chunk={x_chunk}, y_chunk={y_chunk}, time_chunk={time_chunk}, shards={shards})..."
+        )
+        write_zarr(
+            source_da,
+            output_path,
+            crs=da.rio.crs,
+            x_chunksize=x_chunk,
+            y_chunksize=y_chunk,
+            time_chunksize=time_chunk,
+            time_chunks_per_shard=shards,
+            progress=True,
+        )
