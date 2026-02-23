@@ -1472,7 +1472,9 @@ def test_solve_soil_temperature_column() -> None:
         deep_soil_temperature_C=deep_soil_temp_hot,
     )
     assert t_new_bottom[-1] > 10.0, "Bottom layer should warm up from deep soil"
-    assert t_new_bottom[-1] > t_new_bottom[-2], "Bottom layer should be warmer than one above"
+    assert t_new_bottom[-1] > t_new_bottom[-2], (
+        "Bottom layer should be warmer than one above"
+    )
 
 
 def test_calculate_spatial_infiltration_excess() -> None:
