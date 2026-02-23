@@ -43,6 +43,11 @@
 - In evaluate make a dataframe without missing timesteps and ensure that return periods are esimated on the same data for observed and simulated for comparison.
 - Fix: fix for regions with very large coastal areas beyond the riverine grid.
 - Fix: waterbody outflow is larger than waterbody storage (due to floating point imprecision).
+- Fix: Added Liechtenstein to trade regions list which allows the model to be built in the Rhine basin
+- Move MIRCA-OS to new data catalog.
+- Move aquastat to new data catalog.
+- Add OECD Income Distribution Database (IDD) to the new data catalog.
+- Move Coast-RP to new data catalog.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
@@ -92,6 +97,8 @@ To support this version:
 - Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
+- Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
+- Update damagescanner to v1.0.0b1
 
 To support this version:
 
@@ -107,6 +114,7 @@ To support this version:
 - Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 - Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
 - Add and run `setup_vegetation` to `build.yml`. A good place is for example after `setup_soil`.
+- Run uv sync to update damagescanner
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 

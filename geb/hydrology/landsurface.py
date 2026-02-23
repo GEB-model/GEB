@@ -987,8 +987,8 @@ class LandSurface(Module):
             0.0, dtype=np.float32
         )
 
-        slope_m_per_m = self.hydrology.grid.load(
-            self.model.files["grid"]["landsurface/slope_m_per_m"], layer=None
+        slope_m_per_m: ArrayFloat32 = self.hydrology.grid.load(
+            self.model.files["grid"]["landsurface/slope_m_per_m"]
         )
 
         self.HRU.var.slope_m_per_m = self.hydrology.to_HRU(
@@ -996,8 +996,8 @@ class LandSurface(Module):
             fn=None,
         )
 
-        hillslope_length_m = self.hydrology.grid.load(
-            self.model.files["grid"]["drainage/hillslope_length_m"], layer=None
+        hillslope_length_m: ArrayFloat32 = self.hydrology.grid.load(
+            self.model.files["grid"]["drainage/hillslope_length_m"]
         )
 
         self.HRU.var.hillslope_length_m = self.hydrology.to_HRU(

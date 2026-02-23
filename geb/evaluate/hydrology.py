@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from geb.evaluate import Evaluate
     from geb.model import GEBModel
 
-from geb.hazards.floods.workflows.return_periods import (
+from geb.workflows.extreme_value_analysis import (
     ReturnPeriodModel,
 )
 from geb.workflows.io import read_zarr, write_zarr
@@ -311,6 +311,7 @@ def _plot_outflow_discharge_timeseries(
                 outlet_id=outlet_id,
                 outflow_plot_folder=outflow_plot_folder,
                 outflow_file_stem=outflow_file.stem,
+                frequency="hourly",
             )
             plots_created += 1
         except Exception as e:

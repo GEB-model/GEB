@@ -176,5 +176,7 @@ class Adapter:
             return pd.read_csv(self.path, **kwargs)
         elif self.path.suffix == ".xlsx":
             return pd.read_excel(self.path, **kwargs)
+        elif self.path.suffix == ".pkl":
+            return pd.read_pickle(self.path, **kwargs)
         else:
             raise ValueError("Unsupported file format for reading data.")
