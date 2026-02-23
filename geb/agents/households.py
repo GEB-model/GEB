@@ -1679,7 +1679,11 @@ class Households(AgentBaseClass):
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
-        self.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
+        self.buildings_centroid = gpd.GeoDataFrame(
+            geometry=self.buildings.to_crs(epsg=3857).centroid.to_crs(
+                self.buildings.crs
+            )
+        )
         self.buildings_centroid["object_type"] = (
             "building_unprotected"  # before it was "building_content"
         )
