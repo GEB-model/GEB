@@ -1048,7 +1048,6 @@ def init_multiple_fn(
         river_graph=river_graph,
         output_path=merged_basins_path,
         cluster_prefix=cluster_prefix,
-        include_upstream=True,  # Include all upstream subbasins in merged geometry
     )
 
     logger.info(f"Creating visualization map: {save_map}")
@@ -1056,6 +1055,7 @@ def init_multiple_fn(
     create_cluster_visualization_map(
         clusters=clusters,
         data_catalog=data_catalog_instance,
+        river_graph=river_graph,
         output_path=save_map,
         cluster_prefix=cluster_prefix,
     )

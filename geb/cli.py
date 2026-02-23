@@ -7,8 +7,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 import click
+import geopandas as gpd
+from shapely.geometry import box
 
 from geb import GEB_PACKAGE_DIR, __version__
+from geb.build import (
+    cluster_subbasins_following_coastline,
+    create_cluster_visualization_map,
+    create_multi_basin_configs,
+    get_all_downstream_subbasins_in_geom,
+    get_river_graph,
+    save_clusters_as_merged_geometries,
+    save_clusters_to_geoparquet,
+)
 from geb.build.data_catalog import NewDataCatalog
 from geb.runner import (
     ALTER_FROM_MODEL_DEFAULT,
@@ -24,8 +35,8 @@ from geb.runner import (
     WORKING_DIRECTORY_DEFAULT,
     alter_fn,
     build_fn,
+    create_logger,
     init_fn,
-    init_multiple_fn,
     run_model_with_method,
     set_fn,
     share_fn,
@@ -714,9 +725,11 @@ def init_multiple_fn(
     geometry_bounds: str,
     target_area_km2: float,
     cluster_prefix: str,
+    region_shapefile: str | None = None,
     skip_merged_geometries: bool = False,
     skip_visualization: bool = False,
     min_bbox_efficiency: float = 0.99,
+    ocean_outlets_only: bool = False,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -729,25 +742,16 @@ def init_multiple_fn(
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         cluster_prefix: Prefix for cluster directory names.
+        region_shapefile: Optional path to region shape file. Defaults to geometry bounds if not specified.
         skip_merged_geometries: If True, skip creating dissolved basin polygon file (much faster).
         skip_visualization: If True, skip creating visualization map (faster).
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
+        ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
 
     Raises:
         FileNotFoundError: If the example folder does not exist.
         ValueError: If geometry_bounds format is invalid.
     """
-    from geb.build import (
-        cluster_subbasins_following_coastline,
-        create_cluster_visualization_map,
-        create_multi_basin_configs,
-        get_all_downstream_subbasins_in_geom,
-        get_river_graph,
-        save_clusters_as_merged_geometries,
-        save_clusters_to_geoparquet,
-    )
-    from geb.build.data_catalog import NewDataCatalog
-
     # set paths
     config: Path = Path(config)
     build_config: Path = Path(build_config)
@@ -761,15 +765,7 @@ def init_multiple_fn(
     # Create the models/large_scale directory structure
     models_dir = Path.cwd().parent / "models"
     large_scale_dir = models_dir / "large_scale"
-
-    # Clean the large_scale directory to start fresh
-    if large_scale_dir.exists():
-        logger.info(f"Removing existing large_scale directory: {large_scale_dir}")
-        shutil.rmtree(large_scale_dir)
-
-    # Create fresh directory
     large_scale_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Created fresh large_scale directory: {large_scale_dir}")
 
     # create river
     logger.info("Starting multiple model initialization")
@@ -983,10 +979,11 @@ def init_multiple(
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select sub-basins
         target_area_km2: Target cumulative upstream area per cluster
         cluster_prefix: Prefix used for created cluster directory names and output files.
+        region_shapefile: Optional path to a region shapefile (geopandas-compatible, relative to working directory). Defaults to geometry bounds if not specified.
         skip_merged_geometries: If True, skip creating dissolved basin polygon file (faster).
         skip_visualization: If True, skip creating visualization map (faster).
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters and fewer total clusters.
-        overwrite: If True, existing cluster directories and files will be overwritten.
+        ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
 
     """
     init_multiple_fn(
