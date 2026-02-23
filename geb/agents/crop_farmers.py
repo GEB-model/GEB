@@ -2288,11 +2288,14 @@ class CropFarmers(AgentBaseClass):
         ] = 0
 
         # Update the risk perception of all farmers
-        self.var.risk_perception = (
-            self.var.risk_perc_max
-            * (1.6 ** (self.var.risk_decr * self.var.drought_timer))
-            + self.var.risk_perc_min
-        )
+        with np.errstate(
+            under="ignore"
+        ):  # underflow is expected for large drought_timer values, but does not cause issues for the model
+            self.var.risk_perception = (
+                self.var.risk_perc_max
+                * (1.6 ** (self.var.risk_decr * self.var.drought_timer))
+                + self.var.risk_perc_min
+            )
 
         print(
             "Risk perception mean = ",
@@ -3108,12 +3111,14 @@ class CropFarmers(AgentBaseClass):
         y_all = yearly_yield_ratio
         X_all = yearly_SPEI_probability
 
-        c_array = np.zeros(n_groups)  # intercept
-        m_array = np.zeros(n_groups)  # slope
-        r_squared_array = np.zeros(n_groups)
+        c_array = np.full(n_groups, np.nan)  # intercept
+        m_array = np.full(n_groups, np.nan)  # slope
+        r_squared_array = np.full(n_groups, np.nan)
 
         for g in range(n_groups):
             agent_idx = np.where(group_indices == g)[0]
+            if agent_idx.size == 0:
+                continue
 
             y_data = y_all[agent_idx, :].copy()
             X_data = X_all[agent_idx, :].copy()
