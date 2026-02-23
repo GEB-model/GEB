@@ -190,8 +190,33 @@ WATER_BALANCE_REPORT_CONFIG = {
 
 ENERGY_BALANCE_REPORT_CONFIG = {
     "hydrology.landsurface": {
-        "_energy_balance_soil_temperature_top_layer_C": {
+        "_energy_balance_soil_temperature_layer_0_C": {
             "varname": "HRU.var.soil_temperature_C[0]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_1_C": {
+            "varname": "HRU.var.soil_temperature_C[1]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_2_C": {
+            "varname": "HRU.var.soil_temperature_C[2]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_3_C": {
+            "varname": "HRU.var.soil_temperature_C[3]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_4_C": {
+            "varname": "HRU.var.soil_temperature_C[4]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_5_C": {
+            "varname": "HRU.var.soil_temperature_C[5]",
             "type": "HRU",
             "function": "weightedmean",
         },
