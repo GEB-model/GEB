@@ -77,7 +77,7 @@ dependencies = [
     "joblib>=1.5.2",
     "matplotlib>=3.10.7"
 ]
-requires-python = ">=3.13, <3.14"
+requires-python = ">=3.12, <3.14"
 readme = "README.md"
 classifiers = [
     "Development Status :: 4 - Beta",
