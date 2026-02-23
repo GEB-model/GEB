@@ -14,6 +14,7 @@ from geb.hydrology.soil import (
     add_water_to_topwater_and_evaporate_open_water,
     calculate_sensible_heat_flux,
     calculate_spatial_infiltration_excess,
+    calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_bubbling_pressure,
     get_heat_capacity_solid_fraction,
     get_pore_size_index_brakensiek,
@@ -26,6 +27,7 @@ from geb.hydrology.soil import (
     kv_wosten,
     rise_from_groundwater,
     solve_energy_balance_implicit_iterative,
+    solve_soil_temperature_column,
     thetar_brakensiek,
     thetas_toth,
     thetas_wosten,
@@ -1228,7 +1230,7 @@ def test_get_heat_capacity() -> None:
         err_msg="Sum of layer heat capacities should match single block of combined thickness",
     )
 
-    # Individual layer Check
+    # Individual layer check
     expected_result_multi = expected_volumetric_hc_multi * layer_thicknesses
     np.testing.assert_allclose(
         result_multi,
@@ -1236,6 +1238,55 @@ def test_get_heat_capacity() -> None:
         rtol=1e-5,
         err_msg="Individual layer heat capacities mismatch",
     )
+
+
+def test_calculate_thermal_conductivity_solid_fraction() -> None:
+    """Test calculate_thermal_conductivity_solid_fraction.
+
+    Validates against Johansen (1975) parameterization and expected ranges
+    for different soil textures.
+    """
+    # Pure Sand (100% Sand)
+    # Quartz ~ 100% -> q = 1.0
+    # lambda_s = 7.7^1.0 * 2.0^0 = 7.7
+    res_sand = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
+        np.float32(100.0), np.float32(0.0), np.float32(0.0)
+    )
+    assert abs(res_sand - 7.7) < 1e-4
+
+    # Pure Clay (0% Sand)
+    # Quartz ~ 0% -> q = 0.0
+    # lambda_s = 7.7^0 * 2.0^1 = 2.0
+    res_clay = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
+        np.float32(0.0), np.float32(0.0), np.float32(100.0)
+    )
+    assert abs(res_clay - 2.0) < 1e-4
+
+    # Loam (40% Sand, 40% Silt, 20% Clay)
+    # Quartz ~ 40% -> q = 0.4
+    # lambda_s = 7.7^0.4 * 2.0^0.6
+    expected_loam = (7.7**0.4) * (2.0**0.6)
+    res_loam = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
+        np.float32(40.0), np.float32(40.0), np.float32(20.0)
+    )
+    assert abs(res_loam - expected_loam) < 1e-4
+
+    # Plausibility checks for typical soil textures (mostly to avoid unit errors)
+    # Solid soil thermal conductivity typically ranges from 2.0 to 9.0 W/(m·K)
+    # depending on quartz content.
+    textures = [
+        (10, 10, 80),  # Heavy clay
+        (50, 40, 10),  # Sandy loam
+        (90, 5, 5),  # Sand
+    ]
+    for sand, silt, clay in textures:
+        res = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
+            np.float32(sand), np.float32(silt), np.float32(clay)
+        )
+        # Literature range for solid particles
+        assert 2.0 <= res <= 7.7, (
+            f"Conductivity {res} outside common range for {sand}/{silt}/{clay}"
+        )
 
 
 def test_calculate_sensible_heat_flux() -> None:
@@ -1342,6 +1393,88 @@ def test_solve_energy_balance_implicit_iterative() -> None:
     assert t_new_cold < 10.0, "Soil should cool down"
 
 
+def test_solve_soil_temperature_column() -> None:
+    """Test the 1D soil temperature column solver."""
+    # Common Parameters
+    n_soil_layers = 6
+    soil_temperatures_old = np.full(n_soil_layers, 10.0, dtype=np.float32)
+    layer_thicknesses = np.array([0.05, 0.1, 0.2, 0.3, 0.5, 1.0], dtype=np.float32)
+
+    # Simplified heat capacities and conductivities
+    # (Using the same logic as test_solve_energy_balance_implicit_iterative but for multiple layers)
+    bulk_density = np.float32(1300.0)
+    heat_capacity_arr = get_heat_capacity_solid_fraction(
+        np.full(n_soil_layers, bulk_density / 1000.0, dtype=np.float32),
+        layer_thicknesses,
+    )
+    thermal_conductivities = np.full(n_soil_layers, 2.0, dtype=np.float32)
+
+    # Steady State / No Forcing
+    sw_in = np.float32(0.0)
+    lw_in = np.float32(363.0)  # Approx balance
+    air_temp_k = np.float32(283.15)
+    wind_speed = np.float32(2.0)
+    pressure = np.float32(101325.0)
+    dt_seconds = np.float32(3600.0)
+    deep_soil_temp = np.float32(10.0)
+
+    t_new = solve_soil_temperature_column(
+        soil_temperatures_C=soil_temperatures_old,
+        layer_thicknesses_m=layer_thicknesses,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        air_temperature_K=air_temp_k,
+        wind_speed_10m_m_per_s=wind_speed,
+        surface_pressure_pa=pressure,
+        timestep_seconds=dt_seconds,
+        deep_soil_temperature_C=deep_soil_temp,
+    )
+
+    # Should stay close to 10.0 across all layers
+    np.testing.assert_allclose(t_new, 10.0, atol=0.5)
+
+    # Strong heating (daytime) - Top layer should warm most
+    sw_in = np.float32(800.0)
+    lw_in = np.float32(350.0)
+    air_temp_k = np.float32(303.15)
+
+    t_new_hot = solve_soil_temperature_column(
+        soil_temperatures_C=soil_temperatures_old,
+        layer_thicknesses_m=layer_thicknesses,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        air_temperature_K=air_temp_k,
+        wind_speed_10m_m_per_s=wind_speed,
+        surface_pressure_pa=pressure,
+        timestep_seconds=dt_seconds,
+        deep_soil_temperature_C=deep_soil_temp,
+    )
+    assert t_new_hot[0] > 10.0, "Top layer should warm up"
+    assert t_new_hot[0] > t_new_hot[1], "Top layer should be warmer than second layer"
+
+    # Bottom boundary influence (Deep soil heating)
+    deep_soil_temp_hot = np.float32(20.0)
+    t_new_bottom = solve_soil_temperature_column(
+        soil_temperatures_C=soil_temperatures_old,
+        layer_thicknesses_m=layer_thicknesses,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        shortwave_radiation_W_per_m2=np.float32(0.0),
+        longwave_radiation_W_per_m2=np.float32(363.0),
+        air_temperature_K=np.float32(283.15),
+        wind_speed_10m_m_per_s=np.float32(2.0),
+        surface_pressure_pa=np.float32(101325.0),
+        timestep_seconds=np.float32(3600.0 * 24.0 * 10),  # Long time to see diffusion
+        deep_soil_temperature_C=deep_soil_temp_hot,
+    )
+    assert t_new_bottom[-1] > 10.0, "Bottom layer should warm up from deep soil"
+    assert t_new_bottom[-1] > t_new_bottom[-2], "Bottom layer should be warmer than one above"
+
+
 def test_calculate_spatial_infiltration_excess() -> None:
     """Test the spatial variability of infiltration capacity function."""
     # Case 1: Low precipitation (P << f_max), should be mostly infiltrated
@@ -1388,7 +1521,7 @@ def test_calculate_spatial_infiltration_excess() -> None:
 def test_plot_spatial_infiltration_curve() -> None:
     """Plot the spatial infiltration curve for verification."""
     # Mean Green-Ampt Capacity
-    f_GA = np.float32(10.0)  # arbitrary units
+    f_GA = 10.0  # arbitrary units
 
     betas = [0.01, 0.2, 0.5, 1.0, 5.0]
     precip_values = np.linspace(0, 30, 100).astype(np.float32)

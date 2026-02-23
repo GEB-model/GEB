@@ -26,6 +26,7 @@
 - Move aquastat to new data catalog.
 - Add OECD Income Distribution Database (IDD) to the new data catalog.
 - Move Coast-RP to new data catalog.
+- Add heat conductivity to deeper soil layers (still missing influence of water)
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`

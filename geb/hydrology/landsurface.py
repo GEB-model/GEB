@@ -40,6 +40,7 @@ from .potential_evapotranspiration import (
 from .snow_glaciers import snow_model
 from .soil import (
     add_water_to_topwater_and_evaporate_open_water,
+    calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_bubbling_pressure,
     get_heat_capacity_solid_fraction,
     get_interflow,
@@ -49,7 +50,7 @@ from .soil import (
     infiltration,
     kv_wosten,
     rise_from_groundwater,
-    solve_energy_balance_implicit_iterative,
+    solve_soil_temperature_column,
     thetar_brakensiek,
     thetas_toth,
 )
@@ -96,6 +97,7 @@ def land_surface_model(
     ws: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     soil_temperature_C: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32,
+    solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32,
     delta_z: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     soil_layer_height: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     root_depth_m: ArrayFloat32,
@@ -132,6 +134,7 @@ def land_surface_model(
     crop_group_number_per_group: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
     interflow_multiplier: np.float32,
+    deep_soil_temperature_C: ArrayFloat32,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -172,6 +175,7 @@ def land_surface_model(
         ws: Soil moisture content at saturation [m3/m3].
         soil_temperature_C: Soil temperature in Celsius.
         solid_heat_capacity_J_per_m2_K: Solid heat capacity of soil layers [J/m2/K].
+        solid_thermal_conductivity_W_per_m_K: Solid thermal conductivity of soil layers [W/m/K].
         delta_z: Thickness of soil layers [m].
         soil_layer_height: Soil layer heights for the cell in meters, shape (N_SOIL_LAYERS,).
         root_depth_m: Root depth for the cell in meters.
@@ -210,6 +214,7 @@ def land_surface_model(
         crop_group_number_per_group: Crop group numbers for each crop type.
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
         interflow_multiplier: Calibration factor for interflow calculation.
+        deep_soil_temperature_C: Deep soil temperature in Celsius.
 
     Returns:
         Tuple of:
@@ -400,15 +405,20 @@ def land_surface_model(
                 capillary_rise_from_groundwater=capillar_rise_m[i],
             )
 
-            soil_temperature_C[0, i] = solve_energy_balance_implicit_iterative(
-                soil_temperature_C=soil_temperature_C[0, i],
-                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0, i],
+            soil_temperature_C[:, i] = solve_soil_temperature_column(
+                soil_temperatures_C=soil_temperature_C[:, i],
+                layer_thicknesses_m=soil_layer_height[:, i],
+                solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[:, i],
+                thermal_conductivities_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
+                    :, i
+                ],
                 shortwave_radiation_W_per_m2=rsds_W_per_m2_cell[hour],
                 longwave_radiation_W_per_m2=rlds_W_per_m2_cell[hour],
                 air_temperature_K=tas_2m_K_cell[hour],
                 wind_speed_10m_m_per_s=wind_10m_m_per_s,
                 surface_pressure_pa=ps_pascal_cell[hour],
                 timestep_seconds=np.float32(3600.0),
+                deep_soil_temperature_C=deep_soil_temperature_C[i],
             )
 
             soil_is_frozen = soil_temperature_C[0, i] <= np.float32(0.0)
@@ -709,6 +719,7 @@ class LandSurfaceInputs(NamedTuple):
     ws: TwoDArrayFloat32
     soil_temperature_C: TwoDArrayFloat32
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
+    solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32
     delta_z: TwoDArrayFloat32
     soil_layer_height: TwoDArrayFloat32
     root_depth_m: ArrayFloat32
@@ -745,6 +756,7 @@ class LandSurfaceInputs(NamedTuple):
     crop_group_number_per_group: ArrayFloat32
     minimum_effective_root_depth_m: np.float32
     interflow_multiplier: np.float32
+    deep_soil_temperature_C: ArrayFloat32
 
 
 class LandSurfaceVariables(Bucket):
@@ -763,6 +775,7 @@ class LandSurfaceVariables(Bucket):
     crop_map: ArrayInt32
     minimum_effective_root_depth_m: np.float32
     green_ampt_active_layer_idx: ArrayInt32
+    deep_soil_temperature_C: ArrayFloat32
 
 
 class LandSurface(Module):
@@ -809,10 +822,12 @@ class LandSurface(Module):
         root_depth_m: ArrayFloat32,
         interception_capacity_m: ArrayFloat32,
         pr_kg_per_m2_per_s: TwoDArrayFloat32,
+        tas_2m_K: TwoDArrayFloat32,
         crop_factor: ArrayFloat32,
         actual_irrigation_consumption_m: ArrayFloat32,
         capillar_rise_m: ArrayFloat32,
         delta_z: TwoDArrayFloat32,
+        deep_soil_temperature_C: ArrayFloat32,
     ) -> LandSurfaceInputs:
         """Build the input bundle for `land_surface_model`.
 
@@ -824,6 +839,7 @@ class LandSurface(Module):
             actual_irrigation_consumption_m: Actual irrigation consumption (m).
             capillar_rise_m: Capillary rise (m).
             delta_z: Layer interface thicknesses (m).
+            deep_soil_temperature_C: Sub-surface boundary temperature (C).
 
         Returns:
             Bundle of inputs for `land_surface_model`.
@@ -831,7 +847,7 @@ class LandSurface(Module):
         pr_kg_per_m2_per_s_for_model: TwoDArrayFloat32 = np.asfortranarray(
             pr_kg_per_m2_per_s
         )
-        tas_2m_K_for_model: TwoDArrayFloat32 = np.asfortranarray(self.HRU.tas_2m_K)
+        tas_2m_K_for_model: TwoDArrayFloat32 = np.asfortranarray(tas_2m_K)
         dewpoint_tas_2m_K_for_model: TwoDArrayFloat32 = np.asfortranarray(
             self.HRU.dewpoint_tas_2m_K
         )
@@ -872,6 +888,7 @@ class LandSurface(Module):
             ws=self.HRU.var.ws,
             soil_temperature_C=self.HRU.var.soil_temperature_C,
             solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
+            solid_thermal_conductivity_W_per_m_K=self.HRU.var.solid_thermal_conductivity_W_per_m_K,
             delta_z=delta_z,
             soil_layer_height=self.HRU.var.soil_layer_height_m,
             root_depth_m=root_depth_m,
@@ -910,6 +927,7 @@ class LandSurface(Module):
             interflow_multiplier=self.model.config["parameters"][
                 "interflow_multiplier"
             ],
+            deep_soil_temperature_C=deep_soil_temperature_C,
         )
 
     def _snapshot_land_surface_inputs_for_error(
@@ -923,6 +941,7 @@ class LandSurface(Module):
         snow_temperature_C_prev: ArrayFloat32,
         interception_storage_prev: ArrayFloat32,
         soil_temperature_C_prev: TwoDArrayFloat32,
+        deep_soil_temperature_C_prev: ArrayFloat32,
         wetting_front_depth_prev: ArrayFloat32,
         wetting_front_suction_head_prev: ArrayFloat32,
         wetting_front_moisture_deficit_prev: ArrayFloat32,
@@ -955,6 +974,7 @@ class LandSurface(Module):
             snow_temperature_C=snow_temperature_C_prev,
             interception_storage_m=interception_storage_prev,
             soil_temperature_C=soil_temperature_C_prev,
+            deep_soil_temperature_C=deep_soil_temperature_C_prev,
             wetting_front_depth_m=wetting_front_depth_prev,
             wetting_front_suction_head_m=wetting_front_suction_head_prev,
             wetting_front_moisture_deficit=wetting_front_moisture_deficit_prev,
@@ -1197,9 +1217,21 @@ class LandSurface(Module):
             self.HRU.var.soil_layer_height_m, 0.0, dtype=np.float32
         )
 
+        self.HRU.var.deep_soil_temperature_C = np.zeros(
+            self.HRU.var.topwater.shape, dtype=np.float32
+        )
+
         self.HRU.var.solid_heat_capacity_J_per_m2_K = get_heat_capacity_solid_fraction(
             bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
             layer_thickness_m=self.HRU.var.soil_layer_height_m,
+        )
+
+        self.HRU.var.solid_thermal_conductivity_W_per_m_K = (
+            calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
+                sand_percentage=self.HRU.var.sand_percentage,
+                silt_percentage=self.HRU.var.silt_percentage,
+                clay_percentage=self.HRU.var.clay_percentage,
+            )
         )
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
@@ -1263,6 +1295,9 @@ class LandSurface(Module):
             )
             soil_temperature_C_prev: TwoDArrayFloat32 = (
                 self.HRU.var.soil_temperature_C.copy()
+            )
+            deep_soil_temperature_C_prev: ArrayFloat32 = (
+                self.HRU.var.deep_soil_temperature_C.copy()
             )
             wetting_front_depth_prev: ArrayFloat32 = (
                 self.HRU.var.wetting_front_depth_m.copy()
@@ -1362,6 +1397,7 @@ class LandSurface(Module):
             * 0.001  # to m3/s
             * (24 * 3600.0)  # to m3/day
         )
+        tas_2m_K = self.HRU.tas_2m_K
 
         (
             groundwater_abstraction_m3,
@@ -1385,14 +1421,29 @@ class LandSurface(Module):
             + self.HRU.var.soil_layer_height_m[1:, :]
         ) / 2
 
+        # Update deep soil temperature boundary condition using a 10-year Exponential Moving Average.
+        # This reflects the multi-year thermal inertia of the deep soil profile.
+        averaging_period_days = np.float32(10.0 * 365.25)
+        averaging_weight_alpha = np.float32(1.0) / averaging_period_days
+        self.HRU.var.deep_soil_temperature_C[:] = (
+            self.HRU.var.deep_soil_temperature_C
+            * (np.float32(1.0) - averaging_weight_alpha)
+            + (
+                tas_2m_K.mean(axis=0).astype(np.float32) - 273.15
+            )  # daily mean air temperature in Celsius
+            * averaging_weight_alpha
+        )
+
         land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(
             root_depth_m=root_depth_m,
             interception_capacity_m=interception_capacity_m,
             pr_kg_per_m2_per_s=pr_kg_per_m2_per_s,
+            tas_2m_K=tas_2m_K,
             crop_factor=crop_factor,
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             capillar_rise_m=capillar_rise_m,
             delta_z=delta_z,
+            deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
         )
 
         (
@@ -1461,6 +1512,7 @@ class LandSurface(Module):
                 snow_temperature_C_prev=snow_temperature_C_prev,
                 interception_storage_prev=interception_storage_prev,
                 soil_temperature_C_prev=soil_temperature_C_prev,
+                deep_soil_temperature_C_prev=deep_soil_temperature_C_prev,
                 wetting_front_depth_prev=wetting_front_depth_prev,
                 wetting_front_suction_head_prev=wetting_front_suction_head_prev,
                 wetting_front_moisture_deficit_prev=wetting_front_moisture_deficit_prev,

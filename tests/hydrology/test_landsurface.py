@@ -479,10 +479,12 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     CO2_ppm = flt(CO2_ppm_data)
     minimum_effective_root_depth_m = flt(minimum_effective_root_depth_m_data)
     interflow_multiplier = flt(1.0)
+    deep_soil_temperature_C = np.array([0.0], dtype=flt)
     crop_group_number_per_group = crop_group_number_per_group_data.astype(flt)
 
     soil_temperature_C = np.full_like(w, -5.0)  # Assume frozen/cold
     solid_heat_capacity_J_per_m2_K = np.full_like(w, 2e5)
+    solid_thermal_conductivity_W_per_m_K = np.full_like(w, 2.0)
 
     # Capture previous values before calling the model (arrays get modified in-place)
     snow_water_equivalent_prev = snow_water_equivalent_m.copy()
@@ -503,6 +505,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         ws=ws,
         soil_temperature_C=soil_temperature_C,
         solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
+        solid_thermal_conductivity_W_per_m_K=solid_thermal_conductivity_W_per_m_K,
         delta_z=delta_z,
         soil_layer_height=soil_layer_height,
         root_depth_m=root_depth_m,
@@ -539,6 +542,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         minimum_effective_root_depth_m=minimum_effective_root_depth_m,
         green_ampt_active_layer_idx=green_ampt_active_layer_idx,
         interflow_multiplier=interflow_multiplier,
+        deep_soil_temperature_C=deep_soil_temperature_C,
     )
 
     # Unpack the results

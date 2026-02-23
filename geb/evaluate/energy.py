@@ -61,7 +61,7 @@ class Energy:
                 f"Report directory '{report_dir}' does not exist. Did you run the model with energy balance reporting enabled?"
             )
 
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig, ax = plt.subplots(figsize=(30, 6))
 
         energy_balance_soil_layer_files: list[Path] = []
         for layer in range(6):
@@ -74,11 +74,14 @@ class Energy:
                     f"Expected soil temperature file '{energy_balance_soil_layer_file.name}' not found."
                 )
 
-            df = pd.read_csv(energy_balance_soil_layer_file, index_col=0)
+            df = pd.read_csv(
+                energy_balance_soil_layer_file, index_col=0, parse_dates=True
+            )
             df[f"_energy_balance_soil_temperature_layer_{layer}_C"].plot(
                 ax=ax, label=f"Layer {layer + 1}"
             )  # This will plot the time series of the soil temperature for this layer
 
+        ax.set_xlim(df.index[0], df.index[-1])
         ax.set_title(f"Soil Temperature Profile - Run: {run_name}")
         ax.set_xlabel("Time")
         ax.set_ylabel("Temperature (°C)")

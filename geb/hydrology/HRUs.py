@@ -626,6 +626,8 @@ class HRUVariables(Bucket):
     no_elements_harvested: ArrayFloat32
     soil_temperature_C: TwoDArrayFloat32
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
+    solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32
+    deep_soil_temperature_C: ArrayFloat32
     wetting_front_depth_m: ArrayFloat32
     wetting_front_suction_head_m: ArrayFloat32
     wetting_front_moisture_deficit: ArrayFloat32

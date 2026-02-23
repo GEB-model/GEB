@@ -4,6 +4,7 @@ import numpy as np
 from numba import njit
 
 from geb.geb_types import ArrayFloat32, Shape
+from geb.workflows.algebra import tdma_solver
 
 from .landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 
@@ -1223,6 +1224,54 @@ def get_heat_capacity_solid_fraction(
 
 
 @njit(cache=True, inline="always")
+def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
+    sand_percentage: np.float32,
+    silt_percentage: np.float32,
+    clay_percentage: np.float32,
+) -> np.float32:
+    """Calculate the thermal conductivity of the solid fraction of soil [W/(m·K)].
+
+    Based on: https://apps.dtic.mil/sti/tr/pdf/ADA044002.pdf
+
+    The thermal conductivity of the solid fraction ($\lambda_s$) is calculated as a
+    geometric mean of the conductivity of quartz ($\lambda_q$) and other minerals ($\lambda_o$):
+
+    $$ \lambda_s = \lambda_q^q \cdot \lambda_o^{1-q} $$
+
+    where $q$ is the quartz content fraction.
+
+    We assume characteristic quartz content is equal to the sand content fraction.
+
+    Args:
+        sand_percentage: Percentage of sand [0-100].
+        silt_percentage: Percentage of silt [0-100].
+        clay_percentage: Percentage of clay [0-100].
+
+    Returns:
+        Thermal conductivity of the solid fraction [W/(m·K)].
+    """
+    # Quartz thermal conductivity [W/(m K)]
+    # Johansen (1975) value for quartz
+    LAMBDA_QUARTZ = np.float32(7.7)
+    LAMBDA_OTHER_FINE = np.float32(2.0)
+
+    # Estimate from sand if not provided (ensuring it is bounded between 0 and 1)
+    # Ensure it's bounded [0, 1]
+    quartz_ratio = np.minimum(
+        np.maximum(sand_percentage / np.float32(100.0), np.float32(0.0)),
+        np.float32(1.0),
+    )
+
+    # Geometric mean calculation
+    # lambda_s = (lambda_quartz^q) * (lambda_other^(1-q))
+    lambda_s = (LAMBDA_QUARTZ**quartz_ratio) * (
+        LAMBDA_OTHER_FINE ** (np.float32(1.0) - quartz_ratio)
+    )
+
+    return lambda_s
+
+
+@njit(cache=True, inline="always")
 def calculate_net_radiation_flux(
     shortwave_radiation_W_per_m2: np.float32,
     longwave_radiation_W_per_m2: np.float32,
@@ -1484,3 +1533,215 @@ def get_interflow(
     interflow: np.float32 = free_water_m * storage_coefficient
     interflow: np.float32 = min(interflow, free_water_m)
     return interflow
+
+
+@njit(cache=True)
+def solve_soil_temperature_column(
+    soil_temperatures_C: np.ndarray,
+    layer_thicknesses_m: np.ndarray,
+    solid_heat_capacities_J_per_m2_K: np.ndarray,
+    thermal_conductivities_W_per_m_K: np.ndarray,
+    shortwave_radiation_W_per_m2: np.float32,
+    longwave_radiation_W_per_m2: np.float32,
+    air_temperature_K: np.float32,
+    wind_speed_10m_m_per_s: np.float32,
+    surface_pressure_pa: np.float32,
+    timestep_seconds: np.float32,
+    deep_soil_temperature_C: np.float32,
+) -> np.ndarray:
+    """Solve the soil temperature profile using a fully implicit method with non-linear surface boundary.
+
+    This function updates the soil temperature profile by solving the 1D heat diffusion equation.
+    The surface boundary condition is a non-linear energy balance (radiation + sensible heat),
+    which is handled via Newton-Raphson iteration coupled with a Tridiagonal Matrix Algorithm (TDMA) solver.
+    The bottom boundary condition is a Dirichlet boundary with a provided deep soil temperature.
+
+    Args:
+        soil_temperatures_C: Current soil temperatures for each layer [C].
+        layer_thicknesses_m: Thickness of each soil layer [m].
+        solid_heat_capacities_J_per_m2_K: Areal heat capacity of the solid fraction for each layer [J/m2/K].
+        thermal_conductivities_W_per_m_K: Thermal conductivity of the solid fraction for each layer [W/m-K].
+        shortwave_radiation_W_per_m2: Incoming shortwave radiation [W/m2].
+        longwave_radiation_W_per_m2: Incoming longwave radiation [W/m2].
+        air_temperature_K: Air temperature [K].
+        wind_speed_10m_m_per_s: Wind speed at 10m [m/s].
+        surface_pressure_pa: Surface pressure [Pa].
+        timestep_seconds: Time step length [s].
+        deep_soil_temperature_C: Constant temperature at the bottom boundary [C].
+
+    Returns:
+        np.ndarray: Updated soil temperatures for each layer [C].
+    """
+    n_soil_layers = len(soil_temperatures_C)
+    temperatures_at_start_of_timestep_C = soil_temperatures_C.astype(np.float32)
+    # Initial guess for the implicit solution at current iteration k=0
+    temperatures_current_iteration_C = soil_temperatures_C.astype(np.float32)
+
+    # Newton-Raphson iteration parameters
+    MAX_ITERATIONS = 10
+    TOLERANCE_C = np.float32(0.01)  # use a tolerance of 0.01 C for convergence
+
+    # Conductance K is the thermal coupling between centers of adjacent layers [W/m2/K].
+    # It is derived from the thermal resistance of the two half-layers.
+    thermal_conductances_between_layer_centers_W_per_m2_K = np.zeros(
+        n_soil_layers - 1, dtype=np.float32
+    )
+    for i in range(n_soil_layers - 1):
+        resistance_upper_half_layer = (
+            np.float32(0.5) * layer_thicknesses_m[i]
+        ) / thermal_conductivities_W_per_m_K[i]
+        resistance_lower_half_layer = (
+            np.float32(0.5) * layer_thicknesses_m[i + 1]
+        ) / thermal_conductivities_W_per_m_K[i + 1]
+
+        thermal_conductances_between_layer_centers_W_per_m2_K[i] = np.float32(1.0) / (
+            resistance_upper_half_layer + resistance_lower_half_layer
+        )
+
+    # Matrix arrays for the Tridiagonal Matrix Algorithm (TDMA)
+    # The system is structured as: a_i * T_{i-1} + b_i * T_i + c_i * T_{i+1} = d_i
+    lower_diagonal_a = np.zeros(n_soil_layers, dtype=np.float32)
+    main_diagonal_b = np.zeros(n_soil_layers, dtype=np.float32)
+    upper_diagonal_c = np.zeros(n_soil_layers, dtype=np.float32)
+    rhs_vector_d = np.zeros(n_soil_layers, dtype=np.float32)
+
+    for _ in range(MAX_ITERATIONS):
+        # Linearize Surface Boundary Conditions
+        # Since radiation and sensible heat depend non-linearly on surface temperature (T0),
+        # we linearize around the current guess: Flux(T0_new) ≈ Flux(T0) + dFlux/dT * (T0_new - T0)
+        surface_temperature_guess_C = temperatures_current_iteration_C[0]
+
+        net_radiation_flux_W_per_m2, derivative_net_radiation_W_per_m2_K = (
+            calculate_net_radiation_flux(
+                shortwave_radiation_W_per_m2=shortwave_radiation_W_per_m2,
+                longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
+                soil_temperature_C=surface_temperature_guess_C,
+            )
+        )
+        sensible_heat_flux_W_per_m2, derivative_sensible_heat_W_per_m2_K = (
+            calculate_sensible_heat_flux(
+                soil_temperature_C=surface_temperature_guess_C,
+                air_temperature_K=air_temperature_K,
+                wind_speed_10m_m_per_s=wind_speed_10m_m_per_s,
+                surface_pressure_pa=surface_pressure_pa,
+            )
+        )
+
+        # Combine fluxes and conductances for the linearized boundary condition.
+        # We use a first-order Taylor expansion: Flux(T_new) ≈ Flux(T_guess) + dFlux/dT * (T_new - T_guess)
+        # Rearranged as: Flux(T_new) ≈ [Flux(T_guess) - dFlux/dT * T_guess] + dFlux/dT * T_new
+        # Let G = -dFlux/dT (surface conductance).
+        # Flux(T_new) ≈ [Flux(T_guess) + G * T_guess] - G * T_new
+        # The term in brackets (flux_star) is independent of the unknown T_new in the current linear solve.
+        flux_star_W_per_m2 = (
+            net_radiation_flux_W_per_m2
+            + sensible_heat_flux_W_per_m2
+            + (
+                derivative_net_radiation_W_per_m2_K
+                + derivative_sensible_heat_W_per_m2_K
+            )
+            * surface_temperature_guess_C
+        )
+        surface_thermal_conductance_W_per_m2_K = (
+            derivative_net_radiation_W_per_m2_K + derivative_sensible_heat_W_per_m2_K
+        )
+
+        # Build the system for the current iteration
+
+        # Top soil layer (i = 0) with surface boundary condition
+        heat_storage_capacity_normalized_0 = (
+            solid_heat_capacities_J_per_m2_K[0] / timestep_seconds
+        )
+        conductance_to_layer_below = (
+            thermal_conductances_between_layer_centers_W_per_m2_K[0]
+        )
+
+        # The lower diagonal represents the coupling to the node i-1.
+        # Since node 0 is the top layer, there is no node -1, so a[0] is not used.
+        lower_diagonal_a[0] = np.float32(
+            0.0
+        )  # No coupling to layer above because it's the surface
+        main_diagonal_b[0] = (
+            heat_storage_capacity_normalized_0
+            + surface_thermal_conductance_W_per_m2_K
+            + conductance_to_layer_below
+        )  # the self-influence includes the surface conductance and coupling to layer below
+        upper_diagonal_c[
+            0
+        ] = -conductance_to_layer_below  # The coupling to the layer below
+        rhs_vector_d[0] = (
+            heat_storage_capacity_normalized_0 * temperatures_at_start_of_timestep_C[0]
+            + flux_star_W_per_m2
+        )  # this "unchangeble" part of the flux is treated as a source term in the linear system
+        # unchangeable only refers to the current iteration
+
+        # intermediate soil layers
+        for i in range(1, n_soil_layers - 1):
+            heat_storage_capacity_normalized = (
+                solid_heat_capacities_J_per_m2_K[i] / timestep_seconds
+            )
+            conductance_to_layer_above = (
+                thermal_conductances_between_layer_centers_W_per_m2_K[i - 1]
+            )
+            conductance_to_layer_below = (
+                thermal_conductances_between_layer_centers_W_per_m2_K[i]
+            )
+
+            lower_diagonal_a[i] = -conductance_to_layer_above
+            main_diagonal_b[i] = (
+                heat_storage_capacity_normalized
+                + conductance_to_layer_above
+                + conductance_to_layer_below
+            )
+            upper_diagonal_c[i] = -conductance_to_layer_below
+            rhs_vector_d[i] = (
+                heat_storage_capacity_normalized
+                * temperatures_at_start_of_timestep_C[i]
+            )
+
+        # Bottom soil layer
+        # We apply a Dirichlet boundary condition at the bottom using the provided deep soil temperature.
+        last_idx = n_soil_layers - 1
+        heat_storage_capacity_normalized_last = (
+            solid_heat_capacities_J_per_m2_K[last_idx] / timestep_seconds
+        )
+        conductance_to_layer_above = (
+            thermal_conductances_between_layer_centers_W_per_m2_K[last_idx - 1]
+        )
+
+        # Conductance from the center of the last layer to the boundary (distance = 0.5 * thickness)
+        conductance_to_deep_soil_boundary_W_per_m2_K = thermal_conductivities_W_per_m_K[
+            last_idx
+        ] / (np.float32(0.5) * layer_thicknesses_m[last_idx])
+
+        lower_diagonal_a[last_idx] = -conductance_to_layer_above
+        main_diagonal_b[last_idx] = (
+            heat_storage_capacity_normalized_last
+            + conductance_to_layer_above
+            + conductance_to_deep_soil_boundary_W_per_m2_K
+        )
+        # The upper diagonal represents the coupling to the node i+1.
+        # Since last_idx is the bottom layer, there is no node n, so c[last_idx] is not used.
+        upper_diagonal_c[last_idx] = np.float32(0.0)
+        rhs_vector_d[last_idx] = (
+            heat_storage_capacity_normalized_last
+            * temperatures_at_start_of_timestep_C[last_idx]
+            + conductance_to_deep_soil_boundary_W_per_m2_K * deep_soil_temperature_C
+        )
+
+        # Solve the Tridiagonal System
+        temperatures_new_iteration_C = tdma_solver(
+            lower_diagonal_a, main_diagonal_b, upper_diagonal_c, rhs_vector_d
+        )
+
+        # Check for Convergence
+        max_temperature_correction_C = np.max(
+            np.abs(temperatures_new_iteration_C - temperatures_current_iteration_C)
+        )
+        temperatures_current_iteration_C = temperatures_new_iteration_C
+
+        # If the maximum correction is below the tolerance, we consider the solution converged.
+        if max_temperature_correction_C < TOLERANCE_C:
+            break
+
+    return temperatures_current_iteration_C
