@@ -32,7 +32,7 @@ class Energy:
 
         This function reads the reported soil temperature CSV files for each layer and creates
          a consolidated time series plot showing the mean temperature (weighted by area)
-         across the entire basin. The generated plot is saved as a PNG image in the
+         across the entire basin. The generated plot is saved as a SVG image in the
          evaluation output directory.
 
         Notes:
