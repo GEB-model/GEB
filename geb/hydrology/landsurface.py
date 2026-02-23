@@ -835,6 +835,7 @@ class LandSurface(Module):
             root_depth_m: Root depth for each HRU (m).
             interception_capacity_m: Interception capacity per HRU (m).
             pr_kg_per_m2_per_s: Precipitation rate per hour (kg/m2/s).
+            tas_2m_K: 2m air temperature per hour (K).
             crop_factor: Crop factor per HRU (-).
             actual_irrigation_consumption_m: Actual irrigation consumption (m).
             capillar_rise_m: Capillary rise (m).
@@ -958,6 +959,7 @@ class LandSurface(Module):
             snow_temperature_C_prev: Pre-call snow temperature (C).
             interception_storage_prev: Pre-call interception storage (m).
             soil_temperature_C_prev: Pre-call soil temperature (C).
+            deep_soil_temperature_C_prev: Pre-call deep soil temperature (C).
             wetting_front_depth_prev: Pre-call wetting front depth (m).
             wetting_front_suction_head_prev: Pre-call wetting front suction head (m).
             wetting_front_moisture_deficit_prev: Pre-call wetting front moisture deficit (-).
