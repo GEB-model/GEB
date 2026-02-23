@@ -1,10 +1,12 @@
 """Functions for fitting GPD-POT models and assigning return periods to rivers."""
 
 import math
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
 from scipy.signal import find_peaks
 from scipy.stats import genpareto, lmoment
 
@@ -532,7 +534,7 @@ class ReturnPeriodModel:
 
     def plot_gof(
         self,
-        axes: np.ndarray | None = None,
+        axes: np.ndarray[tuple[int], Any] | list[Axes] | None = None,
         figsize: tuple[int, int] = (15, 5),
     ) -> np.ndarray:
         """Plot QQ, PP, and Density diagnostic plots for the chosen threshold.
@@ -637,7 +639,7 @@ class ReturnPeriodModel:
 
     def plot_selection_diagnostics(
         self,
-        axes: np.ndarray | None = None,
+        axes: np.ndarray[tuple[int], Any] | list[Axes] | None = None,
         figsize: tuple[int, int] = (12, 10),
     ) -> np.ndarray:
         """Plot diagnostics across all candidate thresholds.
@@ -722,7 +724,7 @@ class ReturnPeriodModel:
 
     def plot_threshold_stability(
         self,
-        axes: np.ndarray | None = None,
+        axes: np.ndarray[tuple[int], Any] | list[Axes] | None = None,
         return_periods: list[int] | None = None,
         figsize: tuple[int, int] = (12, 8),
     ) -> np.ndarray:

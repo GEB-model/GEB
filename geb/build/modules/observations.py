@@ -657,7 +657,7 @@ class Observations(BuildModelBase):
             how="all"
         )
         if obs_hourly_final.empty:
-            obs_hourly_final = pd.DataFrame(columns=final_hourly_cols)
+            obs_hourly_final = pd.DataFrame(columns=np.array(final_hourly_cols))
             obs_hourly_final.index.name = "time"
         self.set_table(obs_hourly_final, name="discharge/discharge_observations_hourly")
 
@@ -672,7 +672,7 @@ class Observations(BuildModelBase):
             )
 
         if obs_daily_final.empty:
-            obs_daily_final = pd.DataFrame(columns=final_daily_cols)
+            obs_daily_final = pd.DataFrame(columns=np.array(final_daily_cols))
             obs_daily_final.index.name = "time"
 
         self.set_table(obs_daily_final, name="discharge/discharge_observations_daily")

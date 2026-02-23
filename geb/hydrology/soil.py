@@ -205,6 +205,9 @@ def calculate_green_ampt_cumulative_infiltration(
     Returns:
         Cumulative infiltration amount [L].
     """
+    if time == np.float32(0.0):
+        return np.float32(0.0)
+
     # Darcy limit: if suction or the moisture deficit is zero, there is no
     # capillarity-driven enhancement and Green-Ampt reduces to I = K_s t.
     if wetting_front_suction_head_m <= np.float32(

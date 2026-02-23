@@ -22,7 +22,10 @@
 - Fix: fix for regions with very large coastal areas beyond the riverine grid.
 - Fix: waterbody outflow is larger than waterbody storage (due to floating point imprecision).
 - Fix: Added Liechtenstein to trade regions list which allows the model to be built in the Rhine basin
+- Move MIRCA-OS to new data catalog.
 - Move aquastat to new data catalog.
+- Add OECD Income Distribution Database (IDD) to the new data catalog.
+- Move Coast-RP to new data catalog.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`

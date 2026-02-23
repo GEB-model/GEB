@@ -4,6 +4,7 @@ from typing import Any
 
 from .aquastat import AQUASTAT
 from .base import Adapter
+from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
@@ -30,6 +31,8 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
+from .mirca_os import MIRCAOS
+from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
 from .osm_data import OpenStreetMapCoastlines, OpenStreetMapLandPolygons
@@ -643,6 +646,36 @@ data_catalog: dict[str, dict[str, Any]] = {
             "original_source_url": "https://hdr.undp.org",
         },
     },
+    "oecd_idd": {
+        "adapter": OECD(
+            folder="oecd_idd",
+            local_version=1,
+            filename="oecd_idd.csv",
+            cache="global",
+        ),
+        "url": "https://sdmx.oecd.org/public/rest/data/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0/.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR.?startPeriod=2010&dimensionAtObservation=AllDimensions&format=csvfilewithlabels",
+        "source": {
+            "name": "OECD Income Distribution Database",
+            "author": "OECD",
+            "license": "CC BY 4.0",
+            "url": "https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov",
+        },
+    },
+    "coast_rp": {
+        "adapter": CoastRP(
+            folder="coast_rp",
+            local_version=1,
+            filename="COAST-RP.pkl",
+            cache="global",
+        ),
+        "url": "https://raw.githubusercontent.com/jobdullaart/HGRAPHER/refs/tags/v0.1/COAST-RP.pkl",
+        "source": {
+            "name": "COAST-RP",
+            "author": "Dullaart et al. (2023)",
+            "license": "Other (Open)",
+            "url": "https://zenodo.org/records/7912730",
+        },
+    },
     "esa_worldcover_2021": {
         "adapter": ESAWorldCover(),
         "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
@@ -965,6 +998,51 @@ data_catalog: dict[str, dict[str, Any]] = {
             },
         }
         for scenario in ["historical", "ssp1", "ssp2", "ssp3", "ssp5"]
+    },
+    **{
+        f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}": {
+            "adapter": MIRCAOS(
+                folder="mirca_os",
+                filename=f"Annual Harvested Area Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{irrigation}.tif",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/data/contents/Annual%20Harvested%20Area%20Grids/Annual_Harvested_Area_Grids.rar",
+            "source": {
+                "name": "MIRCA-OS",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://doi.org/10.4211/hs.60a890eb841c460192c03bb590687145",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
+        for resolution in ["5-arcminute", "30-arcminute"]
+        for crop in [
+            "Wheat",
+            "Maize",
+            "Rice",
+            "Barley",
+            "Rye",
+            "Millet",
+            "Sorghum",
+            "Soybeans",
+            "Sunflower",
+            "Potatoes",
+            "Cassava",
+            "Sugar_cane",
+            "Sugar_beet",
+            "Oil_palm",
+            "Rapeseed",
+            "Groundnuts",
+            "Others_perennial",
+            "Fodder",
+            "Others_annual",
+            "Cocoa",
+            "Coffee",
+            "Cotton",
+            "Pulses",
+        ]
+        for irrigation in ["ir", "rf"]
     },
 }
 
