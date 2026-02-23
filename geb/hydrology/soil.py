@@ -1573,9 +1573,9 @@ def solve_soil_temperature_column(
         np.ndarray: Updated soil temperatures for each layer [C].
     """
     n_soil_layers = len(soil_temperatures_C)
-    temperatures_at_start_of_timestep_C = soil_temperatures_C.astype(np.float32)
+    temperatures_at_start_of_timestep_C = soil_temperatures_C.copy()
     # Initial guess for the implicit solution at current iteration k=0
-    temperatures_current_iteration_C = soil_temperatures_C.astype(np.float32)
+    temperatures_current_iteration_C = soil_temperatures_C.copy()
 
     # Newton-Raphson iteration parameters
     MAX_ITERATIONS = 10
