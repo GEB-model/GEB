@@ -58,7 +58,7 @@ We use bibtex to add references to the documentation. To add a reference you sho
     }
     ```
 
-    The first part after `@article{` is the name of the bibtex entry, then everything after are the details such as title and author list. There are also other types of entries, such as `@techreport{` and `@misc`. Depending on the the type of entry, different data may be required. You can learn more about bibtex [here](https://www.bibtex.org).
+    The first part after "&#64;article\{" is the name of the bibtex entry, then everything after are the details such as title and author list. There are also other types of entries, such as "&#64;techreport\{" and "&#64;misc\{". Depending on the the type of entry, different data may be required. You can learn more about bibtex [here](https://www.bibtex.org).
 
 2. Add the bibtex entry to [references.bib](https://github.com/GEB-model/GEB/blob/main/docs/references.bib). It doesn't matter where in the file as long as the formatting stays correct.
 3. Then, in the documentation you write "some statement that needs a reference\[&#64;debruijn2023geb\]". Here, the `debruijn2023geb` is the name of the bibtex-entry. It should then be automatically formatted correctly and add the citation to the bibliography at the bottom of the page.

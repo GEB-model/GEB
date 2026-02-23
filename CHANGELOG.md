@@ -1,4 +1,11 @@
 # dev
+- Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
+- Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.
+- Add frequency labels (hourly/daily) to extreme value analysis and validation plot titles.
+- Allow model to run from 1960 onwards (raise clear error if earlier than 1960 is requested).
+- Update `parse_demand` in `agents.py` to backward and forward fill water demand data if it doesn't cover the entire model time range.
+- Update discharge observation processing to support hourly data and separate observations into hourly and daily tables.
+- Update hydrology evaluation to support both hourly and daily observation datasets.
 - Add build method to set up reforestation potential (and data catalog entry)
 - Add units to all data from `setup_hydrography`
 - Compute hillslope length based on drainage density
@@ -8,10 +15,22 @@
 - Add `--profiling` option to `geb build/update/alter`.
 - Fix: fix for farm sizes that are all on the high end of the distribution.
 - Fix: fix for regions with very large coastal areas beyond the riverine grid
+- Use figures path for sfincs model to save all figures
+- Switch to hourly values for extreme value statistics
+- Use maximum of one flood peak per week
+- In evaluate make a dataframe without missing timesteps and ensure that return periods are esimated on the same data for observed and simulated for comparison.
+- Fix: fix for regions with very large coastal areas beyond the riverine grid.
+- Fix: waterbody outflow is larger than waterbody storage (due to floating point imprecision).
+- Fix: Added Liechtenstein to trade regions list which allows the model to be built in the Rhine basin
+- Move MIRCA-OS to new data catalog.
+- Move aquastat to new data catalog.
+- Add OECD Income Distribution Database (IDD) to the new data catalog.
+- Move Coast-RP to new data catalog.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
 - Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`
+- Re-run `setup_discharge_observations`: `geb update -b build.yml::setup_discharge_observations`
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
@@ -60,6 +79,8 @@ To support this version:
 - Included detrending of tide data in estimation of hydrograph shape. 
 - Moved Global dynamic ocean topography to the new data catalog.
 - Implemented a padding of cells with values in Global dynamic ocean topography to extent the data to the coastline based on extrapolation.
+- Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
+- Update damagescanner to v1.0.0b1
 
 To support this version:
 
@@ -75,7 +96,6 @@ To support this version:
 - Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 - Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
 - Add and run `setup_vegetation` to `build.yml`. A good place is for example after `setup_soil`.
-- Re-run `setup_global_ocean_mean_dynamic_topography`: `geb update -b build.yml::setup_global_ocean_mean_dynamic_topography`
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 

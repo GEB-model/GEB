@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import tempfile
 import zipfile
-from pathlib import Path
 from typing import Any
 
 import cdsapi
@@ -62,7 +61,7 @@ class GTSM(Adapter):
             output_path,
         )
 
-    def fetch(self, url: str | None = None) -> None:
+    def fetch(self, url: str | None = None) -> GTSM:
         """Fetch GTSM data and save it to the cache directory.
 
         Args:
@@ -70,14 +69,12 @@ class GTSM(Adapter):
         Returns:
             The current instance of the GTSM adapter.
         """
-        self.output_path: Path = self.root / self.filename
-
-        if self.output_path.exists():
+        if self.path.exists():
             return self
         # make directory if it doesn't exist
         self.root.mkdir(parents=True, exist_ok=True)
         request = self.construct_request()
-        self.download_data(request, str(self.output_path))
+        self.download_data(request, str(self.path))
         return self
 
     def read(self, bounds: tuple[float, float, float, float]) -> xr.Dataset:
@@ -88,12 +85,11 @@ class GTSM(Adapter):
         Returns:
             An xarray DataArray containing the GTSM data clipped to the specified bounds.
         """
-        zip_path = self.output_path
         with tempfile.TemporaryDirectory() as temp_dir:
             extract_path = temp_dir
 
             # Extract the zip file
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            with zipfile.ZipFile(self.path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
                 # read all netcdf files in the extracted folder
                 gtsm_data = []

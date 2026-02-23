@@ -43,8 +43,8 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
-from geb.hazards.floods.workflows.return_periods import ReturnPeriodModel
 from geb.hydrology.routing import get_river_width
+from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
     create_hash_from_parameters,
     get_window,
@@ -118,6 +118,17 @@ class SFINCSRootModel:
             The path to the SFINCS model root directory.
         """
         folder: Path = self._root / self.name
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def figures_path(self) -> Path:
+        """Gets the directory for the SFINCS model diagnostic figures.
+
+        Returns:
+            The path to the SFINCS model figures directory.
+        """
+        folder: Path = self.path / "figures"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -472,6 +483,10 @@ class SFINCSRootModel:
                 )
             )
 
+            # resample to daily frequency because this is the frequency for the river
+            # width and depth estimation formulas.
+            discharge_by_river = discharge_by_river.resample("D", label="left").mean()
+
             if custom_rivers_to_burn is not None:
                 rivers_to_burn = custom_rivers_to_burn.to_crs(sf.crs)
                 if "width" not in rivers_to_burn.columns:
@@ -491,7 +506,7 @@ class SFINCSRootModel:
                     fixed_shape=fixed_shape,
                     selection_strategy=selection_strategy,
                     write_figures=write_figures,
-                    output_directory=self.path / "figures" / "bankfull_estimation",
+                    output_directory=self.figures_path / "bankfull_estimation",
                 )
 
                 river_width_unknown_mask = rivers_to_burn["width"].isnull()
@@ -612,7 +627,7 @@ class SFINCSRootModel:
         )
 
         sf.plot_basemap(
-            fn_out="basemap.png",
+            fn_out=str(self.figures_path / "basemap.png"),
             vmin=math.floor(self.elevation.min()),
             vmax=max(
                 math.ceil(self.elevation.max()), 1
@@ -770,7 +785,7 @@ class SFINCSRootModel:
         # in coastal areas, there may be no active rivers
         if not self.active_rivers.empty:
             self.active_rivers.plot(ax=ax, color="blue")
-        plt.savefig(self.path / "gis" / "rivers.png")
+        plt.savefig(self.figures_path / "rivers.png")
 
     def calculate_outflow_conditions(self, area: gpd.GeoDataFrame) -> None:
         """Calculates outflow elevation and coordinates for all rivers.
@@ -1353,7 +1368,7 @@ class SFINCSRootModel:
             fixed_shape=fixed_shape,
             selection_strategy=selection_strategy,
             write_figures=write_figures,
-            output_directory=self.path / "figures" / "return_periods",
+            output_directory=self.figures_path / "return_periods",
         )
 
         for return_period in return_periods:
@@ -1447,7 +1462,7 @@ class SFINCSRootModel:
         if sea_level_rise is not None and year is not None:
             # get sea level rise adjustment for the specified year without mutating
             # the original index (which may be reused elsewhere as a DatetimeIndex)
-            year_mask = sea_level_rise.index.year == year
+            year_mask = sea_level_rise.index.year == year  # ty:ignore[possibly-missing-attribute]
             if not year_mask.any():
                 raise ValueError(f"No sea level rise data found for year {year}.")
             # select the first matching row; this results in a Series indexed by station ID
@@ -1770,9 +1785,11 @@ class SFINCSSimulation:
         self.sfincs_model.write_config()
 
         if self.write_figures:
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+            self.sfincs_model.plot_forcing(
+                fn_out=str(self.figures_path / "forcing.png")
+            )
             self.sfincs_model.plot_basemap(
-                fn_out="basemap.png",
+                fn_out=str(self.figures_path / "basemap.png"),
                 vmin=math.floor(self.root_model.elevation.min()),
                 vmax=max(
                     math.ceil(self.root_model.elevation.max()), 1
@@ -1990,13 +2007,15 @@ class SFINCSSimulation:
 
         if self.write_figures:
             self.sfincs_model.plot_basemap(
-                fn_out="src_points_check.png",
+                fn_out=str(self.figures_path / "src_points_check.png"),
                 vmin=math.floor(self.root_model.elevation.min()),
                 vmax=max(
                     math.ceil(self.root_model.elevation.max()), 1
                 ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
             )
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+            self.sfincs_model.plot_forcing(
+                fn_out=str(self.figures_path / "forcing.png")
+            )
 
     def set_accumulated_runoff_forcing(
         self,
@@ -2320,6 +2339,13 @@ class SFINCSSimulation:
     def path(self) -> Path:
         """Returns the root directory for the SFINCS simulation files."""
         folder: Path = self.root_path / "simulations" / self.name
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def figures_path(self) -> Path:
+        """Returns the directory for the SFINCS simulation diagnostic figures."""
+        folder: Path = self.path / "figures"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 

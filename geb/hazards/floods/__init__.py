@@ -310,6 +310,7 @@ class Floods(Module):
             overwrite=self.config["overwrite"],
             p_value_threshold=self.config["p_value_threshold"],
             selection_strategy=self.config["selection_strategy"],
+            fixed_shape=self.config["fixed_shape"],
             write_figures=self.config["write_figures"],
         )
 
@@ -499,7 +500,9 @@ class Floods(Module):
         if self.model.multiverse_name is None:
             if self.model.config["general"]["forecasts"]["use"]:
                 print("Multiverse no longer active, now compute flood damages...")
-            self.model.agents.households.flood(flood_depth=flood_depth)
+            # Check if damage simulation is enabled before calculating damages
+            if self.model.config["hazards"]["damage"]["simulate"]:
+                self.model.agents.households.flood(flood_depth=flood_depth)
 
     def get_return_period_maps(self) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
@@ -637,6 +640,7 @@ class Floods(Module):
                     return_periods=self.config["return_periods"],
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
+                    fixed_shape=self.config["fixed_shape"],
                     write_figures=self.config["write_figures"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
@@ -773,7 +777,7 @@ class Floods(Module):
             / "report"
             / "spinup"
             / "hydrology.routing"
-            / "discharge_daily.zarr"
+            / "discharge_hourly.zarr"
         )
 
         start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)
