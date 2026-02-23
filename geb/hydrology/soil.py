@@ -1225,10 +1225,10 @@ def get_heat_capacity_solid_fraction(
 
 @njit(cache=True, inline="always")
 def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
-    sand_percentage: np.float32,
-    silt_percentage: np.float32,
-    clay_percentage: np.float32,
-) -> np.float32:
+    sand_percentage: np.ndarray[Shape, np.dtype[np.float32]],
+    silt_percentage: np.ndarray[Shape, np.dtype[np.float32]],
+    clay_percentage: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculate the thermal conductivity of the solid fraction of soil [W/(m·K)].
 
     Based on: https://apps.dtic.mil/sti/tr/pdf/ADA044002.pdf
@@ -1672,7 +1672,7 @@ def solve_soil_temperature_column(
         rhs_vector_d[0] = (
             heat_storage_capacity_normalized_0 * temperatures_at_start_of_timestep_C[0]
             + flux_star_W_per_m2
-        )  # this "unchangeble" part of the flux is treated as a source term in the linear system
+        )  # this "unchangeable" part of the flux is treated as a source term in the linear system
         # unchangeable only refers to the current iteration
 
         # intermediate soil layers
