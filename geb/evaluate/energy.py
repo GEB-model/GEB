@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
@@ -63,12 +62,10 @@ class Energy:
 
         fig, ax = plt.subplots(figsize=(30, 6))
 
-        energy_balance_soil_layer_files: list[Path] = []
         for layer in range(6):
             energy_balance_soil_layer_file = (
                 report_dir / f"_energy_balance_soil_temperature_layer_{layer}_C.csv"
             )
-            energy_balance_soil_layer_files.append(energy_balance_soil_layer_file)
             if not energy_balance_soil_layer_file.exists():
                 raise FileNotFoundError(
                     f"Expected soil temperature file '{energy_balance_soil_layer_file.name}' not found."
