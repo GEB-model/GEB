@@ -1186,7 +1186,7 @@ class CropFarmers(AgentBaseClass):
             extra_dims=(n_neighbor,),
             extra_dims_names=("neighbors",),
             dtype=np.int32,
-            fill_value=np.nan,
+            fill_value=-1,
         )
 
         bounds = self.grid.bounds
@@ -2156,19 +2156,24 @@ class CropFarmers(AgentBaseClass):
 
             # Get the crop age
             crop_age = self.HRU.var.crop_age_days_map[harvest]
-            current_crop_age = np.bincount(
-                harvesting_farmer_fields, weights=crop_age, minlength=self.var.n
-            ) / np.bincount(harvesting_farmer_fields, minlength=self.var.n)
+            current_crop_age = (
+                np.bincount(
+                    harvesting_farmer_fields, weights=crop_age, minlength=self.var.n
+                )[harvesting_farmers]
+                / np.bincount(harvesting_farmer_fields, minlength=self.var.n)[
+                    harvesting_farmers
+                ]
+            )
 
             harvesting_farmers_mask = np.zeros(self.var.n, dtype=bool)
             harvesting_farmers_mask[harvesting_farmers] = True
 
             self.save_yearly_income(self.income_farmer, potential_income_farmer)
             self.save_harvest_spei(harvesting_farmers)
-            self.save_harvest_precipitation(
-                harvesting_farmers, current_crop_age[harvesting_farmers]
-            )
-            self.drought_risk_perception(harvesting_farmers, current_crop_age)
+            self.save_harvest_precipitation(harvesting_farmers, current_crop_age)
+
+            if not self.model.in_spinup:
+                self.drought_risk_perception(harvesting_farmers, current_crop_age)
 
             ## After updating the drought risk perception, set the previous month for the next timestep as the current for this timestep.
             # TODO: This seems a bit like a quirky solution, perhaps there is a better way to do this.
@@ -2271,6 +2276,8 @@ class CropFarmers(AgentBaseClass):
         # Identify farmers who experienced a drought event based on loss comparison with historical losses
         drought_loss_current = drought_loss_latest - drought_loss_past
 
+        assert not np.isnan(drought_loss_current).any()
+
         experienced_drought_event = (
             drought_loss_current >= self.var.moving_average_threshold
         )
@@ -2300,13 +2307,19 @@ class CropFarmers(AgentBaseClass):
         # Determine their microcredit
         if self.microcredit_adaptation_active:
             # print(np.count_nonzero(loaning_farmers), "farmers are getting microcredit")
-            self.microcredit(loaning_farmers, drought_loss_current, current_crop_age)
+            self.microcredit(
+                loaning_farmers,
+                drought_loss_current,
+                current_crop_age_loaning_farmers=current_crop_age[
+                    loaning_farmers[harvesting_farmers]
+                ],
+            )
 
     def microcredit(
         self,
         loaning_farmers: npt.NDArray[np.bool_],
         drought_loss_current: npt.NDArray[np.floating],
-        current_crop_age: npt.NDArray[np.floating],
+        current_crop_age_loaning_farmers: npt.NDArray[np.floating],
     ) -> None:
         """Compute and assign microcredit based on profits, drought loss, and crop age.
 
@@ -2317,7 +2330,7 @@ class CropFarmers(AgentBaseClass):
             loaning_farmers: Boolean mask of farmers applying for a loan.
             drought_loss_current: Latest drought loss (%)
                 per farmer.
-            current_crop_age: Current crop age per farmer
+            current_crop_age_loaning_farmers: Current crop age per loaning farmer
                 (days or time units consistent with the crop calendar).
         """
         # Compute the maximum loan amount based on the average profits of the last 10 years
@@ -2329,7 +2342,7 @@ class CropFarmers(AgentBaseClass):
             crop_growth_duration == -1, 0, crop_growth_duration
         ).sum(axis=1)
         crop_age_fraction = (
-            current_crop_age[loaning_farmers] / total_crop_age[loaning_farmers]
+            current_crop_age_loaning_farmers / total_crop_age[loaning_farmers]
         )
 
         # Calculate the total loan amount based on drought loss, crop age percentage, and the maximum loan
@@ -5195,8 +5208,13 @@ class CropFarmers(AgentBaseClass):
                 self.save_yearly_pr()
 
             # Set yearly yield ratio based on the difference between saved actual and potential profit
+            yearly_potential_income = np.where(
+                self.var.yearly_potential_income > 0,
+                self.var.yearly_potential_income,
+                np.nan,
+            )
             self.var.yearly_yield_ratio = (
-                self.var.yearly_income / self.var.yearly_potential_income
+                self.var.yearly_income / yearly_potential_income
             )
 
             k = 8
