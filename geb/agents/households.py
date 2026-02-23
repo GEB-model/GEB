@@ -75,7 +75,9 @@ class HouseholdVariables(Bucket):
     property_value: DynamicArray
     locations: DynamicArray
     years_since_last_flood: DynamicArray
+    years_since_last_windstorm: DynamicArray
     risk_perception: DynamicArray
+    risk_perception_windstorm: DynamicArray
     sizes: DynamicArray
     water_efficiency_per_household: ArrayFloat32
     municipal_water_withdrawal_m3_per_capita_per_day_multiplier: pd.DataFrame
@@ -145,6 +147,8 @@ class Households(AgentBaseClass):
             self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
             self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
             self.load_wind_maps()
+            self.wind_risk_perceptions = []  # Store the windstorm risk perceptions in here
+            self.wind_risk_perceptions_statistics = []  # Store some statistics on windstorm risk perceptions here
 
         self.load_objects()
         self.load_max_damage_values()
@@ -184,6 +188,12 @@ class Households(AgentBaseClass):
             self.model.config["hazards"]["windstorm"]["return_periods"]
         )
 
+        debug_maps = bool(
+            self.model.config.get("hazards", {})
+            .get("windstorm", {})
+            .get("debug_maps", False)
+        )
+
         windstorm_maps = {}
         windstorm_path = self.model.output_folder / "wind_maps"
         for return_period in self.windstorm_return_periods:
@@ -191,6 +201,17 @@ class Households(AgentBaseClass):
                 windstorm_path / f"return_level_rp{return_period}.tif"
             )  # adjust to file name
             windstorm_map = xr.open_dataarray(file_path, engine="rasterio")
+
+            if debug_maps:
+                try:
+                    crs = windstorm_map.rio.crs
+                except Exception:
+                    crs = None
+                print(
+                    "Loaded windstorm map: "
+                    f"rp={int(return_period)}, path={file_path}, "
+                    f"shape={tuple(windstorm_map.shape)}, crs={crs}"
+                )
 
             windstorm_maps[return_period] = windstorm_map
 
@@ -433,6 +454,14 @@ class Households(AgentBaseClass):
             extra_dims_names=["measure_type"],
         )
 
+        # ############### FIX FIX #################
+        eu_cfg = self.model.config["agent_settings"]["households"]["expected_utility"]
+
+        flood_rp_cfg = eu_cfg["flood_risk_calculations"]["risk_perception"]
+        wind_rp_cfg = eu_cfg.get("windstorm_risk_calculations", {}).get(
+            "risk_perception", flood_rp_cfg
+        )
+
         # initiate array with risk perception [dummy data for now]
         self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
             "expected_utility"
@@ -444,8 +473,21 @@ class Households(AgentBaseClass):
             "expected_utility"
         ]["flood_risk_calculations"]["risk_perception"]["coef"]
 
+        self.var.risk_perc_w_min = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["windstorm_risk_calculations"]["risk_perception"]["min"]
+        self.var.risk_perc_w_max = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["windstorm_risk_calculations"]["risk_perception"]["max"]
+        self.var.risk_w_decr = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["windstorm_risk_calculations"]["risk_perception"]["coef"]
+
         risk_perception = np.full(self.n, self.var.risk_perc_min)
         self.var.risk_perception = DynamicArray(risk_perception, max_n=self.max_n)
+
+        risk_perception_w = np.full(self.n, self.var.risk_perc_w_min, dtype=np.float32)
+        self.var.risk_perception_w = DynamicArray(risk_perception_w, max_n=self.max_n)
 
         # initiate array with risk aversion [fixed for now]
         self.var.risk_aversion = DynamicArray(np.full(self.n, 1), max_n=self.max_n)
@@ -649,6 +691,143 @@ class Households(AgentBaseClass):
             }
         )
         self.flood_risk_perceptions.append(df)
+
+    def update_windstorm_risk_perceptions(
+        self,
+        damages_unprotected_w: np.ndarray | None = None,
+        damage_threshold: float = 0.0,
+    ) -> None:
+        """Update windstorm risk perceptions based on the latest windstorm data."""
+        max_n = getattr(self, "max_n", self.n)
+
+        if not hasattr(self.var, "years_since_last_windstorm"):
+            self.var.years_since_last_windstorm = DynamicArray(
+                np.full(self.n, 25, np.int32), max_n=max_n
+            )
+
+        if not hasattr(self.var, "risk_perception_windstorm"):
+            self.var.risk_perception_windstorm = DynamicArray(
+                np.full(self.n, self.var.risk_perc_min), max_n=max_n
+            )
+
+        self.var.years_since_last_windstorm.data += 1
+
+        ############   FIX FIX #######
+
+        # --- update perception (windstorm-specific; year-0 equals max) ---
+        base = float(getattr(self.var, "risk_base_wind", 1.6))
+        coef = float(getattr(self.var, "risk_decr_wind", self.var.risk_decr))
+        rp_min = float(getattr(self.var, "risk_perc_min_wind", self.var.risk_perc_min))
+        rp_max = float(getattr(self.var, "risk_perc_max_wind", self.var.risk_perc_max))
+
+        yrs = self.var.years_since_last_windstorm.data.astype(np.float32)
+
+        rp = rp_min + (rp_max - rp_min) * (base ** (coef * yrs))
+        rp = np.clip(rp, rp_min, rp_max).astype(np.float32)
+
+        self.var.risk_perception_w.data = rp
+
+        # ...existing code...
+
+        # ...existing code...
+
+        cfg = self.model.config.get("hazards", {}).get("windstorm", {})
+        # NEW ADDITION
+        adapt_to_actual_windstorms = bool(cfg.get("adapt_to_actual_windstorms", True))
+
+        # OLD CODE
+        # p_event = float(cfg.get("annual_event_probability", 0.0))
+        # p_event = np.clip(p_event, 0.0, 1.0)
+        # print(f"[wind]{self.model.current_time.date()} p_event={p_event:.4f}")
+
+        # selected_rp = None
+        # if np.random.random() < p_event:
+        #     rps_desc = np.sort(self.windstorm_return_periods)[::-1]
+        #     min_rp = np.min(self.windstorm_return_periods)
+        #     u_sev = np.random.random()
+
+        #     for rp in rps_desc:
+        #         if u_sev < (min_rp / rp):
+        #             selected_rp = int(rp)
+        #             break
+
+        # NEW CODE
+        if adapt_to_actual_windstorms:
+            selected_rp: int | None = None
+            rps = getattr(self, "windstorm_return_periods", np.array([]))
+
+            if rps.size:
+                rps_desc = np.sort(rps)[::-1]
+                min_rp = float(np.min(rps_desc))
+                p_event = 1.0 / min_rp if min_rp > 0 else 0.0
+
+                u_event = float(np.random.random())
+                if u_event < p_event:
+                    u_sev = float(np.random.random())
+                    for rp in rps_desc:
+                        if min_rp <= 0:
+                            continue
+                        if u_sev < (min_rp / float(rp)):
+                            selected_rp = int(rp)
+                            break
+        # OLD CODE
+        if selected_rp is not None:
+            print(f"Windstorm event (RP={selected_rp})")
+
+            if damages_unprotected_w is None:
+                damages_unprotected_w, _ = self.calculate_building_wind_damages(
+                    verbose=False
+                )
+
+            rp_idx_arr = np.where(self.windstorm_return_periods == selected_rp)[0]
+            # NEW CODE
+            if rp_idx_arr.size:
+                rp_idx = int(rp_idx_arr[0])
+                # OLD CODE
+                realized_damage = damages_unprotected_w[rp_idx]
+
+            # Threshold logic (unchanged, but clearer)
+            abs_thr = float(cfg.get("damage_threshold", damage_threshold))
+            frac_thr = cfg.get("damage_threshold_fraction_of_property_value", None)
+
+            if frac_thr is None:
+                threshold = abs_thr
+            else:
+                threshold = np.maximum(
+                    abs_thr, float(frac_thr) * self.var.property_value.data
+                )
+
+            # hit = realized_damage > threshold
+            hit = np.asarray(realized_damage > threshold)
+            self.var.years_since_last_windstorm.data[hit] = 0
+
+            print(f"Windstorm households hit: {hit.sum()}/{self.n}")
+
+        # NEW CODE
+        else:
+            p_random = float(cfg.get("random_event_probability", 0.1))  # check why 0.1
+            if np.random.random() < p_random:
+                print("Random windstorm event!")
+                self.var.years_since_last_windstorm.data[:] = 0
+
+        # OLD CODE
+        # --- 5. Update perception (identical to flood) --------------------------
+        self.var.risk_perception_windstorm.data = (
+            self.var.risk_perc_max
+            * 1.6 ** (self.var.risk_decr * self.var.years_since_last_windstorm.data)
+            + self.var.risk_perc_min
+        )
+
+    # # --- Optional bookkeeping ----------------------------------------------
+    # if hasattr(self, "wind_risk_perceptions_statistics"):
+    #     self.wind_risk_perceptions_statistics.append(
+    #         {
+    #             "time": self.model.current_time,
+    #             "min_risk": self.var.risk_perception_windstorm.data.min(),
+    #             "max_risk": self.var.risk_perception_windstorm.data.max(),
+    #             "mean_risk": self.var.risk_perception_windstorm.data.mean(),
+    #         }
+    #     )
 
     def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.
@@ -1682,7 +1861,15 @@ class Households(AgentBaseClass):
         # calculate damages for adapting and not adapting households based on building footprints
         damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
         damages_unprotected_w, damages_adapt_w = self.calculate_building_wind_damages()
+        # update windstorm risk perceptions (use computed damages to avoid re-running scanners)
+        self.update_windstorm_risk_perceptions(
+            damages_unprotected_w=damages_unprotected_w
+        )
 
+        risk_perception_multi = np.maximum(
+            self.var.risk_perception.data, self.var.risk_perception_windstorm.data
+        )
+        # self.var.risk_perception_windstorm.data = 2
         # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt_flood(
             geom_id="NoID",
@@ -1711,7 +1898,7 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,  # + 10,
+            risk_perception=self.var.risk_perception_windstorm.data,  # + 10,
             expected_damages_adapt=damages_adapt_w,
             adaptation_costs=self.var.adaptation_costs_shutters,  # * 0
             time_adapted=self.var.time_adapted_shutters.data,
@@ -1747,7 +1934,7 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,  # + 10
+            risk_perception=self.var.risk_perception_windstorm.data,
             expected_damages=damages_unprotected_w,
             adapted=self.var.adapted_shutters.data == 1,
             p_windstorm=1 / self.windstorm_return_periods,
@@ -1763,7 +1950,7 @@ class Households(AgentBaseClass):
             expenditure_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,
+            risk_perception=risk_perception_multi,
             expected_damages_flood=damages_do_not_adapt,
             expected_damages_wind=damages_unprotected_w,
             p_flood=1 / self.return_periods,
@@ -1783,7 +1970,7 @@ class Households(AgentBaseClass):
                 expenditure_cap=1,
                 amenity_value=self.var.amenity_value.data,
                 amenity_weight=1,
-                risk_perception=self.var.risk_perception.data,
+                risk_perception=risk_perception_multi,
                 expected_damages_flood=damages_do_not_adapt,
                 expected_damages_floodadapted=damages_adapt,
                 expected_damages_wind=damages_unprotected_w,
@@ -1815,9 +2002,17 @@ class Households(AgentBaseClass):
         self.var.time_adapted_shutters[household_adapting_shutters] += 1
 
         # execute strategy (multirisk insurance)
-        households_insurance = np.where(EU_multirisk_insurance > EU_do_nothing)[0]
-        self.var.adapted_insurance[households_insurance] = 1
-        self.var.time_with_insurance[households_insurance] += 1
+        insurance_now = np.asarray(EU_multirisk_insurance > EU_do_nothing)
+        households_insurance = np.where(insurance_now)[0]
+
+        # Insurance is a renewable decision (unlike structural adaptations).
+        # Reset yearly so the insured population can decrease again as perceived risk decays.
+        self.var.adapted_insurance.data[: self.n] = insurance_now.astype(np.int32)
+        self.var.time_with_insurance.data[: self.n] = np.where(
+            insurance_now,
+            self.var.time_with_insurance.data[: self.n] + 1,
+            0,
+        ).astype(self.var.time_with_insurance.data.dtype, copy=False)
 
         # update column in buildings
         self.update_building_adaptation_status(
@@ -2401,6 +2596,12 @@ class Households(AgentBaseClass):
             for rp in self.windstorm_return_periods
         }
 
+        debug_damage_stats = bool(
+            self.model.config.get("hazards", {})
+            .get("windstorm", {})
+            .get("debug_damage_stats", False)
+        )
+
         # create a pandas data array for assigning damage to the agents:
         agent_df = pd.DataFrame(
             {"building_id_of_household": self.var.building_id_of_household}
@@ -2408,14 +2609,28 @@ class Households(AgentBaseClass):
 
         # subset building to those exposed to flooding (multi-hazard exposure)
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(crs)
-        buildings = buildings[buildings["flooded"]]
+
+        only_flooded_buildings = bool(
+            self.model.config.get("hazards", {})
+            .get("windstorm", {})
+            .get("only_flooded_buildings", True)
+        )
+        if only_flooded_buildings:
+            buildings = buildings[buildings["flooded"]]
         # only calculate damages for buildings with more than 0 occupant
         buildings = buildings[buildings["n_occupants"] > 0]
 
         for i, return_period in enumerate(self.windstorm_return_periods):
             wind_map = windstorm_map_crs[return_period]
 
+            wind_threshold = 27.01
+            wind_map_masked = wind_map.fillna(0.0)
+            mind_map_masked = wind_map_masked.where(
+                wind_map_masked >= wind_threshold, 0.0
+            )
+
             building_multicurve = buildings.copy()
+
             multi_curves = {
                 "damages_unprotected": self.wind_buildings_structure_curve[
                     "building_unprotected"
@@ -2428,17 +2643,24 @@ class Households(AgentBaseClass):
                 features=building_multicurve.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
-                hazard=wind_map,
+                hazard=wind_map_masked,
                 multi_curves=multi_curves,
             )
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
             )
 
+            # Damage_threshold = 0.001
+
+            # buildings_to_damage.loc[
+            #     buildings_to_damage["damages_unprotected"] < Damage_threshold,
+            #     "damages_unprotected",
+            # ] = 0.0
+
             if export_building_damages:
                 fn_export = self.model.output_folder / "building_wind_damages"
                 fn_export.mkdir(parents=True, exist_ok=True)
-                buildings_multicurve.to_parquet(
+                building_multicurve.to_parquet(
                     self.model.output_folder
                     / "building_wind_damages"
                     / f"building_wind_damages_rp{return_period}_{self.model.current_time.year}.parquet"
@@ -2453,6 +2675,20 @@ class Households(AgentBaseClass):
                     building_multicurve,
                 )
             )
+
+            if debug_damage_stats:
+                unprot = damages_unprotected_w[i]
+                prot = damages_adapt_w[i]
+                # Keep this cheap: simple stats + non-zero fraction.
+                frac_nonzero = float(np.mean(unprot > 0))
+                print(
+                    "Wind damage stats "
+                    f"rp={int(return_period)}: "
+                    f"sum={float(unprot.sum()):.3e}, mean={float(np.mean(unprot)):.3e}, "
+                    f"p95={float(np.quantile(unprot, 0.95)):.3e}, max={float(np.max(unprot)):.3e}, "
+                    f"nonzero_frac={frac_nonzero:.3f}, "
+                    f"adapt_mean={float(np.mean(prot)):.3e}"
+                )
             if verbose:
                 print(
                     f"Wind Damages rp{return_period}: {round(damages_unprotected_w[i].sum() / 1e6)} million"
@@ -2461,6 +2697,27 @@ class Households(AgentBaseClass):
                     f"Wind Damages adapt rp{return_period}: {round(damages_adapt_w[i].sum() / 1e6)} million"
                 )
         return damages_unprotected_w, damages_adapt_w
+
+    def get_max_wind_at_buildings(
+        self, buildings_gdf: gpd.GeoDataFrame, wind_map: xr.DataArray
+    ) -> np.ndarray:
+        """This function extracts the maximum wind speed at the location of each building.
+
+        Args:
+            buildings_gdf: GeoDataFrame containing building geometries.
+            wind_map: xarray DataArray containing the wind speed map.
+
+        Returns:
+            A numpy array containing the maximum wind speed at each building location.
+        """
+        # Extract the maximum wind speed at the location of each building
+        # by sampling the wind map at the building centroids
+        max_winds = []
+        for geom in buildings_gdf.geometry:
+            masked = wind_map.rio.clip([geom], buildings_gdf.crs, drop=False)
+            max_winds.append(float(masked.max()))
+
+        return np.array(max_winds)
 
     def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.

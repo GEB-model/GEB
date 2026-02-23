@@ -577,6 +577,7 @@ class GEBModel(Module):
             load_data_from_store=False,
             clean_report_folder=False,
             in_spinup=True,
+            simulate_hydrology=False,
         )
 
         # save initial household attributes
