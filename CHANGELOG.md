@@ -77,6 +77,9 @@ To support this version:
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
 - Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
 - Update damagescanner to v1.0.0b1
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
+- Check which MeritHydro files are present on the shared IVM datadrive. Ignore tiles that are not present in build as these are in the ocean.
 
 To support this version:
 

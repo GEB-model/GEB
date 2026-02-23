@@ -615,8 +615,34 @@ class Reporter:
                         routing = self.model.hydrology.routing
                         outflow_rivers = routing.outflow_rivers
                         all_rivers = routing.rivers
+                        routing = self.model.hydrology.routing
+                        outflow_rivers = routing.outflow_rivers
+                        all_rivers = routing.rivers
 
                         outflow_reporters = {}
+
+                        def get_upstream_represented_xys(
+                            river_id: int,
+                        ) -> list[tuple[int, int]]:
+                            """Recursively find the nearest represented upstream rivers.
+
+                            Args:
+                                river_id: The ID of the river to find the upstream represented rivers for.
+
+                            Returns:
+                                A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
+                            """
+                            river = all_rivers.loc[river_id]
+                            if river["represented_in_grid"]:
+                                return [river["hydrography_xy"][-1]]
+
+                            upstream_rivers = all_rivers[
+                                all_rivers["downstream_ID"] == river_id
+                            ]
+                            xys = []
+                            for idx, _ in upstream_rivers.iterrows():
+                                xys.extend(get_upstream_represented_xys(idx))
+                            return xys
 
                         def get_upstream_represented_xys(
                             river_id: int,

@@ -503,7 +503,7 @@ def _create_discharge_folium_map(
     if (
         not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
         .isna()
-        .all()
+        .any()
     ):
         colormap_upstream = cm.LinearColormap(
             colors=["red", "orange", "yellow", "blue", "green"],

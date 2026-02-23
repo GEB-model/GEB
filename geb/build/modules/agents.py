@@ -362,10 +362,13 @@ class Agents(BuildModelBase):
         oecd_idd = oecd_idd[
             ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         ]
-        # only done to check countries in region, could probably be done more efficiently
-        countries = self.data_catalog.fetch("GADM_level0").read(
-            geom=self.region.union_all(),
+        # get GDL regions to use their iso_code for consistent country mapping
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all()
         )
+
+        gdl_countries = GDL_regions["iso_code"].unique().tolist()
+
         # setup donor countries for country missing in oecd data
         donor_countries = setup_donor_countries(
             self.data_catalog,
@@ -374,7 +377,7 @@ class Agents(BuildModelBase):
             alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
         )
 
-        for country in countries["GID_0"]:
+        for country in gdl_countries:
             income_distribution_parameters[country] = {}
             income_distributions[country] = {}
             if country not in oecd_idd["REF_AREA"].values:
@@ -386,17 +389,27 @@ class Agents(BuildModelBase):
             else:
                 oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
 
-            # take the most recent year
-            most_recent_year = oecd_widd_country[
-                oecd_widd_country["TIME_PERIOD"]
-                == np.max(oecd_widd_country["TIME_PERIOD"])
+            # take the most recent year for each statistical operation separately
+            mean_data = oecd_widd_country[
+                oecd_widd_country["STATISTICAL_OPERATION"] == "MEAN"
             ]
-            income_distribution_parameters[country]["MEAN"] = most_recent_year[
-                most_recent_year["STATISTICAL_OPERATION"] == "MEAN"
-            ]["OBS_VALUE"].iloc[0]
-            income_distribution_parameters[country]["MEDIAN"] = most_recent_year[
-                most_recent_year["STATISTICAL_OPERATION"] == "MEDIAN"
-            ]["OBS_VALUE"].iloc[0]
+            median_data = oecd_widd_country[
+                oecd_widd_country["STATISTICAL_OPERATION"] == "MEDIAN"
+            ]
+
+            most_recent_mean = mean_data[
+                mean_data["TIME_PERIOD"] == np.max(mean_data["TIME_PERIOD"])
+            ]
+            most_recent_median = median_data[
+                median_data["TIME_PERIOD"] == np.max(median_data["TIME_PERIOD"])
+            ]
+
+            income_distribution_parameters[country]["MEAN"] = most_recent_mean[
+                "OBS_VALUE"
+            ].iloc[0]
+            income_distribution_parameters[country]["MEDIAN"] = most_recent_median[
+                "OBS_VALUE"
+            ].iloc[0]
 
             # now also create national income distribution
             mu = np.log(income_distribution_parameters[country]["MEDIAN"])
@@ -1183,6 +1196,40 @@ class Agents(BuildModelBase):
                 "lowder_farm_size_distribution"
             ).read()
 
+            # Remove countries with average farm size below subgrid resolution in smallest class
+            subgrid_cell_area_ha: float = (1e6 / (self.subgrid_factor**2)) / 1e4
+            subgrid_cell_area_ha *= 0.95  # substract 5 %, just so that Lithuania stays inside the dataset. No problems there, as the subgrid is not exactly 1km2 (but smaller due to high latitude)
+            countries_to_remove: list[str] = []
+
+            for iso3, country_data in farm_sizes_per_region.groupby(
+                "ISO3"
+            ):  # start removal of countries with small farms
+                holdings = country_data[
+                    country_data["Holdings/ agricultural area"] == "Holdings"
+                ]
+                area = country_data[
+                    country_data["Holdings/ agricultural area"]
+                    == "Agricultural area (Ha)"
+                ]
+
+                if len(holdings) == 1 and len(area) == 1:
+                    n_holdings = (
+                        holdings["< 1 Ha"].replace("..", np.nan).astype(float).iloc[0]
+                    )
+                    area_ha = area["< 1 Ha"].replace("..", np.nan).astype(float).iloc[0]
+
+                    if pd.notna(n_holdings) and n_holdings > 0 and pd.notna(area_ha):
+                        if (area_ha / n_holdings) < subgrid_cell_area_ha:
+                            countries_to_remove.append(iso3)
+
+            if countries_to_remove:
+                self.logger.warning(
+                    f"Removed {len(countries_to_remove)} countries with avg farm size < {subgrid_cell_area_ha:.2f} ha: {countries_to_remove}"
+                )
+                farm_sizes_per_region = farm_sizes_per_region[
+                    ~farm_sizes_per_region["ISO3"].isin(countries_to_remove)
+                ]
+
             farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
             farm_size_donor_country = setup_donor_countries(
                 self.data_catalog,
@@ -1223,7 +1270,9 @@ class Agents(BuildModelBase):
                     region["district_n"],
                     region["sub_dist_1"],
                 )
-                self.logger.info(f"Processing region ({i + 1}/{len(regions_shapes)})")
+                self.logger.info(
+                    f"Processing region, {region.VARNAME_1}, ({i + 1}/{len(regions_shapes)})"
+                )
 
             cultivated_land_region_total_cells = (
                 ((region_ids == UID) & (cultivated_land)).sum().compute()
@@ -1813,14 +1862,14 @@ class Agents(BuildModelBase):
             5: (35, 44),
             6: (45, 54),
             7: (55, 64),
-            8: (66, maximum_age + 1),
+            8: (65, maximum_age + 1),
         }
 
         allocated_agents = pd.DataFrame()
         households_not_allocated = 0
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
-            GDL_code = GDL_region["GDLcode"]
+            # GDL_code = GDL_region["GDLcode"]
             self.logger.info(
                 f"Setting up household characteristics for {GDL_region['GDLcode']} ({i + 1}/{len(GDL_regions)})"
             )
@@ -1868,7 +1917,20 @@ class Agents(BuildModelBase):
                 GLOPOP_S_region["GRID_CELL"].isin(unique_grid_cells)
             ]
 
-            # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefor we combine these.)
+            ## Fixes for MKDr101 ##
+            # Set WEALTH to -1 when INCOME is available to avoid double-counting
+            GLOPOP_S_region.loc[GLOPOP_S_region["INCOME"] != -1, "WEALTH"] = -1
+
+            # Check for 0 values in WEALTH column and convert to 1
+            wealth_zero_count = (GLOPOP_S_region["WEALTH"] == 0).sum()
+            if wealth_zero_count > 0:
+                self.logger.warning(
+                    f"Found {wealth_zero_count} households with WEALTH=0 in {GDL_code}. Converting to WEALTH=1. Tim is in contact with Marijn to correct this in the GLOPOP dataset"
+                )
+                GLOPOP_S_region.loc[GLOPOP_S_region["WEALTH"] == 0, "WEALTH"] = 1
+
+            ## Fixes for MKDr101 done ##
+            # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefore, we combine these.)
             GLOPOP_S_region["wealth_index"] = (
                 GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
             )
@@ -1896,11 +1958,17 @@ class Agents(BuildModelBase):
 
             # sample income from national distribution
             GLOPOP_S_region["disp_income"] = np.percentile(
-                np.array(national_income_distribution[GDL_code[:3]]),
+                np.array(national_income_distribution[GDL_region["iso_code"]]),
                 np.array(GLOPOP_S_region["income_percentile"]),
             )
 
             # calculate age:
+            ## fixes for MKDr101 ##
+            GLOPOP_S_region.loc[GLOPOP_S_region["AGE"] == 0, "AGE"] = (
+                1  # check if age is sometimes 0, if so, set to 1 (otherwise creates issues)
+            )
+            ## fixes for MKDr101 done ##
+
             GLOPOP_S_region["age_household_head"] = np.uint16(np.iinfo(np.uint16).max)
             for age_class in age_class_to_age:
                 age_range = age_class_to_age[age_class]
@@ -2454,16 +2522,9 @@ class Agents(BuildModelBase):
             for ISO3 in ISO3_codes_region
             if ISO3 in TRADE_REGIONS
         }
+        all_ISO3_across_relevant_regions: set[str] = set(relevant_trade_regions.keys())
 
-        all_ISO3_across_relevant_regions: set[str] = {
-            ISO3
-            for ISO3 in ISO3_codes_region
-            if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
-        }
-
-        # determine the donors: donors are all the countries in the trade regions that are within our
-        # model domain(self.geoms["regions"]).
-        # Therefore, this can be a region OUTSIDE of the model domain, but within a trade region in the model domain.
+        # The model now only uses ISO3 codes that are within the trade regions that are within the model domain. Countries not in the trade region dataset (e.g. Kosovo) are NOT considered now even though they can have preferences data.
         donor_data = {}
         for ISO3 in all_ISO3_across_relevant_regions:
             region_risk_aversion_data = preferences_global[
