@@ -10,6 +10,7 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .energy import Energy
 from .hydrology import Hydrology
 from .meteorological_forecasts import MeteorologicalForecasts
 
@@ -28,6 +29,7 @@ class Evaluate:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
         self.hydrology = Hydrology(model, self)
+        self.energy = Energy(model, self)
         self.meteorological_forecasts = MeteorologicalForecasts(model, self)
 
     def run(
