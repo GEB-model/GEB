@@ -898,7 +898,7 @@ class Hydrography(BuildModelBase):
             / np.sum(SWORD_reach_lengths, axis=0)[rivers_with_data]
         )
         # ensure that all rivers with a SWORD ID have a width
-        assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
+        assert (~np.isnan(rivers["width"][rivers_with_data])).all()
 
         self.set_geom(rivers, name="routing/rivers")
 
