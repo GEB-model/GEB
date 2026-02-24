@@ -312,7 +312,7 @@ class Households(AgentBaseClass):
 
         self.var.municipal_water_demand_per_capita_m3_baseline = read_array(
             self.model.files["array"][
-                "agents/households/municipal_water_demand_per_capita_m3_baseline"
+                "agents/households/municipal_water_withdrawal_per_capita_m3_baseline"
             ]
         )
 
@@ -1688,7 +1688,11 @@ class Households(AgentBaseClass):
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
-        self.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
+        self.buildings_centroid = gpd.GeoDataFrame(
+            geometry=self.buildings.to_crs(epsg=3857).centroid.to_crs(
+                self.buildings.crs
+            )
+        )
         self.buildings_centroid["object_type"] = (
             "building_unprotected"  # before it was "building_content"
         )
@@ -1873,7 +1877,7 @@ class Households(AgentBaseClass):
         self.buildings_structure_curve["building_flood_proofed"] = (
             self.buildings_structure_curve["building_unprotected"] * 0.85
         )
-        self.buildings_structure_curve["building_flood_proofed"].loc[0:1] = 0.0
+        self.buildings_structure_curve.loc[0:1, "building_flood_proofed"] = 0.0
 
         self.buildings_content_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
@@ -1892,7 +1896,7 @@ class Households(AgentBaseClass):
             self.buildings_content_curve["building_unprotected"] * 0.85
         )
 
-        self.buildings_content_curve["building_flood_proofed"].loc[0:1] = 0.0
+        self.buildings_content_curve.loc[0:1, "building_flood_proofed"] = 0.0
 
         # TODO: need to adjust the vulnerability curves
         # create another column (curve) in the buildings content curve for

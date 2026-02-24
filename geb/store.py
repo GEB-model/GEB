@@ -291,17 +291,49 @@ class DynamicArray:
             input_.data if isinstance(input_, DynamicArray) else input_
             for input_ in inputs
         )
-        result = self._data.__array_ufunc__(ufunc, method, *modified_inputs, **kwargs)
+
+        out_orig = kwargs.get("out")
+        if out_orig is not None:
+            kwargs = kwargs.copy()
+            kwargs["out"] = tuple(
+                o.data if isinstance(o, DynamicArray) else o for o in out_orig
+            )
+
+        # Call the ufunc method on the underlying data type's implementation
+        # We use the ufunc directly to avoid issues with delegation to _data
+        result = getattr(ufunc, method)(*modified_inputs, **kwargs)
+
+        if result is NotImplemented:
+            return NotImplemented
+
         if method == "reduce":
             return result
-        elif not isinstance(inputs[0], DynamicArray):
-            return result
-        else:
+
+        if out_orig is not None:
+            if len(out_orig) == 1:
+                return out_orig[0]
+            return out_orig
+
+        if isinstance(result, np.ndarray):
+            # Find the first DynamicArray in inputs to inherit metadata from
+            first_da = next((i for i in inputs if isinstance(i, DynamicArray)), self)
+
+            # Determine extra_dims_names. If result ndim changed (e.g. reduction),
+            # we might need to adjust them.
+            # For __call__ (standard elementwise), it stays the same if shape matches elementwise.
+            # Here we assume elementwise or compatible shape.
+            new_extra_dims_names = first_da.extra_dims_names
+            if result.ndim - 1 != len(new_extra_dims_names):
+                # If dimensions changed, we can't reliably guess the names
+                new_extra_dims_names = []
+
             return self.__class__(
                 result,
-                extra_dims_names=self.extra_dims_names,
-                max_n=self._data.shape[0],
+                extra_dims_names=new_extra_dims_names,
+                max_n=first_da.max_n,
             )
+
+        return result
 
     def __array_function__(
         self,
