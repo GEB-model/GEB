@@ -1572,6 +1572,77 @@ def get_interflow(
     return interflow
 
 
+@njit(cache=True, inline="always")
+def apply_evaporative_cooling(
+    soil_temperature_top_layer_C: np.float32,
+    evaporation_m: np.float32,
+    solid_heat_capacity_J_per_m2_K: np.float32,
+) -> np.float32:
+    """Apply evaporative cooling to the top soil layer.
+
+    Args:
+        soil_temperature_top_layer_C: Temperature of the top layer (C).
+        evaporation_m: Amount of evaporation (m).
+        solid_heat_capacity_J_per_m2_K: Heat capacity of the top layer (J/m2/K).
+
+    Returns:
+        New temperature of top soil layer (C).
+    """
+    latent_heat_vaporization_J_per_kg = np.float32(2.45e6)
+    density_water_kg_per_m3 = np.float32(1000.0)
+
+    energy_loss_J_per_m2 = (
+        evaporation_m * density_water_kg_per_m3 * latent_heat_vaporization_J_per_kg
+    )
+
+    cooling_K = energy_loss_J_per_m2 / solid_heat_capacity_J_per_m2_K
+
+    return soil_temperature_top_layer_C - cooling_K
+
+
+@njit(cache=True, inline="always")
+def apply_advective_heat_transport(
+    soil_temperature_top_layer_C: np.float32,
+    infiltration_amount_m: np.float32,
+    rain_temperature_C: np.float32,
+    solid_heat_capacity_J_per_m2_K: np.float32,
+) -> np.float32:
+    """Apply advective heat transport from infiltrating rain to the top soil layer.
+
+    Heat is added/removed based on the temperature difference between rain (air temp) and soil.
+    Q = mass * cp * (T_rain - T_soil)
+    dT = Q / C_soil
+
+    Args:
+        soil_temperature_top_layer_C: Temperature of the top layer (C).
+        infiltration_amount_m: Amount of infiltration (m).
+        rain_temperature_C: Temperature of the rain (C), assumed equal to air temperature.
+        solid_heat_capacity_J_per_m2_K: Heat capacity of the top layer (J/m2/K).
+
+    Returns:
+        New temperature of top soil layer (C).
+    """
+    specific_heat_water_J_per_kg_K = np.float32(4186.0)
+    density_water_kg_per_m3 = np.float32(1000.0)
+
+    # Calculate energy flux into the soil layer: Q_advection (J/m2)
+    # The water enters at T_rain and thermalizes to T_soil.
+    # The energy change of the soil matrix is equal to the energy released by the water cooling down (or heating up).
+    # dU_soil = m_water * cp_water * (T_rain - T_soil)
+    # This energy dU_soil raises the temperature of the soil by dT = dU_soil / C_soil
+
+    energy_added_J_per_m2 = (
+        infiltration_amount_m
+        * density_water_kg_per_m3
+        * specific_heat_water_J_per_kg_K
+        * (rain_temperature_C - soil_temperature_top_layer_C)
+    )
+
+    temperature_change_K = energy_added_J_per_m2 / solid_heat_capacity_J_per_m2_K
+
+    return soil_temperature_top_layer_C + temperature_change_K
+
+
 @njit(cache=True)
 def solve_soil_temperature_column(
     soil_temperatures_C: np.ndarray,

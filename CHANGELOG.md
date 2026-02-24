@@ -30,6 +30,7 @@
 - Add heat conductivity to deeper soil layers (still missing influence of water).
 - Consider soil heat flux in pennmann-monteith.
 - Turn of sensible and turbulent heat fluxes in case there is snow.
+- Include evaporative cooling and advective heat transport from rainfall. 
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`

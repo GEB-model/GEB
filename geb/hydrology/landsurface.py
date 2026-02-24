@@ -41,6 +41,8 @@ from .potential_evapotranspiration import (
 from .snow_glaciers import snow_model
 from .soil import (
     add_water_to_topwater_and_evaporate_open_water,
+    apply_advective_heat_transport,
+    apply_evaporative_cooling,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_bubbling_pressure,
     get_heat_capacity_solid_fraction,
@@ -475,6 +477,15 @@ def land_surface_model(
             runoff_m[hour, i] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
 
+            # Apply advective heat transport from infiltrating rain
+            # We assume rain temperature is equal to air temperature
+            soil_temperature_C[0, i] = apply_advective_heat_transport(
+                soil_temperature_top_layer_C=soil_temperature_C[0, i],
+                infiltration_amount_m=infiltration_amount,
+                rain_temperature_C=tas_C,
+                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0, i],
+            )
+
             bottom_layer = N_SOIL_LAYERS - 1  # ty: ignore[unresolved-reference]
 
             psi: np.float32
@@ -674,7 +685,7 @@ def land_surface_model(
             transpiration_m[i] += transpiration_m_cell_hour
 
             # soil moisture is updated in place
-            bare_soil_evaporation[i] += calculate_bare_soil_evaporation(
+            bare_soil_evaporation_m_cell_hour = calculate_bare_soil_evaporation(
                 soil_is_frozen=soil_is_frozen,
                 land_use_type=land_use_type[i],
                 potential_bare_soil_evaporation_m=potential_bare_soil_evaporation_m,
@@ -682,6 +693,13 @@ def land_surface_model(
                 w_m=w[:, i],
                 wres_m=wres[:, i],
                 unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity_m_per_hour,
+            )
+            bare_soil_evaporation[i] += bare_soil_evaporation_m_cell_hour
+
+            soil_temperature_C[0, i] = apply_evaporative_cooling(
+                soil_temperature_top_layer_C=soil_temperature_C[0, i],
+                evaporation_m=bare_soil_evaporation_m_cell_hour,
+                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0, i],
             )
 
         snow_water_equivalent_m[i] = snow_water_equivalent_m_cell

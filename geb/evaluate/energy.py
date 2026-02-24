@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
@@ -62,6 +63,7 @@ class Energy:
 
         fig, ax = plt.subplots(figsize=(30, 6))
 
+        colors = plt.get_cmap("viridis")(np.linspace(0, 1, 6))
         for layer in range(6):
             energy_balance_soil_layer_file = (
                 report_dir / f"_energy_balance_soil_temperature_layer_{layer}_C.csv"
@@ -75,7 +77,7 @@ class Energy:
                 energy_balance_soil_layer_file, index_col=0, parse_dates=True
             )
             df[f"_energy_balance_soil_temperature_layer_{layer}_C"].plot(
-                ax=ax, label=f"Layer {layer + 1}"
+                ax=ax, label=f"Layer {layer + 1}", color=colors[layer]
             )  # This will plot the time series of the soil temperature for this layer
 
         ax.set_xlim(df.index[0], df.index[-1])
@@ -91,7 +93,7 @@ class Energy:
         energy_plot_folder = self.evaluator.output_folder_evaluate / "energy"
         energy_plot_folder.mkdir(parents=True, exist_ok=True)
 
-        output_file = energy_plot_folder / f"soil_temperature_{run_name}.svg"
+        output_file = energy_plot_folder / f"soil_temperature.svg"
         plt.savefig(output_file)
         plt.close()
 
