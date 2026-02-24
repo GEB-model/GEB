@@ -776,7 +776,7 @@ class Floods(Module):
             / "report"
             / "spinup"
             / "hydrology.routing"
-            / "discharge_daily.zarr"
+            / "discharge_hourly.zarr"
         )
 
         start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)

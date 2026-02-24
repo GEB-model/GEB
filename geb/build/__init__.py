@@ -491,118 +491,115 @@ def cluster_subbasins_by_area_and_proximity(
     logger.info("Setting up lazy adjacency computation...")
     adjacency_cache = {}
 
+    # Fast distance lookup using numpy
+    def fast_distance(
+        subbasin1: int,
+        subbasin2: int,
+        subbasin_to_idx: dict[int, int],
+        coords_array: npt.NDArray[np.float64],
+    ) -> float:
+        """Fast distance calculation using pre-computed arrays.
 
-# Fast distance lookup using numpy
-def fast_distance(
-    subbasin1: int,
-    subbasin2: int,
-    subbasin_to_idx: dict[int, int],
-    coords_array: npt.NDArray[np.float64],
-) -> float:
-    """Fast distance calculation using pre-computed arrays.
+        Args:
+            subbasin1: COMID of the first subbasin.
+            subbasin2: COMID of the second subbasin.
+            subbasin_to_idx: Mapping from COMID to row index in coords_array.
+            coords_array: Nx2 array with centroid coordinates for each subbasin.
 
-    Args:
-        subbasin1: COMID of the first subbasin.
-        subbasin2: COMID of the second subbasin.
-        subbasin_to_idx: Mapping from COMID to row index in coords_array.
-        coords_array: Nx2 array with centroid coordinates for each subbasin.
+        Returns:
+            Euclidean distance between the two subbasin centroids.
+        """
+        idx1 = subbasin_to_idx[subbasin1]
+        idx2 = subbasin_to_idx[subbasin2]
+        vec1 = coords_array[idx1]
+        vec2 = coords_array[idx2]
+        # compute euclidean distance and return as Python float
+        return float(np.linalg.norm(vec1 - vec2))
 
-    Returns:
-        Euclidean distance between the two subbasin centroids.
-    """
-    idx1 = subbasin_to_idx[subbasin1]
-    idx2 = subbasin_to_idx[subbasin2]
-    vec1 = coords_array[idx1]
-    vec2 = coords_array[idx2]
-    # compute euclidean distance and return as Python float
-    return float(np.linalg.norm(vec1 - vec2))
+    def find_nearest_basins(
+        center_subbasin: int,
+        candidates: set[int],
+        max_distance: float,
+        subbasin_to_idx: dict[int, int],
+        coords_array: npt.NDArray[np.float64],
+    ) -> list[tuple[int, float]]:
+        """Find all basins within max_distance from center, sorted by distance.
 
+        Args:
+            center_subbasin: COMID of the center subbasin.
+            candidates: Set of candidate COMID values to search.
+            max_distance: Maximum distance (in degrees) to include.
+            subbasin_to_idx: Mapping from COMID to row index in coords_array.
+            coords_array: Nx2 array with centroid coordinates for each subbasin.
 
-def find_nearest_basins(
-    center_subbasin: int,
-    candidates: set[int],
-    max_distance: float,
-    subbasin_to_idx: dict[int, int],
-    coords_array: npt.NDArray[np.float64],
-) -> list[tuple[int, float]]:
-    """Find all basins within max_distance from center, sorted by distance.
+        Returns:
+            List[tuple[int, float]]: A list of tuples (COMID, distance) for candidates
+            within max_distance, sorted by ascending distance.
+        """
+        if not candidates:
+            return []
 
-    Args:
-        center_subbasin: COMID of the center subbasin.
-        candidates: Set of candidate COMID values to search.
-        max_distance: Maximum distance (in degrees) to include.
-        subbasin_to_idx: Mapping from COMID to row index in coords_array.
-        coords_array: Nx2 array with centroid coordinates for each subbasin.
+        center_idx = subbasin_to_idx[center_subbasin]
+        center_coords = coords_array[center_idx]
 
-    Returns:
-        List[tuple[int, float]]: A list of tuples (COMID, distance) for candidates
-        within max_distance, sorted by ascending distance.
-    """
-    if not candidates:
-        return []
+        # Vectorized distance calculation for all candidates
+        candidate_list = list(candidates)
+        candidate_indices = [subbasin_to_idx[cid] for cid in candidate_list]
+        candidate_coords = coords_array[candidate_indices]
 
-    center_idx = subbasin_to_idx[center_subbasin]
-    center_coords = coords_array[center_idx]
+        # Calculate distances using broadcasting
+        diffs = candidate_coords - center_coords
+        distances = np.sqrt(np.sum(diffs * diffs, axis=1))
 
-    # Vectorized distance calculation for all candidates
-    candidate_list = list(candidates)
-    candidate_indices = [subbasin_to_idx[cid] for cid in candidate_list]
-    candidate_coords = coords_array[candidate_indices]
+        # Filter by distance and build result list
+        valid_mask = distances <= max_distance
+        result = [
+            (candidate_list[i], float(distances[i]))
+            for i in range(len(candidate_list))
+            if valid_mask[i]
+        ]
 
-    # Calculate distances using broadcasting
-    diffs = candidate_coords - center_coords
-    distances = np.sqrt(np.sum(diffs * diffs, axis=1))
+        # Sort by ascending distance
+        result.sort(key=lambda x: x[1])
+        return result
 
-    # Filter by distance and build result list
-    valid_mask = distances <= max_distance
-    result = [
-        (candidate_list[i], float(distances[i]))
-        for i in range(len(candidate_list))
-        if valid_mask[i]
-    ]
+    def get_adjacent_basins(
+        subbasin_id: int,
+        adjacency_cache: dict,
+        subbasins: gpd.GeoDataFrame,
+        subbasins_sindex: Any,
+        subbasin_ids_set: set[int],
+    ) -> set[int]:
+        """Get adjacent basins for a subbasin, with caching.
 
-    # Sort by ascending distance
-    result.sort(key=lambda x: x[1])
-    return result
+        Args:
+            subbasin_id: The COMID of the subbasin to find adjacent basins for.
+            adjacency_cache: Cache dictionary to store computed adjacency sets.
+            subbasins: GeoDataFrame with subbasin geometries indexed by COMID.
+            subbasins_sindex: Spatial index for subbasins for fast intersection queries.
+            subbasin_ids_set: Set of COMIDs that are in the working set.
 
+        Returns:
+            Set of adjacent subbasin COMIDs.
+        """
+        # Return cached result if available
+        if subbasin_id in adjacency_cache:
+            return adjacency_cache[subbasin_id]
 
-def get_adjacent_basins(
-    subbasin_id: int,
-    adjacency_cache: dict,
-    subbasins: gpd.GeoDataFrame,
-    subbasins_sindex: Any,
-    subbasin_ids_set: set[int],
-) -> set[int]:
-    """Get adjacent basins for a subbasin, with caching.
+        # Find adjacent basins by checking which basins touch the current basin
+        adjacent = set()
+        geom = subbasins.loc[subbasin_id].geometry
+        possible_matches_idx = list(subbasins_sindex.intersection(geom.bounds))
 
-    Args:
-        subbasin_id: The COMID of the subbasin to find adjacent basins for.
-        adjacency_cache: Cache dictionary to store computed adjacency sets.
-        subbasins: GeoDataFrame with subbasin geometries indexed by COMID.
-        subbasins_sindex: Spatial index for subbasins for fast intersection queries.
-        subbasin_ids_set: Set of COMIDs that are in the working set.
+        # Only check subbasins that are in our working set
+        for idx in possible_matches_idx:
+            neighbor_id = subbasins.index[idx]
+            if neighbor_id != subbasin_id and neighbor_id in subbasin_ids_set:
+                if geom.touches(subbasins.loc[neighbor_id].geometry):
+                    adjacent.add(neighbor_id)
 
-    Returns:
-        Set of adjacent subbasin COMIDs.
-    """
-    # Return cached result if available (major performance improvement)
-    if subbasin_id in adjacency_cache:
-        return adjacency_cache[subbasin_id]
-
-    # This should rarely happen now since we pre-compute adjacency
-    adjacent = set()
-    geom = subbasins.loc[subbasin_id].geometry
-    possible_matches_idx = list(subbasins_sindex.intersection(geom.bounds))
-
-    # Only check subbasins that are in our working set
-    for idx in possible_matches_idx:
-        neighbor_id = subbasins.index[idx]
-        if neighbor_id != subbasin_id and neighbor_id in subbasin_ids_set:
-            if geom.touches(subbasins.loc[neighbor_id].geometry):
-                adjacent.add(neighbor_id)
-
-    adjacency_cache[subbasin_id] = adjacent
-    return adjacent
+        adjacency_cache[subbasin_id] = adjacent
+        return adjacent
 
 
 def calculate_bbox_efficiency(
@@ -833,7 +830,7 @@ def cluster_subbasins_following_coastline(
             f"\nCluster {cluster_number}: {len(remaining_outlets)} outlets remaining ({progress_pct:.1f}% complete)"
         )
 
-        # Step 1: Select starting outlet for this cluster
+        # Select starting outlet for this cluster
         if cluster_number == 1:
             # First cluster: start from top-right corner (highest lat, then easternmost lon)
             outlet_coords = [
@@ -882,7 +879,7 @@ def cluster_subbasins_following_coastline(
         remaining_outlets.remove(start_outlet)
         logger.info(f"  Initial area: {current_area:,.0f} km²")
 
-        # Step 2: Grow cluster by adding nearest outlets until target area reached
+        # Grow cluster by adding nearest outlets until target area reached
         while current_area < target_area_km2 and remaining_outlets:
             # Check if current cluster already has poor bounding box efficiency
             current_efficiency = calculate_bbox_efficiency(
@@ -994,10 +991,6 @@ def cluster_subbasins_following_coastline(
     MERGE_DISTANCE_KM = 100.0
     SMALL_CLUSTER_THRESHOLD_PERCENT = 0.10  # 10% of target area
 
-    # Post-processing configuration
-    MERGE_DISTANCE_KM = 100.0
-    SMALL_CLUSTER_THRESHOLD_PERCENT = 0.10  # 10% of target area
-
     logger.info("\n=== POST-PROCESSING ===")
     logger.info(f"Merge distance: {MERGE_DISTANCE_KM:.0f} km")
     logger.info(
@@ -1066,7 +1059,6 @@ def cluster_subbasins_following_coastline(
             # Simple rule: if cluster is <10% of target, ALWAYS merge with nearest neighbor
             # No checks - small clusters must be merged to avoid inefficient tiny runs
             if nearest_cluster_idx is not None:
-                # CRITICAL: Use CURRENT area of target cluster (may have been updated by previous merges)
                 target_area = cluster_areas[nearest_cluster_idx]
                 merged_area = target_area + small_area
 
@@ -1076,7 +1068,7 @@ def cluster_subbasins_following_coastline(
                     f"into cluster {nearest_cluster_idx} (distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km²)"
                 )
 
-                # CRITICAL: Update both the cluster list AND the cluster_areas dictionary
+                # Update both the cluster list AND the cluster_areas dictionary
                 clusters[nearest_cluster_idx].extend(small_cluster)
                 cluster_areas[nearest_cluster_idx] = merged_area
                 clusters_to_remove.add(small_idx)
@@ -1219,14 +1211,9 @@ def save_clusters_to_geoparquet(
     print("Creating GeoDataFrame...")
     cluster_gdf = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
 
-    # Save to geoparquet with optimized settings
+    # Save to geoparquet
     print("Saving to geoparquet...")
-    cluster_gdf.to_parquet(
-        output_path,
-        engine="pyarrow",
-        compression="gzip",
-        compression_level=6,  # Lower compression for faster write
-    )
+    write_geom(cluster_gdf, output_path)
     print(
         f"Saved {len(cluster_data)} subbasins in {len(clusters)} clusters to {output_path}"
     )
@@ -1257,7 +1244,7 @@ def create_cluster_visualization_map(
 
     print(f"Creating cluster visualization map: {output_path}")
 
-    # Step 1: Get upstream subbasins for each cluster (with caching for speed)
+    # Get upstream subbasins for each cluster (with caching for speed)
     print("Computing upstream subbasins for all clusters (with caching)...")
 
     # Build a cache of upstream subbasins to avoid redundant networkx.ancestors calls
@@ -1285,34 +1272,30 @@ def create_cluster_visualization_map(
             cluster_all_subbasins.update(get_all_upstream_cached(downstream_subbasin))
         all_cluster_subbasins.append(list(cluster_all_subbasins))
 
-    # Step 2: Load all geometries at once
-    all_unique_subbasins = set()
-    for cluster_subbasins in all_cluster_subbasins:
-        all_unique_subbasins.update(cluster_subbasins)
-
-    print(f"Loading geometries for {len(all_unique_subbasins)} unique subbasins...")
+    total_subbasin_count = sum(len(c) for c in all_cluster_subbasins)
+    print(f"Loading geometries for {total_subbasin_count} unique subbasins...")
     all_geometries = gpd.read_parquet(
         data_catalog.fetch("merit_basins_catchments").path,
-        filters=[("COMID", "in", list(all_unique_subbasins))],
+        filters=[("COMID", "in", [sid for c in all_cluster_subbasins for sid in c])],
         columns=["COMID", "geometry"],
     ).set_index("COMID")
 
-    # Step 2.5: Pre-simplify geometries for MUCH faster dissolving
+    # simplify geometries before plotting
     print(
         "Pre-simplifying geometries for faster dissolving (tolerance: 0.01° ≈ 1km)..."
     )
     all_geometries["geometry"] = all_geometries["geometry"].simplify(
         0.01, preserve_topology=True
     )
-    print("  Geometry complexity reduced significantly")
+    print("Geometry complexity reduced significantly")
 
-    # Step 3: Dissolve clusters sequentially (avoids pickling errors)
+    # Dissolve clusters sequentially to create merged boundaries for visualization
     print("Dissolving clusters into merged boundaries...")
 
     # Use a colormap with very distinct colors
-    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))
+    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))  # type: ignore[attr-defined]
     if len(clusters) > 20:
-        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))
+        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))  # type: ignore[attr-defined]
 
     # Process clusters sequentially
     merged_cluster_data = []
@@ -1375,11 +1358,10 @@ def create_cluster_visualization_map(
     # Convert to Web Mercator for contextily
     cluster_gdf_mercator = cluster_gdf.to_crs(epsg=3857)
 
-    # Create the plot with white background for clarity
-    fig, ax = plt.subplots(1, 1, figsize=figsize, facecolor="white")
-    ax.set_facecolor("white")
+    # Create the plot
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
 
-    # Plot each cluster with distinct colors and thick boundaries FIRST
+    # Plot each cluster with distinct colors and thick boundaries
     print("Plotting clusters...")
     for idx, row in cluster_gdf_mercator.iterrows():
         gpd.GeoSeries([row.geometry], crs=cluster_gdf_mercator.crs).plot(
@@ -1415,21 +1397,14 @@ def create_cluster_visualization_map(
 
     # Add background map AFTER plotting data (so axis limits are set)
     print("Adding background map...")
-    try:
-        ctx.add_basemap(
-            ax,
-            crs=cluster_gdf_mercator.crs,
-            source=ctx.providers.CartoDB.Positron,  # Light, clean background # ty:ignore[unresolved-attribute]
-            alpha=0.5,
-            zoom="auto",
-        )
-        print("  Added CartoDB Positron background")
-    except Exception as e:
-        print(f"  Could not add background: {e}")
-        # Set a light gray background if contextily fails
-        ax.set_facecolor("#F0F0F0")
-
-    # Customize the plot
+    ctx.add_basemap(
+        ax,
+        crs=cluster_gdf_mercator.crs,
+        source=ctx.providers.CartoDB.Positron,  # Light, clean background # ty:ignore[unresolved-attribute]
+        alpha=0.5,
+        zoom="auto",
+    )
+    print("  Added CartoDB Positron background")
     ax.set_title(
         f"Europe Basin Clusters - {len(clusters)} Clusters",
         fontsize=22,
@@ -1483,14 +1458,14 @@ def create_multi_basin_configs(
     clusters: list[list[int]],
     working_directory: Path,
     cluster_prefix: str = "cluster",
-    data_catalog: DataCatalog | None = None,
+    data_catalog: NewDataCatalog | None = None,
     river_graph: networkx.DiGraph | None = None,
 ) -> list[Path]:
     """Create separate config files and directories for each cluster of subbasins.
 
     Args:
         clusters: List of clusters, where each cluster is a list of COMID values.
-        working_directory: Working directory for the models (large_scale directory).
+        working_directory: Working directory for the models (init_multiple_dir).
         cluster_prefix: Prefix for cluster directory names.
         data_catalog: Data catalog for calculating basin areas (optional).
         river_graph: River graph for finding upstream subbasins (optional).
@@ -1500,22 +1475,22 @@ def create_multi_basin_configs(
     """
     print(f"Creating configuration files for {len(clusters)} clusters...")
 
-    # Create full build.yml in large_scale directory
-    print("Creating build.yml in large_scale directory...")
+    # Create full build.yml in init_multiple_dir directory
+    print("Creating build.yml in main init multiple directory...")
     build_config_path = working_directory / "build.yml"
     # Read build config from geul example and automatically copy it
     geul_build_path = GEB_PACKAGE_DIR / "examples" / "geul" / "build.yml"
 
     print(f"Reading build configuration from: {geul_build_path}")
 
-    # Copy geul build.yml content directly to large_scale build.yml
+    # Copy geul build.yml content directly to init_multiple_dir build.yml
     with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
         dst.write(src.read())
 
     print(f"Created build.yml in {working_directory}")
 
-    # Create model.yml in large_scale directory that inherits from reasonable default
-    print("Creating model.yml in large_scale directory...")
+    # Create model.yml in init_multiple_dir directory that inherits from reasonable default
+    print("Creating model.yml in init_multiple_dir directory...")
     model_config_path = working_directory / "model.yml"
 
     # Define the model configuration content with inheritance from reasonable default
@@ -1529,7 +1504,7 @@ def create_multi_basin_configs(
 
     cluster_directories = []
 
-    # Pre-calculate all basin areas at once if needed (major optimization)
+    # Pre-calculate all basin areas at once if needed
     basin_areas = {}
     if data_catalog is not None and river_graph is not None:
         print("Pre-calculating basin areas for all clusters...")
@@ -1574,7 +1549,7 @@ def create_multi_basin_configs(
         base_dir.mkdir(parents=True, exist_ok=True)
         cluster_directories.append(cluster_dir)
 
-        # Create build.yml with inheritance in base folder (inherit from large_scale build.yml)
+        # Create build.yml with inheritance in base folder (inherit from init_multiple_dir build.yml)
         build_config_path = base_dir / "build.yml"
 
         # Create the build configuration dictionary
@@ -1644,7 +1619,7 @@ def calculate_cluster_basin_area(
 
     # Load geometries for subbasins - only load geometry and area columns for performance
     cluster_geometries = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,
+        data_catalog.fetch("merit_basins_catchments").path,  # type: ignore[attr-defined]
         filters=[("COMID", "in", subbasins_to_merge)],
         columns=["COMID", "geometry"],  # Only load required columns
     ).set_index("COMID")
@@ -1689,7 +1664,7 @@ def save_clusters_as_merged_geometries(
         print("  Using optimized mode: simplify before dissolve (much faster)")
     print(f"  Buffer distance for merging polygons: {buffer_distance_km} km")
 
-    # Step 1: Pre-compute all upstream subbasins for all clusters using caching
+    # Pre-compute all upstream subbasins for all clusters using caching
     print("Pre-computing upstream subbasins for all clusters (with caching)...")
 
     # Build a cache of upstream subbasins to avoid redundant networkx.ancestors calls
@@ -1718,23 +1693,19 @@ def save_clusters_as_merged_geometries(
         all_cluster_subbasins.append(list(cluster_all_subbasins))
         print(f"  Cluster {cluster_idx}: {len(cluster_all_subbasins)} subbasins")
 
-    # Step 2: Load ALL geometries at once (single I/O operation)
-    all_unique_subbasins = set()
-    for cluster_subbasins in all_cluster_subbasins:
-        all_unique_subbasins.update(cluster_subbasins)
-
+    total_subbasin_count = sum(len(c) for c in all_cluster_subbasins)
     print(
-        f"Loading geometries for {len(all_unique_subbasins)} unique subbasins (single batch read)..."
+        f"Loading geometries for {total_subbasin_count} unique subbasins (single batch read)..."
     )
     all_geometries = gpd.read_parquet(
         data_catalog.fetch("merit_basins_catchments").path,
-        filters=[("COMID", "in", list(all_unique_subbasins))],
+        filters=[("COMID", "in", [sid for c in all_cluster_subbasins for sid in c])],
         columns=["COMID", "geometry"],  # Only load what we need
     ).set_index("COMID")
 
     # Optimization: Simplify geometries BEFORE dissolving (much faster)
     if pre_simplify:
-        simplify_tolerance = 0.01  # More aggressive: ~1km at equator (was 0.001 = 111m)
+        simplify_tolerance = 0.01  # ~1km at equator
         print(
             f"Pre-simplifying {len(all_geometries)} geometries (tolerance: {simplify_tolerance}° ≈ 1km)..."
         )
@@ -1743,7 +1714,7 @@ def save_clusters_as_merged_geometries(
         )
         print(f"  Geometry complexity reduced significantly for faster dissolving")
 
-    # Step 3: Process each cluster sequentially (optimized with pre-loaded geometries)
+    # Process each cluster sequentially (optimized with pre-loaded geometries)
     print(f"Processing {len(clusters)} clusters...")
     merged_cluster_data = []
 
@@ -2589,10 +2560,7 @@ class GEBModel(
         mask, ldd, ldd_elevation = clip_region(
             mask, ldd, ldd_elevation, align=30 / 60 / 60
         )
-        # mask = mask.load()
-        # mask1 = mask1.load()
-        # ldd_elevation = ldd_elevation.load()
-        # ldd = ldd.load()
+
         self.set_other(ldd_elevation, name="drainage/original_d8_elevation")
 
         ldd: xr.DataArray = xr.where(
@@ -2634,7 +2602,6 @@ class GEBModel(
             ftype="d8",
             transform=ldd.rio.transform(recalc=True),
             latlon=True,
-            # hydrography is specified in latlon
         )
 
         STUDY_AREA_OUTFLOW: Literal[1] = 1

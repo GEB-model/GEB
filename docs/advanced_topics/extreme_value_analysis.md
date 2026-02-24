@@ -58,9 +58,7 @@ $l_1$ (the sample mean of exceedances) and $l_2$ (related to scale/dispersion) a
 
 The shape parameter is notoriously difficult to estimate accurately. To achieve a stable and physically realistic fit for $\xi$, one typically needs a very long time series—often on the order of **10,000 model-years** of extreme events. Since most hydrological simulations cover decades rather than millennia, estimating $\xi$ from the data can lead to high variance and unstable return levels.
 
-To address this, GEB allows users to set a **pre-defined shape parameter**. By default, GEB fixes $\xi = 0$. This forces the tail to follow an **Exponential distribution** (the GPD equivalent of the Gumbel distribution for block maxima). This approach:
-1. **Increases Stability**: Reduces the number of free parameters, making the fit much more robust for shorter time series.
-2. **Standard Practice**: The Gumbel/Exponential assumption is a widely accepted standard in many regional frequency analysis applications unless there is strong evidence for heavy tails.
+To address this, GEB allows users to set a **pre-defined shape parameter**. By default, GEB fixes $\xi = 0$. This forces the tail to follow an exponential distribution (the GPD equivalent of the Gumbel distribution for block maxima). This reduces the number of free parameters, making the fit much more robust for shorter time series.
 
 If a dataset is long enough or there is a physical reason to expect a specific tail behavior (e.g., a heavy tail in specific mountainous regions), the fixed shape can be overridden in the configuration or set to `null` to let the model fit it automatically.
 

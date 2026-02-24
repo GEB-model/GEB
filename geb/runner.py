@@ -890,6 +890,7 @@ def init_multiple_fn(
     save_geoparquet: Path | None,
     save_map: str | Path | None,
     ocean_outlets_only: bool = False,
+    init_multiple_dir: str | Path = "large_scale",
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -908,6 +909,7 @@ def init_multiple_fn(
         save_geoparquet: Path to save clusters as geoparquet file. If None, no file is saved.
         save_map: Path to save visualization map as PNG file. If None, no map is created.
         ocean_outlets_only: If True, only consider subbasins that outlet to the ocean when clustering.
+        init_multiple_dir: Name of the subdirectory within the working directory where the multiple models will be created.
 
     Raises:
         FileExistsError: If directories already exist and overwrite is False.
@@ -931,19 +933,19 @@ def init_multiple_fn(
     working_directory: Path = Path(working_directory)
     if region_shapefile:
         region_shapefile: Path = Path(region_shapefile)
-    # Create the models/large_scale directory structure
-    large_scale_dir = working_directory / "large_scale"
-    if not large_scale_dir.exists():
-        large_scale_dir.mkdir(parents=True, exist_ok=True)
+    # Create the models/init_multiple_dir directory structure
+    init_multiple_dir = working_directory / init_multiple_dir
+    if not init_multiple_dir.exists():
+        init_multiple_dir.mkdir(parents=True, exist_ok=True)
 
     # create logger
     logger = create_logger(working_directory / "init_multiple.log")
 
-    # Always create geoparquet and map files in large_scale directory if not specified
+    # Always create geoparquet and map files in init_multiple_dir directory if not specified
     if save_geoparquet is None:
-        save_geoparquet = large_scale_dir / f"{cluster_prefix}_clusters.geoparquet"
+        save_geoparquet = init_multiple_dir / f"{cluster_prefix}_clusters.geoparquet"
     if save_map is None:
-        save_map = large_scale_dir / f"{cluster_prefix}_clusters_map.png"
+        save_map = init_multiple_dir / f"{cluster_prefix}_clusters_map.png"
 
     # Parse geometry bounds
     try:
@@ -1007,7 +1009,7 @@ def init_multiple_fn(
     # Check for existing directories if not overwriting
     if not overwrite:
         for i in range(len(clusters)):
-            cluster_dir = large_scale_dir / f"{cluster_prefix}_{i:03d}"
+            cluster_dir = init_multiple_dir / f"{cluster_prefix}_{i:03d}"
             if cluster_dir.exists():
                 raise FileExistsError(
                     f"Cluster directory {cluster_dir} already exists. Remove --no-overwrite flag to overwrite."
@@ -1024,7 +1026,7 @@ def init_multiple_fn(
     # Create cluster configurations
     cluster_directories = create_multi_basin_configs(
         clusters=clusters,
-        working_directory=large_scale_dir,
+        working_directory=init_multiple_dir,
         cluster_prefix=cluster_prefix,
     )
 
@@ -1048,7 +1050,6 @@ def init_multiple_fn(
         river_graph=river_graph,
         output_path=merged_basins_path,
         cluster_prefix=cluster_prefix,
-        include_upstream=True,  # Include all upstream subbasins in merged geometry
     )
 
     logger.info(f"Creating visualization map: {save_map}")
@@ -1056,6 +1057,7 @@ def init_multiple_fn(
     create_cluster_visualization_map(
         clusters=clusters,
         data_catalog=data_catalog_instance,
+        river_graph=river_graph,
         output_path=save_map,
         cluster_prefix=cluster_prefix,
     )
@@ -1064,10 +1066,10 @@ def init_multiple_fn(
         f"Successfully created {len(cluster_directories)} model configurations:"
     )
     for cluster_dir in cluster_directories:
-        logger.info(f"  {cluster_dir.relative_to(large_scale_dir)}")
+        logger.info(f"  {cluster_dir.relative_to(init_multiple_dir)}")
 
     logger.info("To build all models, run:")
-    logger.info(f"  cd {large_scale_dir}")
+    logger.info(f"  cd {init_multiple_dir}")
     logger.info(f"  for dir in {cluster_prefix}_*/; do")
     logger.info(f"    echo 'Building model in $dir'")
     logger.info(f"    cd $dir && geb build && cd ..")

@@ -959,18 +959,12 @@ class Hydrography(BuildModelBase):
             name="coastal/global_ocean_mean_dynamic_topography",
         )
 
-    def create_low_elevation_coastal_zone_mask(self) -> gpd.GeoDataFrame | None:
+    def create_low_elevation_coastal_zone_mask(self) -> gpd.GeoDataFrame:
         """creates the low elevation coastal zone (LECZ) mask for sfincs models.
 
         Returns:
             A GeoDataFrame containing the low elevation coastal zone mask.
         """
-        if not self.geom["routing/subbasins"]["is_coastal"].any():
-            self.logger.info(
-                "No coastal basins found, skipping setup_low_elevation_coastal_zone_mask"
-            )
-            return
-
         # load low elevation coastal zone mask
         low_elevation_coastal_zone = self.other[
             "landsurface/low_elevation_coastal_zone"
@@ -1439,7 +1433,7 @@ class Hydrography(BuildModelBase):
         )
 
         # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()
+        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[possibly-missing-attribute]
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}

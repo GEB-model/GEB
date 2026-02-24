@@ -814,15 +814,16 @@ class Crops(BuildModelBase):
             donor_data = donor_data.loc[
                 (slice(None), slice(self.start_date.year, self.end_date.year)), :
             ]
-
+            
+            # here, also countries that are not in the trade regions (e.g. Kosovo) are included (in self.geom["regions"]) and found a donor for (in the setup_donor_countries function)
             data = donate_and_receive_crop_prices(
                 donor_data,
                 unique_regions,
                 TRADE_REGIONS,
                 self.data_catalog,
                 self.geom["global_countries"],
-                self.geom["regions"], # here, also countries that are not in the trade regions (e.g. Kosovo) are included and found a donor for (in the setup_donor_countries function)
-            )
+                self.geom["regions"], 
+            ) 
 
             # exand data to include all data empty rows from start to end year
             data = data.reindex(
