@@ -5,150 +5,21 @@ from __future__ import annotations
 import os
 from io import StringIO
 from pathlib import Path
-from typing import Literal
 
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shapely
-import xarray as xr
-from shapely.ops import nearest_points
 from tqdm import tqdm
 
 from geb.build.methods import build_method
-from geb.workflows.io import get_window
+from geb.build.workflows.river_snapping import (
+    plot_snapping,
+    snap_point_to_river_network,
+)
 from geb.workflows.timeseries import regularize_discharge_timeseries
 
 from .base import BuildModelBase
-
-
-def plot_snapping(
-    station_id: int | str,
-    output_folder: Path,
-    rivers: gpd.GeoDataFrame,
-    upstream_area: xr.DataArray,
-    discharge_observations_coords: tuple[float, float],
-    closest_point_coords: tuple[float, float],
-    closest_river_segment: gpd.GeoDataFrame,
-    grid_pixel_coords: tuple[float, float],
-) -> None:
-    """Create and save a map visualizing gauge snapping results.
-
-    This function produces a map centered on the observed gauge location that shows:
-    - the original gauge location,
-    - the closest point on the river centerline,
-    - the selected grid pixel,
-    - the upstream area raster (within the map extent), and
-    - the closest river segment.
-
-    The resulting figure is saved as a PNG file named "snapping_discharge_{station_id}.png"
-    inside the provided output_folder.
-
-    Args:
-        station_id: Identifier or name of the station used in the plot title and output filename.
-        output_folder: Path to the directory where the PNG file will be saved.
-        rivers: GeoDataFrame containing river centerlines used for plotting.
-        upstream_area: xarray DataArray with upstream area values used for background plotting.
-        discharge_observations_coords: Tuple (lon, lat) of the original observed station coordinates.
-        closest_point_coords: Tuple (lon, lat) of the closest point on the river centerline to the station.
-        closest_river_segment: GeoDataFrame containing the selected river segment to highlight.
-        grid_pixel_coords: Tuple (lon, lat) of the snapped grid pixel coordinates.
-
-    """
-    fig, ax = plt.subplots(
-        subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
-    )
-    ax.coastlines()  # ty:ignore[unresolved-attribute]
-    ax.add_feature(cfeature.BORDERS)  # ty:ignore[unresolved-attribute]
-    ax.add_feature(cfeature.LAND)  # ty:ignore[unresolved-attribute]
-    ax.add_feature(cfeature.OCEAN)  # ty:ignore[unresolved-attribute]
-    ax.add_feature(cfeature.LAKES)  # ty:ignore[unresolved-attribute]
-
-    # Set the extent to zoom in around the gauge location
-    buffer = 0.05  # Adjust this value to control the zoom level
-
-    xmin = discharge_observations_coords[0] - buffer
-    xmax = discharge_observations_coords[0] + buffer
-    ymin = discharge_observations_coords[1] - buffer
-    ymax = discharge_observations_coords[1] + buffer
-
-    ax.set_extent(  # ty:ignore[unresolved-attribute]
-        [
-            xmin,
-            xmax,
-            ymin,
-            ymax,
-        ],
-        crs=ccrs.PlateCarree(),
-    )
-
-    ax.scatter(
-        discharge_observations_coords[0],
-        discharge_observations_coords[1],
-        color="red",
-        marker="o",
-        s=30,
-        label="Original gauge",
-        zorder=3,
-    )
-    ax.scatter(
-        closest_point_coords[0],
-        closest_point_coords[1],
-        color="black",
-        marker="o",
-        s=30,
-        label="Closest point to river",
-        zorder=3,
-    )
-    ax.scatter(
-        grid_pixel_coords[0],
-        grid_pixel_coords[1],
-        color="blue",
-        marker="o",
-        s=30,
-        label="Grid pixel",
-        zorder=3,
-    )
-
-    # Select the upstream area within the extent of the plot
-    upstream_area_within_extent = upstream_area.isel(
-        get_window(
-            upstream_area.x,
-            upstream_area.y,
-            bounds=(xmin, ymin, xmax, ymax),
-            buffer=1,
-            raise_on_buffer_out_of_bounds=False,
-            raise_on_out_of_bounds=False,
-        )
-    )
-
-    upstream_area_within_extent.plot(
-        ax=ax,
-        cmap="viridis",
-        cbar_kwargs={"label": "Upstream area [m2]"},
-        zorder=0,
-        alpha=1,
-    )  # ty:ignore[missing-argument]
-    rivers.plot(ax=ax, color="blue", linewidth=1)
-    closest_river_segment.plot(
-        ax=ax, color="green", linewidth=3, label="Closest river segment"
-    )
-
-    ax.set_title("Upstream area grid and gauge snapping for %s" % station_id)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    ax.legend()
-    plt.savefig(
-        output_folder / f"snapping_discharge_{station_id}.png",
-        dpi=300,
-        bbox_inches="tight",
-    )
-    # plt.show()
-    plt.close()
-    plt.close()
 
 
 def process_station_data(
@@ -214,77 +85,6 @@ def process_station_data(
     return Q_station, (station_coords[0], station_coords[1])
 
 
-def get_distance_to_stations(
-    rivers: shapely.geometry.base.BaseGeometry,
-    discharge_observations_location: gpd.GeoDataFrame,
-) -> float:
-    """This function returns the distance of each river section to the station.
-
-    Args:
-        rivers: A row of the rivers GeoDataFrame (a shapely geometry object).
-        discharge_observations_location: A GeoDataFrame containing the station location as a Point geometry.
-
-    Returns:
-        Distance in degrees between the river section and the station.
-    """
-    return float(rivers.distance(discharge_observations_location).values.item())
-
-
-def select_river_segment(
-    max_uparea_difference_ratio: float,
-    max_spatial_difference_degrees: float,
-    discharge_observations_uparea_m2: float,
-    rivers_sorted: gpd.GeoDataFrame,
-) -> gpd.GeoDataFrame | Literal[False]:
-    """This function selects the closest river segment to the discharge observations station based on the spatial distance.
-
-    It returns false if the spatial distance is larger than the max_spatial_difference_degrees.
-    If the difference between the upstream area from MERIT (from the river centerlines)
-    and the discharge observations upstream area is larger than the max_uparea_difference_ratio,
-    it will select the closest river segment within the correct upstream area range.
-
-    Args:
-        max_uparea_difference_ratio: The maximum allowed difference in upstream area between the discharge observations station and the GEB river segment, as a ratio of the discharge observations upstream area.
-        max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the discharge observations station and the GEB river segment.
-        discharge_observations_uparea_m2 : Upstream area reported for the observational station (in m2). Used to compare against river segment upstream areas to enforce the upstream area ratio criterion.
-        rivers_sorted: GeoDataFrame of river segments sorted by spatial distance to the station; must contain the 'uparea_m2' attribute and will be filtered/queried to find the matching segment.
-
-    Returns:
-        The closest river segment to the discharge observations station that meets the criteria or False if no segment is found.
-    """
-    if np.isnan(
-        discharge_observations_uparea_m2
-    ):  # if discharge observations upstream area is NaN, only just select the closest river segment
-        closest_river_segment = rivers_sorted.head(1)
-    else:
-        # add upstream area criteria
-        upstream_area_diff = (
-            max_uparea_difference_ratio * discharge_observations_uparea_m2
-        )  # 30% difference
-        closest_river_segment = rivers_sorted[
-            (
-                rivers_sorted["uparea_m2"]
-                > (discharge_observations_uparea_m2 - upstream_area_diff)
-            )
-            & (
-                rivers_sorted["uparea_m2"]
-                < (discharge_observations_uparea_m2 + upstream_area_diff)
-            )
-        ].head(1)
-
-        if closest_river_segment.empty:
-            return False  # no river segment found within the upstream area criteria
-
-        if (
-            closest_river_segment.iloc[0].station_distance
-            > max_spatial_difference_degrees
-        ):
-            # No river segment found within the max_spatial_difference_degrees, returning with False
-            return False
-
-    return closest_river_segment
-
-
 class Observations(BuildModelBase):
     """Collects, parses and processes observational data for model evaluation."""
 
@@ -311,10 +111,12 @@ class Observations(BuildModelBase):
             custom_river_stations: Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
         """
         # load data
-        upstream_area = self.grid[
+        upstream_area_grid = self.grid[
             "routing/upstream_area_m2"
         ].compute()  # we need to use this one many times, so we compute it once
-        upstream_area_subgrid = self.other["drainage/original_d8_upstream_area_m2"]
+        upstream_area_subgrid = self.other[
+            "drainage/original_d8_upstream_area_m2"
+        ].compute()
         rivers = self.geom["routing/rivers"]
         region_mask = self.geom["mask"]
 
@@ -417,7 +219,7 @@ class Observations(BuildModelBase):
 
         # Filter metadata by region
         obs_metadata = obs_metadata[
-            obs_metadata.geometry.within(region_mask.geometry.unary_union)
+            obs_metadata.geometry.within(region_mask.geometry.union_all())
         ]
 
         if obs_metadata.empty:
@@ -476,11 +278,6 @@ class Observations(BuildModelBase):
             station_name = station_row["discharge_observations_station_name"]
             station_coords = (station_row["x"], station_row["y"])
 
-            discharge_observations_location = gpd.GeoDataFrame(
-                geometry=[shapely.geometry.Point(station_coords)],
-                crs=rivers.crs,
-            )
-
             discharge_observations_uparea_m2 = station_row[
                 "discharge_observations_upstream_area_m2"
             ]
@@ -488,103 +285,27 @@ class Observations(BuildModelBase):
                 "discharge_observations_river_name"
             ]
 
-            # find river section closest
-            rivers["station_distance"] = rivers.geometry.apply(
-                lambda geom: get_distance_to_stations(
-                    geom, discharge_observations_location
-                )
-            )
-            rivers_sorted = rivers.sort_values(by="station_distance")
-
-            closest_river_segment = select_river_segment(
+            # Snap station to river network
+            snap_results = snap_point_to_river_network(
+                point=shapely.geometry.Point(station_coords),
+                rivers=rivers,
+                upstream_area_grid=upstream_area_grid,
+                upstream_area_subgrid=upstream_area_subgrid,
+                upstream_area_m2=discharge_observations_uparea_m2,
                 max_uparea_difference_ratio=max_uparea_difference_ratio,
                 max_spatial_difference_degrees=max_spatial_difference_degrees,
-                discharge_observations_uparea_m2=discharge_observations_uparea_m2,
-                rivers_sorted=rivers_sorted,
             )
-            if closest_river_segment is False:
+
+            if snap_results is None:
                 self.logger.warning(
-                    f"No river segment found within the max_uparea_difference_ratio ({max_uparea_difference_ratio}) and max_spatial_difference_degrees ({max_spatial_difference_degrees}) for station {station_name} with upstream area {discharge_observations_uparea_m2} m2. Skipping this station."
+                    f"No river segment found within criteria for station {station_name} with upstream area {discharge_observations_uparea_m2} m2. Skipping this station."
                 )
                 continue
 
-            closest_river_segment_linestring = shapely.geometry.LineString(
-                closest_river_segment.iloc[0].geometry
-            )
-            closest_point_on_riverline = nearest_points(
-                discharge_observations_location, closest_river_segment_linestring
-            )[1].geometry.iloc[0]  # find closest point to this nearest river segment
-
-            # Read the upstream area from the subgrid at this point
-            selected_subgrid_pixel = upstream_area_subgrid.sel(
-                x=closest_point_on_riverline.x,
-                y=closest_point_on_riverline.y,
-                method="nearest",
-            )
-            GEB_upstream_area_from_subgrid = (
-                selected_subgrid_pixel.values
-            )  # get the value of the selected pixel
-
-            # Find the closest pixel in the river network in the low-res grid
-            selected_grid_pixel = upstream_area.sel(
-                x=selected_subgrid_pixel.x,
-                y=selected_subgrid_pixel.y,
-                method="nearest",
-            )
-
-            # get the x and y of the selected_grid_pixel
-            id_x = upstream_area.x.values.tolist().index(selected_grid_pixel.x.values)
-            id_y = upstream_area.y.values.tolist().index(selected_grid_pixel.y.values)
-            array = np.array(
-                [id_x, id_y]
-            )  # create an array with the x and y index of the selected_grid_pixel
-
-            # select the closest pixel in the low-res river network
-            xy_tuples = closest_river_segment.iloc[
-                0
-            ][
-                "hydrography_xy"
-            ]  # get the xy of the river pixels of the grid (already prepared and stored as hydrography_xy)
-
-            if xy_tuples.size == 0:
-                self.logger.warning(
-                    f"River not found in hydrography_xy for station {station_name} with river id {closest_river_segment.iloc[0].name}. Skipping this station."
-                )
-                continue
-
-            closest_tuple = min(
-                xy_tuples, key=lambda x: np.linalg.norm(np.array(x) - array)
-            )  # find which of the xy_tuples is closest to the xy of the selected grid pixel. This ensures that the selected pixel is in the river network of the course grid.
-
-            # select the pixels in the different grids on the chosen location
-            upstream_area_grid_pixel = upstream_area.isel(
-                x=closest_tuple[0], y=closest_tuple[1]
-            )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
-
-            # get the upstream area from the grid pixel
-            GEB_upstream_area_from_grid = (
-                upstream_area_grid_pixel.values
-            )  # get the value of the selected pixel
-
-            # make variables for all the different coordinates
-            closest_point_coords = tuple(
-                (
-                    float(closest_point_on_riverline.x),
-                    float(closest_point_on_riverline.y),
-                )
-            )  # closest point coordinates
-            subgrid_pixel_coords = tuple(
-                (
-                    float(selected_subgrid_pixel.x.values),
-                    float(selected_subgrid_pixel.y.values),
-                )
-            )  ## subgrid pixel coordinates
-            grid_pixel_coords = tuple(
-                (
-                    float(upstream_area_grid_pixel.x.values),
-                    float(upstream_area_grid_pixel.y.values),
-                )
-            )  # grid pixel coordinates
+            # Extract results
+            closest_point_coords = snap_results["closest_point_coords"]
+            grid_pixel_coords = snap_results["snapped_grid_pixel_lonlat"]
+            closest_river_segment = snap_results["closest_river_segment"]
 
             discharge_snapping_results.append(
                 {
@@ -594,38 +315,39 @@ class Observations(BuildModelBase):
                     "discharge_observations_upstream_area_m2": discharge_observations_uparea_m2,
                     "discharge_observations_station_coords": station_coords,
                     "closest_point_coords": closest_point_coords,
-                    "subgrid_pixel_coords": subgrid_pixel_coords,
+                    "subgrid_pixel_coords": snap_results["subgrid_pixel_coords"],
                     "snapped_grid_pixel_lonlat": grid_pixel_coords,
-                    "snapped_grid_pixel_xy": closest_tuple,
-                    "GEB_upstream_area_from_subgrid": float(
-                        GEB_upstream_area_from_subgrid
-                    ),
-                    "GEB_upstream_area_from_grid": float(GEB_upstream_area_from_grid),
-                    "discharge_observations_to_GEB_upstream_area_ratio": float(
-                        GEB_upstream_area_from_subgrid
-                        / discharge_observations_uparea_m2
-                    )
-                    if not np.isnan(discharge_observations_uparea_m2)
-                    else np.nan,
-                    "snapping_distance_degrees": closest_river_segment.station_distance.iloc[
-                        0
+                    "snapped_grid_pixel_xy": snap_results["snapped_grid_pixel_xy"],
+                    "GEB_upstream_area_from_subgrid": snap_results[
+                        "geb_uparea_subgrid"
                     ],
+                    "GEB_upstream_area_from_grid": snap_results["geb_uparea_grid"],
+                    "discharge_observations_to_GEB_upstream_area_ratio": (
+                        snap_results["geb_uparea_subgrid"]
+                        / discharge_observations_uparea_m2
+                        if snap_results["geb_uparea_subgrid"] is not None
+                        and not np.isnan(discharge_observations_uparea_m2)
+                        else np.nan
+                    ),
+                    "snapping_distance_degrees": snap_results["distance_degrees"],
                 }
             )
 
             plot_snapping(
-                station_id,
-                self.report_dir / "snapping_discharge",
-                rivers,
-                upstream_area,
-                station_coords,
-                closest_point_coords,
-                closest_river_segment,
-                grid_pixel_coords,
+                point_id=station_id,
+                output_folder=self.report_dir / "snapping_discharge",
+                rivers=rivers,
+                upstream_area=upstream_area_grid,
+                original_coords=station_coords,
+                closest_point_coords=closest_point_coords,
+                closest_river_segment=closest_river_segment,
+                grid_pixel_xy=snap_results["snapped_grid_pixel_xy"],
+                filename_prefix="snapping_discharge",
+                point_label="Original gauge",
+                title=f"Upstream area grid and gauge snapping for {station_id}",
             )
 
         self.logger.info("Discharge snapping done for all stations")
-        # ... (rest of results saving logic)
 
         discharge_snapping_df = pd.DataFrame(discharge_snapping_results)
 
@@ -680,5 +402,3 @@ class Observations(BuildModelBase):
         self.set_geom(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
-
-        self.logger.info("Building discharge datasets done")
