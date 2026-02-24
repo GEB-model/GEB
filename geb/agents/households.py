@@ -303,7 +303,7 @@ class Households(AgentBaseClass):
 
         self.var.municipal_water_demand_per_capita_m3_baseline = read_array(
             self.model.files["array"][
-                "agents/households/municipal_water_demand_per_capita_m3_baseline"
+                "agents/households/municipal_water_withdrawal_per_capita_m3_baseline"
             ]
         )
 
