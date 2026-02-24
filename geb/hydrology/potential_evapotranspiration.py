@@ -233,6 +233,7 @@ def get_reference_evapotranspiration(
     rlds_W_per_m2: np.float32,
     rsds_W_per_m2: np.float32,
     wind_10m_m_per_s: np.float32,
+    soil_heat_flux_W_per_m2: np.float32 = np.float32(0.0),
     albedo_canopy: np.float32 = np.float32(0.13),
     albedo_water: np.float32 = np.float32(0.05),
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
@@ -256,7 +257,7 @@ def get_reference_evapotranspiration(
         u2    wind speed at 2 m height [m s-1]
 
     Note:
-        TODO: Add soil heat flux density (G) term. Currently assumed to be 0.
+        Soil heat flux density (G) can be provided or assumed to be 0.
 
     Args:
         tas_C: average air temperature in Celsius.
@@ -265,6 +266,7 @@ def get_reference_evapotranspiration(
         rlds_W_per_m2: long wave downward surface radiation flux in W/m^2.
         rsds_W_per_m2: short wave downward surface radiation flux in W/m^2.
         wind_10m_m_per_s: wind speed at 10 m height in m/s.
+        soil_heat_flux_W_per_m2: Soil heat flux in W/m^2. Positive = flux INTO the soil.
         albedo_canopy: albedo of vegetation canopy (default = 0.13).
         albedo_water: albedo of water surface (default = 0.05).
 
@@ -327,7 +329,9 @@ def get_reference_evapotranspiration(
         canopy_height_m=np.float32(0.12),
     )
 
-    soil_heat_flux_MJ_per_m2_per_hour: np.float32 = np.float32(0.0)
+    soil_heat_flux_MJ_per_m2_per_hour: np.float32 = W_per_m2_to_MJ_per_m2_per_hour(
+        soil_heat_flux_W_per_m2
+    )
 
     (
         reference_evapotranspiration_land_mm_per_hour,

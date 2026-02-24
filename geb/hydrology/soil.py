@@ -1587,8 +1587,8 @@ def solve_soil_temperature_column(
     deep_soil_temperature_C: np.float32,
     soil_emissivity: np.float32,
     soil_albedo: np.float32,
-    leaf_area_index: np.float32 = np.float32(0.0),
-) -> np.ndarray:
+    leaf_area_index: np.float32,
+) -> tuple[np.ndarray, np.float32]:
     """Solve the soil temperature profile using a fully implicit method with non-linear surface boundary.
 
     This function updates the soil temperature profile by solving the 1D heat diffusion equation.
@@ -1613,7 +1613,9 @@ def solve_soil_temperature_column(
         leaf_area_index: Leaf Area Index [-].
 
     Returns:
-        np.ndarray: Updated soil temperatures for each layer [C].
+        Tuple of:
+            - Updated soil temperatures for each layer [C].
+            - Soil heat flux [W/m2]. Positive = flux into the soil.
     """
     n_soil_layers = len(soil_temperatures_C)
     temperatures_at_start_of_timestep_C = soil_temperatures_C.copy()
@@ -1649,6 +1651,10 @@ def solve_soil_temperature_column(
     upper_diagonal_c = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
     rhs_vector_d = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
 
+    # Store fluxes to return G at the end
+    final_net_radiation_flux_W_per_m2 = np.float32(0.0)
+    final_sensible_heat_flux_W_per_m2 = np.float32(0.0)
+
     for _ in range(MAX_ITERATIONS):
         # Linearize Surface Boundary Conditions
         # Since radiation and sensible heat depend non-linearly on surface temperature (T0),
@@ -1674,6 +1680,10 @@ def solve_soil_temperature_column(
                 surface_pressure_pa=surface_pressure_pa,
             )
         )
+
+        # Store for final G calculation
+        final_net_radiation_flux_W_per_m2 = net_radiation_flux_W_per_m2
+        final_sensible_heat_flux_W_per_m2 = sensible_heat_flux_W_per_m2
 
         # Combine fluxes and conductances for the linearized boundary condition.
         # We use a first-order Taylor expansion: Flux(T_new) ≈ Flux(T_guess) + dFlux/dT * (T_new - T_guess)
@@ -1792,4 +1802,8 @@ def solve_soil_temperature_column(
         if max_temperature_correction_C < TOLERANCE_C:
             break
 
-    return temperatures_current_iteration_C
+    soil_heat_flux_W_per_m2 = (
+        final_net_radiation_flux_W_per_m2 + final_sensible_heat_flux_W_per_m2
+    )
+
+    return temperatures_current_iteration_C, soil_heat_flux_W_per_m2

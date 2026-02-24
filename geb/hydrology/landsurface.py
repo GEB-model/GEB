@@ -294,6 +294,29 @@ def land_surface_model(
                 wind_u10m_m_per_s_cell[hour] ** 2 + wind_v10m_m_per_s_cell[hour] ** 2
             )  # Wind speed at 10m height
 
+            soil_temperature_C[:, i], soil_heat_flux_W_per_m2_cell = (
+                solve_soil_temperature_column(
+                    soil_temperatures_C=soil_temperature_C[:, i],
+                    layer_thicknesses_m=soil_layer_height[:, i],
+                    solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                        :, i
+                    ],
+                    thermal_conductivities_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
+                        :, i
+                    ],
+                    shortwave_radiation_W_per_m2=rsds_W_per_m2_cell[hour],
+                    longwave_radiation_W_per_m2=rlds_W_per_m2_cell[hour],
+                    air_temperature_K=tas_2m_K_cell[hour],
+                    wind_speed_10m_m_per_s=wind_10m_m_per_s,
+                    surface_pressure_pa=ps_pascal_cell[hour],
+                    timestep_seconds=np.float32(3600.0),
+                    deep_soil_temperature_C=deep_soil_temperature_C[i],
+                    soil_emissivity=SOIL_EMISSIVITY,
+                    soil_albedo=SOIL_ALBEDO,
+                    leaf_area_index=leaf_area_index[i],
+                )
+            )
+
             (
                 reference_evapotranspiration_grass_m_hour_cell,
                 reference_evapotranspiration_water_m_hour_cell,
@@ -306,6 +329,7 @@ def land_surface_model(
                 rlds_W_per_m2=rlds_W_per_m2_cell[hour],
                 rsds_W_per_m2=rsds_W_per_m2_cell[hour],
                 wind_10m_m_per_s=wind_10m_m_per_s,
+                soil_heat_flux_W_per_m2=soil_heat_flux_W_per_m2_cell,
             )
 
             # Ensure non-negative evapotranspiration values
@@ -411,25 +435,6 @@ def land_surface_model(
                 w=w[:, i],
                 ws=ws[:, i],
                 capillary_rise_from_groundwater=capillar_rise_m[i],
-            )
-
-            soil_temperature_C[:, i] = solve_soil_temperature_column(
-                soil_temperatures_C=soil_temperature_C[:, i],
-                layer_thicknesses_m=soil_layer_height[:, i],
-                solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[:, i],
-                thermal_conductivities_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
-                    :, i
-                ],
-                shortwave_radiation_W_per_m2=rsds_W_per_m2_cell[hour],
-                longwave_radiation_W_per_m2=rlds_W_per_m2_cell[hour],
-                air_temperature_K=tas_2m_K_cell[hour],
-                wind_speed_10m_m_per_s=wind_10m_m_per_s,
-                surface_pressure_pa=ps_pascal_cell[hour],
-                timestep_seconds=np.float32(3600.0),
-                deep_soil_temperature_C=deep_soil_temperature_C[i],
-                soil_emissivity=SOIL_EMISSIVITY,
-                soil_albedo=SOIL_ALBEDO,
-                leaf_area_index=leaf_area_index[i],
             )
 
             soil_is_frozen = soil_temperature_C[0, i] <= np.float32(0.0)

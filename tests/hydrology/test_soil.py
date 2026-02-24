@@ -1431,7 +1431,7 @@ def test_solve_soil_temperature_column() -> None:
     soil_emissivity = np.float32(0.95)
     soil_albedo = np.float32(0.23)
 
-    t_new = solve_soil_temperature_column(
+    t_new, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
         solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
@@ -1445,6 +1445,7 @@ def test_solve_soil_temperature_column() -> None:
         deep_soil_temperature_C=deep_soil_temp,
         soil_emissivity=soil_emissivity,
         soil_albedo=soil_albedo,
+        leaf_area_index=np.float32(0.0),
     )
 
     # Should stay close to 10.0 across all layers
@@ -1455,7 +1456,7 @@ def test_solve_soil_temperature_column() -> None:
     lw_in = np.float32(350.0)
     air_temp_k = np.float32(303.15)
 
-    t_new_hot = solve_soil_temperature_column(
+    t_new_hot, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
         solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
@@ -1469,13 +1470,14 @@ def test_solve_soil_temperature_column() -> None:
         deep_soil_temperature_C=deep_soil_temp,
         soil_emissivity=soil_emissivity,
         soil_albedo=soil_albedo,
+        leaf_area_index=np.float32(0.0),
     )
     assert t_new_hot[0] > 10.0, "Top layer should warm up"
     assert t_new_hot[0] > t_new_hot[1], "Top layer should be warmer than second layer"
 
     # Bottom boundary influence (Deep soil heating)
     deep_soil_temp_hot = np.float32(20.0)
-    t_new_bottom = solve_soil_temperature_column(
+    t_new_bottom, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
         solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
@@ -1489,6 +1491,7 @@ def test_solve_soil_temperature_column() -> None:
         deep_soil_temperature_C=deep_soil_temp_hot,
         soil_emissivity=soil_emissivity,
         soil_albedo=soil_albedo,
+        leaf_area_index=np.float32(0.0),
     )
     assert t_new_bottom[-1] > 10.0, "Bottom layer should warm up from deep soil"
     assert t_new_bottom[-1] > t_new_bottom[-2], (
