@@ -3,6 +3,7 @@
 import faulthandler
 import os
 import platform
+import warnings
 from importlib.metadata import version
 from importlib.resources import files
 from pathlib import Path
@@ -14,6 +15,7 @@ import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
+from pandas.errors import SettingWithCopyWarning
 
 from geb.workflows.io import fetch_and_save
 
@@ -160,5 +162,17 @@ else:
 # xarray uses bottleneck for some operations to speed up computations
 # however, some implementations are numerically unstable, so we disable it
 xr.set_options(use_bottleneck=False, keep_attrs=True)
+
+# raise all numpy warnings as errors, to catch potential issues early on
+np.seterr(all="raise")
+
+# force solving of all warnings as errors, to catch potential issues early on
+warnings.simplefilter(action="error", category=FutureWarning)
+
+# specific warning for pandas
+warnings.simplefilter(action="error", category=SettingWithCopyWarning)
+
+# we don't want to miss any runtime warnings, as they can indicate potential issues in the code, so we also raise them as errors
+warnings.simplefilter(action="error", category=RuntimeWarning)
 
 faulthandler.enable()

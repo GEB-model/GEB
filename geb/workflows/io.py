@@ -39,6 +39,7 @@ from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.zstd import ZstdCodec
+from zarr.errors import ZarrUserWarning
 
 from geb.geb_types import (
     ArrayDatetime64,
@@ -849,8 +850,11 @@ class AsyncGriddedForcingReader:
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
-        # Check if the variable uses NaN as fill value for the retry workaround
-        array = self.ds[self.variable_name]
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ZarrUserWarning)
+            # Check if the variable uses NaN as fill value for the retry workaround
+            array = self.ds[self.variable_name]
+
         assert isinstance(array, zarr.Array)
         self.array: zarr.Array = array
 
