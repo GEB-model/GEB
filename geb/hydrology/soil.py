@@ -1588,6 +1588,7 @@ def solve_soil_temperature_column(
     soil_emissivity: np.float32,
     soil_albedo: np.float32,
     leaf_area_index: np.float32,
+    snow_water_equivalent_m: np.float32 = np.float32(0.0),
 ) -> tuple[np.ndarray, np.float32]:
     """Solve the soil temperature profile using a fully implicit method with non-linear surface boundary.
 
@@ -1611,6 +1612,7 @@ def solve_soil_temperature_column(
         soil_emissivity: Soil emissivity [-].
         soil_albedo: Soil albedo [-].
         leaf_area_index: Leaf Area Index [-].
+        snow_water_equivalent_m: Snow water equivalent [m]. If provided and > 0.001 m, the boundary condition is treated as adiabatic.
 
     Returns:
         Tuple of:
@@ -1661,25 +1663,31 @@ def solve_soil_temperature_column(
         # we linearize around the current guess: Flux(T0_new) ≈ Flux(T0) + dFlux/dT * (T0_new - T0)
         surface_temperature_guess_C = temperatures_current_iteration_C[0]
 
-        net_radiation_flux_W_per_m2, derivative_net_radiation_W_per_m2_K = (
-            calculate_net_radiation_flux(
-                shortwave_radiation_W_per_m2=shortwave_radiation_W_per_m2,
-                longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
-                soil_temperature_C=surface_temperature_guess_C,
-                leaf_area_index=leaf_area_index,
-                air_temperature_K=air_temperature_K,
-                soil_emissivity=soil_emissivity,
-                soil_albedo=soil_albedo,
+        if snow_water_equivalent_m > np.float32(0.001):
+            net_radiation_flux_W_per_m2 = np.float32(0.0)
+            derivative_net_radiation_W_per_m2_K = np.float32(0.0)
+            sensible_heat_flux_W_per_m2 = np.float32(0.0)
+            derivative_sensible_heat_W_per_m2_K = np.float32(0.0)
+        else:
+            net_radiation_flux_W_per_m2, derivative_net_radiation_W_per_m2_K = (
+                calculate_net_radiation_flux(
+                    shortwave_radiation_W_per_m2=shortwave_radiation_W_per_m2,
+                    longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
+                    soil_temperature_C=surface_temperature_guess_C,
+                    leaf_area_index=leaf_area_index,
+                    air_temperature_K=air_temperature_K,
+                    soil_emissivity=soil_emissivity,
+                    soil_albedo=soil_albedo,
+                )
             )
-        )
-        sensible_heat_flux_W_per_m2, derivative_sensible_heat_W_per_m2_K = (
-            calculate_sensible_heat_flux(
-                soil_temperature_C=surface_temperature_guess_C,
-                air_temperature_K=air_temperature_K,
-                wind_speed_10m_m_per_s=wind_speed_10m_m_per_s,
-                surface_pressure_pa=surface_pressure_pa,
+            sensible_heat_flux_W_per_m2, derivative_sensible_heat_W_per_m2_K = (
+                calculate_sensible_heat_flux(
+                    soil_temperature_C=surface_temperature_guess_C,
+                    air_temperature_K=air_temperature_K,
+                    wind_speed_10m_m_per_s=wind_speed_10m_m_per_s,
+                    surface_pressure_pa=surface_pressure_pa,
+                )
             )
-        )
 
         # Store for final G calculation
         final_net_radiation_flux_W_per_m2 = net_radiation_flux_W_per_m2

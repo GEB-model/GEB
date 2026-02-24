@@ -1499,6 +1499,78 @@ def test_solve_soil_temperature_column() -> None:
     )
 
 
+def test_solve_soil_temperature_column_snow() -> None:
+    """Test that snow cover effectively blocks surface fluxes."""
+    # Setup similar to basic test
+    n_soil_layers = 2
+    soil_temperatures_old = np.full(n_soil_layers, 10.0, dtype=np.float32)
+    layer_thicknesses = np.array([0.1, 0.2], dtype=np.float32)
+    bulk_density = np.float32(1300.0)
+    heat_capacity_arr = get_heat_capacity_solid_fraction(
+        np.full(n_soil_layers, bulk_density / 1000.0, dtype=np.float32),
+        layer_thicknesses,
+    )
+    thermal_conductivities = np.full(n_soil_layers, 2.0, dtype=np.float32)
+
+    # Strong incoming radiation that WOULD heat the soil if no snow
+    sw_in = np.float32(1000.0)
+    lw_in = np.float32(400.0)
+    air_temp_k = np.float32(303.15)  # 30C
+    wind_speed = np.float32(5.0)
+    pressure = np.float32(101325.0)
+    dt_seconds = np.float32(3600.0)
+    deep_soil_temp = np.float32(10.0)  # Same as initial
+    soil_emissivity = np.float32(0.95)
+    soil_albedo = np.float32(0.23)
+
+    # WITH SNOW
+    t_new_snow, fluxes_snow = solve_soil_temperature_column(
+        soil_temperatures_C=soil_temperatures_old,
+        layer_thicknesses_m=layer_thicknesses,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        air_temperature_K=air_temp_k,
+        wind_speed_10m_m_per_s=wind_speed,
+        surface_pressure_pa=pressure,
+        timestep_seconds=dt_seconds,
+        deep_soil_temperature_C=deep_soil_temp,
+        soil_emissivity=soil_emissivity,
+        soil_albedo=soil_albedo,
+        leaf_area_index=np.float32(0.0),
+        snow_water_equivalent_m=np.float32(0.1),  # Significant snow
+    )
+
+    # Fluxes should be zero (adiabatic surface boundary as configured)
+    assert fluxes_snow == 0.0
+    # Temperature should not change significantly (only internal redistribution if any gradient existed, but here uniform 10C)
+    np.testing.assert_allclose(t_new_snow, 10.0, atol=1e-4)
+
+    # WITHOUT SNOW (Control)
+    t_new_control, fluxes_control = solve_soil_temperature_column(
+        soil_temperatures_C=soil_temperatures_old,
+        layer_thicknesses_m=layer_thicknesses,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        air_temperature_K=air_temp_k,
+        wind_speed_10m_m_per_s=wind_speed,
+        surface_pressure_pa=pressure,
+        timestep_seconds=dt_seconds,
+        deep_soil_temperature_C=deep_soil_temp,
+        soil_emissivity=soil_emissivity,
+        soil_albedo=soil_albedo,
+        leaf_area_index=np.float32(0.0),
+        snow_water_equivalent_m=np.float32(0.0),
+    )
+    
+    # Control should have heated up
+    assert t_new_control[0] > 10.1
+    assert fluxes_control > 0.0  # Positive flux into soil
+
+
 def test_calculate_spatial_infiltration_excess() -> None:
     """Test the spatial variability of infiltration capacity function."""
     # Case 1: Low precipitation (P << f_max), should be mostly infiltrated

@@ -314,6 +314,7 @@ def land_surface_model(
                     soil_emissivity=SOIL_EMISSIVITY,
                     soil_albedo=SOIL_ALBEDO,
                     leaf_area_index=leaf_area_index[i],
+                    snow_water_equivalent_m=snow_water_equivalent_m_cell,
                 )
             )
 
