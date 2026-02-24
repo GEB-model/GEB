@@ -222,6 +222,7 @@ def land_surface_model(
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
         interflow_multiplier: Calibration factor for interflow calculation.
         deep_soil_temperature_C: Deep soil temperature in Celsius.
+        leaf_area_index: Leaf area index for the cell.
 
     Returns:
         Tuple of:
