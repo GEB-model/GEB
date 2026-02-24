@@ -1,13 +1,7 @@
 """Large-scale multi-basin cluster rules for GEB model.
 
 This module contains rules for running the complete GEB pipeline
-on multiple basin clusters created by init_m    resources:
-        mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
-        runtime=11520,  # 8 days
-        cpus=6,
-        slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
-        partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
-        slurm_account="ivm"
+on multiple basin clusters created by the 'geb init_multiple' command.
 """
 
 import os
@@ -15,10 +9,11 @@ import yaml
 from pathlib import Path
 
 # Get configuration with defaults
-# CLUSTER_PREFIX should match the value in config/large_scale.yml
-CLUSTER_PREFIX = "Europe"
-LARGE_SCALE_DIR = "/scistor/ivm/tbr910/GEB/models/large_scale"
-EVALUATION_METHODS = "hydrology.plot_discharge,hydrology.evaluate_discharge"
+# LARGE_SCALE_DIR and CLUSTER_PREFIX are read from config/large_scale.yml so that
+# users only need to change them in one place.
+CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "Europe")
+LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", str(Path(workflow.basedir).parent.parent / "models" / "large_scale"))
+EVALUATION_METHODS = config.get("EVALUATION_METHODS", "hydrology.plot_discharge,hydrology.evaluate_discharge")
 
 # Cache for basin areas to avoid repeated file reads
 _basin_area_cache = {}

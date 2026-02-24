@@ -2,8 +2,8 @@
 # This profile configures Snakemake to submit jobs to SLURM with appropriate resources
 
 # Basic SLURM configuration  
-# All SLURM logs go to centralized location
-cluster: "sbatch --parsable --job-name={rule}_{wildcards.cluster} --account={resources.slurm_account} --ntasks=1 --cpus-per-task={resources.cpus} --mem={resources.mem_mb}M --time=8-00:00:00 --output=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/snakemake_logs/{rule}_{wildcards.cluster}-%j.out --error=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/snakemake_logs/{rule}_{wildcards.cluster}-%j.err {resources.partition_arg}"
+# All SLURM logs go to centralized location relative to the workflow directory
+cluster: "sbatch --parsable --job-name={rule}_{wildcards.cluster} --account={resources.slurm_account} --ntasks=1 --cpus-per-task={resources.cpus} --mem={resources.mem_mb}M --time=8-00:00:00 --output=../../sh_scripts/large_scale/logs/snakemake_logs/{rule}_{wildcards.cluster}-%j.out --error=../../sh_scripts/large_scale/logs/snakemake_logs/{rule}_{wildcards.cluster}-%j.err {resources.partition_arg}"
 
 
 # Job management

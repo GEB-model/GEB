@@ -1,37 +1,7 @@
 # Large-scale multi-basin cluster configuration
-# THIS IS THE CENTRAL CONFIGURATION FILE - all settings should be defined here
 
-# Directory containing the cluster models (created by init_multiple)
-LARGE_SCALE_DIR: "/scistor/ivm/tbr910/GEB/models/large_scale"
+# LARGE_SCALE_DIR: "/absolute/path/to/your/models/large_scale" # Directory containing the cluster models (created by 'geb init_multiple').
+CLUSTER_PREFIX: "Europe" # Prefix used when creating clusters (e.g., Europe_000, Europe_001, etc.)
+EVALUATION_METHODS: "hydrology.plot_discharge,hydrology.evaluate_discharge" # Evaluation methods to run for each cluster
 
-# Prefix used when creating clusters (e.g., Europe_000, Europe_001, etc.)
-# This should match the prefix used in 'geb init_multiple --cluster-prefix' command
-# Also used as the default in geb_cluster.sh script
-CLUSTER_PREFIX: "Europe"
-
-# Evaluation methods to run for each cluster
-EVALUATION_METHODS: "hydrology.plot_discharge,hydrology.evaluate_discharge"
-
-# Automatic Memory Allocation:
-# Memory and partition are now automatically determined based on basin size in model.yml
-# Basin areas > 600,000 km² automatically use ivm-fat partition with up to 128GB RAM
-# Basin areas > 35,000 km² use ivm partition with scaled memory allocation
-# Basin areas < 35,000 km² use ivm partition with standard memory allocation
-# 
-# Memory scaling factors:
-# - Build: 32GB base (up to 128GB for very large basins)
-# - Spinup: 48GB base (up to 192GB for very large basins) 
-# - Run: 56GB base (up to 224GB for very large basins, capped at partition limits)
-#
-# Time limits: All jobs have 5-day time limit (7200 minutes)
-
-# Parallel execution settings
-PARALLEL:
-  # Maximum number of clusters to run simultaneously
-  # Adjust based on your system's memory and CPU capacity
-  max_concurrent_builds: 10
-  max_concurrent_runs: 10
-  
-  # Rate limiting for job submission (jobs per second)
-  # Prevents overwhelming the SLURM scheduler
-  submission_rate_limit: 2
+# Parallelism is configured in profiles/slurm/config.yaml (jobs, max-jobs-per-second, group-components)

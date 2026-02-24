@@ -730,6 +730,7 @@ def init_multiple_fn(
     skip_visualization: bool = False,
     min_bbox_efficiency: float = 0.99,
     ocean_outlets_only: bool = False,
+    init_multiple_dir: str = "large_scale",
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -747,6 +748,7 @@ def init_multiple_fn(
         skip_visualization: If True, skip creating visualization map (faster).
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
         ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
+        init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created.
 
     Raises:
         FileNotFoundError: If the example folder does not exist.
@@ -762,10 +764,10 @@ def init_multiple_fn(
     data_catalog_instance = NewDataCatalog()
     logger = create_logger(working_directory / "init_multiple.log")
 
-    # Create the models/large_scale directory structure
+    # Create the models/init_multiple_dir directory structure
     models_dir = Path.cwd().parent / "models"
-    large_scale_dir = models_dir / "large_scale"
-    large_scale_dir.mkdir(parents=True, exist_ok=True)
+    init_multiple_dir = models_dir / init_multiple_dir
+    init_multiple_dir.mkdir(parents=True, exist_ok=True)
 
     # create river
     logger.info("Starting multiple model initialization")
@@ -820,15 +822,15 @@ def init_multiple_fn(
     # Create cluster configurations
     cluster_directories = create_multi_basin_configs(
         clusters=clusters,
-        working_directory=large_scale_dir,
+        working_directory=init_multiple_dir,
         cluster_prefix=cluster_prefix,
         data_catalog=data_catalog_instance,
         river_graph=river_graph,
     )
 
     # save geoparquet and maps to default location
-    save_geoparquet = large_scale_dir / f"{cluster_prefix}_outlets.geoparquet"
-    save_map = large_scale_dir / f"{cluster_prefix}_clusters_map.png"
+    save_geoparquet = init_multiple_dir / f"{cluster_prefix}_outlets.geoparquet"
+    save_map = init_multiple_dir / f"{cluster_prefix}_clusters_map.png"
 
     logger.info(f"Saving outlet basins to geoparquet: {save_geoparquet}")
     # Save outlet-only clusters to geoparquet (simplified geometries)
@@ -843,7 +845,7 @@ def init_multiple_fn(
     # This is slow for large datasets, so allow skipping
     if not skip_merged_geometries:
         merged_basins_path = (
-            large_scale_dir / f"{cluster_prefix}_complete_basins.geoparquet"
+            init_multiple_dir / f"{cluster_prefix}_complete_basins.geoparquet"
         )
         logger.info(
             f"Saving complete basins as merged geometries: {merged_basins_path}"
@@ -943,6 +945,11 @@ def init_multiple_fn(
     default=False,
     help="If set, only include clusters that flow to the ocean (exclude endorheic basins).",
 )
+@click.option(
+    "--init-multiple-dir",
+    default="large_scale",
+    help="Name of the subdirectory in models/ where the large scale model directories will be created. Defaults to 'large_scale'.",
+)
 @working_directory_option
 def init_multiple(
     config: str,
@@ -958,6 +965,7 @@ def init_multiple(
     skip_visualization: bool,
     min_bbox_efficiency: float,
     ocean_outlets_only: bool,
+    init_multiple_dir: str,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
 
@@ -984,6 +992,7 @@ def init_multiple(
         skip_visualization: If True, skip creating visualization map (faster).
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters and fewer total clusters.
         ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
+        init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created.
 
     """
     init_multiple_fn(
@@ -1000,6 +1009,7 @@ def init_multiple(
         skip_visualization=skip_visualization,
         min_bbox_efficiency=min_bbox_efficiency,
         ocean_outlets_only=ocean_outlets_only,
+        init_multiple_dir=init_multiple_dir,
     )
 
 
@@ -1009,23 +1019,6 @@ def server() -> None:
     from geb.mcp_server import mcp
 
     mcp.run()
-
-
-@cli.command()
-def server() -> None:
-    """Run the GEB MCP server."""
-    from geb.mcp_server import mcp
-
-    mcp.run()
-
-
-@cli.command()
-def server() -> None:
-    """Run the GEB MCP server."""
-    from geb.mcp_server import mcp
-
-    mcp.run()
-
 
 @cli.group()
 def tool() -> None:
