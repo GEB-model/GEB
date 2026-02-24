@@ -1161,7 +1161,7 @@ class WorkingDirectory:
         """
         self._new_path = new_path
 
-    def __enter__(self) -> "WorkingDirectory":
+    def __enter__(self) -> WorkingDirectory:
         """Enters the context, changing the current working directory.
 
         Returns:
@@ -1603,7 +1603,7 @@ def create_hash_from_parameters(
             value = value.item()
         try:
             json.dumps(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             raise ValueError(f"Value {value} is not JSON serializable")
         return value
 

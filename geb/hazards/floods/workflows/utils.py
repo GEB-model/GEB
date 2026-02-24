@@ -379,7 +379,7 @@ def check_docker_running() -> bool | None:
             capture_output=True,
         )
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError, FileNotFoundError:
         print("Docker not installed properly or not running properly.")
         return False
 
