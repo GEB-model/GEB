@@ -25,6 +25,7 @@ from .evapotranspiration import (
 )
 from .interception import (
     get_interception_capacity,
+    get_leaf_area_index,
     interception,
     leaf_area_index_to_interception_capacity_m,
 )
@@ -54,6 +55,11 @@ from .soil import (
     thetar_brakensiek,
     thetas_toth,
 )
+
+# Constants for soil radiation
+# These can be adjusted by the user as global parameters
+SOIL_ALBEDO = np.float32(0.23)
+SOIL_EMISSIVITY = np.float32(0.95)
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -135,6 +141,7 @@ def land_surface_model(
     minimum_effective_root_depth_m: np.float32,
     interflow_multiplier: np.float32,
     deep_soil_temperature_C: ArrayFloat32,
+    leaf_area_index: ArrayFloat32,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -419,6 +426,9 @@ def land_surface_model(
                 surface_pressure_pa=ps_pascal_cell[hour],
                 timestep_seconds=np.float32(3600.0),
                 deep_soil_temperature_C=deep_soil_temperature_C[i],
+                soil_emissivity=SOIL_EMISSIVITY,
+                soil_albedo=SOIL_ALBEDO,
+                leaf_area_index=leaf_area_index[i],
             )
 
             soil_is_frozen = soil_temperature_C[0, i] <= np.float32(0.0)
@@ -757,6 +767,7 @@ class LandSurfaceInputs(NamedTuple):
     minimum_effective_root_depth_m: np.float32
     interflow_multiplier: np.float32
     deep_soil_temperature_C: ArrayFloat32
+    leaf_area_index: ArrayFloat32
 
 
 class LandSurfaceVariables(Bucket):
@@ -828,6 +839,7 @@ class LandSurface(Module):
         capillar_rise_m: ArrayFloat32,
         delta_z: TwoDArrayFloat32,
         deep_soil_temperature_C: ArrayFloat32,
+        leaf_area_index: ArrayFloat32,
     ) -> LandSurfaceInputs:
         """Build the input bundle for `land_surface_model`.
 
@@ -841,6 +853,7 @@ class LandSurface(Module):
             capillar_rise_m: Capillary rise (m).
             delta_z: Layer interface thicknesses (m).
             deep_soil_temperature_C: Sub-surface boundary temperature (C).
+            leaf_area_index: Leaf area index per HRU (-).
 
         Returns:
             Bundle of inputs for `land_surface_model`.
@@ -929,6 +942,7 @@ class LandSurface(Module):
                 "interflow_multiplier"
             ],
             deep_soil_temperature_C=deep_soil_temperature_C,
+            leaf_area_index=leaf_area_index,
         )
 
     def _snapshot_land_surface_inputs_for_error(
@@ -1390,6 +1404,14 @@ class LandSurface(Module):
             ],
         )
 
+        leaf_area_index: ArrayFloat32 = get_leaf_area_index(
+            land_use_type=self.HRU.var.land_use_type,
+            leaf_area_index_forest_HRU=self.HRU.var.leaf_area_index_forest[dekad],
+            leaf_area_index_grassland_HRU=self.HRU.var.leaf_area_index_grassland_like[
+                dekad
+            ],
+        )
+
         pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s
         pr_total_m3 = (
             (
@@ -1446,6 +1468,7 @@ class LandSurface(Module):
             capillar_rise_m=capillar_rise_m,
             delta_z=delta_z,
             deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
+            leaf_area_index=leaf_area_index,
         )
 
         (

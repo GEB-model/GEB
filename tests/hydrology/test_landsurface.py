@@ -480,6 +480,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     minimum_effective_root_depth_m = flt(minimum_effective_root_depth_m_data)
     interflow_multiplier = flt(1.0)
     deep_soil_temperature_C = np.array([0.0], dtype=flt)
+    leaf_area_index = np.array([0.0], dtype=flt)
     crop_group_number_per_group = crop_group_number_per_group_data.astype(flt)
 
     soil_temperature_C = np.full_like(w, -5.0)  # Assume frozen/cold
@@ -543,6 +544,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         green_ampt_active_layer_idx=green_ampt_active_layer_idx,
         interflow_multiplier=interflow_multiplier,
         deep_soil_temperature_C=deep_soil_temperature_C,
+        leaf_area_index=leaf_area_index,
     )
 
     # Unpack the results

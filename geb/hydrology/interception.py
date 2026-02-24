@@ -87,6 +87,38 @@ def get_interception_capacity(
     return interception_capacity_m
 
 
+def get_leaf_area_index(
+    land_use_type: npt.NDArray[np.int32],
+    leaf_area_index_forest_HRU: npt.NDArray[np.float32],
+    leaf_area_index_grassland_HRU: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Get Leaf Area Index (LAI) based on land use type.
+
+    Args:
+        land_use_type: Array of land use types.
+        leaf_area_index_forest_HRU: LAI for forest land use type.
+        leaf_area_index_grassland_HRU: LAI for grassland land use type
+
+    Returns:
+        leaf_area_index: Array of LAI corresponding to land use types.
+    """
+    leaf_area_index = np.zeros(land_use_type.shape, dtype=np.float32)
+    # OPEN_WATER, SEALED: LAI = 0.0 (already initialized)
+
+    # PADDY and NON_PADDY IRRIGATED are currently handled with fixed interception
+    # capacity of 1mm in get_interception_capacity, implying some vegetation.
+    # Here we default to 0.0 for LAI as we don't have explicit LAI maps for them yet,
+    # or specific logic.
+
+    mask_forest = land_use_type == FOREST
+    leaf_area_index[mask_forest] = leaf_area_index_forest_HRU[mask_forest]
+
+    mask_grassland = land_use_type == GRASSLAND_LIKE
+    leaf_area_index[mask_grassland] = leaf_area_index_grassland_HRU[mask_grassland]
+
+    return leaf_area_index
+
+
 @njit(cache=True, inline="always")
 def interception(
     rainfall_m: np.float32,

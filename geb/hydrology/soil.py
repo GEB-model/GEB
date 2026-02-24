@@ -1276,6 +1276,10 @@ def calculate_net_radiation_flux(
     shortwave_radiation_W_per_m2: np.float32,
     longwave_radiation_W_per_m2: np.float32,
     soil_temperature_C: np.float32,
+    leaf_area_index: np.float32,
+    air_temperature_K: np.float32,
+    soil_emissivity: np.float32,
+    soil_albedo: np.float32,
 ) -> tuple[np.float32, np.float32]:
     """Calculate the net radiation energy flux and its derivative.
 
@@ -1287,27 +1291,50 @@ def calculate_net_radiation_flux(
         shortwave_radiation_W_per_m2: Incoming shortwave [W/m2].
         longwave_radiation_W_per_m2: Incoming longwave [W/m2].
         soil_temperature_C: Current soil temperature [C].
+        leaf_area_index: Leaf Area Index [-].
+        air_temperature_K: Air temperature [K], used as proxy for canopy temperature.
+        soil_emissivity: Soil emissivity [-].
+        soil_albedo: Soil albedo [-].
 
     Returns:
         Tuple of:
             - Net radiation flux [W/m2]. Positive = warming (incoming > outgoing).
             - Derivative of outgoing radiation flux [W/m2/K] (Conductance equivalent).
     """
-    # Constants (matching other functions)
+    # Constants
     STEFAN_BOLTZMANN_CONSTANT = np.float32(5.670374419e-8)
-    SOIL_EMISSIVITY = np.float32(0.95)
-    SOIL_ALBEDO = np.float32(0.23)
+    EXTINCTION_COEFFICIENT = np.float32(0.5)  # Beer's law extinction coefficient
 
     # Calculate Fluxes
     temperature_K = soil_temperature_C + np.float32(273.15)
 
-    absorbed_shortwave_W = (
-        np.float32(1.0) - SOIL_ALBEDO
-    ) * shortwave_radiation_W_per_m2
-    absorbed_longwave_W = SOIL_EMISSIVITY * longwave_radiation_W_per_m2
-    incoming_W = absorbed_shortwave_W + absorbed_longwave_W
+    # Beer's law attenuation factor
+    attenuation_factor = np.exp(-EXTINCTION_COEFFICIENT * leaf_area_index)
 
-    outgoing_W = SOIL_EMISSIVITY * STEFAN_BOLTZMANN_CONSTANT * (temperature_K**4)
+    absorbed_shortwave_W = (
+        (np.float32(1.0) - soil_albedo)
+        * shortwave_radiation_W_per_m2
+        * attenuation_factor
+    )
+
+    # Longwave radiation reaching the soil
+    # Atmospheric longwave transmitted through canopy
+    transmitted_longwave_W = longwave_radiation_W_per_m2 * attenuation_factor
+
+    # Emissions from canopy
+    # We assume canopy temperature ~= air temperature
+    canopy_longwave_W = (
+        STEFAN_BOLTZMANN_CONSTANT
+        * (air_temperature_K**4)
+        * (np.float32(1.0) - attenuation_factor)
+    )
+
+    incoming_longwave_at_soil_surface_W = transmitted_longwave_W + canopy_longwave_W
+
+    absorbed_longwave_W = soil_emissivity * incoming_longwave_at_soil_surface_W
+
+    incoming_W = absorbed_shortwave_W + absorbed_longwave_W
+    outgoing_W = soil_emissivity * STEFAN_BOLTZMANN_CONSTANT * (temperature_K**4)
 
     net_flux_W = incoming_W - outgoing_W
 
@@ -1315,7 +1342,7 @@ def calculate_net_radiation_flux(
     # d(sigma * eps * T^4)/dT = 4 * sigma * eps * T^3
     conductance_W_per_m2_K = (
         np.float32(4.0)
-        * SOIL_EMISSIVITY
+        * soil_emissivity
         * STEFAN_BOLTZMANN_CONSTANT
         * (temperature_K**3)
     )
@@ -1405,6 +1432,9 @@ def solve_energy_balance_implicit_iterative(
     wind_speed_10m_m_per_s: np.float32,
     surface_pressure_pa: np.float32,
     timestep_seconds: np.float32,
+    soil_emissivity: np.float32,
+    soil_albedo: np.float32,
+    leaf_area_index: np.float32,
 ) -> np.float32:
     """Update soil temperature solving energy balance with an iterative implicit scheme.
 
@@ -1423,6 +1453,9 @@ def solve_energy_balance_implicit_iterative(
         wind_speed_10m_m_per_s: Wind speed [m/s].
         surface_pressure_pa: Surface pressure [Pa].
         timestep_seconds: Total time to simulate [s] (e.g. 3600.0).
+        soil_emissivity: Soil emissivity [-].
+        soil_albedo: Soil albedo [-].
+        leaf_area_index: Leaf Area Index [-].
 
     Returns:
         Updated soil temperature [C].
@@ -1441,6 +1474,10 @@ def solve_energy_balance_implicit_iterative(
                 shortwave_radiation_W_per_m2=shortwave_radiation_W_per_m2,
                 longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
                 soil_temperature_C=T_curr,
+                leaf_area_index=leaf_area_index,
+                air_temperature_K=air_temperature_K,
+                soil_emissivity=soil_emissivity,
+                soil_albedo=soil_albedo,
             )
         )
 
@@ -1548,6 +1585,9 @@ def solve_soil_temperature_column(
     surface_pressure_pa: np.float32,
     timestep_seconds: np.float32,
     deep_soil_temperature_C: np.float32,
+    soil_emissivity: np.float32,
+    soil_albedo: np.float32,
+    leaf_area_index: np.float32 = np.float32(0.0),
 ) -> np.ndarray:
     """Solve the soil temperature profile using a fully implicit method with non-linear surface boundary.
 
@@ -1568,6 +1608,9 @@ def solve_soil_temperature_column(
         surface_pressure_pa: Surface pressure [Pa].
         timestep_seconds: Time step length [s].
         deep_soil_temperature_C: Constant temperature at the bottom boundary [C].
+        soil_emissivity: Soil emissivity [-].
+        soil_albedo: Soil albedo [-].
+        leaf_area_index: Leaf Area Index [-].
 
     Returns:
         np.ndarray: Updated soil temperatures for each layer [C].
@@ -1579,31 +1622,32 @@ def solve_soil_temperature_column(
 
     # Newton-Raphson iteration parameters
     MAX_ITERATIONS = 10
-    TOLERANCE_C = np.float32(0.01)  # use a tolerance of 0.01 C for convergence
+    TOLERANCE_C = np.float32(0.01)
 
     # Conductance K is the thermal coupling between centers of adjacent layers [W/m2/K].
     # It is derived from the thermal resistance of the two half-layers.
     thermal_conductances_between_layer_centers_W_per_m2_K = np.zeros(
-        n_soil_layers - 1, dtype=np.float32
+        n_soil_layers - 1, dtype=soil_temperatures_C.dtype
     )
     for i in range(n_soil_layers - 1):
         resistance_upper_half_layer = (
-            np.float32(0.5) * layer_thicknesses_m[i]
+            soil_temperatures_C.dtype.type(0.5) * layer_thicknesses_m[i]
         ) / thermal_conductivities_W_per_m_K[i]
         resistance_lower_half_layer = (
-            np.float32(0.5) * layer_thicknesses_m[i + 1]
+            soil_temperatures_C.dtype.type(0.5) * layer_thicknesses_m[i + 1]
         ) / thermal_conductivities_W_per_m_K[i + 1]
 
-        thermal_conductances_between_layer_centers_W_per_m2_K[i] = np.float32(1.0) / (
-            resistance_upper_half_layer + resistance_lower_half_layer
+        thermal_conductances_between_layer_centers_W_per_m2_K[i] = (
+            soil_temperatures_C.dtype.type(1.0)
+            / (resistance_upper_half_layer + resistance_lower_half_layer)
         )
 
     # Matrix arrays for the Tridiagonal Matrix Algorithm (TDMA)
     # The system is structured as: a_i * T_{i-1} + b_i * T_i + c_i * T_{i+1} = d_i
-    lower_diagonal_a = np.zeros(n_soil_layers, dtype=np.float32)
-    main_diagonal_b = np.zeros(n_soil_layers, dtype=np.float32)
-    upper_diagonal_c = np.zeros(n_soil_layers, dtype=np.float32)
-    rhs_vector_d = np.zeros(n_soil_layers, dtype=np.float32)
+    lower_diagonal_a = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
+    main_diagonal_b = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
+    upper_diagonal_c = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
+    rhs_vector_d = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
 
     for _ in range(MAX_ITERATIONS):
         # Linearize Surface Boundary Conditions
@@ -1616,6 +1660,10 @@ def solve_soil_temperature_column(
                 shortwave_radiation_W_per_m2=shortwave_radiation_W_per_m2,
                 longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
                 soil_temperature_C=surface_temperature_guess_C,
+                leaf_area_index=leaf_area_index,
+                air_temperature_K=air_temperature_K,
+                soil_emissivity=soil_emissivity,
+                soil_albedo=soil_albedo,
             )
         )
         sensible_heat_flux_W_per_m2, derivative_sensible_heat_W_per_m2_K = (

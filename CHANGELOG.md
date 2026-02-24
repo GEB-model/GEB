@@ -1,4 +1,5 @@
 # dev
+- Add Leaf Area Index (LAI) integration in soil net radiation calculation to account for canopy shielding and emission.
 - Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
 - Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.
 - Add frequency labels (hourly/daily) to extreme value analysis and validation plot titles.

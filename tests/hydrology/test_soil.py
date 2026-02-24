@@ -1342,6 +1342,8 @@ def test_solve_energy_balance_implicit_iterative() -> None:
     wind_speed = np.float32(2.0)
     pressure = np.float32(101325.0)
     dt_seconds = np.float32(3600.0)
+    soil_emissivity = np.float32(0.95)
+    soil_albedo = np.float32(0.23)
 
     t_new = solve_energy_balance_implicit_iterative(
         soil_temperature_C=soil_temperature_old,
@@ -1352,6 +1354,9 @@ def test_solve_energy_balance_implicit_iterative() -> None:
         surface_pressure_pa=pressure,
         solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
         timestep_seconds=dt_seconds,
+        soil_emissivity=soil_emissivity,
+        soil_albedo=soil_albedo,
+        leaf_area_index=np.float32(0.0),
     )
 
     # Should stay close to 10.0
@@ -1371,6 +1376,9 @@ def test_solve_energy_balance_implicit_iterative() -> None:
         surface_pressure_pa=pressure,
         solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
         timestep_seconds=dt_seconds,
+        soil_emissivity=soil_emissivity,
+        soil_albedo=soil_albedo,
+        leaf_area_index=np.float32(0.0),
     )
     assert t_new_hot > 10.0, "Soil should warm up significantly"
 
@@ -1388,6 +1396,9 @@ def test_solve_energy_balance_implicit_iterative() -> None:
         surface_pressure_pa=pressure,
         solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
         timestep_seconds=dt_seconds,
+        soil_emissivity=soil_emissivity,
+        soil_albedo=soil_albedo,
+        leaf_area_index=np.float32(0.0),
     )
 
     assert t_new_cold < 10.0, "Soil should cool down"
@@ -1417,6 +1428,8 @@ def test_solve_soil_temperature_column() -> None:
     pressure = np.float32(101325.0)
     dt_seconds = np.float32(3600.0)
     deep_soil_temp = np.float32(10.0)
+    soil_emissivity = np.float32(0.95)
+    soil_albedo = np.float32(0.23)
 
     t_new = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
@@ -1430,6 +1443,8 @@ def test_solve_soil_temperature_column() -> None:
         surface_pressure_pa=pressure,
         timestep_seconds=dt_seconds,
         deep_soil_temperature_C=deep_soil_temp,
+        soil_emissivity=soil_emissivity,
+        soil_albedo=soil_albedo,
     )
 
     # Should stay close to 10.0 across all layers
@@ -1452,6 +1467,8 @@ def test_solve_soil_temperature_column() -> None:
         surface_pressure_pa=pressure,
         timestep_seconds=dt_seconds,
         deep_soil_temperature_C=deep_soil_temp,
+        soil_emissivity=soil_emissivity,
+        soil_albedo=soil_albedo,
     )
     assert t_new_hot[0] > 10.0, "Top layer should warm up"
     assert t_new_hot[0] > t_new_hot[1], "Top layer should be warmer than second layer"
@@ -1470,6 +1487,8 @@ def test_solve_soil_temperature_column() -> None:
         surface_pressure_pa=np.float32(101325.0),
         timestep_seconds=np.float32(3600.0 * 24.0 * 10),  # Long time to see diffusion
         deep_soil_temperature_C=deep_soil_temp_hot,
+        soil_emissivity=soil_emissivity,
+        soil_albedo=soil_albedo,
     )
     assert t_new_bottom[-1] > 10.0, "Bottom layer should warm up from deep soil"
     assert t_new_bottom[-1] > t_new_bottom[-2], (

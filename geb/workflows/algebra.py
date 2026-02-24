@@ -3,14 +3,16 @@
 import numpy as np
 from numba import njit
 
+from geb.geb_types import ArrayFloat
+
 
 @njit(cache=True, inline="always")
 def tdma_solver(
-    lower_diagonal_a: np.ndarray,
-    main_diagonal_b: np.ndarray,
-    upper_diagonal_c: np.ndarray,
-    rhs_vector_d: np.ndarray,
-) -> np.ndarray:
+    lower_diagonal_a: ArrayFloat,
+    main_diagonal_b: ArrayFloat,
+    upper_diagonal_c: ArrayFloat,
+    rhs_vector_d: ArrayFloat,
+) -> ArrayFloat:
     """Solves a tridiagonal system Ax = d using the Thomas algorithm (TDMA).
 
     Args:
@@ -23,9 +25,9 @@ def tdma_solver(
         solution_vector_x: The solution of the tridiagonal system.
     """
     n = len(rhs_vector_d)
-    c_prime = np.zeros(n, dtype=np.float32)
-    d_prime = np.zeros(n, dtype=np.float32)
-    x = np.zeros(n, dtype=np.float32)
+    c_prime = np.zeros(n, dtype=rhs_vector_d.dtype)
+    d_prime = np.zeros(n, dtype=rhs_vector_d.dtype)
+    x = np.zeros(n, dtype=rhs_vector_d.dtype)
 
     c_prime[0] = upper_diagonal_c[0] / main_diagonal_b[0]
     d_prime[0] = rhs_vector_d[0] / main_diagonal_b[0]
