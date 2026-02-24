@@ -362,7 +362,7 @@ class Agents(BuildModelBase):
         oecd_idd = oecd_idd[
             ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         ]
-        # get GDL regions to use their iso_code for consistent country mapping
+        # get GDL regions to use their iso_code 
         GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
             geom=self.region.union_all()
         )
@@ -1270,9 +1270,6 @@ class Agents(BuildModelBase):
                     region["district_n"],
                     region["sub_dist_1"],
                 )
-                self.logger.info(
-                    f"Processing region, {region.VARNAME_1}, ({i + 1}/{len(regions_shapes)})"
-                )
 
             cultivated_land_region_total_cells = (
                 ((region_ids == UID) & (cultivated_land)).sum().compute()
@@ -1869,7 +1866,7 @@ class Agents(BuildModelBase):
         households_not_allocated = 0
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
-            # GDL_code = GDL_region["GDLcode"]
+            GDL_code = GDL_region["GDLcode"]
             self.logger.info(
                 f"Setting up household characteristics for {GDL_region['GDLcode']} ({i + 1}/{len(GDL_regions)})"
             )
@@ -2524,7 +2521,11 @@ class Agents(BuildModelBase):
         }
         all_ISO3_across_relevant_regions: set[str] = set(relevant_trade_regions.keys())
 
-        # The model now only uses ISO3 codes that are within the trade regions that are within the model domain. Countries not in the trade region dataset (e.g. Kosovo) are NOT considered now even though they can have preferences data.
+        # Only ISO3 codes that both lie within the model domain and appear in the trade
+        # region dataset are considered here. For those ISO3 codes, missing preference
+        # data is filled using donor countries. ISO3 codes that are not present in the
+        # trade region dataset at all (e.g. some partially recognized states) are
+        # excluded from this step, even if separate preference data might exist for them.
         donor_data = {}
         for ISO3 in all_ISO3_across_relevant_regions:
             region_risk_aversion_data = preferences_global[

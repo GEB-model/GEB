@@ -950,7 +950,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     "glopop-sg": {
         "adapter": GLOPOP_SG(
             folder="glopop_sg",
-            local_version=3,
+            local_version=3, # this is the third version of the dataset on Zenodo
             filename="placeholder",
             cache="local",
         ),

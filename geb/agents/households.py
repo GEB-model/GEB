@@ -185,8 +185,9 @@ class Households(AgentBaseClass):
         # This is a simplification - in the future this should use proper subnational datasets
         available_countries = list(distribution_parameters.columns)
         country = available_countries[0]
-        print(
-            f"Using income distribution for country: {country} (first available from GDL regions)"
+        self.model.logger.info(
+            "Using income distribution for country: %s (first available from GDL regions)",
+            country,
         )
 
         average_household_income = distribution_parameters[country]["MEAN"]
