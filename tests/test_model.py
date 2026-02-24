@@ -674,8 +674,7 @@ def test_setup_retention_basins() -> None:
         retention_basins: gpd.GeoDataFrame = rivers[["geometry"]].copy().to_crs(3857)
         retention_basins.geometry = retention_basins.geometry.centroid
         retention_basins = retention_basins.to_crs(4326)
-        retention_basins.index.name = "ID"
-        retention_basins.index = rivers.index.astype(str)
+        retention_basins["ID"] = np.arange(len(retention_basins))
         retention_basins["is_controlled"] = retention_basins.index.astype(int) % 2 == 0
         retention_basins.reset_index().to_file(
             data_folder / "retention_basins.geojson", driver="GeoJSON"

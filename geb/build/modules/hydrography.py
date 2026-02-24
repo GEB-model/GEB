@@ -1620,7 +1620,7 @@ class Hydrography(BuildModelBase):
 
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")
 
-    @build_method(required=True, depends_on=["setup_hydrography"])
+    @build_method(required=False, depends_on=["setup_hydrography"])
     def setup_retention_basins(self, retention_basins: Path) -> None:
         """Setup retention basins.
 
@@ -1632,7 +1632,10 @@ class Hydrography(BuildModelBase):
             ValueError: If a retention basin cannot be snapped to the river network.
 
         Sets:
-            routing/retention_basin_ids: A grid with the same dimensions as the model grid, where each pixel that is part of a retention basin has the ID of the river it is associated with, and pixels that are not part of a retention basin have a value of -1.
+            routing/retention_basin_ids: A grid with the same dimensions as the model grid, where each pixel that is
+            part of a retention basin has the ID of the basin it is associated with, and pixels that are not part of a
+            retention basin have a value of -1.
+            routing/retention_basin_data: A table containing the ID of each retention basin and other data (e.g., is_controlled).
         """
         # create a grid with the same dimensions as the model grid to store the retention basin IDs
         retention_basin_ids = full_like(
@@ -1640,7 +1643,9 @@ class Hydrography(BuildModelBase):
         ).compute()
 
         # read the retention basins from the provided file
-        retention_basins = gpd.read_file(retention_basins)
+        retention_basins = gpd.read_file(retention_basins).to_crs(
+            self.grid["mask"].rio.crs
+        )
         rivers = self.geom["routing/rivers"]
 
         retention_basin_data = []
@@ -1650,7 +1655,7 @@ class Hydrography(BuildModelBase):
             "drainage/original_d8_upstream_area_m2"
         ].compute()
 
-        for ID, retention_basin in retention_basins.iterrows():
+        for _, retention_basin in retention_basins.iterrows():
             centroid = retention_basin.geometry.centroid
 
             # the centroid of the retention basin may not fall exactly on the river network,
@@ -1670,11 +1675,14 @@ class Hydrography(BuildModelBase):
             # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
             retention_basin_ids.values[
                 snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
-            ] = ID
+            ] = retention_basin["ID"]
 
             # store the retention basin data in a list to create a table later
             retention_basin_data.append(
-                {"ID": ID, "is_controlled": retention_basin["is_controlled"]}
+                {
+                    "ID": retention_basin["ID"],
+                    "is_controlled": retention_basin["is_controlled"],
+                }
             )
 
         retention_basin_df = pd.DataFrame(retention_basin_data)

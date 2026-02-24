@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Literal
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -41,11 +40,11 @@ def plot_snapping(
     - the upstream area raster (within the map extent), and
     - the closest river segment.
 
-    The resulting figure is saved as a PNG file inside the provided output_folder.
+    The resulting figure is saved as a SVG file inside the provided output_folder.
 
     Args:
         point_id: Identifier or name of the point used in the plot title and output filename.
-        output_folder: Path to the directory where the PNG file will be saved.
+        output_folder: Path to the directory where the SVG file will be saved.
         rivers: GeoDataFrame containing river centerlines used for plotting.
         upstream_area: xarray DataArray with upstream area values used for background plotting.
         original_coords: Tuple (lon, lat) of the original point coordinates.
@@ -222,7 +221,7 @@ def snap_point_to_river_network(
         max_uparea_difference_ratio=max_uparea_difference_ratio,
     )
 
-    if best_river_segment is False:
+    if best_river_segment is None:
         return None
 
     # Then along the selected river segment, we find the closest point on the river line to the original point.
@@ -277,9 +276,7 @@ def snap_point_to_river_network(
         ),
         "snapped_grid_pixel_xy": closest_river_point_and_xy[1],
         "geb_uparea_subgrid": (
-            upstream_area_subgrid.isel(
-                x=closest_river_point_and_xy[1][0], y=closest_river_point_and_xy[1][1]
-            ).item()
+            (river_cell_in_subgrid.x.item(), river_cell_in_subgrid.y.item())
             if include_uparea
             else None
         ),
@@ -300,7 +297,7 @@ def select_river_segment(
     max_spatial_difference_degrees: float,
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
-) -> gpd.GeoDataFrame | Literal[False]:
+) -> gpd.GeoDataFrame | None:
     """Select the closest river segment that matches optional upstream area criteria.
 
     Args:
@@ -310,7 +307,7 @@ def select_river_segment(
         max_uparea_difference_ratio: The maximum allowed difference ratio for upstream area matching.
 
     Returns:
-        The selected river segment or False if no segment meets the criteria.
+        The selected river segment or None if no segment meets the criteria.
     """
     if upstream_area_m2 is None or np.isnan(upstream_area_m2):
         closest_river_segment = rivers_sorted.head(1)
@@ -323,9 +320,9 @@ def select_river_segment(
         ].head(1)
 
     if closest_river_segment.empty:
-        return False
+        return None
 
     if closest_river_segment.iloc[0].station_distance > max_spatial_difference_degrees:
-        return False
+        return None
 
     return closest_river_segment.iloc[0:1]
