@@ -292,11 +292,11 @@ def test_spinup() -> None:
         )
 
         hourly_discharge_data = xr.open_dataarray(
-            routing_report_folder / "discharge_hourly.zarr"
+            routing_report_folder / "discharge_hourly.zarr", consolidated=False
         )
 
         daily_discharge_data = xr.open_dataarray(
-            routing_report_folder / "discharge_daily.zarr"
+            routing_report_folder / "discharge_daily.zarr", consolidated=False
         )
 
         outflow_rivers = geb.hydrology.routing.outflow_rivers

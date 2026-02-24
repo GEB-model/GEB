@@ -281,7 +281,7 @@ class WaterDemand(Module):
 
         domestic_water_demand_m3 = write_to_array(
             domestic_water_demand_m3,
-            domestic_water_demand_per_household,
+            domestic_water_demand_per_household.data,
             household_locations,
             self.model.hydrology.grid.gt,
         )
