@@ -18,6 +18,7 @@ from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
+from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -30,6 +31,7 @@ from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import (
     calculate_height_m,
     calculate_width_m,
+    full_like,
     rasterize_like,
     snap_to_grid,
 )
@@ -1622,3 +1624,72 @@ class Hydrography(BuildModelBase):
             )
 
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")
+
+    @build_method(required=False, depends_on=["setup_hydrography"])
+    def setup_retention_basins(self, retention_basins: Path) -> None:
+        """Setup retention basins.
+
+        Args:
+            retention_basins: A vector file that can be read by geopandas containing the retention basins,
+                with a point geometry representing the location of the retention basin.
+
+        Raises:
+            ValueError: If a retention basin cannot be snapped to the river network.
+
+        Sets:
+            routing/retention_basin_ids: A grid with the same dimensions as the model grid, where each pixel that is
+            part of a retention basin has the ID of the basin it is associated with, and pixels that are not part of a
+            retention basin have a value of -1.
+            routing/retention_basin_data: A table containing the ID of each retention basin and other data (e.g., is_controlled).
+        """
+        # create a grid with the same dimensions as the model grid to store the retention basin IDs
+        retention_basin_ids = full_like(
+            self.grid["mask"], fill_value=-1, nodata=-1, dtype=np.int32
+        ).compute()
+
+        # read the retention basins from the provided file
+        retention_basins = gpd.read_file(retention_basins).to_crs(
+            self.grid["mask"].rio.crs
+        )
+        rivers = self.geom["routing/rivers"]
+
+        retention_basin_data = []
+
+        upstream_area_grid = self.grid["routing/upstream_area_m2"].compute()
+        upstream_area_subgrid = self.other[
+            "drainage/original_d8_upstream_area_m2"
+        ].compute()
+
+        for _, retention_basin in retention_basins.iterrows():
+            centroid = retention_basin.geometry.centroid
+
+            # the centroid of the retention basin may not fall exactly on the river network,
+            # so we snap it to the nearest river pixel using the snap_point_to_river_network function
+            snapped_data = snap_point_to_river_network(
+                point=centroid,
+                rivers=rivers,
+                upstream_area_grid=upstream_area_grid,
+                upstream_area_subgrid=upstream_area_subgrid,
+            )
+            if snapped_data is None:
+                raise ValueError(
+                    f"Could not snap retention basin for basin ID {ID} to river network. "
+                )
+            snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
+
+            # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
+            retention_basin_ids.values[
+                snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+            ] = retention_basin["ID"]
+
+            # store the retention basin data in a list to create a table later
+            retention_basin_data.append(
+                {
+                    "ID": retention_basin["ID"],
+                    "is_controlled": retention_basin["is_controlled"],
+                }
+            )
+
+        retention_basin_df = pd.DataFrame(retention_basin_data)
+        self.set_table(retention_basin_df, name="routing/retention_basin_data")
+        self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")

@@ -1041,6 +1041,17 @@ class Routing(Module):
             self.model.files["grid"]["routing/river_ids"],
         )
 
+        if "routing/retention_basin_ids" in self.model.files["grid"]:
+            self.retention_basin_ids = self.grid.load(
+                self.model.files["grid"]["routing/retention_basin_ids"],
+            )
+            self.retention_basin_data = read_table(
+                self.model.files["table"]["routing/retention_basin_data"]
+            ).set_index("ID")
+        else:
+            self.retention_basin_ids = None
+            self.retention_basin_data = None
+
         self.inflow = {}
         self.inflow_idx: int = -1  # index for the current time step in the inflow data
         if "routing/inflow_m3_per_s" in self.model.files["table"]:
