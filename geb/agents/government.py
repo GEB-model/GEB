@@ -132,10 +132,7 @@ class Government(AgentBaseClass):
             and self.config.get("plant_forest", False)
             and self.model.current_timestep == 0
         ):
-            print(
-                "FOREST PLANTING: Starting farmer removal at timestep 0...",
-                flush=True,
-            )
+            logger.info("FOREST PLANTING: Starting farmer removal at timestep 0...")
 
             logger.info("GOVERNMENT: Starting forest planting workflow at timestep 0")
 
@@ -151,7 +148,7 @@ class Government(AgentBaseClass):
                 else np.array([])
             )
 
-            self.prepare_modified_soil_maps()
+            self.prepare_modified_soil_maps_for_forest()
 
             # Capture after state
             farmers_after = self.model.agents.crop_farmers.n
@@ -163,29 +160,16 @@ class Government(AgentBaseClass):
                 else np.array([])
             )
 
-            # Print summary
-
-            print("FOREST PLANTING WORKFLOW SUMMARY:", flush=True)
-
-            print(
-                f"FARMERS: {farmers_before} → {farmers_after} (removed: {farmers_before - farmers_after})",
-                flush=True,
+            # Summary
+            logger.info("FOREST PLANTING WORKFLOW SUMMARY:")
+            logger.info(
+                f"FARMERS: {farmers_before} → {farmers_after} (removed: {farmers_before - farmers_after})"
             )
-            print(
-                f"FIELDS PLANTED: {planted_fields_before} → {planted_fields_after} (change: {planted_fields_after - planted_fields_before})",
-                flush=True,
+            logger.info(
+                f"FIELDS PLANTED: {planted_fields_before} → {planted_fields_after} (change: {planted_fields_after - planted_fields_before})"
             )
 
             self.forest_planting_done = True
-
-            print(
-                "NEXT TIMESTEP: Hydrology will use new forest soil properties",
-                flush=True,
-            )
-            print(
-                "NEXT TIMESTEP: Farmer agents reflect new land ownership patterns",
-                flush=True,
-            )
 
             logger.info("GOVERNMENT: Forest planting workflow complete")
 
@@ -193,18 +177,18 @@ class Government(AgentBaseClass):
 
         self.report(locals())
 
-    def create_suitability_map_from_zarr_potential(
+    def create_forest_suitability_from_potential(
         self,
-        potential_zarr_path: str | Path,
+        potential_path: str | Path,
         template_da: xr.DataArray,
         threshold_ratio: float = 0.5,
     ) -> xr.DataArray:
-        """Create a binary suitability map from forest restoration potential zarr dataset.
+        """Create a binary suitability map from forest restoration potential dataset.
 
         Uses a simple threshold approach based on restoration potential ratio.
 
         Args:
-            potential_zarr_path: Path to the forest_restoration_potential_ratio.zarr file.
+            potential_path: Path to the forest_restoration_potential_ratio dataset file.
             template_da: Template DataArray defining target grid, CRS, and coordinates.
             threshold_ratio: Minimum restoration potential ratio to consider suitable (default: 0.5).
 
@@ -212,23 +196,23 @@ class Government(AgentBaseClass):
             Binary suitability map (1=suitable, 0=unsuitable) on the template grid.
 
         Raises:
-            FileNotFoundError: If the restoration potential zarr file does not exist.
+            FileNotFoundError: If the restoration potential file does not exist.
         """
         logger.info("\n" + "=" * 80)
         logger.info(
-            "STEP 1: Creating Suitability Map from Forest Restoration Potential (Zarr)"
+            "STEP 1: Creating Suitability Map from Forest Restoration Potential"
         )
         logger.info("=" * 80)
 
-        potential_path = Path(potential_zarr_path)
+        potential_path = Path(potential_path)
         if not potential_path.exists():
             raise FileNotFoundError(
-                f"Forest restoration potential zarr file not found: {potential_path}"
+                f"Forest restoration potential file not found: {potential_path}"
             )
 
         logger.info(f"Loading forest restoration potential from: {potential_path}")
 
-        # Load zarr dataset and compute it to avoid dask issues
+        # Load dataset and compute it to avoid dask issues
         potential_ds = xr.open_zarr(potential_path, consolidated=False)
         potential_data = potential_ds["forest_restoration_potential_ratio"].compute()
 
@@ -275,7 +259,7 @@ class Government(AgentBaseClass):
 
         return suitability_binary
 
-    def modify_bulk_density_relative(
+    def modify_bulk_density_for_forest_relative(
         self,
         bulk_density_ds: xr.Dataset,
         suitability: xr.DataArray,
@@ -343,7 +327,7 @@ class Government(AgentBaseClass):
 
         return modified_ds
 
-    def analyze_soil_by_landcover(
+    def analyze_soil_by_landcover_for_forest(
         self,
         soil_ds: xr.Dataset,
         landcover: xr.DataArray,
@@ -394,7 +378,7 @@ class Government(AgentBaseClass):
 
         return stats_by_class
 
-    def modify_soil_characteristics(
+    def modify_soil_characteristics_for_forest(
         self,
         soil_ds: xr.Dataset,
         landcover_resampled: xr.DataArray,
@@ -461,7 +445,7 @@ class Government(AgentBaseClass):
 
         return modified_ds
 
-    def create_future_landcover_scenario(
+    def create_future_landcover_with_forest(
         self, landcover: xr.DataArray, suitability: xr.DataArray, target_class: int = 10
     ) -> xr.DataArray:
         """Create future land cover scenario by converting suitable areas to forest.
@@ -527,11 +511,6 @@ class Government(AgentBaseClass):
             suitability: Binary suitability map.
             output_path: Optional path to save the figure (default: None, shows plot).
         """
-        logger.info("\n" + "=" * 80)
-        logger.info("CREATING VISUALIZATION PLOTS")
-        logger.info("=" * 80)
-        logger.info("  Downsampling arrays for faster visualization...")
-
         # Load catchment boundary from geoparquet file
         mask_path = Path("input/geom/mask.geoparquet")
         logger.info(f"  Loading catchment boundary from: {mask_path}")
@@ -561,9 +540,6 @@ class Government(AgentBaseClass):
             float(current_landcover.y.max()),
         )
         extent = [x_min, x_max, y_min, y_max]
-
-        logger.info(f"  Visualization array size: {current_downsampled.shape}")
-        logger.info(f"  Plot extent: {extent}")
 
         fig, axes = plt.subplots(2, 2, figsize=(16, 14))
 
@@ -663,15 +639,15 @@ class Government(AgentBaseClass):
 
         This forces hydrology to re-read the modified soil maps.
         """
-        print("HYDROLOGY: Reloading soil properties from modified files...", flush=True)
+        logger.info("HYDROLOGY: Reloading soil properties from modified files...")
 
         # Call the setup_soil_properties method again to reload from files
         self.model.hydrology.landsurface.setup_soil_properties()
 
-        print("HYDROLOGY: Soil properties reloaded successfully!", flush=True)
-        print("Hydrology will now use modified soil maps", flush=True)
+        logger.info("HYDROLOGY: Soil properties reloaded successfully!")
+        logger.info("Hydrology will now use modified soil maps")
 
-    def prepare_modified_soil_maps(self) -> None:
+    def prepare_modified_soil_maps_for_forest(self) -> None:
         """Simplified forest planting workflow - only modify files and reload hydrology.
 
         This approach is much simpler:
@@ -687,13 +663,13 @@ class Government(AgentBaseClass):
         10. This approach is more efficient and avoids potential issues with file I/O and model updates
         11. It allows us to directly see the impact of soil modifications in the next hydrology step without needing to manage modified files
         """
-        print("WORKFLOW: Running complete forest planting workflow...", flush=True)
+        logger.info("WORKFLOW: Running complete forest planting workflow...")
 
-        # Load restored forest potential from model files (zarr dataset)
+        # Load restored forest potential from model files
         forest_potential_path = self.model.files["grid"][
             "landsurface/forest_restoration_potential_ratio"
         ]
-        print(f"Forest restoration potential path: {forest_potential_path}", flush=True)
+        logger.info(f"Forest restoration potential path: {forest_potential_path}")
 
         # Load soil data using model.files paths
         bulk_density_path = self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"]
@@ -718,86 +694,67 @@ class Government(AgentBaseClass):
                 template_da = template_da.rio.write_crs(self.model.hydrology.grid.crs)
 
         # Step 1: Create suitability map from forest restoration potential
-        print(
-            "Creating suitability map from forest restoration potential...",
-            flush=True,
-        )
-        suitability = self.create_suitability_map_from_zarr_potential(
-            potential_zarr_path=forest_potential_path,
+        logger.info("Creating suitability map from forest restoration potential...")
+        suitability = self.create_forest_suitability_from_potential(
+            potential_path=forest_potential_path,
             template_da=template_da,
             threshold_ratio=0.5,
         )
-        print(
-            f"Suitability map created. Shape: {suitability.shape}, Suitable pixels: {(suitability == 1).sum().item():,}",
-            flush=True,
+        logger.info(
+            f"Suitability map created. Shape: {suitability.shape}, Suitable pixels: {(suitability == 1).sum().item():,}"
         )
 
         # Step 2: Resample landcover to match soil grid
-        print("Resampling land cover to match soil grid...", flush=True)
+        logger.info("Resampling land cover to match soil grid...")
         landcover_resampled = landcover.rio.reproject_match(template_da, resampling=0)
-        print(
-            f"Landcover resampled from {landcover.shape} to {landcover_resampled.shape}",
-            flush=True,
+        logger.info(
+            f"Landcover resampled from {landcover.shape} to {landcover_resampled.shape}"
         )
 
         # Step 3: Create future landcover scenario
-        print(
-            "\nCreating future landcover scenario with forest conversions...",
-            flush=True,
-        )
-        future_landcover = self.create_future_landcover_scenario(
+        logger.info("Creating future landcover scenario with forest conversions...")
+        future_landcover = self.create_future_landcover_with_forest(
             landcover=landcover_resampled, suitability=suitability, target_class=10
         )
         n_converted = (
             ((future_landcover == 10) & (landcover_resampled != 10)).sum().item()
         )
-        print(
-            f"Future scenario created. Pixels converted to forest: {n_converted:,}",
-            flush=True,
+        logger.info(
+            f"Future scenario created. Pixels converted to forest: {n_converted:,}"
         )
 
         # Store for farmer removal
         self._landcover_resampled = landcover_resampled
 
         # Step 4: Analyze soil by landcover class
-        print(
-            "\nAnalyzing soil characteristics by land cover class...",
-            flush=True,
-        )
-        soc_stats = self.analyze_soil_by_landcover(
+        logger.info("Analyzing soil characteristics by land cover class...")
+        soc_stats = self.analyze_soil_by_landcover_for_forest(
             soil_ds=soc_ds,
             landcover=landcover_resampled,
             variable_name="soil_organic_carbon_percentage",
             target_class=10,
         )
-        print(
-            f"SOC analysis complete. Forest mean: {soc_stats[10]['mean']:.4f}",
-            flush=True,
-        )
+        logger.info(f"SOC analysis complete. Forest mean: {soc_stats[10]['mean']:.4f}")
 
-        bulk_density_stats = self.analyze_soil_by_landcover(
+        bulk_density_stats = self.analyze_soil_by_landcover_for_forest(
             soil_ds=bulk_density_ds,
             landcover=landcover_resampled,
             variable_name="bulk_density_kg_per_dm3",
             target_class=10,
         )
-        print(
-            f"Bulk density analysis complete. Forest mean: {bulk_density_stats[10]['mean']:.4f}",
-            flush=True,
+        logger.info(
+            f"Bulk density analysis complete. Forest mean: {bulk_density_stats[10]['mean']:.4f}"
         )
 
         # Step 5: Modify soil files with forest values
-        print("\nModifying soil files for converted areas...", flush=True)
+        logger.info("Modifying soil files for converted areas...")
 
         # Get forest soil characteristics from analysis
         forest_soc_mean = soc_stats[10]["mean"]  # Class 10 = forest
         forest_bd_mean = bulk_density_stats[10]["mean"]
 
-        print(f"Applying forest SOC: {forest_soc_mean:.4f}%", flush=True)
-        print(
-            f"Applying forest bulk density: {forest_bd_mean:.4f} kg/m³",
-            flush=True,
-        )
+        logger.info(f"Applying forest SOC: {forest_soc_mean:.4f}%")
+        logger.info(f"Applying forest bulk density: {forest_bd_mean:.4f} kg/m³")
 
         # Create modified SOC map - replace areas where suitability = 1 with forest values
         soc_variable = soc_ds["soil_organic_carbon_percentage"]
@@ -807,58 +764,33 @@ class Government(AgentBaseClass):
         bd_variable = bulk_density_ds["bulk_density_kg_per_dm3"]
         bulk_density_modified = bd_variable.where(suitability != 1, forest_bd_mean)
 
-        # Save modified files and update model to use them
-        print(
-            "Saving modified soil maps...",
-            flush=True,
-        )
-
         # Create modified file paths
         soc_modified_path = str(soc_path).replace(".zarr", "_modified.zarr")
         bd_modified_path = str(bulk_density_path).replace(".zarr", "_modified.zarr")
 
-        print(f"Saving modified SOC to: {soc_modified_path}", flush=True)
-        print(f"Saving modified bulk density to: {bd_modified_path}", flush=True)
-
-        # Save modified SOC - the key inside zarr must match the filename stem
+        # Save modified SOC - dataset key must match the filename stem
         soc_modified_ds = soc_ds.copy()
         soc_modified_ds = soc_modified_ds.drop_vars("soil_organic_carbon_percentage")
         soc_modified_ds["soil_organic_carbon_percentage_modified"] = soc_modified
         soc_modified_ds.to_zarr(soc_modified_path, mode="w")
 
-        # Save modified bulk density - the key inside zarr must match the filename stem
+        # Save modified bulk density - dataset key must match the filename stem
         bd_modified_ds = bulk_density_ds.copy()
         bd_modified_ds = bd_modified_ds.drop_vars("bulk_density_kg_per_dm3")
         bd_modified_ds["bulk_density_kg_per_dm3_modified"] = bulk_density_modified
         bd_modified_ds.to_zarr(bd_modified_path, mode="w")
 
-        print(f"Modified SOC saved to: {soc_modified_path}", flush=True)
-        print(
-            f"Modified bulk density saved to: {bd_modified_path}",
-            flush=True,
-        )
-
         # Update model file paths to use modified versions
-        print("Updating model to use modified soil files...", flush=True)
         self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"] = Path(
             soc_modified_path
         )
         self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"] = Path(
             bd_modified_path
         )
-        print("Model file paths updated", flush=True)
-
         # Step 6: Reload hydrology soil properties to read the modified files
-        print(
-            "\nReloading hydrology soil properties from modified files...",
-            flush=True,
-        )
         self.reload_hydrology_soil_properties()
-        print("Soil properties reloaded successfully!", flush=True)
-        print("Hydrology will now use the modified soil maps", flush=True)
 
         # Step 7: Create visualization (optional - skip for simplicity)
-        print(f"Creating visualization...", flush=True)
         output_folder = self.model.output_folder / "forest_planting"
         output_folder.mkdir(parents=True, exist_ok=True)
         plot_output_path = output_folder / "reforestation_scenario.png"
@@ -868,23 +800,12 @@ class Government(AgentBaseClass):
             suitability=suitability,
             output_path=plot_output_path,
         )
-        print(f"Visualization saved to: {plot_output_path}", flush=True)
+        logger.info(f"Visualization saved to: {plot_output_path}")
 
         # Step 8: Remove farmers from converted areas
-        print("\nRemoving farmers from converted areas...", flush=True)
-        self.remove_farmers_from_converted_areas(future_landcover)
-        print("Farmer removal complete", flush=True)
-        print("HYDROLOGY UPDATE: Updated farmer configuration active!", flush=True)
-        print(
-            " Land ownership updated: Forest areas no longer have farmers",
-            flush=True,
-        )
-        print(
-            "  Hydrology using: Modified soil properties in memory",
-            flush=True,
-        )
+        self.remove_farmers_from_converted_forest_areas(future_landcover)
 
-    def remove_farmers_from_converted_areas(
+    def remove_farmers_from_converted_forest_areas(
         self, future_landcover: xr.DataArray
     ) -> None:
         """Remove farmers from areas that have been converted to forest.
@@ -897,25 +818,21 @@ class Government(AgentBaseClass):
         """
         if not hasattr(self.agents, "crop_farmers"):
             logger.warning("No crop farmers agent found - skipping farmer removal")
-            print(
-                "  [WARNING] No crop farmers agent found - skipping farmer removal",
-                flush=True,
-            )
             return
 
-        print("  Analyzing converted areas...", flush=True)
+        logger.info("Analyzing converted areas and removing farmers where needed")
         logger.info("Removing farmers from converted forest areas...")
 
         crop_farmers = self.agents.crop_farmers
 
         # Check if crop farmers are properly initialized before accessing count
         if not hasattr(crop_farmers.var, "n"):
-            print("  Farmers not fully initialized - skipping farmer count", flush=True)
+            logger.debug("CropFarmers not fully initialized - skipping farmer count")
             logger.warning(
                 "CropFarmers not fully initialized - proceeding without count"
             )
         else:
-            print(f"  Total farmers in model: {crop_farmers.n}", flush=True)
+            logger.info(f"Total farmers in model: {crop_farmers.n}")
 
         # Use the resampled landcover that was used to create the future scenario
         # This ensures both arrays have the same shape and resolution
@@ -927,31 +844,18 @@ class Government(AgentBaseClass):
         original_landcover = self._landcover_resampled.values
 
         # Find locations where landcover changed to forest (class 10 = tree cover in ESA WorldCover)
-        print("  Comparing landcover scenarios...", flush=True)
         converted_mask = (future_landcover.values == 10) & (original_landcover != 10)
-
-        logger.info(f"Future landcover shape: {future_landcover.shape}")
-        logger.info(f"Original landcover shape: {original_landcover.shape}")
-        logger.info(f"Converted mask shape: {converted_mask.shape}")
-        print(
-            f"  Landcover shapes match: {future_landcover.shape} == {original_landcover.shape}",
-            flush=True,
-        )
 
         if not converted_mask.any():
             logger.info("No areas converted to forest, no farmers to remove")
-            print("  No areas converted to forest - nothing to do", flush=True)
             return
 
         n_converted_cells = converted_mask.sum()
         logger.info(f"Found {n_converted_cells:,} grid cells converted to forest")
-        print(
-            f"  Found {n_converted_cells:,} grid cells converted to forest", flush=True
-        )
 
         # Convert subgrid mask to HRU scale
         # Use "last" method since we're working with a binary mask
-        print("  Converting grid mask to HRU scale...", flush=True)
+        logger.info("Converting grid mask to HRU scale")
         converted_mask_HRU = crop_farmers.HRU.convert_subgrid_to_HRU(
             converted_mask.astype(np.int32), method="last"
         )
@@ -961,17 +865,9 @@ class Government(AgentBaseClass):
 
         if len(converted_HRU_indices) == 0:
             logger.info("No HRUs converted to forest")
-            print("  No HRUs converted to forest after scaling", flush=True)
             return
 
-        logger.info(f"Found {len(converted_HRU_indices):,} HRUs converted to forest")
-        print(
-            f"  Found {len(converted_HRU_indices):,} HRUs converted to forest",
-            flush=True,
-        )
-
         # Get land owners for converted HRUs
-        print("  Identifying farmers in converted areas...", flush=True)
         land_owners_in_converted = crop_farmers.HRU.var.land_owners[
             converted_HRU_indices
         ]
@@ -980,11 +876,9 @@ class Government(AgentBaseClass):
         farmer_indices_in_converted = land_owners_in_converted[
             land_owners_in_converted != -1
         ]
-        print(f"  HRUs with farmers: {len(farmer_indices_in_converted):,}", flush=True)
 
         if len(farmer_indices_in_converted) == 0:
             logger.info("No farmers found in converted areas")
-            print("  No farmers found in converted areas", flush=True)
             return
 
         # Get unique farmer indices
@@ -992,16 +886,10 @@ class Government(AgentBaseClass):
         n_farmers_to_remove = len(unique_farmer_indices)
 
         logger.info(f"Removing {n_farmers_to_remove:,} farmers from converted areas")
-        print(f"  Unique farmers to remove: {n_farmers_to_remove:,}", flush=True)
-        logger.info(
-            f"Farmer indices: {unique_farmer_indices[:10]}..."
-            if n_farmers_to_remove > 10
-            else f"Farmer indices: {unique_farmer_indices}"
-        )
 
         # Remove farmers using crop_farmers' remove_agents method
         # The new land use type should be FOREST (hydrology module constant = 0)
-        print("  Removing farmers (this may take a moment)...", flush=True)
+        logger.info("Removing farmers (this may take a moment)")
         removed_HRUs = crop_farmers.remove_agents(
             farmer_indices=unique_farmer_indices,
             new_land_use_type=FOREST,
