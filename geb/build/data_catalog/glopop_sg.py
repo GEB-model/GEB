@@ -146,12 +146,11 @@ class GLOPOP_SG(Adapter):
             data_reshaped = np.reshape(GLOPOP_s, (n_attr, n_people)).transpose()
         except ValueError:
             n_columns = 17
-            n_people = GLOPOP_s.size// n_columns
+            n_people = GLOPOP_s.size // n_columns
             data_reshaped = np.reshape(GLOPOP_s, (n_columns, n_people)).transpose()
             data_reshaped = np.hstack((data_reshaped[:, :-2], data_reshaped[:, -1:]))
             print(region)
-            print('17 columns')
-
+            print("17 columns")
 
         df = pd.DataFrame(
             data_reshaped,

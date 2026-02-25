@@ -362,7 +362,7 @@ class Agents(BuildModelBase):
         oecd_idd = oecd_idd[
             ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         ]
-        # get GDL regions to use their iso_code 
+        # get GDL regions to use their iso_code
         GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
             geom=self.region.union_all()
         )
@@ -1913,7 +1913,7 @@ class Agents(BuildModelBase):
             GLOPOP_S_region = GLOPOP_S_region[
                 GLOPOP_S_region["GRID_CELL"].isin(unique_grid_cells)
             ]
-            
+
             # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefore, we combine these.)
             GLOPOP_S_region["wealth_index"] = (
                 GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
