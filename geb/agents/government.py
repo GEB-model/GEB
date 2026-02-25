@@ -787,14 +787,7 @@ class Government(AgentBaseClass):
 
         crop_farmers = self.agents.crop_farmers
 
-        # Check if crop farmers are properly initialized before accessing count
-        if not hasattr(crop_farmers.var, "n"):
-            logger.debug("CropFarmers not fully initialized - skipping farmer count")
-            logger.warning(
-                "CropFarmers not fully initialized - proceeding without count"
-            )
-        else:
-            logger.info(f"Total farmers in model: {crop_farmers.n}")
+        logger.info(f"Total farmers in model: {crop_farmers.n}")
 
         # Use the resampled landcover that was used to create the future scenario
         # This ensures both arrays have the same shape and resolution
@@ -859,11 +852,11 @@ class Government(AgentBaseClass):
 
         logger.info(f"Successfully removed {n_farmers_to_remove:,} farmers")
         logger.info(f"Total HRUs disowned: {len(removed_HRUs):,}")
-        print(f"  Successfully removed {n_farmers_to_remove:,} farmers", flush=True)
-        print(f"  Total HRUs disowned: {len(removed_HRUs):,}", flush=True)
+        print(f"  Successfully removed {n_farmers_to_remove:,} farmers")
+        print(f"  Total HRUs disowned: {len(removed_HRUs):,}")
 
         # Safe access to remaining farmer count
         if hasattr(crop_farmers.var, "n"):
-            print(f"  Remaining farmers: {crop_farmers.n}", flush=True)
+            print(f"  Remaining farmers: {crop_farmers.n}")
         else:
-            print("  Remaining farmers: (count unavailable after removal)", flush=True)
+            print("  Remaining farmers: (count unavailable after removal)")
