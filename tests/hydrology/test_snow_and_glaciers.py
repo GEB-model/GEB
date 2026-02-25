@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from geb.geb_types import ArrayFloat32
-from geb.hydrology.snow_glaciers import (
+from geb.hydrology.landsurface.snow_glaciers import (
     calculate_albedo,
     calculate_melt,
     calculate_runoff,

@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from geb.hydrology import landsurface
-from geb.hydrology.landsurface import land_surface_model
+from geb.hydrology.landsurface import model as landsurface
+from geb.hydrology.landsurface.model import land_surface_model
 from geb.workflows import balance_check
 
 

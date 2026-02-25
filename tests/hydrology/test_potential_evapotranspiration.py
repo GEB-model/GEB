@@ -13,7 +13,7 @@ from geb.hydrology.landcovers import (
     PADDY_IRRIGATED,
     SEALED,
 )
-from geb.hydrology.potential_evapotranspiration import (
+from geb.hydrology.landsurface.potential_evapotranspiration import (
     W_per_m2_to_MJ_per_m2_per_hour,
     adjust_wind_speed_log_profile,
     get_CO2_induced_crop_factor_adustment,

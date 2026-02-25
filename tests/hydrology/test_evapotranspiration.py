@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from geb.hydrology.evapotranspiration import (
+from geb.hydrology.landsurface.evapotranspiration import (
     calculate_bare_soil_evaporation,
     calculate_transpiration,
     get_critical_soil_moisture_content,

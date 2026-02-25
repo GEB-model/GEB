@@ -1,4 +1,6 @@
 # dev
+- Reorganized `geb/hydrology/` by moving land surface-related modules (`landsurface.py`, `evapotranspiration.py`, `interception.py`, `snow_glaciers.py`, `potential_evapotranspiration.py`) into a new `geb/hydrology/landsurface/` package.
+- Split `soil.py` into `geb/hydrology/landsurface/water.py` (soil hydraulic processes) and `geb/hydrology/landsurface/energy.py` (soil thermal processes).
 - Add Leaf Area Index (LAI) integration in soil net radiation calculation to account for canopy shielding and emission.
 - Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
 - Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.

@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from geb.hydrology.interception import interception
+from geb.hydrology.landsurface.interception import interception
 
 
 def test_interception_no_rainfall_evaporation_only() -> None:
@@ -382,7 +382,9 @@ def test_leaf_area_index_to_interception_capacity_m() -> None:
 
     Formula: S_max (mm) = 0.935 + 0.498*LAI - 0.00575*LAI^2 for LAI > 0.1
     """
-    from geb.hydrology.interception import leaf_area_index_to_interception_capacity_m
+    from geb.hydrology.landsurface.interception import (
+        leaf_area_index_to_interception_capacity_m,
+    )
 
     # Test case 1: LAI <= 0.1 -> Capacity 0
     lai_low = np.array([0.05, 0.1, 0.0], dtype=np.float32)

@@ -27,7 +27,7 @@ from numba import njit
 
 from geb.geb_types import Shape
 
-from .landcovers import (
+from ..landcovers import (
     FOREST,
     GRASSLAND_LIKE,
     NON_PADDY_IRRIGATED,

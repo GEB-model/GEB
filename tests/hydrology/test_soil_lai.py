@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from geb.hydrology.soil import calculate_net_radiation_flux
+from geb.hydrology.landsurface.energy import calculate_net_radiation_flux
 
 
 def test_lai_attenuation() -> None:

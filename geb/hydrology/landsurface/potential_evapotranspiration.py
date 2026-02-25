@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
-from .landcovers import FOREST, GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from ..landcovers import FOREST, GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 
 
 @njit(cache=True, inline="always")

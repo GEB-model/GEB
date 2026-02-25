@@ -19,6 +19,14 @@ from geb.store import Bucket
 from geb.workflows import balance_check
 from geb.workflows.io import read_grid
 
+from ..landcovers import SEALED
+from .energy import (
+    apply_advective_heat_transport,
+    apply_evaporative_cooling,
+    calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
+    get_heat_capacity_solid_fraction,
+    solve_soil_temperature_column,
+)
 from .evapotranspiration import (
     calculate_bare_soil_evaporation,
     calculate_transpiration,
@@ -29,7 +37,6 @@ from .interception import (
     interception,
     leaf_area_index_to_interception_capacity_m,
 )
-from .landcovers import SEALED
 from .potential_evapotranspiration import (
     get_CO2_induced_crop_factor_adustment,
     get_crop_factors_and_root_depths,
@@ -39,14 +46,7 @@ from .potential_evapotranspiration import (
     get_reference_evapotranspiration,
 )
 from .snow_glaciers import snow_model
-from .soil_energy import (
-    apply_advective_heat_transport,
-    apply_evaporative_cooling,
-    calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
-    get_heat_capacity_solid_fraction,
-    solve_soil_temperature_column,
-)
-from .soil_water import (
+from .water import (
     add_water_to_topwater_and_evaporate_open_water,
     get_bubbling_pressure,
     get_interflow,

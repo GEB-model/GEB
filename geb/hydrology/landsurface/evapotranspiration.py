@@ -8,7 +8,7 @@ from numba import njit
 
 from geb.geb_types import ArrayFloat32
 
-from .landcovers import (
+from ..landcovers import (
     FOREST,
     GRASSLAND_LIKE,
     OPEN_WATER,
