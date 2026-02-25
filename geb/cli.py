@@ -743,31 +743,27 @@ def workflow(
     help="Target cumulative upstream area per cluster in km². Defaults to 817,000 km².",
 )
 @click.option(
-    "--area-tolerance",
-    default=0.3,
-    type=float,
-    help="Tolerance for target area as fraction (0.3 = 30% tolerance).",
-)
-@click.option(
     "--cluster-prefix",
     default="cluster",
     help="Prefix for cluster directory names. Defaults to 'cluster'.",
 )
 @click.option(
-    "--overwrite",
+    "--skip-merged-geometries",
     is_flag=True,
-    default=True,
-    help="If set, overwrite existing cluster directories and files.",
+    default=False,
+    help="Skip creating merged geometry file (faster, but no dissolved basin polygons).",
 )
 @click.option(
-    "--save-geoparquet",
-    type=click.Path(),
-    help="Save clusters to geoparquet file at this path. If not specified, saves to 'models/clusters.geoparquet'.",
+    "--skip-visualization",
+    is_flag=True,
+    default=False,
+    help="Skip creating visualization map (faster).",
 )
 @click.option(
-    "--save-map",
-    type=click.Path(),
-    help="Save visualization map to PNG file at this path. If not specified, saves to 'models/clusters_map.png'.",
+    "--min-bbox-efficiency",
+    default=0.99,
+    type=float,
+    help="Minimum bbox efficiency (0-1) for cluster merging. Higher values create more compact/square clusters. Default: 0.97 (97% land fill ratio, allows only ~3% wasted land). Use 0.85 for slightly less compact (85%), 0.70 for moderate compactness, or 0.60 for more elongated shapes.",
 )
 @click.option(
     "--ocean-outlets-only",
@@ -775,50 +771,16 @@ def workflow(
     default=False,
     help="If set, only include clusters that flow to the ocean (exclude endorheic basins).",
 )
+@click.option(
+    "--init-multiple-dir",
+    default="large_scale",
+    help="Name of the subdirectory in models/ where the large scale model directories will be created. Defaults to 'large_scale'.",
+)
 @working_directory_option
-def init_multiple(
-    config: str,
-    build_config: str,
-    update_config: str,
-    working_directory: Path,
-    from_example: str,
-    geometry_bounds: str,
-    region_shapefile: str | None,
-    target_area_km2: float,
-    area_tolerance: float,
-    cluster_prefix: str,
-    overwrite: bool,
-    save_geoparquet: Path | None,
-    save_map: str | None,
-    ocean_outlets_only: bool,
-) -> None:
-    """Initialize multiple models by clustering downstream subbasins in a geometry.
-
-    This command identifies all downstream subbasins (outlets) within a specified
-    bounding box, clusters them by proximity and cumulative upstream area, and
-    creates separate model configurations for each cluster.
-
-    Example for parts of Europe:
-        geb init_multiple --geometry-bounds="5.0,50.0,15.0,55.0"
-
-    By default, a region covering Europe is used. Use --geometry-bounds to specify a different region.
-    """
-    init_multiple_fn(
-        config=config,
-        build_config=build_config,
-        update_config=update_config,
-        working_directory=working_directory,
-        from_example=from_example,
-        geometry_bounds=geometry_bounds,
-        region_shapefile=region_shapefile,
-        target_area_km2=target_area_km2,
-        area_tolerance=area_tolerance,
-        cluster_prefix=cluster_prefix,
-        overwrite=overwrite,
-        save_geoparquet=save_geoparquet,
-        save_map=save_map,
-        ocean_outlets_only=ocean_outlets_only,
-    )
+def init_multiple(*args: Any, **kwargs: Any) -> None:
+    """Initialize a new model for multiple subbasins."""
+    # Initialize the model with the given config and build config
+    init_multiple_fn(*args, **kwargs)
 
 
 @cli.command()

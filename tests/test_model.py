@@ -238,7 +238,12 @@ def test_update_with_dict() -> None:
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "method",
-    ["setup_hydrography", "setup_vegetation", "setup_water_demand"],
+    [
+        "setup_hydrography",
+        "setup_vegetation",
+        "setup_water_demand",
+        "setup_discharge_observations",
+    ],
 )
 def test_update_with_method(method: str) -> None:
     """Test updating model configuration using different methods.
@@ -292,11 +297,11 @@ def test_spinup() -> None:
         )
 
         hourly_discharge_data = xr.open_dataarray(
-            routing_report_folder / "discharge_hourly.zarr"
+            routing_report_folder / "discharge_hourly.zarr", consolidated=False
         )
 
         daily_discharge_data = xr.open_dataarray(
-            routing_report_folder / "discharge_daily.zarr"
+            routing_report_folder / "discharge_daily.zarr", consolidated=False
         )
 
         outflow_rivers = geb.hydrology.routing.outflow_rivers
@@ -625,6 +630,81 @@ def test_setup_inflow() -> None:
                 os.remove(data_folder / "inflow_hydrograph.csv")
             if (data_folder / "inflow_locations.geojson").exists():
                 os.remove(data_folder / "inflow_locations.geojson")
+
+            # restore original input file
+            if (Path("input") / "files.yml.bak").exists():
+                shutil.copy(
+                    Path("input") / "files.yml.bak", Path("input") / "files.yml"
+                )
+                os.remove(Path("input") / "files.yml.bak")
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_setup_retention_basins() -> None:
+    """Test setup of retention basins.
+
+    Verifies that the model can set up retention basins
+    from specified locations and retention basin data files.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        config = parse_config(CONFIG_DEFAULT)
+        config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=10
+        )
+        args["config"] = config
+
+        model: GEBModel = run_model_with_method(
+            method=None,
+            close_after_run=False,
+            **args,
+        )
+        model.run(initialize_only=True)
+        data_folder: Path = Path("data")
+        data_folder.mkdir(parents=True, exist_ok=True)
+
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers.copy()
+
+        start_time = model.spinup_start
+        end_time = model.run_end + model.timestep_length
+
+        model.close()
+
+        retention_basins: gpd.GeoDataFrame = rivers[["geometry"]].copy().to_crs(3857)
+        retention_basins.geometry = retention_basins.geometry.centroid
+        retention_basins = retention_basins.to_crs(4326)
+        retention_basins["ID"] = np.arange(len(retention_basins))
+        retention_basins["is_controlled"] = retention_basins.index.astype(int) % 2 == 0
+        retention_basins.reset_index().to_file(
+            data_folder / "retention_basins.geojson", driver="GeoJSON"
+        )
+
+        try:
+            build_args = DEFAULT_BUILD_ARGS.copy()
+            del build_args["continue_"]
+
+            build_config: dict[str, dict[str, str | bool]] = {}
+            build_config["setup_retention_basins"] = {
+                "retention_basins": str(Path("data") / "retention_basins.geojson"),
+            }
+            build_args["build_config"] = build_config
+
+            # copy the original input file
+            shutil.copy(Path("input") / "files.yml", Path("input") / "files.yml.bak")
+
+            update_fn(**build_args)
+            geb_model = run_model_with_method(
+                method="run", **args, close_after_run=False
+            )
+            assert geb_model.hydrology.routing.retention_basin_data is not None
+            assert geb_model.hydrology.routing.retention_basin_ids is not None
+            geb_model.close()
+
+        finally:
+            # remove retention basin data files
+            if (data_folder / "retention_basins.geojson").exists():
+                os.remove(data_folder / "retention_basins.geojson")
 
             # restore original input file
             if (Path("input") / "files.yml.bak").exists():

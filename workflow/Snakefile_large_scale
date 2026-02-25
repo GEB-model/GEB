@@ -1,0 +1,36 @@
+"""Snakemake workflow for large-scale multi-basin cluster simulations.
+
+This workflow runs the complete GEB pipeline on multiple basin clusters
+created by the 'geb init_multiple' command.
+
+Usage:
+    # Run all clusters
+    snakemake --snakefile Snakefile_large_scale --cores 8
+
+    # Run specific phases
+    snakemake --snakefile Snakefile_large_scale build_all_clusters --cores 4
+    snakemake --snakefile Snakefile_large_scale run_all_clusters --cores 2
+
+    # Run single cluster
+    snakemake --snakefile Snakefile_large_scale complete_cluster --cores 1 --config cluster=test_000
+"""
+
+# Load configuration
+configfile: "config/large_scale.yml"
+
+# Include the large-scale rules
+include: "rules/large_scale.smk"
+
+# Set resource constraints based on configuration
+if "PARALLEL" in config:
+    # Limit concurrent resource-intensive jobs
+    max_builds = config["PARALLEL"].get("max_concurrent_builds", 4)
+    max_runs = config["PARALLEL"].get("max_concurrent_runs", 2)
+
+    # Apply resource constraints to specific rules
+    ruleorder: build_cluster > spinup_cluster > run_cluster
+
+# Optional: Add cluster-specific configuration
+if "cluster" in config:
+    # Override CLUSTER_NAMES to run only specific cluster
+    CLUSTER_NAMES = [config["cluster"]]
