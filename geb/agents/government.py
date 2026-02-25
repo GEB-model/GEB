@@ -643,9 +643,11 @@ class Government(AgentBaseClass):
 
         # Load soil data using model.files paths
         bulk_density_path = self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"]
-        soc_path = self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"]
+        soil_organic_carbon_path = self.model.files["subgrid"][
+            "soil/soil_organic_carbon_percentage"
+        ]
         bulk_density_ds = xr.open_zarr(bulk_density_path)
-        soc_ds = xr.open_zarr(soc_path)
+        soil_organic_carbon_ds = xr.open_zarr(soil_organic_carbon_path)
 
         # Load landcover
         landcover_path = self.model.files["other"]["landcover/classification"]
@@ -694,13 +696,15 @@ class Government(AgentBaseClass):
         self._landcover_resampled = landcover_resampled
 
         logger.info("Analyzing soil characteristics by land cover class...")
-        soc_stats = self.analyze_soil_by_landcover_for_forest(
-            soil_ds=soc_ds,
+        soil_organic_carbon_stats = self.analyze_soil_by_landcover_for_forest(
+            soil_ds=soil_organic_carbon_ds,
             landcover=landcover_resampled,
             variable_name="soil_organic_carbon_percentage",
             target_class=10,
         )
-        logger.info(f"SOC analysis complete. Forest mean: {soc_stats[10]['mean']:.4f}")
+        logger.info(
+            f"Soil organic carbon analysis complete. Forest mean: {soil_organic_carbon_stats[10]['mean']:.4f}"
+        )
 
         bulk_density_stats = self.analyze_soil_by_landcover_for_forest(
             soil_ds=bulk_density_ds,
@@ -715,42 +719,68 @@ class Government(AgentBaseClass):
         logger.info("Modifying soil files for converted areas...")
 
         # Get forest soil characteristics from analysis
-        forest_soc_mean = soc_stats[10]["mean"]  # Class 10 = forest
-        forest_bd_mean = bulk_density_stats[10]["mean"]
+        forest_soil_organic_carbon_mean = soil_organic_carbon_stats[10][
+            "mean"
+        ]  # Class 10 = forest
+        forest_bulk_density_mean = bulk_density_stats[10]["mean"]
 
-        logger.info(f"Applying forest SOC: {forest_soc_mean:.4f}%")
-        logger.info(f"Applying forest bulk density: {forest_bd_mean:.4f} kg/m³")
+        logger.info(
+            f"Applying forest soil organic carbon: {forest_soil_organic_carbon_mean:.4f}%"
+        )
+        logger.info(
+            f"Applying forest bulk density: {forest_bulk_density_mean:.4f} kg/m³"
+        )
 
-        # Create modified SOC map - replace areas where suitability = 1 with forest values
-        soc_variable = soc_ds["soil_organic_carbon_percentage"]
-        soc_modified = soc_variable.where(suitability != 1, forest_soc_mean)
+        # Create modified soil organic carbon map - replace areas where suitability = 1 with forest values
+        soil_organic_carbon_variable = soil_organic_carbon_ds[
+            "soil_organic_carbon_percentage"
+        ]
+        soil_organic_carbon_modified = soil_organic_carbon_variable.where(
+            suitability != 1, forest_soil_organic_carbon_mean
+        )
 
         # Create modified bulk density map
-        bd_variable = bulk_density_ds["bulk_density_kg_per_dm3"]
-        bulk_density_modified = bd_variable.where(suitability != 1, forest_bd_mean)
+        bulk_density_variable = bulk_density_ds["bulk_density_kg_per_dm3"]
+        bulk_density_modified = bulk_density_variable.where(
+            suitability != 1, forest_bulk_density_mean
+        )
 
         # Create modified file paths
-        soc_modified_path = str(soc_path).replace(".zarr", "_modified.zarr")
-        bd_modified_path = str(bulk_density_path).replace(".zarr", "_modified.zarr")
+        soil_organic_carbon_modified_path = str(soil_organic_carbon_path).replace(
+            ".zarr", "_modified.zarr"
+        )
+        bulk_density_modified_path = str(bulk_density_path).replace(
+            ".zarr", "_modified.zarr"
+        )
 
-        # Save modified SOC - dataset key must match the filename stem
-        soc_modified_ds = soc_ds.copy()
-        soc_modified_ds = soc_modified_ds.drop_vars("soil_organic_carbon_percentage")
-        soc_modified_ds["soil_organic_carbon_percentage_modified"] = soc_modified
-        soc_modified_ds.to_zarr(soc_modified_path, mode="w")
+        # Save modified soil organic carbon - dataset key must match the filename stem
+        soil_organic_carbon_modified_ds = soil_organic_carbon_ds.copy()
+        soil_organic_carbon_modified_ds = soil_organic_carbon_modified_ds.drop_vars(
+            "soil_organic_carbon_percentage"
+        )
+        soil_organic_carbon_modified_ds["soil_organic_carbon_percentage_modified"] = (
+            soil_organic_carbon_modified
+        )
+        soil_organic_carbon_modified_ds.to_zarr(
+            soil_organic_carbon_modified_path, mode="w"
+        )
 
         # Save modified bulk density - dataset key must match the filename stem
-        bd_modified_ds = bulk_density_ds.copy()
-        bd_modified_ds = bd_modified_ds.drop_vars("bulk_density_kg_per_dm3")
-        bd_modified_ds["bulk_density_kg_per_dm3_modified"] = bulk_density_modified
-        bd_modified_ds.to_zarr(bd_modified_path, mode="w")
+        bulk_density_modified_ds = bulk_density_ds.copy()
+        bulk_density_modified_ds = bulk_density_modified_ds.drop_vars(
+            "bulk_density_kg_per_dm3"
+        )
+        bulk_density_modified_ds["bulk_density_kg_per_dm3_modified"] = (
+            bulk_density_modified
+        )
+        bulk_density_modified_ds.to_zarr(bulk_density_modified_path, mode="w")
 
         # Update model file paths to use modified versions
         self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"] = Path(
-            soc_modified_path
+            soil_organic_carbon_modified_path
         )
         self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"] = Path(
-            bd_modified_path
+            bulk_density_modified_path
         )
         self.reload_hydrology_soil_properties()
 
