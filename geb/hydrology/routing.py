@@ -622,6 +622,7 @@ class KinematicWave(Router):
         evaporation_m3: ArrayFloat32,
         waterbody_storage_m3: ArrayFloat64,
         outflow_per_waterbody_m3: ArrayFloat32,
+        **kwargs: Any,
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat32,
@@ -641,6 +642,7 @@ class KinematicWave(Router):
             evaporation_m3: Evaporation in m3 for each grid cell in the river network.
             waterbody_storage_m3: Storage of each waterbody in m3.
             outflow_per_waterbody_m3: Outflow of each waterbody in m3.
+            kwargs: Additional keyword arguments.
 
         Returns:
             Q: New discharge array, which is a 1D array with discharge for each grid cell in the river network.
@@ -1172,16 +1174,12 @@ class Routing(Module):
             self.model.files["grid"]["routing/river_ids"],
         )
 
-        if "routing/retention_basin_ids" in self.model.files["grid"]:
-            self.retention_basin_ids = self.grid.load(
-                self.model.files["grid"]["routing/retention_basin_ids"],
-            )
-            self.retention_basin_data = read_table(
-                self.model.files["table"]["routing/retention_basin_data"]
-            ).set_index("ID")
-        else:
-            self.retention_basin_ids = None
-            self.retention_basin_data = None
+        self.retention_basin_ids: ArrayInt32 = self.grid.load(
+            self.model.files["grid"]["routing/retention_basin_ids"],
+        )
+        self.retention_basin_data: pd.DataFrame = read_table(
+            self.model.files["table"]["routing/retention_basin_data"]
+        ).set_index("ID")
 
         self.inflow = {}
         self.inflow_idx: int = -1  # index for the current time step in the inflow data
@@ -1246,16 +1244,16 @@ class Routing(Module):
                 self.grid.var.average_river_width,
                 self.default_missing_channel_width,
             )
-            self.router = KinematicWave(
-                dt=3600,
-                river_network=self.river_network,
-                river_width=river_width,
-                river_length=self.grid.var.river_length,
-                river_alpha=self.grid.var.river_alpha,
-                river_beta=self.var.river_beta,
-                waterbody_id=self.grid.var.waterBodyID,
-                is_waterbody_outflow=is_waterbody_outflow,
-            )
+            # self.router = KinematicWave(
+            #     dt=3600,
+            #     river_network=self.river_network,
+            #     river_width=river_width,
+            #     river_length=self.grid.var.river_length,
+            #     river_alpha=self.grid.var.river_alpha,
+            #     river_beta=self.var.river_beta,
+            #     waterbody_id=self.grid.var.waterBodyID,
+            #     is_waterbody_outflow=is_waterbody_outflow,
+            # )
         elif routing_algorithm == "accuflux":
             self.router = Accuflux(
                 dt=3600,
@@ -1355,6 +1353,10 @@ class Routing(Module):
             (24, self.grid.var.discharge_m3_s_substep.size),
             0,
             dtype=self.grid.var.discharge_m3_s_substep.dtype,
+        )
+
+        self.grid.var.retention_basin_storage_m3 = self.grid.full_compressed(
+            0, dtype=np.float32
         )
 
         self.var.sum_of_all_discharge_steps: ArrayFloat64 = self.grid.full_compressed(
@@ -1616,12 +1618,17 @@ class Routing(Module):
                 self.hydrology.waterbodies.var.storage,
                 waterbody_inflow_m3,
                 outflow_at_pits_m3_routing_step,
+                self.grid.var.retention_basin_storage_m3,
+                retention_inflow_m3,
+                retention_outflow_m3,
             ) = self.router.step(
                 Q_prev_m3_s=self.grid.var.discharge_in_rivers_m3_s_substep,
                 sideflow_m3=side_flow_channel_m3_per_hour.astype(np.float32),
                 evaporation_m3=potential_evaporation_in_rivers_m3_per_hour,
                 waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
+                retention_node_id=self.retention_basin_ids,
+                retention_storage_m3=self.grid.var.retention_basin_storage_m3,
             )
 
             assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
