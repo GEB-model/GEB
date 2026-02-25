@@ -6,12 +6,12 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
 from geb.hydrology.landcovers import FOREST
+from geb.workflows.io import read_geom
 
 from .general import AgentBaseClass
 
@@ -500,14 +500,8 @@ class Government(AgentBaseClass):
             suitability: Binary suitability map.
             output_path: Optional path to save the figure (default: None, shows plot).
         """
-        # Load catchment boundary from geoparquet file
-        mask_path = Path("input/geom/mask.geoparquet")
-        logger.info(f"  Loading catchment boundary from: {mask_path}")
-
-        catchment_gdf = gpd.read_parquet(mask_path)
-        # Reproject to match the landcover data CRS if needed
-        if current_landcover.rio.crs is not None:
-            catchment_gdf = catchment_gdf.to_crs(current_landcover.rio.crs)
+        # Load catchment boundary
+        catchment_gdf = read_geom(self.model.files["geom"]["mask"])
 
         # Downsample arrays by factor of 10 for faster plotting
         current_downsampled = current_landcover.values[::10, ::10]
