@@ -270,7 +270,7 @@ class DynamicArray:
         ufunc: np.ufunc,
         method: Literal["__call__", "reduce", "reduceat", "accumulate", "outer", "at"],
         *inputs: tuple[Any],
-        **kwargs: dict[str, Any],
+        **kwargs: Any,
     ) -> Any:
         """
         Handle NumPy ufuncs applied to DynamicArray instances.
