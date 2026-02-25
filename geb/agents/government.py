@@ -205,6 +205,10 @@ class Government(AgentBaseClass):
         potential_ds = xr.open_zarr(potential_path, consolidated=False)
         potential_data = potential_ds["forest_restoration_potential_ratio"].compute()
 
+        if potential_data.rio.crs is None:
+            potential_data = potential_data.rio.write_crs(template_da.rio.crs)
+            logger.info(f"  Set CRS to match template: {template_da.rio.crs}")
+
         # Compute min/max values safely
         potential_min = float(potential_data.min())
         potential_max = float(potential_data.max())
@@ -233,7 +237,7 @@ class Government(AgentBaseClass):
             (suitable_pixels / total_pixels * 100) if total_pixels > 0 else 0.0
         )
 
-        logger.info(f"\nSuitability map statistics:")
+        logger.info("\nSuitability map statistics:")
         logger.info(f"  Total valid pixels: {total_pixels:,}")
         logger.info(f"  Suitable pixels: {suitable_pixels:,}")
         logger.info(f"  Suitability percentage: {suitability_percentage:.2f}%")
@@ -495,63 +499,35 @@ class Government(AgentBaseClass):
         # Load catchment boundary
         catchment_gdf = read_geom(self.model.files["geom"]["mask"])
 
-        # Downsample arrays by factor of 10 for faster plotting
-        current_downsampled = current_landcover.values[::10, ::10]
-        future_downsampled = future_landcover.values[::10, ::10]
-        suitability_downsampled = suitability.values[::10, ::10]
-
-        # Calculate extent for proper georeferenced plotting
-        x_min, x_max = (
-            float(current_landcover.x.min()),
-            float(current_landcover.x.max()),
-        )
-        y_min, y_max = (
-            float(current_landcover.y.min()),
-            float(current_landcover.y.max()),
-        )
-        extent = [x_min, x_max, y_min, y_max]
-
+        # Use xarray's plotting - it respects coordinates and handles extents
+        # automatically, so we can remove manual extent calculation and
+        # direct numpy downsampling. Overlay catchment boundary from GeoDataFrame.
         fig, axes = plt.subplots(2, 2, figsize=(16, 14))
 
         # Top left: Current landcover
-        im1 = axes[0, 0].imshow(
-            current_downsampled,
-            cmap="tab20",
-            interpolation="nearest",
-            extent=extent,
-            origin="upper",
-        )
+        im1 = current_landcover.plot.imshow(ax=axes[0, 0], cmap="tab20")
         axes[0, 0].set_title("Current Land Cover", fontsize=14, fontweight="bold")
         catchment_gdf.boundary.plot(
             ax=axes[0, 0], color="black", linewidth=2, alpha=0.8
         )
-        plt.colorbar(im1, ax=axes[0, 0], fraction=0.046, pad=0.04)
 
         # Top right: Future landcover
-        im2 = axes[0, 1].imshow(
-            future_downsampled,
-            cmap="tab20",
-            interpolation="nearest",
-            extent=extent,
-            origin="upper",
-        )
+        im2 = future_landcover.plot.imshow(ax=axes[0, 1], cmap="tab20")
         axes[0, 1].set_title(
             "Future Land Cover (with Reforestation)", fontsize=14, fontweight="bold"
         )
         catchment_gdf.boundary.plot(
             ax=axes[0, 1], color="black", linewidth=2, alpha=0.8
         )
-        plt.colorbar(im2, ax=axes[0, 1], fraction=0.046, pad=0.04)
 
-        # Bottom left: Suitability map
-        im3 = axes[1, 0].imshow(
-            suitability_downsampled,
+        # Bottom left: Suitability map (0/1)
+        im3 = suitability.plot.imshow(
+            ax=axes[1, 0],
             cmap="Greens",
             interpolation="nearest",
             vmin=0,
             vmax=1,
-            extent=extent,
-            origin="upper",
+            add_colorbar=False,
         )
         axes[1, 0].set_title(
             "Reforestation Suitability (50% threshold)", fontsize=14, fontweight="bold"
@@ -559,26 +535,18 @@ class Government(AgentBaseClass):
         catchment_gdf.boundary.plot(
             ax=axes[1, 0], color="black", linewidth=2, alpha=0.8
         )
-        cbar3 = plt.colorbar(im3, ax=axes[1, 0], fraction=0.046, pad=0.04)
+        cbar3 = fig.colorbar(im3, ax=axes[1, 0])
         cbar3.set_ticks([0, 1])
         cbar3.set_ticklabels(["Unsuitable", "Suitable"])
 
         # Bottom right: Change map
-        change_map = (future_downsampled != current_downsampled).astype(int)
-        im4 = axes[1, 1].imshow(
-            change_map,
-            cmap="Reds",
-            interpolation="nearest",
-            vmin=0,
-            vmax=1,
-            extent=extent,
-            origin="upper",
-        )
+        change_map = (future_landcover != current_landcover).astype(int)
+        im4 = change_map.plot.imshow(ax=axes[1, 1], cmap="Reds", vmin=0, vmax=1)
         axes[1, 1].set_title("Converted Areas", fontsize=14, fontweight="bold")
         catchment_gdf.boundary.plot(
             ax=axes[1, 1], color="black", linewidth=2, alpha=0.8
         )
-        cbar4 = plt.colorbar(im4, ax=axes[1, 1], fraction=0.046, pad=0.04)
+        cbar4 = fig.colorbar(im4, ax=axes[1, 1])
         cbar4.set_ticks([0, 1])
         cbar4.set_ticklabels(["No Change", "Converted"])
 
@@ -591,9 +559,7 @@ class Government(AgentBaseClass):
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             logger.info("  Saving plot (using reduced DPI for speed)...")
-            plt.savefig(
-                output_path, dpi=150, bbox_inches="tight"
-            )  # Reduced from 300 for speed
+            plt.savefig(output_path, dpi=150, bbox_inches="tight")
             logger.info(f"Saved plot to: {output_path}")
         else:
             plt.show()
