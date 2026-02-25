@@ -530,10 +530,9 @@ class Government(AgentBaseClass):
             origin="upper",
         )
         axes[0, 0].set_title("Current Land Cover", fontsize=14, fontweight="bold")
-        if catchment_gdf is not None:
-            catchment_gdf.boundary.plot(
-                ax=axes[0, 0], color="black", linewidth=2, alpha=0.8
-            )
+        catchment_gdf.boundary.plot(
+            ax=axes[0, 0], color="black", linewidth=2, alpha=0.8
+        )
         plt.colorbar(im1, ax=axes[0, 0], fraction=0.046, pad=0.04)
 
         # Top right: Future landcover
@@ -547,10 +546,9 @@ class Government(AgentBaseClass):
         axes[0, 1].set_title(
             "Future Land Cover (with Reforestation)", fontsize=14, fontweight="bold"
         )
-        if catchment_gdf is not None:
-            catchment_gdf.boundary.plot(
-                ax=axes[0, 1], color="black", linewidth=2, alpha=0.8
-            )
+        catchment_gdf.boundary.plot(
+            ax=axes[0, 1], color="black", linewidth=2, alpha=0.8
+        )
         plt.colorbar(im2, ax=axes[0, 1], fraction=0.046, pad=0.04)
 
         # Bottom left: Suitability map
@@ -566,10 +564,9 @@ class Government(AgentBaseClass):
         axes[1, 0].set_title(
             "Reforestation Suitability (50% threshold)", fontsize=14, fontweight="bold"
         )
-        if catchment_gdf is not None:
-            catchment_gdf.boundary.plot(
-                ax=axes[1, 0], color="black", linewidth=2, alpha=0.8
-            )
+        catchment_gdf.boundary.plot(
+            ax=axes[1, 0], color="black", linewidth=2, alpha=0.8
+        )
         cbar3 = plt.colorbar(im3, ax=axes[1, 0], fraction=0.046, pad=0.04)
         cbar3.set_ticks([0, 1])
         cbar3.set_ticklabels(["Unsuitable", "Suitable"])
@@ -586,10 +583,9 @@ class Government(AgentBaseClass):
             origin="upper",
         )
         axes[1, 1].set_title("Converted Areas", fontsize=14, fontweight="bold")
-        if catchment_gdf is not None:
-            catchment_gdf.boundary.plot(
-                ax=axes[1, 1], color="black", linewidth=2, alpha=0.8
-            )
+        catchment_gdf.boundary.plot(
+            ax=axes[1, 1], color="black", linewidth=2, alpha=0.8
+        )
         cbar4 = plt.colorbar(im4, ax=axes[1, 1], fraction=0.046, pad=0.04)
         cbar4.set_ticks([0, 1])
         cbar4.set_ticklabels(["No Change", "Converted"])
@@ -615,7 +611,7 @@ class Government(AgentBaseClass):
     def reload_hydrology_soil_properties(self) -> None:
         """Reload soil properties in hydrology after modifying soil files.
 
-        This forces hydrology to re-read the modified soil maps.
+        Re-read the modified soil maps.
         """
         logger.info("HYDROLOGY: Reloading soil properties from modified files...")
 
@@ -626,7 +622,7 @@ class Government(AgentBaseClass):
         logger.info("Hydrology will now use modified soil maps")
 
     def prepare_modified_soil_maps_for_forest(self) -> None:
-        """Simplified forest planting workflow - only modify files and reload hydrology.
+        """Forest planting workflow - only modify files and reload hydrology.
 
         This approach is much simpler:
         1. Analyze soil characteristics by land cover
@@ -636,10 +632,6 @@ class Government(AgentBaseClass):
         5. Create visualization (optional)
         6. Skip file saving and model file path updates for simplicity
         7. Skip future land cover scenario creation for simplicity
-        8. Skip detailed statistics and logging for simplicity
-        9. Focus on core steps to demonstrate the concept without complex file handling
-        10. This approach is more efficient and avoids potential issues with file I/O and model updates
-        11. It allows us to directly see the impact of soil modifications in the next hydrology step without needing to manage modified files
         """
         logger.info("WORKFLOW: Running complete forest planting workflow...")
 
