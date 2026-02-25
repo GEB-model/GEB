@@ -7,19 +7,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 import click
-import geopandas as gpd
-from shapely.geometry import box
 
 from geb import GEB_PACKAGE_DIR, __version__
-from geb.build import (
-    cluster_subbasins_following_coastline,
-    create_cluster_visualization_map,
-    create_multi_basin_configs,
-    get_all_downstream_subbasins_in_geom,
-    get_river_graph,
-    save_clusters_as_merged_geometries,
-    save_clusters_to_geoparquet,
-)
 from geb.build.data_catalog import NewDataCatalog
 from geb.runner import (
     ALTER_FROM_MODEL_DEFAULT,
@@ -35,8 +24,8 @@ from geb.runner import (
     WORKING_DIRECTORY_DEFAULT,
     alter_fn,
     build_fn,
-    create_logger,
     init_fn,
+    init_multiple_fn,
     run_model_with_method,
     set_fn,
     share_fn,
@@ -716,169 +705,6 @@ def workflow(
         sys.exit(result.returncode)
 
 
-def init_multiple_fn(
-    config: str | Path,
-    build_config: str | Path,
-    update_config: str | Path,
-    working_directory: str | Path,
-    from_example: str,
-    geometry_bounds: str,
-    target_area_km2: float,
-    cluster_prefix: str,
-    region_shapefile: str | None = None,
-    skip_merged_geometries: bool = False,
-    skip_visualization: bool = False,
-    min_bbox_efficiency: float = 0.99,
-    ocean_outlets_only: bool = False,
-    init_multiple_dir: str = "large_scale",
-) -> None:
-    """Create multiple models from a geometry by clustering downstream subbasins.
-
-    Args:
-        config: Path to the base model configuration file.
-        build_config: Path to the base model build configuration file.
-        update_config: Path to the base model update configuration file.
-        working_directory: Working directory for the models.
-        from_example: Name of the example to use as a base for the models.
-        geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
-        target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
-        cluster_prefix: Prefix for cluster directory names.
-        region_shapefile: Optional path to region shape file. Defaults to geometry bounds if not specified.
-        skip_merged_geometries: If True, skip creating dissolved basin polygon file (much faster).
-        skip_visualization: If True, skip creating visualization map (faster).
-        min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
-        ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
-        init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created.
-
-    Raises:
-        FileNotFoundError: If the example folder does not exist.
-        ValueError: If geometry_bounds format is invalid.
-    """
-    # set paths
-    config: Path = Path(config)
-    build_config: Path = Path(build_config)
-    update_config: Path = Path(update_config)
-    working_directory: Path = Path(working_directory)
-
-    # Initialize data catalog and logger
-    data_catalog_instance = NewDataCatalog()
-    logger = create_logger(working_directory / "init_multiple.log")
-
-    # Create the models/init_multiple_dir directory structure
-    models_dir = Path.cwd().parent / "models"
-    init_multiple_dir = models_dir / init_multiple_dir
-    init_multiple_dir.mkdir(parents=True, exist_ok=True)
-
-    # create river
-    logger.info("Starting multiple model initialization")
-    logger.info(f"Using geometry bounds: {geometry_bounds}")
-    logger.info(f"Target area: {target_area_km2:,.0f} km²")
-
-    logger.info("Loading river network...")
-    river_graph = get_river_graph(data_catalog_instance)
-
-    # Parse geometry bounds and convert to geodataframe
-    bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
-    if len(bounds) != 4:
-        raise ValueError(
-            "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
-        )
-    xmin, ymin, xmax, ymax = bounds
-
-    bbox_geom = gpd.GeoDataFrame(
-        geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
-    )
-
-    downstream_subbasins = get_all_downstream_subbasins_in_geom(
-        data_catalog_instance, bbox_geom, logger
-    )  # get all downstream subbasins in the bounding box geometry
-
-    if not downstream_subbasins:
-        raise ValueError("No downstream subbasins found in the specified geometry")
-
-    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins")
-
-    logger.info("Clustering subbasins by area and proximity...")
-    clusters = cluster_subbasins_following_coastline(
-        data_catalog_instance,
-        downstream_subbasins,
-        target_area_km2=target_area_km2,
-        logger=logger,
-        river_graph=river_graph,
-        min_bbox_efficiency=min_bbox_efficiency,
-    )
-
-    logger.info(f"Created {len(clusters)} clusters")
-
-    # Verify example folder exists
-    example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
-    if not example_folder.exists():
-        raise FileNotFoundError(
-            f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
-        )
-
-    logger.info(f"Creating cluster configurations using example: {from_example}")
-
-    # Create cluster configurations
-    cluster_directories = create_multi_basin_configs(
-        clusters=clusters,
-        working_directory=init_multiple_dir,
-        cluster_prefix=cluster_prefix,
-        data_catalog=data_catalog_instance,
-        river_graph=river_graph,
-    )
-
-    # save geoparquet and maps to default location
-    save_geoparquet = init_multiple_dir / f"{cluster_prefix}_outlets.geoparquet"
-    save_map = init_multiple_dir / f"{cluster_prefix}_clusters_map.png"
-
-    logger.info(f"Saving outlet basins to geoparquet: {save_geoparquet}")
-    # Save outlet-only clusters to geoparquet (simplified geometries)
-    save_clusters_to_geoparquet(
-        clusters=clusters,
-        data_catalog=data_catalog_instance,
-        output_path=save_geoparquet,
-        cluster_prefix=cluster_prefix,
-    )
-
-    # Save complete basins as merged geometries (full upstream basins as single polygons)
-    # This is slow for large datasets, so allow skipping
-    if not skip_merged_geometries:
-        merged_basins_path = (
-            init_multiple_dir / f"{cluster_prefix}_complete_basins.geoparquet"
-        )
-        logger.info(
-            f"Saving complete basins as merged geometries: {merged_basins_path}"
-        )
-        save_clusters_as_merged_geometries(
-            clusters=clusters,
-            data_catalog=data_catalog_instance,
-            river_graph=river_graph,
-            output_path=merged_basins_path,
-            cluster_prefix=cluster_prefix,
-            buffer_distance_km=5.0,  # 5km buffer to merge nearby polygons (reduces MultiPolygon complexity)
-        )
-    else:
-        logger.info("Skipping merged geometries (--skip-merged-geometries flag set)")
-
-    # Create visualization map (optional)
-    if not skip_visualization:
-        logger.info(f"Creating visualization map: {save_map}")
-        create_cluster_visualization_map(
-            clusters=clusters,
-            data_catalog=data_catalog_instance,
-            river_graph=river_graph,
-            output_path=save_map,
-            cluster_prefix=cluster_prefix,
-        )
-    else:
-        logger.info("Skipping visualization map (--skip-visualization flag set)")
-
-    logger.info(
-        f"Successfully created {len(cluster_directories)} model configurations:"
-    )
-
-
 @cli.command()
 @click_config
 @click.option(
@@ -951,66 +777,10 @@ def init_multiple_fn(
     help="Name of the subdirectory in models/ where the large scale model directories will be created. Defaults to 'large_scale'.",
 )
 @working_directory_option
-def init_multiple(
-    config: str,
-    build_config: str,
-    update_config: str,
-    working_directory: Path,
-    from_example: str,
-    geometry_bounds: str,
-    region_shapefile: str | None,
-    target_area_km2: float,
-    cluster_prefix: str,
-    skip_merged_geometries: bool,
-    skip_visualization: bool,
-    min_bbox_efficiency: float,
-    ocean_outlets_only: bool,
-    init_multiple_dir: str,
-) -> None:
-    """Initialize multiple models by clustering downstream subbasins in a geometry.
-
-    This command identifies all downstream subbasins (outlets) within a specified
-    bounding box, clusters them by proximity and cumulative upstream area, and
-    creates separate model configurations for each cluster.
-
-    Example for parts of Europe:
-        geb init_multiple --geometry-bounds="5.0,50.0,15.0,55.0"
-
-    By default, a region covering Europe is used. Use --geometry-bounds to specify a different region.
-
-    Args:
-        config: Path to the base model configuration file.
-        build_config: Path to the base model build configuration file.
-        update_config: Path to the base model update configuration file.
-        working_directory: Working directory for the models.
-        from_example: Name of the example to use as a base for the models.
-        geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select sub-basins
-        target_area_km2: Target cumulative upstream area per cluster
-        cluster_prefix: Prefix used for created cluster directory names and output files.
-        region_shapefile: Optional path to a region shapefile (geopandas-compatible, relative to working directory). Defaults to geometry bounds if not specified.
-        skip_merged_geometries: If True, skip creating dissolved basin polygon file (faster).
-        skip_visualization: If True, skip creating visualization map (faster).
-        min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters and fewer total clusters.
-        ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
-        init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created.
-
-    """
-    init_multiple_fn(
-        config=config,
-        build_config=build_config,
-        update_config=update_config,
-        working_directory=working_directory,
-        from_example=from_example,
-        geometry_bounds=geometry_bounds,
-        region_shapefile=region_shapefile,
-        target_area_km2=target_area_km2,
-        cluster_prefix=cluster_prefix,
-        skip_merged_geometries=skip_merged_geometries,
-        skip_visualization=skip_visualization,
-        min_bbox_efficiency=min_bbox_efficiency,
-        ocean_outlets_only=ocean_outlets_only,
-        init_multiple_dir=init_multiple_dir,
-    )
+def init_multiple(*args: Any, **kwargs: Any) -> None:
+    """Initialize a new model for multiple subbasins."""
+    # Initialize the model with the given config and build config
+    init_multiple_fn(*args, **kwargs)
 
 
 @cli.command()
@@ -1019,6 +789,7 @@ def server() -> None:
     from geb.mcp_server import mcp
 
     mcp.run()
+
 
 @cli.group()
 def tool() -> None:

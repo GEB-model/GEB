@@ -1673,7 +1673,7 @@ class Hydrography(BuildModelBase):
             )
             if snapped_data is None:
                 raise ValueError(
-                    f"Could not snap retention basin for basin ID {ID} to river network. "
+                    f"Could not snap retention basin for basin ID {retention_basin['ID']} to river network. "
                 )
             snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
 
