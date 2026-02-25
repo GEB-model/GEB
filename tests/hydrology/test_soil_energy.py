@@ -6,9 +6,32 @@ from geb.hydrology.landsurface.energy import (
     calculate_sensible_heat_flux,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_heat_capacity_solid_fraction,
+    get_heat_capacity_water_fraction,
     solve_energy_balance_implicit_iterative,
     solve_soil_temperature_column,
 )
+
+
+def test_get_heat_capacity_water_fraction() -> None:
+    """Test get_heat_capacity_water_fraction."""
+    # Test valid input
+    # layer_thickness_m = 0.5
+    # current_water_content_m = 0.1
+    # volumetric_heat_capacity_water = 4.186e6
+    # expected_water_areal_hc = 0.1 * 4.186e6 = 0.4186e6
+
+    layer_thickness = np.array([0.5], dtype=np.float32)
+    current_water = np.array([0.1], dtype=np.float32)
+
+    C_WATER_VOLUMETRIC = 4.186e6
+    expected_water_length = 0.1
+    expected_water_areal_hc = expected_water_length * C_WATER_VOLUMETRIC
+
+    result = get_heat_capacity_water_fraction(current_water_content_m=current_water)
+
+    np.testing.assert_allclose(
+        result, np.array([expected_water_areal_hc], dtype=np.float32), rtol=1e-5
+    )
 
 
 def test_get_heat_capacity() -> None:
@@ -199,7 +222,7 @@ def test_solve_energy_balance_implicit_iterative() -> None:
         air_temperature_K=air_temp_k,
         wind_speed_10m_m_per_s=wind_speed,
         surface_pressure_pa=pressure,
-        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
+        soil_heat_capacity_J_per_m2_K=heat_capacity_areal,
         timestep_seconds=dt_seconds,
         soil_emissivity=soil_emissivity,
         soil_albedo=soil_albedo,
@@ -221,7 +244,7 @@ def test_solve_energy_balance_implicit_iterative() -> None:
         air_temperature_K=air_temp_k,
         wind_speed_10m_m_per_s=wind_speed,
         surface_pressure_pa=pressure,
-        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
+        soil_heat_capacity_J_per_m2_K=heat_capacity_areal,
         timestep_seconds=dt_seconds,
         soil_emissivity=soil_emissivity,
         soil_albedo=soil_albedo,
@@ -241,7 +264,7 @@ def test_solve_energy_balance_implicit_iterative() -> None:
         air_temperature_K=air_temp_k,
         wind_speed_10m_m_per_s=wind_speed,
         surface_pressure_pa=pressure,
-        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
+        soil_heat_capacity_J_per_m2_K=heat_capacity_areal,
         timestep_seconds=dt_seconds,
         soil_emissivity=soil_emissivity,
         soil_albedo=soil_albedo,
@@ -281,7 +304,7 @@ def test_solve_soil_temperature_column() -> None:
     t_new, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
         thermal_conductivities_W_per_m_K=thermal_conductivities,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
@@ -306,7 +329,7 @@ def test_solve_soil_temperature_column() -> None:
     t_new_hot, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
         thermal_conductivities_W_per_m_K=thermal_conductivities,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
@@ -327,7 +350,7 @@ def test_solve_soil_temperature_column() -> None:
     t_new_bottom, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
         thermal_conductivities_W_per_m_K=thermal_conductivities,
         shortwave_radiation_W_per_m2=np.float32(0.0),
         longwave_radiation_W_per_m2=np.float32(363.0),
@@ -374,7 +397,7 @@ def test_solve_soil_temperature_column_snow() -> None:
     t_new_snow, fluxes_snow = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
         thermal_conductivities_W_per_m_K=thermal_conductivities,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
@@ -398,7 +421,7 @@ def test_solve_soil_temperature_column_snow() -> None:
     t_new_control, fluxes_control = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
         thermal_conductivities_W_per_m_K=thermal_conductivities,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,

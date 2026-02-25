@@ -42,6 +42,25 @@ def get_heat_capacity_solid_fraction(
 
 
 @njit(cache=True, inline="always")
+def get_heat_capacity_water_fraction(
+    current_water_content_m: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
+    """Calculate the heat capacity of the water fraction in the soil layer [J/(m2·K)].
+
+    Args:
+        current_water_content_m: Current water water storage in m [m].
+
+    Returns:
+        The areal heat capacity of the water fraction [J/(m2·K)].
+    """
+    # Volumetric heat capacity of water [J/(m3·K)]
+    # (density_water * specific_heat_water) = 1000 * 4186
+    C_WATER_VOLUMETRIC: np.float32 = np.float32(4.186e6)
+
+    return current_water_content_m * C_WATER_VOLUMETRIC
+
+
+@njit(cache=True, inline="always")
 def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
     sand_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     silt_percentage: np.ndarray[Shape, np.dtype[np.float32]],
@@ -243,7 +262,7 @@ def calculate_sensible_heat_flux(
 @njit(cache=True, inline="always")
 def solve_energy_balance_implicit_iterative(
     soil_temperature_C: np.float32,
-    solid_heat_capacity_J_per_m2_K: np.float32,
+    soil_heat_capacity_J_per_m2_K: np.float32,
     shortwave_radiation_W_per_m2: np.float32,
     longwave_radiation_W_per_m2: np.float32,
     air_temperature_K: np.float32,
@@ -264,7 +283,7 @@ def solve_energy_balance_implicit_iterative(
 
     Args:
         soil_temperature_C: Initial soil temperature [C].
-        solid_heat_capacity_J_per_m2_K: Heat capacity of the soil layer [J/m2/K].
+        soil_heat_capacity_J_per_m2_K: Heat capacity of the soil layer [J/m2/K].
         shortwave_radiation_W_per_m2: Incoming shortwave radiation [W/m2].
         longwave_radiation_W_per_m2: Incoming longwave radiation [W/m2].
         air_temperature_K: Air temperature [K].
@@ -311,7 +330,7 @@ def solve_energy_balance_implicit_iterative(
         # Function f(T_new) = C/dt * (T_new - T_old) - (Q_rad + Q_sens)
         # We want f(T_new) = 0
 
-        storage_term_W_per_m2 = (solid_heat_capacity_J_per_m2_K / timestep_seconds) * (
+        storage_term_W_per_m2 = (soil_heat_capacity_J_per_m2_K / timestep_seconds) * (
             T_curr - T_old
         )
         total_flux_W_per_m2 = net_radiation_flux_W_per_m2 + sensible_heat_flux_W_per_m2
@@ -325,7 +344,7 @@ def solve_energy_balance_implicit_iterative(
         # So f'(T_new) = C/dt + radiation_conductance + sensible_heat_conductance
 
         f_prime = (
-            (solid_heat_capacity_J_per_m2_K / timestep_seconds)
+            (soil_heat_capacity_J_per_m2_K / timestep_seconds)
             + radiation_conductance_W_per_m2_K
             + sensible_heat_conductance_W_per_m2_K
         )
@@ -345,14 +364,14 @@ def solve_energy_balance_implicit_iterative(
 def apply_evaporative_cooling(
     soil_temperature_top_layer_C: np.float32,
     evaporation_m: np.float32,
-    solid_heat_capacity_J_per_m2_K: np.float32,
+    soil_heat_capacity_J_per_m2_K: np.float32,
 ) -> np.float32:
     """Apply evaporative cooling to the top soil layer.
 
     Args:
         soil_temperature_top_layer_C: Temperature of the top layer (C).
         evaporation_m: Amount of evaporation (m).
-        solid_heat_capacity_J_per_m2_K: Heat capacity of the top layer (J/m2/K).
+        soil_heat_capacity_J_per_m2_K: Heat capacity of the top layer (J/m2/K).
 
     Returns:
         New temperature of top soil layer (C).
@@ -364,7 +383,7 @@ def apply_evaporative_cooling(
         evaporation_m * density_water_kg_per_m3 * latent_heat_vaporization_J_per_kg
     )
 
-    cooling_K = energy_loss_J_per_m2 / solid_heat_capacity_J_per_m2_K
+    cooling_K = energy_loss_J_per_m2 / soil_heat_capacity_J_per_m2_K
 
     return soil_temperature_top_layer_C - cooling_K
 
@@ -374,7 +393,7 @@ def apply_advective_heat_transport(
     soil_temperature_top_layer_C: np.float32,
     infiltration_amount_m: np.float32,
     rain_temperature_C: np.float32,
-    solid_heat_capacity_J_per_m2_K: np.float32,
+    soil_heat_capacity_J_per_m2_K: np.float32,
 ) -> np.float32:
     """Apply advective heat transport from infiltrating rain to the top soil layer.
 
@@ -386,7 +405,7 @@ def apply_advective_heat_transport(
         soil_temperature_top_layer_C: Temperature of the top layer (C).
         infiltration_amount_m: Amount of infiltration (m).
         rain_temperature_C: Temperature of the rain (C), assumed equal to air temperature.
-        solid_heat_capacity_J_per_m2_K: Heat capacity of the top layer (J/m2/K).
+        soil_heat_capacity_J_per_m2_K: Heat capacity of the top layer (J/m2/K).
 
     Returns:
         New temperature of top soil layer (C).
@@ -407,7 +426,7 @@ def apply_advective_heat_transport(
         * (rain_temperature_C - soil_temperature_top_layer_C)
     )
 
-    temperature_change_K = energy_added_J_per_m2 / solid_heat_capacity_J_per_m2_K
+    temperature_change_K = energy_added_J_per_m2 / soil_heat_capacity_J_per_m2_K
 
     return soil_temperature_top_layer_C + temperature_change_K
 
@@ -416,7 +435,7 @@ def apply_advective_heat_transport(
 def solve_soil_temperature_column(
     soil_temperatures_C: np.ndarray,
     layer_thicknesses_m: np.ndarray,
-    solid_heat_capacities_J_per_m2_K: np.ndarray,
+    soil_heat_capacities_J_per_m2_K: np.ndarray,
     thermal_conductivities_W_per_m_K: np.ndarray,
     shortwave_radiation_W_per_m2: np.float32,
     longwave_radiation_W_per_m2: np.float32,
@@ -440,7 +459,7 @@ def solve_soil_temperature_column(
     Args:
         soil_temperatures_C: Current soil temperatures for each layer [C].
         layer_thicknesses_m: Thickness of each soil layer [m].
-        solid_heat_capacities_J_per_m2_K: Areal heat capacity of the solid fraction for each layer [J/m2/K].
+        soil_heat_capacities_J_per_m2_K: Areal heat capacity for each layer [J/m2/K].
         thermal_conductivities_W_per_m_K: Thermal conductivity of the solid fraction for each layer [W/m-K].
         shortwave_radiation_W_per_m2: Incoming shortwave radiation [W/m2].
         longwave_radiation_W_per_m2: Incoming longwave radiation [W/m2].
@@ -556,7 +575,7 @@ def solve_soil_temperature_column(
 
         # Top soil layer (i = 0) with surface boundary condition
         heat_storage_capacity_normalized_0 = (
-            solid_heat_capacities_J_per_m2_K[0] / timestep_seconds
+            soil_heat_capacities_J_per_m2_K[0] / timestep_seconds
         )
         conductance_to_layer_below = (
             thermal_conductances_between_layer_centers_W_per_m2_K[0]
@@ -584,7 +603,7 @@ def solve_soil_temperature_column(
         # intermediate soil layers
         for i in range(1, n_soil_layers - 1):
             heat_storage_capacity_normalized = (
-                solid_heat_capacities_J_per_m2_K[i] / timestep_seconds
+                soil_heat_capacities_J_per_m2_K[i] / timestep_seconds
             )
             conductance_to_layer_above = (
                 thermal_conductances_between_layer_centers_W_per_m2_K[i - 1]
@@ -609,7 +628,7 @@ def solve_soil_temperature_column(
         # We apply a Dirichlet boundary condition at the bottom using the provided deep soil temperature.
         last_idx = n_soil_layers - 1
         heat_storage_capacity_normalized_last = (
-            solid_heat_capacities_J_per_m2_K[last_idx] / timestep_seconds
+            soil_heat_capacities_J_per_m2_K[last_idx] / timestep_seconds
         )
         conductance_to_layer_above = (
             thermal_conductances_between_layer_centers_W_per_m2_K[last_idx - 1]

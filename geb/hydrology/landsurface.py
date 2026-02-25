@@ -44,6 +44,7 @@ from .soil_energy import (
     apply_evaporative_cooling,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_heat_capacity_solid_fraction,
+    get_heat_capacity_water_fraction,
     solve_soil_temperature_column,
 )
 from .soil_water import (
@@ -298,13 +299,17 @@ def land_surface_model(
                 wind_u10m_m_per_s_cell[hour] ** 2 + wind_v10m_m_per_s_cell[hour] ** 2
             )  # Wind speed at 10m height
 
+            soil_heat_capacities_J_per_m2_K = solid_heat_capacity_J_per_m2_K[
+                :, i
+            ] + get_heat_capacity_water_fraction(
+                current_water_content_m=w[:, i],
+            )
+
             soil_temperature_C[:, i], soil_heat_flux_W_per_m2_cell = (
                 solve_soil_temperature_column(
                     soil_temperatures_C=soil_temperature_C[:, i],
                     layer_thicknesses_m=soil_layer_height[:, i],
-                    solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                        :, i
-                    ],
+                    soil_heat_capacities_J_per_m2_K=soil_heat_capacities_J_per_m2_K,
                     thermal_conductivities_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
                         :, i
                     ],
@@ -485,7 +490,7 @@ def land_surface_model(
                 soil_temperature_top_layer_C=soil_temperature_C[0, i],
                 infiltration_amount_m=infiltration_amount,
                 rain_temperature_C=tas_C,
-                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0, i],
+                soil_heat_capacity_J_per_m2_K=soil_heat_capacities_J_per_m2_K[0],
             )
 
             bottom_layer = N_SOIL_LAYERS - 1  # ty: ignore[unresolved-reference]
@@ -701,7 +706,7 @@ def land_surface_model(
             soil_temperature_C[0, i] = apply_evaporative_cooling(
                 soil_temperature_top_layer_C=soil_temperature_C[0, i],
                 evaporation_m=bare_soil_evaporation_m_cell_hour,
-                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0, i],
+                soil_heat_capacity_J_per_m2_K=soil_heat_capacities_J_per_m2_K[0],
             )
 
         snow_water_equivalent_m[i] = snow_water_equivalent_m_cell
