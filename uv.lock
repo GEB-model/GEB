@@ -1380,7 +1380,7 @@ requires-dist = [
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "seaborn", marker = "extra == 'display'", specifier = ">=0.13.2" },
     { name = "setuptools", specifier = ">=75.8.0" },
-    { name = "snakemake", specifier = "==7.32.4" },
+    { name = "snakemake", specifier = ">=7.32.4,<8" },
     { name = "snakemake-executor-plugin-slurm", specifier = ">=0.13.3" },
     { name = "snakemake-storage-plugin-fs", specifier = ">=1.0.0" },
     { name = "statsmodels", specifier = ">=0.14.5" },
@@ -4805,10 +4805,7 @@ dependencies = [
     { name = "wrapt" },
     { name = "yte" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/b4/fe32a1f3135a1ab4e6bb9b06cf8b5ab5def92c9c6c72e86bd39e9e23cfeb/snakemake-7.32.4.tar.gz", hash = "sha256:5c70ab9d2a737b9b72bb382de3770233d7e5db8b88a8ad1568e7b7c0b470e42a", size = 369615, upload-time = "2023-10-02T13:19:48.147Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/83/bf48af5bafefc6a8269b30b8c2b3b1ba86667ad1b7b0c8f60fda4c49a4012/snakemake-7.32.4-py3-none-any.whl", hash = "sha256:d60037c2fc9eb1b70f61b37b9c0e7d1be98ff885b5a2d0b90c6c9577f0c28e7", size = 493264, upload-time = "2023-10-02T13:19:47.231Z" },
-]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/94/884160dab89886cef7802df0a8c8217bfb2d795427dee01ad0e0dc15964a/snakemake-7.32.4.tar.gz", hash = "sha256:fdc3f15dd7b06fabb7da30d460e0a3b1fba08e4ea91f9c32c47a83705cdc7b6e", size = 371171, upload-time = "2023-09-18T14:47:18.704Z" }
 
 [[package]]
 name = "snakemake-executor-plugin-slurm"
@@ -4896,15 +4893,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1c/0d/fbf95e4ed2f36541798ba2920734cee55bb8fd6724586c8455cc03ecd00b/snakemake_storage_plugin_fs-1.1.3.tar.gz", hash = "sha256:a3d4245915c5973645579afc1e2c7406dd5238ac600cdade388747095ced012e", size = 5010, upload-time = "2025-10-31T10:00:14.144Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/7a/91ffac71cb0a7e6959f780f38b623b81ed34c4f8b77bb7b043cf42565728/snakemake_storage_plugin_fs-1.1.3-py3-none-any.whl", hash = "sha256:6ab494a110b66cc6becba068a544a9d0a0774bd290c19a4a5de03099b3f7f698", size = 5763, upload-time = "2025-10-31T10:00:13.049Z" },
-]
-
-[[package]]
-name = "snowballstemmer"
-version = "3.0.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/75/a7/9810d872919697c9d01295633f5d574fb416d47e535f258272ca1f01f447/snowballstemmer-3.0.1.tar.gz", hash = "sha256:6d5eeeec8e9f84d4d56b847692bacf79bc2c8e90c7f80ca4444ff8b6f2e52895", size = 105575, upload-time = "2025-05-09T16:34:51.843Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/78/3565d011c61f5a43488987ee32b6f3f656e7f107ac2782dd57bdd7d91d9a/snowballstemmer-3.0.1-py3-none-any.whl", hash = "sha256:6cd7b3897da8d6c9ffb968a6781fa6532dce9c3618a4b127d920dab764a19064", size = 103274, upload-time = "2025-05-09T16:34:50.371Z" },
 ]
 
 [[package]]
@@ -4999,6 +4987,12 @@ wheels = [
 ]
 
 [[package]]
+name = "stopit"
+version = "1.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/35/58/e8bb0b0fb05baf07bbac1450c447d753da65f9701f551dca79823ce15d50/stopit-1.1.2.tar.gz", hash = "sha256:f7f39c583fd92027bd9d06127b259aee7a5b7945c1f1fa56263811e1e766996d", size = 18281, upload-time = "2018-02-09T00:32:14.204Z" }
+
+[[package]]
 name = "super-collections"
 version = "0.6.2"
 source = { registry = "https://pypi.org/simple" }
@@ -5009,12 +5003,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/e0/de/a0c3d1244912c2606
 wheels = [
     { url = "https://files.pythonhosted.org/packages/17/43/47c7cf84b3bd74a8631b02d47db356656bb8dff6f2e61a4c749963814d0d/super_collections-0.6.2-py3-none-any.whl", hash = "sha256:291b74d26299e9051d69ad9d89e61b07b6646f86a57a2f5ab3063d206eee9c56", size = 16173, upload-time = "2025-09-30T00:37:07.104Z" },
 ]
-
-[[package]]
-name = "stopit"
-version = "1.1.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/35/58/e8bb0b0fb05baf07bbac1450c447d753da65f9701f551dca79823ce15d50/stopit-1.1.2.tar.gz", hash = "sha256:f7f39c583fd92027bd9d06127b259aee7a5b7945c1f1fa56263811e1e766996d", size = 18281, upload-time = "2018-02-09T00:32:14.204Z" }
 
 [[package]]
 name = "sympy"
