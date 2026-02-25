@@ -126,7 +126,6 @@ class Government(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
-        # Handle forest planting at timestep 0
         if (
             not self.forest_planting_done
             and self.config.get("plant_forest", False)
@@ -505,15 +504,10 @@ class Government(AgentBaseClass):
         mask_path = Path("input/geom/mask.geoparquet")
         logger.info(f"  Loading catchment boundary from: {mask_path}")
 
-        try:
-            catchment_gdf = gpd.read_parquet(mask_path)
-            # Reproject to match the landcover data CRS if needed
-            if current_landcover.rio.crs is not None:
-                catchment_gdf = catchment_gdf.to_crs(current_landcover.rio.crs)
-            logger.info(f"  Catchment boundary loaded with CRS: {catchment_gdf.crs}")
-        except Exception as e:
-            logger.warning(f"  Could not load catchment boundary: {e}")
-            catchment_gdf = None
+        catchment_gdf = gpd.read_parquet(mask_path)
+        # Reproject to match the landcover data CRS if needed
+        if current_landcover.rio.crs is not None:
+            catchment_gdf = catchment_gdf.to_crs(current_landcover.rio.crs)
 
         # Downsample arrays by factor of 10 for faster plotting
         current_downsampled = current_landcover.values[::10, ::10]
