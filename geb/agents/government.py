@@ -195,20 +195,10 @@ class Government(AgentBaseClass):
         Returns:
             Binary suitability map (1=suitable, 0=unsuitable) on the template grid.
 
-        Raises:
-            FileNotFoundError: If the restoration potential file does not exist.
         """
-        logger.info("\n" + "=" * 80)
-        logger.info(
-            "STEP 1: Creating Suitability Map from Forest Restoration Potential"
-        )
-        logger.info("=" * 80)
+        logger.info("Creating Suitability Map from Forest Restoration Potential")
 
         potential_path = Path(potential_path)
-        if not potential_path.exists():
-            raise FileNotFoundError(
-                f"Forest restoration potential file not found: {potential_path}"
-            )
 
         logger.info(f"Loading forest restoration potential from: {potential_path}")
 
@@ -460,7 +450,7 @@ class Government(AgentBaseClass):
         """
         logger.info("\n" + "=" * 80)
         logger.info(
-            f"STEP 2: Creating Future Land Cover Scenario (converting to class {target_class})"
+            f"Creating Future Land Cover Scenario (converting to class {target_class})"
         )
         logger.info("=" * 80)
 
@@ -693,7 +683,6 @@ class Government(AgentBaseClass):
                 landcover = landcover.rio.write_crs(self.model.hydrology.grid.crs)
                 template_da = template_da.rio.write_crs(self.model.hydrology.grid.crs)
 
-        # Step 1: Create suitability map from forest restoration potential
         logger.info("Creating suitability map from forest restoration potential...")
         suitability = self.create_forest_suitability_from_potential(
             potential_path=forest_potential_path,
@@ -704,14 +693,12 @@ class Government(AgentBaseClass):
             f"Suitability map created. Shape: {suitability.shape}, Suitable pixels: {(suitability == 1).sum().item():,}"
         )
 
-        # Step 2: Resample landcover to match soil grid
         logger.info("Resampling land cover to match soil grid...")
         landcover_resampled = landcover.rio.reproject_match(template_da, resampling=0)
         logger.info(
             f"Landcover resampled from {landcover.shape} to {landcover_resampled.shape}"
         )
 
-        # Step 3: Create future landcover scenario
         logger.info("Creating future landcover scenario with forest conversions...")
         future_landcover = self.create_future_landcover_with_forest(
             landcover=landcover_resampled, suitability=suitability, target_class=10
@@ -726,7 +713,6 @@ class Government(AgentBaseClass):
         # Store for farmer removal
         self._landcover_resampled = landcover_resampled
 
-        # Step 4: Analyze soil by landcover class
         logger.info("Analyzing soil characteristics by land cover class...")
         soc_stats = self.analyze_soil_by_landcover_for_forest(
             soil_ds=soc_ds,
@@ -746,7 +732,6 @@ class Government(AgentBaseClass):
             f"Bulk density analysis complete. Forest mean: {bulk_density_stats[10]['mean']:.4f}"
         )
 
-        # Step 5: Modify soil files with forest values
         logger.info("Modifying soil files for converted areas...")
 
         # Get forest soil characteristics from analysis
@@ -787,10 +772,8 @@ class Government(AgentBaseClass):
         self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"] = Path(
             bd_modified_path
         )
-        # Step 6: Reload hydrology soil properties to read the modified files
         self.reload_hydrology_soil_properties()
 
-        # Step 7: Create visualization (optional - skip for simplicity)
         output_folder = self.model.output_folder / "forest_planting"
         output_folder.mkdir(parents=True, exist_ok=True)
         plot_output_path = output_folder / "reforestation_scenario.png"
@@ -802,7 +785,6 @@ class Government(AgentBaseClass):
         )
         logger.info(f"Visualization saved to: {plot_output_path}")
 
-        # Step 8: Remove farmers from converted areas
         self.remove_farmers_from_converted_forest_areas(future_landcover)
 
     def remove_farmers_from_converted_forest_areas(
