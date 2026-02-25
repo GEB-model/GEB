@@ -205,14 +205,6 @@ class Government(AgentBaseClass):
         potential_ds = xr.open_zarr(potential_path, consolidated=False)
         potential_data = potential_ds["forest_restoration_potential_ratio"].compute()
 
-        # Set CRS to match template if missing
-        if potential_data.rio.crs is None:
-            potential_data = potential_data.rio.write_crs(template_da.rio.crs)
-            logger.info(f"  Set CRS to match template: {template_da.rio.crs}")
-
-        logger.info(f"  Potential data shape: {potential_data.shape}")
-        logger.info(f"  Potential data CRS: {potential_data.rio.crs}")
-
         # Compute min/max values safely
         potential_min = float(potential_data.min())
         potential_max = float(potential_data.max())
@@ -630,8 +622,6 @@ class Government(AgentBaseClass):
         3. Directly update hydrology soil arrays in memory
         4. Remove farmers from converted areas
         5. Create visualization (optional)
-        6. Skip file saving and model file path updates for simplicity
-        7. Skip future land cover scenario creation for simplicity
         """
         logger.info("WORKFLOW: Running complete forest planting workflow...")
 
