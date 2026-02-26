@@ -2,21 +2,11 @@
 
 from __future__ import annotations
 
-from ...households import Households
-
-
-import json
-from datetime import datetime
-from pathlib import Path
-
 import geopandas as gpd
 import numpy as np
-import osmnx as ox
 import pandas as pd
-import xarray as xr
-from rasterstats import point_query, zonal_stats
 
-from ....workflows.io import read_zarr, write_zarr
+from ....workflows.io import read_zarr
 from ...households import Households
 
 

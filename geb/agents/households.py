@@ -13,13 +13,11 @@ import xarray as xr
 from pyproj import CRS
 from rasterio.features import shapes
 from rasterio.transform import Affine
-from scipy import interpolate
 from shapely.geometry import shape
-from workflows.households.early_warning import EarlyWarningModule
-from workflows.households.flood_risk import FloodRiskModule
+from .workflows.households.early_warning import EarlyWarningModule
+from .workflows.households.flood_risk import FloodRiskModule
 
 from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
-from geb.workflows.io import read_params
 
 from ..hydrology.landcovers import (
     FOREST,
