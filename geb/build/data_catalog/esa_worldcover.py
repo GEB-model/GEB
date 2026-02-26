@@ -1,18 +1,12 @@
-"""Adapter for ESA WorldCover datasets using STAC API, with direct S3 fallback."""
+"""Adapter for ESA WorldCover datasets using direct AWS S3 access."""
 
 from __future__ import annotations
 
 import math
-import warnings
+import os
 from typing import Any
 
-import numpy as np
-import odc.stac
-import pystac
-import pystac_client
-import rasterio
 import rioxarray  # noqa: F401 – registers .rio accessor on xarray
-import s3fs
 import xarray as xr
 from rioxarray.merge import merge_arrays
 
@@ -56,7 +50,7 @@ def _s3_tile_urls(xmin: float, ymin: float, xmax: float, ymax: float) -> list[st
 
 
 class ESAWorldCover(Adapter):
-    """Adapter for ESA WorldCover datasets using STAC API, with direct S3 fallback."""
+    """Adapter for ESA WorldCover datasets using direct AWS S3 access."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the ESA WorldCover adapter.
@@ -66,35 +60,17 @@ class ESAWorldCover(Adapter):
             **kwargs: Keyword arguments to pass to the Adapter constructor.
         """
         super().__init__(*args, **kwargs)
-        self._use_s3_fallback: bool = False
 
-    def fetch(self, url: str, *args: Any, **kwargs: Any) -> ESAWorldCover:
-        """Fetch the ESA WorldCover dataset from the specified STAC URL.
-
-        Tries the Terrascope STAC endpoint first. If the connection fails (e.g.
-        during a service outage), falls back to reading tiles directly from the
-        public AWS S3 bucket ``esa-worldcover``.
+    def fetch(self, *args: Any, **kwargs: Any) -> ESAWorldCover:
+        """No-op; ESA WorldCover tiles are read directly from AWS S3 on demand.
 
         Args:
-            url: The STAC API URL for the ESA WorldCover collection.
+            *args: Ignored.
+            **kwargs: Ignored.
 
         Returns:
             The ESAWorldCover adapter instance.
         """
-        try:
-            self.collection = pystac.Collection.from_file(url)
-            parent = self.collection.get_parent()
-            assert parent is not None, "Collection has no parent catalog."
-            root_catalog_url = parent.get_self_href()
-            assert root_catalog_url, "Could not determine root catalog URL from collection."
-            self.client = pystac_client.Client.open(root_catalog_url)
-        except Exception as e:
-            warnings.warn(
-                f"Could not connect to Terrascope STAC ({e}). "
-                "Falling back to direct S3 access for ESA WorldCover tiles.",
-                stacklevel=2,
-            )
-            self._use_s3_fallback = True
         return self
 
     def read(
@@ -104,86 +80,7 @@ class ESAWorldCover(Adapter):
         xmax: float,
         ymax: float,
     ) -> xr.DataArray:
-        """Read the ESA WorldCover data for the specified bounding box.
-
-        Args:
-            xmin: Minimum x-coordinate (longitude).
-            ymin: Minimum y-coordinate (latitude).
-            xmax: Maximum x-coordinate (longitude).
-            ymax: Maximum y-coordinate (latitude).
-
-        Returns:
-            xarray.DataArray: The data array containing the ESA WorldCover data for the specified bounding box.
-        """
-        if self._use_s3_fallback:
-            return self._read_from_s3(xmin, ymin, xmax, ymax)
-        return self._read_from_stac(xmin, ymin, xmax, ymax)
-
-    def _read_from_stac(
-        self,
-        xmin: float,
-        ymin: float,
-        xmax: float,
-        ymax: float,
-    ) -> xr.DataArray:
-        """Read tiles via the Terrascope STAC API.
-
-        Args:
-            xmin: Minimum x-coordinate (longitude).
-            ymin: Minimum y-coordinate (latitude).
-            xmax: Maximum x-coordinate (longitude).
-            ymax: Maximum y-coordinate (latitude).
-
-        Returns:
-            xarray.DataArray: The ESA WorldCover data for the specified bounding box.
-        """
-        search_result = self.client.search(
-            collections=[self.collection.id],
-            bbox=(xmin, ymin, xmax, ymax),
-        )
-
-        item_list = list(search_result.items())
-        assert len(item_list) > 0, "No items found for the specified bounding box."
-
-        assets = item_list[0].assets
-        assert len(assets) == 1, "Expected exactly one asset per item."
-        tif_url = list(assets.values())[0].href
-
-        with s3fs.S3FileSystem(anon=True).open(tif_url) as f:
-            src = rasterio.open(f)
-            crs = src.profile["crs"]
-            resolution = abs(src.profile["transform"].a)
-            dtype = src.profile["dtype"]
-            nodata = src.profile["nodata"]
-            nodata = getattr(np, dtype)(nodata)
-
-        ds = (
-            odc.stac.load(
-                item_list,
-                crs=crs,
-                chunks={"x": 3000, "y": 3000},
-                resolution=resolution,
-                dtype=dtype,
-            )
-            .isel(time=0)
-            .rename({"latitude": "y", "longitude": "x"})
-            .sel(
-                x=slice(xmin, xmax),
-                y=slice(ymax, ymin),
-            )
-        )
-        da = ds["ESA_WORLDCOVER_10M_MAP"]
-        da.attrs["_FillValue"] = nodata
-        return da
-
-    def _read_from_s3(
-        self,
-        xmin: float,
-        ymin: float,
-        xmax: float,
-        ymax: float,
-    ) -> xr.DataArray:
-        """Read tiles directly from the public S3 bucket, bypassing STAC.
+        """Read ESA WorldCover data for the specified bounding box from AWS S3.
 
         Uses GDAL's /vsis3/ virtual filesystem so that rasterio manages the S3
         connections internally — avoiding the closed-file-handle issue that occurs
@@ -198,9 +95,7 @@ class ESAWorldCover(Adapter):
         Returns:
             xarray.DataArray: The ESA WorldCover data for the specified bounding box.
         """
-        import os
-
-        # Tell GDAL to use anonymous access and the correct region
+        # Tell GDAL to use anonymous access and the correct bucket region
         os.environ.setdefault("AWS_NO_SIGN_REQUEST", "YES")
         os.environ.setdefault("AWS_DEFAULT_REGION", _S3_REGION)
 
@@ -209,7 +104,7 @@ class ESAWorldCover(Adapter):
         arrays: list[xr.DataArray] = []
         for url in tile_urls:
             # Convert s3:// URL to GDAL /vsis3/ path
-            vsi_path = "/vsis3/" + url[len("s3://"):]
+            vsi_path = "/vsis3/" + url[len("s3://") :]
             da = rioxarray.open_rasterio(vsi_path, chunks={"x": 3000, "y": 3000})
             assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
             arrays.append(da.squeeze("band", drop=True))
