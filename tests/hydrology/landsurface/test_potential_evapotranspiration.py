@@ -287,6 +287,18 @@ def test_get_potential_direct_evaporation() -> None:
     )
     assert np.isclose(direct_evaporation_sealed, 1.2, rtol=1e-6)
 
+    # Test paddy irrigated with canopy shading
+    direct_evaporation_paddy_shaded = get_potential_direct_evaporation(
+        reference_evapotranspiration_grass_m_per_hour=reference_evapotranspiration_grass_m,
+        reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m,
+        leaf_area_index=np.float32(2.0),
+        land_use_type=PADDY_IRRIGATED,
+    )
+    # attenuation = exp(-0.5 * 2.0) = exp(-1) approx 0.3678
+    # 6.0 * 0.3678 approx 2.207
+    assert direct_evaporation_paddy_shaded < 3.0
+    assert math.isclose(direct_evaporation_paddy_shaded, 6.0 * math.exp(-1), rel_tol=1e-5)
+
 
 def test_get_potential_interception_evaporation() -> None:
     """Test the calculation of potential interception evaporation."""

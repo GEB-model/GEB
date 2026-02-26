@@ -1,7 +1,5 @@
 """Functions for calculating evapotranspiration."""
 
-from typing import Literal
-
 import numpy as np
 import numpy.typing as npt
 from numba import njit
@@ -16,7 +14,8 @@ from ..landcovers import (
     SEALED,
 )
 
-N_SOIL_LAYERS: Literal[6] = 6
+# TODO: Load this dynamically as global var (see model.py)
+N_SOIL_LAYERS: int = 6
 
 
 @njit(cache=True, inline="always")
@@ -379,6 +378,7 @@ def calculate_bare_soil_evaporation(
     open_water_evaporation_m: np.float32,
     w_m: npt.NDArray[np.float32],
     wres_m: npt.NDArray[np.float32],
+    wfc_m: npt.NDArray[np.float32],
     unsaturated_hydraulic_conductivity_m_per_hour: np.float32,
 ) -> np.float32:
     """Calculate bare soil evaporation for a single soil cell.
@@ -390,6 +390,7 @@ def calculate_bare_soil_evaporation(
         open_water_evaporation_m: Actual open water evaporation (m).
         w_m: Soil water content (m), shape (N_SOIL_LAYERS,).
         wres_m: Residual soil moisture content (m), shape (N_SOIL_LAYERS,).
+        wfc_m: Field capacity soil moisture content (m), shape (N_SOIL_LAYERS,).
         unsaturated_hydraulic_conductivity_m_per_hour: Unsaturated hydraulic conductivity (m/h).
 
     Returns:
@@ -402,6 +403,18 @@ def calculate_bare_soil_evaporation(
         and land_use_type != OPEN_WATER
         and land_use_type != SEALED
     ):
+        # Apply an additional correction due to dust mulch
+        # reduction based on relative moisture of the top layer.
+        relative_moisture = max(
+            np.float32(0.0),
+            (w_m[0] - wres_m[0]) / (wfc_m[0] - wres_m[0]),
+        )
+        dust_mulch_reduction = min(np.float32(1.0), relative_moisture**2)
+
+        potential_direct_evaporation_m = (
+            potential_direct_evaporation_m * dust_mulch_reduction
+        )
+
         # Limit potential evaporation by the unsaturated hydraulic conductivity
         # This accounts for the reduced ability of the soil to transport water to the surface
         potential_direct_evaporation_m = min(

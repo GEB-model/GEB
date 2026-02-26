@@ -7,8 +7,8 @@ from geb.geb_types import ArrayFloat32, Shape
 
 from ..landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 
-# TODO: Load this dynamically as global var (see soil.py)
-N_SOIL_LAYERS = 6
+# TODO: Load this dynamically as global var (see model.py)
+N_SOIL_LAYERS: int = 6
 
 
 @njit(cache=True, inline="always")

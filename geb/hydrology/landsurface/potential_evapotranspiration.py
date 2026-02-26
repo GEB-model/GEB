@@ -241,7 +241,7 @@ def get_reference_evapotranspiration(
     rsds_W_per_m2: np.float32,
     wind_10m_m_per_s: np.float32,
     soil_heat_flux_W_per_m2: np.float32 = np.float32(0.0),
-    albedo_canopy: np.float32 = np.float32(0.13),
+    albedo_canopy: np.float32 = np.float32(0.23),
     albedo_water: np.float32 = np.float32(0.05),
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Calculate potential evapotranspiration based on Penman-Monteith equation.
@@ -274,7 +274,7 @@ def get_reference_evapotranspiration(
         rsds_W_per_m2: short wave downward surface radiation flux in W/m^2.
         wind_10m_m_per_s: wind speed at 10 m height in m/s.
         soil_heat_flux_W_per_m2: Soil heat flux in W/m^2. Positive = flux INTO the soil.
-        albedo_canopy: albedo of vegetation canopy (default = 0.13).
+        albedo_canopy: albedo of vegetation canopy (default = 0.23 following FAO-56).
         albedo_water: albedo of water surface (default = 0.05).
 
     Returns:
@@ -427,17 +427,21 @@ def get_potential_direct_evaporation(
         Potential direct evaporation (m).
     """
     if land_use_type == PADDY_IRRIGATED or land_use_type == OPEN_WATER:
-        return reference_evapotranspiration_water_m_per_hour
+        attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
+        return max(
+            attenuation_factor * reference_evapotranspiration_water_m_per_hour,
+            np.float32(0.0),
+        )
     elif land_use_type == SEALED:
         # Evaporation from precipitation fallen on sealed area (estimated as 0.2 x ET0 water)
         return np.float32(0.2) * reference_evapotranspiration_water_m_per_hour
     else:
-        # Natural areas: applies Beer's law to a fixed fraction (0.2) of reference grass ET0
+        # Natural areas: applies Beer's law to reference grass ET0.
+        # This partitioning assumes that potential direct evaporation from bare soil
+        # matches the reference ET budget when no canopy is present.
         attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
         return max(
-            attenuation_factor
-            * np.float32(0.2)
-            * reference_evapotranspiration_grass_m_per_hour,
+            attenuation_factor * reference_evapotranspiration_grass_m_per_hour,
             np.float32(0.0),
         )
 

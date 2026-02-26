@@ -66,6 +66,10 @@ from .water import (
 SOIL_ALBEDO = np.float32(0.23)
 SOIL_EMISSIVITY = np.float32(0.95)
 
+# Number of soil layers, set dynamically by set_global_variables
+# Default is 6, matching other modules
+N_SOIL_LAYERS: int = 6
+
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
@@ -450,6 +454,11 @@ def land_surface_model(
                 throughfall_m + runoff_from_melt_m
             )
 
+            # if there is snow, we assume no soil evaporation or transpiration can occur
+            if snow_water_equivalent_m_cell > np.float32(0.0):
+                potential_direct_evaporation_m = np.float32(0.0)
+                potential_transpiration_m_cell_hour = np.float32(0.0)
+
             topwater_m[i], open_water_evaporation_m_cell_hour = (
                 add_water_to_topwater_and_evaporate_open_water(
                     natural_available_water_infiltration_m=natural_available_water_infiltration_m,
@@ -461,21 +470,15 @@ def land_surface_model(
             )
             open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
 
-            # Avoid double counting for paddy irrigation: crop_factor-based potential ET typically
-            # represents *total* ET (evaporation + transpiration). Open-water evaporation is an
-            # evaporation component, so it should reduce the remaining transpiration demand.
-            if land_use_type[i] == PADDY_IRRIGATED:
-                potential_transpiration_m_cell_hour = max(
-                    np.float32(0.0),
-                    potential_transpiration_m_cell_hour
-                    - open_water_evaporation_m_cell_hour,
-                )
-
-            runoff_m[hour, i] += rise_from_groundwater(
+            groundwater_rise = rise_from_groundwater(
                 w=w[:, i],
                 ws=ws[:, i],
                 capillary_rise_from_groundwater=capillar_rise_m[i],
             )
+            if land_use_type[i] == PADDY_IRRIGATED:
+                topwater_m[i] += groundwater_rise
+            else:
+                runoff_m[hour, i] += groundwater_rise
 
             soil_is_frozen = soil_temperature_C[0, i] <= np.float32(0.0)
 
@@ -731,6 +734,7 @@ def land_surface_model(
                 open_water_evaporation_m=open_water_evaporation_m_cell_hour,
                 w_m=w[:, i],
                 wres_m=wres[:, i],
+                wfc_m=wfc[:, i],
                 unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity_m_per_hour,
             )
             bare_soil_evaporation[i] += bare_soil_evaporation_m_cell_hour
@@ -884,8 +888,14 @@ class LandSurface(Module):
         to change the number of soil layers between different datasets.
         """
         # set number of soil layers as global variable for numba
-        global N_SOIL_LAYERS  # ty: ignore[unresolved-global]
+        global N_SOIL_LAYERS
         N_SOIL_LAYERS = self.HRU.var.soil_layer_height_m.shape[0]
+
+        # propagate to other modules that use this global variable
+        from . import evapotranspiration, water
+
+        evapotranspiration.N_SOIL_LAYERS = N_SOIL_LAYERS
+        water.N_SOIL_LAYERS = N_SOIL_LAYERS
 
     def _build_land_surface_inputs(
         self,
