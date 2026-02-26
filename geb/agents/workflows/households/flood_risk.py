@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 
 from ....workflows.io import read_zarr
-from ...households import Households
+
+if TYPE_CHECKING:
+    from ...households import Households
 
 
 class FloodRiskModule:

@@ -14,8 +14,6 @@ from pyproj import CRS
 from rasterio.features import shapes
 from rasterio.transform import Affine
 from shapely.geometry import shape
-from .workflows.households.early_warning import EarlyWarningModule
-from .workflows.households.flood_risk import FloodRiskModule
 
 from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
 
@@ -27,6 +25,8 @@ from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.io import read_array, read_table, read_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
+from .workflows.households.early_warning import EarlyWarningModule
+from .workflows.households.flood_risk import FloodRiskModule
 
 if TYPE_CHECKING:
     from geb.agents import Agents

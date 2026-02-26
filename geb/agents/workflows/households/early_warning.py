@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
@@ -14,7 +15,9 @@ import xarray as xr
 from rasterstats import point_query, zonal_stats
 
 from ....workflows.io import read_zarr, write_zarr
-from ...households import Households
+
+if TYPE_CHECKING:
+    from ...households import Households
 
 
 class EarlyWarningModule:
