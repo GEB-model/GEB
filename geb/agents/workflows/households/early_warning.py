@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,8 @@ class EarlyWarningModule:
     def __init__(self, households: Households) -> None:
         """Initialize the EarlyWarningModule with a reference to the Households agent."""
         self.households: Households = households
+        self.load_critical_infrastructure()  # ideally this should be done in the setup_assets when building the model
+        self.load_wlranges_and_measures()
 
     def assign_households_to_postal_codes(self) -> None:
         """This function associates the household points with their postal codes to get the correct geometry for the warning function."""
@@ -686,6 +689,20 @@ class EarlyWarningModule:
             / f"actions_log_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
         )
         pd.DataFrame(actions_log).to_csv(path, index=False)
+
+    def load_wlranges_and_measures(self) -> None:
+        """Loads the water level ranges and appropriate measures, and the implementation times for measures."""
+        with open(
+            self.households.model.files["dict"]["measures/implementation_times"], "r"
+        ) as f:
+            self.households.var.implementation_times = json.load(f)
+
+        with open(self.households.model.files["dict"]["measures/wl_ranges"], "r") as f:
+            wlranges_and_measures = json.load(f)
+            # convert the keys (range ids) to integers and store them in a new dictionary
+            self.households.var.wlranges_and_measures = {
+                int(key): value for key, value in wlranges_and_measures.items()
+            }
 
     def load_critical_infrastructure(self) -> None:
         """Load critical infrastructure elements (vulnerable and emergency facilities, energy substations) and assign them to postal codes."""

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -138,7 +137,6 @@ class Households(AgentBaseClass):
             else {}
         )
         self.decision_module = DecisionModule()
-        self.early_warning_module = EarlyWarningModule(self)
         if self.config["adapt"]:
             self.load_flood_maps()
             self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
@@ -148,8 +146,7 @@ class Households(AgentBaseClass):
         self.load_max_damage_values()
         self.load_damage_curves()
         if self.model.config["agent_settings"]["households"]["warning_response"]:
-            self.load_critical_infrastructure()  # ideally this should be done in the setup_assets when building the model
-            self.load_wlranges_and_measures()
+            self.early_warning_module = EarlyWarningModule(self)
 
         if self.model.in_spinup:
             self.spinup()
@@ -876,18 +873,6 @@ class Households(AgentBaseClass):
         self.var.rail_curve = self.var.rail_curve.rename(
             columns={"damage_ratio": "rail"}
         )
-
-    def load_wlranges_and_measures(self) -> None:
-        """Loads the water level ranges and appropriate measures, and the implementation times for measures."""
-        with open(self.model.files["dict"]["measures/implementation_times"], "r") as f:
-            self.var.implementation_times = json.load(f)
-
-        with open(self.model.files["dict"]["measures/wl_ranges"], "r") as f:
-            wlranges_and_measures = json.load(f)
-            # convert the keys (range ids) to integers and store them in a new dictionary
-            self.var.wlranges_and_measures = {
-                int(key): value for key, value in wlranges_and_measures.items()
-            }
 
     def create_damage_interpolators(self) -> None:
         """This function creates interpolation functions for the damage curves."""
