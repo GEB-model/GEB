@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-import os
 from typing import Any
 
+import rasterio
 import rioxarray  # noqa: F401 – registers .rio accessor on xarray
 import xarray as xr
 from rioxarray.merge import merge_arrays
@@ -62,7 +62,7 @@ class ESAWorldCover(Adapter):
         super().__init__(*args, **kwargs)
 
     def fetch(self, *args: Any, **kwargs: Any) -> ESAWorldCover:
-        """No-op; ESA WorldCover tiles are read directly from AWS S3 on demand.
+        """No pre-fetching required; tiles are read directly from AWS S3 in read().
 
         Args:
             *args: Ignored.
@@ -82,10 +82,6 @@ class ESAWorldCover(Adapter):
     ) -> xr.DataArray:
         """Read ESA WorldCover data for the specified bounding box from AWS S3.
 
-        Uses GDAL's /vsis3/ virtual filesystem so that rasterio manages the S3
-        connections internally — avoiding the closed-file-handle issue that occurs
-        when passing lazy dask arrays opened via s3fs context managers.
-
         Args:
             xmin: Minimum x-coordinate (longitude).
             ymin: Minimum y-coordinate (latitude).
@@ -95,29 +91,32 @@ class ESAWorldCover(Adapter):
         Returns:
             xarray.DataArray: The ESA WorldCover data for the specified bounding box.
         """
-        # Tell GDAL to use anonymous access and the correct bucket region
-        os.environ.setdefault("AWS_NO_SIGN_REQUEST", "YES")
-        os.environ.setdefault("AWS_DEFAULT_REGION", _S3_REGION)
-
         tile_urls = _s3_tile_urls(xmin, ymin, xmax, ymax)
 
-        arrays: list[xr.DataArray] = []
-        for url in tile_urls:
-            # Convert s3:// URL to GDAL /vsis3/ path
-            vsi_path = "/vsis3/" + url[len("s3://") :]
-            da = rioxarray.open_rasterio(vsi_path, chunks={"x": 3000, "y": 3000})
-            assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
-            arrays.append(da.squeeze("band", drop=True))
+        # Scope GDAL config locally so it does not affect other S3 operations
+        with rasterio.Env(AWS_NO_SIGN_REQUEST="YES", AWS_DEFAULT_REGION=_S3_REGION):
+            arrays: list[xr.DataArray] = []
+            for url in tile_urls:
+                # Convert s3:// URL to GDAL /vsis3/ path
+                vsi_path = "/vsis3/" + url[len("s3://") :]
+                da = rioxarray.open_rasterio(vsi_path, chunks={"x": 3000, "y": 3000})
+                assert isinstance(da, xr.DataArray), (
+                    f"Expected DataArray, got {type(da)}"
+                )
+                arrays.append(da.squeeze("band", drop=True))
 
-        assert len(arrays) > 0, (
-            f"No ESA WorldCover S3 tiles found for bbox ({xmin}, {ymin}, {xmax}, {ymax})."
-        )
+            assert len(arrays) > 0, (
+                f"No ESA WorldCover S3 tiles found for bbox ({xmin}, {ymin}, {xmax}, {ymax})."
+            )
 
-        merged = merge_arrays(arrays) if len(arrays) > 1 else arrays[0]
-        nodata = merged.attrs.get("_FillValue", merged.attrs.get("missing_value", 0))
-        merged = merged.sel(
-            x=slice(xmin, xmax),
-            y=slice(ymax, ymin),
-        )
+            merged = merge_arrays(arrays) if len(arrays) > 1 else arrays[0]
+            nodata = merged.attrs.get("_FillValue")
+            merged = merged.sel(
+                x=slice(xmin, xmax),
+                y=slice(ymax, ymin),
+            )
+            # Force all S3 reads within the scoped env before the context exits
+            merged = merged.compute()
+
         merged.attrs["_FillValue"] = nodata
         return merged
