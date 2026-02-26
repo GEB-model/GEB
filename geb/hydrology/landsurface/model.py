@@ -25,7 +25,6 @@ from .energy import (
     apply_evaporative_cooling,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_heat_capacity_solid_fraction,
-    get_heat_capacity_water_fraction,
     solve_soil_temperature_column,
 )
 from .evapotranspiration import (
@@ -109,6 +108,8 @@ def land_surface_model(
     soil_temperature_C: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32,
     solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32,
+    bulk_density_kg_per_dm3: TwoDArrayFloat32,
+    sand_percentage: TwoDArrayFloat32,
     delta_z: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     soil_layer_height: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     root_depth_m: ArrayFloat32,
@@ -188,6 +189,8 @@ def land_surface_model(
         soil_temperature_C: Soil temperature in Celsius.
         solid_heat_capacity_J_per_m2_K: Solid heat capacity of soil layers [J/m2/K].
         solid_thermal_conductivity_W_per_m_K: Solid thermal conductivity of soil layers [W/m/K].
+        bulk_density_kg_per_dm3: Bulk density of soil layers [kg/dm3].
+        sand_percentage: Sand percentage of soil layers [%].
         delta_z: Thickness of soil layers [m].
         soil_layer_height: Soil layer heights for the cell in meters, shape (N_SOIL_LAYERS,).
         root_depth_m: Root depth for the cell in meters.
@@ -299,32 +302,43 @@ def land_surface_model(
                 wind_u10m_m_per_s_cell[hour] ** 2 + wind_v10m_m_per_s_cell[hour] ** 2
             )  # Wind speed at 10m height
 
-            soil_heat_capacities_J_per_m2_K = solid_heat_capacity_J_per_m2_K[
-                :, i
-            ] + get_heat_capacity_water_fraction(
-                current_water_content_m=w[:, i],
-            )
+            volumetric_water_content_cell = w[:, i] / soil_layer_height[:, i]
+            degree_of_saturation_cell = w[:, i] / ws[:, i]
+            porosity_cell = ws[:, i] / soil_layer_height[:, i]
 
-            soil_temperature_C[:, i], soil_heat_flux_W_per_m2_cell = (
-                solve_soil_temperature_column(
-                    soil_temperatures_C=soil_temperature_C[:, i],
-                    layer_thicknesses_m=soil_layer_height[:, i],
-                    soil_heat_capacities_J_per_m2_K=soil_heat_capacities_J_per_m2_K,
-                    thermal_conductivities_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
-                        :, i
-                    ],
-                    shortwave_radiation_W_per_m2=rsds_W_per_m2_cell[hour],
-                    longwave_radiation_W_per_m2=rlds_W_per_m2_cell[hour],
-                    air_temperature_K=tas_2m_K_cell[hour],
-                    wind_speed_10m_m_per_s=wind_10m_m_per_s,
-                    surface_pressure_pa=ps_pascal_cell[hour],
-                    timestep_seconds=np.float32(3600.0),
-                    deep_soil_temperature_C=deep_soil_temperature_C[i],
-                    soil_emissivity=SOIL_EMISSIVITY,
-                    soil_albedo=SOIL_ALBEDO,
-                    leaf_area_index=leaf_area_index[i],
-                    snow_water_equivalent_m=snow_water_equivalent_m_cell,
-                )
+            # We calculate total sensible heat capacity for advection/evaporation cooling
+            # But specific solid fraction for the implicit solver
+            # Only solid fraction
+            solid_heat_capacities_J_per_m2_K_cell = solid_heat_capacity_J_per_m2_K[:, i]
+
+            (
+                soil_temperature_C[:, i],
+                soil_heat_flux_W_per_m2_cell,
+                total_sensible_heat_capacities_J_per_m2_K,
+            ) = solve_soil_temperature_column(
+                soil_temperatures_C=soil_temperature_C[:, i],
+                layer_thicknesses_m=soil_layer_height[:, i],
+                solid_heat_capacities_J_per_m2_K=solid_heat_capacities_J_per_m2_K_cell,
+                thermal_conductivity_solid_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
+                    :, i
+                ],
+                porosity=porosity_cell,
+                sand_percentage=sand_percentage[:, i],
+                volumetric_water_content=volumetric_water_content_cell,
+                degree_of_saturation=degree_of_saturation_cell,
+                shortwave_radiation_W_per_m2=rsds_W_per_m2_cell[hour],
+                longwave_radiation_W_per_m2=rlds_W_per_m2_cell[hour],
+                air_temperature_K=tas_2m_K_cell[hour],
+                wind_speed_10m_m_per_s=wind_10m_m_per_s,
+                surface_pressure_pa=ps_pascal_cell[hour],
+                timestep_seconds=np.float32(3600.0),
+                deep_soil_temperature_C=deep_soil_temperature_C[i],
+                soil_emissivity=SOIL_EMISSIVITY,
+                soil_albedo=SOIL_ALBEDO,
+                leaf_area_index=leaf_area_index[i],
+                snow_water_equivalent_m=snow_water_equivalent_m_cell,
+                snow_temperature_C=snow_temperature_C_cell,
+                topwater_m=topwater_m[i],
             )
 
             (
@@ -490,7 +504,9 @@ def land_surface_model(
                 soil_temperature_top_layer_C=soil_temperature_C[0, i],
                 infiltration_amount_m=infiltration_amount,
                 rain_temperature_C=tas_C,
-                soil_heat_capacity_J_per_m2_K=soil_heat_capacities_J_per_m2_K[0],
+                soil_heat_capacity_J_per_m2_K=total_sensible_heat_capacities_J_per_m2_K[
+                    0
+                ],
             )
 
             bottom_layer = N_SOIL_LAYERS - 1  # ty: ignore[unresolved-reference]
@@ -705,8 +721,11 @@ def land_surface_model(
 
             soil_temperature_C[0, i] = apply_evaporative_cooling(
                 soil_temperature_top_layer_C=soil_temperature_C[0, i],
-                evaporation_m=bare_soil_evaporation_m_cell_hour,
-                soil_heat_capacity_J_per_m2_K=soil_heat_capacities_J_per_m2_K[0],
+                evaporation_m=bare_soil_evaporation_m_cell_hour
+                + open_water_evaporation_m_cell_hour,
+                soil_heat_capacity_J_per_m2_K=total_sensible_heat_capacities_J_per_m2_K[
+                    0
+                ],
             )
 
         snow_water_equivalent_m[i] = snow_water_equivalent_m_cell
@@ -762,6 +781,8 @@ class LandSurfaceInputs(NamedTuple):
     soil_temperature_C: TwoDArrayFloat32
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
     solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32
+    bulk_density_kg_per_dm3: TwoDArrayFloat32
+    sand_percentage: TwoDArrayFloat32
     delta_z: TwoDArrayFloat32
     soil_layer_height: TwoDArrayFloat32
     root_depth_m: ArrayFloat32
@@ -809,6 +830,7 @@ class LandSurfaceVariables(Bucket):
     clay_percentage: TwoDArrayFloat32
     sand_percentage: TwoDArrayFloat32
     silt_percentage: TwoDArrayFloat32
+    bulk_density_kg_per_dm3: TwoDArrayFloat32
     soil_layer_height: TwoDArrayFloat32
     snow_water_equivalent_m: ArrayFloat32
     liquid_water_in_snow_m: ArrayFloat32
@@ -935,6 +957,8 @@ class LandSurface(Module):
             soil_temperature_C=self.HRU.var.soil_temperature_C,
             solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
             solid_thermal_conductivity_W_per_m_K=self.HRU.var.solid_thermal_conductivity_W_per_m_K,
+            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+            sand_percentage=self.HRU.var.sand_percentage,
             delta_z=delta_z,
             soil_layer_height=self.HRU.var.soil_layer_height_m,
             root_depth_m=root_depth_m,
@@ -1140,6 +1164,7 @@ class LandSurface(Module):
             ),
             method="mean",
         )
+        self.HRU.var.bulk_density_kg_per_dm3 = bulk_density_kg_per_dm3
         self.HRU.var.silt_percentage: TwoDArrayFloat32 = (
             self.HRU.convert_subgrid_to_HRU(
                 read_grid(

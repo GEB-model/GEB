@@ -486,6 +486,8 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     soil_temperature_C = np.full_like(w, -5.0)  # Assume frozen/cold
     solid_heat_capacity_J_per_m2_K = np.full_like(w, 2e5)
     solid_thermal_conductivity_W_per_m_K = np.full_like(w, 2.0)
+    bulk_density_kg_per_dm3 = np.full_like(w, 1.3)
+    sand_percentage = np.full_like(w, 40.0)
 
     # Capture previous values before calling the model (arrays get modified in-place)
     snow_water_equivalent_prev = snow_water_equivalent_m.copy()
@@ -507,6 +509,8 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         soil_temperature_C=soil_temperature_C,
         solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
         solid_thermal_conductivity_W_per_m_K=solid_thermal_conductivity_W_per_m_K,
+        bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+        sand_percentage=sand_percentage,
         delta_z=delta_z,
         soil_layer_height=soil_layer_height,
         root_depth_m=root_depth_m,

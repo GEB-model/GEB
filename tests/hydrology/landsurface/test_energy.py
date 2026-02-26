@@ -4,34 +4,11 @@ import numpy as np
 
 from geb.hydrology.landsurface.energy import (
     calculate_sensible_heat_flux,
+    calculate_soil_thermal_conductivity,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_heat_capacity_solid_fraction,
-    get_heat_capacity_water_fraction,
-    solve_energy_balance_implicit_iterative,
     solve_soil_temperature_column,
 )
-
-
-def test_get_heat_capacity_water_fraction() -> None:
-    """Test get_heat_capacity_water_fraction."""
-    # Test valid input
-    # layer_thickness_m = 0.5
-    # current_water_content_m = 0.1
-    # volumetric_heat_capacity_water = 4.186e6
-    # expected_water_areal_hc = 0.1 * 4.186e6 = 0.4186e6
-
-    layer_thickness = np.array([0.5], dtype=np.float32)
-    current_water = np.array([0.1], dtype=np.float32)
-
-    C_WATER_VOLUMETRIC = 4.186e6
-    expected_water_length = 0.1
-    expected_water_areal_hc = expected_water_length * C_WATER_VOLUMETRIC
-
-    result = get_heat_capacity_water_fraction(current_water_content_m=current_water)
-
-    np.testing.assert_allclose(
-        result, np.array([expected_water_areal_hc], dtype=np.float32), rtol=1e-5
-    )
 
 
 def test_get_heat_capacity() -> None:
@@ -159,6 +136,49 @@ def test_calculate_thermal_conductivity_solid_fraction() -> None:
         )
 
 
+def test_calculate_soil_thermal_conductivity() -> None:
+    """Test the total soil thermal conductivity calculation."""
+    # Input data
+    lambda_s = np.array([2.5], dtype=np.float32)
+    bd = np.array([1.3], dtype=np.float32)
+    sand = np.array([50.0], dtype=np.float32)
+    # theta = np.array([0.2], dtype=np.float32)
+    temp_hot = np.array([20.0], dtype=np.float32)
+    temp_cold = np.array([-10.0], dtype=np.float32)
+
+    # Calculate porosity to get degree of saturation
+    RHO_MINERAL = 2650.0
+    rho_bulk = bd * 1000.0
+    phi = 1.0 - (rho_bulk / RHO_MINERAL)
+    # degree_of_saturation = theta / phi
+    Sr = np.array([0.4], dtype=np.float32)
+
+    # Calculate for unfrozen
+    lambda_total_hot = calculate_soil_thermal_conductivity(
+        thermal_conductivity_solid_W_per_m_K=lambda_s,
+        porosity=phi.astype(np.float32),
+        degree_of_saturation=Sr,
+        sand_percentage=sand,
+        soil_temperature_C=temp_hot,
+    )
+
+    # Calculate for frozen
+    lambda_total_cold = calculate_soil_thermal_conductivity(
+        thermal_conductivity_solid_W_per_m_K=lambda_s,
+        porosity=phi.astype(np.float32),
+        degree_of_saturation=Sr,
+        sand_percentage=sand,
+        soil_temperature_C=temp_cold,
+    )
+
+    # Saturated frozen conductivity should be higher than unfrozen because lambda_ice > lambda_water
+    assert lambda_total_cold[0] > lambda_total_hot[0]
+
+    # Both should be between lambda_dry (~0.2-0.5) and lambda_sat (~2-4)
+    assert lambda_total_hot[0] > 0.1
+    assert lambda_total_hot[0] < 5.0
+
+
 def test_calculate_sensible_heat_flux() -> None:
     """Test the calculate_sensible_heat_flux function."""
     # Equilibrium (No transfer)
@@ -189,91 +209,6 @@ def test_calculate_sensible_heat_flux() -> None:
     assert flux_cooling < 0.0
 
 
-def test_solve_energy_balance_implicit_iterative() -> None:
-    """Test the implicit iterative energy balance solver."""
-    # Common Parameters (Scalars)
-    soil_temperature_old = np.float32(10.0)  # 10 C
-    bulk_density = np.float32(1300.0)
-    layer_thickness = np.float32(0.1)
-
-    # Calculate heat capacity for scalar input
-    # Note: get_heat_capacity_solid_fraction expects arrays usually, but let's see.
-    # It seems to accept arrays. Let's compute it with array helper but use result as scalar.
-    heat_capacity_arr = get_heat_capacity_solid_fraction(
-        np.array([bulk_density / 1000.0], dtype=np.float32),
-        np.array([layer_thickness], dtype=np.float32),
-    )
-    heat_capacity_areal = heat_capacity_arr[0]
-
-    # Steady State / No Forcing
-    sw_in = np.float32(0.0)
-    lw_in = np.float32(363.0)  # Approx balance
-    air_temp_k = np.float32(283.15)
-    wind_speed = np.float32(2.0)
-    pressure = np.float32(101325.0)
-    dt_seconds = np.float32(3600.0)
-    soil_emissivity = np.float32(0.95)
-    soil_albedo = np.float32(0.23)
-
-    t_new = solve_energy_balance_implicit_iterative(
-        soil_temperature_C=soil_temperature_old,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        soil_heat_capacity_J_per_m2_K=heat_capacity_areal,
-        timestep_seconds=dt_seconds,
-        soil_emissivity=soil_emissivity,
-        soil_albedo=soil_albedo,
-        leaf_area_index=np.float32(0.0),
-    )
-
-    # Should stay close to 10.0
-    assert abs(t_new - 10.0) < 0.5, f"Steady state failed, got {t_new}"
-
-    # Strong heating (daytime)
-    sw_in = np.float32(800.0)
-    lw_in = np.float32(350.0)
-    air_temp_k = np.float32(303.15)
-
-    t_new_hot = solve_energy_balance_implicit_iterative(
-        soil_temperature_C=soil_temperature_old,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        soil_heat_capacity_J_per_m2_K=heat_capacity_areal,
-        timestep_seconds=dt_seconds,
-        soil_emissivity=soil_emissivity,
-        soil_albedo=soil_albedo,
-        leaf_area_index=np.float32(0.0),
-    )
-    assert t_new_hot > 10.0, "Soil should warm up significantly"
-
-    # Strong cooling (nighttime clear sky)
-    sw_in = np.float32(0.0)
-    lw_in = np.float32(200.0)
-    air_temp_k = np.float32(263.15)
-
-    t_new_cold = solve_energy_balance_implicit_iterative(
-        soil_temperature_C=soil_temperature_old,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        soil_heat_capacity_J_per_m2_K=heat_capacity_areal,
-        timestep_seconds=dt_seconds,
-        soil_emissivity=soil_emissivity,
-        soil_albedo=soil_albedo,
-        leaf_area_index=np.float32(0.0),
-    )
-
-    assert t_new_cold < 10.0, "Soil should cool down"
-
-
 def test_solve_soil_temperature_column() -> None:
     """Test the 1D soil temperature column solver."""
     # Common Parameters
@@ -282,13 +217,17 @@ def test_solve_soil_temperature_column() -> None:
     layer_thicknesses = np.array([0.05, 0.1, 0.2, 0.3, 0.5, 1.0], dtype=np.float32)
 
     # Simplified heat capacities and conductivities
-    # (Using the same logic as test_solve_energy_balance_implicit_iterative but for multiple layers)
+    # (Using basic mineral parameters for multiple layers)
     bulk_density = np.float32(1300.0)
     heat_capacity_arr = get_heat_capacity_solid_fraction(
         np.full(n_soil_layers, bulk_density / 1000.0, dtype=np.float32),
         layer_thicknesses,
     )
     thermal_conductivities = np.full(n_soil_layers, 2.0, dtype=np.float32)
+    porosity_arr = np.full(n_soil_layers, 0.4, dtype=np.float32)
+    sat_arr = np.full(n_soil_layers, 0.5, dtype=np.float32)
+    vol_water_arr = porosity_arr * sat_arr
+    sand_arr = np.full(n_soil_layers, 50.0, dtype=np.float32)
 
     # Steady State / No Forcing
     sw_in = np.float32(0.0)
@@ -300,12 +239,17 @@ def test_solve_soil_temperature_column() -> None:
     deep_soil_temp = np.float32(10.0)
     soil_emissivity = np.float32(0.95)
     soil_albedo = np.float32(0.23)
+    lai = np.float32(0.0)
 
-    t_new, _ = solve_soil_temperature_column(
+    t_new, _, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
+        porosity=porosity_arr,
+        sand_percentage=sand_arr,
+        volumetric_water_content=vol_water_arr,
+        degree_of_saturation=sat_arr,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
         air_temperature_K=air_temp_k,
@@ -315,7 +259,7 @@ def test_solve_soil_temperature_column() -> None:
         deep_soil_temperature_C=deep_soil_temp,
         soil_emissivity=soil_emissivity,
         soil_albedo=soil_albedo,
-        leaf_area_index=np.float32(0.0),
+        leaf_area_index=lai,
     )
 
     # Should stay close to 10.0 across all layers
@@ -326,11 +270,15 @@ def test_solve_soil_temperature_column() -> None:
     lw_in = np.float32(350.0)
     air_temp_k = np.float32(303.15)
 
-    t_new_hot, _ = solve_soil_temperature_column(
+    t_new_hot, _, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
+        porosity=porosity_arr,
+        sand_percentage=sand_arr,
+        volumetric_water_content=vol_water_arr,
+        degree_of_saturation=sat_arr,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
         air_temperature_K=air_temp_k,
@@ -347,11 +295,15 @@ def test_solve_soil_temperature_column() -> None:
 
     # Bottom boundary influence (Deep soil heating)
     deep_soil_temp_hot = np.float32(20.0)
-    t_new_bottom, _ = solve_soil_temperature_column(
+    t_new_bottom, _, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
+        porosity=porosity_arr,
+        sand_percentage=sand_arr,
+        volumetric_water_content=vol_water_arr,
+        degree_of_saturation=sat_arr,
         shortwave_radiation_W_per_m2=np.float32(0.0),
         longwave_radiation_W_per_m2=np.float32(363.0),
         air_temperature_K=np.float32(283.15),
@@ -382,6 +334,12 @@ def test_solve_soil_temperature_column_snow() -> None:
     )
     thermal_conductivities = np.full(n_soil_layers, 2.0, dtype=np.float32)
 
+    # Added arguments required for new signature
+    porosity_arr = np.full(n_soil_layers, 0.4, dtype=np.float32)
+    sand_arr = np.full(n_soil_layers, 50.0, dtype=np.float32)
+    sat_arr = np.full(n_soil_layers, 0.5, dtype=np.float32)
+    vol_water_arr = porosity_arr * sat_arr
+
     # Strong incoming radiation that WOULD heat the soil if no snow
     sw_in = np.float32(1000.0)
     lw_in = np.float32(400.0)
@@ -394,11 +352,15 @@ def test_solve_soil_temperature_column_snow() -> None:
     soil_albedo = np.float32(0.23)
 
     # WITH SNOW
-    t_new_snow, fluxes_snow = solve_soil_temperature_column(
+    t_new_snow, fluxes_snow, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
+        porosity=porosity_arr,
+        sand_percentage=sand_arr,
+        volumetric_water_content=vol_water_arr,
+        degree_of_saturation=sat_arr,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
         air_temperature_K=air_temp_k,
@@ -418,11 +380,15 @@ def test_solve_soil_temperature_column_snow() -> None:
     np.testing.assert_allclose(t_new_snow, 10.0, atol=1e-4)
 
     # WITHOUT SNOW (Control)
-    t_new_control, fluxes_control = solve_soil_temperature_column(
+    t_new_control, fluxes_control, _ = solve_soil_temperature_column(
         soil_temperatures_C=soil_temperatures_old,
         layer_thicknesses_m=layer_thicknesses,
-        soil_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivities_W_per_m_K=thermal_conductivities,
+        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
+        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
+        porosity=porosity_arr,
+        sand_percentage=sand_arr,
+        volumetric_water_content=vol_water_arr,
+        degree_of_saturation=sat_arr,
         shortwave_radiation_W_per_m2=sw_in,
         longwave_radiation_W_per_m2=lw_in,
         air_temperature_K=air_temp_k,

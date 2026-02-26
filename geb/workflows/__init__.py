@@ -3,6 +3,7 @@
 from time import time
 
 import numpy as np
+from attr import s
 
 from geb.geb_types import ArrayFloat
 from geb.store import DynamicArray
@@ -109,7 +110,19 @@ def balance_check(
         balance = inflow - outflow + prestorage - poststorage
 
         if np.isnan(balance).any():
-            raise ValueError("Balance check failed, NaN values found.")
+            for kind, array in zip(
+                ["inflow", "outflow", "prestorage", "poststorage"],
+                [inflow, outflow, prestorage, poststorage],
+            ):
+                for i, component in enumerate(array, start=1):
+                    if np.isnan(component):
+                        raise ValueError(
+                            f"NaN values found in {kind} component {i} (1-indexed)."
+                        )
+            else:
+                raise ValueError(
+                    "NaN values found in balance calculation, but could not identify component (shouldn't happen)."
+                )
 
         if balance.size == 0:
             return True
