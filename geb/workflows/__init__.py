@@ -3,7 +3,6 @@
 from time import time
 
 import numpy as np
-from attr import s
 
 from geb.geb_types import ArrayFloat
 from geb.store import DynamicArray
