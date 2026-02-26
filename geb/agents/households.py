@@ -2149,14 +2149,6 @@ class Households(AgentBaseClass):
         )
         self.buildings_structure_curve.loc[0:1, "building_flood_proofed"] = 0.0
 
-        self.buildings_content_curve = pd.read_parquet(
-            self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
-        )
-        self.buildings_content_curve.set_index("severity", inplace=True)
-        self.buildings_content_curve = self.buildings_content_curve.rename(
-            columns={"damage_ratio": "building_unprotected"}
-        )
-
         # create another column (curve) in the buildings content curve for protected buildings
         self.buildings_content_curve["building_protected"] = (
             self.buildings_content_curve["building_unprotected"] * 0.7
