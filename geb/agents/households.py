@@ -63,49 +63,64 @@ def from_landuse_raster_to_polygon(
 class HouseholdVariables(Bucket):
     """Variables for the Households agent."""
 
-    household_points: gpd.GeoDataFrame
     actions_taken: DynamicArray
+    adapted: DynamicArray
+    adaptation_costs_dryproofing: DynamicArray
+    adaptation_costs_wetproofing: DynamicArray
+    adaptation_type: DynamicArray
+    age_household_head: DynamicArray
+    agriculture_curve: pd.DataFrame
+    amenity_value: DynamicArray
+    annual_adaptation_costs_dryproofing: DynamicArray
+    annual_adaptation_costs_wetproofing: DynamicArray
+    building_id_of_household: DynamicArray
+    education_level: DynamicArray
+    evacuated: DynamicArray
+    forest_curve: pd.DataFrame
+    household_building_area: DynamicArray
+    household_building_circumference: DynamicArray
+    household_points: gpd.GeoDataFrame
+    implementation_times: Any
+    income: DynamicArray
+    income_distribution: np.ndarray
+    income_percentile: DynamicArray
+    loan_duration: int
+    locations: DynamicArray
+    max_dam_agriculture_m2: float
+    max_dam_buildings_content: float
+    max_dam_buildings_structure: float
+    max_dam_forest_m2: float
+    max_dam_rail: float
+    municipal_water_demand_per_capita_m3_baseline: ArrayFloat32
+    municipal_water_withdrawal_m3_per_capita_per_day_multiplier: pd.DataFrame
+    number_of_households: DynamicArray
     possible_measures: list[str]
     possible_warning_triggers: list[str]
-    municipal_water_demand_per_capita_m3_baseline: ArrayFloat32
-    water_demand_per_household_m3: ArrayFloat32
-    income: DynamicArray
-    building_id_of_household: DynamicArray
-    wealth: DynamicArray
     property_value: DynamicArray
-    locations: DynamicArray
-    years_since_last_flood: DynamicArray
-    risk_perception: DynamicArray
-    sizes: DynamicArray
-    water_efficiency_per_household: ArrayFloat32
-    municipal_water_withdrawal_m3_per_capita_per_day_multiplier: pd.DataFrame
+    r_loan: float
+    rail_curve: pd.DataFrame
+    recommended_measures: DynamicArray
+    region_id: DynamicArray
+    response_probability: DynamicArray
+    risk_aversion: DynamicArray
+    risk_decr: float
     risk_perc_max: float
     risk_perc_min: float
-    risk_decr: float
-    wlranges_and_measures: dict[int, Any]
-    implementation_times: Any
-    rail_curve: pd.DataFrame
-    warning_trigger: DynamicArray
-    evacuated: DynamicArray
+    risk_perception: DynamicArray
+    road_curves: pd.DataFrame
+    sizes: DynamicArray
+    time_adapted: DynamicArray
+    total_adaptation_costs_dryproofing: DynamicArray
+    total_adaptation_costs_wetproofing_array: DynamicArray
     warning_level: DynamicArray
     warning_reached: DynamicArray
-    response_probability: DynamicArray
-    amenity_value: DynamicArray
-    adaptation_costs: DynamicArray
-    base_adaptation_costs_dryproofing: DynamicArray
-    base_adaptation_costs_wetproofing: DynamicArray
-    recommended_measures: DynamicArray
-    time_adapted: DynamicArray
-    max_dam_buildings_structure: float
-    forest_curve: pd.DataFrame
-    agriculture_curve: pd.DataFrame
-    road_curves: pd.DataFrame
-    adapted: DynamicArray
-    max_dam_buildings_content: float
-    max_dam_rail: float
-    max_dam_forest_m2: float
-    max_dam_agriculture_m2: float
-    region_id: DynamicArray
+    warning_trigger: DynamicArray
+    water_demand_per_household_m3: ArrayFloat32
+    water_efficiency_per_household: ArrayFloat32
+    wealth: DynamicArray
+    wealth_index: DynamicArray
+    wlranges_and_measures: dict[int, Any]
+    years_since_last_flood: DynamicArray
 
 
 class Households(AgentBaseClass):
@@ -556,45 +571,51 @@ class Households(AgentBaseClass):
         )
 
         # Dry floodproofing costs eur 2024 per meter of building circumference, article Aerts (2018)
-        total_adaptation_costs_dry_proofing = (
+        self.var.total_adaptation_costs_dryproofing = (
             901 * self.var.household_building_circumference.data
         ).astype(np.int64)
 
-        r_loan: float = (
-            0.04  # 4% interest rate #TODO: values based on paper Lars France
+        self.var.r_loan = (
+            0.04  # 4% interest rate #TODO: values based on paper Lars France  # float
         )
-        loan_duration: int = 16  # years #TODO: values based on paper Lars France
+        self.var.loan_duration = (
+            16  # years #TODO: values based on paper Lars France # INT
+        )
         annual_adaptation_costs_dryproofing: float = (
-            total_adaptation_costs_dry_proofing
+            self.var.total_adaptation_costs_dryproofing.data
             * (
-                r_loan
-                * (1 + r_loan) ** loan_duration
-                / ((1 + r_loan) ** loan_duration - 1)
+                self.var.r_loan
+                * (1 + self.var.r_loan) ** self.var.loan_duration
+                / ((1 + self.var.r_loan) ** self.var.loan_duration - 1)
             )
         )
         self.var.adaptation_costs_dryproofing = DynamicArray(
             annual_adaptation_costs_dryproofing, max_n=self.max_n
         )
-        self.var.base_adaptation_costs_dryproofing = DynamicArray(
+        self.var.annual_adaptation_costs_dryproofing = DynamicArray(
             np.asarray(annual_adaptation_costs_dryproofing, dtype=np.float32),
             max_n=self.max_n,
         )
 
         # initiate array with adaptation costs for wet-proofing, eur 2024 values, article Aerts (2018)
-        total_adaptation_costs_wet_proofing: int = 27384
+        total_adaptation_costs_wetproofing: int = 27384
+        self.var.total_adaptation_costs_wetproofing_array = DynamicArray(
+            np.full(self.n, total_adaptation_costs_wetproofing, np.int64),
+            max_n=self.max_n,
+        )
         annual_adaptation_costs_wetproofing: float = (
-            total_adaptation_costs_wet_proofing
+            total_adaptation_costs_wetproofing
             * (
-                r_loan
-                * (1 + r_loan) ** loan_duration
-                / ((1 + r_loan) ** loan_duration - 1)
+                self.var.r_loan
+                * (1 + self.var.r_loan) ** self.var.loan_duration
+                / ((1 + self.var.r_loan) ** self.var.loan_duration - 1)
             )
         )
         self.var.adaptation_costs_wetproofing = DynamicArray(
             np.full(self.n, annual_adaptation_costs_wetproofing, np.float32),
             max_n=self.max_n,
         )
-        self.var.base_adaptation_costs_wetproofing = DynamicArray(
+        self.var.annual_adaptation_costs_wetproofing = DynamicArray(
             np.full(self.n, annual_adaptation_costs_wetproofing, np.float32),
             max_n=self.max_n,
         )
@@ -746,11 +767,11 @@ class Households(AgentBaseClass):
         wetproofing_subsidy_value: float,
         household_mask: np.ndarray | None = None,
     ) -> None:
-        """Apply subsidy factors to adaptation costs for eligible households.
+        """Apply subsidy to adaptation costs for eligible households.
 
         Args:
-            dryproofing_subsidy_value: Absolute subsidy value to subtract from dry-proofing costs.
-            wetproofing_subsidy_value: Absolute subsidy value to subtract from wet-proofing costs.
+            dryproofing_subsidy_value: Absolute subsidy value to subtract from total dry-proofing costs (€).
+            wetproofing_subsidy_value: Absolute subsidy value to subtract from total wet-proofing costs (€).
             household_mask: Boolean mask of households eligible for the subsidy. If None, all households are eligible.
 
         Raises:
@@ -762,36 +783,39 @@ class Households(AgentBaseClass):
         if household_mask.shape[0] != n_households:
             raise ValueError("household_mask length must match number of households")
 
-        if not hasattr(self.var, "base_adaptation_costs_dryproofing"):
-            self.var.base_adaptation_costs_dryproofing = DynamicArray(
-                np.asarray(self.var.adaptation_costs_dryproofing.data).copy(),
-                max_n=self.max_n,
-            )
-        if not hasattr(self.var, "base_adaptation_costs_wetproofing"):
-            self.var.base_adaptation_costs_wetproofing = DynamicArray(
-                np.asarray(self.var.adaptation_costs_wetproofing.data).copy(),
-                max_n=self.max_n,
-            )
+        base_total_dry = self.var.total_adaptation_costs_dryproofing.data
+        base_total_wet = self.var.total_adaptation_costs_wetproofing_array.data
 
-        base_dry = self.var.base_adaptation_costs_dryproofing.data
-        base_wet = self.var.base_adaptation_costs_wetproofing.data
-
-        self.var.adaptation_costs_dryproofing.data[household_mask] = np.maximum(
-            0.0,
-            base_dry[household_mask] - float(dryproofing_subsidy_value),
-        )
-        self.var.adaptation_costs_wetproofing.data[household_mask] = np.maximum(
-            0.0,
-            base_wet[household_mask] - float(wetproofing_subsidy_value),
+        # Subtract subsidy from total costs and recalculate annual costs
+        annualization_factor = (
+            self.var.r_loan
+            * (1 + self.var.r_loan) ** self.var.loan_duration
+            / ((1 + self.var.r_loan) ** self.var.loan_duration - 1)
         )
 
+        # Apply subsidy to eligible households
+        subsidized_total_dry = np.maximum(
+            0.0, base_total_dry[household_mask] - dryproofing_subsidy_value
+        )
+        subsidized_total_wet = np.maximum(
+            0.0, base_total_wet[household_mask] - wetproofing_subsidy_value
+        )
+
+        self.var.annual_adaptation_costs_dryproofing.data[household_mask] = (
+            subsidized_total_dry * annualization_factor
+        )
+        self.var.annual_adaptation_costs_wetproofing.data[household_mask] = (
+            subsidized_total_wet * annualization_factor
+        )
+
+        # Restore base annual costs for ineligible households
         if (~household_mask).any():
-            self.var.adaptation_costs_dryproofing.data[~household_mask] = base_dry[
-                ~household_mask
-            ]
-            self.var.adaptation_costs_wetproofing.data[~household_mask] = base_wet[
-                ~household_mask
-            ]
+            self.var.adaptation_costs_dryproofing.data[~household_mask] = (
+                base_total_dry[~household_mask] * annualization_factor
+            )
+            self.var.adaptation_costs_wetproofing.data[~household_mask] = (
+                base_total_wet[~household_mask] * annualization_factor
+            )
 
     def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.
@@ -1838,12 +1862,12 @@ class Households(AgentBaseClass):
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
             expected_damages_adapt=damages_adapt_dryproofing,
-            adaptation_costs=self.var.adaptation_costs_dryproofing.data,
+            adaptation_costs=self.var.annual_adaptation_costs_dryproofing.data,
             time_adapted=self.var.time_adapted.data,
-            loan_duration=16,
+            loan_duration=self.var.loan_duration,
             p_floods=1 / self.return_periods,
             T=35,
-            r=0.04,
+            r=self.var.r_loan,
             sigma=1,
         )
 
@@ -1857,12 +1881,12 @@ class Households(AgentBaseClass):
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
             expected_damages_adapt=damages_adapt_wetproofing,
-            adaptation_costs=self.var.adaptation_costs_wetproofing.data,
+            adaptation_costs=self.var.annual_adaptation_costs_wetproofing.data,
             time_adapted=self.var.time_adapted.data,
-            loan_duration=16,
+            loan_duration=self.var.loan_duration,
             p_floods=1 / self.return_periods,
             T=35,
-            r=0.04,
+            r=self.var.r_loan,
             sigma=1,
         )
 
@@ -1878,7 +1902,7 @@ class Households(AgentBaseClass):
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
             T=35,
-            r=0.04,
+            r=self.var.r_loan,
             sigma=1,
         )
 

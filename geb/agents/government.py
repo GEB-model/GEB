@@ -142,15 +142,23 @@ class Government(AgentBaseClass):
             ValueError: If subsidies.apply_to is not "all" or "random_share".
         """
         if "subsidies" not in self.config:
+            print(
+                "Warning: subsidies configuration not found for government agent. No subsidies will be provided."
+            )
             return None
         subsidies_config = self.config["subsidies"]
         if not subsidies_config.get("enabled", True):
+            print(
+                "Warning: subsidies are disabled in the government agent configuration. No subsidies will be provided."
+            )
             return None
 
         frequency = subsidies_config.get("frequency", "yearly")
+
         if frequency == "yearly":
+            print("Providing yearly subsidies to households.")
             if not (
-                self.current_time.day == 1 and self.current_time.month == 1
+                self.model.current_time.day == 1 and self.model.current_time.month == 1
             ):  # provide subsidies on the first day of the year
                 return None
         elif frequency != "always":
@@ -159,8 +167,10 @@ class Government(AgentBaseClass):
         selected_households = subsidies_config.get("selected_households", "all")
         n_households = self.agents.households.n
         if selected_households == "all":
+            print("Providing subsidies to all households.")
             eligible_mask = np.ones(n_households, dtype=bool)
         elif selected_households == "random_share":
+            print("Providing subsidies to a random share of households.")
             share = float(subsidies_config.get("share", 1.0))
             share = min(max(share, 0.0), 1.0)
             rng = np.random.default_rng(subsidies_config.get("seed", 42))
@@ -171,7 +181,9 @@ class Government(AgentBaseClass):
             )
 
         dry_value = float(subsidies_config.get("dryproofing_subsidy_value", 0.0))
+        print(f"Dry-proofing subsidy value: {dry_value}")
         wet_value = float(subsidies_config.get("wetproofing_subsidy_value", 0.0))
+        print(f"Wet-proofing subsidy value: {wet_value}")
         self.agents.households.apply_subsidy(
             dryproofing_subsidy_value=dry_value,
             wetproofing_subsidy_value=wet_value,
