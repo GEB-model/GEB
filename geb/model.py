@@ -347,21 +347,7 @@ class GEBModel(Module):
                         print(
                             f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
-                        self.agents.households.create_flood_probability_maps(
-                            date_time=self.current_time, strategy=1, exceedance=True
-                        )
-                        self.agents.households.water_level_warning_strategy(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.critical_infrastructure_warning_strategy(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.household_decision_making(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.update_households_geodataframe_w_warning_variables(
-                            date_time=self.current_time
-                        )
+                        self.agents.households.early_warning_module.step()
 
         t0 = time()
         self.agents.step()
