@@ -4,7 +4,15 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
-from ..landcovers import FOREST, GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from geb.hazards.floods import OPEN_WATER
+
+from ..landcovers import (
+    FOREST,
+    GRASSLAND_LIKE,
+    NON_PADDY_IRRIGATED,
+    PADDY_IRRIGATED,
+    SEALED,
+)
 
 
 @njit(cache=True, inline="always")
@@ -552,6 +560,18 @@ def get_crop_factors_and_root_depths(
             crop_factor[i] = get_crop_factor_from_lai(
                 np.float32(0.2), np.float32(1.2), leaf_area_index_grassland_like[i]
             )
+
+        elif land_use == OPEN_WATER:
+            root_depth[i] = 0.0
+            crop_factor[i] = 0.0
+
+        elif land_use == SEALED:
+            root_depth[i] = 0.0
+            crop_factor[i] = 0.0
+
+        else:
+            root_depth[i] = np.nan
+            crop_factor[i] = np.nan
 
     return crop_factor, root_depth, crop_sub_stage
 
