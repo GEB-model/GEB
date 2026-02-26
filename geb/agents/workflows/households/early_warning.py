@@ -9,7 +9,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
-from rasterstats import zonal_stats
+from rasterstats import point_query, zonal_stats
 
 from ....workflows.io import read_zarr, write_zarr
 from ...households import Households
@@ -401,7 +401,7 @@ class EarlyWarningModule:
 
                     # Communicate the warning to the target households
                     # This function should return the number of households that were warned
-                    n_warned_households = self.households.warning_communication(
+                    n_warned_households = self.warning_communication(
                         target_households=affected_households,
                         measures=measures,
                         evacuate=evacuate,
@@ -686,6 +686,412 @@ class EarlyWarningModule:
         )
         pd.DataFrame(actions_log).to_csv(path, index=False)
 
+    def load_critical_infrastructure(self) -> None:
+        """Load critical infrastructure elements (vulnerable and emergency facilities, energy substations) and assign them to postal codes."""
+        # Load postal codes
+        postal_codes = self.households.postal_codes.copy()
+
+        # Get critical facilities (vulnerable and emergency) and update buildings with relevant attributes
+        self.get_critical_facilities()
+
+        # Assign critical facilities to postal codes
+        critical_facilities = gpd.read_parquet(
+            self.households.model.files["geom"]["assets/critical_facilities"]
+        )
+        self.assign_critical_facilities_to_postal_codes(
+            critical_facilities, postal_codes
+        )
+
+        # Get energy substations and assign them to postal codes
+        substations = gpd.read_parquet(
+            self.households.model.files["geom"]["assets/energy_substations"]
+        )
+        self.assign_energy_substations_to_postal_codes(substations, postal_codes)
+
+    def get_critical_facilities(self) -> None:
+        """Extract critical infrastructure elements (vulnerable and emergency facilities) from OSM using the catchment polygon as boundary."""
+        catchment_boundary = gpd.read_parquet(
+            self.households.model.files["geom"]["catchment_boundary"]
+        )
+
+        # OSM needs a shapely geometry in EPSG:4326
+        catchment_boundary = catchment_boundary.to_crs(epsg=4326)
+        catchment_boundary = catchment_boundary.geometry.iloc[0]
+
+        # Define the crs for the output data
+        wanted_crs = self.households.model.config["hazards"]["floods"]["crs"]
+
+        # Define the queries for vulnerable and emergency facilities
+        # These queries are based on OSM tags, you can modify them as needed
+        # OSMnx considers an AND statement across different tag keys, so we need to split queries and then combine them later
+        queries = {
+            "vulnerable_facilities_query": {
+                "amenity": [
+                    "hospital",
+                    "school",
+                    "kindergarten",
+                    "nursing_home",
+                    "childcare",
+                ]
+            },
+            "emergency_facilities_query1": {"amenity": ["fire_station", "police"]},
+            "emergency_facilities_query2": {"emergency": ["ambulance_station"]},
+        }
+
+        # Extract the wanted facilities from OSM using the queries
+        gdf = {}
+        for key, query in queries.items():
+            gdf[key] = ox.features_from_polygon(catchment_boundary, query)
+
+        # Combine emergency facilities from all queries
+        all_critical_facilities = gpd.GeoDataFrame(
+            pd.concat(
+                [
+                    gdf["emergency_facilities_query1"],
+                    gdf["emergency_facilities_query2"],
+                    gdf["vulnerable_facilities_query"],
+                ],
+                ignore_index=True,
+            )
+        )
+
+        # Reproject the facilities to the wanted CRS and save them
+        all_critical_facilities.insert(0, "id", all_critical_facilities.index + 1)
+        all_critical_facilities.to_crs(wanted_crs, inplace=True)
+        save_path = (
+            self.households.model.input_folder
+            / "geom"
+            / "assets"
+            / "critical_facilities.geoparquet"
+        )
+        all_critical_facilities.to_parquet(save_path)
+        print(f"Loaded {len(all_critical_facilities)} critical facilities.")
+
+        # Update buildings with critical infrastructure attributes
+        buildings = self.update_buildings_w_critical_infrastructure(
+            all_critical_facilities
+        )
+
+        # Save updated buildings with critical infrastructure attributes
+        save_path = (
+            self.households.model.input_folder
+            / "geom"
+            / "assets"
+            / "buildings_with_critical_facilities.geoparquet"
+        )
+        buildings.to_parquet(save_path)
+
+        # Update the buildings (global variable) for later use
+        self.households.buildings = buildings
+
+    def update_buildings_w_critical_infrastructure(
+        self, critical_infrastructure: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Update buildings layer with critical infrastructure attributes via spatial intersection.
+
+        Args:
+            critical_infrastructure: Iterable of GeoDataFrames representing different sets of
+                critical infrastructure (e.g., vulnerable facilities, emergency facilities).
+
+        Returns:
+            Copy of buildings with updated attributes from critical infrastructure data where spatial intersections occurred.
+        """
+        buildings = self.households.buildings.copy()
+        # TODO: check if this function is needed with the new OBM data
+
+        # Spatial join: find which facility features intersect which buildings
+        joined = gpd.sjoin(
+            buildings,
+            critical_infrastructure,
+            how="left",
+            predicate="intersects",
+            lsuffix="bld",
+            rsuffix="fac",
+        )
+
+        # Take only the first match for each building
+        # This is to avoid duplicating buildings if they intersect with multiple facilities
+        joined = joined[~joined.index.duplicated(keep="first")]
+
+        # Identify shared columns
+        common_cols = buildings.columns.intersection(critical_infrastructure.columns)
+        common_cols = [
+            col for col in common_cols if col not in ("geometry", "index_right")
+        ]
+
+        # Replace only where there was a match in the column name
+        for col in common_cols:
+            col_fac = f"{col}_fac"
+            if col_fac in joined.columns:
+                buildings[col] = joined[col_fac].combine_first(buildings[col])
+
+        return buildings
+
+    def assign_energy_substations_to_postal_codes(
+        self, substations: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
+    ) -> None:
+        """Assign energy substations to postal codes based on spatial proximity. Every postal code gets assigned to the nearest substation.
+
+        Args:
+            substations: GeoDataFrame of energy substations.
+            postal_codes: GeoDataFrame of postal codes.
+        """
+        # TODO: need to improve this with Thiessen polygons or similar
+        postal_codes_with_substations = gpd.sjoin_nearest(
+            postal_codes,
+            substations[["fid", "geometry"]],
+            how="left",
+            distance_col="distance",
+        )
+        # Rename the fid_right column for clarity
+        postal_codes_with_substations.rename(
+            columns={"fid_right": "substation_id"},
+            inplace=True,
+        )
+
+        # Save the postal codes with associated energy substations to a file
+        path = (
+            self.households.model.input_folder
+            / "geom"
+            / "assets"
+            / "postal_codes_with_energy_substations.geoparquet"
+        )
+        postal_codes_with_substations.to_parquet(path)
+
+    def assign_critical_facilities_to_postal_codes(
+        self, critical_facilities: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
+    ) -> None:
+        """Assign critical facilities (vulnerable and emergency) to postal codes based on spatial intersection. Every facility gets assigned to the postal code it is located in.
+
+        Args:
+            critical_facilities: GeoDataFrame of critical facilities.
+            postal_codes: GeoDataFrame of postal codes.
+        """
+        # Use the centroid of the critical facilities to assign them to postal codes
+        critical_facilities_centroid = critical_facilities.copy()
+        critical_facilities_centroid["geometry"] = (
+            critical_facilities_centroid.geometry.centroid
+        )
+
+        # Spatial join to assign postal codes to critical facilities based on their centroid
+        critical_facilities_with_postal_codes = gpd.sjoin(
+            critical_facilities_centroid[
+                ["id", "addr:city", "amenity", "name", "source", "geometry"]
+            ],
+            postal_codes[["postcode", "geometry"]],
+            how="left",
+            predicate="within",
+        )
+        critical_facilities_with_postal_codes.drop(
+            columns=["index_right"], inplace=True
+        )
+
+        # Rename the id column for clarity and drop fid so it can save to gpkg
+        critical_facilities_with_postal_codes = (
+            critical_facilities_with_postal_codes.rename(columns={"id": "facility_id"})
+        )
+
+        # Save the critical facilities with postal codes to a file
+        path = (
+            self.households.model.input_folder
+            / "geom"
+            / "assets"
+            / "critical_facilities_with_postal_codes.geoparquet"
+        )
+        critical_facilities_with_postal_codes.to_parquet(path)
+
+    def critical_infrastructure_warning_strategy(
+        self, date_time: datetime, prob_threshold: float = 0.6
+    ) -> None:
+        """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
+
+        Args:
+            date_time: The forecast date time for which to implement the warning strategy.
+            prob_threshold: The probability threshold above which a warning is issued.
+        """
+        # Get the household points, needed to issue warnings
+        households = self.households.var.household_points.copy()
+
+        # Load substations and critical facilities
+        substations = gpd.read_parquet(
+            self.households.model.files["geom"]["assets/energy_substations"]
+        )
+        critical_facilities = gpd.read_parquet(
+            self.households.model.files["geom"]["assets/critical_facilities"]
+        )
+
+        # Load postal codes with associated substations and critical facilities
+        path = self.households.model.input_folder / "geom" / "assets"
+        postal_codes_with_substations = gpd.read_parquet(
+            path / "postal_codes_with_energy_substations.geoparquet"
+        )
+        critical_facilities_with_postal_codes = gpd.read_parquet(
+            path / "critical_facilities_with_postal_codes.geoparquet"
+        )
+
+        ## For energy substations:
+        # The strategy id is used in the create_flood_probability_maps function to define the right water level range, so it makes sure you get the right probability map for that specific strategy
+        # strategy_id = 2 means wl_range > 30 cm for energy substations
+        strategy_id = 2
+
+        # Create flood probability maps associated to the critical hit of energy substations
+        # Need to give the number (id) of strategy as argument
+        self.create_flood_probability_maps(strategy=strategy_id, date_time=date_time)
+
+        # Get the probability map for the specific day and strategy
+        prob_energy_hit_path = Path(
+            self.households.model.output_folder
+            / "prob_maps"
+            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
+            / f"prob_map_range1_strategy{strategy_id}.zarr"
+        )
+
+        # Open the probability map
+        prob_map = read_zarr(prob_energy_hit_path)
+        affine = prob_map.rio.transform()
+        prob_array = np.asarray(prob_map.values)
+
+        # Sample the probability map at the substations locations
+        sampled_probs = point_query(
+            substations, prob_array, affine=affine, interpolate="nearest"
+        )
+        substations["probability"] = sampled_probs
+
+        # Filter substations that have a flood hit probability > threshold
+        critical_hits_energy = substations[substations["probability"] >= prob_threshold]
+
+        # Create an empty list to store the postcodes
+        affected_postcodes_energy = []
+
+        # If there are critical hits, issue warnings
+        if not critical_hits_energy.empty:
+            print(f"Critical hits for energy substations: {len(critical_hits_energy)}")
+
+            # Get the postcodes that will be affected by the critical hits of energy substations
+            affected_postcodes_energy = postal_codes_with_substations[
+                postal_codes_with_substations["substation_id"].isin(
+                    critical_hits_energy["fid"]
+                )
+            ]["postcode"].unique()
+
+        ## For vulnerable and emergency facilities:
+        # strategy_id = 3 means wl_range > 10 cm for vulnerable and emergency facilities (flooded or not)
+        strategy_id = 3
+
+        # Create flood probability map for vulnerable and emergency facilities
+        self.create_flood_probability_maps(strategy=strategy_id, date_time=date_time)
+
+        # Get the probability map for the specific day and strategy
+        prob_critical_facilities_hit_path = Path(
+            self.households.model.output_folder
+            / "prob_maps"
+            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
+            / f"prob_map_range1_strategy{strategy_id}.zarr"
+        )
+
+        # Open the probability map
+        prob_map = read_zarr(prob_critical_facilities_hit_path)
+        affine = prob_map.rio.transform()
+        prob_array = np.asarray(prob_map.values)
+
+        # Sample the probability map at the facilities locations using their centroid (can be improved later to use whole area of the polygon)
+        critical_facilities = critical_facilities.copy()
+
+        sampled_probs = point_query(
+            critical_facilities.geometry.centroid,
+            prob_array,
+            affine=affine,
+            interpolate="nearest",
+        )
+        critical_facilities["probability"] = sampled_probs
+
+        # Filter facilities that have a flood hit probability > threshold
+        critical_hits_facilities = critical_facilities[
+            critical_facilities["probability"] >= prob_threshold
+        ]
+        # Create an empty list to store the postcodes
+        affected_postcodes_facilities = []
+
+        # If there are critical hits, issue warnings
+        if not critical_hits_facilities.empty:
+            print(
+                f"Critical hits for vulnerable/emergency facilities: {len(critical_hits_facilities)}"
+            )
+
+            # Get the postcodes that will be affected by the critical hits of facilities
+            affected_postcodes_facilities = critical_facilities_with_postal_codes[
+                critical_facilities_with_postal_codes["facility_id"].isin(
+                    critical_hits_facilities["id"]
+                )
+            ]["postcode"].unique()
+
+        # Function to keep track of what triggered the warning for each postal code
+        def trigger_label(postcode: str) -> str:
+            """Determine the trigger label for a given postcode based on affected postcodes from both strategies.
+
+            Args:
+                postcode: The postcode to evaluate.
+
+            Returns:
+                A string indicating the trigger type.
+
+            Raises:
+                ValueError: If the postcode is not found in either affected postcodes list.
+            """
+            e = postcode in affected_postcodes_energy
+            f = postcode in affected_postcodes_facilities
+            if e and f:
+                return "energy_and_facilities"
+            elif e:
+                return "energy"
+            elif f:
+                return "facilities"
+            else:
+                raise ValueError(
+                    f"Postcode {postcode} not found in either affected postcodes list."
+                )
+
+        # Combine affected_postcodes from both strategies and remove duplicates
+        affected_postcodes = np.unique(
+            np.concatenate(
+                (affected_postcodes_energy, affected_postcodes_facilities), axis=0
+            )
+        )
+
+        # Create an empty log to store the warnings
+        warning_log = []
+
+        # Issue warnings to the households in the affected postcodes
+        for postcode in affected_postcodes:
+            affected_households = households[households["postcode"] == postcode]
+            n_warned_households = self.warning_communication(
+                target_households=affected_households,
+                measures=set(),
+                evacuate=True,
+                trigger="critical_infrastructure",
+            )
+            trigger = trigger_label(postcode)
+
+            print(
+                f"Evacuation warning issued to postal code {postcode} on {date_time.isoformat()} (trigger: {trigger})"
+            )
+            warning_log.append(
+                {
+                    "date_time": date_time.isoformat(),
+                    "postcode": postcode,
+                    "n_warned_households": n_warned_households,
+                    "trigger": trigger,
+                }
+            )
+
+        # Save warning log
+        path = (
+            self.households.model.output_folder
+            / "warning_logs"
+            / f"warning_log_critical_infrastructure_{date_time.isoformat()}.csv"
+        )
+        pd.DataFrame(warning_log).to_csv(path, index=False)
+
     def update_households_geodataframe_w_warning_variables(
         self, date_time: datetime
     ) -> None:
@@ -768,20 +1174,16 @@ class EarlyWarningModule:
 
     def step(self) -> None:
         """Step function for early warning module."""
-        self.households.create_flood_probability_maps(
-            date_time=self.households.model.__format__current_time,
+        self.create_flood_probability_maps(
+            date_time=self.households.model.current_time,
             strategy=1,
             exceedance=True,
         )
-        self.households.water_level_warning_strategy(
+        self.water_level_warning_strategy(date_time=self.households.model.current_time)
+        self.critical_infrastructure_warning_strategy(
             date_time=self.households.model.current_time
         )
-        self.households.critical_infrastructure_warning_strategy(
-            date_time=self.households.model.current_time
-        )
-        self.households.household_decision_making(
-            date_time=self.households.model.current_time
-        )
-        self.households.update_households_geodataframe_w_warning_variables(
+        self.household_decision_making(date_time=self.households.model.current_time)
+        self.update_households_geodataframe_w_warning_variables(
             date_time=self.households.model.current_time
         )
