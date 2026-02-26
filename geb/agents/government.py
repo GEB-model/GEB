@@ -144,18 +144,26 @@ class Government(AgentBaseClass):
         # Skip subsidies during spinup
         if self.model.in_spinup:
             return None
-        if "subsidies" not in self.config:
-            print(
-                "Warning: subsidies configuration not found for government agent. No subsidies will be provided."
-            )
+
+        if self.model.current_timestep == 0:
+            if "subsidies" not in self.config:
+                print(
+                    "Warning: subsidies configuration not found for government agent. No subsidies will be provided."
+                )
+                return None
+            subsidies_config = self.config["subsidies"]
+            if not subsidies_config.get("enabled", True):
+                print(
+                    "Warning: subsidies are disabled in the government agent configuration. No subsidies will be provided."
+                )
+                return None
+
+        # Skip if config is missing or disabled (for all timesteps)
+        if "subsidies" not in self.config or not self.config["subsidies"].get(
+            "enabled", True
+        ):
             return None
         subsidies_config = self.config["subsidies"]
-        if not subsidies_config.get("enabled", True):
-            print(
-                "Warning: subsidies are disabled in the government agent configuration. No subsidies will be provided."
-            )
-            return None
-
         frequency = subsidies_config.get("frequency", "yearly")
 
         if frequency == "yearly":
@@ -203,19 +211,28 @@ class Government(AgentBaseClass):
         # Skip risk communication during spinup
         if self.model.in_spinup:
             return None
-        if "risk_communication" not in self.config:
-            print(
-                "Warning: risk_communication configuration not found for government agent."
-            )
+
+        if self.model.current_timestep == 0:
+            if "risk_communication" not in self.config:
+                print(
+                    "Warning: risk_communication configuration not found for government agent."
+                )
+                return None
+
+            risk_communication_config = self.config["risk_communication"]
+            if not risk_communication_config.get("enabled", True):
+                print(
+                    "Warning: risk communication is disabled in the government agent configuration."
+                )
+                return None
+
+        # Skip if config is missing or disabled (for all timesteps)
+        if "risk_communication" not in self.config or not self.config[
+            "risk_communication"
+        ].get("enabled", True):
             return None
 
         risk_communication_config = self.config["risk_communication"]
-        if not risk_communication_config.get("enabled", True):
-            print(
-                "Warning: risk communication is disabled in the government agent configuration."
-            )
-            return None
-
         frequency = risk_communication_config.get("frequency", "yearly")
         if frequency == "yearly":
             print("Providing yearly risk communication to households.")

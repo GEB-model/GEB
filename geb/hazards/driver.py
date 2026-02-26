@@ -97,7 +97,6 @@ class HazardDriver(Module):
                 return
 
             if self.model.config["hazards"]["floods"]["detect_floods_from_discharge"]:
-                print("Detecting floods from discharge...")
                 if self.model.in_spinup:
                     return
                 else:

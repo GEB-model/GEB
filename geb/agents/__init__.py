@@ -47,11 +47,11 @@ class Agents(Module):
 
         self.agents: list[AgentBaseClass] = [
             self.crop_farmers,
+            self.government,
             self.households,
             self.livestock_farmers,
             self.industry,
             self.reservoir_operators,
-            self.government,
             self.market,
         ]
 
