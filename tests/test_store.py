@@ -487,3 +487,35 @@ def test_dynamic_array_where() -> None:
     assert isinstance(res_scalar, DynamicArray)
     assert np.array_equal(res_scalar.data, np.array([1, 0, 3]))
     assert res_scalar.max_n == 10
+
+
+def test_dynamic_array_min_max() -> None:
+    """Test np.minimum and np.maximum with DynamicArray.
+
+    Verifies that np.minimum and np.maximum work correctly with DynamicArray,
+    supporting both DynamicArray and scalar/ndarray inputs as first or second
+    arguments, and handling the 'out' parameter.
+    """
+    da1 = DynamicArray(np.array([10, 2, 30]), max_n=10)
+    da2 = DynamicArray(np.array([5, 15, 20]), max_n=10)
+
+    # Test between two DynamicArrays
+    res_min = np.minimum(da1, da2)
+    assert isinstance(res_min, DynamicArray)
+    np.testing.assert_array_equal(res_min.data, np.array([5, 2, 20]))
+
+    # Test with scalar as first argument
+    res_scalar = np.minimum(5, da1)
+    assert isinstance(res_scalar, DynamicArray)
+    np.testing.assert_array_equal(res_scalar.data, np.array([5, 2, 5]))
+
+    # Test with ndarray as first argument
+    arr = np.array([5, 15, 20])
+    res_arr = np.minimum(arr, da1)
+    assert isinstance(res_arr, DynamicArray)
+    np.testing.assert_array_equal(res_arr.data, np.array([5, 2, 20]))
+
+    # Test np.maximum
+    res_max = np.maximum(da1, da2)
+    assert isinstance(res_max, DynamicArray)
+    np.testing.assert_array_equal(res_max.data, np.array([10, 15, 30]))

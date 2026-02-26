@@ -1437,6 +1437,9 @@ class MeritHydro(Adapter):
 
         Returns:
             xarray DataArray with merged tiles, preserving CRS and coordinates.
+
+        Raises:
+            ValueError: If data types among tiles are inconsistent.
         """
         das: list[xr.DataArray] = []
         for path in tile_paths:
@@ -1444,7 +1447,22 @@ class MeritHydro(Adapter):
             assert isinstance(src, xr.DataArray)
             das.append(src.sel(band=1))
 
-        da: xr.DataArray = merge.merge_arrays(das)
+        first_dtype = das[0].dtype
+        for da in das:
+            if da.dtype != first_dtype:
+                raise ValueError("Inconsistent data types among tiles.")
+
+        # there is an issue with merging uint8 tiles. Therefore, we convert to int32
+        # before merging and then convert back.
+        if das[0].dtype == np.uint8:
+            das = [da.astype(np.int32) for da in das]
+            is_uint8 = True
+        else:
+            is_uint8 = False
+
+        da: xr.DataArray = merge.merge_arrays(das, nodata=self._source_nodata)
+        if is_uint8:
+            da = da.astype(np.uint8)
         return da
 
     def _missing_marker_path(self, tile_name: str) -> Path:
@@ -1511,6 +1529,13 @@ class MeritHydro(Adapter):
             requests.RequestException: If repeated HTTP errors occur.
             tarfile.ReadError: If tar parsing repeatedly fails.
         """
+        self._xmin = xmin
+        self._xmax = xmax
+        self._ymin = ymin
+        self._ymax = ymax
+        self._source_nodata = source_nodata
+        self._target_nodata = target_nodata
+
         username = os.getenv("MERIT_USERNAME")
         password = os.getenv("MERIT_PASSWORD")
         if not username or not password:
