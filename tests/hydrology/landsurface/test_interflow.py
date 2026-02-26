@@ -5,7 +5,7 @@ import numpy as np
 
 from geb.hydrology.landsurface.water import get_interflow
 
-from ..testconfig import output_folder
+from ...testconfig import output_folder
 
 
 def test_get_interflow_normal_conditions() -> None:

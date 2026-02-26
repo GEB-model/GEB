@@ -28,7 +28,7 @@ from geb.hydrology.landsurface.water import (
     thetas_wosten,
 )
 
-from ..testconfig import output_folder
+from ...testconfig import output_folder
 
 
 def test_add_water_to_topwater_and_evaporate_open_water() -> None:

@@ -18,7 +18,7 @@ from geb.hydrology.landsurface.snow_glaciers import (
     update_snow_temperature,
 )
 
-from ..testconfig import output_folder
+from ...testconfig import output_folder
 
 output_folder_snow = output_folder / "snow_glaciers"
 output_folder_snow.mkdir(exist_ok=True)

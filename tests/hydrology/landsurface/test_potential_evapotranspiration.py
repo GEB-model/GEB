@@ -31,7 +31,7 @@ from geb.hydrology.landsurface.potential_evapotranspiration import (
     penman_monteith,
 )
 
-from ..testconfig import output_folder
+from ...testconfig import output_folder
 
 
 def test_get_vapour_pressure() -> None:
