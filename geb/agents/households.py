@@ -581,13 +581,12 @@ class Households(AgentBaseClass):
         self.var.loan_duration = (
             16  # years #TODO: values based on paper Lars France # INT
         )
-        annual_adaptation_costs_dryproofing: float = (
+        annual_adaptation_costs_dryproofing: float = np.asarray(
             self.var.total_adaptation_costs_dryproofing.data
-            * (
-                self.var.r_loan
-                * (1 + self.var.r_loan) ** self.var.loan_duration
-                / ((1 + self.var.r_loan) ** self.var.loan_duration - 1)
-            )
+        ) * (
+            self.var.r_loan
+            * (1 + self.var.r_loan) ** self.var.loan_duration
+            / ((1 + self.var.r_loan) ** self.var.loan_duration - 1)
         )
         self.var.adaptation_costs_dryproofing = DynamicArray(
             annual_adaptation_costs_dryproofing, max_n=self.max_n
@@ -783,8 +782,10 @@ class Households(AgentBaseClass):
         if household_mask.shape[0] != n_households:
             raise ValueError("household_mask length must match number of households")
 
-        base_total_dry = self.var.total_adaptation_costs_dryproofing.data
-        base_total_wet = self.var.total_adaptation_costs_wetproofing_array.data
+        base_total_dry = np.asarray(self.var.total_adaptation_costs_dryproofing.data)
+        base_total_wet = np.asarray(
+            self.var.total_adaptation_costs_wetproofing_array.data
+        )
 
         # Subtract subsidy from total costs and recalculate annual costs
         annualization_factor = (
@@ -810,12 +811,44 @@ class Households(AgentBaseClass):
 
         # Restore base annual costs for ineligible households
         if (~household_mask).any():
-            self.var.adaptation_costs_dryproofing.data[~household_mask] = (
+            self.var.annual_adaptation_costs_dryproofing.data[~household_mask] = (
                 base_total_dry[~household_mask] * annualization_factor
             )
-            self.var.adaptation_costs_wetproofing.data[~household_mask] = (
+            self.var.annual_adaptation_costs_wetproofing.data[~household_mask] = (
                 base_total_wet[~household_mask] * annualization_factor
             )
+
+    def apply_risk_communication(
+        self,
+        percentage_increase: float,
+        household_mask: np.ndarray | None = None,
+    ) -> None:
+        """Increase risk perception by a percentage for eligible households.
+
+        Args:
+            percentage_increase: Percentage increase (e.g., 20 for +20%).
+            household_mask: Boolean mask of eligible households. If None, all are eligible.
+
+        Raises:
+            ValueError: If length of household_mask does not match number of households.
+        """
+        n_households = self.n
+        if household_mask is None:
+            household_mask = np.ones(n_households, dtype=bool)
+        if household_mask.shape[0] != n_households:
+            raise ValueError("household_mask length must match number of households")
+
+        percentage_increase = max(
+            0.0, float(percentage_increase / 100)
+        )  # Percentage can't be smaller than 0
+        rp = self.var.risk_perception.data
+        rp[household_mask] = rp[household_mask] * (1.0 + percentage_increase)
+
+        # Cap at max
+        rp[household_mask] = np.minimum(rp[household_mask], self.var.risk_perc_max)
+        self.var.risk_perception.data[:] = (
+            rp  # Assign updated risk perception back to original file
+        )
 
     def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.

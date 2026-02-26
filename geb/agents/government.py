@@ -141,6 +141,9 @@ class Government(AgentBaseClass):
             ValueError: If subsidies.frequency is not "yearly" or "always".
             ValueError: If subsidies.apply_to is not "all" or "random_share".
         """
+        # Skip subsidies during spinup
+        if self.model.in_spinup:
+            return None
         if "subsidies" not in self.config:
             print(
                 "Warning: subsidies configuration not found for government agent. No subsidies will be provided."
@@ -190,8 +193,69 @@ class Government(AgentBaseClass):
             household_mask=eligible_mask,
         )
 
+    def provide_risk_communication(self) -> None:
+        """Communicate risk to households based on the configuration.
+
+        Raises:
+            ValueError: If risk_communication.frequency is not "yearly" or "always".
+            ValueError: If risk_communication.selected_households is not "all" or "random_share".
+        """
+        # Skip risk communication during spinup
+        if self.model.in_spinup:
+            return None
+        if "risk_communication" not in self.config:
+            print(
+                "Warning: risk_communication configuration not found for government agent."
+            )
+            return None
+
+        risk_communication_config = self.config["risk_communication"]
+        if not risk_communication_config.get("enabled", True):
+            print(
+                "Warning: risk communication is disabled in the government agent configuration."
+            )
+            return None
+
+        frequency = risk_communication_config.get("frequency", "yearly")
+        if frequency == "yearly":
+            print("Providing yearly risk communication to households.")
+            if not (
+                self.model.current_time.day == 1 and self.model.current_time.month == 1
+            ):  # provide risk communication on the first day of the year
+                return None
+        elif frequency != "always":
+            raise ValueError(
+                "risk_communication.frequency must be 'yearly' or 'always'"
+            )
+
+        selected_households = risk_communication_config.get(
+            "selected_households", "all"
+        )
+        n_households = self.agents.households.n
+        if selected_households == "all":
+            print("Providing risk communication to all households.")
+            eligible_mask = np.ones(n_households, dtype=bool)
+        elif selected_households == "random_share":
+            print("Providing risk communication to a random share of households.")
+            share = float(risk_communication_config.get("share", 1.0))
+            share = min(max(share, 0.0), 1.0)
+            rng = np.random.default_rng(risk_communication_config.get("seed", 42))
+            eligible_mask = rng.random(n_households) < share
+        else:
+            raise ValueError(
+                "risk_communication.selected_households must be 'all' or 'random_share'"
+            )
+        percentage_increase_risk_perception = float(
+            risk_communication_config.get("percentage_increase_risk_perception", 0.0)
+        )
+        self.agents.households.apply_risk_communication(
+            percentage_increase=percentage_increase_risk_perception,
+            household_mask=eligible_mask,
+        )
+
     def step(self) -> None:
         """This function is run each timestep."""
         self.set_irrigation_limit()
         self.provide_subsidies()
+        self.provide_risk_communication()
         self.report(locals())
