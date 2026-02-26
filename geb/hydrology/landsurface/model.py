@@ -40,7 +40,6 @@ from .interception import (
 from .potential_evapotranspiration import (
     get_CO2_induced_crop_factor_adustment,
     get_crop_factors_and_root_depths,
-    get_potential_direct_evaporation,
     get_potential_evapotranspiration,
     get_potential_interception_evaporation,
     get_potential_transpiration,
@@ -409,24 +408,18 @@ def land_surface_model(
 
             sublimation_m[i] += sublimation_m_cell_hour
 
-            potential_direct_evaporation_m: np.float32 = get_potential_direct_evaporation(
-                reference_evapotranspiration_grass_m_per_hour=reference_evapotranspiration_grass_m_hour_cell,
-                reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m_hour_cell,
-                leaf_area_index=leaf_area_index[i],
-                land_use_type=land_use_type[i],
-            )
-
             potential_evapotranspiration_m: np.float32 = get_potential_evapotranspiration(
                 reference_evapotranspiration_grass_m=reference_evapotranspiration_grass_m_hour_cell,
                 crop_factor=crop_factor[i],
                 CO2_induced_crop_factor_adustment=CO2_induced_crop_factor_adustment,
             )
 
-            potential_transpiration_m_cell_hour: np.float32 = (
-                get_potential_transpiration(
-                    potential_evapotranspiration_m=potential_evapotranspiration_m,
-                    potential_direct_evaporation_m=potential_direct_evaporation_m,
-                )
+            (
+                potential_transpiration_m_cell_hour,
+                potential_direct_evaporation_m,  # Updates the potential direct evaporation
+            ) = get_potential_transpiration(
+                potential_evapotranspiration_m=potential_evapotranspiration_m,
+                leaf_area_index=leaf_area_index[i],
             )
 
             potential_interception_evaporation_m: np.float32 = get_potential_interception_evaporation(
@@ -1482,6 +1475,7 @@ class LandSurface(Module):
             leaf_area_index_grassland_HRU=self.HRU.var.leaf_area_index_grassland_like[
                 dekad
             ],
+            crop_map=self.HRU.var.crop_map,
         )
 
         pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s

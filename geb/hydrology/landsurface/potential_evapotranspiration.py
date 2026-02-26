@@ -365,21 +365,28 @@ def get_reference_evapotranspiration(
 @njit(cache=True, inline="always")
 def get_potential_transpiration(
     potential_evapotranspiration_m: np.float32,
-    potential_direct_evaporation_m: np.float32,
-) -> np.float32:
-    """Calculate potential transpiration.
+    leaf_area_index: np.float32,
+) -> tuple[np.float32, np.float32]:
+    """Calculate potential transpiration and potential evaporation.
+
+    Transpiration is calculated using Beer's Law partitioning:
+    potential transpiration = potential evapotranspiration * (1 - exp(-k * LAI))
+    potential evaporation = potential evapotranspiration - potential transpiration
 
     Args:
         potential_evapotranspiration_m: Potential evapotranspiration (m).
-        potential_direct_evaporation_m: Potential direct evaporation (soil/water) (m).
+        leaf_area_index: Leaf area index (-).
 
     Returns:
         Potential transpiration (m).
+        Potential evaporation (m) (bare soil/water under canopy).
     """
-    return max(
-        np.float32(0.0),
-        potential_evapotranspiration_m - potential_direct_evaporation_m,
-    )
+    attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
+    potential_transpiration = (
+        np.float32(1.0) - attenuation_factor
+    ) * potential_evapotranspiration_m
+    potential_evaporation = potential_evapotranspiration_m - potential_transpiration
+    return potential_transpiration, potential_evaporation
 
 
 @njit(cache=True, inline="always")
@@ -397,53 +404,6 @@ def get_canopy_radiation_attenuation(
         Attenuation factor (0-1), representing the fraction of radiation transmitted through the canopy.
     """
     return np.exp(-extinction_coefficient * leaf_area_index)
-
-
-@njit(cache=True, inline="always")
-def get_potential_direct_evaporation(
-    reference_evapotranspiration_grass_m_per_hour: np.float32,
-    reference_evapotranspiration_water_m_per_hour: np.float32,
-    leaf_area_index: np.float32,
-    land_use_type: int,
-) -> np.float32:
-    """Calculate potential direct evaporation from the surface (soil or water).
-
-    This function estimates the maximum possible evaporation from a surface, which
-    can be either bare soil or an open water layer (e.g., in a paddy field or pond).
-    For vegetated areas, it applies Beer's law to account for canopy shading.
-
-    Notes:
-        There is always either a potential for open water evaporation (for water-based
-        or sealed land uses) or bare soil evaporation (for natural vegetated areas),
-        but never neither.
-
-    Args:
-        reference_evapotranspiration_grass_m_per_hour: Reference grass ET0 (m/hour).
-        reference_evapotranspiration_water_m_per_hour: Reference water ET0 (m/hour).
-        leaf_area_index: Leaf Area Index (-).
-        land_use_type: Land use type (-).
-
-    Returns:
-        Potential direct evaporation (m).
-    """
-    if land_use_type == PADDY_IRRIGATED or land_use_type == OPEN_WATER:
-        attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
-        return max(
-            attenuation_factor * reference_evapotranspiration_water_m_per_hour,
-            np.float32(0.0),
-        )
-    elif land_use_type == SEALED:
-        # Evaporation from precipitation fallen on sealed area (estimated as 0.2 x ET0 water)
-        return np.float32(0.2) * reference_evapotranspiration_water_m_per_hour
-    else:
-        # Natural areas: applies Beer's law to reference grass ET0.
-        # This partitioning assumes that potential direct evaporation from bare soil
-        # matches the reference ET budget when no canopy is present.
-        attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
-        return max(
-            attenuation_factor * reference_evapotranspiration_grass_m_per_hour,
-            np.float32(0.0),
-        )
 
 
 @njit(cache=True, inline="always")

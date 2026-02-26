@@ -20,7 +20,6 @@ from geb.hydrology.landsurface.potential_evapotranspiration import (
     get_crop_factor_from_lai,
     get_crop_factors_and_root_depths,
     get_net_solar_radiation,
-    get_potential_direct_evaporation,
     get_potential_evapotranspiration,
     get_potential_interception_evaporation,
     get_potential_transpiration,
@@ -202,19 +201,30 @@ def test_penman_monteith_night() -> None:
 
 def test_get_potential_transpiration() -> None:
     """Test the calculation of potential transpiration."""
-    potential_transpiration_m = get_potential_transpiration(
+    # Test with LAI=0 (no transpiration)
+    potential_transpiration_m, potential_evaporation_m = get_potential_transpiration(
         potential_evapotranspiration_m=np.float32(5.0),
-        potential_direct_evaporation_m=np.float32(2.0),
+        leaf_area_index=np.float32(0.0),
     )
-    expected_value = np.float32(3.0)
-    assert np.isclose(potential_transpiration_m, expected_value, rtol=1e-6)
+    expected_transpiration = np.float32(0.0)
+    expected_evaporation = np.float32(5.0)
+    assert np.isclose(potential_transpiration_m, expected_transpiration, rtol=1e-6)
+    assert np.isclose(potential_evaporation_m, expected_evaporation, rtol=1e-6)
 
-    potential_transpiration_m = get_potential_transpiration(
+    # Test with LAI such that attenuation is ~0.3678 (LAI=2.0)
+    potential_transpiration_m, potential_evaporation_m = get_potential_transpiration(
         potential_evapotranspiration_m=np.float32(5.0),
-        potential_direct_evaporation_m=np.float32(6.0),
+        leaf_area_index=np.float32(2.0),
     )
-    expected_value = np.float32(0.0)
-    assert np.isclose(potential_transpiration_m, expected_value, rtol=1e-6)
+    # extinction_coefficient = 0.5, LAI = 2.0 -> k*LAI = 1.0
+    # attenuation = exp(-1) = 0.367879...
+    # (1 - 0.367879...) * 5.0 = 0.632120... * 5.0 = 3.16060...
+    expected_transpiration = (np.float32(1.0) - np.exp(np.float32(-1.0))) * np.float32(
+        5.0
+    )
+    expected_evaporation = (np.exp(np.float32(-1.0))) * np.float32(5.0)
+    assert np.isclose(potential_transpiration_m, expected_transpiration, rtol=1e-6)
+    assert np.isclose(potential_evaporation_m, expected_evaporation, rtol=1e-6)
 
 
 def test_get_potential_evapotranspiration() -> None:
@@ -255,49 +265,6 @@ def test_get_potential_evapotranspiration() -> None:
     )
     expected_value = np.float32(2.5)
     assert np.isclose(potential_evapotranspiration_m, expected_value, rtol=1e-6)
-
-
-def test_get_potential_direct_evaporation() -> None:
-    """Test the calculation of potential direct evaporation."""
-    reference_evapotranspiration_grass_m = np.float32(5.0)
-    reference_evapotranspiration_water_m = np.float32(6.0)
-    direct_evaporation = get_potential_direct_evaporation(
-        reference_evapotranspiration_grass_m_per_hour=reference_evapotranspiration_grass_m,
-        reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m,
-        leaf_area_index=np.float32(0.0),
-        land_use_type=FOREST,
-    )
-
-    expected_value = np.float32(1.0)  # exp(-0.5 * 0) * 0.2 * 5.0
-    assert np.isclose(direct_evaporation, expected_value, rtol=1e-6)
-
-    direct_evaporation_water = get_potential_direct_evaporation(
-        reference_evapotranspiration_grass_m_per_hour=reference_evapotranspiration_grass_m,
-        reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m,
-        leaf_area_index=np.float32(0.0),
-        land_use_type=OPEN_WATER,
-    )
-    assert direct_evaporation_water == 6.0
-
-    direct_evaporation_sealed = get_potential_direct_evaporation(
-        reference_evapotranspiration_grass_m_per_hour=reference_evapotranspiration_grass_m,
-        reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m,
-        leaf_area_index=np.float32(0.0),
-        land_use_type=SEALED,
-    )
-    assert np.isclose(direct_evaporation_sealed, 1.2, rtol=1e-6)
-
-    # Test paddy irrigated with canopy shading
-    direct_evaporation_paddy_shaded = get_potential_direct_evaporation(
-        reference_evapotranspiration_grass_m_per_hour=reference_evapotranspiration_grass_m,
-        reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m,
-        leaf_area_index=np.float32(2.0),
-        land_use_type=PADDY_IRRIGATED,
-    )
-    # attenuation = exp(-0.5 * 2.0) = exp(-1) approx 0.3678
-    # 6.0 * 0.3678 approx 2.207
-    assert direct_evaporation_paddy_shaded < 3.0
-    assert math.isclose(direct_evaporation_paddy_shaded, 6.0 * math.exp(-1), rel_tol=1e-5)
 
 
 def test_get_potential_interception_evaporation() -> None:
