@@ -19,7 +19,7 @@ from geb.store import Bucket
 from geb.workflows import balance_check
 from geb.workflows.io import read_grid
 
-from ..landcovers import SEALED
+from ..landcovers import PADDY_IRRIGATED, SEALED
 from .energy import (
     apply_advective_heat_transport,
     apply_evaporative_cooling,
@@ -40,8 +40,9 @@ from .interception import (
 from .potential_evapotranspiration import (
     get_CO2_induced_crop_factor_adustment,
     get_crop_factors_and_root_depths,
-    get_potential_bare_soil_evaporation,
+    get_potential_direct_evaporation,
     get_potential_evapotranspiration,
+    get_potential_interception_evaporation,
     get_potential_transpiration,
     get_reference_evapotranspiration,
 )
@@ -404,9 +405,11 @@ def land_surface_model(
 
             sublimation_m[i] += sublimation_m_cell_hour
 
-            potential_bare_soil_evaporation_m: np.float32 = get_potential_bare_soil_evaporation(
-                reference_evapotranspiration_grass_m_per_day=reference_evapotranspiration_grass_m_hour_cell,
+            potential_direct_evaporation_m: np.float32 = get_potential_direct_evaporation(
+                reference_evapotranspiration_grass_m_per_hour=reference_evapotranspiration_grass_m_hour_cell,
+                reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m_hour_cell,
                 leaf_area_index=leaf_area_index[i],
+                land_use_type=land_use_type[i],
             )
 
             potential_evapotranspiration_m: np.float32 = get_potential_evapotranspiration(
@@ -418,20 +421,27 @@ def land_surface_model(
             potential_transpiration_m_cell_hour: np.float32 = (
                 get_potential_transpiration(
                     potential_evapotranspiration_m=potential_evapotranspiration_m,
-                    potential_bare_soil_evaporation_m=potential_bare_soil_evaporation_m,
+                    potential_direct_evaporation_m=potential_direct_evaporation_m,
                 )
+            )
+
+            potential_interception_evaporation_m: np.float32 = get_potential_interception_evaporation(
+                reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m_hour_cell,
+                potential_evapotranspiration_m=potential_evapotranspiration_m,
             )
             (
                 interception_storage_m[i],
                 throughfall_m,
                 interception_evaporation_m_cell_hour,
                 potential_transpiration_m_cell_hour,
+                potential_direct_evaporation_m,
             ) = interception(
                 rainfall_m=rainfall_that_resulted_in_runoff_if_interception_was_not_considered_m_per_hour,
                 storage_m=interception_storage_m[i],
                 capacity_m=interception_capacity_m[i],
-                potential_evaporation_m=reference_evapotranspiration_water_m_hour_cell,
+                potential_interception_evaporation_m=potential_interception_evaporation_m,
                 potential_transpiration_m=potential_transpiration_m_cell_hour,
+                potential_direct_evaporation_m=potential_direct_evaporation_m,
             )
 
             interception_evaporation_m[i] += interception_evaporation_m_cell_hour
@@ -440,17 +450,26 @@ def land_surface_model(
                 throughfall_m + runoff_from_melt_m
             )
 
-            # TODO: Test if removing if-statements in the function speeds up the code
             topwater_m[i], open_water_evaporation_m_cell_hour = (
                 add_water_to_topwater_and_evaporate_open_water(
                     natural_available_water_infiltration_m=natural_available_water_infiltration_m,
                     actual_irrigation_consumption_m=actual_irrigation_consumption_m[i],
                     land_use_type=land_use_type[i],
-                    reference_evapotranspiration_water_m=reference_evapotranspiration_water_m_hour_cell,
+                    potential_direct_evaporation_m=potential_direct_evaporation_m,
                     topwater_m=topwater_m[i],
                 )
             )
             open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
+
+            # Avoid double counting for paddy irrigation: crop_factor-based potential ET typically
+            # represents *total* ET (evaporation + transpiration). Open-water evaporation is an
+            # evaporation component, so it should reduce the remaining transpiration demand.
+            if land_use_type[i] == PADDY_IRRIGATED:
+                potential_transpiration_m_cell_hour = max(
+                    np.float32(0.0),
+                    potential_transpiration_m_cell_hour
+                    - open_water_evaporation_m_cell_hour,
+                )
 
             runoff_m[hour, i] += rise_from_groundwater(
                 w=w[:, i],
@@ -708,7 +727,7 @@ def land_surface_model(
             bare_soil_evaporation_m_cell_hour = calculate_bare_soil_evaporation(
                 soil_is_frozen=soil_is_frozen,
                 land_use_type=land_use_type[i],
-                potential_bare_soil_evaporation_m=potential_bare_soil_evaporation_m,
+                potential_direct_evaporation_m=potential_direct_evaporation_m,
                 open_water_evaporation_m=open_water_evaporation_m_cell_hour,
                 w_m=w[:, i],
                 wres_m=wres[:, i],

@@ -35,7 +35,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
     """Test the scalar version of add_water_to_topwater_and_evaporate_open_water."""
     # Test different land use types
     test_cases = [
-        (PADDY_IRRIGATED, 0.01, 0.0, 0.025, 0.05),  # paddy with evaporation
+        (PADDY_IRRIGATED, 0.01, 0.0, 0.025, 0.025),  # paddy with evaporation
         (NON_PADDY_IRRIGATED, 0.01, 0.0, 0.025, 0.0),  # non-paddy, no evaporation
         (SEALED, 0.01, 0.0, 0.025, 0.0),  # sealed, no evaporation in this function
         (
@@ -43,15 +43,15 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
             0.01,
             0.0,
             0.025,
-            0.0,
-        ),  # open water, no evaporation in this function
+            0.025,
+        ),  # open water, evaporation in this function
     ]
 
     for (
         land_use_type,
         infiltration_val,
         irrigation,
-        et_ref,
+        potential_direct_evaporation_m,
         expected_evap,
     ) in test_cases:
         topwater = np.float32(0.05)
@@ -62,7 +62,9 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
                 natural_available_water_infiltration_m=np.float32(infiltration_val),
                 actual_irrigation_consumption_m=np.float32(irrigation),
                 land_use_type=np.int32(land_use_type),
-                reference_evapotranspiration_water_m=np.float32(et_ref),
+                potential_direct_evaporation_m=np.float32(
+                    potential_direct_evaporation_m
+                ),
                 topwater_m=topwater,
             )
         )
@@ -91,7 +93,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
             natural_available_water_infiltration_m=np.float32(0.0),
             actual_irrigation_consumption_m=np.float32(0.0),
             land_use_type=np.int32(PADDY_IRRIGATED),
-            reference_evapotranspiration_water_m=np.float32(0.0),
+            potential_direct_evaporation_m=np.float32(0.0),
             topwater_m=topwater,
         )
     )
@@ -105,7 +107,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
             natural_available_water_infiltration_m=np.float32(0.0),
             actual_irrigation_consumption_m=np.float32(0.0),
             land_use_type=np.int32(PADDY_IRRIGATED),
-            reference_evapotranspiration_water_m=np.float32(
+            potential_direct_evaporation_m=np.float32(
                 1.0
             ),  # Much larger than topwater
             topwater_m=topwater,

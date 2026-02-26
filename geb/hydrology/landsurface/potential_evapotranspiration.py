@@ -4,12 +4,11 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
-from geb.hazards.floods import OPEN_WATER
-
 from ..landcovers import (
     FOREST,
     GRASSLAND_LIKE,
     NON_PADDY_IRRIGATED,
+    OPEN_WATER,
     PADDY_IRRIGATED,
     SEALED,
 )
@@ -366,20 +365,20 @@ def get_reference_evapotranspiration(
 @njit(cache=True, inline="always")
 def get_potential_transpiration(
     potential_evapotranspiration_m: np.float32,
-    potential_bare_soil_evaporation_m: np.float32,
+    potential_direct_evaporation_m: np.float32,
 ) -> np.float32:
     """Calculate potential transpiration.
 
     Args:
-        potential_evapotranspiration_m: Potential evapotranspiration [m]
-        potential_bare_soil_evaporation_m: Potential bare soil evaporation [m]
+        potential_evapotranspiration_m: Potential evapotranspiration (m).
+        potential_direct_evaporation_m: Potential direct evaporation (soil/water) (m).
 
     Returns:
-        Potential transpiration [m]
+        Potential transpiration (m).
     """
     return max(
         np.float32(0.0),
-        potential_evapotranspiration_m - potential_bare_soil_evaporation_m,
+        potential_evapotranspiration_m - potential_direct_evaporation_m,
     )
 
 
@@ -401,30 +400,46 @@ def get_canopy_radiation_attenuation(
 
 
 @njit(cache=True, inline="always")
-def get_potential_bare_soil_evaporation(
-    reference_evapotranspiration_grass_m_per_day: np.float32,
+def get_potential_direct_evaporation(
+    reference_evapotranspiration_grass_m_per_hour: np.float32,
+    reference_evapotranspiration_water_m_per_hour: np.float32,
     leaf_area_index: np.float32,
+    land_use_type: int,
 ) -> np.float32:
-    """Calculate potential bare soil evaporation.
+    """Calculate potential direct evaporation from the surface (soil or water).
 
-    Removes sublimation from potential bare soil evaporation and ensures non-negative result.
-    Applies Beer's law to account for canopy shading reducing soil evaporation.
+    This function estimates the maximum possible evaporation from a surface, which
+    can be either bare soil or an open water layer (e.g., in a paddy field or pond).
+    For vegetated areas, it applies Beer's law to account for canopy shading.
+
+    Notes:
+        There is always either a potential for open water evaporation (for water-based
+        or sealed land uses) or bare soil evaporation (for natural vegetated areas),
+        but never neither.
 
     Args:
-        reference_evapotranspiration_grass_m_per_day: Reference evapotranspiration [m]
-        leaf_area_index: Leaf Area Index [-]
+        reference_evapotranspiration_grass_m_per_hour: Reference grass ET0 (m/hour).
+        reference_evapotranspiration_water_m_per_hour: Reference water ET0 (m/hour).
+        leaf_area_index: Leaf Area Index (-).
+        land_use_type: Land use type (-).
 
     Returns:
-        Potential bare soil evaporation [m]
+        Potential direct evaporation (m).
     """
-    attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
-
-    return max(
-        attenuation_factor
-        * np.float32(0.2)
-        * reference_evapotranspiration_grass_m_per_day,
-        np.float32(0.0),
-    )
+    if land_use_type == PADDY_IRRIGATED or land_use_type == OPEN_WATER:
+        return reference_evapotranspiration_water_m_per_hour
+    elif land_use_type == SEALED:
+        # Evaporation from precipitation fallen on sealed area (estimated as 0.2 x ET0 water)
+        return np.float32(0.2) * reference_evapotranspiration_water_m_per_hour
+    else:
+        # Natural areas: applies Beer's law to a fixed fraction (0.2) of reference grass ET0
+        attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
+        return max(
+            attenuation_factor
+            * np.float32(0.2)
+            * reference_evapotranspiration_grass_m_per_hour,
+            np.float32(0.0),
+        )
 
 
 @njit(cache=True, inline="always")
@@ -441,11 +456,39 @@ def get_potential_evapotranspiration(
         CO2_induced_crop_factor_adustment: Adjustment factor for CO2 effects [dimensionless]
 
     Returns:
-        Potential evapotranspiration [m]
+        Potential evapotranspiration (m).
     """
     return (
         crop_factor * reference_evapotranspiration_grass_m
     ) * CO2_induced_crop_factor_adustment
+
+
+@njit(cache=True, inline="always")
+def get_potential_interception_evaporation(
+    reference_evapotranspiration_water_m_per_hour: np.float32,
+    potential_evapotranspiration_m: np.float32,
+) -> np.float32:
+    """Calculate potential interception evaporation.
+
+    Prevents wet-canopy evaporation from allocating more water than the total
+    (crop-factor based) potential ET budget available for this hour.
+
+    Without this cap, interception evaporation can exceed the remaining potential
+    transpiration (because it is driven by ET0 for a wet surface), which allows
+    total ET (interception + transpiration + bare soil) to exceed
+    `potential_evapotranspiration_m`.
+
+    Args:
+        reference_evapotranspiration_water_m_per_hour: Reference evapotranspiration for a wet surface (m/hour).
+        potential_evapotranspiration_m: Total potential evapotranspiration (transpiration + bare soil) (m).
+
+    Returns:
+        Potential interception evaporation (m).
+    """
+    return min(
+        reference_evapotranspiration_water_m_per_hour,
+        max(np.float32(0.0), potential_evapotranspiration_m),
+    )
 
 
 @njit(cache=True, inline="always")

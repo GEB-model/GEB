@@ -525,7 +525,7 @@ def test_calculate_bare_soil_evaporation() -> None:
     # Test data for a single cell
     soil_is_frozen = False
     land_use_type = NON_PADDY_IRRIGATED
-    potential_bare_soil_evaporation = np.float32(0.001)
+    potential_direct_evaporation = np.float32(0.001)
     open_water_evaporation = np.float32(0.0)
     w_cell = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres_cell = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
@@ -535,7 +535,7 @@ def test_calculate_bare_soil_evaporation() -> None:
     evaporation = calculate_bare_soil_evaporation(
         soil_is_frozen=soil_is_frozen,
         land_use_type=land_use_type,
-        potential_bare_soil_evaporation_m=potential_bare_soil_evaporation,
+        potential_direct_evaporation_m=potential_direct_evaporation,
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
@@ -545,13 +545,13 @@ def test_calculate_bare_soil_evaporation() -> None:
     # Basic checks
     assert isinstance(evaporation, (float, np.float32))
     assert evaporation >= 0
-    assert evaporation <= potential_bare_soil_evaporation
+    assert evaporation <= potential_direct_evaporation
 
     # Test with frozen soil - should return 0
     evaporation_frozen = calculate_bare_soil_evaporation(
         soil_is_frozen=True,
         land_use_type=land_use_type,
-        potential_bare_soil_evaporation_m=potential_bare_soil_evaporation,
+        potential_direct_evaporation_m=potential_direct_evaporation,
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
@@ -669,7 +669,7 @@ def test_calculate_bare_soil_evaporation_paddy() -> None:
     evaporation_paddy = calculate_bare_soil_evaporation(
         soil_is_frozen=False,
         land_use_type=PADDY_IRRIGATED,
-        potential_bare_soil_evaporation_m=0.001,
+        potential_direct_evaporation_m=0.001,
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
@@ -693,7 +693,7 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
     evaporation_with_open_water = calculate_bare_soil_evaporation(
         soil_is_frozen=False,
         land_use_type=NON_PADDY_IRRIGATED,
-        potential_bare_soil_evaporation_m=0.001,
+        potential_direct_evaporation_m=0.001,
         open_water_evaporation_m=0.0005,  # Half of potential
         w_m=w,
         wres_m=wres,
@@ -703,7 +703,7 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
     evaporation_no_open_water = calculate_bare_soil_evaporation(
         soil_is_frozen=False,
         land_use_type=NON_PADDY_IRRIGATED,
-        potential_bare_soil_evaporation_m=0.001,
+        potential_direct_evaporation_m=0.001,
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,

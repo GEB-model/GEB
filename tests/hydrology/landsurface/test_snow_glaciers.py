@@ -1406,7 +1406,7 @@ def _plot_scenario_results(
     axs[4].axhline(0, color="black", linestyle="-", linewidth=0.8)
 
     axs[-1].set_xlabel("Time (hours)")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.tight_layout()
     plot_path = (
         output_folder_snow / f"scenario_{scenario_name.replace(' ', '_').lower()}.png"
     )

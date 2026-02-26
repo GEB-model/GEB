@@ -375,27 +375,27 @@ def calculate_transpiration(
 def calculate_bare_soil_evaporation(
     soil_is_frozen: bool,
     land_use_type: np.int32,
-    potential_bare_soil_evaporation_m: np.float32,  # [m]
-    open_water_evaporation_m: np.float32,  # [m]
-    w_m: npt.NDArray[np.float32],  # [m]
-    wres_m: npt.NDArray[np.float32],  # [m]
-    unsaturated_hydraulic_conductivity_m_per_hour: np.float32,  # [m/h]
+    potential_direct_evaporation_m: np.float32,
+    open_water_evaporation_m: np.float32,
+    w_m: npt.NDArray[np.float32],
+    wres_m: npt.NDArray[np.float32],
+    unsaturated_hydraulic_conductivity_m_per_hour: np.float32,
 ) -> np.float32:
     """Calculate bare soil evaporation for a single soil cell.
 
     Args:
-        soil_is_frozen: Boolean indicating whether the soil is frozen.
-        land_use_type: Land use type of the hydrological response unit.
-        potential_bare_soil_evaporation_m: Potential bare soil evaporation [m].
-        open_water_evaporation_m: Open water evaporation [m], which is the water evaporated from open water areas.
-        w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
-        wres_m: Residual soil moisture content [m], shape (N_SOIL_LAYERS,).
-        unsaturated_hydraulic_conductivity_m_per_hour: Unsaturated hydraulic conductivity of the top soil layer [m/h].
+        soil_is_frozen: Indicate whether the soil is frozen.
+        land_use_type: Land use type (-).
+        potential_direct_evaporation_m: Potential direct evaporation (soil/water) (m).
+        open_water_evaporation_m: Actual open water evaporation (m).
+        w_m: Soil water content (m), shape (N_SOIL_LAYERS,).
+        wres_m: Residual soil moisture content (m), shape (N_SOIL_LAYERS,).
+        unsaturated_hydraulic_conductivity_m_per_hour: Unsaturated hydraulic conductivity (m/h).
 
     Returns:
-        The actual bare soil evaporation [m] for the cell.
+        Actual bare soil evaporation (m).
     """
-    # limit the bare soil evaporation to the available water in the soil
+    # Bare soil evaporation is only applied for natural (non-watery, non-paddy, non-sealed) areas.
     if (
         not soil_is_frozen
         and land_use_type != PADDY_IRRIGATED
@@ -404,28 +404,23 @@ def calculate_bare_soil_evaporation(
     ):
         # Limit potential evaporation by the unsaturated hydraulic conductivity
         # This accounts for the reduced ability of the soil to transport water to the surface
-        potential_bare_soil_evaporation_m: np.float32 = min(
-            potential_bare_soil_evaporation_m,
+        potential_direct_evaporation_m = min(
+            potential_direct_evaporation_m,
             unsaturated_hydraulic_conductivity_m_per_hour,
         )
 
-        # TODO: Minor bug, this should only occur when topwater is above 0
-        # fix this after completing soil module speedup
-        actual_bare_soil_evaporation: np.float32 = min(
+        # Subtract open water evaporation (though it's expected to be 0 for these land uses)
+        actual_bare_soil_evaporation = min(
             max(
                 np.float32(0),
-                potential_bare_soil_evaporation_m - open_water_evaporation_m,
+                potential_direct_evaporation_m - open_water_evaporation_m,
             ),
-            max(
-                w_m[0] - wres_m[0], np.float32(0)
-            ),  # soil moisture can never be lower than 0
+            max(w_m[0] - wres_m[0], np.float32(0)),
         )
-        # remove the bare soil evaporation from the top layer
+        # Update soil moisture
         w_m[0] -= actual_bare_soil_evaporation
-        w_m[0] = max(w_m[0], wres_m[0])  # soil moisture can never be lower than wres
+        w_m[0] = max(w_m[0], wres_m[0])
     else:
-        # if the soil is frozen, no evaporation occurs
-        # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
-        actual_bare_soil_evaporation: np.float32 = np.float32(0)
+        actual_bare_soil_evaporation = np.float32(0)
 
     return actual_bare_soil_evaporation

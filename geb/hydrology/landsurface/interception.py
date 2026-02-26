@@ -124,26 +124,30 @@ def interception(
     rainfall_m: np.float32,
     storage_m: np.float32,
     capacity_m: np.float32,
-    potential_evaporation_m: np.float32,
+    potential_interception_evaporation_m: np.float32,
     potential_transpiration_m: np.float32,
-) -> tuple[np.float32, np.float32, np.float32, np.float32]:
+    potential_direct_evaporation_m: np.float32,
+) -> tuple[np.float32, np.float32, np.float32, np.float32, np.float32]:
     """Calculate interception storage, throughfall, and evaporation.
 
-    The potential transpiration is reduced by the amount of evaporation from
-    the interception storage.
+    The potential transpiration and potential direct evaporation are reduced by
+    the amount of evaporation from the interception storage, with priority given
+    to reducing transpiration.
 
     Args:
-        rainfall_m: Precipitation (rain) in m.
-        storage_m: Current interception storage in m.
-        capacity_m: Interception capacity of vegetation in m.
-        potential_evaporation_m: Potential evaporation from a wet surface in m.
-        potential_transpiration_m: Potential transpiration in m.
+        rainfall_m: Precipitation (rain) (m).
+        storage_m: Current interception storage (m).
+        capacity_m: Interception capacity of vegetation (m).
+        potential_interception_evaporation_m: Potential evaporation from a wet surface (m).
+        potential_transpiration_m: Potential transpiration (m).
+        potential_direct_evaporation_m: Potential direct evaporation (soil/water) (m).
 
     Returns:
-        new_storage: Updated interception storage in m.
-        throughfall: Water reaching the ground after interception in m.
-        evaporation: Evaporation from intercepted water in m.
-        potential_transpiration_m: Updated potential transpiration in m.
+        new_storage: Updated interception storage (m).
+        throughfall: Water reaching the ground after interception (m).
+        evaporation: Evaporation from intercepted water (m).
+        potential_transpiration_m: Updated potential transpiration (m).
+        potential_direct_evaporation_m: Updated potential direct evaporation (m).
     """
     # Calculate throughfall
     throughfall = max(np.float32(0.0), rainfall_m + storage_m - capacity_m)
@@ -154,7 +158,7 @@ def interception(
     # Calculate evaporation from intercepted water
     evaporation = min(
         new_storage,
-        potential_evaporation_m * (new_storage / capacity_m) ** np.float32(2.0 / 3.0)
+        potential_interception_evaporation_m * (new_storage / capacity_m) ** np.float32(2.0 / 3.0)
         if capacity_m > np.float32(0.0)
         else np.float32(0.0),
     )
@@ -162,7 +166,23 @@ def interception(
     # Update interception storage after evaporation
     new_storage -= evaporation
 
-    potential_transpiration_m -= evaporation
-    potential_transpiration_m = max(np.float32(0.0), potential_transpiration_m)
+    # Subtract evaporation from transpiration potential first.
+    evaporation_from_transpiration = min(evaporation, potential_transpiration_m)
+    potential_transpiration_m -= evaporation_from_transpiration
 
-    return new_storage, throughfall, evaporation, potential_transpiration_m
+    # Subtract remaining evaporation from direct (soil/water) potential.
+    evaporation_from_direct = max(
+        np.float32(0.0), evaporation - evaporation_from_transpiration
+    )
+    potential_direct_evaporation_m -= evaporation_from_direct
+    potential_direct_evaporation_m = max(
+        np.float32(0.0), potential_direct_evaporation_m
+    )
+
+    return (
+        new_storage,
+        throughfall,
+        evaporation,
+        potential_transpiration_m,
+        potential_direct_evaporation_m,
+    )

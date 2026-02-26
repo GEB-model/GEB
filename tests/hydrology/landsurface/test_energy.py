@@ -322,7 +322,12 @@ def test_solve_soil_temperature_column() -> None:
 
 
 def test_solve_soil_temperature_column_snow() -> None:
-    """Test that snow cover effectively blocks surface fluxes."""
+    """Test that snow cover couples the soil surface to the snowpack.
+
+    The energy solver uses a conductive boundary condition between the top soil
+    layer and the snowpack when snow is present (instead of a radiative/aerodynamic
+    surface energy balance).
+    """
     # Setup similar to basic test
     n_soil_layers = 2
     soil_temperatures_old = np.full(n_soil_layers, 10.0, dtype=np.float32)
@@ -372,12 +377,12 @@ def test_solve_soil_temperature_column_snow() -> None:
         soil_albedo=soil_albedo,
         leaf_area_index=np.float32(0.0),
         snow_water_equivalent_m=np.float32(0.1),  # Significant snow
+        snow_temperature_C=np.float32(0.0),
     )
 
-    # Fluxes should be zero (adiabatic surface boundary as configured)
-    assert fluxes_snow == 0.0
-    # Temperature should not change significantly (only internal redistribution if any gradient existed, but here uniform 10C)
-    np.testing.assert_allclose(t_new_snow, 10.0, atol=1e-4)
+    # With snow present at 0C, a soil profile initially at 10C should cool.
+    assert fluxes_snow < 0.0
+    assert t_new_snow[0] < 10.0
 
     # WITHOUT SNOW (Control)
     t_new_control, fluxes_control, _ = solve_soil_temperature_column(

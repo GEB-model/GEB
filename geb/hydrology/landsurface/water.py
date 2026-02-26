@@ -16,43 +16,37 @@ def add_water_to_topwater_and_evaporate_open_water(
     natural_available_water_infiltration_m: np.float32,
     actual_irrigation_consumption_m: np.float32,
     land_use_type: np.int32,
-    reference_evapotranspiration_water_m: np.float32,
+    potential_direct_evaporation_m: np.float32,
     topwater_m: np.float32,
 ) -> tuple[np.float32, np.float32]:
-    """Add available water from natural and innatural sources to the topwater and calculate open water evaporation.
+    """Add available water to topwater and calculate open water evaporation.
 
     Args:
-        natural_available_water_infiltration_m: The natural available water infiltration in m.
-        actual_irrigation_consumption_m: The actual irrigation consumption in m.
-        land_use_type: The land use type of the hydrological response unit.
-        reference_evapotranspiration_water_m: The reference evapotranspiration from water in m.
-        topwater_m: The topwater in m, which is the water available for evaporation and transpiration.
+        natural_available_water_infiltration_m: Natural available water (m).
+        actual_irrigation_consumption_m: Actual irrigation consumption (m).
+        land_use_type: Land use type (-).
+        potential_direct_evaporation_m: Potential direct evaporation (soil/water) (m).
+        topwater_m: Topwater storage before update (m).
 
     Returns:
         A tuple containing:
-            - The updated topwater in m
-            - The open water evaporation in m, which is the water evaporated from open water areas.
+            - Updated topwater storage (m)
+            - Actual open water evaporation (m)
     """
     # Add water to topwater
     topwater_m += (
         natural_available_water_infiltration_m + actual_irrigation_consumption_m
     )
 
-    # Calculate open water evaporation based on land use type
-    if land_use_type == PADDY_IRRIGATED:
+    # Calculate open water evaporation for water-based or sealed land use types.
+    # For natural areas, direct (bare soil) evaporation is handled later by
+    # calculate_bare_soil_evaporation.
+    if land_use_type in (OPEN_WATER, PADDY_IRRIGATED, SEALED):
         open_water_evaporation_m = min(
             max(np.float32(0.0), topwater_m),
-            reference_evapotranspiration_water_m,
-        )
-    elif land_use_type == SEALED:
-        # evaporation from precipitation fallen on sealed area (ponds)
-        # estimated as 0.2 x reference evapotranspiration from water
-        open_water_evaporation_m = min(
-            np.float32(0.2) * reference_evapotranspiration_water_m, topwater_m
+            potential_direct_evaporation_m,
         )
     else:
-        # no open water evaporation for other land use types (thus using default of 0)
-        # note that evaporation from open water and channels is calculated in the routing module
         open_water_evaporation_m = np.float32(0.0)
 
     # Subtract evaporation from topwater
