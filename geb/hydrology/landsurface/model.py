@@ -732,15 +732,6 @@ def land_surface_model(
         liquid_water_in_snow_m[i] = liquid_water_in_snow_m_cell
         snow_temperature_C[i] = snow_temperature_C_cell
 
-    # TODO: Also solve vertical soil water balance for non-bio land use types
-    # some of the above calculations for non-bio land use types will lead to NaNs
-    # but these can be safely converted to zeros
-    groundwater_recharge_m = np.nan_to_num(groundwater_recharge_m)
-    interflow_m = np.nan_to_num(interflow_m)
-    bare_soil_evaporation = np.nan_to_num(bare_soil_evaporation)
-    transpiration_m = np.nan_to_num(transpiration_m)
-    potential_transpiration_m = np.nan_to_num(potential_transpiration_m)
-
     return (
         rain_m,
         snow_m,
@@ -1245,8 +1236,8 @@ class LandSurface(Module):
         # set soil moisture to nan where land use is not bioarea
         self.HRU.var.w: TwoDArrayFloat32 = np.where(
             self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
-            (self.HRU.var.wfc - self.HRU.var.wwp) * 0.2 + self.HRU.var.wwp,
-            np.nan,
+            (self.HRU.var.wfc - self.HRU.var.wwp) * np.float32(0.2) + self.HRU.var.wwp,
+            self.HRU.var.wres,
         )
         # for paddy irrigation flooded paddy fields
         self.HRU.var.topwater: ArrayFloat32 = self.HRU.full_compressed(
