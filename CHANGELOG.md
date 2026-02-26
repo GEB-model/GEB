@@ -41,7 +41,7 @@ To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
 - Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`
 - Re-run `setup_discharge_observations`: `geb update -b build.yml::setup_discharge_observations`
-- re-run `setup_household_characteristics`: `geb update -b build yml::setup_household_characteristics`
+- re-run `setup_household_characteristics`: `geb update -b build.yml::setup_household_characteristics`
 - re-run `setup_crops`: `geb update -b build.yml::setup_crops`
 - re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
 - re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
