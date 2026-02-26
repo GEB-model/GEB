@@ -12,6 +12,7 @@ import xarray as xr
 from rasterstats import zonal_stats
 from workflows.households.early_warning import EarlyWarningModule
 
+from ...households import Households
 from ..workflows.io import read_zarr, write_zarr
 
 
@@ -21,8 +22,9 @@ class EarlyWarningModule:
     It includes functions to create flood probability maps, implement warning strategies, communicate warnings to households, and simulate household response decisions.
     """
 
-    def __init__(self, households):
-        self.households = households
+    def __init__(self, households: Households) -> None:
+        """Initialize the EarlyWarningModule with a reference to the Households agent."""
+        self.households: Households = households
 
     def assign_households_to_postal_codes(self) -> None:
         """This function associates the household points with their postal codes to get the correct geometry for the warning function."""
