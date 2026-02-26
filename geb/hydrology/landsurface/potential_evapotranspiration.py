@@ -384,21 +384,45 @@ def get_potential_transpiration(
 
 
 @njit(cache=True, inline="always")
+def get_canopy_radiation_attenuation(
+    leaf_area_index: np.float32,
+    extinction_coefficient: np.float32 = np.float32(0.5),
+) -> np.float32:
+    """Calculate the radiation attenuation factor through a canopy using Beer's Law.
+
+    Args:
+        leaf_area_index: Leaf Area Index [-].
+        extinction_coefficient: Extinction coefficient (k) [-]. Default is 0.5.
+
+    Returns:
+        Attenuation factor (0-1), representing the fraction of radiation transmitted through the canopy.
+    """
+    return np.exp(-extinction_coefficient * leaf_area_index)
+
+
+@njit(cache=True, inline="always")
 def get_potential_bare_soil_evaporation(
     reference_evapotranspiration_grass_m_per_day: np.float32,
+    leaf_area_index: np.float32,
 ) -> np.float32:
     """Calculate potential bare soil evaporation.
 
     Removes sublimation from potential bare soil evaporation and ensures non-negative result.
+    Applies Beer's law to account for canopy shading reducing soil evaporation.
 
     Args:
         reference_evapotranspiration_grass_m_per_day: Reference evapotranspiration [m]
+        leaf_area_index: Leaf Area Index [-]
 
     Returns:
         Potential bare soil evaporation [m]
     """
+    attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
+
     return max(
-        np.float32(0.2) * reference_evapotranspiration_grass_m_per_day,
+        attenuation_factor
+        * np.float32(0.2)
+        * reference_evapotranspiration_grass_m_per_day,
         np.float32(0.0),
     )
 

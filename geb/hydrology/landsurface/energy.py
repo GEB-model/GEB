@@ -6,9 +6,11 @@ from numba import njit
 from geb.geb_types import Shape
 from geb.workflows.algebra import tdma_solver
 
+from .potential_evapotranspiration import get_canopy_radiation_attenuation
 from .snow_glaciers import calculate_snow_thermal_properties
 
 
+@njit(cache=True)
 def get_heat_capacity_solid_fraction(
     bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     layer_thickness_m: np.ndarray[Shape, np.dtype[np.float32]],
@@ -300,13 +302,12 @@ def calculate_net_radiation_flux(
     """
     # Constants
     STEFAN_BOLTZMANN_CONSTANT = np.float32(5.670374419e-8)
-    EXTINCTION_COEFFICIENT = np.float32(0.5)  # Beer's law extinction coefficient
 
     # Calculate Fluxes
     temperature_K = soil_temperature_C + np.float32(273.15)
 
     # Beer's law attenuation factor
-    attenuation_factor = np.exp(-EXTINCTION_COEFFICIENT * leaf_area_index)
+    attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
 
     absorbed_shortwave_W = (
         (np.float32(1.0) - soil_albedo)
@@ -577,6 +578,7 @@ def solve_soil_temperature_column(
         soil_albedo: Soil albedo [-].
         leaf_area_index: Leaf Area Index [-].
         snow_water_equivalent_m: Snow water equivalent [m]. If provided and > 0.001 m, the boundary condition is treated as adiabatic.
+        snow_temperature_C: Snow temperature [C], used for sensible heat flux if snow is present.
         topwater_m: Standing water on top of the soil [m].
 
     Returns:

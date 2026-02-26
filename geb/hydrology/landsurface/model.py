@@ -108,7 +108,6 @@ def land_surface_model(
     soil_temperature_C: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32,
     solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32,
-    bulk_density_kg_per_dm3: TwoDArrayFloat32,
     sand_percentage: TwoDArrayFloat32,
     delta_z: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
     soil_layer_height: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
@@ -189,7 +188,6 @@ def land_surface_model(
         soil_temperature_C: Soil temperature in Celsius.
         solid_heat_capacity_J_per_m2_K: Solid heat capacity of soil layers [J/m2/K].
         solid_thermal_conductivity_W_per_m_K: Solid thermal conductivity of soil layers [W/m/K].
-        bulk_density_kg_per_dm3: Bulk density of soil layers [kg/dm3].
         sand_percentage: Sand percentage of soil layers [%].
         delta_z: Thickness of soil layers [m].
         soil_layer_height: Soil layer heights for the cell in meters, shape (N_SOIL_LAYERS,).
@@ -406,10 +404,9 @@ def land_surface_model(
 
             sublimation_m[i] += sublimation_m_cell_hour
 
-            potential_bare_soil_evaporation_m: np.float32 = (
-                get_potential_bare_soil_evaporation(
-                    reference_evapotranspiration_grass_m_hour_cell,
-                )
+            potential_bare_soil_evaporation_m: np.float32 = get_potential_bare_soil_evaporation(
+                reference_evapotranspiration_grass_m_per_day=reference_evapotranspiration_grass_m_hour_cell,
+                leaf_area_index=leaf_area_index[i],
             )
 
             potential_evapotranspiration_m: np.float32 = get_potential_evapotranspiration(
@@ -772,7 +769,6 @@ class LandSurfaceInputs(NamedTuple):
     soil_temperature_C: TwoDArrayFloat32
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
     solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32
-    bulk_density_kg_per_dm3: TwoDArrayFloat32
     sand_percentage: TwoDArrayFloat32
     delta_z: TwoDArrayFloat32
     soil_layer_height: TwoDArrayFloat32
@@ -948,7 +944,6 @@ class LandSurface(Module):
             soil_temperature_C=self.HRU.var.soil_temperature_C,
             solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
             solid_thermal_conductivity_W_per_m_K=self.HRU.var.solid_thermal_conductivity_W_per_m_K,
-            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
             sand_percentage=self.HRU.var.sand_percentage,
             delta_z=delta_z,
             soil_layer_height=self.HRU.var.soil_layer_height_m,
