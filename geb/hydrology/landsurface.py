@@ -980,7 +980,7 @@ class LandSurface(Module):
         )
 
         self.HRU.var.variable_runoff_shape_beta = self.HRU.full_compressed(
-            0.0, dtype=np.float32
+            1.5, dtype=np.float32
         )
 
         slope_m_per_m = self.hydrology.grid.load(

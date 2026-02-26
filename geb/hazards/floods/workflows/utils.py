@@ -873,7 +873,7 @@ def gpd_return_level(
 
 def gpd_pot_ad_auto(
     series: pd.Series,
-    quantile_start: float = 0.80,
+    quantile_start: float = 0.90,
     quantile_end: float = 0.99,
     quantile_step: float = 0.01,
     min_exceed: int = 30,
