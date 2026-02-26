@@ -10,10 +10,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from rasterstats import zonal_stats
-from workflows.households.early_warning import EarlyWarningModule
 
+from ....workflows.io import read_zarr, write_zarr
 from ...households import Households
-from ..workflows.io import read_zarr, write_zarr
 
 
 class EarlyWarningModule:
