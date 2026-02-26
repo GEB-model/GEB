@@ -752,6 +752,9 @@ class Households(AgentBaseClass):
             dryproofing_subsidy_value: Absolute subsidy value to subtract from dry-proofing costs.
             wetproofing_subsidy_value: Absolute subsidy value to subtract from wet-proofing costs.
             household_mask: Boolean mask of households eligible for the subsidy. If None, all households are eligible.
+
+        Raises:
+            ValueError: If length of household_mask does not match number of households.
         """
         n_households = self.n
         if household_mask is None:
@@ -1888,26 +1891,26 @@ class Households(AgentBaseClass):
             EU_all, axis=1
         )  # get index of best choice per household (0 = no adaptation, 1 = dry proofing, 2 = wet proofing)
 
-        self.var.adapted[:] = (
-            0  # reset adapted status, because households may abandon adaptation measures
+        # Households can't abondon measures: once adapted (1 or 2), households keep that choice forever
+        prev_adaptation = self.var.adaptation_type.data.copy()
+        best_choice_per_household = np.where(
+            prev_adaptation != 0, prev_adaptation, best_choice_per_household
         )
 
-        self.var.time_adapted[best_choice_per_household == 0] = (
-            0  # reset time adapted for those who choose not to adapt
-        )
+        is_adapted = best_choice_per_household != 0
+        prev_adapted = prev_adaptation != 0
 
-        self.var.time_adapted[best_choice_per_household != 0] += (
-            1  # increase time adapted for those who choose to adapt (either dry or wet proofing)
-        )
+        # update time adapted
+        self.var.time_adapted[~is_adapted] = 0
+        self.var.time_adapted[is_adapted & prev_adapted] += 1
+        self.var.time_adapted[is_adapted & ~prev_adapted] = 1
 
-        self.var.adapted[best_choice_per_household != 0] = (
-            1  # store adapted households (either dry or wet proofing)
-        )
+        self.var.adapted[:] = 0
+        self.var.adapted[is_adapted] = 1
 
         self.var.adaptation_type[:] = (
             best_choice_per_household  #  store which measure they took, 0 = no adaptation, 1 = dry proofing, 2 = wet proofing
         )
-
         # update column in buildings
         self.update_building_adaptation_status(self.var.adaptation_type)
 
