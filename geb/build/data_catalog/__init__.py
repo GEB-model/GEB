@@ -18,6 +18,9 @@ from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
+from .global_ocean_mean_dynamic_topography import (
+    GlobalOceanMeanDynamicTopography as GlobalOceanMeanDynamicTopography,
+)
 from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
@@ -827,6 +830,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY-NC-SA 4.0",
             "url": "https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7",
             "paper_doi": "10.1088/1748-9326/ac4d4f",
+        },
+    },
+    "global_ocean_mean_dynamic_topography": {
+        "adapter": GlobalOceanMeanDynamicTopography(
+            folder="global_ocean_mean_dynamic_topography",
+            local_version=1,
+            filename="global_ocean_mean_dynamic_topography.nc",
+            cache="global",
+        ),
+        "url": "https://cmr.earthdata.nasa.gov/search/concepts/C2216864025-ORNL_CLOUD.html",
+        "source": {
+            "name": "Global Ocean Mean Dynamic Topography",
+            "author": "Copernicus Marine Service",
+            "version": "1",
+            "license": "CC0",
+            "url": "https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_MDT_008_063/description",
+            "paper_doi": "https://doi.org/10.48670/moi-00150",
         },
     },
     "gtsm": {

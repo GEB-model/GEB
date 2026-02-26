@@ -530,7 +530,7 @@ class GEBModel(Module):
             n_timesteps=n_timesteps,
             timestep_length=relativedelta(years=1),
             simulate_hydrology=False,
-            clean_report_folder=True,
+            clean_report_folder=False,
             load_data_from_store=True,
         )
 

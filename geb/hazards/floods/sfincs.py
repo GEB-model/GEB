@@ -33,6 +33,7 @@ from rioxarray.merge import merge_arrays
 from scipy.ndimage import binary_dilation, value_indices
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point
+from shapely.ops import nearest_points
 from tqdm import tqdm
 
 from geb.geb_types import (
@@ -75,7 +76,7 @@ from .workflows.utils import (
     make_relative_paths,
     read_flood_depth,
     run_sfincs_simulation,
-    select_most_downstream_point,
+    select_most_upstream_point,
     to_sfincs_datetime,
 )
 
@@ -296,7 +297,7 @@ class SFINCSRootModel:
 
         # we need this later to exclude these subbasins from the area of interest
         subbasins_of_interest = subbasins[
-            (~subbasins["is_downstream_outflow"])
+            (~subbasins["is_downstream_outflow"].astype(bool))
         ].index.tolist()
 
         self.subbasins, subbasins_burned = self.burn_and_align_subbasins(
@@ -383,7 +384,7 @@ class SFINCSRootModel:
             # setup the coastal boundary conditions
             sf.setup_mask_bounds(
                 btype="waterlevel",
-                zmax=2,  # maximum elevation for valid boundary cells
+                zmax=3,  # maximum elevation for valid boundary cells
                 exclude_mask=coastal_boundary_exclude_mask,
                 all_touched=True,
             )
@@ -427,7 +428,14 @@ class SFINCSRootModel:
                     ],
                     crs=self.mask.rio.crs,
                 )
-                assert len(area) == 1
+                if len(area) > 1:
+                    # remove isolated cells by keeping only the largest polygon
+                    area["area"] = area.geometry.area
+                    area = area.sort_values("area", ascending=False).iloc[0:1]
+                    area = area.drop(columns=["area"])
+                    # raise ValueError(
+                    #     "Calculated outflow area is not a single polygon, cannot calculate outflow conditions"
+                    # )
 
                 self.calculate_outflow_conditions(area=area)
 
@@ -662,7 +670,10 @@ class SFINCSRootModel:
         mask.name = "mask"
 
         # for in case the first DEM does not cover the entire area, we first pad the mask to the subbasins bounds
-        minx, miny, maxx, maxy = subbasins.to_crs(mask.rio.crs).total_bounds
+        # added a small buffer to ensure we don't have issues with rounding errors in the bounds and the mask alignment
+        minx, miny, maxx, maxy = (
+            subbasins.buffer(0.01).to_crs(mask.rio.crs).total_bounds
+        )
         mask = pad_xy(
             mask,
             minx=minx,
@@ -792,7 +803,9 @@ class SFINCSRootModel:
             ValueError: if the calculated outflow point is outside of the model grid.
         """
 
-        def export_diagnostics(outflow_point: Point | MultiPoint) -> None:
+        def export_diagnostics(
+            outflow_point: Point | MultiPoint | GeometryCollection,
+        ) -> None:
             write_zarr(
                 self.mask,
                 self.path / "debug_outflow_mask.zarr",
@@ -814,7 +827,70 @@ class SFINCSRootModel:
         ].iterrows():
             downstream_river_idx = river["downstream_ID"]
             if downstream_river_idx == -1:
-                print("Skipping coastal river")
+                # continue  # skip rivers that flow into ocean, as they don't have an outflow point on the grid
+                river = river.geometry
+
+                # Last point of river
+                end_point = Point(river.coords[-1])
+
+                # Compute nearest points between end_point and boundary
+                _, nearest_boundary_point = nearest_points(end_point, boundary)
+
+                # Extend river directly to that location
+                river = LineString(
+                    list(river.coords) + [nearest_boundary_point.coords[0]]
+                )
+
+                outflow_point = nearest_boundary_point
+
+                if not isinstance(outflow_point, Point):
+                    export_diagnostics(outflow_point)
+                    raise ValueError(
+                        "Calculated outflow point is not a single point. Please check the river geometries and subbasins boundary."
+                    )
+
+                outflow_col, outflow_row = coord_to_pixel(
+                    (outflow_point.x, outflow_point.y),
+                    self.mask.rio.transform().to_gdal(),
+                )
+
+                # due to floating point precision, the intersection point
+                # may be just outside the model grid. We therefore check if the
+                # point is outside the grid, and if so, move it 1 m upstream along the river
+                if not self.mask.values[outflow_row, outflow_col]:
+                    # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
+                    outflow_point: Point | MultiPoint | GeometryCollection = (
+                        river.interpolate(
+                            line_locate_point(river, outflow_point) - 0.000008983
+                            if self.is_geographic
+                            else 1.0
+                        )
+                    )
+                    if not isinstance(outflow_point, Point):
+                        # if the intersection is not a single point, select the most upstream point
+                        outflow_point: Point = select_most_upstream_point(
+                            river, outflow_point
+                        )
+
+                    outflow_col, outflow_row = coord_to_pixel(
+                        (outflow_point.x, outflow_point.y),
+                        self.mask.rio.transform().to_gdal(),
+                    )
+
+                    # if still outside the grid, raise error for boundary rivers
+                    if not self.mask.values[outflow_row, outflow_col]:
+                        export_diagnostics(outflow_point)
+                        raise ValueError(
+                            "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
+                        )
+
+                self.rivers.at[river_idx, "outflow_elevation"] = 0
+                self.rivers.at[river_idx, "outflow_point_xy"] = (
+                    outflow_point.x,
+                    outflow_point.y,
+                )
+                self.rivers.at[river_idx, "is_outflow_boundary"] = True
+
             else:
                 river = river.geometry
                 assert isinstance(river, LineString)
@@ -832,10 +908,27 @@ class SFINCSRootModel:
                 outflow_point: Point | MultiPoint | GeometryCollection = (
                     river.intersection(boundary)
                 )
+
+                # while there is no intersection point, we elongate the river geometry to ensure it intersects with the boundary. \
+                # Since there is no downstream river segment, we extend the last segment of the river
+                if outflow_point.is_empty and downstream_river_idx == -1:
+                    # Last point of river
+                    end_point = Point(river.coords[-1])
+
+                    # Compute nearest points between end_point and boundary
+                    _, nearest_boundary_point = nearest_points(end_point, boundary)
+
+                    # Extend river directly to that location
+                    river = LineString(
+                        list(river.coords) + [nearest_boundary_point.coords[0]]
+                    )
+
+                    outflow_point = nearest_boundary_point
+
                 if not isinstance(outflow_point, Point):
                     export_diagnostics(outflow_point)
-                    # if the intersection is not a single point, select the most downstream point
-                    outflow_point: Point = select_most_downstream_point(
+                    # if the intersection is not a single point, select the most upstream point
+                    outflow_point: Point = select_most_upstream_point(
                         river, outflow_point
                     )
 
@@ -857,8 +950,8 @@ class SFINCSRootModel:
                         )
                     )
                     if not isinstance(outflow_point, Point):
-                        # if the intersection is not a single point, select the most downstream point
-                        outflow_point: Point = select_most_downstream_point(
+                        # if the intersection is not a single point, select the most upstream point
+                        outflow_point: Point = select_most_upstream_point(
                             river, outflow_point
                         )
 
@@ -1399,8 +1492,6 @@ class SFINCSRootModel:
         timeseries.columns = range(len(timeseries.columns))
         locations_copy.index = range(len(locations_copy.index))
 
-        timeseries = timeseries.iloc[250:-250]  # trim the first and last 250 rows
-
         simulation: SFINCSSimulation = self.create_simulation(
             simulation_name=f"rp_{return_period}_coastal",
             start_time=timeseries.index[0],
@@ -1532,7 +1623,11 @@ class MultipleSFINCSSimulations:
         """
         self.simulations = simulations
 
-    def run(self, ncpus: int | str = "auto", gpu: bool | str = "auto") -> None:
+    def run(
+        self,
+        ncpus: int | str = "auto",
+        gpu: bool | str = "auto",
+    ) -> None:
         """Runs all contained SFINCS simulations.
 
         Args:

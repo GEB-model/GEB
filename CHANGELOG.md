@@ -90,6 +90,10 @@ To support this version:
 - Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
+- Added a water level boundary for coastal rivers (for now set to zero).
+- Included detrending of tide data in estimation of hydrograph shape. 
+- Moved Global dynamic ocean topography to the new data catalog.
+- Implemented a padding of cells with values in Global dynamic ocean topography to extent the data to the coastline based on extrapolation.
 - Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
 - Update damagescanner to v1.0.0b1
 - Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
@@ -110,7 +114,6 @@ To support this version:
 - Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 - Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
 - Add and run `setup_vegetation` to `build.yml`. A good place is for example after `setup_soil`.
-- Run uv sync to update damagescanner
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 

@@ -924,12 +924,6 @@ class Hydrography(BuildModelBase):
             )
             return
 
-        global_ocean_mdt_fn = self.old_data_catalog.get_source(
-            "global_ocean_mean_dynamic_topography"
-        ).path
-
-        global_ocean_mdt = xr.open_dataset(global_ocean_mdt_fn)
-
         # get the model bounds and buffer by ~10km
         model_bounds = self.bounds
         model_bounds = (
@@ -938,28 +932,11 @@ class Hydrography(BuildModelBase):
             model_bounds[2] + 0.083,  # max_lon
             model_bounds[3] + 0.083,  # max_lat
         )
-        min_lon, min_lat, max_lon, max_lat = model_bounds
 
-        # reproject global_ocean_mdt to 0.008333 grid (~1km)
-        global_ocean_mdt = global_ocean_mdt["mdt"]
-        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
+        global_ocean_mdt = self.data_catalog.fetch(
+            "global_ocean_mean_dynamic_topography"
+        ).read(model_bounds)
 
-        # clip to model bounds
-        global_ocean_mdt = global_ocean_mdt.rio.clip_box(
-            minx=min_lon,
-            miny=min_lat,
-            maxx=max_lon,
-            maxy=max_lat,
-        )
-
-        # write crs
-        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
-        # drop unused columns
-        global_ocean_mdt = global_ocean_mdt.squeeze(drop=True)
-        # set datatype to float32 and set fillvalue to np.nan
-        global_ocean_mdt = global_ocean_mdt.astype(np.float32)
-        global_ocean_mdt.encoding["_FillValue"] = np.nan
-        global_ocean_mdt.attrs["_FillValue"] = np.nan
         # write to model
         self.set_other(
             global_ocean_mdt,
@@ -1067,14 +1044,17 @@ class Hydrography(BuildModelBase):
             return
 
         # load elevation data
-        elevation = self.other["DEM/fabdem"]
+        elevation = self.other["DEM/delta_dtm"]
         # load the lecz mask
-        low_elevation_coastal_zone_mask = self.create_low_elevation_coastal_zone_mask()
-
-        # add small buffer to ensure connection of 'islands' with coastlines
-        low_elevation_coastal_zone_mask.geometry = (
-            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+        low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = (
+            self.create_low_elevation_coastal_zone_mask()
         )
+
+        if low_elevation_coastal_zone_mask is None:
+            self.logger.info(
+                "No low elevation coastal zone mask found, skipping setup_coastal_sfincs_model_regions"
+            )
+            return
 
         # sample the minimum elevation present in the lecz mask
         mask = elevation.rio.clip(
@@ -1085,6 +1065,11 @@ class Hydrography(BuildModelBase):
         )
 
         initial_water_levels = float(np.nanmin(mask.values))
+
+        # add small buffer to ensure connection of 'islands' with coastlines
+        low_elevation_coastal_zone_mask.geometry = (
+            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+        )
 
         low_elevation_coastal_zone_mask["initial_water_level"] = initial_water_levels
         self.set_geom(
