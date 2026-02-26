@@ -577,7 +577,7 @@ def solve_soil_temperature_column(
         soil_emissivity: Soil emissivity [-].
         soil_albedo: Soil albedo [-].
         leaf_area_index: Leaf Area Index [-].
-        snow_water_equivalent_m: Snow water equivalent [m]. If provided and > 0.001 m, the boundary condition is treated as adiabatic.
+        snow_water_equivalent_m: Snow water equivalent [m]. If provided and > 0.001 m, the surface boundary is driven by conductive heat exchange with the snowpack.
         snow_temperature_C: Snow temperature [C], used for sensible heat flux if snow is present.
         topwater_m: Standing water on top of the soil [m].
 
