@@ -7,6 +7,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import osmnx as ox
 import pandas as pd
 import xarray as xr
 from rasterstats import point_query, zonal_stats
