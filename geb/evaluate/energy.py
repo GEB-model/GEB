@@ -84,6 +84,7 @@ class Energy:
         ax.set_title(f"Soil Temperature Profile - Run: {run_name}")
         ax.set_xlabel("Time")
         ax.set_ylabel("Temperature (°C)")
+        ax.axhline(0, color="k", alpha=0.7, label="Freezing Point")
         ax.legend(title="Soil Layers")
         ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
