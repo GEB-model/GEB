@@ -112,7 +112,74 @@ class Government(AgentBaseClass):
                 < irrigation_limit["min"]
             ] = irrigation_limit["min"]
 
+    def provide_subsidies(self) -> None:
+        """Provide subsidies to households based on the configuration.
+
+        Configuration (model.yml):
+            agent_settings.government.subsidies:
+                enabled (bool, default: True):
+                    Whether to apply subsidies at all.
+                frequency (str, default: "yearly"):
+                    When to apply subsidies. Allowed values:
+                    - "yearly": only on Jan 1.
+                    - "always": every timestep.
+                apply_to (str, default: "all"):
+                    Which households are eligible. Allowed values:
+                    - "all": all households.
+                    - "random_share": random subset of households.
+                share (float, default: 1.0):
+                    Only used when apply_to == "random_share".
+                    Fraction in [0, 1] of households to select.
+                seed (int, default: 42):
+                    RNG seed used when apply_to == "random_share".
+                dryproofing_subsidy_value (float, default: 0.0):
+                    Absolute subsidy amount for dry-proofing (currency units).
+                wetproofing_subsidy_value (float, default: 0.0):
+                    Absolute subsidy amount for wet-proofing (currency units).
+
+        Raises:
+            ValueError: If subsidies.frequency is not "yearly" or "always".
+            ValueError: If subsidies.apply_to is not "all" or "random_share".
+        """
+        if "subsidies" not in self.config:
+            return None
+        subsidies_config = self.config["subsidies"]
+        if not subsidies_config.get("enabled", True):
+            return None
+
+        frequency = subsidies_config.get("frequency", "yearly")
+        if frequency == "yearly":
+            if not (
+                self.current_time.day == 1 and self.current_time.month == 1
+            ):  # provide subsidies on the first day of the year
+                return None
+        elif frequency != "always":
+            raise ValueError("subsidies.frequency must be 'yearly' or 'always'")
+
+        selected_households = subsidies_config.get("selected_households", "all")
+        n_households = self.agents.households.n
+        if selected_households == "all":
+            eligible_mask = np.ones(n_households, dtype=bool)
+        elif selected_households == "random_share":
+            share = float(subsidies_config.get("share", 1.0))
+            share = min(max(share, 0.0), 1.0)
+            rng = np.random.default_rng(subsidies_config.get("seed", 42))
+            eligible_mask = rng.random(n_households) < share
+        else:
+            raise ValueError(
+                "subsidies.selected_households must be 'all' or 'random_share'"
+            )
+
+        dry_value = float(subsidies_config.get("dryproofing_subsidy_value", 0.0))
+        wet_value = float(subsidies_config.get("wetproofing_subsidy_value", 0.0))
+        self.agents.households.apply_subsidy(
+            dryproofing_subsidy_value=dry_value,
+            wetproofing_subsidy_value=wet_value,
+            household_mask=eligible_mask,
+        )
+
     def step(self) -> None:
         """This function is run each timestep."""
         self.set_irrigation_limit()
+        self.provide_subsidies()
         self.report(locals())

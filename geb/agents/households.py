@@ -92,6 +92,8 @@ class HouseholdVariables(Bucket):
     response_probability: DynamicArray
     amenity_value: DynamicArray
     adaptation_costs: DynamicArray
+    base_adaptation_costs_dryproofing: DynamicArray
+    base_adaptation_costs_wetproofing: DynamicArray
     recommended_measures: DynamicArray
     time_adapted: DynamicArray
     max_dam_buildings_structure: float
@@ -573,6 +575,10 @@ class Households(AgentBaseClass):
         self.var.adaptation_costs_dryproofing = DynamicArray(
             annual_adaptation_costs_dryproofing, max_n=self.max_n
         )
+        self.var.base_adaptation_costs_dryproofing = DynamicArray(
+            np.asarray(annual_adaptation_costs_dryproofing, dtype=np.float32),
+            max_n=self.max_n,
+        )
 
         # initiate array with adaptation costs for wet-proofing, eur 2024 values, article Aerts (2018)
         total_adaptation_costs_wet_proofing: int = 27384
@@ -585,6 +591,10 @@ class Households(AgentBaseClass):
             )
         )
         self.var.adaptation_costs_wetproofing = DynamicArray(
+            np.full(self.n, annual_adaptation_costs_wetproofing, np.float32),
+            max_n=self.max_n,
+        )
+        self.var.base_adaptation_costs_wetproofing = DynamicArray(
             np.full(self.n, annual_adaptation_costs_wetproofing, np.float32),
             max_n=self.max_n,
         )
@@ -729,6 +739,56 @@ class Households(AgentBaseClass):
             }
         )
         self.flood_risk_perceptions.append(df)
+
+    def apply_subsidy(
+        self,
+        dryproofing_subsidy_value: float,
+        wetproofing_subsidy_value: float,
+        household_mask: np.ndarray | None = None,
+    ) -> None:
+        """Apply subsidy factors to adaptation costs for eligible households.
+
+        Args:
+            dryproofing_subsidy_value: Absolute subsidy value to subtract from dry-proofing costs.
+            wetproofing_subsidy_value: Absolute subsidy value to subtract from wet-proofing costs.
+            household_mask: Boolean mask of households eligible for the subsidy. If None, all households are eligible.
+        """
+        n_households = self.n
+        if household_mask is None:
+            household_mask = np.ones(n_households, dtype=bool)
+        if household_mask.shape[0] != n_households:
+            raise ValueError("household_mask length must match number of households")
+
+        if not hasattr(self.var, "base_adaptation_costs_dryproofing"):
+            self.var.base_adaptation_costs_dryproofing = DynamicArray(
+                np.asarray(self.var.adaptation_costs_dryproofing.data).copy(),
+                max_n=self.max_n,
+            )
+        if not hasattr(self.var, "base_adaptation_costs_wetproofing"):
+            self.var.base_adaptation_costs_wetproofing = DynamicArray(
+                np.asarray(self.var.adaptation_costs_wetproofing.data).copy(),
+                max_n=self.max_n,
+            )
+
+        base_dry = self.var.base_adaptation_costs_dryproofing.data
+        base_wet = self.var.base_adaptation_costs_wetproofing.data
+
+        self.var.adaptation_costs_dryproofing.data[household_mask] = np.maximum(
+            0.0,
+            base_dry[household_mask] - float(dryproofing_subsidy_value),
+        )
+        self.var.adaptation_costs_wetproofing.data[household_mask] = np.maximum(
+            0.0,
+            base_wet[household_mask] - float(wetproofing_subsidy_value),
+        )
+
+        if (~household_mask).any():
+            self.var.adaptation_costs_dryproofing.data[~household_mask] = base_dry[
+                ~household_mask
+            ]
+            self.var.adaptation_costs_wetproofing.data[~household_mask] = base_wet[
+                ~household_mask
+            ]
 
     def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.
