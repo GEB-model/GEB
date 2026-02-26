@@ -181,7 +181,16 @@ class Households(AgentBaseClass):
         distribution_parameters = read_table(
             self.model.files["table"]["income/distribution_parameters"]
         )
-        country = self.model.regions["ISO3"].values[0]
+
+        # Use first available country from distribution parameters (consistent with GDL regions used in build phase)
+        # This is a simplification - in the future this should use proper subnational datasets
+        available_countries = list(distribution_parameters.columns)
+        country = available_countries[0]
+        self.model.logger.info(
+            "Using income distribution for country: %s (first available from GDL regions)",
+            country,
+        )
+
         average_household_income = distribution_parameters[country]["MEAN"]
         median_income = distribution_parameters[country]["MEDIAN"]
 
@@ -333,7 +342,7 @@ class Households(AgentBaseClass):
 
         self.var.municipal_water_demand_per_capita_m3_baseline = read_array(
             self.model.files["array"][
-                "agents/households/municipal_water_demand_per_capita_m3_baseline"
+                "agents/households/municipal_water_withdrawal_per_capita_m3_baseline"
             ]
         )
 
@@ -1867,6 +1876,14 @@ class Households(AgentBaseClass):
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
+        self.buildings_centroid = gpd.GeoDataFrame(
+            geometry=self.buildings.to_crs(epsg=3857).centroid.to_crs(
+                self.buildings.crs
+            )
+        )
+        self.buildings_centroid["object_type"] = (
+            "building_unprotected"  # before it was "building_content"
+        )
 
         # Load roads
         self.roads = gpd.read_parquet(self.model.files["geom"]["assets/roads"]).rename(
@@ -2130,7 +2147,15 @@ class Households(AgentBaseClass):
         self.buildings_structure_curve["building_flood_proofed"] = (
             self.buildings_structure_curve["building_unprotected"] * 0.85
         )
-        self.buildings_structure_curve["building_flood_proofed"].loc[0:1] = 0.0
+        self.buildings_structure_curve.loc[0:1, "building_flood_proofed"] = 0.0
+
+        self.buildings_content_curve = pd.read_parquet(
+            self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
+        )
+        self.buildings_content_curve.set_index("severity", inplace=True)
+        self.buildings_content_curve = self.buildings_content_curve.rename(
+            columns={"damage_ratio": "building_unprotected"}
+        )
 
         # create another column (curve) in the buildings content curve for protected buildings
         self.buildings_content_curve["building_protected"] = (
@@ -2141,7 +2166,7 @@ class Households(AgentBaseClass):
             self.buildings_content_curve["building_unprotected"] * 0.85
         )
 
-        self.buildings_content_curve["building_flood_proofed"].loc[0:1] = 0.0
+        self.buildings_content_curve.loc[0:1, "building_flood_proofed"] = 0.0
 
         # TODO: need to adjust the vulnerability curves
         # create another column (curve) in the buildings content curve for

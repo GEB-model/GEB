@@ -17,7 +17,7 @@ The hydrology evaluation module provides comprehensive tools to assess model per
 To use these for the evaluation, you can run them using geb evaluate. Below, you see an example for the evaluate_discharge methodology: 
 
 ```bash
-geb evaluate --methods "evaluate_discharge" --run-name default
+geb evaluate --method hydrology.evaluate_discharge --run-name default
 ```
 
 For more control, use additional options:
@@ -66,7 +66,13 @@ The discharge evaluation results are saved to `output/evaluate/discharge/`:
 **Station specific plots** (`plots/`):
 - `timeseries_plot_{station_id}.png`: Time series comparing observed vs simulated discharge
 - `scatter_plot_{station_id}.png`: Scatter plots showing correlation between observed and simulated
+- `return_period_plot_{station_id}.png`: GPD-POT return-period comparison (observed vs simulated)
+- `shape_metrics_plot_{station_id}.png`: Skewness and kurtosis comparison (observed vs simulated)
 - Yearly plots are created when `--include-yearly-plots` is enabled
+
+**Outflow-only plots** (`plots/outflow/`):
+- `river_outflow_hourly_m3_per_s_{river_id}.png`: Line plot of simulated river outflow discharge (m3/s) for each exported outflow location
+- `river_outflow_hourly_m3_per_s_{river_id}_return_period.png`: GPD-POT return-period plot for each exported outflow location
 
 The evaluation creates an interactive dashboard showing performance metrics across all stations (INSERT IMAGE). 
 
@@ -101,7 +107,7 @@ The water balance evaluation analyzes inflows, outflows, and storage changes acr
 Visualize water balance components as a Sankey diagram:
 
 ```bash
-geb evaluate --methods "water_circle" --run-name default
+geb evaluate --method hydrology.water_circle --run-name default
 ```
 
 Shows flows between precipitation, evaporation, runoff, and storage components.
@@ -111,7 +117,7 @@ Shows flows between precipitation, evaporation, runoff, and storage components.
 Calculate and plot all water balance components:
 
 ```bash
-geb evaluate --methods "water_balance" --run-name default 
+geb evaluate --method hydrology.water_balance --run-name default 
 ```
 Analyzes inflows, outflows, and storage changes across the model domain to verify water conservation.
 

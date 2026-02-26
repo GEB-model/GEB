@@ -9,7 +9,7 @@ Contains several dictionaries to convert between different country coding system
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 import geopandas as gpd
 
@@ -122,6 +122,7 @@ TRADE_REGIONS: dict[str, str] = {
     "ISL": "ROWE",
     "NOR": "ROWE",
     "CHE": "EU_MidWest",  # Switzerland is grouped with EU_MidWest
+    "LIE": "EU_MidWest",  # Liechtenstein is grouped with EU_MidWest
     "BOL": "RSAM",
     "CHL": "RSAM",
     "COL": "RSAM",
@@ -204,7 +205,7 @@ TRADE_REGIONS: dict[str, str] = {
 def setup_donor_countries(
     data_catalog: NewDataCatalog,
     global_countries: gpd.GeoDataFrame,
-    countries_with_data: list[str],
+    countries_with_data: Iterable[str],
     alternative_countries: list[str],
 ) -> dict[str, str]:
     """Sets up the donor countries for GEB.

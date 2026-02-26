@@ -1,17 +1,3 @@
-MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
-  data_type: RasterDataset
-  driver: raster
-  path: agriculture/MIRCA-OS/Annual Harvested/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{ir_or_rf}.tif
-  meta:
-    paper_doi: 10.4211/hs.60a890eb841c460192c03bb590687145
-    paper_ref: Kebede et al. (2024) (preprint)
-    source_license: CC BY 4.0
-    source_url: https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/
-  placeholders:
-    year: ['2000', '2005', '2010', '2015']
-    resolution: ['5-arcminute', '30-arcminute']
-    crop: ['Barley', 'Cassava', 'Cocoa', 'Coffee', 'Cotton', 'Fodder', 'Groundnuts', 'Maize', 'Millet', 'Oil_palm', 'Others_annual', 'Others_perennial', 'Potatoes', 'Pulses', 'Rapeseed', 'Rice', 'Rye', 'Sorghum', 'Soybeans', 'Sugar_beet', 'Sugar_cane', 'Sunflower', 'Wheat']
-    ir_or_rf: [ir, rf]
 global_ocean_mean_dynamic_topography:
   data_type: RasterDataset
   driver: raster
@@ -41,44 +27,3 @@ GTSM_surge:
     source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
     source_version: 1.0
     unit: m+MSL
-COAST_RP:
-  path: COAST_RP/COAST-RP.pkl
-  data_type: Dataset
-  meta:
-    category: extreme water levels
-    paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
-    paper_ref: Dullaart et al. (2023)
-oecd_idd:
-  meta:
-    category: economics
-    source_author: OECD
-    source_url: https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov
-  path:
-    socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
-  driver: csv
-  data_type: DataFrame
-AQUASTAT_municipal_withdrawal:
-  data_type: DataFrame
-  driver: excel
-  path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
-  meta:
-    source_license: CC BY 4.0
-preferences_individual:
-  path: socioeconomic/social/cleaned_individual_data.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
-    category: time and risk preferences
-    source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
-    paper_doi: doi.org/10.1093/qje/qjy013
-    paper_ref: Falk et al. (2018)
-    source_license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (non-profit only)
-preferences_country:
-  path: socioeconomic/social/cleaned_country_data.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
-    category: time and risk preferences
-    source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
-    paper_doi: doi.org/10.1093/qje/qjy013
-    paper_ref: Falk et al. (2018)

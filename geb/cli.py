@@ -451,9 +451,9 @@ def update(*args: Any, **kwargs: Any) -> None:
 @cli.command()
 @click_run_options()
 @click.option(
-    "--methods",
-    default="hydrology.plot_discharge, hydrology.evaluate_discharge",  # , hydrology.evaluate_hydrodynamics",
-    help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
+    "--method",
+    default="hydrology.evaluate_discharge",
+    help="Single evaluation method to run, e.g. 'hydrology.evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
@@ -470,18 +470,18 @@ def update(*args: Any, **kwargs: Any) -> None:
     help="Create yearly plots in evaluation.",
 )
 @click.option(
-    "--correct-q-obs",
+    "--correct-discharge-observations",
     is_flag=True,
     default=False,
-    help="correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the difference in upstream area between the Q_obs station and the simulated discharge",
+    help="correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries for the difference in upstream area between the discharge_observations station and the simulated discharge",
 )
 def evaluate(
-    methods: str,
+    method: str,
     spinup_name: str,
     run_name: str,
     include_spinup: bool,
     include_yearly_plots: bool,
-    correct_q_obs: bool,
+    correct_discharge_observations: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     config: dict[str, Any] | Path = CONFIG_DEFAULT,
     profiling: bool = PROFILING_DEFAULT,
@@ -491,34 +491,29 @@ def evaluate(
     """Evaluate model, for example by comparing observed and simulated discharge.
 
     Args:
-        methods: Comma-seperated list of methods to evaluate. Currently supported methods: '
-            'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.
+        method: Single evaluation method to run, e.g. `hydrology.evaluate_discharge`.
         spinup_name: Name of the evaluation run.
         run_name: Name of the run to evaluate.
         include_spinup: Include spinup in evaluation.
         include_yearly_plots: Create yearly plots in evaluation.
-        correct_q_obs: correct_Q_obs can be flagged to correct the Q_obs discharge timeseries
-            for the difference in upstream area between the Q_obs station and the simulated discharge.
+        correct_discharge_observations: correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries
+            for the difference in upstream area between the discharge_observations station and the simulated discharge.
         working_directory: Working directory for the model.
         config: Path to the model configuration file or a dict with the config.
         profiling: If True, run the model with profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
         timing: If True, run the model with timing, printing the time taken for specific methods
     """
-    # If no methods are provided, pass None to run_model_with_method
-    methods_list: list[str] = methods.split(",")
-    methods_list: list[str] = [
-        method.replace("-", "_").strip() for method in methods_list
-    ]
+    method_name = method.replace("-", "_").strip()
     run_model_with_method(
         method="evaluate",
         method_args={
-            "methods": methods_list,
+            "method": method_name,
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,
             "include_yearly_plots": include_yearly_plots,
-            "correct_Q_obs": correct_q_obs,
+            "correct_discharge_observations": correct_discharge_observations,
         },
         working_directory=working_directory,
         config=config,
@@ -748,31 +743,27 @@ def workflow(
     help="Target cumulative upstream area per cluster in km². Defaults to 817,000 km².",
 )
 @click.option(
-    "--area-tolerance",
-    default=0.3,
-    type=float,
-    help="Tolerance for target area as fraction (0.3 = 30% tolerance).",
-)
-@click.option(
     "--cluster-prefix",
     default="cluster",
     help="Prefix for cluster directory names. Defaults to 'cluster'.",
 )
 @click.option(
-    "--overwrite",
+    "--skip-merged-geometries",
     is_flag=True,
-    default=True,
-    help="If set, overwrite existing cluster directories and files.",
+    default=False,
+    help="Skip creating merged geometry file (faster, but no dissolved basin polygons).",
 )
 @click.option(
-    "--save-geoparquet",
-    type=click.Path(),
-    help="Save clusters to geoparquet file at this path. If not specified, saves to 'models/clusters.geoparquet'.",
+    "--skip-visualization",
+    is_flag=True,
+    default=False,
+    help="Skip creating visualization map (faster).",
 )
 @click.option(
-    "--save-map",
-    type=click.Path(),
-    help="Save visualization map to PNG file at this path. If not specified, saves to 'models/clusters_map.png'.",
+    "--min-bbox-efficiency",
+    default=0.99,
+    type=float,
+    help="Minimum bbox efficiency (0-1) for cluster merging. Higher values create more compact/square clusters. Default: 0.97 (97% land fill ratio, allows only ~3% wasted land). Use 0.85 for slightly less compact (85%), 0.70 for moderate compactness, or 0.60 for more elongated shapes.",
 )
 @click.option(
     "--ocean-outlets-only",
@@ -780,50 +771,16 @@ def workflow(
     default=False,
     help="If set, only include clusters that flow to the ocean (exclude endorheic basins).",
 )
+@click.option(
+    "--init-multiple-dir",
+    default="large_scale",
+    help="Name of the subdirectory in models/ where the large scale model directories will be created. Defaults to 'large_scale'.",
+)
 @working_directory_option
-def init_multiple(
-    config: str,
-    build_config: str,
-    update_config: str,
-    working_directory: Path,
-    from_example: str,
-    geometry_bounds: str,
-    region_shapefile: str | None,
-    target_area_km2: float,
-    area_tolerance: float,
-    cluster_prefix: str,
-    overwrite: bool,
-    save_geoparquet: Path | None,
-    save_map: str | None,
-    ocean_outlets_only: bool,
-) -> None:
-    """Initialize multiple models by clustering downstream subbasins in a geometry.
-
-    This command identifies all downstream subbasins (outlets) within a specified
-    bounding box, clusters them by proximity and cumulative upstream area, and
-    creates separate model configurations for each cluster.
-
-    Example for parts of Europe:
-        geb init_multiple --geometry-bounds="5.0,50.0,15.0,55.0"
-
-    By default, a region covering Europe is used. Use --geometry-bounds to specify a different region.
-    """
-    init_multiple_fn(
-        config=config,
-        build_config=build_config,
-        update_config=update_config,
-        working_directory=working_directory,
-        from_example=from_example,
-        geometry_bounds=geometry_bounds,
-        region_shapefile=region_shapefile,
-        target_area_km2=target_area_km2,
-        area_tolerance=area_tolerance,
-        cluster_prefix=cluster_prefix,
-        overwrite=overwrite,
-        save_geoparquet=save_geoparquet,
-        save_map=save_map,
-        ocean_outlets_only=ocean_outlets_only,
-    )
+def init_multiple(*args: Any, **kwargs: Any) -> None:
+    """Initialize a new model for multiple subbasins."""
+    # Initialize the model with the given config and build config
+    init_multiple_fn(*args, **kwargs)
 
 
 @cli.command()

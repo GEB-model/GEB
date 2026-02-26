@@ -1,0 +1,7 @@
+# Large-scale multi-basin cluster configuration
+
+# LARGE_SCALE_DIR: "/absolute/path/to/your/models/large_scale" # Directory containing the cluster models (created by 'geb init_multiple').
+CLUSTER_PREFIX: "Europe" # Prefix used when creating clusters (e.g., Europe_000, Europe_001, etc.)
+EVALUATION_METHODS: "hydrology.plot_discharge,hydrology.evaluate_discharge" # Evaluation methods to run for each cluster
+
+# Parallelism is configured in profiles/slurm/config.yaml (jobs, max-jobs-per-second, group-components)

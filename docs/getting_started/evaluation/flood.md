@@ -15,7 +15,7 @@ The hydrodynamics evaluation tools help you:
 Evaluate flood extents against observations:
 
 ```bash
-geb evaluate --methods "evaluate_hydrodynamics" --run-name default
+geb evaluate --method hydrology.evaluate_hydrodynamics --run-name default
 ```
 
 ## Parameters

@@ -28,7 +28,6 @@ class GroundWater(BuildModelBase):
         self,
         minimum_thickness_confined_layer: int | float = 50,
         maximum_thickness_confined_layer: int | float = 1000,
-        intial_heads_source: str = "GLOBGM",
         force_one_layer: bool = True,
     ) -> None:
         """Sets up the MODFLOW grid for GEB.
@@ -41,7 +40,6 @@ class GroundWater(BuildModelBase):
         Args:
             minimum_thickness_confined_layer: The minimum thickness of the confined layer in meters. Default is 50.
             maximum_thickness_confined_layer: The maximum thickness of the confined layer in meters. Default is 1000.
-            intial_heads_source: The initial heads dataset to use, options are GLOBGM and Fan. Default is 'GLOBGM'.
             force_one_layer: If True, the model will be forced to use only one layer. Default is True.
         """
         aquifer_top_elevation = convert_nodata(
@@ -207,114 +205,69 @@ class GroundWater(BuildModelBase):
 
         self.set_grid(why_map_grid, name="groundwater/why_map")
 
-        if intial_heads_source == "GLOBGM":
-            # the GLOBGM DEM has a slight offset, which we fix here before loading it
+        # the GLOBGM DEM has a slight offset, which we fix here before loading it
 
-            reference_globgm_map = self.data_catalog.fetch(
-                "head_upper_layer_globgm"
-            ).read()
+        reference_globgm_map = self.data_catalog.fetch("head_upper_layer_globgm").read()
 
-            dem_globgm = self.data_catalog.fetch("dem_globgm").read()
+        dem_globgm = self.data_catalog.fetch("dem_globgm").read()
 
-            dem_globgm = dem_globgm.assign_coords(
-                x=reference_globgm_map.x.values,
-                y=reference_globgm_map.y.values,
+        dem_globgm = dem_globgm.assign_coords(
+            x=reference_globgm_map.x.values,
+            y=reference_globgm_map.y.values,
+        )
+
+        dem_globgm = dem_globgm.isel(
+            get_window(dem_globgm.x, dem_globgm.y, self.bounds, buffer=2)
+        )
+        dem = convert_nodata(self.grid["landsurface/elevation_m"], new_nodata=np.nan)
+
+        # heads
+        head_upper_layer = self.data_catalog.fetch("head_upper_layer_globgm").read()
+        head_upper_layer = head_upper_layer.isel(
+            get_window(head_upper_layer.x, head_upper_layer.y, self.bounds, buffer=2),
+        )
+
+        head_upper_layer = convert_nodata(head_upper_layer, new_nodata=np.nan)
+
+        relative_head_upper_layer = head_upper_layer - dem_globgm
+
+        relative_head_upper_layer = resample_like(
+            relative_head_upper_layer, aquifer_top_elevation, method="bilinear"
+        )
+
+        head_upper_layer = dem + relative_head_upper_layer
+
+        head_lower_layer = self.data_catalog.fetch("head_lower_layer_globgm").read()
+        head_lower_layer = head_lower_layer.isel(
+            get_window(head_lower_layer.x, head_lower_layer.y, self.bounds, buffer=2),
+        )
+
+        head_lower_layer = convert_nodata(head_lower_layer, new_nodata=np.nan)
+
+        relative_head_lower_layer = head_lower_layer - dem_globgm
+
+        relative_head_lower_layer = resample_like(
+            relative_head_lower_layer, aquifer_top_elevation, method="bilinear"
+        )
+
+        # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
+        relative_head_lower_layer = xr.where(
+            relative_head_lower_layer
+            < layer_boundary_elevation.isel(boundary=-1) - dem,
+            layer_boundary_elevation.isel(boundary=-1) - dem,
+            relative_head_lower_layer,
+        )
+        head_lower_layer = dem + relative_head_lower_layer
+
+        if two_layers:
+            # combine upper and lower layer head in one dataarray
+            heads = xr.concat(
+                [head_upper_layer, head_lower_layer],
+                dim=xr.Variable("layer", ["upper", "lower"]),
+                compat="equals",
             )
-
-            dem_globgm = dem_globgm.isel(
-                get_window(dem_globgm.x, dem_globgm.y, self.bounds, buffer=2)
-            )
-            dem = convert_nodata(
-                self.grid["landsurface/elevation_m"], new_nodata=np.nan
-            )
-
-            # heads
-            head_upper_layer = self.data_catalog.fetch("head_upper_layer_globgm").read()
-            head_upper_layer = head_upper_layer.isel(
-                get_window(
-                    head_upper_layer.x, head_upper_layer.y, self.bounds, buffer=2
-                ),
-            )
-
-            head_upper_layer = convert_nodata(head_upper_layer, new_nodata=np.nan)
-
-            relative_head_upper_layer = head_upper_layer - dem_globgm
-
-            relative_head_upper_layer = resample_like(
-                relative_head_upper_layer, aquifer_top_elevation, method="bilinear"
-            )
-
-            head_upper_layer = dem + relative_head_upper_layer
-
-            head_lower_layer = self.data_catalog.fetch("head_lower_layer_globgm").read()
-            head_lower_layer = head_lower_layer.isel(
-                get_window(
-                    head_lower_layer.x, head_lower_layer.y, self.bounds, buffer=2
-                ),
-            )
-
-            head_lower_layer = convert_nodata(head_lower_layer, new_nodata=np.nan)
-
-            relative_head_lower_layer = head_lower_layer - dem_globgm
-
-            relative_head_lower_layer = resample_like(
-                relative_head_lower_layer, aquifer_top_elevation, method="bilinear"
-            )
-
-            # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
-            relative_head_lower_layer = xr.where(
-                relative_head_lower_layer
-                < layer_boundary_elevation.isel(boundary=-1) - dem,
-                layer_boundary_elevation.isel(boundary=-1) - dem,
-                relative_head_lower_layer,
-            )
-            head_lower_layer = dem + relative_head_lower_layer
-
-            if two_layers:
-                # combine upper and lower layer head in one dataarray
-                heads = xr.concat(
-                    [head_upper_layer, head_lower_layer],
-                    dim=xr.Variable("layer", ["upper", "lower"]),
-                    compat="equals",
-                )
-            else:
-                heads = head_lower_layer.expand_dims(layer=["upper"])
-
-        elif intial_heads_source == "Fan":
-            # Load in the starting groundwater depth
-            region_continent = np.unique(self.geom["regions"]["CONTINENT"])
-            assert (
-                np.size(region_continent) == 1
-            )  # Transcontinental basins should not be possible
-
-            if (
-                np.unique(self.geom["regions"]["CONTINENT"])[0] == "Asia"
-                or np.unique(self.geom["regions"]["CONTINENT"])[0] == "Europe"
-            ):
-                region_continent = "Eurasia"
-            else:
-                region_continent = region_continent[0]
-
-            initial_depth = xr.open_dataarray(
-                self.old_data_catalog.get_source(
-                    f"initial_groundwater_depth_{region_continent}"
-                ).path
-            ).rename({"lon": "x", "lat": "y"})
-            initial_depth = initial_depth.isel(
-                get_window(initial_depth.x, initial_depth.y, self.bounds, buffer=1)
-            )
-
-            initial_depth_static = initial_depth.isel(time=0)
-
-            initial_depth = resample_like(
-                initial_depth_static,
-                self.grid["mask"],
-                method="bilinear",
-            )
-
-            raise NotImplementedError(
-                "Need to convert initial depth to heads for all layers"
-            )
+        else:
+            heads = head_lower_layer.expand_dims(layer=["upper"])
 
         assert heads.shape == hydraulic_conductivity.shape
         self.set_grid(heads, name="groundwater/heads")

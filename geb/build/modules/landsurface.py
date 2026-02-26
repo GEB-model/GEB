@@ -355,7 +355,7 @@ class LandSurface(BuildModelBase):
         self.set_geom(global_countries, name="global_countries")
 
         assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
-            f"Region database must contain unique region IDs ({self.old_data_catalog[region_database].path})"
+            f"Region database must contain unique region IDs"
         )
 
         region_id_mapping = {
@@ -365,9 +365,7 @@ class LandSurface(BuildModelBase):
 
         self.set_params(region_id_mapping, name="region_id_mapping")
 
-        assert "ISO3" in regions.columns, (
-            f"Region database must contain ISO3 column ({self.old_data_catalog[region_database].path})"
-        )
+        assert "ISO3" in regions.columns, f"Region database must contain ISO3 column)"
 
         self.set_geom(regions, name="regions")
 
