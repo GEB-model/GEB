@@ -467,13 +467,16 @@ def apply_evaporative_cooling(
 
     energy_loss_J_per_m2 = evaporation_m * density_water_kg_per_m3 * latent_heat
 
+    # We approximate the temperature change by dividing by the current heat capacity.
+    # Strictly speaking, the heat capacity changes as mass is removed (evaporation),
+    # but is negligible for small time steps.
     cooling_K = energy_loss_J_per_m2 / soil_heat_capacity_J_per_m2_K
 
     return soil_temperature_top_layer_C - cooling_K
 
 
 @njit(cache=True, inline="always")
-def apply_advective_heat_transport(
+def apply_rain_heat_advection(
     soil_temperature_top_layer_C: np.float32,
     infiltration_amount_m: np.float32,
     rain_temperature_C: np.float32,
@@ -500,30 +503,86 @@ def apply_advective_heat_transport(
 
     # Calculate energy flux into the soil layer: Q_advection (J/m2)
     # The water enters at T_rain and thermalizes to T_soil.
-    # The energy change of the soil matrix is equal to the energy released by the water cooling down (or heating up).
-    # dU_soil = m_water * cp_water * (T_rain - T_soil)
 
-    # Sensible heat term
-    energy_added_J_per_m2 = (
+    # Sensible heat content of the infiltrating water
+    heat_content_infiltration_J_per_m2 = (
         infiltration_amount_m
         * density_water_kg_per_m3
         * specific_heat_water_J_per_kg_K
-        * (rain_temperature_C - soil_temperature_top_layer_C)
+        * rain_temperature_C
     )
 
-    # Latent heat term: If rain falls on frozen soil, it likely freezes (releasing latent heat)
-    # This is a simplification; in reality, it depends on the capacity of the soil to freeze the water.
-    # Here we assume if soil < 0C, the infiltrating water freezes and releases energy.
-    if soil_temperature_top_layer_C < np.float32(0.0):
-        energy_added_J_per_m2 += (
-            infiltration_amount_m
-            * density_water_kg_per_m3
-            * latent_heat_fusion_J_per_kg
-        )
+    # Mixing: T_new = (C_old * T_old + H_added) / (C_old + C_added)
+    # Note: T_old is in Celsius, so C_old * T_old is heat content relative to 0 C.
 
-    temperature_change_K = energy_added_J_per_m2 / soil_heat_capacity_J_per_m2_K
+    added_heat_capacity_J_per_m2_K = (
+        infiltration_amount_m * density_water_kg_per_m3 * specific_heat_water_J_per_kg_K
+    )
 
-    return soil_temperature_top_layer_C + temperature_change_K
+    total_heat_capacity_J_per_m2_K = (
+        soil_heat_capacity_J_per_m2_K + added_heat_capacity_J_per_m2_K
+    )
+
+    new_temperature_C = (
+        (soil_heat_capacity_J_per_m2_K * soil_temperature_top_layer_C)
+        + heat_content_infiltration_J_per_m2
+    ) / total_heat_capacity_J_per_m2_K
+
+    return new_temperature_C
+
+
+@njit(cache=True, inline="always")
+def apply_soil_layer_heat_advection(
+    source_layer_temperature_C: np.float32,
+    sink_layer_temperature_C: np.float32,
+    water_flux_m: np.float32,
+    sink_heat_capacity_J_per_m2_K: np.float32,
+) -> np.float32:
+    """Apply advective heat transport from moving water between soil layers.
+
+    When water moves from the source layer (percolation or capillary rise), it carries energy with it.
+    This function modifies the sink layer temperature by mixing its existing heat content with
+    the incoming water's heat content.
+
+    The source layer has no net change in temperature due to the flux,
+    as the energy and heat capacity decrease proportionally.
+
+    The source layer temperature does not change due to leaving flux (mass and energy leave proportionally).
+
+    Formula: T_new = (C_old * T_old + C_added * T_source) / (C_old + C_added)
+    Where:
+      C_old   = sink_heat_capacity_J_per_m2_K
+      T_old   = sink_layer_temperature_C
+      C_added = added_heat_capacity_J_per_m2_K (water_flux_m * specific_heat_water)
+      T_source= source_layer_temperature_C
+
+    Args:
+        source_layer_temperature_C: Temperature of the source layer (C).
+        sink_layer_temperature_C: Temperature of the sink layer (C).
+        water_flux_m: Amount of water flux (percolation or capillary rise) (m).
+        sink_heat_capacity_J_per_m2_K: Heat capacity of the sink layer (J/m2/K).
+
+    Returns:
+        New temperature of the sink layer (C).
+    """
+    specific_heat_water_J_per_kg_K = np.float32(4186.0)
+    density_water_kg_per_m3 = np.float32(1000.0)
+
+    # Calculate the heat capacity added by the moving water
+    added_heat_capacity_J_per_m2_K = (
+        water_flux_m * density_water_kg_per_m3 * specific_heat_water_J_per_kg_K
+    )
+
+    total_sink_heat_capacity_J_per_m2_K = (
+        sink_heat_capacity_J_per_m2_K + added_heat_capacity_J_per_m2_K
+    )
+
+    new_sink_temperature_C = (
+        (sink_heat_capacity_J_per_m2_K * sink_layer_temperature_C)
+        + (added_heat_capacity_J_per_m2_K * source_layer_temperature_C)
+    ) / total_sink_heat_capacity_J_per_m2_K
+
+    return new_sink_temperature_C
 
 
 @njit(cache=True)

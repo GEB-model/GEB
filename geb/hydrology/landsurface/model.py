@@ -21,8 +21,9 @@ from geb.workflows.io import read_grid
 
 from ..landcovers import PADDY_IRRIGATED, SEALED
 from .energy import (
-    apply_advective_heat_transport,
     apply_evaporative_cooling,
+    apply_rain_heat_advection,
+    apply_soil_layer_heat_advection,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_heat_capacity_solid_fraction,
     solve_soil_temperature_column,
@@ -308,9 +309,6 @@ def land_surface_model(
             degree_of_saturation_cell = w[:, i] / ws[:, i]
             porosity_cell = ws[:, i] / soil_layer_height[:, i]
 
-            # We calculate total sensible heat capacity for advection/evaporation cooling
-            # But specific solid fraction for the implicit solver
-            # Only solid fraction
             solid_heat_capacities_J_per_m2_K_cell = solid_heat_capacity_J_per_m2_K[:, i]
 
             (
@@ -512,7 +510,7 @@ def land_surface_model(
 
             # Apply advective heat transport from infiltrating rain
             # We assume rain temperature is equal to air temperature
-            soil_temperature_C[0, i] = apply_advective_heat_transport(
+            soil_temperature_C[0, i] = apply_rain_heat_advection(
                 soil_temperature_top_layer_C=soil_temperature_C[0, i],
                 infiltration_amount_m=infiltration_amount,
                 rain_temperature_C=tas_C,
@@ -521,7 +519,7 @@ def land_surface_model(
                 ],
             )
 
-            bottom_layer = N_SOIL_LAYERS - 1  # ty: ignore[unresolved-reference]
+            bottom_layer = N_SOIL_LAYERS - 1
 
             psi: np.float32
             unsaturated_hydraulic_conductivity_m_per_hour: np.float32
@@ -589,7 +587,7 @@ def land_surface_model(
             )
 
             # iterate from bottom to top layer (ignoring the bottom layer which is treated above)
-            for layer in range(N_SOIL_LAYERS - 2, -1, -1):  # ty: ignore[unresolved-reference]
+            for layer in range(N_SOIL_LAYERS - 2, -1, -1):
                 psi, unsaturated_hydraulic_conductivity_m_per_hour = (
                     get_soil_water_flow_parameters(
                         w=w[layer, i],
@@ -669,6 +667,19 @@ def land_surface_model(
                     w[source, i] -= flux
                     w[sink, i] += flux
 
+                    # Apply advective heat transport between soil layers.
+                    # Note: The source layer temperature does not change because we assume
+                    # the leaving water has the same temperature as the source layer.
+                    # The source layer's heat capacity decreases implicitly as water is removed.
+                    soil_temperature_C[sink, i] = apply_soil_layer_heat_advection(
+                        source_layer_temperature_C=soil_temperature_C[source, i],
+                        sink_layer_temperature_C=soil_temperature_C[sink, i],
+                        water_flux_m=flux,
+                        sink_heat_capacity_J_per_m2_K=total_sensible_heat_capacities_J_per_m2_K[
+                            sink
+                        ],
+                    )
+
                     # Ensure water content stays within physical bounds
                     w[sink, i] = min(w[sink, i], ws[sink, i])
                     w[source, i] = max(w[source, i], wres[source, i])
@@ -678,7 +689,6 @@ def land_surface_model(
                     unsaturated_hydraulic_conductivity_m_per_hour
                 )
 
-                # Calculate interflow from this layer
                 interflow_cell_hour: np.float32 = get_interflow(
                     w=w[layer, i],
                     wfc=wfc[layer, i],
