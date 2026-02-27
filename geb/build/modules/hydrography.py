@@ -1683,10 +1683,22 @@ class Hydrography(BuildModelBase):
             ] = retention_basin["ID"]
 
             # store the retention basin data in a list to create a table later
+            controlled_flag = (
+                str(retention_basin["controlled_retention"]).lower() == "controlled"
+            )
             retention_basin_data.append(
                 {
                     "ID": retention_basin["ID"],
-                    "is_controlled": retention_basin["is_controlled"],
+                    "retention_max_storage_m3": retention_basin[
+                        "retention_max_storage_m3"
+                    ],
+                    "controlled_retention": controlled_flag,
+                    "retention_activation_threshold_controlled_m3_s": retention_basin[
+                        "retention_activation_threshold_controlled_m3_s"
+                    ],
+                    "retention_activation_threshold_uncontrolled_m3_s": retention_basin[
+                        "retention_activation_threshold_uncontrolled_m3_s"
+                    ],
                 }
             )
 

@@ -1451,6 +1451,9 @@ class Routing(Module):
             pre_river_storage_m3: ArrayFloat32 = self.router.get_total_storage(
                 self.grid.var.discharge_in_rivers_m3_s_substep
             )
+            pre_retention_storage_m3: ArrayFloat32 = (
+                self.grid.var.retention_basin_storage_m3.copy()
+            )
 
         channel_abstraction_m3_per_hour: np.ndarray = channel_abstraction_m3 / 24
         assert (
@@ -1629,6 +1632,10 @@ class Routing(Module):
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
                 retention_node_id=self.retention_basin_ids,
                 retention_storage_m3=self.grid.var.retention_basin_storage_m3,
+                retention_max_storage_m3=retention_max_storage_m3,
+                controlled_retention=controlled_retention,
+                retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
+                retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
             )
 
             assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
@@ -1697,6 +1704,7 @@ class Routing(Module):
                     return_flow * self.grid.var.cell_area,
                     over_abstraction_m3,
                     total_inflow_m3,
+                    retention_outflow_m3,
                 ],
                 outfluxes=[
                     channel_abstraction_m3,
@@ -1704,14 +1712,17 @@ class Routing(Module):
                     evaporation_in_rivers_m3,
                     waterbody_evaporation_m3,
                     command_area_release_m3,
+                    retention_inflow_m3,
                 ],
                 prestorages=[
                     pre_storage,
                     pre_river_storage_m3,
+                    pre_retention_storage_m3,
                 ],
                 poststorages=[
                     self.hydrology.waterbodies.var.storage,
                     river_storage_m3,
+                    self.grid.var.retention_basin_storage_m3,
                 ],
                 name="routing_1",
                 tolerance=100,
