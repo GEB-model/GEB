@@ -30,11 +30,25 @@
 - Move Coast-RP to new data catalog.
 - Generalize river snapping.
 - Setup example preprocessing for retention basins.
+- Fix: Add iso codes for GDL regions where those are missing 
+- Fix: Fix error in GLOPOP due to regions with 17 columns, instead of 16
+- Fix: Fix missing age (65) in age distribution for households 
+- use GDL regions (instead of GADM) for the income distribution parameters 
+- Fix: fix bug of farms that are smaller than the subgrid size 
+- Fix: fix bug of countries that are not in trade regions (GLOBIOM) 
+- Raise error when progress.txt contains duplicates 
+- Speedup pr_gev calculation in build.
+
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
 - Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`
 - Re-run `setup_discharge_observations`: `geb update -b build.yml::setup_discharge_observations`
+- Only in case of build errors (or later in spinup/run):
+     - re-run `setup_household_characteristics`: `geb update -b build yml::setup_household_characteristics`
+     - re-run `setup_crops`: `geb update -b build.yml::setup_crops`
+     - re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
+     - re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
@@ -81,6 +95,9 @@ To support this version:
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
 - Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
 - Update damagescanner to v1.0.0b1
+- Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
+- Change MERIT Hydro to use local GeoTIFF tiles directly instead of intermediate Zarr files.
+- Check which MeritHydro files are present on the shared IVM datadrive. Ignore tiles that are not present in build as these are in the ocean.
 
 To support this version:
 
