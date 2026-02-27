@@ -22,7 +22,7 @@ def decision_template() -> dict[str, Any]:
     return_periods = np.array([10, 50])
     income = np.random.randint(10_000, 20_000, n_agents)
     wealth = 1.5 * income
-    expendature_cap = 0.1
+    expenditure_cap = 0.1
     amenity_value = np.random.random(n_agents) * wealth
     amenity_weight = 1
     risk_perception = np.full(n_agents, 1)
@@ -43,7 +43,7 @@ def decision_template() -> dict[str, Any]:
         "n_agents": n_agents,
         "wealth": wealth,
         "income": income,
-        "expendature_cap": expendature_cap,
+        "expenditure_cap": expenditure_cap,
         "amenity_value": amenity_value,
         "amenity_weight": amenity_weight,
         "risk_perception": risk_perception,
@@ -76,8 +76,8 @@ def test_expenditure_cap(decision_template: dict) -> None:
         "Expected all EU_do_not_adapt values to be greater than -inf as there are no budget constraints"
     )
 
-    # make sure an expendature cap results in no adaptation
-    decision_template["expendature_cap"] = 0
+    # make sure an expenditure cap results in no adaptation
+    decision_template["expenditure_cap"] = 0
     EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
     EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_adapt == -np.inf), "Expected all EU_adapt values to be -inf"
@@ -89,7 +89,7 @@ def test_expenditure_cap(decision_template: dict) -> None:
     )
 
     # make sure setting expenditure cap to high results in all agents being able to afford adaptation
-    decision_template["expendature_cap"] = 10
+    decision_template["expenditure_cap"] = 10
     EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
     EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_adapt > -np.inf), (
@@ -108,7 +108,7 @@ def test_risk_perception(decision_template: dict) -> None:
 
     """
     decision_module = DecisionModule()
-    decision_template["expendature_cap"] = 10  # ensure all can adapt
+    decision_template["expenditure_cap"] = 10  # ensure all can adapt
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 0.01)
     EU_do_nothing_low_risk_perception = decision_module.calcEU_do_nothing_flood(
         **decision_template
@@ -132,7 +132,7 @@ def test_damages(decision_template: dict) -> None:
     decision_module = DecisionModule()
 
     # make sure all can adapt and behave rationally
-    decision_template["expendature_cap"] = 10
+    decision_template["expenditure_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
     # set damages under adaptation to zero
     decision_template["expected_damages_adapt"] *= 0
@@ -160,7 +160,7 @@ def test_time_adapted(decision_template: dict) -> None:
     """
     decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
-    decision_template["expendature_cap"] = 10
+    decision_template["expenditure_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
 
     # set damages to equal
@@ -194,7 +194,7 @@ def test_loan_duration(decision_template: dict) -> None:
     """
     decision_module = DecisionModule()
     # make sure all can adapt and behave rationally and set time discounting to zero
-    decision_template["expendature_cap"] = 10
+    decision_template["expenditure_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
     decision_template["r"] = 0
 
@@ -219,7 +219,7 @@ def test_time_discounting(decision_template: dict) -> None:
     """
     decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
-    decision_template["expendature_cap"] = 10
+    decision_template["expenditure_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
 
     # set time discounting low
@@ -243,7 +243,7 @@ def test_decision_horizon(decision_template: dict) -> None:
     """
     decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
-    decision_template["expendature_cap"] = 10
+    decision_template["expenditure_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
 
     # set time discounting to zero (no adaptation costs should be incurred in year zero)
