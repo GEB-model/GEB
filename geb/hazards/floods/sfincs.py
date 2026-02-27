@@ -68,6 +68,7 @@ from .workflows import get_river_depth, get_river_manning
 from .workflows.outflow import create_outflow_in_mask
 from .workflows.utils import (
     create_hourly_hydrograph,
+    create_hydrograph_from_discharge_shape,
     export_rivers,
     get_discharge_and_river_parameters_by_river,
     get_representative_river_points,
@@ -1235,21 +1236,56 @@ class SFINCSRootModel:
         selection_strategy: str = "first_significant",
         fixed_shape: float | None = 0.0,
         write_figures: bool = False,
+        hydrograph_shape: str = "triangular",
+        shape_window_days: float = 3.5,
+        shape_tolerance: float = 0.1,
     ) -> None:
         """Estimate discharge for specified return periods and create hydrographs.
 
         Args:
-            discharge: xr.DataArray containing the discharge data
-            rising_limb_hours: number of hours for the rising limb of the hydrograph.
-            return_periods: list of return periods for which to estimate discharge.
+            discharge: xr.DataArray containing the discharge data.
+            rising_limb_hours: Duration of rising (and falling) limb in hours.
+                Only used when ``hydrograph_shape='triangular'``.
+            return_periods: List of return periods for which to estimate discharge.
             p_value_threshold: Anderson-Darling p-value threshold for threshold selection. Defaults to 0.05.
             selection_strategy: Strategy for selecting the best threshold.
                 'first_significant': Selects the first threshold (ordered high-to-low) with p_ad > p_value_threshold.
                 'best_fit': Evaluates all thresholds and selects the one with the highest p-value.
-            fixed_shape: Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted. Defaults to 0.0.
+            fixed_shape: Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an
+                Exponential (Gumbel) tail, or null to allow it to be fitted. Defaults to 0.0.
             write_figures: Whether to generate and save diagnostic figures.
+            hydrograph_shape: Method used to build the hydrograph shape.
+                ``'triangular'``: symmetric linear rise and fall (default).
+                ``'direct'``: mean shape extracted from historical events near Q_N.
+                ``'anchor'``: mean shape extracted from historical events near Q_2
+                (always computed), then scaled to Q_N.
+            shape_window_days: Days extracted before AND after the peak (total window = 2 × shape_window_days).
+                Only used for ``'direct'`` and ``'anchor'``. Default 3.5 (→ ±3.5 days = 7 days total).
+            shape_tolerance: Fractional tolerance (±) around anchor discharge
+                used to identify events. Only used for ``'direct'`` and
+                ``'anchor'``. Default 0.1 (±10%).
+
+        Raises:
+            ValueError: If ``hydrograph_shape`` is not one of ``'triangular'``,
+                ``'direct'``, or ``'anchor'``.
+            ValueError: If fewer than 3 historical events are found near the
+                anchor discharge when using ``'direct'`` or ``'anchor'``.
         """
+        if hydrograph_shape not in ("triangular", "direct", "anchor"):
+            raise ValueError(
+                f"Unknown hydrograph_shape '{hydrograph_shape}'. "
+                "Choose 'triangular', 'direct', or 'anchor'."
+            )
+
         recession_limb_hours: int = rising_limb_hours
+        shape_window_hours: int = int(shape_window_days * 24)
+
+        # For 'anchor' mode Q_2 is always needed as the reference discharge.
+        # Add it to the GPD computation even if the user did not request RP=2.
+        anchor_rp: int | float = 2
+        return_periods_for_gpd: list[int | float] = list(return_periods)
+        if hydrograph_shape == "anchor" and anchor_rp not in return_periods_for_gpd:
+            return_periods_for_gpd = [anchor_rp] + return_periods_for_gpd
 
         # here we only select the rivers that have an upstream forcing point
         rivers_with_return_period: gpd.GeoDataFrame = self.active_rivers[
@@ -1270,7 +1306,7 @@ class SFINCSRootModel:
         rivers_with_return_period: gpd.GeoDataFrame = self.assign_return_periods(
             rivers_with_return_period,
             discharge_by_river,
-            return_periods=return_periods,
+            return_periods=return_periods_for_gpd,
             p_value_threshold=p_value_threshold,
             fixed_shape=fixed_shape,
             selection_strategy=selection_strategy,
@@ -1281,21 +1317,61 @@ class SFINCSRootModel:
         for return_period in return_periods:
             self.rivers[f"hydrograph_{return_period}"] = None
 
+        figures_path = (
+            self.figures_path / "hydrograph_shapes" if write_figures else None
+        )
+
         for river_idx in rivers_with_return_period.index:
-            for return_period in return_periods:
-                discharge_for_return_period = rivers_with_return_period.at[
-                    river_idx, f"Q_{return_period}"
-                ]
-                hydrograph: pd.DataFrame = create_hourly_hydrograph(
-                    discharge_for_return_period,
-                    rising_limb_hours,
-                    recession_limb_hours,
+            discharge_series: pd.Series = discharge_by_river[river_idx]
+
+            anchor_discharge: float | None = None
+            if hydrograph_shape == "anchor":
+                anchor_discharge = float(
+                    rivers_with_return_period.at[river_idx, f"Q_{anchor_rp}"]
                 )
-                hydrograph: dict[str, Any] = {
+
+            for return_period in return_periods:
+                Q_N: float = float(
+                    rivers_with_return_period.at[river_idx, f"Q_{return_period}"]
+                )
+
+                if hydrograph_shape == "triangular":
+                    hydrograph_df: pd.DataFrame = create_hourly_hydrograph(
+                        Q_N,
+                        rising_limb_hours,
+                        recession_limb_hours,
+                    )
+                elif hydrograph_shape == "direct":
+                    hydrograph_df = create_hydrograph_from_discharge_shape(
+                        discharge_series,
+                        peak_discharge=Q_N,
+                        anchor_discharge=Q_N,
+                        window_hours=shape_window_hours,
+                        tolerance=shape_tolerance,
+                        output_path=figures_path,
+                        river_idx=river_idx,
+                        return_period=return_period,
+                    )
+                else:  # anchor
+                    assert anchor_discharge is not None
+                    hydrograph_df = create_hydrograph_from_discharge_shape(
+                        discharge_series,
+                        peak_discharge=Q_N,
+                        anchor_discharge=anchor_discharge,
+                        window_hours=shape_window_hours,
+                        tolerance=shape_tolerance,
+                        output_path=figures_path,
+                        river_idx=river_idx,
+                        return_period=return_period,
+                    )
+
+                hydrograph_dict: dict[str, Any] = {
                     time.isoformat(): Q.item()  # ty: ignore[unresolved-attribute]
-                    for time, Q in hydrograph.iterrows()
+                    for time, Q in hydrograph_df.iterrows()
                 }
-                self.rivers.at[river_idx, f"hydrograph_{return_period}"] = hydrograph
+                self.rivers.at[river_idx, f"hydrograph_{return_period}"] = (
+                    hydrograph_dict
+                )
 
         export_rivers(self.path, rivers_with_return_period, postfix="_return_periods")
 

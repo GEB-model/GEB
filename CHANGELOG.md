@@ -36,7 +36,7 @@
 - Fix: fix bug of countries that are not in trade regions (GLOBIOM) 
 - Raise error when progress.txt contains duplicates 
 - Speedup pr_gev calculation in build.
-
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`

@@ -38,6 +38,10 @@ hazards:
       - 250
       - 500
       - 1000
+    shape:
+      method: triangular  # triangular (default), direct, or anchor
+      # window_days: 3.5  # days before AND after peak to extract (total window = 2 × window_days; default 3.5 → ±3.5 days = 7 days total)
+      # tolerance: 0.1    # ±fraction tolerance around anchor discharge (default 0.1 = ±10%)
     p_value_threshold: 0.05
     selection_strategy: first_significant
     fixed_shape: 0.0 # set to 0 to force gumbel (Exponential), null to allow free distribution
