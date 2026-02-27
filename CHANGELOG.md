@@ -1,4 +1,6 @@
 # dev
+- Reforestation: add government forest planting policy and soil modification workflow.
+- Convert suitable cropland/grassland to forest; update soils and remove farmers.
 - Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
 - Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.
 - Add frequency labels (hourly/daily) to extreme value analysis and validation plot titles.
