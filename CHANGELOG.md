@@ -42,16 +42,18 @@
 - Fix: fix bug of farms that are smaller than the subgrid size 
 - Fix: fix bug of countries that are not in trade regions (GLOBIOM) 
 - Raise error when progress.txt contains duplicates 
+- Speedup pr_gev calculation in build.
 
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
 - Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`
 - Re-run `setup_discharge_observations`: `geb update -b build.yml::setup_discharge_observations`
-- re-run `setup_household_characteristics`: `geb update -b build yml::setup_household_characteristics`
-- re-run `setup_crops`: `geb update -b build.yml::setup_crops`
-- re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
-- re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
+- Only in case of build errors (or later in spinup/run):
+     - re-run `setup_household_characteristics`: `geb update -b build yml::setup_household_characteristics`
+     - re-run `setup_crops`: `geb update -b build.yml::setup_crops`
+     - re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
+     - re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.

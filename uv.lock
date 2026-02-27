@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.13.*"
 resolution-markers = [
     "platform_machine == 'ARM64' and sys_platform == 'win32'",
@@ -1236,6 +1236,7 @@ dependencies = [
     { name = "ecmwf-api-client" },
     { name = "flask" },
     { name = "flopy" },
+    { name = "flox" },
     { name = "folium" },
     { name = "geopandas" },
     { name = "hydromt" },
@@ -1335,6 +1336,7 @@ requires-dist = [
     { name = "ecmwf-api-client", specifier = ">=1.6.5" },
     { name = "flask", specifier = ">=3.0.0" },
     { name = "flopy", specifier = ">=3.8.0" },
+    { name = "flox", specifier = ">=0.11.1" },
     { name = "folium", specifier = ">=0.19.6" },
     { name = "geopandas", specifier = ">=1.0.1" },
     { name = "hydromt", specifier = "==0.10.1" },
