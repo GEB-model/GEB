@@ -3386,7 +3386,6 @@ class CropFarmers(AgentBaseClass):
             y_data = masked_yearly_yield_ratio[agent_idx, :].copy()
             X_data = masked_SPEI_probability[agent_idx, :].copy()
 
-            # Same validity rules as your original (ln requires y>0 anyway)
             mask_bad = (X_data >= 1) | (y_data <= 0)
             y_data[mask_bad] = np.nan
             X_data[mask_bad] = np.nan

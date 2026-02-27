@@ -1313,6 +1313,20 @@ class Agents:
                 agricultural_area_db_ha = agricultural_area_db_ha[region_n_holdings > 0]
                 region_n_holdings = region_n_holdings[region_n_holdings > 0]
 
+                if ISO3 == "AUS":
+                    # Reduce the nr. in the top size class, as the average size becomes too large
+                    # Due to larger farms in the north and no pasture/cropland distinction
+                    # This creates a closer alignment with observed data
+                    top_bins = ["> 1000 Ha", "500 - 1000 Ha"]
+
+                    # scale holdings
+                    region_n_holdings.loc[top_bins] = (
+                        region_n_holdings.loc[top_bins] / 5
+                    )
+                    agricultural_area_db_ha.loc[top_bins] = (
+                        agricultural_area_db_ha.loc[top_bins] / 5
+                    )
+
                 def correct_farm_size_data(
                     agricultural_area_db_ha: pd.Series,
                     region_n_holdings: pd.Series,
