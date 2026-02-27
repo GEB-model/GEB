@@ -365,6 +365,179 @@ def create_hourly_hydrograph(
     return hydrograph_df
 
 
+def create_hydrograph_from_discharge_shape(
+    discharge_series: pd.Series,
+    peak_discharge: float,
+    anchor_discharge: float,
+    window_hours: int = 84,
+    tolerance: float = 0.1,
+    min_events: int = 3,
+    output_path: Path | None = None,
+    river_idx: int | None = None,
+    return_period: int | float | None = None,
+) -> pd.DataFrame:
+    """Create a hydrograph by extracting the mean shape from historical discharge events.
+
+    Finds historical events where discharge is within ``tolerance`` of
+    ``anchor_discharge``, extracts windows of ±``window_hours`` around each
+    peak, averages them to obtain a normalised mean shape, then scales the
+    shape so that its peak equals ``peak_discharge``.
+
+    For the ``direct`` shape method ``anchor_discharge`` equals
+    ``peak_discharge``.  For the ``anchor`` method ``anchor_discharge`` is
+    the 2-year return period discharge (Q_2), which typically has enough
+    historical occurrences to build a reliable mean shape even when the
+    target return period is rare.
+
+    Args:
+        discharge_series: Hourly discharge time series for the river reach.
+        peak_discharge: Target peak discharge (Q_RP from GPD-POT).
+        anchor_discharge: Discharge value used to identify reference events.
+        window_hours: Number of hours extracted before AND after the peak (total window = 2 × window_hours + 1). Default 84 (3.5 days either side → 7 days total).
+        tolerance: Fractional tolerance around anchor_discharge. Default 0.1 (±10%).
+        min_events: Minimum number of events required to build the shape. Default 3.
+        output_path: Directory to save diagnostic figures. If None no figure is saved.
+        river_idx: River index used in the figure title and filename.
+        return_period: Return period used in the figure title and filename.
+
+    Returns:
+        pd.DataFrame with a DatetimeIndex and a ``discharge`` column.
+
+    Raises:
+        ValueError: If fewer than ``min_events`` events are found near
+            ``anchor_discharge``.
+    """
+    lower = anchor_discharge * (1 - tolerance)
+    upper = anchor_discharge * (1 + tolerance)
+
+    # Find events where discharge rises above `lower`, then keep only those
+    # whose TRUE event peak falls within [lower, upper].  Using `lower` (not
+    # `upper`) as the entry threshold ensures we capture the full event even
+    # when discharge briefly exceeds `upper` mid-event; the tolerance filter
+    # on the peak value is what guarantees that every accepted event peak —
+    # and therefore every extracted window peak — lies inside the yellow band.
+    above_lower_mask = discharge_series >= lower
+
+    peak_times: list[pd.Timestamp] = []
+    in_event = False
+    event_start: pd.Timestamp | None = None
+
+    for time, above in above_lower_mask.items():
+        if above and not in_event:
+            in_event = True
+            event_start = time
+        elif not above and in_event:
+            in_event = False
+            event_slice = discharge_series[event_start:time]
+            peak_val = float(event_slice.max())
+            if lower <= peak_val <= upper:
+                peak_times.append(event_slice.idxmax())
+
+    if in_event and event_start is not None:
+        event_slice = discharge_series[event_start:]
+        peak_val = float(event_slice.max())
+        if lower <= peak_val <= upper:
+            peak_times.append(event_slice.idxmax())
+
+    # Extract fixed-length windows around each peak
+    windows: list[npt.NDArray[np.float64]] = []
+    for peak_time in peak_times:
+        start = peak_time - pd.Timedelta(hours=window_hours)
+        end = peak_time + pd.Timedelta(hours=window_hours)
+        window = discharge_series[start:end]
+        if len(window) == 2 * window_hours + 1:
+            windows.append(window.values)
+
+    if len(windows) < min_events:
+        raise ValueError(
+            f"Only {len(windows)} event(s) found near discharge "
+            f"{anchor_discharge:.2f} m³/s (±{tolerance * 100:.0f}%) for river "
+            f"{river_idx}, return period {return_period}. "
+            f"Need at least {min_events}. "
+            f"Consider using 'triangular' shape or the 'anchor' method with a lower anchor RP."
+        )
+
+    mean_shape_at_anchor = np.nanmean(windows, axis=0)
+
+    # Scale so peak equals peak_discharge
+    peak_of_mean = float(mean_shape_at_anchor.max())
+    scaled_shape = (
+        (mean_shape_at_anchor * (peak_discharge / peak_of_mean)).astype(np.float32)
+        if peak_of_mean > 0
+        else mean_shape_at_anchor.astype(np.float32)
+    )
+
+    n_steps = 2 * window_hours + 1
+    time_index = pd.date_range(start="2024-01-01 00:00", periods=n_steps, freq="h")
+    hydrograph_df = pd.DataFrame({"discharge": scaled_shape}, index=time_index)
+    hydrograph_df.index.name = "time"
+
+    if output_path is not None:
+        output_path.mkdir(parents=True, exist_ok=True)
+        time_axis = np.arange(-window_hours, window_hours + 1)
+
+        fig, ax = plt.subplots(figsize=(12, 7))
+
+        for w in windows:
+            ax.plot(time_axis, w, color="gray", alpha=0.3)
+
+        ax.plot(
+            time_axis,
+            mean_shape_at_anchor,
+            color="blue",
+            linewidth=2,
+            label=f"Mean shape at anchor ({anchor_discharge:.1f} m³/s)",
+        )
+        ax.plot(
+            time_axis,
+            scaled_shape,
+            color="purple",
+            linewidth=2,
+            linestyle="--",
+            label=f"Scaled hydrograph (RP={return_period}, {peak_discharge:.1f} m³/s)",
+        )
+        ax.axhline(
+            anchor_discharge,
+            color="green",
+            linestyle="--",
+            alpha=0.7,
+            label=f"Anchor discharge ({anchor_discharge:.1f} m³/s)",
+        )
+        ax.fill_between(
+            time_axis,
+            lower,
+            upper,
+            color="yellow",
+            alpha=0.2,
+            label=f"±{tolerance * 100:.0f}% anchor range",
+        )
+        ax.axhline(
+            peak_discharge,
+            color="red",
+            linestyle="--",
+            label=f"Q_RP={return_period} ({peak_discharge:.1f} m³/s)",
+        )
+        ax.axvline(0, color="black", linestyle=":", label="Peak hour")
+
+        ax.set_title(
+            f"Hydrograph shape — River {river_idx}, RP={return_period} "
+            f"({len(windows)} events)"
+        )
+        ax.set_xlabel("Hours relative to peak")
+        ax.set_ylabel("Discharge (m³/s)")
+        ax.legend(loc="best")
+        ax.grid(True)
+
+        fig.savefig(
+            output_path / f"river_{river_idx}_rp_{return_period}_shape.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
+
+    return hydrograph_df
+
+
 def check_docker_running() -> bool | None:
     """Check if Docker is installed and running.
 
