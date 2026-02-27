@@ -434,7 +434,7 @@ class DecisionModule:
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
-        expendature_cap: float,
+        expenditure_cap: float,
         amenity_value: np.ndarray,
         amenity_weight: float | int,
         risk_perception: np.ndarray,
@@ -590,7 +590,7 @@ class DecisionModule:
         EU_adapt_array = np.trapezoid(y=y, x=x, axis=0)
 
         # set EU of adapt to -np.inf for thuse unable to afford it [maybe move this earlier to reduce array sizes]
-        constrained = np.where(income * expendature_cap <= adaptation_costs)
+        constrained = np.where(income * expenditure_cap <= adaptation_costs)
         EU_adapt_array[constrained] = -np.inf
         # EU_adapt_array *= self.error_terms_stay
         return EU_adapt_array
