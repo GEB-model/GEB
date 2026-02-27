@@ -1273,8 +1273,6 @@ class Forcing(BuildModelBase):
         """Sets up the Generalized Extreme Value (GEV) parameters for the precipitation data.
 
         Sets the c shape (ξ), loc location (μ), and scale (σ) parameters.
-
-        It uses a temporary file to rechunk the data for efficient fitting.
         """
         pr: xr.DataArray = (
             self.other["climate/pr_kg_per_m2_per_s"] * 3600
