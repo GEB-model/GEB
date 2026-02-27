@@ -751,6 +751,32 @@ class fairSTREAMModel(GEBModel):
             name="climate/pr_gev_scale",
         )
 
+    @build_method(depends_on=["setup_forcing"])
+    def setup_pr_GEV_drought(self) -> None:
+        """Fit GEV parameters for drought-relevant low annual rainfall totals using minima EVT."""
+        pr = self.other["climate/pr_kg_per_m2_per_s"] * 3600  # mm/hour
+
+        pr_yearly_total = pr.resample(time="YS").sum(dim="time", skipna=True)
+
+        # Transform to model minima: Y = -X
+        neg_pr_yearly_total = (-pr_yearly_total).chunk({"time": -1}).compute()
+
+        gev_neg_pr = xci.stats.fit(neg_pr_yearly_total, dist="genextreme").compute()
+
+        # Store params for Y = -X. In pricing you must sample Y then negate back.
+        self.set_other(
+            gev_neg_pr.sel(dparams="c").astype(np.float32),
+            name="climate/pr_gev_c_drought",
+        )
+        self.set_other(
+            gev_neg_pr.sel(dparams="loc").astype(np.float32),
+            name="climate/pr_gev_loc_drought",
+        )
+        self.set_other(
+            gev_neg_pr.sel(dparams="scale").astype(np.float32),
+            name="climate/pr_gev_scale_drought",
+        )
+
     @build_method(depends_on=["setup_create_farms", "setup_regions_and_land_use"])
     def setup_farmer_crop_calendar(
         self,

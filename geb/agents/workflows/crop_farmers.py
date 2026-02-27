@@ -1163,6 +1163,7 @@ def compute_premiums_and_best_contracts_numba(
     rate_vals,
     n_sims,
     seed=42,
+    minima=False,
 ):
     """Computes the best insurance contracts for each agent based on GEV parameters, historical SPEI data, and losses.
 
@@ -1226,6 +1227,8 @@ def compute_premiums_and_best_contracts_numba(
                 for _ in range(n_sims):
                     u = np.random.random()  # Uniform(0,1)
                     spei_val = gev_ppf_scalar(u, shape, loc, scale)
+                    if minima:
+                        spei_val = -spei_val
                     shortfall = strike - spei_val
                     if shortfall <= 0.0:
                         continue

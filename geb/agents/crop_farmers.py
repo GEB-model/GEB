@@ -829,7 +829,9 @@ class CropFarmers(AgentBaseClass):
             or self.index_insurance_adaptation_active
             or self.pr_insurance_adaptation_active
         ):
-            for i, varname in enumerate(["pr_gev_c", "pr_gev_loc", "pr_gev_scale"]):
+            for i, varname in enumerate(
+                ["pr_gev_c_drought", "pr_gev_loc_drought", "pr_gev_scale_drought"]
+            ):
                 GEV_pr_grid = getattr(self.grid, varname)
                 self.var.GEV_pr_parameters[:, i] = sample_from_map(
                     GEV_pr_grid, self.var.locations.data, self.grid.gt
@@ -1263,7 +1265,9 @@ class CropFarmers(AgentBaseClass):
 
         Args:
             gross_irrigation_demand_m3_per_field: gross irrigation demand in m3 per field
-            gross_irrigation_demand_m3_per_field_limit_adjusted: adjusted gross irrigation demand in m3 per field
+            gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir: adjusted gross reservoir irrigation demand in m3 per field
+            gross_irrigation_demand_m3_per_field_limit_adjusted_channel: adjusted gross channel irrigation demand in m3 per field
+            gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater: adjusted groundwater gross irrigation demand in m3 per field
             available_channel_storage_m3: available channel storage in m3 per grid cell
             available_groundwater_m3: available groundwater storage in m3 per grid cell
             groundwater_depth: groundwater depth in meters per grid cell
@@ -2177,6 +2181,7 @@ class CropFarmers(AgentBaseClass):
         exit_vals,
         rate_vals,
         government_premium_cap,
+        minima=False,
     ):
         # Make a series of candidate insurance contracts and find the optimal contract
         # with the least basis risk considering past losses
@@ -2200,6 +2205,7 @@ class CropFarmers(AgentBaseClass):
             rate_vals,
             n_sims=100,
             seed=42,
+            minima=minima,
         )
 
         best_strike = strike_vals[best_strike_idx]
@@ -4590,6 +4596,7 @@ class CropFarmers(AgentBaseClass):
                             exit_vals=exit_vals,
                             rate_vals=rate_vals,
                             government_premium_cap=government_premium_cap,
+                            minima=True,
                         )
                     )
                     pr_insured_farmers_mask = (
