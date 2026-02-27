@@ -575,12 +575,16 @@ class Households(AgentBaseClass):
             901 * self.var.household_building_circumference.data
         ).astype(np.int64)
 
-        self.var.r_loan = (
-            0.04  # 4% interest rate #TODO: values based on paper Lars France  # float
-        )
-        self.var.loan_duration = (
-            16  # years #TODO: values based on paper Lars France # INT
-        )
+        # Load adaptation financing parameters from config
+        self.var.r_loan = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["adaptation_financing"]["loan_interest_rate"]
+        self.var.loan_duration = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["adaptation_financing"]["loan_duration"]
+        self.var.expenditure_cap = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["adaptation_financing"]["expenditure_cap"]
         annual_adaptation_costs_dryproofing: float = np.asarray(
             self.var.total_adaptation_costs_dryproofing.data
         ) * (
@@ -1891,7 +1895,7 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            expenditure_cap=1,
+            expenditure_cap=self.var.expenditure_cap,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
@@ -1910,7 +1914,7 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            expenditure_cap=1,
+            expenditure_cap=self.var.expenditure_cap,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,

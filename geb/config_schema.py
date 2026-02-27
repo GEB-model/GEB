@@ -210,12 +210,31 @@ class RiskPerceptionConfig(BaseModel):
     min: float = Field(0.01, description="Minimum risk perception.")
 
 
+class AdaptationFinancingConfig(BaseModel):
+    """Configuration for adaptation financing parameters."""
+
+    expenditure_cap: float = Field(
+        1.0,
+        description="Expenditure cap for adaptation investments (fraction of income).",
+    )
+    loan_duration: int = Field(
+        16, description="Loan duration for adaptation investments (years)."
+    )
+    loan_interest_rate: float = Field(
+        0.04, description="Interest rate for adaptation loans (annual rate)."
+    )
+
+
 class FloodRiskCalculationsConfig(BaseModel):
     """Configuration for flood risk calculations."""
 
     risk_perception: RiskPerceptionConfig = Field(
         default_factory=RiskPerceptionConfig,
         description="Risk perception configuration.",
+    )
+    adaptation_financing: AdaptationFinancingConfig = Field(
+        default_factory=AdaptationFinancingConfig,
+        description="Adaptation financing configuration.",
     )
 
 
@@ -232,12 +251,21 @@ class WaterDemandConfig(BaseModel):
     """Configuration for water demand."""
 
     method: str = Field("default", description="Method for water demand calculation.")
+    custom_value: dict[str, Any] = Field(
+        default_factory=dict, description="Custom water demand value configuration."
+    )
 
 
 class HouseholdsConfig(BaseModel):
     """Configuration for households agent."""
 
     adapt: bool = Field(False, description="Whether households adapt.")
+    adapt_to_actual_floods: bool = Field(
+        True, description="Whether households adapt to actual flood events."
+    )
+    include_VVEs_and_woningcorporaties: bool = Field(
+        False, description="Whether to include VVEs and woningcorporaties."
+    )
     warning_response: bool = Field(
         False, description="Whether households respond to warnings."
     )
@@ -250,6 +278,72 @@ class HouseholdsConfig(BaseModel):
     expected_utility: ExpectedUtilityConfig = Field(
         default_factory=ExpectedUtilityConfig,
         description="Expected utility configuration.",
+    )
+
+
+class SubsidiesConfig(BaseModel):
+    """Configuration for government subsidies program."""
+
+    enabled: bool = Field(False, description="Whether subsidies are enabled.")
+    frequency: str = Field(
+        "always", description="Frequency of subsidy provision ('yearly' or 'always')."
+    )
+    selected_households: str = Field(
+        "all",
+        description="Which households receive subsidies ('all' or 'random_share').",
+    )
+    share: float = Field(
+        1.0,
+        description="Share of households to receive subsidies (only for 'random_share').",
+    )
+    seed: int = Field(42, description="Random seed for household selection.")
+    dryproofing_subsidy_value: float = Field(
+        0.0, description="Subsidy value for dryproofing (currency units)."
+    )
+    wetproofing_subsidy_value: float = Field(
+        0.0, description="Subsidy value for wetproofing (currency units)."
+    )
+
+
+class RiskCommunicationConfig(BaseModel):
+    """Configuration for government risk communication program."""
+
+    enabled: bool = Field(False, description="Whether risk communication is enabled.")
+    frequency: str = Field(
+        "always", description="Frequency of risk communication ('yearly' or 'always')."
+    )
+    selected_households: str = Field(
+        "all",
+        description="Which households receive communication ('all' or 'random_share').",
+    )
+    share: float = Field(
+        1.0,
+        description="Share of households to receive communication (only for 'random_share').",
+    )
+    seed: int = Field(42, description="Random seed for household selection.")
+    percentage_increase_risk_perception: float = Field(
+        0.0, description="Percentage increase in risk perception."
+    )
+
+
+class GovernmentConfig(BaseModel):
+    """Configuration for government agent."""
+
+    subsidies: SubsidiesConfig = Field(
+        default_factory=SubsidiesConfig,
+        description="Subsidies program configuration.",
+    )
+    risk_communication: RiskCommunicationConfig = Field(
+        default_factory=RiskCommunicationConfig,
+        description="Risk communication program configuration.",
+    )
+
+
+class IndustryConfig(BaseModel):
+    """Configuration for industry agent."""
+
+    disable_water_demand: bool = Field(
+        False, description="Whether to disable water demand for industry."
     )
 
 
@@ -499,6 +593,12 @@ class AgentSettingsConfig(BaseModel):
     )
     households: HouseholdsConfig = Field(
         default_factory=HouseholdsConfig, description="Households agent configuration."
+    )
+    government: GovernmentConfig = Field(
+        default_factory=GovernmentConfig, description="Government agent configuration."
+    )
+    industry: IndustryConfig = Field(
+        default_factory=IndustryConfig, description="Industry agent configuration."
     )
     farmers: FarmersConfig = Field(
         default_factory=FarmersConfig, description="Farmers agent configuration."
