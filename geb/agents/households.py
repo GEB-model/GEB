@@ -180,7 +180,16 @@ class Households(AgentBaseClass):
         distribution_parameters = read_table(
             self.model.files["table"]["income/distribution_parameters"]
         )
-        country = self.model.regions["ISO3"].values[0]
+
+        # Use first available country from distribution parameters (consistent with GDL regions used in build phase)
+        # This is a simplification - in the future this should use proper subnational datasets
+        available_countries = list(distribution_parameters.columns)
+        country = available_countries[0]
+        self.model.logger.info(
+            "Using income distribution for country: %s (first available from GDL regions)",
+            country,
+        )
+
         average_household_income = distribution_parameters[country]["MEAN"]
         median_income = distribution_parameters[country]["MEDIAN"]
 

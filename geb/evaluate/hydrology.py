@@ -503,7 +503,7 @@ def _create_discharge_folium_map(
     if (
         not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
         .isna()
-        .all()
+        .any()
     ):
         colormap_upstream = cm.LinearColormap(
             colors=["red", "orange", "yellow", "blue", "green"],
@@ -1890,6 +1890,9 @@ class Hydrology:
                 "extra_validation_region", None
             )
 
+            # Mask water depth values
+            hmin: float = self.config["floods"]["minimum_flood_depth"]
+
             if extra_validation_path and Path(extra_validation_path).exists():
                 extra_clip_region = gpd.read_file(extra_validation_path).set_crs(28992)
                 extra_clip_region = extra_clip_region.to_crs(region.crs)
@@ -1899,15 +1902,12 @@ class Hydrology:
                     extra_clip_region_buffer.geometry.values,
                     extra_clip_region_buffer.crs,
                 )
-                clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
+                clipped_out = (sim_no_rivers > hmin) & (sim_extra_clipped.isnull())
                 clipped_out_raster = sim_no_rivers.where(clipped_out)
             else:
                 # If no extra validation region, skip clipping
                 sim_extra_clipped = sim_no_rivers
                 clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
-
-            # Mask water depth values
-            hmin: float = self.config["floods"]["minimum_flood_depth"]
 
             sim_extra_clipped = sim_extra_clipped.rio.reproject_like(obs_region)
             simulation_final = sim_extra_clipped > hmin
