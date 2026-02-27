@@ -30,7 +30,7 @@ def decision_template() -> dict[str, Any]:
         [np.full(n_agents, 5_000), np.full(n_agents, 15_000)]
     )
     damages_adapt = expected_damages_no_adapt * 0.8
-    adaptation_costs = 100
+    adaptation_costs = np.full(n_agents, 100)
     time_adapted = np.zeros(n_agents)
     loan_duration = 20
     T = 35
