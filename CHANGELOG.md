@@ -35,6 +35,7 @@
 - Fix: fix bug of farms that are smaller than the subgrid size 
 - Fix: fix bug of countries that are not in trade regions (GLOBIOM) 
 - Raise error when progress.txt contains duplicates 
+- Speedup pr_gev calculation in build.
 
 
 To support this version:
