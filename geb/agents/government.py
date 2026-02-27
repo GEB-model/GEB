@@ -145,23 +145,14 @@ class Government(AgentBaseClass):
         if self.model.in_spinup:
             return None
 
-        if self.model.current_timestep == 0:
-            if "subsidies" not in self.config:
-                print(
-                    "Warning: subsidies configuration not found for government agent. No subsidies will be provided."
-                )
-                return None
-            subsidies_config = self.config["subsidies"]
-            if not subsidies_config.get("enabled", True):
-                print(
-                    "Warning: subsidies are disabled in the government agent configuration. No subsidies will be provided."
-                )
-                return None
-
         # Skip if config is missing or disabled (for all timesteps)
         if "subsidies" not in self.config or not self.config["subsidies"].get(
             "enabled", True
         ):
+            if self.model.current_timestep == 0:
+                print(
+                    "Warning: subsidies are disabled or not configured for government agent. No subsidies will be provided"
+                )
             return None
         subsidies_config = self.config["subsidies"]
         frequency = subsidies_config.get("frequency", "yearly")
@@ -212,24 +203,14 @@ class Government(AgentBaseClass):
         if self.model.in_spinup:
             return None
 
-        if self.model.current_timestep == 0:
-            if "risk_communication" not in self.config:
-                print(
-                    "Warning: risk_communication configuration not found for government agent."
-                )
-                return None
-
-            risk_communication_config = self.config["risk_communication"]
-            if not risk_communication_config.get("enabled", True):
-                print(
-                    "Warning: risk communication is disabled in the government agent configuration."
-                )
-                return None
-
         # Skip if config is missing or disabled (for all timesteps)
         if "risk_communication" not in self.config or not self.config[
             "risk_communication"
         ].get("enabled", True):
+            if self.model.current_timestep == 0:
+                print(
+                    "Warning: risk communication is disabled or not configured for government agent. No risk communication will be provided"
+                )
             return None
 
         risk_communication_config = self.config["risk_communication"]

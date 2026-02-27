@@ -841,6 +841,7 @@ class Households(AgentBaseClass):
         percentage_increase = max(
             0.0, float(percentage_increase / 100)
         )  # Percentage can't be smaller than 0
+        print(f"Risk perception increases to 1.0 + {percentage_increase}")
         rp = self.var.risk_perception.data
         rp[household_mask] = rp[household_mask] * (1.0 + percentage_increase)
 
