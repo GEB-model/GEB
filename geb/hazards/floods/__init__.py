@@ -635,7 +635,7 @@ class Floods(Module):
                 )
                 _shape_config = self.config.get("shape", {})
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge=self.discharge_spinup_ds,
+                    discharge=self.discharge_spinup_and_run_ds,
                     return_periods=self.config["return_periods"],
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
@@ -791,6 +791,65 @@ class Floods(Module):
             raise ValueError(
                 """Not enough data available for reliable spinup, should be at least 20 years of data left.
                 Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
+
+        return da
+
+    @property
+    def discharge_spinup_and_run_ds(self) -> xr.DataArray:
+        """Open and concatenate spinup and run discharge datasets.
+
+        Reads the spinup hourly discharge (discarding the first 10 years as
+        warm-up), then appends the run discharge if available.  Using the
+        combined series gives GPD-POT more data, which is especially useful
+        for rare return periods.
+
+        Returns:
+            Concatenated discharge DataArray covering spinup (minus warm-up)
+            and run periods.
+
+        Raises:
+            ValueError: If there is not enough data available for reliable spinup.
+        """
+        spinup_da: xr.DataArray = read_zarr(
+            self.model.output_folder
+            / "report"
+            / "spinup"
+            / "hydrology.routing"
+            / "discharge_hourly.zarr"
+        )
+        start_time = pd.to_datetime(spinup_da.time[0].item()) + pd.DateOffset(years=10)
+        spinup_da = spinup_da.sel(time=slice(start_time, spinup_da.time[-1]))
+
+        if (
+            len(spinup_da.time) == 0
+            or len(spinup_da.time.groupby(spinup_da.time.dt.year).groups) < 20
+        ):
+            raise ValueError(
+                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
+
+        run_zarr_path = (
+            self.model.output_folder
+            / "report"
+            / "default"
+            / "hydrology.routing"
+            / "discharge_hourly.zarr"
+        )
+        if run_zarr_path.exists():
+            run_da: xr.DataArray = read_zarr(run_zarr_path)
+            da: xr.DataArray = xr.concat([spinup_da, run_da], dim="time")
+            print(
+                f"Using spinup + run discharge for GPD-POT: "
+                f"{len(spinup_da.time.groupby(spinup_da.time.dt.year).groups)} spinup years + "
+                f"{len(run_da.time.groupby(run_da.time.dt.year).groups)} run years."
+            )
+        else:
+            da = spinup_da
+            print(
+                "Run discharge not found, using spinup only for GPD-POT: "
+                f"{len(spinup_da.time.groupby(spinup_da.time.dt.year).groups)} years."
             )
 
         return da
