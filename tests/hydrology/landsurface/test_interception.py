@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from geb.hydrology.interception import interception
+from geb.hydrology.landsurface.interception import interception
 
 
 def test_interception_no_rainfall_evaporation_only() -> None:
@@ -14,14 +14,19 @@ def test_interception_no_rainfall_evaporation_only() -> None:
     capacity_m = np.float32(0.002)  # 2mm capacity
     potential_transpiration_m = np.float32(0.0005)  # 0.5mm potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # No throughfall when no rainfall
@@ -49,14 +54,19 @@ def test_interception_rainfall_below_capacity() -> None:
     capacity_m = np.float32(0.002)  # 2mm capacity
     potential_transpiration_m = np.float32(0.0005)  # 0.5mm potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # No throughfall when rainfall < capacity
@@ -82,14 +92,19 @@ def test_interception_rainfall_exceeds_capacity() -> None:
     capacity_m = np.float32(0.002)  # 2mm capacity
     potential_transpiration_m = np.float32(0.0005)  # 0.5mm potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # Throughfall should be rainfall + storage - capacity
@@ -116,14 +131,19 @@ def test_interception_zero_capacity() -> None:
     capacity_m = np.float32(0.0)  # Zero capacity
     potential_transpiration_m = np.float32(0.001)  # 1mm potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # All rainfall becomes throughfall
@@ -148,14 +168,19 @@ def test_interception_zero_potential_evaporation() -> None:
     capacity_m = np.float32(0.002)  # 2mm capacity
     potential_transpiration_m = np.float32(0.0)  # Zero potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # No throughfall
@@ -180,14 +205,19 @@ def test_interception_full_storage_no_rainfall() -> None:
     capacity_m = np.float32(0.002)  # 2mm capacity
     potential_transpiration_m = np.float32(0.001)  # 1mm potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # No throughfall
@@ -212,14 +242,19 @@ def test_interception_evaporation_formula() -> None:
     capacity_m = np.float32(0.002)  # 2mm capacity
     potential_transpiration_m = np.float32(0.002)  # 2mm potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # No throughfall
@@ -248,14 +283,19 @@ def test_interception_large_rainfall() -> None:
     capacity_m = np.float32(0.002)  # 2mm capacity
     potential_transpiration_m = np.float32(0.001)  # 1mm potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # Throughfall should be large
@@ -287,14 +327,19 @@ def test_interception_edge_case_zero_storage_zero_rainfall() -> None:
     capacity_m = np.float32(0.002)
     potential_transpiration_m = np.float32(0.001)
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # Everything should be zero
@@ -315,14 +360,19 @@ def test_interception_evaporation_limited_by_storage() -> None:
     capacity_m = np.float32(0.002)
     potential_transpiration_m = np.float32(0.001)  # Large potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # No throughfall
@@ -351,14 +401,19 @@ def test_interception_storage_exceeds_capacity_initially() -> None:
     capacity_m = np.float32(0.002)  # 2mm capacity
     potential_transpiration_m = np.float32(0.0005)  # 0.5mm potential transpiration
 
-    new_storage, throughfall, evaporation, remaining_potential_transpiration = (
-        interception(
-            rainfall_m=rainfall_m,
-            storage_m=storage_m,
-            capacity_m=capacity_m,
-            potential_transpiration_m=potential_transpiration_m,
-            potential_evaporation_m=potential_transpiration_m,
-        )
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        remaining_potential_transpiration,
+        remaining_potential_direct_evaporation,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_transpiration_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=np.float32(0.0),
     )
 
     # Throughfall should account for excess storage plus rainfall
@@ -382,7 +437,9 @@ def test_leaf_area_index_to_interception_capacity_m() -> None:
 
     Formula: S_max (mm) = 0.935 + 0.498*LAI - 0.00575*LAI^2 for LAI > 0.1
     """
-    from geb.hydrology.interception import leaf_area_index_to_interception_capacity_m
+    from geb.hydrology.landsurface.interception import (
+        leaf_area_index_to_interception_capacity_m,
+    )
 
     # Test case 1: LAI <= 0.1 -> Capacity 0
     lai_low = np.array([0.05, 0.1, 0.0], dtype=np.float32)
@@ -404,3 +461,68 @@ def test_leaf_area_index_to_interception_capacity_m() -> None:
     np.testing.assert_allclose(
         result, np.array([expected_m], dtype=np.float32), rtol=1e-5
     )
+
+
+def test_interception_budget_distribution() -> None:
+    """Test that interception evaporation consumes budget from both potentials."""
+    rainfall_m = np.float32(0.0)
+    storage_m = np.float32(0.01)  # Large storage
+    capacity_m = np.float32(0.01)
+    potential_transpiration_m = np.float32(0.005)
+    potential_bare_soil_m = np.float32(0.005)
+    # Total potential budget is 0.01
+    potential_evaporation_m = np.float32(0.01)
+
+    (
+        _,
+        _,
+        evaporation,
+        remaining_pot_transp,
+        remaining_pot_bare_soil,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_evaporation_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=potential_bare_soil_m,
+    )
+
+    # Since potential_evaporation_m == total budget, and storage is full,
+    # it should evaporate the full 0.01.
+    assert math.isclose(evaporation, 0.01, abs_tol=1e-7)
+    assert remaining_pot_transp == 0.0
+    assert remaining_pot_bare_soil == 0.0
+
+
+def test_interception_budget_distribution_partial() -> None:
+    """Test that interception evaporation consumes budget from both potentials correctly (partial)."""
+    rainfall_m = np.float32(0.0)
+    storage_m = np.float32(0.01)  # Large storage
+    capacity_m = np.float32(0.01)
+    potential_transpiration_m = np.float32(0.005)
+    potential_bare_soil_m = np.float32(0.005)
+    # Total potential budget is 0.01, but we only have energy for 0.007
+    potential_evaporation_m = np.float32(0.007)
+
+    (
+        _,
+        _,
+        evaporation,
+        remaining_pot_transp,
+        remaining_pot_bare_soil,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=potential_evaporation_m,
+        potential_transpiration_m=potential_transpiration_m,
+        potential_direct_evaporation_m=potential_bare_soil_m,
+    )
+
+    # evaporation = 0.007
+    # transp consumed = 0.005, remaining = 0.0
+    # bare soil consumed = 0.002, remaining = 0.003
+    assert math.isclose(evaporation, 0.007, abs_tol=1e-7)
+    assert remaining_pot_transp == 0.0
+    assert math.isclose(remaining_pot_bare_soil, 0.003, abs_tol=1e-7)

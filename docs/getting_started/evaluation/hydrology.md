@@ -123,5 +123,5 @@ Analyzes inflows, outflows, and storage changes across the model domain to verif
 
 ## Code reference
 
-::: geb.evaluate.hydrology.Hydrology
+::: geb.evaluate.hydrology
 

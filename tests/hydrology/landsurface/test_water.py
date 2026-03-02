@@ -1,4 +1,4 @@
-"""Tests for scalar soil functions in GEB."""
+"""Tests for scalar soil water functions in GEB."""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,12 +10,10 @@ from geb.hydrology.landcovers import (
     PADDY_IRRIGATED,
     SEALED,
 )
-from geb.hydrology.soil import (
+from geb.hydrology.landsurface.water import (
     add_water_to_topwater_and_evaporate_open_water,
-    calculate_sensible_heat_flux,
     calculate_spatial_infiltration_excess,
     get_bubbling_pressure,
-    get_heat_capacity_solid_fraction,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
     get_soil_moisture_at_pressure,
@@ -25,20 +23,19 @@ from geb.hydrology.soil import (
     kv_cosby,
     kv_wosten,
     rise_from_groundwater,
-    solve_energy_balance_implicit_iterative,
     thetar_brakensiek,
     thetas_toth,
     thetas_wosten,
 )
 
-from ..testconfig import output_folder
+from ...testconfig import output_folder
 
 
 def test_add_water_to_topwater_and_evaporate_open_water() -> None:
     """Test the scalar version of add_water_to_topwater_and_evaporate_open_water."""
     # Test different land use types
     test_cases = [
-        (PADDY_IRRIGATED, 0.01, 0.0, 0.025, 0.05),  # paddy with evaporation
+        (PADDY_IRRIGATED, 0.01, 0.0, 0.025, 0.025),  # paddy with evaporation
         (NON_PADDY_IRRIGATED, 0.01, 0.0, 0.025, 0.0),  # non-paddy, no evaporation
         (SEALED, 0.01, 0.0, 0.025, 0.0),  # sealed, no evaporation in this function
         (
@@ -46,27 +43,35 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
             0.01,
             0.0,
             0.025,
-            0.0,
-        ),  # open water, no evaporation in this function
+            0.025,
+        ),  # open water, evaporation in this function
     ]
 
-    for land_use_type, infiltration, irrigation, et_ref, expected_evap in test_cases:
+    for (
+        land_use_type,
+        infiltration_val,
+        irrigation,
+        potential_direct_evaporation_m,
+        expected_evap,
+    ) in test_cases:
         topwater = np.float32(0.05)
         topwater_pre = topwater
 
         updated_topwater, open_water_evaporation = (
             add_water_to_topwater_and_evaporate_open_water(
-                natural_available_water_infiltration_m=np.float32(infiltration),
+                natural_available_water_infiltration_m=np.float32(infiltration_val),
                 actual_irrigation_consumption_m=np.float32(irrigation),
                 land_use_type=np.int32(land_use_type),
-                reference_evapotranspiration_water_m=np.float32(et_ref),
+                potential_direct_evaporation_m=np.float32(
+                    potential_direct_evaporation_m
+                ),
                 topwater_m=topwater,
             )
         )
 
         # Check water balance
         expected_topwater = (
-            topwater_pre + infiltration + irrigation - open_water_evaporation
+            topwater_pre + infiltration_val + irrigation - open_water_evaporation
         )
         assert abs(updated_topwater - expected_topwater) < 1e-6, (
             f"Water balance failed for land_use_type {land_use_type}"
@@ -88,7 +93,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
             natural_available_water_infiltration_m=np.float32(0.0),
             actual_irrigation_consumption_m=np.float32(0.0),
             land_use_type=np.int32(PADDY_IRRIGATED),
-            reference_evapotranspiration_water_m=np.float32(0.0),
+            potential_direct_evaporation_m=np.float32(0.0),
             topwater_m=topwater,
         )
     )
@@ -102,9 +107,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
             natural_available_water_infiltration_m=np.float32(0.0),
             actual_irrigation_consumption_m=np.float32(0.0),
             land_use_type=np.int32(PADDY_IRRIGATED),
-            reference_evapotranspiration_water_m=np.float32(
-                1.0
-            ),  # Much larger than topwater
+            potential_direct_evaporation_m=np.float32(1.0),  # Much larger than topwater
             topwater_m=topwater,
         )
     )
@@ -497,7 +500,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
 
     Notes:
         This checks only the bottom-layer drainage component implemented in
-        `geb.hydrology.soil.infiltration`.
+        `geb.hydrology.soil_water.infiltration`.
     """
     ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
     wres = np.zeros_like(ws)
@@ -1162,186 +1165,6 @@ def test_pedotransfer_functions_consistency() -> None:
     )
 
 
-def test_get_heat_capacity() -> None:
-    """Test get_heat_capacity_solid_fraction."""
-    # Test valid input
-    # Bulk density of 1.3 g/cm3 (~1300 kg/m3) should yield a porosity of roughly 0.5
-    # (actually 1 - 1300/2650 = 0.49 void, 0.51 solid).
-    # Solid fraction phi_s = 1300 / 2650 = 0.490566
-    # Volumetric Heat capacity C_s = phi_s * C_mineral = 0.490566 * 2.13e6 = 1.045e6
-    # Layer thickness = 1.0 m
-    # Areal Heat Capacity = 1.045e6 * 1.0 = 1.045e6 J/(m2 K)
-
-    bulk_density = np.array([1.3], dtype=np.float32)
-    layer_thickness = np.array([1.0], dtype=np.float32)
-
-    expected_phi_s = 1300.0 / 2650.0
-    volumetric_hc = expected_phi_s * 2.13e6
-    expected_areal_hc = volumetric_hc * 1.0
-
-    result = get_heat_capacity_solid_fraction(bulk_density, layer_thickness)
-
-    np.testing.assert_allclose(
-        result, np.array([expected_areal_hc], dtype=np.float32), rtol=1e-5
-    )
-
-    # Test with bulk density equal to mineral density (solid rock)
-    # Bulk density 2.65 g/cm3. phi_s should be 1.0. Heat capacity = C_mineral = 2.13e6.
-    # Layer thickness = 2.0 m
-    # Areal Heat Capacity = 2.13e6 * 2.0
-
-    bulk_density_rock = np.array([2.65], dtype=np.float32)
-    layer_thickness_rock = np.array([2.0], dtype=np.float32)
-
-    expected_hc_rock = 2.13e6
-    expected_areal_hc_rock = expected_hc_rock * 2.0
-
-    result_rock = get_heat_capacity_solid_fraction(
-        bulk_density_rock, layer_thickness_rock
-    )
-    np.testing.assert_allclose(
-        result_rock, np.array([expected_areal_hc_rock], dtype=np.float32), rtol=1e-5
-    )
-
-    # Test with multiple layers summing to 1.0 m thickness
-    # Bulk density 1.3 g/cm3 for all layers
-    bulk_density_val = 1.3
-    # Layer thicknesses: 0.1, 0.2, 0.3, 0.4 -> Sum = 1.0
-    layer_thicknesses = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
-    bulk_densities = np.full_like(layer_thicknesses, bulk_density_val)
-
-    # Expected volumetric heat capacity (same as first test case)
-    expected_phi_s_multi = 1300.0 / 2650.0
-    expected_volumetric_hc_multi = expected_phi_s_multi * 2.13e6
-
-    # Calculate for multi-layer case
-    result_multi = get_heat_capacity_solid_fraction(bulk_densities, layer_thicknesses)
-
-    # Total heat capacity sum should match calculation for single 1.0m layer
-    total_heat_capacity_sum = np.sum(result_multi)
-    expected_total_1m = expected_volumetric_hc_multi * 1.0
-
-    np.testing.assert_allclose(
-        total_heat_capacity_sum,
-        expected_total_1m,
-        rtol=1e-5,
-        err_msg="Sum of layer heat capacities should match single block of combined thickness",
-    )
-
-    # Individual layer Check
-    expected_result_multi = expected_volumetric_hc_multi * layer_thicknesses
-    np.testing.assert_allclose(
-        result_multi,
-        expected_result_multi,
-        rtol=1e-5,
-        err_msg="Individual layer heat capacities mismatch",
-    )
-
-
-def test_calculate_sensible_heat_flux() -> None:
-    """Test the calculate_sensible_heat_flux function."""
-    # Equilibrium (No transfer)
-    flux, G = calculate_sensible_heat_flux(
-        soil_temperature_C=np.float32(20.0),
-        air_temperature_K=np.float32(293.15),  # 20C
-        wind_speed_10m_m_per_s=np.float32(2.0),
-        surface_pressure_pa=np.float32(101325.0),
-    )
-    assert abs(flux) < 1e-4
-
-    # Air warmer than soil (Warming)
-    flux_warming, _ = calculate_sensible_heat_flux(
-        soil_temperature_C=np.float32(10.0),
-        air_temperature_K=np.float32(293.15),  # 20C
-        wind_speed_10m_m_per_s=np.float32(5.0),
-        surface_pressure_pa=np.float32(101325.0),
-    )
-    assert flux_warming > 0.0
-
-    # Soil warmer than air (Cooling)
-    flux_cooling, _ = calculate_sensible_heat_flux(
-        soil_temperature_C=np.float32(30.0),
-        air_temperature_K=np.float32(293.15),  # 20C
-        wind_speed_10m_m_per_s=np.float32(5.0),
-        surface_pressure_pa=np.float32(101325.0),
-    )
-    assert flux_cooling < 0.0
-
-
-def test_solve_energy_balance_implicit_iterative() -> None:
-    """Test the implicit iterative energy balance solver."""
-    # Common Parameters (Scalars)
-    soil_temperature_old = np.float32(10.0)  # 10 C
-    bulk_density = np.float32(1300.0)
-    layer_thickness = np.float32(0.1)
-
-    # Calculate heat capacity for scalar input
-    # Note: get_heat_capacity_solid_fraction expects arrays usually, but let's see.
-    # It seems to accept arrays. Let's compute it with array helper but use result as scalar.
-    heat_capacity_arr = get_heat_capacity_solid_fraction(
-        np.array([bulk_density / 1000.0], dtype=np.float32),
-        np.array([layer_thickness], dtype=np.float32),
-    )
-    heat_capacity_areal = heat_capacity_arr[0]
-
-    # Steady State / No Forcing
-    sw_in = np.float32(0.0)
-    lw_in = np.float32(363.0)  # Approx balance
-    air_temp_k = np.float32(283.15)
-    wind_speed = np.float32(2.0)
-    pressure = np.float32(101325.0)
-    dt_seconds = np.float32(3600.0)
-
-    t_new = solve_energy_balance_implicit_iterative(
-        soil_temperature_C=soil_temperature_old,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
-        timestep_seconds=dt_seconds,
-    )
-
-    # Should stay close to 10.0
-    assert abs(t_new - 10.0) < 0.5, f"Steady state failed, got {t_new}"
-
-    # Strong heating (daytime)
-    sw_in = np.float32(800.0)
-    lw_in = np.float32(350.0)
-    air_temp_k = np.float32(303.15)
-
-    t_new_hot = solve_energy_balance_implicit_iterative(
-        soil_temperature_C=soil_temperature_old,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
-        timestep_seconds=dt_seconds,
-    )
-    assert t_new_hot > 10.0, "Soil should warm up significantly"
-
-    # Strong cooling (nighttime clear sky)
-    sw_in = np.float32(0.0)
-    lw_in = np.float32(200.0)
-    air_temp_k = np.float32(263.15)
-
-    t_new_cold = solve_energy_balance_implicit_iterative(
-        soil_temperature_C=soil_temperature_old,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        solid_heat_capacity_J_per_m2_K=heat_capacity_areal,
-        timestep_seconds=dt_seconds,
-    )
-
-    assert t_new_cold < 10.0, "Soil should cool down"
-
-
 def test_calculate_spatial_infiltration_excess() -> None:
     """Test the spatial variability of infiltration capacity function."""
     # Case 1: Low precipitation (P << f_max), should be mostly infiltrated
@@ -1388,7 +1211,7 @@ def test_calculate_spatial_infiltration_excess() -> None:
 def test_plot_spatial_infiltration_curve() -> None:
     """Plot the spatial infiltration curve for verification."""
     # Mean Green-Ampt Capacity
-    f_GA = np.float32(10.0)  # arbitrary units
+    f_GA = 10.0  # arbitrary units
 
     betas = [0.01, 0.2, 0.5, 1.0, 5.0]
     precip_values = np.linspace(0, 30, 100).astype(np.float32)
