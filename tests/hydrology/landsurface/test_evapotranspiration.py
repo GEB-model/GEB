@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from geb.hydrology.evapotranspiration import (
+from geb.hydrology.landsurface.evapotranspiration import (
     calculate_bare_soil_evaporation,
     calculate_transpiration,
     get_critical_soil_moisture_content,
@@ -525,36 +525,39 @@ def test_calculate_bare_soil_evaporation() -> None:
     # Test data for a single cell
     soil_is_frozen = False
     land_use_type = NON_PADDY_IRRIGATED
-    potential_bare_soil_evaporation = np.float32(0.001)
+    potential_direct_evaporation = np.float32(0.001)
     open_water_evaporation = np.float32(0.0)
     w_cell = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres_cell = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
+    wfc_cell = np.array([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], dtype=np.float32)
     ws_cell = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
     unsaturated_hydraulic_conductivity = np.float32(0.001)
 
     evaporation = calculate_bare_soil_evaporation(
         soil_is_frozen=soil_is_frozen,
         land_use_type=land_use_type,
-        potential_bare_soil_evaporation_m=potential_bare_soil_evaporation,
+        potential_direct_evaporation_m=potential_direct_evaporation,
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
+        wfc_m=wfc_cell,
         unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 
     # Basic checks
     assert isinstance(evaporation, (float, np.float32))
     assert evaporation >= 0
-    assert evaporation <= potential_bare_soil_evaporation
+    assert evaporation <= potential_direct_evaporation
 
     # Test with frozen soil - should return 0
     evaporation_frozen = calculate_bare_soil_evaporation(
         soil_is_frozen=True,
         land_use_type=land_use_type,
-        potential_bare_soil_evaporation_m=potential_bare_soil_evaporation,
+        potential_direct_evaporation_m=potential_direct_evaporation,
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
+        wfc_m=wfc_cell,
         unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
     assert evaporation_frozen == 0.0
@@ -663,16 +666,18 @@ def test_calculate_bare_soil_evaporation_paddy() -> None:
 
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
+    wfc = np.array([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], dtype=np.float32)
     ws = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
     unsaturated_hydraulic_conductivity = np.float32(0.001)
 
     evaporation_paddy = calculate_bare_soil_evaporation(
         soil_is_frozen=False,
         land_use_type=PADDY_IRRIGATED,
-        potential_bare_soil_evaporation_m=0.001,
+        potential_direct_evaporation_m=0.001,
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
+        wfc_m=wfc,
         unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 
@@ -686,6 +691,7 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
 
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
+    wfc = np.array([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], dtype=np.float32)
     ws = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
     unsaturated_hydraulic_conductivity = np.float32(0.001)
 
@@ -693,20 +699,22 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
     evaporation_with_open_water = calculate_bare_soil_evaporation(
         soil_is_frozen=False,
         land_use_type=NON_PADDY_IRRIGATED,
-        potential_bare_soil_evaporation_m=0.001,
+        potential_direct_evaporation_m=0.001,
         open_water_evaporation_m=0.0005,  # Half of potential
         w_m=w,
         wres_m=wres,
+        wfc_m=wfc,
         unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 
     evaporation_no_open_water = calculate_bare_soil_evaporation(
         soil_is_frozen=False,
         land_use_type=NON_PADDY_IRRIGATED,
-        potential_bare_soil_evaporation_m=0.001,
+        potential_direct_evaporation_m=0.001,
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
+        wfc_m=wfc,
         unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 

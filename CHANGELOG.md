@@ -1,4 +1,7 @@
 # dev
+- Reorganized `geb/hydrology/` by moving land surface-related modules (`landsurface.py`, `evapotranspiration.py`, `interception.py`, `snow_glaciers.py`, `potential_evapotranspiration.py`) into a new `geb/hydrology/landsurface/` package.
+- Split `soil.py` into `geb/hydrology/landsurface/water.py` (soil hydraulic processes) and `geb/hydrology/landsurface/energy.py` (soil thermal processes).
+- Add Leaf Area Index (LAI) integration in soil net radiation calculation to account for canopy shielding and emission.
 - Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
 - Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.
 - Add frequency labels (hourly/daily) to extreme value analysis and validation plot titles.
@@ -26,6 +29,10 @@
 - Move aquastat to new data catalog.
 - Add OECD Income Distribution Database (IDD) to the new data catalog.
 - Move Coast-RP to new data catalog.
+- Add heat conductivity to deeper soil layers (still missing influence of water).
+- Consider soil heat flux in pennmann-monteith.
+- Turn of sensible and turbulent heat fluxes in case there is snow.
+- Include evaporative cooling and advective heat transport from rainfall. 
 - Generalize river snapping.
 - Setup example preprocessing for retention basins.
 - Fix: Add iso codes for GDL regions where those are missing 

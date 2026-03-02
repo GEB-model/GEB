@@ -3,9 +3,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from geb.hydrology.soil import get_interflow
+from geb.hydrology.landsurface.water import get_interflow
 
-from ..testconfig import output_folder
+from ...testconfig import output_folder
 
 
 def test_get_interflow_normal_conditions() -> None:

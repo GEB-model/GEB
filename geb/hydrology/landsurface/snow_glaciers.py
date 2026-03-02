@@ -36,6 +36,42 @@ def discriminate_precipitation(
 
 
 @njit(cache=True, inline="always")
+def calculate_snow_thermal_properties(
+    snow_water_equivalent_m: np.float32,
+) -> tuple[np.float32, np.float32, np.float32]:
+    """Calculate snow density, depth, and thermal conductivity.
+
+    Args:
+        snow_water_equivalent_m: Snow water equivalent [m].
+
+    Returns:
+        Tuple of:
+            - Snow density [kg/m³].
+            - Snow depth [m].
+            - Thermal conductivity [W/m/K].
+    """
+    # Estimate snow density (kg/m³) from SWE (m).
+    snow_density_kg_per_m3 = np.minimum(
+        np.float32(550.0),
+        np.float32(150.0) + np.float32(400.0) * snow_water_equivalent_m,
+    )
+
+    # Calculate thermal conductivity (k) in W/m/K
+    snow_thermal_conductivity = (
+        np.float32(0.021)
+        + np.float32(2.5) * (snow_density_kg_per_m3 / np.float32(1000.0)) ** 2
+    )
+
+    # Estimate snow depth (m) from SWE and density
+    snow_depth_m = snow_water_equivalent_m / (
+        snow_density_kg_per_m3 / np.float32(1000.0)
+    )
+    snow_depth_m = np.maximum(snow_depth_m, np.float32(0.01))  # Min depth of 1cm
+
+    return snow_density_kg_per_m3, snow_depth_m, snow_thermal_conductivity
+
+
+@njit(cache=True, inline="always")
 def update_snow_temperature(
     snow_water_equivalent_m: np.float32,
     snow_temperature_C: np.float32,
@@ -77,20 +113,11 @@ def update_snow_temperature(
     )
 
     # Conductive heat transfer adjustment from the atmosphere
-    # Estimate snow density (kg/m³) from SWE (m).
-    snow_density_kg_per_m3 = np.minimum(
-        np.float32(550.0), np.float32(150.0) + np.float32(400.0) * new_swe_m
-    )
-
-    # Calculate thermal conductivity (k) in W/m/K
-    snow_thermal_conductivity = (
-        np.float32(0.021)
-        + np.float32(2.5) * (snow_density_kg_per_m3 / np.float32(1000.0)) ** 2
-    )
-
-    # Estimate snow depth (m) from SWE and density
-    snow_depth_m = new_swe_m / (snow_density_kg_per_m3 / np.float32(1000.0))
-    snow_depth_m = np.maximum(snow_depth_m, np.float32(0.01))  # Min depth of 1cm
+    (
+        snow_density_kg_per_m3,
+        snow_depth_m,
+        snow_thermal_conductivity,
+    ) = calculate_snow_thermal_properties(new_swe_m)
 
     # Calculate thermal diffusivity (alpha) in m²/s
     thermal_diffusivity_m2_per_s = snow_thermal_conductivity / (

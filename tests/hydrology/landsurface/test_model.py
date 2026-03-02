@@ -3,8 +3,13 @@
 import numpy as np
 import pytest
 
-from geb.hydrology import landsurface
-from geb.hydrology.landsurface import land_surface_model
+from geb.hydrology.landsurface import model as landsurface
+from geb.hydrology.landsurface.constants import (
+    L_FUSION_J_PER_KG,
+    RHO_WATER_KG_PER_M3,
+    VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K,
+)
+from geb.hydrology.landsurface.model import land_surface_model
 from geb.workflows import balance_check
 
 
@@ -450,11 +455,11 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     green_ampt_active_layer_idx = np.array([0], dtype=np.int32)
 
     # 2D arrays: add cell dimension and set dtype
-    w = w_data.reshape(-1, 1).astype(flt)
-    wres = wres_data.reshape(-1, 1).astype(flt)
-    wwp = wwp_data.reshape(-1, 1).astype(flt)
-    wfc = wfc_data.reshape(-1, 1).astype(flt)
-    ws = ws_data.reshape(-1, 1).astype(flt)
+    water_content_m = w_data.reshape(-1, 1).astype(flt)
+    water_content_residual_m = wres_data.reshape(-1, 1).astype(flt)
+    water_content_wilting_point_m = wwp_data.reshape(-1, 1).astype(flt)
+    water_content_field_capacity_m = wfc_data.reshape(-1, 1).astype(flt)
+    water_content_saturated_m = ws_data.reshape(-1, 1).astype(flt)
     delta_z = delta_z_data.reshape(-1, 1).astype(flt)
     saturated_hydraulic_conductivity_m_per_s = (
         saturated_hydraulic_conductivity_m_per_s_data.reshape(-1, 1).astype(flt)
@@ -479,30 +484,57 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     CO2_ppm = flt(CO2_ppm_data)
     minimum_effective_root_depth_m = flt(minimum_effective_root_depth_m_data)
     interflow_multiplier = flt(1.0)
+    deep_soil_temperature_C = np.array([0.0], dtype=flt)
+    leaf_area_index = np.array([0.0], dtype=flt)
     crop_group_number_per_group = crop_group_number_per_group_data.astype(flt)
 
-    soil_temperature_C = np.full_like(w, -5.0)  # Assume frozen/cold
-    solid_heat_capacity_J_per_m2_K = np.full_like(w, 2e5)
+    soil_temperature_C = np.full_like(
+        water_content_m, -5.0
+    )  # Local diagnostic for enthalpy init
+    solid_heat_capacity_J_per_m2_K = np.full_like(water_content_m, 2e5)
+    solid_thermal_conductivity_W_per_m_K = np.full_like(water_content_m, 2.0)
+    sand_percentage = np.full_like(water_content_m, 40.0)
+    bulk_density_kg_per_dm3 = np.full_like(water_content_m, 1.4)
+
+    soil_enthalpy_J_per_m2 = np.empty_like(soil_temperature_C)
+    for layer_idx in range(landsurface.N_SOIL_LAYERS):
+        topwater_layer_m = topwater_m[0] if layer_idx == 0 else flt(0.0)
+        # The test initializes all layers below 0°C, so we use the fully frozen
+        # branch of the sharp-freezing enthalpy relation directly.
+        water_depth_m = flt(water_content_m[layer_idx, 0] + topwater_layer_m)
+        latent_heat_areal_J_per_m2 = (
+            water_depth_m * flt(RHO_WATER_KG_PER_M3) * flt(L_FUSION_J_PER_KG)
+        )
+        heat_capacity_frozen_J_per_m2_K = flt(
+            solid_heat_capacity_J_per_m2_K[layer_idx, 0]
+            + water_depth_m * flt(VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K)
+        )
+        soil_enthalpy_J_per_m2[layer_idx, 0] = (
+            heat_capacity_frozen_J_per_m2_K * flt(soil_temperature_C[layer_idx, 0])
+            - latent_heat_areal_J_per_m2
+        )
 
     # Capture previous values before calling the model (arrays get modified in-place)
     snow_water_equivalent_prev = snow_water_equivalent_m.copy()
     liquid_water_in_snow_prev = liquid_water_in_snow_m.copy()
     interception_storage_prev = interception_storage_m.copy()
     topwater_m_prev = topwater_m.copy()
-    w_prev = w.copy()
+    water_content_m_prev = water_content_m.copy()
 
     # Call the land surface model
     results = land_surface_model(
         land_use_type=land_use_type,
         slope_m_per_m=slope_m_per_m,
         hillslope_length_m=hillslope_length_m,
-        w=w,
-        wres=wres,
-        wwp=wwp,
-        wfc=wfc,
-        ws=ws,
-        soil_temperature_C=soil_temperature_C,
+        water_content_m=water_content_m,
+        water_content_residual_m=water_content_residual_m,
+        water_content_wilting_point_m=water_content_wilting_point_m,
+        water_content_field_capacity_m=water_content_field_capacity_m,
+        water_content_saturated_m=water_content_saturated_m,
+        soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2,
         solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
+        solid_thermal_conductivity_W_per_m_K=solid_thermal_conductivity_W_per_m_K,
+        sand_percentage=sand_percentage,
         delta_z=delta_z,
         soil_layer_height=soil_layer_height,
         root_depth_m=root_depth_m,
@@ -528,17 +560,20 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         capillar_rise_m=capillar_rise_m,
         groundwater_toplayer_conductivity_m_per_day=groundwater_toplayer_conductivity_m_per_day,
         saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s,
+        bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
         wetting_front_depth_m=wetting_front_depth_m,
         wetting_front_suction_head_m=wetting_front_suction_head_m,
         wetting_front_moisture_deficit=wetting_front_moisture_deficit,
+        green_ampt_active_layer_idx=green_ampt_active_layer_idx,
         lambda_pore_size_distribution=lambda_pore_size_distribution,
         bubbling_pressure_cm=bubbling_pressure_cm,
         crop_group_forest=crop_group_forest,
         crop_group_grassland_like=crop_group_grassland_like,
         crop_group_number_per_group=crop_group_number_per_group,
         minimum_effective_root_depth_m=minimum_effective_root_depth_m,
-        green_ampt_active_layer_idx=green_ampt_active_layer_idx,
         interflow_multiplier=interflow_multiplier,
+        deep_soil_temperature_C=deep_soil_temperature_C,
+        leaf_area_index=leaf_area_index,
     )
 
     # Unpack the results
@@ -585,7 +620,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         liquid_water_in_snow_prev.astype(np.float64),
         interception_storage_prev.astype(np.float64),
         topwater_m_prev.astype(np.float64),
-        np.nansum(w_prev, axis=0).astype(np.float64),
+        np.nansum(water_content_m_prev, axis=0).astype(np.float64),
     ]
 
     poststorages = [
@@ -593,7 +628,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         liquid_water_in_snow_m_out.astype(np.float64),
         interception_storage_m_out.astype(np.float64),
         topwater_m_out.astype(np.float64),
-        np.nansum(w, axis=0).astype(np.float64),
+        np.nansum(water_content_m, axis=0).astype(np.float64),
     ]
 
     # Check that the balance closes within tolerance

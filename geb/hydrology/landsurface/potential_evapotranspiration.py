@@ -4,7 +4,14 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
-from .landcovers import FOREST, GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from ..landcovers import (
+    FOREST,
+    GRASSLAND_LIKE,
+    NON_PADDY_IRRIGATED,
+    OPEN_WATER,
+    PADDY_IRRIGATED,
+    SEALED,
+)
 
 
 @njit(cache=True, inline="always")
@@ -233,7 +240,8 @@ def get_reference_evapotranspiration(
     rlds_W_per_m2: np.float32,
     rsds_W_per_m2: np.float32,
     wind_10m_m_per_s: np.float32,
-    albedo_canopy: np.float32 = np.float32(0.13),
+    soil_heat_flux_W_per_m2: np.float32 = np.float32(0.0),
+    albedo_canopy: np.float32 = np.float32(0.23),
     albedo_water: np.float32 = np.float32(0.05),
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Calculate potential evapotranspiration based on Penman-Monteith equation.
@@ -256,7 +264,7 @@ def get_reference_evapotranspiration(
         u2    wind speed at 2 m height [m s-1]
 
     Note:
-        TODO: Add soil heat flux density (G) term. Currently assumed to be 0.
+        Soil heat flux density (G) can be provided or assumed to be 0.
 
     Args:
         tas_C: average air temperature in Celsius.
@@ -265,7 +273,8 @@ def get_reference_evapotranspiration(
         rlds_W_per_m2: long wave downward surface radiation flux in W/m^2.
         rsds_W_per_m2: short wave downward surface radiation flux in W/m^2.
         wind_10m_m_per_s: wind speed at 10 m height in m/s.
-        albedo_canopy: albedo of vegetation canopy (default = 0.13).
+        soil_heat_flux_W_per_m2: Soil heat flux in W/m^2. Positive = flux INTO the soil.
+        albedo_canopy: albedo of vegetation canopy (default = 0.23 following FAO-56).
         albedo_water: albedo of water surface (default = 0.05).
 
     Returns:
@@ -327,7 +336,9 @@ def get_reference_evapotranspiration(
         canopy_height_m=np.float32(0.12),
     )
 
-    soil_heat_flux_MJ_per_m2_per_hour: np.float32 = np.float32(0.0)
+    soil_heat_flux_MJ_per_m2_per_hour: np.float32 = W_per_m2_to_MJ_per_m2_per_hour(
+        soil_heat_flux_W_per_m2
+    )
 
     (
         reference_evapotranspiration_land_mm_per_hour,
@@ -354,41 +365,45 @@ def get_reference_evapotranspiration(
 @njit(cache=True, inline="always")
 def get_potential_transpiration(
     potential_evapotranspiration_m: np.float32,
-    potential_bare_soil_evaporation_m: np.float32,
-) -> np.float32:
-    """Calculate potential transpiration.
+    leaf_area_index: np.float32,
+) -> tuple[np.float32, np.float32]:
+    """Calculate potential transpiration and potential evaporation.
+
+    Transpiration is calculated using Beer's Law partitioning:
+    potential transpiration = potential evapotranspiration * (1 - exp(-k * LAI))
+    potential evaporation = potential evapotranspiration - potential transpiration
 
     Args:
-        potential_evapotranspiration_m: Potential evapotranspiration [m]
-        potential_bare_soil_evaporation_m: Potential bare soil evaporation [m]
+        potential_evapotranspiration_m: Potential evapotranspiration (m).
+        leaf_area_index: Leaf area index (-).
 
     Returns:
-        Potential transpiration [m]
+        Potential transpiration (m).
+        Potential evaporation (m) (bare soil/water under canopy).
     """
-    return max(
-        np.float32(0.0),
-        potential_evapotranspiration_m - potential_bare_soil_evaporation_m,
-    )
+    attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
+    potential_transpiration = (
+        np.float32(1.0) - attenuation_factor
+    ) * potential_evapotranspiration_m
+    potential_evaporation = potential_evapotranspiration_m - potential_transpiration
+    return potential_transpiration, potential_evaporation
 
 
 @njit(cache=True, inline="always")
-def get_potential_bare_soil_evaporation(
-    reference_evapotranspiration_grass_m_per_day: np.float32,
+def get_canopy_radiation_attenuation(
+    leaf_area_index: np.float32,
+    extinction_coefficient: np.float32 = np.float32(0.5),
 ) -> np.float32:
-    """Calculate potential bare soil evaporation.
-
-    Removes sublimation from potential bare soil evaporation and ensures non-negative result.
+    """Calculate the radiation attenuation factor through a canopy using Beer's Law.
 
     Args:
-        reference_evapotranspiration_grass_m_per_day: Reference evapotranspiration [m]
+        leaf_area_index: Leaf Area Index [-].
+        extinction_coefficient: Extinction coefficient (k) [-]. Default is 0.5.
 
     Returns:
-        Potential bare soil evaporation [m]
+        Attenuation factor (0-1), representing the fraction of radiation transmitted through the canopy.
     """
-    return max(
-        np.float32(0.2) * reference_evapotranspiration_grass_m_per_day,
-        np.float32(0.0),
-    )
+    return np.exp(-extinction_coefficient * leaf_area_index)
 
 
 @njit(cache=True, inline="always")
@@ -405,11 +420,39 @@ def get_potential_evapotranspiration(
         CO2_induced_crop_factor_adustment: Adjustment factor for CO2 effects [dimensionless]
 
     Returns:
-        Potential evapotranspiration [m]
+        Potential evapotranspiration (m).
     """
     return (
         crop_factor * reference_evapotranspiration_grass_m
     ) * CO2_induced_crop_factor_adustment
+
+
+@njit(cache=True, inline="always")
+def get_potential_interception_evaporation(
+    reference_evapotranspiration_water_m_per_hour: np.float32,
+    potential_evapotranspiration_m: np.float32,
+) -> np.float32:
+    """Calculate potential interception evaporation.
+
+    Prevents wet-canopy evaporation from allocating more water than the total
+    (crop-factor based) potential ET budget available for this hour.
+
+    Without this cap, interception evaporation can exceed the remaining potential
+    transpiration (because it is driven by ET0 for a wet surface), which allows
+    total ET (interception + transpiration + bare soil) to exceed
+    `potential_evapotranspiration_m`.
+
+    Args:
+        reference_evapotranspiration_water_m_per_hour: Reference evapotranspiration for a wet surface (m/hour).
+        potential_evapotranspiration_m: Total potential evapotranspiration (transpiration + bare soil) (m).
+
+    Returns:
+        Potential interception evaporation (m).
+    """
+    return min(
+        reference_evapotranspiration_water_m_per_hour,
+        max(np.float32(0.0), potential_evapotranspiration_m),
+    )
 
 
 @njit(cache=True, inline="always")
@@ -548,6 +591,18 @@ def get_crop_factors_and_root_depths(
             crop_factor[i] = get_crop_factor_from_lai(
                 np.float32(0.2), np.float32(1.2), leaf_area_index_grassland_like[i]
             )
+
+        elif land_use == OPEN_WATER:
+            root_depth[i] = 0.0
+            crop_factor[i] = 0.0
+
+        elif land_use == SEALED:
+            root_depth[i] = 0.0
+            crop_factor[i] = 0.0
+
+        else:
+            root_depth[i] = np.nan
+            crop_factor[i] = np.nan
 
     return crop_factor, root_depth, crop_sub_stage
 
