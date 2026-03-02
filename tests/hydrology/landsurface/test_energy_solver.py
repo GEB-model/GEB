@@ -1,3 +1,5 @@
+"""Test the soil enthalpy solver for energy balance and stability."""
+
 import numpy as np
 
 from geb.hydrology.landsurface.constants import (
@@ -7,7 +9,7 @@ from geb.hydrology.landsurface.constants import (
 from geb.hydrology.landsurface.energy import solve_soil_enthalpy_column
 
 
-def test_solve_soil_enthalpy_column_energy_balance():
+def test_solve_soil_enthalpy_column_energy_balance() -> None:
     """Test that the implicit enthalpy solver conserves energy and behaves reasonably."""
     # Setup a 3-layer soil column
     n_layers = 3
