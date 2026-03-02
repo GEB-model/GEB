@@ -101,7 +101,7 @@ def write_array(arr: np.ndarray, fp: Path) -> None:
         arr: The numpy array to save.
         fp: The path to the output .zarr file.
     """
-    zarr.save(fp, arr, overwrite=True)  # ty:ignore[invalid-argument-type]
+    zarr.save_array(fp, arr, overwrite=True)  # ty:ignore[invalid-argument-type]
 
 
 @overload
