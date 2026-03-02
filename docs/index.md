@@ -18,3 +18,9 @@ GEB builds on, couples and extends several models, depicted in the figure below.
 4.  Streefkerk, Ileen N., et al. "A coupled agent-based model to analyse human-drought feedbacks for agropastoralists in dryland regions." Frontiers in Water 4 (2023): 1037971.
 5.  Joshi, Jaideep, et al. "Plant-FATE-Predicting the adaptive responses of biodiverse plant communities using functional-trait evolution." EGU General Assembly Conference Abstracts. 2022.
 6.  Leijnse, Tim, et al. "Modeling compound flooding in coastal systems using a computationally efficient reduced-physics solver: Including fluvial, pluvial, tidal, wind-and wave-driven processes." Coastal Engineering 163 (2021): 103796.
+
+## FAQ
+
+**How do you pronounce GEB?**
+
+It’s pronounced as "geb" ([/ɡɛb/](https://en.wikipedia.org/wiki/Help:IPA/English#Key)), with the "g" as in "get" or "gate", aligning with how ancient Egyptians would have *likely* pronounced the name of their god of the Earth: Geb.
