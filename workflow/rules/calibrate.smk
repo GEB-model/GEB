@@ -81,11 +81,11 @@ def generate_initial_population():
     population = toolbox.population(n=MU)
     individuals = []
     for i, ind in enumerate(population):
-        label = f"0_{i:03d}"  # Single digit for generation to match wildcard pattern
+        label = "0_{:03d}".format(i)  # Single digit for generation to match wildcard pattern
         individuals.append({
             "label": label,
             "generation": 0,
-            "individual_id": f"{i:03d}",
+            "individual_id": "{:03d}".format(i),
             "values": [float(x) for x in ind]
         })
     return individuals
@@ -106,12 +106,12 @@ rule generate_initial_parameters:
 # Generate parameter file for a specific individual
 rule generate_individual_parameters:
     input:
-        pop_file=lambda wildcards: "generation_0_population.yml" if int(wildcards.gen) == 0 else f"generation_{int(wildcards.gen) - 1}_next.yml",
+        pop_file=lambda wildcards: "generation_0_population.yml" if int(wildcards.gen) == 0 else "generation_" + str(int(wildcards.gen) - 1) + "_next.yml",
         # Ensure previous generation's checkpoint is complete before creating params for the next generation.
         # This is the key to resolving the cyclic dependency for generational workflows.
         checkpoint_done=lambda wildcards: checkpoints.create_next_generation.get(gen=int(wildcards.gen) - 1).output if int(wildcards.gen) > 0 else []
     output:
-        params=f"{RUNS_DIR}/{{gen}}_{{ind}}/parameters.yml"
+        params=RUNS_DIR + "/{gen}_{ind}/parameters.yml"
     run:
         import yaml
         
@@ -155,10 +155,10 @@ rule generate_individual_parameters:
 checkpoint create_next_generation:
     input:
         fitness_files=lambda wildcards: [
-            f"{RUNS_DIR}/{wildcards.gen}_{i:03d}/fitness.yml"
+            RUNS_DIR + "/{gen}_{i:03d}/fitness.yml".format(gen=wildcards.gen, i=i)
             for i in range(MU if int(wildcards.gen) == 0 else LAMBDA)
         ],
-        prev_pop=lambda wildcards: "generation_0_population.yml" if int(wildcards.gen) == 0 else f"generation_{int(wildcards.gen) - 1}_next.yml"
+        prev_pop=lambda wildcards: "generation_0_population.yml" if int(wildcards.gen) == 0 else "generation_" + str(int(wildcards.gen) - 1) + "_next.yml"
     output:
         selected_pop="generation_{gen}_selected.yml",
         summary="generation_{gen}_summary.yml",
@@ -177,7 +177,7 @@ checkpoint create_next_generation:
                 fitness_data = yaml.safe_load(f)
             
             # Find corresponding individual
-            label = f"{gen}_{i:03d}"
+            label = "{}_{:03d}".format(gen, i)
             ind_data = None
             for ind in pop_data["individuals"]:
                 if ind["label"] == label:
@@ -218,9 +218,9 @@ checkpoint create_next_generation:
             offspring_data = []
             for i, child in enumerate(offspring):
                 offspring_data.append({
-                    "label": f"{gen+1}_{i:03d}",
+                    "label": "{}_{:03d}".format(gen + 1, i),
                     "generation": gen + 1,
-                    "individual_id": f"{i:03d}",
+                    "individual_id": "{:03d}".format(i),
                     "values": [float(x) for x in child]
                 })
             
