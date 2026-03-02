@@ -2641,22 +2641,16 @@ class Hydrology:
 
     def water_balance(
         self,
-        run_name: str,
-        include_spinup: bool,
         spinup_name: str,
-        *args: Any,
+        run_name: str,
         export: bool = True,
-        **kwargs: Any,
     ) -> None:
         """Create a csv file and plot showing the water balance components.
 
         Args:
+            spinup_name: Name of the spinup run to use for the water balance evaluation.
             run_name: Name of the run to evaluate.
-            include_spinup: Whether to include the spinup run in the evaluation.
-            spinup_name: Name of the spinup run to include in the evaluation.
             export: Whether to export the water balance plot to a file.
-            *args: ignored.
-            **kwargs: ignored.
         """
         folder = self.model.output_folder / "report" / run_name
 
@@ -2878,8 +2872,13 @@ class Hydrology:
         )
 
         if export:
-            fig_path = folder / "water_balance_yearly_subplots.png"
-            plt.savefig(fig_path, dpi=300)
+            fig_path = (
+                self.evaluator.output_folder_evaluate
+                / "hydrology"
+                / "water_balance_yearly_subplots.svg"
+            )
+            fig_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(fig_path)
             print(f"Water balance yearly plot saved as: {fig_path}")
 
         plt.show()

@@ -520,6 +520,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     interception_storage_prev = interception_storage_m.copy()
     topwater_m_prev = topwater_m.copy()
     water_content_m_prev = water_content_m.copy()
+    soil_enthalpy_J_per_m2_prev = soil_enthalpy_J_per_m2.copy()
 
     # Call the land surface model
     results = land_surface_model(
@@ -596,6 +597,12 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         bare_soil_evaporation_m,
         transpiration_m,
         potential_transpiration_m,
+        soil_boundary_enthalpy_flux_J_per_m2,
+        rain_advection_enthalpy_flux_J_per_m2,
+        evaporative_cooling_enthalpy_loss_J_per_m2,
+        interflow_enthalpy_loss_J_per_m2,
+        groundwater_recharge_enthalpy_loss_J_per_m2,
+        transpiration_enthalpy_loss_J_per_m2,
     ) = results
     # Construct the balance check parameters
     influxes = [
@@ -640,4 +647,38 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         prestorages=prestorages,
         poststorages=poststorages,
         tolerance=tolerance,
+    )
+
+    soil_boundary_influx_J_per_m2 = np.maximum(
+        soil_boundary_enthalpy_flux_J_per_m2, flt(0.0)
+    )
+    soil_boundary_outflux_J_per_m2 = np.maximum(
+        -soil_boundary_enthalpy_flux_J_per_m2, flt(0.0)
+    )
+
+    rain_advection_influx_J_per_m2 = np.maximum(
+        rain_advection_enthalpy_flux_J_per_m2, flt(0.0)
+    )
+    rain_advection_outflux_J_per_m2 = np.maximum(
+        -rain_advection_enthalpy_flux_J_per_m2, flt(0.0)
+    )
+
+    assert balance_check(
+        name=f"land surface enthalpy test {'float64' if asfloat64 else 'float32'}",
+        how="cellwise",
+        influxes=[
+            soil_boundary_influx_J_per_m2.astype(np.float64),
+            rain_advection_influx_J_per_m2.astype(np.float64),
+        ],
+        outfluxes=[
+            soil_boundary_outflux_J_per_m2.astype(np.float64),
+            rain_advection_outflux_J_per_m2.astype(np.float64),
+            evaporative_cooling_enthalpy_loss_J_per_m2.astype(np.float64),
+            interflow_enthalpy_loss_J_per_m2.astype(np.float64),
+            groundwater_recharge_enthalpy_loss_J_per_m2.astype(np.float64),
+            transpiration_enthalpy_loss_J_per_m2.astype(np.float64),
+        ],
+        prestorages=[np.nansum(soil_enthalpy_J_per_m2_prev, axis=0).astype(np.float64)],
+        poststorages=[np.nansum(soil_enthalpy_J_per_m2, axis=0).astype(np.float64)],
+        tolerance=1e-2,
     )

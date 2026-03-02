@@ -468,7 +468,6 @@ def test_evaluate_evaluate_water_balance() -> None:
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
             "method": "hydrology.water_balance",
-            "include_yearly_plots": False,
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)

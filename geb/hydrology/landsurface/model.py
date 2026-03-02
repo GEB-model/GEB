@@ -178,6 +178,12 @@ def land_surface_model(
     ArrayFloat32,
     ArrayFloat32,
     ArrayFloat32,
+    ArrayFloat32,
+    ArrayFloat32,
+    ArrayFloat32,
+    ArrayFloat32,
+    ArrayFloat32,
+    ArrayFloat32,
 ]:
     """The main land surface model of GEB.
 
@@ -289,6 +295,17 @@ def land_surface_model(
     transpiration_m = np.zeros_like(snow_water_equivalent_m)
     groundwater_recharge_m = np.zeros_like(snow_water_equivalent_m)
 
+    # Daily integrated enthalpy flux diagnostics [J/m2].
+    # Positive values indicate energy entering the soil enthalpy reservoir.
+    soil_boundary_enthalpy_flux_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
+    rain_advection_enthalpy_flux_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
+
+    # Positive values indicate energy leaving the soil enthalpy reservoir.
+    evaporative_cooling_enthalpy_loss_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
+    interflow_enthalpy_loss_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
+    groundwater_recharge_enthalpy_loss_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
+    transpiration_enthalpy_loss_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
+
     for i in prange(snow_water_equivalent_m.size):  # ty: ignore[not-iterable]
         pr_kg_per_m2_per_s_cell = pr_kg_per_m2_per_s[:, i]
         tas_2m_K_cell = tas_2m_K[:, i]
@@ -312,6 +329,10 @@ def land_surface_model(
             wind_10m_m_per_s: np.float32 = np.sqrt(
                 wind_u10m_m_per_s_cell[hour] ** 2 + wind_v10m_m_per_s_cell[hour] ** 2
             )  # Wind speed at 10m height
+
+            soil_enthalpy_before_solver_J_per_m2: np.float32 = soil_enthalpy_J_per_m2[
+                :, i
+            ].sum()
 
             (
                 soil_enthalpy_J_per_m2[:, i],
@@ -341,6 +362,11 @@ def land_surface_model(
                 snow_water_equivalent_m=snow_water_equivalent_m_cell,
                 snow_temperature_C=snow_temperature_C_cell,
                 topwater_m=topwater_m[i],
+            )
+
+            soil_boundary_enthalpy_flux_J_per_m2[i] += (
+                soil_enthalpy_J_per_m2[:, i].sum()
+                - soil_enthalpy_before_solver_J_per_m2
             )
 
             (
@@ -510,11 +536,20 @@ def land_surface_model(
             runoff_m[hour, i] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
 
-            # Apply advective heat transport from infiltrating rain
+            # Apply advective heat transport from infiltrating rain.
+            # We accumulate the realized enthalpy increment (after - before)
+            # to keep diagnostics exactly consistent with the prognostic update.
+            soil_enthalpy_before_rain_advection_J_per_m2: np.float32 = (
+                soil_enthalpy_J_per_m2[0, i]
+            )
             soil_enthalpy_J_per_m2[0, i] = apply_rain_heat_advection(
                 soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0, i],
                 infiltration_amount_m=infiltration_amount,
                 rain_temperature_C=tas_C,  # assume rain temperature is equal to air temperature
+            )
+            rain_advection_enthalpy_flux_J_per_m2[i] += (
+                soil_enthalpy_J_per_m2[0, i]
+                - soil_enthalpy_before_rain_advection_J_per_m2
             )
 
             bottom_layer = N_SOIL_LAYERS - 1
@@ -580,11 +615,17 @@ def land_surface_model(
                 bottom_advected_temperature_C = max(
                     bottom_layer_temperature_C, np.float32(0.0)
                 )
-                soil_enthalpy_J_per_m2[bottom_layer, i] -= (
+                groundwater_recharge_enthalpy_loss_J_per_m2_hour: np.float32 = (
                     flux
                     * RHO_WATER_KG_PER_M3
                     * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
                     * bottom_advected_temperature_C
+                )
+                soil_enthalpy_J_per_m2[bottom_layer, i] -= (
+                    groundwater_recharge_enthalpy_loss_J_per_m2_hour
+                )
+                groundwater_recharge_enthalpy_loss_J_per_m2[i] += (
+                    groundwater_recharge_enthalpy_loss_J_per_m2_hour
                 )
                 water_content_m[bottom_layer, i] -= flux
                 water_content_m[bottom_layer, i] = max(
@@ -635,12 +676,16 @@ def land_surface_model(
             bottom_layer_advected_temperature_C = max(
                 bottom_layer_temperature_C, np.float32(0.0)
             )
-            soil_enthalpy_J_per_m2[bottom_layer, i] -= (
+            interflow_enthalpy_loss_J_per_m2_hour: np.float32 = (
                 interflow_cell_hour
                 * RHO_WATER_KG_PER_M3
                 * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
                 * bottom_layer_advected_temperature_C
             )
+            soil_enthalpy_J_per_m2[bottom_layer, i] -= (
+                interflow_enthalpy_loss_J_per_m2_hour
+            )
+            interflow_enthalpy_loss_J_per_m2[i] += interflow_enthalpy_loss_J_per_m2_hour
             water_content_m[bottom_layer, i] -= interflow_cell_hour
             water_content_m[bottom_layer, i] = max(
                 water_content_m[bottom_layer, i],
@@ -827,11 +872,17 @@ def land_surface_model(
 
                 interflow_m[hour, i] += interflow_cell_hour
                 layer_advected_temperature_C = max(layer_temperature_C, np.float32(0.0))
-                soil_enthalpy_J_per_m2[layer, i] -= (
+                interflow_enthalpy_loss_J_per_m2_hour = (
                     interflow_cell_hour
                     * RHO_WATER_KG_PER_M3
                     * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
                     * layer_advected_temperature_C
+                )
+                soil_enthalpy_J_per_m2[layer, i] -= (
+                    interflow_enthalpy_loss_J_per_m2_hour
+                )
+                interflow_enthalpy_loss_J_per_m2[i] += (
+                    interflow_enthalpy_loss_J_per_m2_hour
                 )
                 water_content_m[layer, i] -= interflow_cell_hour
                 water_content_m[layer, i] = max(
@@ -840,6 +891,11 @@ def land_surface_model(
                 )
 
             # soil moisture is updated in place
+            water_content_before_transpiration_m: TwoDArrayFloat32 = water_content_m[
+                :, i
+            ].copy()
+            topwater_before_transpiration_m: np.float32 = topwater_m[i]
+
             transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
                 soil_is_frozen=soil_is_frozen,
                 wwp_m=water_content_wilting_point_m[:, i],
@@ -858,6 +914,68 @@ def land_surface_model(
                 topwater_m=topwater_m[i],
                 minimum_effective_root_depth_m=minimum_effective_root_depth_m,
             )
+
+            # Remove sensible enthalpy exported with transpired liquid water.
+            # This closes the soil enthalpy budget when transpiration withdraws
+            # water from soil layers and/or ponded topwater.
+            for layer in range(N_SOIL_LAYERS):
+                transpired_from_layer_m: np.float32 = max(
+                    np.float32(0.0),
+                    water_content_before_transpiration_m[layer]
+                    - water_content_m[layer, i],
+                )
+                if transpired_from_layer_m > np.float32(0.0):
+                    layer_temperature_C, _ = (
+                        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[layer, i],
+                            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                                layer, i
+                            ],
+                            water_content_m=water_content_before_transpiration_m[layer],
+                            topwater_m=(
+                                topwater_before_transpiration_m
+                                if layer == 0
+                                else np.float32(0.0)
+                            ),
+                        )
+                    )
+                    advected_temperature_C = max(layer_temperature_C, np.float32(0.0))
+                    enthalpy_export_J_per_m2 = (
+                        transpired_from_layer_m
+                        * RHO_WATER_KG_PER_M3
+                        * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+                        * advected_temperature_C
+                    )
+                    soil_enthalpy_J_per_m2[layer, i] -= enthalpy_export_J_per_m2
+                    transpiration_enthalpy_loss_J_per_m2[i] += enthalpy_export_J_per_m2
+
+            transpired_from_topwater_m: np.float32 = max(
+                np.float32(0.0), topwater_before_transpiration_m - topwater_m[i]
+            )
+            if transpired_from_topwater_m > np.float32(0.0):
+                top_layer_temperature_C, _ = (
+                    get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[0, i],
+                        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                            0, i
+                        ],
+                        water_content_m=water_content_before_transpiration_m[0],
+                        topwater_m=topwater_before_transpiration_m,
+                    )
+                )
+                topwater_advected_temperature_C = max(
+                    top_layer_temperature_C, np.float32(0.0)
+                )
+                topwater_enthalpy_export_J_per_m2 = (
+                    transpired_from_topwater_m
+                    * RHO_WATER_KG_PER_M3
+                    * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+                    * topwater_advected_temperature_C
+                )
+                soil_enthalpy_J_per_m2[0, i] -= topwater_enthalpy_export_J_per_m2
+                transpiration_enthalpy_loss_J_per_m2[i] += (
+                    topwater_enthalpy_export_J_per_m2
+                )
 
             potential_transpiration_m[i] += potential_transpiration_m_cell_hour
             transpiration_m[i] += transpiration_m_cell_hour
@@ -884,11 +1002,18 @@ def land_surface_model(
                 )
             )
 
+            soil_enthalpy_before_evaporative_cooling_J_per_m2: np.float32 = (
+                soil_enthalpy_J_per_m2[0, i]
+            )
             soil_enthalpy_J_per_m2[0, i] = apply_evaporative_cooling(
                 soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0, i],
                 evaporation_m=bare_soil_evaporation_m_cell_hour
                 + open_water_evaporation_m_cell_hour,
                 frozen_fraction_top_layer=frozen_fraction_top_layer,
+            )
+            evaporative_cooling_enthalpy_loss_J_per_m2[i] += (
+                soil_enthalpy_before_evaporative_cooling_J_per_m2
+                - soil_enthalpy_J_per_m2[0, i]
             )
 
         snow_water_equivalent_m[i] = snow_water_equivalent_m_cell
@@ -914,6 +1039,12 @@ def land_surface_model(
         bare_soil_evaporation,
         transpiration_m,
         potential_transpiration_m,
+        soil_boundary_enthalpy_flux_J_per_m2,
+        rain_advection_enthalpy_flux_J_per_m2,
+        evaporative_cooling_enthalpy_loss_J_per_m2,
+        interflow_enthalpy_loss_J_per_m2,
+        groundwater_recharge_enthalpy_loss_J_per_m2,
+        transpiration_enthalpy_loss_J_per_m2,
     )
 
 
@@ -1213,6 +1344,78 @@ class LandSurface(Module):
             green_ampt_active_layer_idx=green_ampt_active_layer_idx_prev,
         )
         return error_inputs
+
+    def _check_soil_enthalpy_balance(
+        self,
+        *,
+        soil_enthalpy_J_per_m2_prev: TwoDArrayFloat32,
+        soil_boundary_enthalpy_flux_J_per_m2: ArrayFloat32,
+        rain_advection_enthalpy_flux_J_per_m2: ArrayFloat32,
+        evaporative_cooling_enthalpy_loss_J_per_m2: ArrayFloat32,
+        interflow_enthalpy_loss_J_per_m2: ArrayFloat32,
+        groundwater_recharge_enthalpy_loss_J_per_m2: ArrayFloat32,
+        transpiration_enthalpy_loss_J_per_m2: ArrayFloat32,
+    ) -> bool:
+        """Check closure of the daily soil enthalpy budget.
+
+        Notes:
+            This budget targets only the prognostic soil enthalpy reservoir
+            (`soil_enthalpy_J_per_m2`). Snowpack and canopy thermal stores are
+            excluded because they are not represented as prognostic enthalpy
+            state variables in this module.
+
+        Args:
+            soil_enthalpy_J_per_m2_prev: Soil enthalpy before the daily step (J/m2).
+            soil_boundary_enthalpy_flux_J_per_m2: Net enthalpy flux from the
+                implicit soil energy solver (J/m2, positive into soil).
+            rain_advection_enthalpy_flux_J_per_m2: Enthalpy carried by infiltrating
+                rain (J/m2, signed).
+            evaporative_cooling_enthalpy_loss_J_per_m2: Latent cooling losses by
+                evaporation/sublimation from the top layer (J/m2, positive out).
+            interflow_enthalpy_loss_J_per_m2: Enthalpy exported by interflow
+                (J/m2, positive out).
+            groundwater_recharge_enthalpy_loss_J_per_m2: Enthalpy exported by
+                groundwater recharge (J/m2, positive out).
+            transpiration_enthalpy_loss_J_per_m2: Sensible enthalpy exported by
+                transpiration withdrawals from soil/topwater (J/m2, positive out).
+
+        Returns:
+            True if the soil enthalpy balance closes within tolerance.
+        """
+        soil_boundary_influx_J_per_m2: ArrayFloat32 = np.maximum(
+            soil_boundary_enthalpy_flux_J_per_m2, np.float32(0.0)
+        )
+        soil_boundary_outflux_J_per_m2: ArrayFloat32 = np.maximum(
+            -soil_boundary_enthalpy_flux_J_per_m2, np.float32(0.0)
+        )
+
+        rain_advection_influx_J_per_m2: ArrayFloat32 = np.maximum(
+            rain_advection_enthalpy_flux_J_per_m2, np.float32(0.0)
+        )
+        rain_advection_outflux_J_per_m2: ArrayFloat32 = np.maximum(
+            -rain_advection_enthalpy_flux_J_per_m2, np.float32(0.0)
+        )
+
+        return balance_check(
+            name="land surface enthalpy",
+            how="cellwise",
+            influxes=[
+                soil_boundary_influx_J_per_m2,
+                rain_advection_influx_J_per_m2,
+            ],
+            outfluxes=[
+                soil_boundary_outflux_J_per_m2,
+                rain_advection_outflux_J_per_m2,
+                evaporative_cooling_enthalpy_loss_J_per_m2,
+                interflow_enthalpy_loss_J_per_m2,
+                groundwater_recharge_enthalpy_loss_J_per_m2,
+                transpiration_enthalpy_loss_J_per_m2,
+            ],
+            prestorages=[np.nansum(soil_enthalpy_J_per_m2_prev, axis=0)],
+            poststorages=[np.nansum(self.HRU.var.soil_enthalpy_J_per_m2, axis=0)],
+            tolerance=1e2,
+            raise_on_error=False,
+        )
 
     def spinup(self) -> None:
         """Spinup function for the land surface module."""
@@ -1728,6 +1931,12 @@ class LandSurface(Module):
             bare_soil_evaporation_m,
             transpiration_m,
             potential_transpiration_m,
+            soil_boundary_enthalpy_flux_J_per_m2,
+            rain_advection_enthalpy_flux_J_per_m2,
+            evaporative_cooling_enthalpy_loss_J_per_m2,
+            interflow_enthalpy_loss_J_per_m2,
+            groundwater_recharge_enthalpy_loss_J_per_m2,
+            transpiration_enthalpy_loss_J_per_m2,
         ) = land_surface_model(**land_surface_inputs._asdict())
 
         # Keep temperature as a diagnostic output only; the kernel is enthalpy-only.
@@ -1806,6 +2015,42 @@ class LandSurface(Module):
                 **error_inputs._asdict(),
             )
             raise AssertionError("Land surface water balance check failed.")
+
+        if not self._check_soil_enthalpy_balance(
+            soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
+            soil_boundary_enthalpy_flux_J_per_m2=soil_boundary_enthalpy_flux_J_per_m2,
+            rain_advection_enthalpy_flux_J_per_m2=rain_advection_enthalpy_flux_J_per_m2,
+            evaporative_cooling_enthalpy_loss_J_per_m2=evaporative_cooling_enthalpy_loss_J_per_m2,
+            interflow_enthalpy_loss_J_per_m2=interflow_enthalpy_loss_J_per_m2,
+            groundwater_recharge_enthalpy_loss_J_per_m2=groundwater_recharge_enthalpy_loss_J_per_m2,
+            transpiration_enthalpy_loss_J_per_m2=transpiration_enthalpy_loss_J_per_m2,
+        ):
+            error_inputs = self._snapshot_land_surface_inputs_for_error(
+                land_surface_inputs=land_surface_inputs,
+                water_content_m_prev=water_content_m_prev,
+                topwater_m_prev=topwater_m_prev,
+                snow_water_equivalent_prev=snow_water_equivalent_prev,
+                liquid_water_in_snow_prev=liquid_water_in_snow_prev,
+                snow_temperature_C_prev=snow_temperature_C_prev,
+                interception_storage_prev=interception_storage_prev,
+                soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
+                deep_soil_temperature_C_prev=deep_soil_temperature_C_prev,
+                wetting_front_depth_prev=wetting_front_depth_prev,
+                wetting_front_suction_head_prev=wetting_front_suction_head_prev,
+                wetting_front_moisture_deficit_prev=wetting_front_moisture_deficit_prev,
+                green_ampt_active_layer_idx_prev=green_ampt_active_layer_idx_prev,
+            )
+            np.savez(
+                self.model.diagnostics_folder / "landsurface_enthalpy_error.npz",
+                **error_inputs._asdict(),
+                soil_boundary_enthalpy_flux_J_per_m2=soil_boundary_enthalpy_flux_J_per_m2,
+                rain_advection_enthalpy_flux_J_per_m2=rain_advection_enthalpy_flux_J_per_m2,
+                evaporative_cooling_enthalpy_loss_J_per_m2=evaporative_cooling_enthalpy_loss_J_per_m2,
+                interflow_enthalpy_loss_J_per_m2=interflow_enthalpy_loss_J_per_m2,
+                groundwater_recharge_enthalpy_loss_J_per_m2=groundwater_recharge_enthalpy_loss_J_per_m2,
+                transpiration_enthalpy_loss_J_per_m2=transpiration_enthalpy_loss_J_per_m2,
+            )
+            raise AssertionError("Land surface enthalpy balance check failed.")
 
         actual_evapotranspiration_m = (
             interception_evaporation_m
