@@ -21,6 +21,6 @@ GEB builds on, couples and extends several models, depicted in the figure below.
 
 ## FAQ
 
-**How do you pronounce GEB?**
+**How is GEB pronounced?**
 
 It’s pronounced as "geb" ([/ɡɛb/](https://en.wikipedia.org/wiki/Help:IPA/English#Key)), with the "g" as in "get" or "gate", aligning with how ancient Egyptians would have *likely* pronounced the name of their god of the Earth: Geb.
