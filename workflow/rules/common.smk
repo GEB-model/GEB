@@ -27,7 +27,7 @@ rule build_base:
         "logs/base_build.log"
     shell:
         """
-        geb build 2>&1 | tee {log}
+        geb build --continue 2>&1 | tee {log}
         """
 
 # Initialize individual run directory
