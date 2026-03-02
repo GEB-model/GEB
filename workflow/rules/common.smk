@@ -33,12 +33,12 @@ rule build_base:
 # Initialize individual run directory
 rule init_individual:
     input:
-        params=f"{RUNS_DIR}/{{gen}}_{{ind}}/parameters.yml",
+        params=RUNS_DIR + "/{gen}_{ind}/parameters.yml",
         base_build="base_build.done"
     output:
-        touch(f"{RUNS_DIR}/{{gen}}_{{ind}}/init.done")
+        touch(RUNS_DIR + "/{gen}_{ind}/init.done")
     log:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/init.log"
+        RUNS_DIR + "/{gen}_{ind}/logs/init.log"
     run:
         import yaml
         
@@ -61,11 +61,11 @@ rule init_individual:
 # Alter individual model based on base model
 rule alter_individual:
     input:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/init.done"
+        RUNS_DIR + "/{gen}_{ind}/init.done"
     output:
-        touch(f"{RUNS_DIR}/{{gen}}_{{ind}}/altered.done")
+        touch(RUNS_DIR + "/{gen}_{ind}/altered.done")
     log:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/alter.log"
+        RUNS_DIR + "/{gen}_{ind}/logs/alter.log"
     shell:
         """
         geb alter --from-model ../../. -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
@@ -74,12 +74,12 @@ rule alter_individual:
 # Apply parameters to individual config
 rule set_individual_parameters:
     input:
-        altered_done=f"{RUNS_DIR}/{{gen}}_{{ind}}/altered.done",
-        params=f"{RUNS_DIR}/{{gen}}_{{ind}}/parameters.yml"
+        altered_done=RUNS_DIR + "/{gen}_{ind}/altered.done",
+        params=RUNS_DIR + "/{gen}_{ind}/parameters.yml"
     output:
-        touch(f"{RUNS_DIR}/{{gen}}_{{ind}}/params_set.done")
+        touch(RUNS_DIR + "/{gen}_{ind}/params_set.done")
     log:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/set_params.log"
+        RUNS_DIR + "/{gen}_{ind}/logs/set_params.log"
     run:
         import yaml
         
@@ -109,11 +109,11 @@ rule set_individual_parameters:
 # Run spinup for an individual
 rule spinup_individual:
     input:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/params_set.done"
+        RUNS_DIR + "/{gen}_{ind}/params_set.done"
     output:
-        touch(f"{RUNS_DIR}/{{gen}}_{{ind}}/spinup.done")
+        touch(RUNS_DIR + "/{gen}_{ind}/spinup.done")
     log:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/spinup.log"
+        RUNS_DIR + "/{gen}_{ind}/logs/spinup.log"
     shell:
         """
         geb spinup -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
@@ -122,11 +122,11 @@ rule spinup_individual:
 # Run main simulation for an individual
 rule run_individual:
     input:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/spinup.done"
+        RUNS_DIR + "/{gen}_{ind}/spinup.done"
     output:
-        touch(f"{RUNS_DIR}/{{gen}}_{{ind}}/run.done")
+        touch(RUNS_DIR + "/{gen}_{ind}/run.done")
     log:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/run.log"
+        RUNS_DIR + "/{gen}_{ind}/logs/run.log"
     shell:
         """
         geb run -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
@@ -135,11 +135,11 @@ rule run_individual:
 # Evaluate an individual
 rule evaluate_individual:
     input:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/run.done"
+        RUNS_DIR + "/{gen}_{ind}/run.done"
     output:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/fitness.yml"
+        RUNS_DIR + "/{gen}_{ind}/fitness.yml"
     log:
-        f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/evaluate.log"
+        RUNS_DIR + "/{gen}_{ind}/logs/evaluate.log"
     shell:
         """
         # Use geb evaluate to compute metrics
