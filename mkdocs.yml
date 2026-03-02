@@ -120,11 +120,12 @@ nav:
     - ODD protocol: agents/ODD/protocol.md
   - Hydrology:
     - Overview: hydrology/index.md
-    - Evapotranspiration: hydrology/evapotranspiration.md
     - Land Surface: hydrology/landsurface.md
+    - Evapotranspiration: hydrology/evapotranspiration.md
     - Interception: hydrology/interception.md
     - Snow and Glaciers: hydrology/snow_glaciers.md
-    - Soil: hydrology/soil.md
+    - Soil Water: hydrology/soil_water.md
+    - Soil Energy: hydrology/soil_energy.md
     - Water Demand: hydrology/water_demand.md
     - Groundwater: hydrology/groundwater.md
     - Runoff concentration: hydrology/runoff_concentration.md
