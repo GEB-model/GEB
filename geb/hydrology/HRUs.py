@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -274,7 +274,9 @@ class Grid(BaseVariables):
         """
         self.data = data
         self.model = model
-        self.var: GridVariables = self.model.store.create_bucket("hydrology.grid.var")
+        self.var = cast(
+            GridVariables, self.model.store.create_bucket("hydrology.grid.var")
+        )
 
         self.scaling = 1
         mask, self.transform, self.crs = read_grid(
@@ -589,11 +591,11 @@ class HRUVariables(Bucket):
     crop_map: ArrayInt32
     topwater: ArrayFloat32
     soil_layer_height_m: TwoDArrayFloat32
-    wfc: TwoDArrayFloat32
-    w: TwoDArrayFloat32
-    ws: TwoDArrayFloat32
-    wwp: TwoDArrayFloat32
-    wres: TwoDArrayFloat32
+    water_content_field_capacity_m: TwoDArrayFloat32
+    water_content_m: TwoDArrayFloat32
+    water_content_saturated_m: TwoDArrayFloat32
+    water_content_wilting_point_m: TwoDArrayFloat32
+    water_content_residual_m: TwoDArrayFloat32
     crop_harvest_age_days: ArrayInt32
     silt_percentage: TwoDArrayFloat32
     clay_percentage: TwoDArrayFloat32
@@ -602,7 +604,7 @@ class HRUVariables(Bucket):
     lambda_pore_size_distribution: TwoDArrayFloat32
     saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
     organic_matter_percentage: TwoDArrayFloat32
-    bulk_density: TwoDArrayFloat32
+    bulk_density_kg_per_dm3: TwoDArrayFloat32
     crop_group_number_forest: ArrayFloat32
     crop_group_number_grassland_like: ArrayFloat32
     leaf_area_index_forest: TwoDArrayFloat32
@@ -624,6 +626,7 @@ class HRUVariables(Bucket):
     canopy_cover: ArrayFloat32
     stem_diameter_harvested: ArrayFloat32
     no_elements_harvested: ArrayFloat32
+    soil_enthalpy_J_per_m2: TwoDArrayFloat32
     soil_temperature_C: TwoDArrayFloat32
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
     solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32
@@ -698,11 +701,16 @@ class HRUs(BaseVariables):
         In addition, several mapping arrays are created to map between HRUs and grid cells. These are
         later used in functions to convert between HRU and grid scales.
         """
-        self.var: HRUVariables = self.model.store.create_bucket(
-            "hydrology.HRU.var",
-            validator=lambda x: (
-                isinstance(x, np.ndarray)
-                and (not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32)
+        self.var: HRUVariables = cast(
+            HRUVariables,
+            self.model.store.create_bucket(
+                "hydrology.HRU.var",
+                validator=lambda x: (
+                    isinstance(x, np.ndarray)
+                    and (
+                        not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32
+                    )
+                ),
             ),
         )
 

@@ -439,7 +439,7 @@ def test_evaluate_water_circle() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate_hydrology() -> None:
+def test_evaluate_evaluate_discharge() -> None:
     """Test model evaluation functionality.
 
     Verifies that model outputs can be evaluated and analyzed
@@ -450,6 +450,24 @@ def test_evaluate_hydrology() -> None:
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
             "method": "hydrology.evaluate_discharge",
+            "include_yearly_plots": False,
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate_evaluate_water_balance() -> None:
+    """Test model evaluation functionality.
+
+    Verifies that model outputs can be evaluated and analyzed
+    for correctness and consistency. Does not check the evaluation
+    results itself. Just if it can be run.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "method": "hydrology.water_balance",
             "include_yearly_plots": False,
         }
         args["method_args"] = method_args

@@ -12,22 +12,25 @@ def tdma_solver(
     main_diagonal_b: ArrayFloat,
     upper_diagonal_c: ArrayFloat,
     rhs_vector_d: ArrayFloat,
-) -> ArrayFloat:
-    """Solves a tridiagonal system Ax = d using the Thomas algorithm (TDMA).
+    solution_vector_x: ArrayFloat,
+    c_prime: ArrayFloat,
+    d_prime: ArrayFloat,
+) -> None:
+    """Solve a tridiagonal system Ax = d in-place using the Thomas algorithm.
+
+    Notes:
+        All arrays must have the same length and dtype.
 
     Args:
-        lower_diagonal_a: lower diagonal (length n).
-        main_diagonal_b: main diagonal (length n).
-        upper_diagonal_c: upper diagonal (length n).
-        rhs_vector_d: right hand side (length n).
-
-    Returns:
-        solution_vector_x: The solution of the tridiagonal system.
+        lower_diagonal_a: Lower diagonal (length n).
+        main_diagonal_b: Main diagonal (length n).
+        upper_diagonal_c: Upper diagonal (length n).
+        rhs_vector_d: Right hand side (length n).
+        solution_vector_x: Output solution array (length n), modified in-place.
+        c_prime: Work array (length n), modified in-place.
+        d_prime: Work array (length n), modified in-place.
     """
     n = len(rhs_vector_d)
-    c_prime = np.zeros(n, dtype=rhs_vector_d.dtype)
-    d_prime = np.zeros(n, dtype=rhs_vector_d.dtype)
-    x = np.zeros(n, dtype=rhs_vector_d.dtype)
 
     c_prime[0] = upper_diagonal_c[0] / main_diagonal_b[0]
     d_prime[0] = rhs_vector_d[0] / main_diagonal_b[0]
@@ -36,8 +39,9 @@ def tdma_solver(
         denominator = main_diagonal_b[i] - lower_diagonal_a[i] * c_prime[i - 1]
 
         # Avoid division by zero
-        if abs(denominator) < 1e-10:
-            denominator = 1e-10
+        eps = np.float32(1e-10)
+        if abs(denominator) < eps:
+            denominator = eps
 
         if i < n - 1:
             c_prime[i] = upper_diagonal_c[i] / denominator
@@ -45,8 +49,6 @@ def tdma_solver(
             rhs_vector_d[i] - lower_diagonal_a[i] * d_prime[i - 1]
         ) / denominator
 
-    x[n - 1] = d_prime[n - 1]
+    solution_vector_x[n - 1] = d_prime[n - 1]
     for i in range(n - 2, -1, -1):
-        x[i] = d_prime[i] - c_prime[i] * x[i + 1]
-
-    return x
+        solution_vector_x[i] = d_prime[i] - c_prime[i] * solution_vector_x[i + 1]

@@ -4,10 +4,9 @@ import numpy as np
 
 from geb.hydrology.landsurface.energy import (
     calculate_sensible_heat_flux,
-    calculate_soil_thermal_conductivity,
+    calculate_soil_thermal_conductivity_from_frozen_fraction,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_heat_capacity_solid_fraction,
-    solve_soil_temperature_column,
 )
 
 
@@ -150,25 +149,28 @@ def test_calculate_soil_thermal_conductivity() -> None:
     RHO_MINERAL = 2650.0
     rho_bulk = bd * 1000.0
     phi = 1.0 - (rho_bulk / RHO_MINERAL)
-    # degree_of_saturation = theta / phi
     Sr = np.array([0.4], dtype=np.float32)
+    phi_val = phi.astype(np.float32)
+    bd_val = bd.astype(np.float32)
 
-    # Calculate for unfrozen
-    lambda_total_hot = calculate_soil_thermal_conductivity(
+    # Calculate for unfrozen (frozen_fraction = 0.0)
+    lambda_total_hot = calculate_soil_thermal_conductivity_from_frozen_fraction(
         thermal_conductivity_solid_W_per_m_K=lambda_s,
-        porosity=phi.astype(np.float32),
+        bulk_density_kg_per_dm3=bd_val,
+        porosity=phi_val,
         degree_of_saturation=Sr,
         sand_percentage=sand,
-        soil_temperature_C=temp_hot,
+        frozen_fraction=np.array([0.0], dtype=np.float32),
     )
 
-    # Calculate for frozen
-    lambda_total_cold = calculate_soil_thermal_conductivity(
+    # Calculate for frozen (frozen_fraction = 1.0)
+    lambda_total_cold = calculate_soil_thermal_conductivity_from_frozen_fraction(
         thermal_conductivity_solid_W_per_m_K=lambda_s,
-        porosity=phi.astype(np.float32),
+        bulk_density_kg_per_dm3=bd_val,
+        porosity=phi_val,
         degree_of_saturation=Sr,
         sand_percentage=sand,
-        soil_temperature_C=temp_cold,
+        frozen_fraction=np.array([1.0], dtype=np.float32),
     )
 
     # Saturated frozen conductivity should be higher than unfrozen because lambda_ice > lambda_water
@@ -207,206 +209,3 @@ def test_calculate_sensible_heat_flux() -> None:
         surface_pressure_pa=np.float32(101325.0),
     )
     assert flux_cooling < 0.0
-
-
-def test_solve_soil_temperature_column() -> None:
-    """Test the 1D soil temperature column solver."""
-    # Common Parameters
-    n_soil_layers = 6
-    soil_temperatures_old = np.full(n_soil_layers, 10.0, dtype=np.float32)
-    layer_thicknesses = np.array([0.05, 0.1, 0.2, 0.3, 0.5, 1.0], dtype=np.float32)
-
-    # Simplified heat capacities and conductivities
-    # (Using basic mineral parameters for multiple layers)
-    bulk_density = np.float32(1300.0)
-    heat_capacity_arr = get_heat_capacity_solid_fraction(
-        np.full(n_soil_layers, bulk_density / 1000.0, dtype=np.float32),
-        layer_thicknesses,
-    )
-    thermal_conductivities = np.full(n_soil_layers, 2.0, dtype=np.float32)
-    porosity_arr = np.full(n_soil_layers, 0.4, dtype=np.float32)
-    sat_arr = np.full(n_soil_layers, 0.5, dtype=np.float32)
-    vol_water_arr = porosity_arr * sat_arr
-    sand_arr = np.full(n_soil_layers, 50.0, dtype=np.float32)
-
-    # Steady State / No Forcing
-    sw_in = np.float32(0.0)
-    lw_in = np.float32(363.0)  # Approx balance
-    air_temp_k = np.float32(283.15)
-    wind_speed = np.float32(2.0)
-    pressure = np.float32(101325.0)
-    dt_seconds = np.float32(3600.0)
-    deep_soil_temp = np.float32(10.0)
-    soil_emissivity = np.float32(0.95)
-    soil_albedo = np.float32(0.23)
-    lai = np.float32(0.0)
-
-    t_new, _, _ = solve_soil_temperature_column(
-        soil_temperatures_C=soil_temperatures_old,
-        layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
-        porosity=porosity_arr,
-        sand_percentage=sand_arr,
-        volumetric_water_content=vol_water_arr,
-        degree_of_saturation=sat_arr,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        timestep_seconds=dt_seconds,
-        deep_soil_temperature_C=deep_soil_temp,
-        soil_emissivity=soil_emissivity,
-        soil_albedo=soil_albedo,
-        leaf_area_index=lai,
-    )
-
-    # Should stay close to 10.0 across all layers
-    np.testing.assert_allclose(t_new, 10.0, atol=0.5)
-
-    # Strong heating (daytime) - Top layer should warm most
-    sw_in = np.float32(800.0)
-    lw_in = np.float32(350.0)
-    air_temp_k = np.float32(303.15)
-
-    t_new_hot, _, _ = solve_soil_temperature_column(
-        soil_temperatures_C=soil_temperatures_old,
-        layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
-        porosity=porosity_arr,
-        sand_percentage=sand_arr,
-        volumetric_water_content=vol_water_arr,
-        degree_of_saturation=sat_arr,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        timestep_seconds=dt_seconds,
-        deep_soil_temperature_C=deep_soil_temp,
-        soil_emissivity=soil_emissivity,
-        soil_albedo=soil_albedo,
-        leaf_area_index=np.float32(0.0),
-    )
-    assert t_new_hot[0] > 10.0, "Top layer should warm up"
-    assert t_new_hot[0] > t_new_hot[1], "Top layer should be warmer than second layer"
-
-    # Bottom boundary influence (Deep soil heating)
-    deep_soil_temp_hot = np.float32(20.0)
-    t_new_bottom, _, _ = solve_soil_temperature_column(
-        soil_temperatures_C=soil_temperatures_old,
-        layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
-        porosity=porosity_arr,
-        sand_percentage=sand_arr,
-        volumetric_water_content=vol_water_arr,
-        degree_of_saturation=sat_arr,
-        shortwave_radiation_W_per_m2=np.float32(0.0),
-        longwave_radiation_W_per_m2=np.float32(363.0),
-        air_temperature_K=np.float32(283.15),
-        wind_speed_10m_m_per_s=np.float32(2.0),
-        surface_pressure_pa=np.float32(101325.0),
-        timestep_seconds=np.float32(3600.0 * 24.0 * 10),  # Long time to see diffusion
-        deep_soil_temperature_C=deep_soil_temp_hot,
-        soil_emissivity=soil_emissivity,
-        soil_albedo=soil_albedo,
-        leaf_area_index=np.float32(0.0),
-    )
-    assert t_new_bottom[-1] > 10.0, "Bottom layer should warm up from deep soil"
-    assert t_new_bottom[-1] > t_new_bottom[-2], (
-        "Bottom layer should be warmer than one above"
-    )
-
-
-def test_solve_soil_temperature_column_snow() -> None:
-    """Test that snow cover couples the soil surface to the snowpack.
-
-    The energy solver uses a conductive boundary condition between the top soil
-    layer and the snowpack when snow is present (instead of a radiative/aerodynamic
-    surface energy balance).
-    """
-    # Setup similar to basic test
-    n_soil_layers = 2
-    soil_temperatures_old = np.full(n_soil_layers, 10.0, dtype=np.float32)
-    layer_thicknesses = np.array([0.1, 0.2], dtype=np.float32)
-    bulk_density = np.float32(1300.0)
-    heat_capacity_arr = get_heat_capacity_solid_fraction(
-        np.full(n_soil_layers, bulk_density / 1000.0, dtype=np.float32),
-        layer_thicknesses,
-    )
-    thermal_conductivities = np.full(n_soil_layers, 2.0, dtype=np.float32)
-
-    # Added arguments required for new signature
-    porosity_arr = np.full(n_soil_layers, 0.4, dtype=np.float32)
-    sand_arr = np.full(n_soil_layers, 50.0, dtype=np.float32)
-    sat_arr = np.full(n_soil_layers, 0.5, dtype=np.float32)
-    vol_water_arr = porosity_arr * sat_arr
-
-    # Strong incoming radiation that WOULD heat the soil if no snow
-    sw_in = np.float32(1000.0)
-    lw_in = np.float32(400.0)
-    air_temp_k = np.float32(303.15)  # 30C
-    wind_speed = np.float32(5.0)
-    pressure = np.float32(101325.0)
-    dt_seconds = np.float32(3600.0)
-    deep_soil_temp = np.float32(10.0)  # Same as initial
-    soil_emissivity = np.float32(0.95)
-    soil_albedo = np.float32(0.23)
-
-    # WITH SNOW
-    t_new_snow, fluxes_snow, _ = solve_soil_temperature_column(
-        soil_temperatures_C=soil_temperatures_old,
-        layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
-        porosity=porosity_arr,
-        sand_percentage=sand_arr,
-        volumetric_water_content=vol_water_arr,
-        degree_of_saturation=sat_arr,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        timestep_seconds=dt_seconds,
-        deep_soil_temperature_C=deep_soil_temp,
-        soil_emissivity=soil_emissivity,
-        soil_albedo=soil_albedo,
-        leaf_area_index=np.float32(0.0),
-        snow_water_equivalent_m=np.float32(0.1),  # Significant snow
-        snow_temperature_C=np.float32(0.0),
-    )
-
-    # With snow present at 0C, a soil profile initially at 10C should cool.
-    assert fluxes_snow < 0.0
-    assert t_new_snow[0] < 10.0
-
-    # WITHOUT SNOW (Control)
-    t_new_control, fluxes_control, _ = solve_soil_temperature_column(
-        soil_temperatures_C=soil_temperatures_old,
-        layer_thicknesses_m=layer_thicknesses,
-        solid_heat_capacities_J_per_m2_K=heat_capacity_arr,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivities,
-        porosity=porosity_arr,
-        sand_percentage=sand_arr,
-        volumetric_water_content=vol_water_arr,
-        degree_of_saturation=sat_arr,
-        shortwave_radiation_W_per_m2=sw_in,
-        longwave_radiation_W_per_m2=lw_in,
-        air_temperature_K=air_temp_k,
-        wind_speed_10m_m_per_s=wind_speed,
-        surface_pressure_pa=pressure,
-        timestep_seconds=dt_seconds,
-        deep_soil_temperature_C=deep_soil_temp,
-        soil_emissivity=soil_emissivity,
-        soil_albedo=soil_albedo,
-        leaf_area_index=np.float32(0.0),
-        snow_water_equivalent_m=np.float32(0.0),
-    )
-
-    # Control should have heated up
-    assert t_new_control[0] > 10.1
-    assert fluxes_control > 0.0  # Positive flux into soil

@@ -6,6 +6,21 @@ from numba import njit
 from geb.geb_types import Shape
 from geb.workflows.algebra import tdma_solver
 
+from .constants import (
+    C_MINERAL_VOLUMETRIC_J_PER_M3_K,
+    L_FUSION_J_PER_KG,
+    L_SUBLIMATION_J_PER_KG,
+    L_VAPORIZATION_J_PER_KG,
+    LAMBDA_ICE,
+    LAMBDA_OTHER_FINE,
+    LAMBDA_QUARTZ,
+    LAMBDA_WATER,
+    RHO_MINERAL_KG_PER_M3,
+    RHO_WATER_KG_PER_M3,
+    STEFAN_BOLTZMANN_W_PER_M2_K4,
+    VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K,
+    VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K,
+)
 from .potential_evapotranspiration import get_canopy_radiation_attenuation
 from .snow_glaciers import calculate_snow_thermal_properties
 
@@ -14,7 +29,7 @@ from .snow_glaciers import calculate_snow_thermal_properties
 def get_heat_capacity_solid_fraction(
     bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     layer_thickness_m: np.ndarray[Shape, np.dtype[np.float32]],
-) -> np.ndarray[Shape, np.dtype[np.float32]]:
+) -> np.ndarray:
     """Calculate the heat capacity of the solid fraction of the soil layer [J/(m2·K)].
 
     This calculates the total heat capacity per unit area for the solid part of the soil layer.
@@ -26,106 +41,19 @@ def get_heat_capacity_solid_fraction(
     Returns:
         The areal heat capacity of the solid fraction [J/(m2·K)].
     """
-    # Constants for volumetric heat capacity [J/(m3·K)]
-    C_MINERAL = np.float32(2.13e6)
-
-    # Particle density of minerals [kg/m3]
-    RHO_MINERAL = np.float32(2650.0)
-
     # Calculate total volume fraction of solids from bulk density
-    # Convert bulk density from g/cm3 to kg/m3 (factor 1000)
-    phi_s = (bulk_density_kg_per_dm3 * 1000.0) / RHO_MINERAL
+    # Convert bulk density from kg/dm3 (= g/cm3) to kg/m3 (factor 1000)
+    phi_s = (bulk_density_kg_per_dm3 * np.float32(1000.0)) / RHO_MINERAL_KG_PER_M3
 
     # Calculate volumetric heat capacity [J/(m3·K)]
-    volumetric_heat_capacity_solid = phi_s * C_MINERAL
+    volumetric_heat_capacity_solid = phi_s * C_MINERAL_VOLUMETRIC_J_PER_M3_K
 
     # Calculate areal heat capacity [J/(m2·K)]
-    areal_heat_capacity = volumetric_heat_capacity_solid * layer_thickness_m
-
-    return areal_heat_capacity.astype(np.float32)
-
-
-@njit(cache=True)
-def get_apparent_heat_capacity_areal(
-    solid_heat_capacity_J_per_m2_K: np.ndarray,
-    volumetric_water_content: np.ndarray,
-    soil_layer_thickness_m: np.ndarray,
-    soil_temperature_C: np.ndarray,
-    topwater_m: np.float32 = np.float32(0.0),
-) -> np.ndarray:
-    """Calculate the total apparent heat capacity of soil layers.
-
-    Includes the solid matrix heat capacity, liquid/ice water phase heat capacity, and
-    the latent heat of fusion component distributed over a freezing range.
-    Also includes the heat capacity of standing water (topwater) for the first layer.
-
-    Args:
-        solid_heat_capacity_J_per_m2_K: Heat capacity of solid soil fraction [J/(m2·K)].
-        volumetric_water_content: Total water content (liquid + ice) [m3/m3].
-        soil_layer_thickness_m: Layer thickness [m].
-        soil_temperature_C: Soil temperature [C].
-        topwater_m: Standing water on top of the soil [m]. Added to top layer capacity.
-
-    Returns:
-        Apparent heat capacity [J/(m2·K)].
-    """
-    n_layers = len(solid_heat_capacity_J_per_m2_K)
-    apparent_heat_capacity = np.empty_like(solid_heat_capacity_J_per_m2_K)
-
-    # Constants
-    C_WATER = np.float32(4.18e6)  # J/(m3 K)
-    C_ICE = np.float32(1.9e6)  # J/(m3 K)
-    L_FUSION = np.float32(3.34e5)  # J/kg
-    RHO_WATER = np.float32(1000.0)  # kg/m3
-
-    # Latent heat per volume of water: L * rho_w [J/m3]
-    latent_heat_volumetric = L_FUSION * RHO_WATER
-
-    # Freezing range parameters (width of freezing window)
-    T_freeze = np.float32(0.0)
-    width = np.float32(0.5)  # K. Freezing occurs from 0 to -0.5 C ideally
-
-    for i in range(n_layers):
-        temp = soil_temperature_C[i]
-        theta = volumetric_water_content[i]
-        thickness = soil_layer_thickness_m[i]
-
-        water_depth_m = theta * thickness
-        if i == 0:
-            water_depth_m += topwater_m
-
-        # 1. Sensible Heat Capacity of Water/Ice component
-        c_water_part_vol = np.float32(0.0)
-
-        if temp >= T_freeze:
-            # Unfrozen
-            c_water_part_vol = C_WATER
-        elif temp <= (T_freeze - width):
-            # Frozen
-            c_water_part_vol = C_ICE
-        else:
-            # Transition - Linear interpolation of C
-            # normalized position in freezing range [0=frozen, 1=unfrozen]
-            frac_unfrozen = (temp - (T_freeze - width)) / width
-            c_water_part_vol = frac_unfrozen * C_WATER + (1.0 - frac_unfrozen) * C_ICE
-
-        # Areal heat capacity from water/ice mass
-        c_water_areal = c_water_part_vol * water_depth_m
-
-        # 2. Latent Heat Component (Apparent Heat Capacity)
-        # d(liquid_fraction)/dT contributions
-        # If in freezing range, energy goes into phase change.
-        c_latent_areal = np.float32(0.0)
-        if (temp < T_freeze) and (temp > (T_freeze - width)):
-            # Uniform distribution of latent heat over 'width'
-            # d(theta_liquid)/dT = theta / width => d(Depth)/dT = Depth / width
-            c_latent_areal = (latent_heat_volumetric / width) * water_depth_m
-
-        apparent_heat_capacity[i] = (
-            solid_heat_capacity_J_per_m2_K[i] + c_water_areal + c_latent_areal
-        )
-
-    return apparent_heat_capacity
+    # We allocate an explicitly-float32 output buffer so both Numba and static type
+    # checkers can unambiguously see the return dtype.
+    areal_heat_capacity = np.empty_like(layer_thickness_m, dtype=np.float32)
+    areal_heat_capacity[:] = volumetric_heat_capacity_solid * layer_thickness_m
+    return areal_heat_capacity
 
 
 @njit(cache=True, inline="always")
@@ -134,7 +62,7 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
     silt_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     clay_percentage: np.ndarray[Shape, np.dtype[np.float32]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
-    """Calculate the thermal conductivity of the solid fraction of soil [W/(m·K)].
+    r"""Calculate the thermal conductivity of the solid fraction of soil [W/(m·K)].
 
     Based on: https://apps.dtic.mil/sti/tr/pdf/ADA044002.pdf
 
@@ -155,11 +83,6 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
     Returns:
         Thermal conductivity of the solid fraction [W/(m·K)].
     """
-    # Quartz thermal conductivity [W/(m K)]
-    # Johansen (1975) value for quartz
-    LAMBDA_QUARTZ = np.float32(7.7)
-    LAMBDA_OTHER_FINE = np.float32(2.0)
-
     # Estimate from sand if not provided (ensuring it is bounded between 0 and 1)
     # Ensure it's bounded [0, 1]
     quartz_ratio = np.minimum(
@@ -177,13 +100,14 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
 
 
 @njit(cache=True, inline="always")
-def calculate_soil_thermal_conductivity(
-    thermal_conductivity_solid_W_per_m_K: np.ndarray,
-    porosity: np.ndarray,
-    degree_of_saturation: np.ndarray,
-    sand_percentage: np.ndarray,
-    soil_temperature_C: np.ndarray,
-) -> np.ndarray:
+def calculate_soil_thermal_conductivity_from_frozen_fraction(
+    thermal_conductivity_solid_W_per_m_K: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
+    porosity: np.ndarray[Shape, np.dtype[np.float32]],
+    degree_of_saturation: np.ndarray[Shape, np.dtype[np.float32]],
+    sand_percentage: np.ndarray[Shape, np.dtype[np.float32]],
+    frozen_fraction: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculate the total soil thermal conductivity [W/(m·K)].
 
     Based on the Johansen (1975) method as described in Farouki (1981).
@@ -193,42 +117,30 @@ def calculate_soil_thermal_conductivity(
 
     Args:
         thermal_conductivity_solid_W_per_m_K: Thermal conductivity of the solid fraction [W/(m·K)].
+        bulk_density_kg_per_dm3: Soil bulk density [kg/dm3].
         porosity: Soil porosity [-].
         degree_of_saturation: Degree of saturation [0-1].
         sand_percentage: Percentage of sand [0-100].
-        soil_temperature_C: Soil temperature [C].
+        frozen_fraction: Frozen water mass fraction (0-1).
 
     Returns:
         Total soil thermal conductivity [W/(m·K)].
     """
-    # Physical constants [W/(m K)]
-    LAMBDA_WATER = np.float32(0.57)
-    LAMBDA_ICE = np.float32(2.2)
-    RHO_MINERAL = np.float32(2650.0)  # [kg/m3]
-
-    # Use input degree of saturation directly
     Sr = np.maximum(np.float32(1e-5), np.minimum(degree_of_saturation, np.float32(1.0)))
 
-    # Calculate bulk density from porosity (assuming mineral density)
-    # phi = 1 - (rho_bulk / rho_mineral) => rho_bulk = rho_mineral * (1 - phi)
-    rho_bulk = RHO_MINERAL * (np.float32(1.0) - porosity)
+    # Convert bulk density from kg/dm3 to kg/m3 for calculation
+    rho_bulk = bulk_density_kg_per_dm3 * np.float32(1000.0)
 
-    # 1. Dry thermal conductivity (lambda_dry) [W/(m K)]
     # Johansen (1975) semi-empirical formula for dry mineral soils
     lambda_dry = (np.float32(0.135) * rho_bulk + np.float32(64.7)) / (
-        RHO_MINERAL - np.float32(0.947) * rho_bulk
+        RHO_MINERAL_KG_PER_M3 - np.float32(0.947) * rho_bulk
     )
 
-    # 2. Saturated thermal conductivity (lambda_sat) [W/(m K)]
-    # Use frozen fraction for smooth transition between states
-    FREEZING_TRANSITION_RANGE = np.float32(1.0)
-    T_FREEZE = np.float32(0.0)
-
-    # frozen_fraction: 0 at 0C, 1 at (0 - range)
-    frozen_fraction = (T_FREEZE - soil_temperature_C) / FREEZING_TRANSITION_RANGE
-    frozen_fraction = np.maximum(
-        np.float32(0.0), np.minimum(np.float32(1.0), frozen_fraction)
-    )
+    # Clip into [0, 1]. We avoid `out=` here because Numba does not support ufunc
+    # keyword arguments in nopython mode.
+    frozen_fraction_clipped = np.minimum(
+        np.maximum(frozen_fraction, np.float32(0.0)), np.float32(1.0)
+    ).astype(np.float32)
 
     # We use a geometric mean for the saturated state components
     lambda_sat_unfrozen = (
@@ -238,36 +150,40 @@ def calculate_soil_thermal_conductivity(
         thermal_conductivity_solid_W_per_m_K ** (np.float32(1.0) - porosity)
     ) * (LAMBDA_ICE**porosity)
 
-    # 3. Kersten number (Ke)
-    # Interpolation factor [0, 1]
+    # Kersten number (Ke) is an empirical weighting factor [0-1] that interpolates
+    # between dry and saturated thermal conductivities based on moisture content.
 
-    # Unfrozen:
+    # Calculate Ke for unfrozen conditions
     log10_sr = np.log10(Sr)
 
-    # Coarse soils (sand content > 40%)
+    # Coarse soils (sand content > 40%) use a different moisture sensitivity
     Ke_unfrozen_coarse = np.float32(0.7) * log10_sr + np.float32(1.0)
-    # Fine soils
+    # Fine soils use a steeper moisture sensitivity
     Ke_unfrozen_fine = log10_sr + np.float32(1.0)
 
     is_coarse = sand_percentage > np.float32(40.0)
     Ke_unfrozen = np.where(is_coarse, Ke_unfrozen_coarse, Ke_unfrozen_fine)
     Ke_unfrozen = np.maximum(Ke_unfrozen, np.float32(0.0))
 
-    # Frozen:
+    # Calculate Ke for frozen conditions
+    # For frozen soil, the relationship is typically assumed linear with saturation
     Ke_frozen = Sr
 
-    # Linear interpolation of results based on frozen fraction
-    lambda_sat = (lambda_sat_frozen**frozen_fraction) * (
-        lambda_sat_unfrozen ** (np.float32(1.0) - frozen_fraction)
+    # Determine the saturated thermal conductivity and Kersten number
+    # We use a geometric mean for the saturated state components and linear
+    # interpolation for the Kersten number based on the frozen fraction.
+    lambda_sat = (lambda_sat_frozen**frozen_fraction_clipped) * (
+        lambda_sat_unfrozen ** (np.float32(1.0) - frozen_fraction_clipped)
     )
-    Ke = (frozen_fraction * Ke_frozen) + (
-        (np.float32(1.0) - frozen_fraction) * Ke_unfrozen
+    Ke = (frozen_fraction_clipped * Ke_frozen) + (
+        (np.float32(1.0) - frozen_fraction_clipped) * Ke_unfrozen
     )
 
-    # Resulting thermal conductivity
+    # Combine into total thermal conductivity [W/(m·K)]
+    # lambda = Ke * lambda_sat + (1 - Ke) * lambda_dry
     lambda_total = Ke * (lambda_sat - lambda_dry) + lambda_dry
 
-    return lambda_total.astype(np.float32)
+    return lambda_total
 
 
 @njit(cache=True, inline="always")
@@ -300,9 +216,6 @@ def calculate_net_radiation_flux(
             - Net radiation flux [W/m2]. Positive = warming (incoming > outgoing).
             - Derivative of outgoing radiation flux [W/m2/K] (Conductance equivalent).
     """
-    # Constants
-    STEFAN_BOLTZMANN_CONSTANT = np.float32(5.670374419e-8)
-
     # Calculate Fluxes
     temperature_K = soil_temperature_C + np.float32(273.15)
 
@@ -322,7 +235,7 @@ def calculate_net_radiation_flux(
     # Emissions from canopy
     # We assume canopy temperature ~= air temperature
     canopy_longwave_W = (
-        STEFAN_BOLTZMANN_CONSTANT
+        STEFAN_BOLTZMANN_W_PER_M2_K4
         * (air_temperature_K**4)
         * (np.float32(1.0) - attenuation_factor)
     )
@@ -332,7 +245,7 @@ def calculate_net_radiation_flux(
     absorbed_longwave_W = soil_emissivity * incoming_longwave_at_soil_surface_W
 
     incoming_W = absorbed_shortwave_W + absorbed_longwave_W
-    outgoing_W = soil_emissivity * STEFAN_BOLTZMANN_CONSTANT * (temperature_K**4)
+    outgoing_W = soil_emissivity * STEFAN_BOLTZMANN_W_PER_M2_K4 * (temperature_K**4)
 
     net_flux_W = incoming_W - outgoing_W
 
@@ -341,7 +254,7 @@ def calculate_net_radiation_flux(
     conductance_W_per_m2_K = (
         np.float32(4.0)
         * soil_emissivity
-        * STEFAN_BOLTZMANN_CONSTANT
+        * STEFAN_BOLTZMANN_W_PER_M2_K4
         * (temperature_K**3)
     )
 
@@ -421,180 +334,303 @@ def calculate_sensible_heat_flux(
 
 
 @njit(cache=True, inline="always")
+def get_temperature_and_frozen_fraction_from_enthalpy(
+    enthalpy_J_per_m2: np.ndarray[Shape, np.dtype[np.float32]],
+    solid_heat_capacity_J_per_m2_K: np.ndarray[Shape, np.dtype[np.float32]],
+    water_content_m: np.ndarray[Shape, np.dtype[np.float32]],
+    topwater_m: np.float32 | np.ndarray[Shape, np.dtype[np.float32]] = np.float32(0.0),
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert enthalpy to temperature and frozen fraction.
+
+    This applies the sharp-freezing enthalpy formulation (0°C plateau) and
+    returns temperature and frozen fraction.
+
+    Args:
+        enthalpy_J_per_m2: Layer enthalpy relative to 0°C liquid water (J/m2).
+        solid_heat_capacity_J_per_m2_K: Areal heat capacity of the solid soil fraction (J/m2/K).
+        water_content_m: Total soil water storage (liquid + ice) (m).
+        topwater_m: Standing water depth included in the layer thermal mass (m). May be a scalar
+            (applied to all elements) or an array broadcastable to `water_content_m`.
+
+    Returns:
+        Tuple of:
+            - Temperature (C).
+            - Frozen fraction of water mass [0-1].
+    """
+    water_depth_m = water_content_m + topwater_m
+
+    temperature_C: np.ndarray = np.empty_like(enthalpy_J_per_m2, dtype=np.float32)
+    frozen_fraction: np.ndarray = np.empty_like(enthalpy_J_per_m2, dtype=np.float32)
+
+    enthalpy_flat = enthalpy_J_per_m2.ravel()
+    solid_heat_capacity_flat = solid_heat_capacity_J_per_m2_K.ravel()
+    water_depth_flat = water_depth_m.ravel()
+    temperature_flat = temperature_C.ravel()
+    frozen_fraction_flat = frozen_fraction.ravel()
+
+    for flat_idx in range(enthalpy_flat.size):
+        water_depth_cell_m = water_depth_flat[flat_idx]
+
+        latent_heat_areal_J_per_m2 = (
+            water_depth_cell_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+        )
+        heat_capacity_liquid_J_per_m2_K = solid_heat_capacity_flat[flat_idx] + (
+            water_depth_cell_m * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
+        )
+        heat_capacity_frozen_J_per_m2_K = solid_heat_capacity_flat[flat_idx] + (
+            water_depth_cell_m * VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K
+        )
+
+        temperature_cell_C, frozen_fraction_cell, _, _ = get_phase_state(
+            enthalpy_J_per_m2=enthalpy_flat[flat_idx],
+            latent_heat_areal_J_per_m2=latent_heat_areal_J_per_m2,
+            heat_capacity_liquid_J_per_m2_K=heat_capacity_liquid_J_per_m2_K,
+            heat_capacity_frozen_J_per_m2_K=heat_capacity_frozen_J_per_m2_K,
+        )
+        temperature_flat[flat_idx] = temperature_cell_C
+        frozen_fraction_flat[flat_idx] = frozen_fraction_cell
+
+    return temperature_C, frozen_fraction
+
+
+@njit(cache=True, inline="always")
+def get_temperature_from_enthalpy(
+    enthalpy_J_per_m2: np.ndarray[Shape, np.dtype[np.float32]],
+    solid_heat_capacity_J_per_m2_K: np.ndarray[Shape, np.dtype[np.float32]],
+    water_content_m: np.ndarray[Shape, np.dtype[np.float32]],
+    topwater_m: np.float32 | np.ndarray[Shape, np.dtype[np.float32]] = np.float32(0.0),
+) -> np.float32 | np.ndarray[Shape, np.dtype[np.float32]]:
+    """Calculate temperature from enthalpy.
+
+    Args:
+        enthalpy_J_per_m2: Layer enthalpy relative to 0°C liquid water (J/m2).
+        solid_heat_capacity_J_per_m2_K: Areal heat capacity of the solid soil fraction (J/m2/K).
+        water_content_m: Total soil water storage (liquid + ice) (m).
+        topwater_m: Standing water depth included in the layer thermal mass (m).
+
+    Returns:
+        Temperature (C).
+    """
+    temperature_C, _ = get_temperature_and_frozen_fraction_from_enthalpy(
+        enthalpy_J_per_m2=enthalpy_J_per_m2,
+        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
+        water_content_m=water_content_m,
+        topwater_m=topwater_m,
+    )
+    return temperature_C
+
+
+@njit(cache=True, inline="always")
+def get_frozen_fraction_from_enthalpy(
+    enthalpy_J_per_m2: np.ndarray[Shape, np.dtype[np.float32]],
+    solid_heat_capacity_J_per_m2_K: np.ndarray[Shape, np.dtype[np.float32]],
+    water_content_m: np.ndarray[Shape, np.dtype[np.float32]],
+    topwater_m: np.float32 | np.ndarray[Shape, np.dtype[np.float32]] = np.float32(0.0),
+) -> np.float32 | np.ndarray[Shape, np.dtype[np.float32]]:
+    """Return frozen fraction [0-1] from enthalpy.
+
+    Args:
+        enthalpy_J_per_m2: Layer enthalpy relative to 0°C liquid water (J/m2).
+        solid_heat_capacity_J_per_m2_K: Areal heat capacity of the solid soil fraction (J/m2/K).
+        water_content_m: Total soil water storage (liquid + ice) (m).
+        topwater_m: Standing water depth included in the layer thermal mass (m).
+
+    Returns:
+        Frozen fraction of water mass [0-1].
+    """
+    _, frozen_fraction = get_temperature_and_frozen_fraction_from_enthalpy(
+        enthalpy_J_per_m2=enthalpy_J_per_m2,
+        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
+        water_content_m=water_content_m,
+        topwater_m=topwater_m,
+    )
+    return frozen_fraction
+
+
+@njit(cache=True, inline="always")
+def get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+    enthalpy_J_per_m2: np.float32,
+    solid_heat_capacity_J_per_m2_K: np.float32,
+    water_content_m: np.float32,
+    topwater_m: np.float32 = np.float32(0.0),
+) -> tuple[np.float32, np.float32]:
+    """Diagnose temperature and frozen fraction from enthalpy for scalar inputs.
+
+    Notes:
+        This is a scalar-only helper intended for hot loops where both temperature
+        and frozen fraction are needed (e.g., to limit liquid-water fluxes while
+        advecting sensible heat).
+
+        The enthalpy reference is 0°C liquid water, consistent with the enthalpy
+        column solver.
+
+    Args:
+        enthalpy_J_per_m2: Layer enthalpy relative to 0°C liquid water (J/m2).
+        solid_heat_capacity_J_per_m2_K: Areal heat capacity of the solid soil fraction (J/m2/K).
+        water_content_m: Total soil water storage (liquid + ice) (m).
+        topwater_m: Standing water depth included in the layer thermal mass (m).
+
+    Returns:
+        Tuple of:
+            - temperature_C: Layer temperature (C).
+            - frozen_fraction: Frozen fraction of water mass (0-1).
+    """
+    water_depth_m = water_content_m + topwater_m
+    latent_heat_areal_J_per_m2 = water_depth_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+
+    heat_capacity_liquid_J_per_m2_K = (
+        solid_heat_capacity_J_per_m2_K
+        + water_depth_m * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
+    )
+    heat_capacity_frozen_J_per_m2_K = (
+        solid_heat_capacity_J_per_m2_K
+        + water_depth_m * VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K
+    )
+
+    temperature_C, frozen_fraction, _, _ = get_phase_state(
+        enthalpy_J_per_m2=enthalpy_J_per_m2,
+        latent_heat_areal_J_per_m2=latent_heat_areal_J_per_m2,
+        heat_capacity_liquid_J_per_m2_K=heat_capacity_liquid_J_per_m2_K,
+        heat_capacity_frozen_J_per_m2_K=heat_capacity_frozen_J_per_m2_K,
+    )
+    return temperature_C, frozen_fraction
+
+
+@njit(cache=True, inline="always")
+def get_phase_state(
+    enthalpy_J_per_m2: np.float32,
+    latent_heat_areal_J_per_m2: np.float32,
+    heat_capacity_liquid_J_per_m2_K: np.float32,
+    heat_capacity_frozen_J_per_m2_K: np.float32,
+) -> tuple[np.float32, np.float32, np.float32, np.float32]:
+    """Diagnose temperature, frozen fraction, and linearization from enthalpy.
+
+    This function implements a sharp-freezing (0°C plateau) enthalpy-temperature
+    relation. It is used to diagnostically determine the thermal state of a soil layer
+    and to provide gradients for implicit nonlinear solvers where $T \approx \alpha H + \beta$.
+
+    Notes:
+        The enthalpy reference point is 0°C liquid water.
+        - $H > 0$: Fully liquid, $T = H / C_{liq}$
+        - $-L < H \leq 0$: Phase change (mushy zone), $T = 0$, $f_{ice} = -H / L$
+        - $H \leq -L$: Fully frozen, $T = (H + L) / C_{ice}$
+
+    Args:
+        enthalpy_J_per_m2: Layer enthalpy relative to 0°C liquid water (J/m2).
+        latent_heat_areal_J_per_m2: Areal latent heat of fusion for the layer water (J/m2).
+        heat_capacity_liquid_J_per_m2_K: Areal heat capacity in fully liquid regime (J/m2/K).
+        heat_capacity_frozen_J_per_m2_K: Areal heat capacity in fully frozen regime (J/m2/K).
+
+    Returns:
+        A tuple containing:
+            - temperature_C: Layer temperature (C).
+            - frozen_fraction: Frozen fraction of water mass (0-1).
+            - dT_dH: The derivative $\partial T/\partial H$ (K per (J/m2)).
+            - beta: Intercept for the linear approximation $T \approx (dT/dH) \cdot H + \beta$.
+    """
+    # Fully liquid
+    if enthalpy_J_per_m2 >= np.float32(0.0):
+        if heat_capacity_liquid_J_per_m2_K <= np.float32(0.0):
+            return np.float32(0.0), np.float32(0.0), np.float32(0.0), np.float32(0.0)
+        alpha = np.float32(1.0) / heat_capacity_liquid_J_per_m2_K
+        temperature_C = enthalpy_J_per_m2 * alpha
+        return temperature_C, np.float32(0.0), alpha, np.float32(0.0)
+
+    # Mushy zone (0°C plateau)
+    if enthalpy_J_per_m2 >= -latent_heat_areal_J_per_m2:
+        frozen_fraction = -enthalpy_J_per_m2 / (
+            latent_heat_areal_J_per_m2 + np.float32(1e-12)
+        )
+        frozen_fraction = np.minimum(
+            np.maximum(frozen_fraction, np.float32(0.0)), np.float32(1.0)
+        )
+        return np.float32(0.0), frozen_fraction, np.float32(0.0), np.float32(0.0)
+
+    # Fully frozen (below 0°C)
+    if heat_capacity_frozen_J_per_m2_K <= np.float32(0.0):
+        return np.float32(0.0), np.float32(1.0), np.float32(0.0), np.float32(0.0)
+
+    alpha = np.float32(1.0) / heat_capacity_frozen_J_per_m2_K
+    beta = latent_heat_areal_J_per_m2 * alpha
+    temperature_C = (enthalpy_J_per_m2 + latent_heat_areal_J_per_m2) * alpha
+    return temperature_C, np.float32(1.0), alpha, beta
+
+
+@njit(cache=True, inline="always")
 def apply_evaporative_cooling(
-    soil_temperature_top_layer_C: np.float32,
+    soil_enthalpy_top_layer_J_per_m2: np.float32,
     evaporation_m: np.float32,
-    soil_heat_capacity_J_per_m2_K: np.float32,
+    frozen_fraction_top_layer: np.float32,
 ) -> np.float32:
-    """Apply evaporative cooling to the top soil layer.
+    """Apply evaporative cooling to the top soil layer enthalpy.
 
     Sublimation and vaporization can only occur if there is water available.
     However, we assume evaporation has already been checked against available water.
 
     Args:
-        soil_temperature_top_layer_C: Temperature of the top layer (C).
+        soil_enthalpy_top_layer_J_per_m2: Top-layer enthalpy (J/m2).
         evaporation_m: Amount of evaporation (m).
-        soil_heat_capacity_J_per_m2_K: Heat capacity of the top layer (J/m2/K).
+        frozen_fraction_top_layer: Frozen fraction of the top-layer water mass [0-1].
 
     Returns:
-        New temperature of top soil layer (C).
+        Updated top-layer enthalpy (J/m2).
     """
-    latent_heat_vaporization_J_per_kg = np.float32(2.45e6)
-    latent_heat_sublimation_J_per_kg = np.float32(2.834e6)  # Vaporization + Fusion
-    density_water_kg_per_m3 = np.float32(1000.0)
-
-    # Freezing range parameters (consistent with get_apparent_heat_capacity_areal)
-    T_freeze = np.float32(0.0)
-    width = np.float32(0.5)  # K
-
-    # Determine fraction of liquid vs ice based on temperature
-    # 1.0 = All Liquid (Unfrozen), 0.0 = All Ice (Frozen)
-    if soil_temperature_top_layer_C >= T_freeze:
-        fraction_unfrozen = np.float32(1.0)
-    elif soil_temperature_top_layer_C <= (T_freeze - width):
-        fraction_unfrozen = np.float32(0.0)
-    else:
-        # Linear transition in freezing range
-        fraction_unfrozen = (soil_temperature_top_layer_C - (T_freeze - width)) / width
+    fraction_unfrozen = np.float32(1.0) - np.minimum(
+        np.maximum(frozen_fraction_top_layer, np.float32(0.0)), np.float32(1.0)
+    )
 
     # Weighted latent heat
     # If liquid: Vaporization energy
     # If ice: Sublimation energy (Fusion + Vaporization)
     latent_heat = (
-        fraction_unfrozen * latent_heat_vaporization_J_per_kg
-        + (np.float32(1.0) - fraction_unfrozen) * latent_heat_sublimation_J_per_kg
+        fraction_unfrozen * L_VAPORIZATION_J_PER_KG
+        + (np.float32(1.0) - fraction_unfrozen) * L_SUBLIMATION_J_PER_KG
     )
 
-    energy_loss_J_per_m2 = evaporation_m * density_water_kg_per_m3 * latent_heat
+    energy_loss_J_per_m2 = evaporation_m * RHO_WATER_KG_PER_M3 * latent_heat
 
-    # We approximate the temperature change by dividing by the current heat capacity.
-    # Strictly speaking, the heat capacity changes as mass is removed (evaporation),
-    # but is negligible for small time steps.
-    cooling_K = energy_loss_J_per_m2 / soil_heat_capacity_J_per_m2_K
-
-    return soil_temperature_top_layer_C - cooling_K
+    return soil_enthalpy_top_layer_J_per_m2 - energy_loss_J_per_m2
 
 
 @njit(cache=True, inline="always")
 def apply_rain_heat_advection(
-    soil_temperature_top_layer_C: np.float32,
+    soil_enthalpy_top_layer_J_per_m2: np.float32,
     infiltration_amount_m: np.float32,
     rain_temperature_C: np.float32,
-    soil_heat_capacity_J_per_m2_K: np.float32,
 ) -> np.float32:
-    """Apply advective heat transport from infiltrating rain to the top soil layer.
+    """Apply advective heat transport from infiltrating rain to top-layer enthalpy.
 
-    Heat is added/removed based on the temperature difference between rain (air temp) and soil.
-    Also considers latent heat of fusion if rain freezes upon contact with frozen soil.
-    Q = mass * cp * (T_rain - T_soil) + mass * L_fusion (if freezing)
+    Notes:
+        The infiltrating water enters as liquid water at `rain_temperature_C`.
+        This updates enthalpy conservatively:
+        $H_{new} = H_{old} + m c_w T_{rain}$.
 
     Args:
-        soil_temperature_top_layer_C: Temperature of the top layer (C).
-        infiltration_amount_m: Amount of infiltration (m).
-        rain_temperature_C: Temperature of the rain (C), assumed equal to air temperature.
-        soil_heat_capacity_J_per_m2_K: Heat capacity of the top layer (J/m2/K).
+        soil_enthalpy_top_layer_J_per_m2: Top-layer enthalpy (J/m2).
+        infiltration_amount_m: Infiltration added to the top layer (m).
+        rain_temperature_C: Rain temperature (C).
 
     Returns:
-        New temperature of top soil layer (C).
+        Updated top-layer enthalpy (J/m2).
     """
-    specific_heat_water_J_per_kg_K = np.float32(4186.0)
-    latent_heat_fusion_J_per_kg = np.float32(3.34e5)
-    density_water_kg_per_m3 = np.float32(1000.0)
-
-    # Calculate energy flux into the soil layer: Q_advection (J/m2)
-    # The water enters at T_rain and thermalizes to T_soil.
-
-    # Sensible heat content of the infiltrating water
-    heat_content_infiltration_J_per_m2 = (
+    enthalpy_added_J_per_m2: np.float32 = (
         infiltration_amount_m
-        * density_water_kg_per_m3
-        * specific_heat_water_J_per_kg_K
+        * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
         * rain_temperature_C
     )
-
-    # Mixing: T_new = (C_old * T_old + H_added) / (C_old + C_added)
-    # Note: T_old is in Celsius, so C_old * T_old is heat content relative to 0 C.
-
-    added_heat_capacity_J_per_m2_K = (
-        infiltration_amount_m * density_water_kg_per_m3 * specific_heat_water_J_per_kg_K
-    )
-
-    total_heat_capacity_J_per_m2_K = (
-        soil_heat_capacity_J_per_m2_K + added_heat_capacity_J_per_m2_K
-    )
-
-    new_temperature_C = (
-        (soil_heat_capacity_J_per_m2_K * soil_temperature_top_layer_C)
-        + heat_content_infiltration_J_per_m2
-    ) / total_heat_capacity_J_per_m2_K
-
-    return new_temperature_C
+    return soil_enthalpy_top_layer_J_per_m2 + enthalpy_added_J_per_m2
 
 
 @njit(cache=True, inline="always")
-def apply_soil_layer_heat_advection(
-    source_layer_temperature_C: np.float32,
-    sink_layer_temperature_C: np.float32,
-    water_flux_m: np.float32,
-    sink_heat_capacity_J_per_m2_K: np.float32,
-) -> np.float32:
-    """Apply advective heat transport from moving water between soil layers.
-
-    When water moves from the source layer (percolation or capillary rise), it carries energy with it.
-    This function modifies the sink layer temperature by mixing its existing heat content with
-    the incoming water's heat content.
-
-    The source layer has no net change in temperature due to the flux,
-    as the energy and heat capacity decrease proportionally.
-
-    The source layer temperature does not change due to leaving flux (mass and energy leave proportionally).
-
-    Formula: T_new = (C_old * T_old + C_added * T_source) / (C_old + C_added)
-    Where:
-      C_old   = sink_heat_capacity_J_per_m2_K
-      T_old   = sink_layer_temperature_C
-      C_added = added_heat_capacity_J_per_m2_K (water_flux_m * specific_heat_water)
-      T_source= source_layer_temperature_C
-
-    Args:
-        source_layer_temperature_C: Temperature of the source layer (C).
-        sink_layer_temperature_C: Temperature of the sink layer (C).
-        water_flux_m: Amount of water flux (percolation or capillary rise) (m).
-        sink_heat_capacity_J_per_m2_K: Heat capacity of the sink layer (J/m2/K).
-
-    Returns:
-        New temperature of the sink layer (C).
-    """
-    specific_heat_water_J_per_kg_K = np.float32(4186.0)
-    density_water_kg_per_m3 = np.float32(1000.0)
-
-    # Calculate the heat capacity added by the moving water
-    added_heat_capacity_J_per_m2_K = (
-        water_flux_m * density_water_kg_per_m3 * specific_heat_water_J_per_kg_K
-    )
-
-    total_sink_heat_capacity_J_per_m2_K = (
-        sink_heat_capacity_J_per_m2_K + added_heat_capacity_J_per_m2_K
-    )
-
-    new_sink_temperature_C = (
-        (sink_heat_capacity_J_per_m2_K * sink_layer_temperature_C)
-        + (added_heat_capacity_J_per_m2_K * source_layer_temperature_C)
-    ) / total_sink_heat_capacity_J_per_m2_K
-
-    return new_sink_temperature_C
-
-
-@njit(cache=True)
-def solve_soil_temperature_column(
-    soil_temperatures_C: np.ndarray,
+def solve_soil_enthalpy_column(
+    soil_enthalpies_J_per_m2: np.ndarray,
     layer_thicknesses_m: np.ndarray,
+    bulk_density_kg_per_dm3: np.ndarray,
     solid_heat_capacities_J_per_m2_K: np.ndarray,
     thermal_conductivity_solid_W_per_m_K: np.ndarray,
-    porosity: np.ndarray,
+    water_content_saturated_m: np.ndarray,
     sand_percentage: np.ndarray,
-    volumetric_water_content: np.ndarray,
-    degree_of_saturation: np.ndarray,
+    water_content_m: np.ndarray,
     shortwave_radiation_W_per_m2: np.float32,
     longwave_radiation_W_per_m2: np.float32,
     air_temperature_K: np.float32,
@@ -609,125 +645,189 @@ def solve_soil_temperature_column(
     snow_temperature_C: np.float32 = np.float32(0.0),
     topwater_m: np.float32 = np.float32(0.0),
 ) -> tuple[np.ndarray, np.float32, np.ndarray]:
-    """Solve the soil temperature profile using a fully implicit method with non-linear surface boundary and phase change.
+    """Solve the soil enthalpy profile with an implicit scheme.
 
-    This function updates the soil temperature profile by solving the 1D heat diffusion equation.
-    The surface boundary condition is a non-linear energy balance (radiation + sensible heat).
-    Latent heat of fusion is included via the apparent heat capacity method.
-    Thermodynamic parameters (thermal conductivity and apparent capacity) are re-evaluated
-    in each iteration based on the current temperature guess.
+    The prognostic state is enthalpy H (J/m2) per layer. Temperature and frozen fraction
+    are derived diagnostically each nonlinear iteration using a sharp-freezing enthalpy
+    formulation (0°C plateau).
+
+    Notes:
+        The diffusion term depends on temperature gradients, so we linearize temperature
+        w.r.t. enthalpy each iteration using $T \approx \alpha H + \beta$ where
+        $\alpha = \partial T/\partial H$.
+
+        For performance and robustness, the soil thermal conductivity is held fixed
+        over the timestep. It is computed once from the start-of-timestep frozen
+        fraction and then reused for all nonlinear iterations.
 
     Args:
-        soil_temperatures_C: Current soil temperatures for each layer [C].
-        layer_thicknesses_m: Thickness of each soil layer [m].
-        solid_heat_capacities_J_per_m2_K: Sensible areal heat capacity of the SOLID fraction for each layer [J/m2/K].
-        thermal_conductivity_solid_W_per_m_K: Solid fraction conductivity [W/m-K].
-        porosity: Soil porosity [-].
-        sand_percentage: Sand percentage [0-100].
-        volumetric_water_content: Volumetric water content [m3/m3].
-        degree_of_saturation: Degree of saturation [0-1].
-        shortwave_radiation_W_per_m2: Incoming shortwave radiation [W/m2].
-        longwave_radiation_W_per_m2: Incoming longwave radiation [W/m2].
-        air_temperature_K: Air temperature [K].
-        wind_speed_10m_m_per_s: Wind speed at 10m [m/s].
-        surface_pressure_pa: Surface pressure [Pa].
-        timestep_seconds: Time step length [s].
-        deep_soil_temperature_C: Constant temperature at the bottom boundary [C].
-        soil_emissivity: Soil emissivity [-].
-        soil_albedo: Soil albedo [-].
-        leaf_area_index: Leaf Area Index [-].
-        snow_water_equivalent_m: Snow water equivalent [m]. If provided and > 0.001 m, the surface boundary is driven by conductive heat exchange with the snowpack.
-        snow_temperature_C: Snow temperature [C], used for sensible heat flux if snow is present.
-        topwater_m: Standing water on top of the soil [m].
+        soil_enthalpies_J_per_m2: Current layer enthalpies (J/m2).
+        layer_thicknesses_m: Layer thicknesses (m).
+        bulk_density_kg_per_dm3: Soil bulk density (kg/dm3).
+        solid_heat_capacities_J_per_m2_K: Areal heat capacity of the solid fraction (J/m2/K).
+        thermal_conductivity_solid_W_per_m_K: Conductivity of solid fraction (W/m/K).
+        water_content_saturated_m: Saturated water storage (m).
+        sand_percentage: Sand fraction (0-100).
+        water_content_m: Layer water storage (m).
+        shortwave_radiation_W_per_m2: Incoming shortwave radiation (W/m2).
+        longwave_radiation_W_per_m2: Incoming longwave radiation (W/m2).
+        air_temperature_K: Air temperature (K).
+        wind_speed_10m_m_per_s: Wind speed at 10m (m/s).
+        surface_pressure_pa: Surface pressure (Pa).
+        timestep_seconds: Timestep length (s).
+        deep_soil_temperature_C: Bottom boundary temperature (C).
+        soil_emissivity: Soil emissivity (-).
+        soil_albedo: Soil albedo (-).
+        leaf_area_index: Leaf area index (-).
+        snow_water_equivalent_m: Snow water equivalent (m).
+        snow_temperature_C: Snow temperature (C).
+        topwater_m: Standing water depth (m).
 
     Returns:
         Tuple of:
-            - Updated soil temperatures for each layer [C].
-            - Soil heat flux [W/m2]. Positive = flux into the soil.
-            - Final apparent heat capacities for each layer [J/m2/K].
+            - Updated enthalpies (J/m2).
+            - Soil heat flux (W/m2).
+            - Frozen fractions (0-1).
     """
-    n_soil_layers = len(soil_temperatures_C)
-    temperatures_at_start_of_timestep_C = soil_temperatures_C.copy()
-    # Initial guess for the implicit solution at current iteration k=0
-    temperatures_current_iteration_C = soil_temperatures_C.copy()
+    n_soil_layers = len(soil_enthalpies_J_per_m2)
 
-    # Newton-Raphson iteration parameters
-    MAX_ITERATIONS = 15  # Increased slightly to ensure convergence with phase change
-    TOLERANCE_C = np.float32(0.01)
+    # Keep the start-of-timestep state without copying; we never mutate the input array.
+    enthalpies_at_start_of_timestep = soil_enthalpies_J_per_m2
+    enthalpies_current_iteration = soil_enthalpies_J_per_m2.copy()
 
-    # Matrix arrays for the Tridiagonal Matrix Algorithm (TDMA)
-    # The system is structured as: a_i * T_{i-1} + b_i * T_i + c_i * T_{i+1} = d_i
-    lower_diagonal_a = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
-    main_diagonal_b = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
-    upper_diagonal_c = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
-    rhs_vector_d = np.zeros(n_soil_layers, dtype=soil_temperatures_C.dtype)
+    dT_dH_current_iteration = np.zeros_like(soil_enthalpies_J_per_m2)
+    beta_current_iteration = np.zeros_like(soil_enthalpies_J_per_m2)
 
-    # Store fluxes to return G at the end
+    lower_diagonal_a = np.zeros(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
+    main_diagonal_b = np.zeros(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
+    upper_diagonal_c = np.zeros(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
+    rhs_vector_d = np.zeros(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
+
+    # Work arrays for allocation-free TDMA and iteration bookkeeping.
+    tdma_c_prime = np.empty(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
+    tdma_d_prime = np.empty(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
+    enthalpies_new_iteration = np.empty_like(soil_enthalpies_J_per_m2)
+    thermal_conductances_between_layer_centers_W_per_m2_K = np.empty(
+        n_soil_layers - 1, dtype=soil_enthalpies_J_per_m2.dtype
+    )
+
+    # Freeze thermal conductivity during the timestep:
+    # compute it once from the start-of-timestep frozen fraction and reuse.
+    frozen_fraction_for_conductivity = np.empty_like(soil_enthalpies_J_per_m2)
+
+    # Precompute per-layer thermodynamic constants used in the scalar enthalpy diagnostics.
+    #
+    # These depend only on (water content, layer thickness, topwater) which we treat as fixed
+    # over this implicit solve. Precomputing once avoids recomputing them for every nonlinear
+    # iteration and layer.
+    latent_heat_areal_J_per_m2_per_layer = np.empty_like(soil_enthalpies_J_per_m2)
+    heat_capacity_liquid_J_per_m2_K_per_layer = np.empty_like(soil_enthalpies_J_per_m2)
+    heat_capacity_frozen_J_per_m2_K_per_layer = np.empty_like(soil_enthalpies_J_per_m2)
+
+    for layer_idx in range(n_soil_layers):
+        topwater_layer_m = topwater_m if layer_idx == 0 else np.float32(0.0)
+        water_depth_m = water_content_m[layer_idx] + topwater_layer_m
+        latent_heat_areal_J_per_m2 = (
+            water_depth_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+        )
+        heat_capacity_liquid_J_per_m2_K = (
+            solid_heat_capacities_J_per_m2_K[layer_idx]
+            + water_depth_m * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
+        )
+        heat_capacity_frozen_J_per_m2_K = (
+            solid_heat_capacities_J_per_m2_K[layer_idx]
+            + water_depth_m * VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K
+        )
+
+        latent_heat_areal_J_per_m2_per_layer[layer_idx] = latent_heat_areal_J_per_m2
+        heat_capacity_liquid_J_per_m2_K_per_layer[layer_idx] = (
+            heat_capacity_liquid_J_per_m2_K
+        )
+        heat_capacity_frozen_J_per_m2_K_per_layer[layer_idx] = (
+            heat_capacity_frozen_J_per_m2_K
+        )
+
+        _, frozen_fraction, _, _ = get_phase_state(
+            enthalpy_J_per_m2=enthalpies_at_start_of_timestep[layer_idx],
+            latent_heat_areal_J_per_m2=latent_heat_areal_J_per_m2,
+            heat_capacity_liquid_J_per_m2_K=heat_capacity_liquid_J_per_m2_K,
+            heat_capacity_frozen_J_per_m2_K=heat_capacity_frozen_J_per_m2_K,
+        )
+        frozen_fraction_for_conductivity[layer_idx] = frozen_fraction
+
+    # Thermal conductivity needs porosity
+    porosity_for_conductivity = water_content_saturated_m / layer_thicknesses_m
+
+    # Compute diagnostic volumetric terms once for thermal conductivity
+    degree_of_saturation = water_content_m / water_content_saturated_m
+
+    thermal_conductivities_fixed_W_per_m_K = (
+        calculate_soil_thermal_conductivity_from_frozen_fraction(
+            thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K,
+            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+            porosity=porosity_for_conductivity,
+            degree_of_saturation=degree_of_saturation,
+            sand_percentage=sand_percentage,
+            frozen_fraction=frozen_fraction_for_conductivity,
+        )
+    )
+
+    for layer_idx in range(n_soil_layers - 1):
+        resistance_upper_half_layer = (
+            np.float32(0.5) * layer_thicknesses_m[layer_idx]
+        ) / thermal_conductivities_fixed_W_per_m_K[layer_idx]
+        resistance_lower_half_layer = (
+            np.float32(0.5) * layer_thicknesses_m[layer_idx + 1]
+        ) / thermal_conductivities_fixed_W_per_m_K[layer_idx + 1]
+        thermal_conductances_between_layer_centers_W_per_m2_K[layer_idx] = np.float32(
+            1.0
+        ) / (resistance_upper_half_layer + resistance_lower_half_layer)
+
+    MAX_ITERATIONS = 15
+    # Convergence tolerance in enthalpy.
+    # Rough scaling: an areal heat capacity of ~1e6 J/m2/K means that a 0.01 K
+    # change in temperature corresponds to ~1e4 J/m2.
+    # We use an enthalpy-based criterion because the sharp-freezing (0°C plateau)
+    # formulation has dT/dH = 0 in the mushy zone.
+    TOLERANCE_ENTHALPY_J_PER_M2 = np.float32(1.0e4)
+
     final_net_radiation_flux_W_per_m2 = np.float32(0.0)
     final_sensible_heat_flux_W_per_m2 = np.float32(0.0)
 
-    # Store capacities to return at the end
-    current_apparent_heat_capacities_J_per_m2_K = np.zeros_like(
-        solid_heat_capacities_J_per_m2_K
-    )
+    inv_dt = np.float32(1.0) / timestep_seconds
 
-    for _ in range(MAX_ITERATIONS):
-        # Update thermodynamic parameters based on current temperature guess
-        current_thermal_conductivities_W_per_m_K = calculate_soil_thermal_conductivity(
-            thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K,
-            porosity=porosity,
-            degree_of_saturation=degree_of_saturation,
-            sand_percentage=sand_percentage,
-            soil_temperature_C=temperatures_current_iteration_C,
-        )
-
-        current_apparent_heat_capacities_J_per_m2_K = get_apparent_heat_capacity_areal(
-            solid_heat_capacity_J_per_m2_K=solid_heat_capacities_J_per_m2_K,
-            volumetric_water_content=volumetric_water_content,
-            soil_layer_thickness_m=layer_thicknesses_m,
-            soil_temperature_C=temperatures_current_iteration_C,
-            topwater_m=topwater_m,
-        )
-
-        # Conductance K is the thermal coupling between centers of adjacent layers [W/m2/K].
-        # It is derived from the thermal resistance of the two half-layers.
-        thermal_conductances_between_layer_centers_W_per_m2_K = np.zeros(
-            n_soil_layers - 1, dtype=soil_temperatures_C.dtype
-        )
-        for i in range(n_soil_layers - 1):
-            resistance_upper_half_layer = (
-                soil_temperatures_C.dtype.type(0.5) * layer_thicknesses_m[i]
-            ) / current_thermal_conductivities_W_per_m_K[i]
-            resistance_lower_half_layer = (
-                soil_temperatures_C.dtype.type(0.5) * layer_thicknesses_m[i + 1]
-            ) / current_thermal_conductivities_W_per_m_K[i + 1]
-
-            thermal_conductances_between_layer_centers_W_per_m2_K[i] = (
-                soil_temperatures_C.dtype.type(1.0)
-                / (resistance_upper_half_layer + resistance_lower_half_layer)
+    for iteration_index in range(MAX_ITERATIONS):
+        # Derive temperature, frozen fraction, and linearization T ≈ alpha*H + beta
+        surface_temperature_guess_C = np.float32(np.nan)
+        for layer_idx in range(n_soil_layers):
+            temperature_C, _, dT_dH, beta = get_phase_state(
+                enthalpy_J_per_m2=enthalpies_current_iteration[layer_idx],
+                latent_heat_areal_J_per_m2=latent_heat_areal_J_per_m2_per_layer[
+                    layer_idx
+                ],
+                heat_capacity_liquid_J_per_m2_K=heat_capacity_liquid_J_per_m2_K_per_layer[
+                    layer_idx
+                ],
+                heat_capacity_frozen_J_per_m2_K=heat_capacity_frozen_J_per_m2_K_per_layer[
+                    layer_idx
+                ],
             )
+            dT_dH_current_iteration[layer_idx] = dT_dH
+            beta_current_iteration[layer_idx] = beta
 
-        # Linearize Surface Boundary Conditions
-        # Since radiation and sensible heat depend non-linearly on surface temperature (T0),
-        # we linearize around the current guess: Flux(T0_new) ≈ Flux(T0) + dFlux/dT * (T0_new - T0)
-        surface_temperature_guess_C = temperatures_current_iteration_C[0]
+            if layer_idx == 0:
+                surface_temperature_guess_C = temperature_C
 
-        if snow_water_equivalent_m > np.float32(0.001):
+        if snow_water_equivalent_m > np.float32(0.0):
             net_radiation_flux_W_per_m2 = np.float32(0.0)
             derivative_net_radiation_W_per_m2_K = np.float32(0.0)
 
-            # Use snow properties for conductive heat flux
             (
                 _,
                 snow_depth_m,
                 snow_thermal_conductivity_W_per_m_K,
             ) = calculate_snow_thermal_properties(snow_water_equivalent_m)
-
-            # We assume the snow temperature is representative for the middle of the snowpack
-            # Therefore the distance is half the snow depth
             conductance_distance_m = snow_depth_m * np.float32(0.5)
-
-            # Conductance = lambda / distance
             snow_conductance_W_per_m2_K = (
                 snow_thermal_conductivity_W_per_m_K / conductance_distance_m
             )
@@ -757,16 +857,9 @@ def solve_soil_temperature_column(
                 )
             )
 
-        # Store for final G calculation
         final_net_radiation_flux_W_per_m2 = net_radiation_flux_W_per_m2
         final_sensible_heat_flux_W_per_m2 = sensible_heat_flux_W_per_m2
 
-        # Combine fluxes and conductances for the linearized boundary condition.
-        # We use a first-order Taylor expansion: Flux(T_new) ≈ Flux(T_guess) + dFlux/dT * (T_new - T_guess)
-        # Rearranged as: Flux(T_new) ≈ [Flux(T_guess) - dFlux/dT * T_guess] + dFlux/dT * T_new
-        # Let G = -dFlux/dT (surface conductance).
-        # Flux(T_new) ≈ [Flux(T_guess) + G * T_guess] - G * T_new
-        # The term in brackets (flux_star) is independent of the unknown T_new in the current linear solve.
         flux_star_W_per_m2 = (
             net_radiation_flux_W_per_m2
             + sensible_heat_flux_W_per_m2
@@ -780,111 +873,143 @@ def solve_soil_temperature_column(
             derivative_net_radiation_W_per_m2_K + derivative_sensible_heat_W_per_m2_K
         )
 
-        # Build the system for the current iteration
-
-        # Top soil layer (i = 0) with surface boundary condition
-        heat_storage_capacity_normalized_0 = (
-            current_apparent_heat_capacities_J_per_m2_K[0] / timestep_seconds
-        )
+        # Build the tridiagonal system in H
+        # Top layer
         conductance_to_layer_below = (
             thermal_conductances_between_layer_centers_W_per_m2_K[0]
         )
+        alpha_0 = dT_dH_current_iteration[0]
+        beta_0 = beta_current_iteration[0]
+        alpha_1 = dT_dH_current_iteration[1]
+        beta_1 = beta_current_iteration[1]
 
-        # The lower diagonal represents the coupling to the node i-1.
-        # Since node 0 is the top layer, there is no node -1, so a[0] is not used.
-        lower_diagonal_a[0] = np.float32(
-            0.0
-        )  # No coupling to layer above because it's the surface
+        lower_diagonal_a[0] = np.float32(0.0)
         main_diagonal_b[0] = (
-            heat_storage_capacity_normalized_0
-            + surface_thermal_conductance_W_per_m2_K
-            + conductance_to_layer_below
-        )  # the self-influence includes the surface conductance and coupling to layer below
-        upper_diagonal_c[
-            0
-        ] = -conductance_to_layer_below  # The coupling to the layer below
+            inv_dt
+            + (surface_thermal_conductance_W_per_m2_K + conductance_to_layer_below)
+            * alpha_0
+        )
+        upper_diagonal_c[0] = -conductance_to_layer_below * alpha_1
         rhs_vector_d[0] = (
-            heat_storage_capacity_normalized_0 * temperatures_at_start_of_timestep_C[0]
+            inv_dt * enthalpies_at_start_of_timestep[0]
             + flux_star_W_per_m2
-        )  # this "unchangeable" part of the flux is treated as a source term in the linear system
-        # unchangeable only refers to the current iteration
+            - (surface_thermal_conductance_W_per_m2_K + conductance_to_layer_below)
+            * beta_0
+            + conductance_to_layer_below * beta_1
+        )
 
-        # intermediate soil layers
-        for i in range(1, n_soil_layers - 1):
-            heat_storage_capacity_normalized = (
-                current_apparent_heat_capacities_J_per_m2_K[i] / timestep_seconds
-            )
+        # Intermediate layers
+        for layer_idx in range(1, n_soil_layers - 1):
             conductance_to_layer_above = (
-                thermal_conductances_between_layer_centers_W_per_m2_K[i - 1]
+                thermal_conductances_between_layer_centers_W_per_m2_K[layer_idx - 1]
             )
             conductance_to_layer_below = (
-                thermal_conductances_between_layer_centers_W_per_m2_K[i]
+                thermal_conductances_between_layer_centers_W_per_m2_K[layer_idx]
             )
 
-            lower_diagonal_a[i] = -conductance_to_layer_above
-            main_diagonal_b[i] = (
-                heat_storage_capacity_normalized
-                + conductance_to_layer_above
-                + conductance_to_layer_below
+            alpha_im1 = dT_dH_current_iteration[layer_idx - 1]
+            beta_im1 = beta_current_iteration[layer_idx - 1]
+            alpha_i = dT_dH_current_iteration[layer_idx]
+            beta_i = beta_current_iteration[layer_idx]
+            alpha_ip1 = dT_dH_current_iteration[layer_idx + 1]
+            beta_ip1 = beta_current_iteration[layer_idx + 1]
+
+            lower_diagonal_a[layer_idx] = -conductance_to_layer_above * alpha_im1
+            main_diagonal_b[layer_idx] = (
+                inv_dt
+                + (conductance_to_layer_above + conductance_to_layer_below) * alpha_i
             )
-            upper_diagonal_c[i] = -conductance_to_layer_below
-            rhs_vector_d[i] = (
-                heat_storage_capacity_normalized
-                * temperatures_at_start_of_timestep_C[i]
+            upper_diagonal_c[layer_idx] = -conductance_to_layer_below * alpha_ip1
+            rhs_vector_d[layer_idx] = (
+                inv_dt * enthalpies_at_start_of_timestep[layer_idx]
+                - (conductance_to_layer_above + conductance_to_layer_below) * beta_i
+                + conductance_to_layer_above * beta_im1
+                + conductance_to_layer_below * beta_ip1
             )
 
-        # Bottom soil layer
-        # We apply a Dirichlet boundary condition at the bottom using the provided deep soil temperature.
+        # Bottom layer (Dirichlet)
         last_idx = n_soil_layers - 1
-        heat_storage_capacity_normalized_last = (
-            current_apparent_heat_capacities_J_per_m2_K[last_idx] / timestep_seconds
-        )
         conductance_to_layer_above = (
             thermal_conductances_between_layer_centers_W_per_m2_K[last_idx - 1]
         )
-
-        # Conductance from the center of the last layer to the boundary (distance = 0.5 * thickness)
         conductance_to_deep_soil_boundary_W_per_m2_K = (
-            current_thermal_conductivities_W_per_m_K[last_idx]
+            thermal_conductivities_fixed_W_per_m_K[last_idx]
             / (np.float32(0.5) * layer_thicknesses_m[last_idx])
         )
 
-        lower_diagonal_a[last_idx] = -conductance_to_layer_above
+        alpha_last = dT_dH_current_iteration[last_idx]
+        beta_last = beta_current_iteration[last_idx]
+        alpha_above = dT_dH_current_iteration[last_idx - 1]
+        beta_above = beta_current_iteration[last_idx - 1]
+
+        lower_diagonal_a[last_idx] = -conductance_to_layer_above * alpha_above
         main_diagonal_b[last_idx] = (
-            heat_storage_capacity_normalized_last
-            + conductance_to_layer_above
-            + conductance_to_deep_soil_boundary_W_per_m2_K
+            inv_dt
+            + (
+                conductance_to_layer_above
+                + conductance_to_deep_soil_boundary_W_per_m2_K
+            )
+            * alpha_last
         )
-        # The upper diagonal represents the coupling to the node i+1.
-        # Since last_idx is the bottom layer, there is no node n, so c[last_idx] is not used.
         upper_diagonal_c[last_idx] = np.float32(0.0)
         rhs_vector_d[last_idx] = (
-            heat_storage_capacity_normalized_last
-            * temperatures_at_start_of_timestep_C[last_idx]
+            inv_dt * enthalpies_at_start_of_timestep[last_idx]
             + conductance_to_deep_soil_boundary_W_per_m2_K * deep_soil_temperature_C
+            - (
+                conductance_to_layer_above
+                + conductance_to_deep_soil_boundary_W_per_m2_K
+            )
+            * beta_last
+            + conductance_to_layer_above * beta_above
         )
 
-        # Solve the Tridiagonal System
-        temperatures_new_iteration_C = tdma_solver(
-            lower_diagonal_a, main_diagonal_b, upper_diagonal_c, rhs_vector_d
+        tdma_solver(
+            lower_diagonal_a,
+            main_diagonal_b,
+            upper_diagonal_c,
+            rhs_vector_d,
+            enthalpies_new_iteration,
+            tdma_c_prime,
+            tdma_d_prime,
         )
 
-        # Check for Convergence
-        max_temperature_correction_C = np.max(
-            np.abs(temperatures_new_iteration_C - temperatures_current_iteration_C)
-        )
-        temperatures_current_iteration_C = temperatures_new_iteration_C
+        # Convergence check in enthalpy.
+        max_enthalpy_correction_J_per_m2 = np.float32(0.0)
+        for layer_idx in range(n_soil_layers):
+            enthalpy_correction_J_per_m2 = abs(
+                enthalpies_new_iteration[layer_idx]
+                - enthalpies_current_iteration[layer_idx]
+            )
+            if enthalpy_correction_J_per_m2 > max_enthalpy_correction_J_per_m2:
+                max_enthalpy_correction_J_per_m2 = enthalpy_correction_J_per_m2
 
-        # If the maximum correction is below the tolerance, we consider the solution converged.
-        if max_temperature_correction_C < TOLERANCE_C:
+        enthalpies_current_iteration[:] = enthalpies_new_iteration
+
+        # With frozen conductivity, the remaining nonlinearity is only in T(H).
+        # Converging in H is more robust than converging in T near 0 C.
+        if max_enthalpy_correction_J_per_m2 < TOLERANCE_ENTHALPY_J_PER_M2:
             break
 
     soil_heat_flux_W_per_m2 = (
         final_net_radiation_flux_W_per_m2 + final_sensible_heat_flux_W_per_m2
     )
 
+    frozen_fractions_final = np.empty_like(soil_enthalpies_J_per_m2)
+    for layer_idx in range(n_soil_layers):
+        _, frozen_fraction, _, _ = get_phase_state(
+            enthalpy_J_per_m2=enthalpies_current_iteration[layer_idx],
+            latent_heat_areal_J_per_m2=latent_heat_areal_J_per_m2_per_layer[layer_idx],
+            heat_capacity_liquid_J_per_m2_K=heat_capacity_liquid_J_per_m2_K_per_layer[
+                layer_idx
+            ],
+            heat_capacity_frozen_J_per_m2_K=heat_capacity_frozen_J_per_m2_K_per_layer[
+                layer_idx
+            ],
+        )
+        frozen_fractions_final[layer_idx] = frozen_fraction
+
     return (
-        temperatures_current_iteration_C,
+        enthalpies_current_iteration,
         soil_heat_flux_W_per_m2,
-        current_apparent_heat_capacities_J_per_m2_K,
+        frozen_fractions_final,
     )

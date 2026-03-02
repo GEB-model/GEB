@@ -5,20 +5,23 @@ import numpy as np
 from geb.workflows.algebra import tdma_solver
 
 
-def test_tdma_solver_identity() -> None:
+def test_tdma_solver_inplace_identity() -> None:
     """Test TDMA solver with an identity matrix."""
     n = 5
     a = np.zeros(n, dtype=np.float32)
     b = np.ones(n, dtype=np.float32)
     c = np.zeros(n, dtype=np.float32)
     d = np.array([1, 2, 3, 4, 5], dtype=np.float32)
+    x = np.zeros(n, dtype=np.float32)
+    cp = np.zeros(n, dtype=np.float32)
+    dp = np.zeros(n, dtype=np.float32)
 
-    x = tdma_solver(a, b, c, d)
+    tdma_solver(a, b, c, d, x, cp, dp)
 
     np.testing.assert_allclose(x, d, atol=1e-6)
 
 
-def test_tdma_solver_simple_system() -> None:
+def test_tdma_solver_inplace_simple_system() -> None:
     """Test TDMA solver with a known 3x3 system.
 
     Matrix:
@@ -33,14 +36,17 @@ def test_tdma_solver_simple_system() -> None:
     b = np.array([2, 2, 2], dtype=np.float32)
     c = np.array([-1, -1, 0], dtype=np.float32)
     d = np.array([1, 0, 1], dtype=np.float32)
+    x = np.zeros(n, dtype=np.float32)
+    cp = np.zeros(n, dtype=np.float32)
+    dp = np.zeros(n, dtype=np.float32)
 
-    x = tdma_solver(a, b, c, d)
+    tdma_solver(a, b, c, d, x, cp, dp)
 
     expected_x = np.ones(3, dtype=np.float32)
     np.testing.assert_allclose(x, expected_x, atol=1e-6)
 
 
-def test_tdma_solver_sum_of_rows() -> None:
+def test_tdma_solver_inplace_sum_of_rows() -> None:
     """Test TDMA solver using the sum of rows method.
 
     If x is a vector of ones, then Ax = d where d_i is the sum of row i.
@@ -64,7 +70,11 @@ def test_tdma_solver_sum_of_rows() -> None:
         d[i] = a[i] + b[i] + c[i]
     d[n - 1] = a[n - 1] + b[n - 1]
 
-    x = tdma_solver(a, b, c, d)
+    x = np.zeros(n, dtype=np.float32)
+    cp = np.zeros(n, dtype=np.float32)
+    dp = np.zeros(n, dtype=np.float32)
+
+    tdma_solver(a, b, c, d, x, cp, dp)
 
     expected_x = np.ones(n, dtype=np.float32)
     np.testing.assert_allclose(x, expected_x, atol=1e-5)

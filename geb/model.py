@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from time import time
 from types import TracebackType
-from typing import Any, overload
+from typing import Any, cast, overload
 
 import geopandas as gpd
 import numpy as np
@@ -559,7 +559,7 @@ class GEBModel(Module):
         assert n_timesteps > 0, "End time is before or identical to start time"
 
         # create var bucket
-        self.var: GEBModelVariables = self.store.create_bucket("var")
+        self.var = cast(GEBModelVariables, self.store.create_bucket("var"))
 
         # initialize the model
         self._initialize(
@@ -617,7 +617,9 @@ class GEBModel(Module):
         #     }
         # }
 
-        self.var: GEBModelVariables = self.store.create_bucket("var")
+        self.var: GEBModelVariables = cast(
+            GEBModelVariables, self.store.create_bucket("var")
+        )
 
         self.check_time_range()
         self._initialize(
