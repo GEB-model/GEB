@@ -38,6 +38,7 @@ from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.workflows.io import (
     read_params,
+    write_array,
     write_geom,
     write_params,
     write_table,
@@ -2876,7 +2877,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["array"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            zarr.save_array(fp_with_root, data, overwrite=True)  # ty:ignore[invalid-argument-type]
+            write_array(data, fp_with_root)
 
         self.array[name] = fp_with_root
 
