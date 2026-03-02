@@ -33,6 +33,7 @@
 - Consider soil heat flux in pennmann-monteith.
 - Turn of sensible and turbulent heat fluxes in case there is snow.
 - Include evaporative cooling and advective heat transport from rainfall. 
+- Add a daily soil enthalpy balance check.
 - Generalize river snapping.
 - Setup example preprocessing for retention basins.
 - Fix: Add iso codes for GDL regions where those are missing 
@@ -43,6 +44,8 @@
 - Fix: fix bug of countries that are not in trade regions (GLOBIOM) 
 - Raise error when progress.txt contains duplicates 
 - Speedup pr_gev calculation in build.
+- Simplify report function arguments.
+- Report water balance evaluation plot to evaluate folder.
 
 
 To support this version:
