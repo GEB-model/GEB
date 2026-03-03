@@ -941,7 +941,7 @@ class AsyncGriddedForcingReader:
         Returns:
             The preloaded data, or None if out of bounds.
         """
-        if end_index + n <= self.time_size:
+        if end_index + n < self.time_size:
             return await self.load_await(start_index + n, end_index + n)
         return None
 
