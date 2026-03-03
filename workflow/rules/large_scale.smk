@@ -53,18 +53,25 @@ def get_basin_area_km2(cluster_name):
 def get_resources(cluster_name):
     """Get memory allocation, SLURM partition, and partition arg based on basin size.
 
-    Memory strategy: MAXIMIZE memory allocation to prevent OOM crashes.
-    Job failures are extremely costly (hours of lost compute time), so we
-    allocate near-maximum memory for each partition.
+    Memory strategy: allocate safely below each partition's physical limit to
+    prevent OOM crashes. Job failures are extremely costly (hours of lost
+    compute time), so we are conservative about partition routing.
 
     Partition limits and our allocations:
-      - defq:    limit ~251 GB → allocate 240 GB
-      - ivm:     limit ~110 GB → allocate 105 GB
-      - ivm-fat: limit ~755 GB → allocate 400 GB
+      - defq:    limit ~251 GB → allocate 240 GB  (small basins <150k km2 only)
+      - ivm:     limit ~110 GB → allocate 105 GB  (tiny basins <100k km2 only)
+      - ivm-fat: limit ~755 GB → allocate 700 GB  (all basins >=150k km2)
 
-    Routing strategy: Minimize use of memory-constrained `ivm` partition.
-    Only the smallest basins (<100k km²) go to ivm; everything else goes
-    to defq or ivm-fat where we have ample memory headroom.
+    Routing strategy:
+      - Basins >=150k km2: always ivm-fat (700 GB). Memory usage does NOT scale
+        reliably with area — Europe_017 (282k km2) peaked at 267 GB while
+        Europe_005 (350k km2) only used 96 GB. Since defq nodes are limited to
+        ~251 GB physical RAM, any medium or large basin is at risk. The only
+        basins we have high confidence will stay within defq's limit are those
+        <150k km2, which all showed <70 GB peak RSS.
+      - Small basins (100k-150k km2): defq (240 GB), based on observed <70 GB.
+      - Tiny basins (<100k km2): prefer defq; only 1-in-3 go to ivm to spread
+        load while staying within ivm's tighter memory limit.
 
     Args:
         cluster_name: Name of the cluster directory (e.g. "Europe_007").
@@ -80,31 +87,29 @@ def get_resources(cluster_name):
     except ValueError:
         cluster_index = 0
 
-    # Partition assignment: minimize ivm usage due to its ~110 GB memory limit
-    if area_km2 >= 500000:
-        # Very large basins: alternate defq / ivm-fat for load balancing
-        partition_index = 0 if (cluster_index % 2 == 0) else 2
-    elif area_km2 >= 100000:
-        # Medium/large basins: alternate defq / ivm-fat (avoid ivm entirely)
-        partition_index = 0 if (cluster_index % 2 == 0) else 2
-    else:
-        # Small basins (<100k km²): can use ivm, but still prefer defq
-        # Only 1 in 3 small basins go to ivm to minimize risk
-        partition_index = 1 if (cluster_index % 3 == 0) else 0
-
-    # Allocate near-maximum memory for each partition
-    if partition_index == 0:
-        partition = "defq"
-        partition_arg = ""  # defq is the default queue
-        memory_mb = 300000  # 300 GB (limit ~251 GB)
-    elif partition_index == 1:
-        partition = "ivm"
-        partition_arg = "--partition=ivm"
-        memory_mb = 105000  # 105 GB (limit ~110 GB)
-    else:  # partition_index == 2
+    if area_km2 >= 150000:
+        # Medium and large basins: peak RSS is unpredictable from area alone
+        # (e.g. Europe_017 at 282k km2 peaked at 267 GB while Europe_005 at
+        # 350k km2 only used 96 GB). Route all to ivm-fat to be safe.
         partition = "ivm-fat"
         partition_arg = "--partition=ivm-fat"
-        memory_mb = 400000  # 400 GB (limit ~755 GB)
+        memory_mb = 700000  # 700 GB, safely below the ~755 GB node limit
+    elif area_km2 >= 100000:
+        # Small basins (100k-150k km2): all observed <70 GB, safely within defq.
+        partition = "defq"
+        partition_arg = ""
+        memory_mb = 240000  # 240 GB, safely below the ~251 GB node limit
+    else:
+        # Tiny basins (<100k km2): spread across defq and ivm to balance load.
+        # Only 1-in-3 go to the memory-constrained ivm partition.
+        if cluster_index % 3 == 0:
+            partition = "ivm"
+            partition_arg = "--partition=ivm"
+            memory_mb = 105000  # 105 GB, safely below the ~110 GB node limit
+        else:
+            partition = "defq"
+            partition_arg = ""
+            memory_mb = 240000  # 240 GB, safely below the ~251 GB node limit
 
     return memory_mb, partition, partition_arg
 
