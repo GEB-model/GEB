@@ -654,6 +654,13 @@ def workflow(
             sys.exit(1)
         cmd.extend(["-s", str(snakefile)])
 
+        # Snakemake uses a lock file to prevent multiple runs in the same directory.
+        # However, often when a process is interrupted (e.g., by Ctrl+C) the lock file is not removed,
+        # which prevents running the workflow again until the lock file is manually removed.
+        # However, we leave it to the user to ensure they don't run multiple workflows
+        # so we unlock any existing lock file at the start of the workflow.
+        subprocess.run(cmd + ["--unlock"], check=True)
+
         # Add workflow config file
         configfile = geb_dir / "workflow" / "config" / f"{workflow_name}.yml"
         if configfile.exists():
