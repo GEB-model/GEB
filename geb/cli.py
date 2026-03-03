@@ -1,5 +1,6 @@
 """Command line interface for GEB."""
 
+import datetime
 import functools
 import subprocess
 import sys
@@ -379,8 +380,16 @@ def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
                     # Try float
                     value = float(value)
                 except ValueError:
-                    # Keep as string
-                    pass
+                    try:
+                        # Try parsing as ISO format date (YYYY-MM-DD)
+                        value = datetime.date.fromisoformat(value)
+                    except ValueError:
+                        try:
+                            # Try parsing as ISO format datetime
+                            value = datetime.datetime.fromisoformat(value)
+                        except ValueError:
+                            # Keep as string
+                            pass
             params[key] = value
         else:
             click.echo(
@@ -659,7 +668,10 @@ def workflow(
         # which prevents running the workflow again until the lock file is manually removed.
         # However, we leave it to the user to ensure they don't run multiple workflows
         # so we unlock any existing lock file at the start of the workflow.
-        subprocess.run(cmd + ["--unlock"], check=True)
+        result = subprocess.run(cmd + ["--unlock"], check=True)
+        if result.returncode != 0:
+            click.echo("Error: Failed to unlock Snakemake lock file.", err=True)
+            sys.exit(result.returncode)
 
         # Add workflow config file
         configfile = geb_dir / "workflow" / "config" / f"{workflow_name}.yml"
