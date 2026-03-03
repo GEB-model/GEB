@@ -72,7 +72,7 @@ toolbox.register("mutate", tools.mutGaussian,
                  indpb=CALIBRATION_CONFIG["DEAP"]["gaussian_indpb"])
 toolbox.register("select", tools.selNSGA2)
 
-# Set random seed for reproducibility
+# Set seed for reproducibility
 random.seed(42)
 
 # Generate initial population (generation 0)
