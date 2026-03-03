@@ -96,7 +96,7 @@ calibration:
         min: 0.5
         max: 2
     reservoir_M_factor:
-        variable: agents.reservoir_operators.reservoir_M_factor
+        variable: agent_settings.reservoir_operators.reservoir_M_factor
         min: 0.05
         max: 0.4
     return_fraction:
