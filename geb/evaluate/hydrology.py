@@ -1161,13 +1161,6 @@ class Hydrology:
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )
 
-        GEB_discharge = read_zarr(
-            self.model.output_folder
-            / "report"
-            / run_name
-            / "hydrology.routing"
-            / "discharge_daily.zarr"
-        )
         print(f"Loaded discharge simulation from {run_name} run.")
 
         # check if run file exists, if not, raise an error
@@ -1195,19 +1188,6 @@ class Hydrology:
                 if isinstance(discharge_obs_series, pd.DataFrame):
                     discharge_obs_series.columns = ["Q"]
                 discharge_obs_series.name = "Q"
-
-                # check if there is data in the model time period
-                start_date = GEB_discharge.time.min().values
-                end_date = GEB_discharge.time.max().values
-                data_check = discharge_obs_series[
-                    (discharge_obs_series.index >= start_date)
-                    & (discharge_obs_series.index <= end_date)
-                ].dropna()  # filter the dataframe to the model time period
-                if len(data_check) < 365:
-                    print(
-                        f"Station {ID} has only {len(data_check)} days of data, less than 1 year. Skipping."
-                    )
-                    continue
 
                 # extract the properties from the snapping dataframe
                 discharge_observations_station_name = snapped_locations.loc[
@@ -1269,7 +1249,7 @@ class Hydrology:
 
         if len(evaluation_per_station) == 0:
             # Create empty evaluation dataframe with proper structure
-            empty_evaluation_df = pd.DataFrame(
+            evaluation_df = pd.DataFrame(
                 columns=np.array(
                     [
                         "station_name",
@@ -1280,67 +1260,52 @@ class Hydrology:
                         "NSE",
                         "R",
                     ]
-                )
-            ).set_index(pd.Index([], name="station_ID"))
-
-            # Save empty evaluation metrics as Excel file
-            empty_evaluation_df.to_excel(
-                eval_result_folder / "evaluation_metrics.xlsx",
-                index=True,
+                ),
+                index=pd.Index([], name="station_ID"),
             )
-
-            # Create empty GeoDataFrame and save as parquet
-            empty_evaluation_gdf = gpd.GeoDataFrame(
-                empty_evaluation_df,
-                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
-                crs="EPSG:4326",
-            )
-            empty_evaluation_gdf.to_parquet(
-                eval_result_folder / "evaluation_metrics.geoparquet",
-            )
-
         else:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
-            evaluation_df.to_excel(
-                eval_result_folder / "evaluation_metrics.xlsx",
-                index=True,
-            )
 
-            # Save evaluation metrics as as excel and parquet file
-            evaluation_gdf = gpd.GeoDataFrame(
-                evaluation_df,
-                geometry=gpd.points_from_xy(evaluation_df.x, evaluation_df.y),
-                crs="EPSG:4326",
-            )  # create a geodataframe from the evaluation dataframe
-            evaluation_gdf.to_parquet(
-                eval_result_folder / "evaluation_metrics.geoparquet",
-            )
+        evaluation_df.to_excel(
+            eval_result_folder / "evaluation_metrics.xlsx",
+            index=True,
+        )
 
-            _plot_discharge_validation_map(
-                evaluation_gdf=evaluation_gdf,
-                region_shapefile=region_shapefile,
-                rivers=rivers,
-                eval_result_folder=eval_result_folder,
-            )
+        # Save evaluation metrics as as excel and parquet file
+        evaluation_gdf = gpd.GeoDataFrame(
+            evaluation_df,
+            geometry=gpd.points_from_xy(evaluation_df.x, evaluation_df.y),
+            crs="EPSG:4326",
+        )  # create a geodataframe from the evaluation dataframe
+        evaluation_gdf.to_parquet(
+            eval_result_folder / "evaluation_metrics.geoparquet",
+        )
 
-            _create_discharge_folium_map(
-                evaluation_gdf=evaluation_gdf,
-                eval_plot_folder=eval_plot_folder,
-                eval_result_folder=eval_result_folder,
-                region_shapefile=region_shapefile,
-                rivers=rivers,
-            )
+        _plot_discharge_validation_map(
+            evaluation_gdf=evaluation_gdf,
+            region_shapefile=region_shapefile,
+            rivers=rivers,
+            eval_result_folder=eval_result_folder,
+        )
 
-            outflow_plot_count: int = _plot_outflow_discharge_timeseries(
-                output_folder=self.model.output_folder,
-                run_name=run_name,
-                eval_plot_folder=eval_plot_folder,
-                include_spinup=include_spinup,
-                spinup_name=spinup_name,
-            )
-            print(f"Created {outflow_plot_count} outflow discharge plots.")
+        _create_discharge_folium_map(
+            evaluation_gdf=evaluation_gdf,
+            eval_plot_folder=eval_plot_folder,
+            eval_result_folder=eval_result_folder,
+            region_shapefile=region_shapefile,
+            rivers=rivers,
+        )
 
-            print("Discharge evaluation dashboard created.")
+        outflow_plot_count: int = _plot_outflow_discharge_timeseries(
+            output_folder=self.model.output_folder,
+            run_name=run_name,
+            eval_plot_folder=eval_plot_folder,
+            include_spinup=include_spinup,
+            spinup_name=spinup_name,
+        )
+        print(f"Created {outflow_plot_count} outflow discharge plots.")
+
+        print("Discharge evaluation dashboard created.")
 
     def skill_score_graphs(
         self,
