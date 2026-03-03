@@ -69,7 +69,7 @@ report:
 calibration:
   spinup_time: 1990-01-01
   start_time: 2000-01-01
-  end_time: 2025-12-31
+  end_time: 2024-12-31
   calibration_targets:
     KGE_discharge: 1
   DEAP:
