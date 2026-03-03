@@ -368,7 +368,12 @@ class GEBModel(Module):
         if self.simulate_hydrology:
             self.hydrology.step()
 
-        self.hazard_driver.step()
+        # self.hazard_driver.step()
+
+        ## CARO
+        if getattr(self, "hazard_driver", None) is not None:
+            self.hazard_driver.step()
+        ## CARO
 
         self.report(locals())
 
@@ -387,10 +392,12 @@ class GEBModel(Module):
         n_timesteps: int,
         timestep_length: datetime.timedelta | relativedelta,
         in_spinup: bool = False,
-        simulate_hydrology: bool = True,
+        simulate_hydrology: bool = True,  # CARO
         clean_report_folder: bool = False,
         load_data_from_store: bool = False,
         omit: None | str = None,
+        # initialize_hazards: bool = False,  # CARO
+        # enabled_agents: list[str] | None = None,
     ) -> None:
         """Initializes the model.
 
@@ -418,6 +425,21 @@ class GEBModel(Module):
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
         self.hydrology: Hydrology = Hydrology(self)
+
+        ## CARO
+        # if self.simulate_hydrology:
+        #    self.hydrology = Hydrology(self)
+        # else:
+        #    self.hydrology = None
+
+        # self.agents = Agents(self, enabled_agents=enabled_agents)
+
+        # if initialize_hazards:
+        #    self.hazard_driver = HazardDriver(self)
+        # else:
+        #    self.hazard_driver = None
+
+        ## CARO
 
         self.hazard_driver = HazardDriver(self)
 
@@ -579,7 +601,14 @@ class GEBModel(Module):
             clean_report_folder=False,
             in_spinup=True,
             simulate_hydrology=False,
+            initialize_hazards=False,  # CARO
+            enabled_agents=[agent_type],  # CARO
         )
+
+        if agent_type == "households":
+            hh = self.agents.households
+            hh.construct_income_distribution()
+            hh.assign_household_attributes()
 
         # save initial household attributes
         print(f"Refreshing household attributes for {agent_type}...")

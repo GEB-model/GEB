@@ -877,9 +877,9 @@ class DecisionModule:
         )
 
         # ---- Adaptation cost logic ----
-        # For testing we assume a one-time payment with no loan for shutters installation
-        discounts = 1 / (1 + r) ** np.arange(1)  # only year 0
-        years = np.arange(1, dtype=np.int32)
+        loan_duration = int(loan_duration)
+        discounts = 1 / (1 + r) ** np.arange(loan_duration)  # only year 0
+        years = np.arange(loan_duration + 1, dtype=np.int32)
         cost_array = np.full((n_agents, years.size), -1, np.float32)
         for i, year in enumerate(years):
             cost_array[:, i] = np.sum(discounts[: year + 1]) * adaptation_costs
@@ -887,10 +887,10 @@ class DecisionModule:
         # right now we are considering no loan but this could be change/adapted in the future
         loan_left = (loan_duration - time_adapted).astype(np.int32)  # 0 for no loan
         loan_left = np.maximum(loan_left, 0)
-        loan_left - np.minimum(loan_left, T)
+        loan_left = np.minimum(loan_left, T)
 
         axis_0 = np.array(np.arange(n_agents))
-        time_discounted_adaptation_cost = adaptation_costs  # one-time payment
+        time_discounted_adaptation_cost = cost_array[axis_0, loan_left]
 
         # substract from NPV array
         NPV_summed -= time_discounted_adaptation_cost
@@ -1019,6 +1019,59 @@ class DecisionModule:
         # EU_do_nothing_array *= self.error_terms_stay
         return EU_do_nothing_w_array
 
+    # CARO NEW
+    @staticmethod
+    def _combine_two_hazards_no_double_count(
+        *,
+        sigma: float,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        amenity_value: np.ndarray,
+        amenity_weight: float,
+        risk_perception_flood: np.ndarray,
+        risk_perception_wind: np.ndarray,
+        p_flood: np.ndarray,
+        p_wind: np.ndarray,
+        EU_flood: np.ndarray,
+        EU_wind: np.ndarray,
+    ) -> np.ndarray:
+        amenity_adjusted = np.asarray(amenity_value, dtype=np.float32) * np.float32(
+            amenity_weight
+        )
+        W0 = np.maximum(
+            np.float32(1.0),
+            wealth.astype(np.float32) + income.astype(np.float32) + amenity_adjusted,
+        )
+
+        if sigma == 1:
+            U0 = np.log(W0)
+        else:
+            s = np.float32(sigma)
+            U0 = (W0 ** (1 - s)) / (1 - s)
+
+        rp_f = np.asarray(risk_perception_flood, dtype=np.float32).reshape(-1)
+        rp_w = np.asarray(risk_perception_wind, dtype=np.float32).reshape(-1)
+        p_f = np.asarray(p_flood, dtype=np.float32).reshape(-1)
+        p_w = np.asarray(p_wind, dtype=np.float32).reshape(-1)
+
+        P_f = np.sum(
+            np.minimum(p_f[:, None] * rp_f[None, :], np.float32(0.998)), axis=0
+        )
+        P_w = np.sum(
+            np.minimum(p_w[:, None] * rp_w[None, :], np.float32(0.998)), axis=0
+        )
+        P_none = np.maximum(np.float32(0.0), np.float32(1.0) - P_f - P_w)
+
+        eps = np.float32(1e-8)
+        EU_flood_event = (EU_flood - (np.float32(1.0) - P_f) * U0) / np.maximum(
+            P_f, eps
+        )
+        EU_wind_event = (EU_wind - (np.float32(1.0) - P_w) * U0) / np.maximum(P_w, eps)
+
+        EU_multi = P_f * EU_flood_event + P_w * EU_wind_event + P_none * U0
+        return np.asarray(EU_multi, dtype=np.float32).reshape(-1)
+        ## CARO NEW
+
     def calcEU_no_insure(
         self,
         n_agents: int,
@@ -1027,7 +1080,8 @@ class DecisionModule:
         expenditure_cap: float,
         amenity_value: np.ndarray,
         amenity_weight: float,
-        risk_perception: np.ndarray,
+        risk_perception_flood: np.ndarray,
+        risk_perception_wind: np.ndarray,
         expected_damages_flood: np.ndarray,
         expected_damages_wind: np.ndarray,
         p_flood: np.ndarray,
@@ -1051,7 +1105,7 @@ class DecisionModule:
             income=income,
             amenity_value=amenity_value,
             amenity_weight=amenity_weight,
-            risk_perception=risk_perception,
+            risk_perception=risk_perception_flood,
             expected_damages=expected_damages_flood,
             adapted=np.zeros(n_agents, dtype=bool),
             p_floods=p_flood,
@@ -1068,7 +1122,7 @@ class DecisionModule:
             expendature_cap=expenditure_cap,
             amenity_value=amenity_value,
             amenity_weight=amenity_weight,
-            risk_perception=risk_perception,
+            risk_perception=risk_perception_wind,
             expected_damages=expected_damages_wind,
             adapted=np.zeros(n_agents, dtype=bool),
             p_windstorm=p_wind,
@@ -1077,42 +1131,56 @@ class DecisionModule:
             sigma=sigma,
         )
 
-        # 2) compute U0 (no-event utility) in the same wealth convention
-        amenity_adjusted = np.asarray(amenity_value, dtype=np.float32) * np.float32(
-            amenity_weight
+        return self._combine_two_hazards_no_double_count(
+            sigma=sigma,
+            wealth=wealth,
+            income=income,
+            amenity_value=amenity_value,
+            amenity_weight=amenity_weight,
+            risk_perception_flood=risk_perception_flood,
+            risk_perception_wind=risk_perception_wind,
+            p_flood=p_flood,
+            p_wind=p_wind,
+            EU_flood=EU_flood,
+            EU_wind=EU_wind,
         )
-        W0 = np.maximum(
-            np.float32(1.0),
-            wealth.astype(np.float32) + income.astype(np.float32) + amenity_adjusted,
-        )
 
-        if sigma == 1:
-            U0 = np.log(W0)
-        else:
-            s = np.float32(sigma)
-            U0 = (W0 ** (1 - s)) / (1 - s)
+        # # 2) compute U0 (no-event utility) in the same wealth convention
+        # amenity_adjusted = np.asarray(amenity_value, dtype=np.float32) * np.float32(
+        #     amenity_weight
+        # )
+        # W0 = np.maximum(
+        #     np.float32(1.0),
+        #     wealth.astype(np.float32) + income.astype(np.float32) + amenity_adjusted,
+        # )
 
-        # 3) perceived total hazard probabilities (consistent with other code: cap at 0.998 per event)
-        rp = np.asarray(risk_perception, dtype=np.float32).reshape(-1)
-        p_f = np.asarray(p_flood, dtype=np.float32).reshape(-1)
-        p_w = np.asarray(p_wind, dtype=np.float32).reshape(-1)
+        # if sigma == 1:
+        #     U0 = np.log(W0)
+        # else:
+        #     s = np.float32(sigma)
+        #     U0 = (W0 ** (1 - s)) / (1 - s)
 
-        P_f = np.sum(np.minimum(p_f[:, None] * rp[None, :], np.float32(0.998)), axis=0)
-        P_w = np.sum(np.minimum(p_w[:, None] * rp[None, :], np.float32(0.998)), axis=0)
-        P_none = np.maximum(np.float32(0.0), np.float32(1.0) - P_f - P_w)
+        # # 3) perceived total hazard probabilities (consistent with other code: cap at 0.998 per event)
+        # rp = np.asarray(risk_perception, dtype=np.float32).reshape(-1)
+        # p_f = np.asarray(p_flood, dtype=np.float32).reshape(-1)
+        # p_w = np.asarray(p_wind, dtype=np.float32).reshape(-1)
 
-        eps = np.float32(1e-8)
+        # P_f = np.sum(np.minimum(p_f[:, None] * rp[None, :], np.float32(0.998)), axis=0)
+        # P_w = np.sum(np.minimum(p_w[:, None] * rp[None, :], np.float32(0.998)), axis=0)
+        # P_none = np.maximum(np.float32(0.0), np.float32(1.0) - P_f - P_w)
 
-        # 4) back out "event-conditional EU" for each hazard from the single-hazard mixture
-        EU_flood_event = (EU_flood - (np.float32(1.0) - P_f) * U0) / np.maximum(
-            P_f, eps
-        )
-        EU_wind_event = (EU_wind - (np.float32(1.0) - P_w) * U0) / np.maximum(P_w, eps)
+        # eps = np.float32(1e-8)
 
-        # 5) combine into one multi-hazard EU without double counting no-event utility
-        EU_no_insure_array = P_f * EU_flood_event + P_w * EU_wind_event + P_none * U0
+        # # 4) back out "event-conditional EU" for each hazard from the single-hazard mixture
+        # EU_flood_event = (EU_flood - (np.float32(1.0) - P_f) * U0) / np.maximum(
+        #     P_f, eps
+        # )
+        # EU_wind_event = (EU_wind - (np.float32(1.0) - P_w) * U0) / np.maximum(P_w, eps)
 
-        return np.asarray(EU_no_insure_array, dtype=np.float32).reshape(-1)
+        # # 5) combine into one multi-hazard EU without double counting no-event utility
+        # EU_no_insure_array = P_f * EU_flood_event + P_w * EU_wind_event + P_none * U0
+
+        # return np.asarray(EU_no_insure_array, dtype=np.float32).reshape(-1)
 
     def calcEU_insure_multirisk_residual_CATNAT(
         self,
@@ -1123,7 +1191,8 @@ class DecisionModule:
         expenditure_cap: float,
         amenity_value: np.ndarray,
         amenity_weight: float,
-        risk_perception: np.ndarray,
+        risk_perception_flood: np.ndarray,
+        risk_perception_wind: np.ndarray,
         expected_damages_flood: np.ndarray,
         expected_damages_floodadapted: np.ndarray,
         expected_damages_wind: np.ndarray,
@@ -1197,6 +1266,15 @@ class DecisionModule:
         damages_flood = damages_flood[flood_order, :].astype(np.float32)
         damages_wind = damages_wind[wind_order, :].astype(np.float32)
 
+        ## NEW CAP INSURED VALUES TO NOT OVERFLOW IN PREMIUM CALCULATION
+        insured_value = kwargs.get("insured_value", None)
+        if insured_value is not None:
+            iv = np.asarray(insured_value, dtype=np.float32).reshape(-1)
+            iv = np.maximum(iv, np.float32(0.0))
+            damages_flood = np.minimum(damages_flood, iv[None, :])
+            damages_wind = np.minimum(damages_wind, iv[None, :])
+        ## END OF NEW CODE
+
         # insurance loss split
         damages_flood_residual = damages_flood * np.float32(deductible)
         damages_wind_residual = damages_wind * np.float32(deductible)
@@ -1213,61 +1291,56 @@ class DecisionModule:
             operating_insurer=operating_insurer,
         )
 
-        # Compute premiums with PPP (check order of arrays)
-        # premium, premium_public, premium_private = self.Insurance_premium_PPP(
-        #     expected_damages_flood=damages_flood_insured,
-        #     p_flood=p_flood,
-        #     expected_damages_wind=damages_wind_insured,
-        #     p_wind=p_wind,
-        #     operating_insurer=operating_insurer,
-        #     public_reinsurer=public_reinsurer,
-        # )
+        premium = np.asarray(premium, dtype=np.float32).reshape(-1)  # NEW
+        wealth_after_premium = wealth.astype(np.float32) - premium.astype(
+            np.float32
+        )  # NEW
 
-        # --- perceived probabilities (risk perception) ---
-        rp = np.asarray(risk_perception, dtype=np.float32).reshape(-1)
-        # if rp.shape != (n_agents,):
-        #     raise AssertionError(f"risk_perception must be (n_agents,), got {rp.shape}")
-
-        # Per-event perceived probabilities, capped
-        p_flood_perc = np.minimum(p_flood[:, None] * rp[None, :], np.float32(0.998))
-        p_wind_perc = np.minimum(p_wind[:, None] * rp[None, :], np.float32(0.998))
-
-        # --- wealth baseline after paying premium (no income added here, consistent with your other flood EU functions) ---
-        amenity_adjusted = np.asarray(amenity_value, dtype=np.float32) * np.float32(
-            amenity_weight
-        )
-        W0 = np.maximum(
-            np.float32(1.0),
-            wealth.astype(np.float32) + amenity_adjusted - premium.astype(np.float32),
+        EU_flood_ins = self.calcEU_do_nothing_flood(
+            geom_id=kwargs.get("geom_id", "NoID"),
+            n_agents=n_agents,
+            wealth=wealth_after_premium,
+            income=income,
+            amenity_value=amenity_value,
+            amenity_weight=amenity_weight,
+            risk_perception=risk_perception_flood,
+            expected_damages=damages_flood_residual,
+            adapted=np.zeros(n_agents, dtype=bool),
+            p_floods=p_flood,
+            T=T,
+            r=r,
+            sigma=sigma,
         )
 
-        # --- utilities for each event-state ---
-        # Flood event i: lose flood residual only
-        W_iflood = np.maximum(np.float32(1.0), W0[None, :] - damages_flood_residual)
-        # Wind event j: lose wind residual only
-        W_iwind = np.maximum(np.float32(1.0), W0[None, :] - damages_wind_residual)
+        EU_wind_ins = self.calcEU_do_nothing_w(
+            geom_id=kwargs.get("geom_id", "NoID"),
+            n_agents=n_agents,
+            wealth=wealth_after_premium,
+            income=income,
+            expendature_cap=expenditure_cap,
+            amenity_value=amenity_value,
+            amenity_weight=amenity_weight,
+            risk_perception=risk_perception_wind,
+            expected_damages=damages_wind_residual,
+            adapted=np.zeros(n_agents, dtype=bool),
+            p_windstorm=p_wind,
+            T=T,
+            r=r,
+            sigma=sigma,
+        )
 
-        if sigma == 1:
-            U0 = np.log(W0)
-            U_iflood = np.log(W_iflood)
-            U_iwind = np.log(W_iwind)
-        else:
-            s = np.float32(sigma)
-            U0 = (W0 ** (1 - s)) / (1 - s)
-            U_iflood = (W_iflood ** (1 - s)) / (1 - s)
-            U_iwind = (W_iwind ** (1 - s)) / (1 - s)
-
-        # --- expected utility across combined hazard state-space (no double counting) ---
-        # NOTE: This treats events as mutually exclusive states within a year.
-        # It matches your discrete-event setup and avoids EU_flood + EU_wind inflation.
-        sum_pf = np.sum(p_flood_perc, axis=0)  # (n_agents,)
-        sum_pw = np.sum(p_wind_perc, axis=0)  # (n_agents,)
-        p_noevent = np.maximum(np.float32(0.0), np.float32(1.0) - sum_pf - sum_pw)
-
-        EU_insure_array = (
-            np.sum(p_flood_perc * U_iflood, axis=0)
-            + np.sum(p_wind_perc * U_iwind, axis=0)
-            + p_noevent * U0
+        EU_insure_array = self._combine_two_hazards_no_double_count(
+            sigma=sigma,
+            wealth=wealth_after_premium,
+            income=income,
+            amenity_value=amenity_value,
+            amenity_weight=amenity_weight,
+            risk_perception_flood=risk_perception_flood,
+            risk_perception_wind=risk_perception_wind,
+            p_flood=p_flood,
+            p_wind=p_wind,
+            EU_flood=EU_flood_ins,
+            EU_wind=EU_wind_ins,
         )
 
         # Affordability constraint
@@ -1300,87 +1373,87 @@ class DecisionModule:
             # premium_public,
         )
 
-    def Insurance_premium_PPP(
-        self,
-        expected_damages_flood: np.ndarray,
-        p_flood: np.ndarray,
-        expected_damages_wind: np.ndarray,
-        p_wind: np.ndarray,
-        operating_insurer: float = 0.3,
-        method: str = "household",
-        public_reinsurer: float = 0.0,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Compute insurance premium under a public-private partnership (PPP) scheme.
+    # def Insurance_premium_PPP(
+    #     self,
+    #     expected_damages_flood: np.ndarray,
+    #     p_flood: np.ndarray,
+    #     expected_damages_wind: np.ndarray,
+    #     p_wind: np.ndarray,
+    #     operating_insurer: float = 0.3,
+    #     method: str = "household",
+    #     public_reinsurer: float = 0.0,
+    # ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    #     """
+    #     Compute insurance premium under a public-private partnership (PPP) scheme.
 
-        Args:
-            expected_damages_flood (np.ndarray): _description_
-            p_flood (np.ndarray): _description_
-            expected_damages_wind (np.ndarray): _description_
-            p_wind (np.ndarray): _description_
-            adapted_floodproofing (np.ndarray, optional): _description_. Defaults to None.
-            adapted_windshutters (np.ndarray, optional): _description_. Defaults to None.
-            deductible (float, optional): _description_. Defaults to 0.1.
-            operating_insurer (float, optional): _description_. Defaults to 0.3.
-            method (str, optional): _description_. Defaults to "household".
-            public_reinsurer (float, optional): _description_. Defaults to 0.0.
+    #     Args:
+    #         expected_damages_flood (np.ndarray): _description_
+    #         p_flood (np.ndarray): _description_
+    #         expected_damages_wind (np.ndarray): _description_
+    #         p_wind (np.ndarray): _description_
+    #         adapted_floodproofing (np.ndarray, optional): _description_. Defaults to None.
+    #         adapted_windshutters (np.ndarray, optional): _description_. Defaults to None.
+    #         deductible (float, optional): _description_. Defaults to 0.1.
+    #         operating_insurer (float, optional): _description_. Defaults to 0.3.
+    #         method (str, optional): _description_. Defaults to "household".
+    #         public_reinsurer (float, optional): _description_. Defaults to 0.0.
 
-        Returns:
-            premium_total: total premium per household
-            premium_public: premium paid by public sector
-            premium_private: premium paid by private insurer
-        """
+    #     Returns:
+    #         premium_total: total premium per household
+    #         premium_public: premium paid by public sector
+    #         premium_private: premium paid by private insurer
+    #     """
 
-        def calc_EAD(
-            damages: np.ndarray, probabilities: np.ndarray, method="household"
-        ) -> np.ndarray:
-            """
-            Calculate Expected Annual Damages (EAD) with trapezoidal integration.
+    #     def calc_EAD(
+    #         damages: np.ndarray, probabilities: np.ndarray, method="household"
+    #     ) -> np.ndarray:
+    #         """
+    #         Calculate Expected Annual Damages (EAD) with trapezoidal integration.
 
-            Args:
-                damages (np.ndarray): _description_
-                probabilities (np.ndarray): _description_
-                method (str, optional): _description_. Defaults to "household".
+    #         Args:
+    #             damages (np.ndarray): _description_
+    #             probabilities (np.ndarray): _description_
+    #             method (str, optional): _description_. Defaults to "household".
 
-            Returns:
-                EAD_
-            """
-            idx = np.argsort(probabilities)
-            probabilities = probabilities[idx]
-            damages = damages[idx, :]
+    #         Returns:
+    #             EAD_
+    #         """
+    #         idx = np.argsort(probabilities)
+    #         probabilities = probabilities[idx]
+    #         damages = damages[idx, :]
 
-            if method == "regional":
-                # Sum across households first
-                damages = damages.sum(axis=1, keepdims=True)
+    #         if method == "regional":
+    #             # Sum across households first
+    #             damages = damages.sum(axis=1, keepdims=True)
 
-            return np.trapezoid(damages, x=probabilities, axis=0)
+    #         return np.trapezoid(damages, x=probabilities, axis=0)
 
-        # Calculate EADs (revisit what does it line mean)
-        EAD_flood = (
-            calc_EAD(expected_damages_flood, p_flood, method=method)
-            if expected_damages_flood.size
-            else np.zeros(expected_damages_wind.shape[1])
-        )
-        EAD_wind = (
-            calc_EAD(expected_damages_wind, p_wind, method=method)
-            if expected_damages_wind.size
-            else np.zeros(expected_damages_flood.shape[1])
-        )
+    #     # Calculate EADs (revisit what does it line mean)
+    #     EAD_flood = (
+    #         calc_EAD(expected_damages_flood, p_flood, method=method)
+    #         if expected_damages_flood.size
+    #         else np.zeros(expected_damages_wind.shape[1])
+    #     )
+    #     EAD_wind = (
+    #         calc_EAD(expected_damages_wind, p_wind, method=method)
+    #         if expected_damages_wind.size
+    #         else np.zeros(expected_damages_flood.shape[1])
+    #     )
 
-        EAD_total = EAD_flood + EAD_wind
+    #     EAD_total = EAD_flood + EAD_wind
 
-        # Base premium with operating_insurer factor
-        premium = EAD_total * (1.0 + operating_insurer)
+    #     # Base premium with operating_insurer factor
+    #     premium = EAD_total * (1.0 + operating_insurer)
 
-        # Split premium between public and private sector contributions
-        if public_reinsurer > 0:
-            premium_public = premium * public_reinsurer
-            premium_private = premium * (1 - public_reinsurer)
-        else:
-            premium_public = np.zeros_like(premium)
-            premium_private = premium
+    #     # Split premium between public and private sector contributions
+    #     if public_reinsurer > 0:
+    #         premium_public = premium * public_reinsurer
+    #         premium_private = premium * (1 - public_reinsurer)
+    #     else:
+    #         premium_public = np.zeros_like(premium)
+    #         premium_private = premium
 
-        return premium, premium_public, premium_private
+    #     return premium, premium_public, premium_private
 
     def Insurance_premium_CATNAT(
         self,

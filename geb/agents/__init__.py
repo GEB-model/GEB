@@ -27,33 +27,67 @@ if TYPE_CHECKING:
 class Agents(Module):
     """This class initalizes all agent classes, and is used to activate the agents each timestep."""
 
-    def __init__(self, model: GEBModel) -> None:
-        """Initialize the Agents module.
+    # def __init__(self, model: GEBModel) -> None:
+    #     """Initialize the Agents module.
 
-        Initalizes all agent classes and stores them in a list to be activated each timestep.
+    #     Initalizes all agent classes and stores them in a list to be activated each timestep.
 
-        Args:
-            model: The GEB model instance.
-        """
+    #     Args:
+    #         model: The GEB model instance.
+    #     """
+    #     super().__init__(model)
+
+    #     self.households = Households(model, self, 0.1)
+    #     self.crop_farmers = CropFarmers(model, self, 0.1)
+    #     self.livestock_farmers = LiveStockFarmers(model, self, 0.1)
+    #     self.industry = Industry(model, self)
+    #     self.reservoir_operators = ReservoirOperators(model, self)
+    #     self.government = Government(model, self)
+    #     self.market = Market(model, self)
+
+    #     self.agents: list[AgentBaseClass] = [
+    #         self.crop_farmers,
+    #         self.households,
+    #         self.livestock_farmers,
+    #         self.industry,
+    #         self.reservoir_operators,
+    #         self.government,
+    #         self.market,
+    #     ]
+
+    def __init__(
+        self, model: GEBModel, enabled_agents: list[str] | None = None
+    ) -> None:
         super().__init__(model)
 
-        self.households = Households(model, self, 0.1)
-        self.crop_farmers = CropFarmers(model, self, 0.1)
-        self.livestock_farmers = LiveStockFarmers(model, self, 0.1)
-        self.industry = Industry(model, self)
-        self.reservoir_operators = ReservoirOperators(model, self)
-        self.government = Government(model, self)
-        self.market = Market(model, self)
+        enabled = set(enabled_agents) if enabled_agents is not None else None
 
-        self.agents: list[AgentBaseClass] = [
-            self.crop_farmers,
-            self.households,
-            self.livestock_farmers,
-            self.industry,
-            self.reservoir_operators,
-            self.government,
-            self.market,
-        ]
+        def on(name: str) -> bool:
+            return enabled is None or name in enabled
+
+        self.agents: list[AgentBaseClass] = []
+
+        if on("crop_farmers"):
+            self.crop_farmers = CropFarmers(model, self, 0.1)
+            self.agents.append(self.crop_farmers)
+        if on("households"):
+            self.households = Households(model, self, 0.1)
+            self.agents.append(self.households)
+        if on("livestock_farmers"):
+            self.livestock_farmers = LiveStockFarmers(model, self, 0.1)
+            self.agents.append(self.livestock_farmers)
+        if on("industry"):
+            self.industry = Industry(model, self)
+            self.agents.append(self.industry)
+        if on("reservoir_operators"):
+            self.reservoir_operators = ReservoirOperators(model, self)
+            self.agents.append(self.reservoir_operators)
+        if on("government"):
+            self.government = Government(model, self)
+            self.agents.append(self.government)
+        if on("market"):
+            self.market = Market(model, self)
+            self.agents.append(self.market)
 
     @property
     def name(self) -> str:
