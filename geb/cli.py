@@ -547,11 +547,41 @@ def evaluate(
         ctx.exit()
 
     method_name = method.replace("-", "_").strip()
-    # Parse extra arguments as key=value pairs
+    # Parse extra arguments from ctx.args
+    # Supports --key value or --key=value formats
     extra_args = {}
-    for arg in ctx.args:
-        if "=" in arg:
-            key, value = arg.split("=", 1)
+    i = 0
+    while i < len(ctx.args):
+        arg = ctx.args[i]
+        key = None
+        value = None
+
+        if arg.startswith("--"):
+            if "=" in arg:
+                # Handle --key=value
+                parts = arg[2:].split("=", 1)
+                key = parts[0]
+                value = parts[1]
+                i += 1
+            else:
+                # Handle --key value
+                key = arg[2:]
+                if i + 1 < len(ctx.args) and not ctx.args[i + 1].startswith("--"):
+                    value = ctx.args[i + 1]
+                    i += 2
+                else:
+                    # Flag case: --key without value
+                    value = "true"
+                    i += 1
+        else:
+            click.echo(
+                f"Warning: Ignoring invalid argument '{arg}'. Expected format: --key value or --key=value",
+                err=True,
+            )
+            i += 1
+            continue
+
+        if key:
             # Try to convert value to appropriate type
             if value.lower() == "true":
                 value = True
@@ -569,11 +599,6 @@ def evaluate(
                         # Keep as string
                         pass
             extra_args[key] = value
-        else:
-            click.echo(
-                f"Warning: Ignoring invalid argument '{arg}'. Expected format: key=value",
-                err=True,
-            )
 
     run_model_with_method(
         method="evaluate",
