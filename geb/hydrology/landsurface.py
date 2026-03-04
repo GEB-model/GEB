@@ -1054,28 +1054,6 @@ class LandSurface(Module):
             )
         )
 
-        # Load soil organic carbon and bulk density with logging
-        soc_path = self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"]
-        bd_path = self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"]
-
-        logger.info("LOADING SOIL DATA IN HYDROLOGY MODULE")
-
-        logger.info(f"Loading SOC from: {soc_path}")
-        logger.info(f"Loading bulk density from: {bd_path}")
-
-        if "_modified" in str(soc_path) or "_modified" in str(bd_path):
-            logger.info("Using MODIFIED soil maps for forest planting scenario")
-            print(
-                "\n[HYDROLOGY] Loading MODIFIED soil maps (forest planting scenario)",
-                flush=True,
-            )
-        else:
-            logger.info("Using original soil maps")
-            print(
-                "[HYDROLOGY] Loading original soil maps, no scenario yet implemented",
-                flush=True,
-            )
-
         self.HRU.var.depth_to_bedrock_m: ArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
             read_grid(
                 self.model.files["subgrid"]["soil/depth_to_bedrock_m"],
