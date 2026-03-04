@@ -2,6 +2,7 @@
 
 import datetime
 import functools
+import json
 import subprocess
 import sys
 from operator import attrgetter
@@ -600,7 +601,7 @@ def evaluate(
                         pass
             extra_args[key] = value
 
-    run_model_with_method(
+    result = run_model_with_method(
         method="evaluate",
         method_args={
             "method": method_name,
@@ -614,6 +615,11 @@ def evaluate(
         optimize=optimize,
         timing=timing,
     )
+
+    # If the result is a dictionary, print it as JSON to stdout
+    # This allows piping metrics to other tools or Snakemake
+    if isinstance(result, dict):
+        click.echo(json.dumps(result))
 
 
 @cli.command()
@@ -674,6 +680,11 @@ def data_catalog(method: str) -> None:
         ["calibrate", "sensitivity", "multirun", "benchmark"], case_sensitive=True
     ),
 )
+@click.argument(
+    "target",
+    required=False,
+    type=str,
+)
 @click.option(
     "--cores",
     "-c",
@@ -704,6 +715,7 @@ def data_catalog(method: str) -> None:
 @click.argument("snakemake_args", nargs=-1, type=click.UNPROCESSED)
 def workflow(
     workflow_name: str,
+    target: str | None,
     cores: str,
     profile: Path | None,
     dryrun: bool,
@@ -719,13 +731,14 @@ def workflow(
     - multirun: Multiple scenario runs
 
     Examples:
-        geb workflow calibrate --cores 8
+        geb workflow calibrate hydrology --cores 8
         geb workflow calibrate --profile profiles/cluster
         geb workflow calibrate -co REGION=geul -co NGEN=10
         geb workflow sensitivity --dryrun
 
     Args:
         workflow_name: Name of the workflow to run.
+        target: Optional calibration target (e.g., 'hydrology').
         cores: Number of cores to use.
         profile: Snakemake profile directory.
         dryrun: Whether to perform a dry run.
@@ -747,20 +760,15 @@ def workflow(
             sys.exit(1)
         cmd.extend(["-s", str(snakefile)])
 
-        # Snakemake uses a lock file to prevent multiple runs in the same directory.
-        # However, often when a process is interrupted (e.g., by Ctrl+C) the lock file is not removed,
-        # which prevents running the workflow again until the lock file is manually removed.
-        # However, we leave it to the user to ensure they don't run multiple workflows
-        # so we unlock any existing lock file at the start of the workflow.
-        result = subprocess.run(cmd + ["--unlock"], check=True)
-        if result.returncode != 0:
-            click.echo("Error: Failed to unlock Snakemake lock file.", err=True)
-            sys.exit(result.returncode)
-
         # Add workflow config file
         configfile = geb_dir / "workflow" / "config" / f"{workflow_name}.yml"
         if configfile.exists():
             cmd.extend(["--configfile", str(configfile)])
+
+        # Add target as config override if provided
+        config_overrides_dict = {}
+        if target:
+            config_overrides_dict["TARGET"] = target
 
         # Add profile if specified and exists
         if profile is not None:
@@ -780,7 +788,6 @@ def workflow(
             cmd.append("-n")
 
         # Process config overrides
-        config_overrides_dict = {}
         if config_override:
             for override in config_override:
                 if "=" in override:
@@ -799,6 +806,16 @@ def workflow(
 
         # Add additional snakemake arguments
         cmd.extend(snakemake_args)
+
+        # Snakemake uses a lock file to prevent multiple runs in the same directory.
+        # However, often when a process is interrupted (e.g., by Ctrl+C) the lock file is not removed,
+        # which prevents running the workflow again until the lock file is manually removed.
+        # However, we leave it to the user to ensure they don't run multiple workflows
+        # so we unlock any existing lock file at the start of the workflow.
+        result = subprocess.run(cmd + ["--unlock"], check=True)
+        if result.returncode != 0:
+            click.echo("Error: Failed to unlock Snakemake lock file.", err=True)
+            sys.exit(result.returncode)
 
         # Print command
         click.echo(f"Running: {' '.join(cmd)}")

@@ -199,7 +199,7 @@ def run_model_with_method(
     optimize: bool = OPTIMIZE_DEFAULT,
     method_args: dict = {},
     close_after_run: bool = True,
-) -> GEBModel:
+) -> Any:
     """Run model with a specific method.
 
     Args:
@@ -213,7 +213,7 @@ def run_model_with_method(
         close_after_run: If True, close the model after running the method. Defaults to True.
 
     Returns:
-        Instance of GEBModel
+        The result of the method run or the GEBModel instance if no method was run.
 
     Raises:
         SystemExit: If the model is restarted in optimized mode.
@@ -228,7 +228,8 @@ def run_model_with_method(
         command: list[str] = [sys.executable, "-O"] + sys.argv
         raise SystemExit(subprocess.run(command).returncode)
 
-    def run_operation() -> GEBModel:
+    def run_operation() -> Any:
+        from geb.config_schema import Config
 
         config_parsed: dict[str, Any] = parse_config(config, schema=Config)
         files: dict[str, Any] = parse_config(
@@ -238,12 +239,13 @@ def run_model_with_method(
         )
 
         geb = GEBModel(config=config_parsed, files=files, timing=timing)
+        result = geb
         if method is not None:
-            getattr(geb, method)(**method_args)
+            result = getattr(geb, method)(**method_args)
         if close_after_run:
             geb.close()
 
-        return geb
+        return result or geb
 
     with WorkingDirectory(working_directory):
         return _run_with_optional_profiling(
@@ -642,6 +644,10 @@ def alter_fn(
 
     def alter_operation() -> None:
         original_config: Path = from_model / config
+        if not original_config.exists():
+            raise FileNotFoundError(
+                f"Config file {original_config} does not exist in the original model. Cannot create alternative model based on it."
+            )
 
         # if config does not exist, create a new config that inherits from the original model
         if not config.exists():
