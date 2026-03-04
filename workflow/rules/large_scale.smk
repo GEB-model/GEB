@@ -165,7 +165,10 @@ rule build_cluster:
         cpus=2,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
-        slurm_account="ivm"
+        slurm_account="ivm",
+        # Consume 1 ivm_fat_slots token for ivm-fat jobs so Snakemake's scheduler
+        # prevents two jobs from sharing the single 773 GB node243 simultaneously.
+        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0
     shell:
         """
         mkdir -p $(dirname {log})
@@ -190,7 +193,8 @@ rule spinup_cluster:
         cpus=6,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
-        slurm_account="ivm"
+        slurm_account="ivm",
+        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0
     shell:
         """
         mkdir -p $(dirname {log})
@@ -215,7 +219,8 @@ rule run_cluster:
         cpus=8,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
-        slurm_account="ivm"
+        slurm_account="ivm",
+        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0
     shell:
         """
         mkdir -p $(dirname {log})
