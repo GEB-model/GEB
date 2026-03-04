@@ -443,8 +443,8 @@ def test_evaluate_evaluate_discharge() -> None:
     """Test model evaluation functionality.
 
     Verifies that model outputs can be evaluated and analyzed
-    for correctness and consistency. Does not check the evaluation
-    results itself. Just if it can be run.
+    for correctness and consistency. Checks that the evaluation
+    returns a dictionary containing expected metrics.
     """
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
@@ -453,7 +453,14 @@ def test_evaluate_evaluate_discharge() -> None:
             "include_yearly_plots": False,
         }
         args["method_args"] = method_args
-        run_model_with_method(method="evaluate", **args)
+        result = run_model_with_method(method="evaluate", **args)
+
+        # Verify that the result is a dictionary and contains expected keys
+        assert isinstance(result, dict)
+        assert "KGE" in result
+        assert "NSE" in result
+        assert "R" in result
+        assert isinstance(result["KGE"], (float, int))
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

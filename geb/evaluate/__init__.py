@@ -47,7 +47,7 @@ class Evaluate:
         spinup_name: str = "spinup",
         run_name: str = "default",
         **kwargs: Any,
-    ) -> None:
+    ) -> Any:
         """Run a single evaluation method.
 
         Args:
@@ -56,6 +56,9 @@ class Evaluate:
             spinup_name: Name of the spinup run. Defaults to "spinup".
             run_name: Name of the run to evaluate. Defaults to "default".
             **kwargs: Additional keyword arguments to pass to the evaluation method.
+
+        Returns:
+            The result of the evaluation method.
 
         Raises:
             AttributeError: If the specified method is not implemented in the Evaluate class.
@@ -78,7 +81,8 @@ class Evaluate:
             **kwargs,
         }
 
-        attr(**all_kwargs)
+        # Run the method and return the result
+        return attr(**all_kwargs)
 
     @property
     def output_folder_evaluate(self) -> Path:

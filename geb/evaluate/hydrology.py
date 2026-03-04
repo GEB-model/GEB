@@ -1096,7 +1096,7 @@ class Hydrology:
         include_yearly_plots: bool = True,
         correct_discharge_observations: bool = False,
         create_plots: bool = True,
-    ) -> None:
+    ) -> dict[str, float | None]:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
         Compares simulated discharge from the GEB model with observed discharge data from
@@ -1117,6 +1117,9 @@ class Hydrology:
             correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
                 in upstream area between the discharge observations station and the discharge from GEB.
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
+
+        Returns:
+            Dictionary containing mean metrics (KGE, NSE, R).
 
         Raises:
             FileNotFoundError: If the run folder does not exist in the report directory.
@@ -1307,6 +1310,20 @@ class Hydrology:
                 spinup_name=spinup_name,
             )
             print(f"Created {outflow_plot_count} outflow discharge plots.")
+
+        # Return mean metrics if available
+        if not evaluation_df.empty:
+            return {
+                "KGE": float(evaluation_df["KGE"].mean()),
+                "NSE": float(evaluation_df["NSE"].mean()),
+                "R": float(evaluation_df["R"].mean()),
+            }
+        else:
+            return {
+                "KGE": None,
+                "NSE": None,
+                "R": None,
+            }
 
     def skill_score_graphs(
         self,
