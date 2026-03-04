@@ -18,7 +18,7 @@ max-status-checks-per-second: 0.5
 # Snakemake's scheduler will not submit a second ivm-fat job until the first
 # finishes. defq and ivm (small nodes) can run multiple jobs concurrently.
 resources:
-  ivm_fat_slots: 1
+  - ivm_fat_slots=1
 
 # Resource defaults (will be overridden by rule-specific resources)
 # Keep coordinator job lightweight - only cluster rules need large memory
