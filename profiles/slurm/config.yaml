@@ -11,11 +11,14 @@ jobs: 8
 max-jobs-per-second: 2
 max-status-checks-per-second: 0.5
 
-# Partition-specific job limits
-group-components:
-  defq_empty: 2     # Max 2 concurrent jobs on defq (no partition arg)
-  ivm_part: 2       # Max 2 concurrent jobs on ivm partition
-  ivm-fat_part: 2   # Max 2 concurrent jobs on ivm-fat partition
+# Partition-specific job limits.
+# ivm-fat has only one physical node (node243, 773 GB). Each job requests
+# 700 GB, so only 1 job can run at a time without OOM. This is enforced via
+# the custom Snakemake resource `ivm_fat_slots=1` declared in each rule;
+# Snakemake's scheduler will not submit a second ivm-fat job until the first
+# finishes. defq and ivm (small nodes) can run multiple jobs concurrently.
+resources:
+  ivm_fat_slots: 1
 
 # Resource defaults (will be overridden by rule-specific resources)
 # Keep coordinator job lightweight - only cluster rules need large memory
