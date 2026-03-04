@@ -89,12 +89,14 @@ class Hydrology(Data, Module):
                     self.HRU.var.snow_water_equivalent_m.astype(np.float64)
                     + self.HRU.var.liquid_water_in_snow_m.astype(np.float64)
                     + self.HRU.var.interception_storage_m.astype(np.float64)
-                    + np.nansum(self.HRU.var.w.astype(np.float64), axis=0)
+                    + np.nansum(self.HRU.var.water_content_m.astype(np.float64), axis=0)
                     + self.HRU.var.topwater_m.astype(np.float64)
                 )
                 * self.HRU.var.cell_area
             ).sum()
-            + (self.HRU.var.topwater.astype(np.float64) * self.HRU.var.cell_area).sum()
+            + (
+                self.HRU.var.topwater_m.astype(np.float64) * self.HRU.var.cell_area
+            ).sum()
             + self.routing.router.get_total_storage(
                 self.grid.var.discharge_in_rivers_m3_s_substep
             )

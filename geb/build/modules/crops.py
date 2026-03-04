@@ -764,7 +764,9 @@ class Crops(BuildModelBase):
                 if ISO3 in TRADE_REGIONS
             }
 
-            all_ISO3_across_relevant_regions: set[str] = set(relevant_trade_regions.keys())
+            all_ISO3_across_relevant_regions: set[str] = set(
+                relevant_trade_regions.keys()
+            )
 
             # Setup dataFrame for further data corrections
             donor_data: dict[str, pd.DataFrame] = {}
@@ -814,7 +816,7 @@ class Crops(BuildModelBase):
             donor_data = donor_data.loc[
                 (slice(None), slice(self.start_date.year, self.end_date.year)), :
             ]
-            
+
             # here, also countries that are not in the trade regions (e.g. Kosovo) are included (in self.geom["regions"]) and found a donor for (in the setup_donor_countries function)
             data = donate_and_receive_crop_prices(
                 donor_data,
@@ -822,8 +824,8 @@ class Crops(BuildModelBase):
                 TRADE_REGIONS,
                 self.data_catalog,
                 self.geom["global_countries"],
-                self.geom["regions"], 
-            ) 
+                self.geom["regions"],
+            )
 
             # exand data to include all data empty rows from start to end year
             data = data.reindex(

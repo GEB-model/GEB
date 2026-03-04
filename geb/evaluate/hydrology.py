@@ -727,16 +727,16 @@ def create_validation_df(
             "Observed discharge index must be a regular time series with a monotonic increasing DateTimeIndex."
         )
 
-    assert observed_discharge.index.freq is not None, (  # ty:ignore[possibly-missing-attribute]
+    assert observed_discharge.index.freq is not None, (  # ty:ignore[unresolved-attribute]
         "Observed discharge index must have a defined frequency."
     )
     # check if simulated discharge is at least as frequent as observed discharge, and if multiple of observed discharge frequency
-    if simulated_discharge.index.freq > observed_discharge.index.freq:  # ty:ignore[possibly-missing-attribute]
+    if simulated_discharge.index.freq > observed_discharge.index.freq:  # ty:ignore[unresolved-attribute]
         raise ValueError(
             "Simulated discharge frequency is lower than observed discharge frequency. Please ensure the simulated discharge is at least as frequent as the observed discharge."
         )
     if (
-        observed_discharge.index.freq.nanos % simulated_discharge.index.freq.nanos  # ty:ignore[possibly-missing-attribute]
+        observed_discharge.index.freq.nanos % simulated_discharge.index.freq.nanos  # ty:ignore[unresolved-attribute]
     ) != 0:
         raise ValueError(
             "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
@@ -744,7 +744,7 @@ def create_validation_df(
 
     # resample simulated discharge to match the frequency of observed discharge if needed
     simulated_discharge = simulated_discharge.resample(
-        observed_discharge.index.freq  # ty:ignore[possibly-missing-attribute]
+        observed_discharge.index.freq  # ty:ignore[unresolved-attribute]
     ).mean()
 
     # cut both observed and simulated discharge to the same time range
@@ -908,11 +908,11 @@ def _plot_discharge_validation_graphs(
     plt.close()
 
     if include_yearly_plots:
-        years_to_plot: list[int] = sorted(validation_df.index.year.unique())  # ty:ignore[possibly-missing-attribute]
+        years_to_plot: list[int] = sorted(validation_df.index.year.unique())  # ty:ignore[unresolved-attribute]
         print("yearly plots!!!")
         print(years_to_plot)
         for year in years_to_plot:
-            one_year_df: pd.DataFrame = validation_df[validation_df.index.year == year]  # ty:ignore[possibly-missing-attribute]
+            one_year_df: pd.DataFrame = validation_df[validation_df.index.year == year]  # ty:ignore[unresolved-attribute]
             if one_year_df.empty:
                 print(f"No data available for year {year}, skipping.")
                 continue
@@ -1890,6 +1890,9 @@ class Hydrology:
                 "extra_validation_region", None
             )
 
+            # Mask water depth values
+            hmin: float = self.config["floods"]["minimum_flood_depth"]
+
             if extra_validation_path and Path(extra_validation_path).exists():
                 extra_clip_region = gpd.read_file(extra_validation_path).set_crs(28992)
                 extra_clip_region = extra_clip_region.to_crs(region.crs)
@@ -1899,15 +1902,12 @@ class Hydrology:
                     extra_clip_region_buffer.geometry.values,
                     extra_clip_region_buffer.crs,
                 )
-                clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
+                clipped_out = (sim_no_rivers > hmin) & (sim_extra_clipped.isnull())
                 clipped_out_raster = sim_no_rivers.where(clipped_out)
             else:
                 # If no extra validation region, skip clipping
                 sim_extra_clipped = sim_no_rivers
                 clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
-
-            # Mask water depth values
-            hmin: float = self.config["floods"]["minimum_flood_depth"]
 
             sim_extra_clipped = sim_extra_clipped.rio.reproject_like(obs_region)
             simulation_final = sim_extra_clipped > hmin
@@ -2641,22 +2641,16 @@ class Hydrology:
 
     def water_balance(
         self,
-        run_name: str,
-        include_spinup: bool,
         spinup_name: str,
-        *args: Any,
+        run_name: str,
         export: bool = True,
-        **kwargs: Any,
     ) -> None:
         """Create a csv file and plot showing the water balance components.
 
         Args:
+            spinup_name: Name of the spinup run to use for the water balance evaluation.
             run_name: Name of the run to evaluate.
-            include_spinup: Whether to include the spinup run in the evaluation.
-            spinup_name: Name of the spinup run to include in the evaluation.
             export: Whether to export the water balance plot to a file.
-            *args: ignored.
-            **kwargs: ignored.
         """
         folder = self.model.output_folder / "report" / run_name
 
@@ -2878,8 +2872,13 @@ class Hydrology:
         )
 
         if export:
-            fig_path = folder / "water_balance_yearly_subplots.png"
-            plt.savefig(fig_path, dpi=300)
+            fig_path = (
+                self.evaluator.output_folder_evaluate
+                / "hydrology"
+                / "water_balance_yearly_subplots.svg"
+            )
+            fig_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(fig_path)
             print(f"Water balance yearly plot saved as: {fig_path}")
 
         plt.show()

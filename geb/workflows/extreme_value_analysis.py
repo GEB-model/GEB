@@ -294,13 +294,13 @@ class ReturnPeriodModel:
 
         series = series.fillna(0)
 
-        n_data_points_per_week = math.ceil(pd.Timedelta("7D") / series.index.freq)
+        n_data_points_per_week = math.ceil(pd.Timedelta("7D") / series.index.freq)  # ty:ignore[unresolved-attribute]
 
         self.series = series
         # Resample to daily maxima to ensure independence of observations (de-clustering)
         total_days = (self.series.index.max() - self.series.index.min()).days + 1
         self.years_non_nan = (
-            (self.n_non_nan * self.series.index.freq) / pd.Timedelta(days=1)
+            (self.n_non_nan * self.series.index.freq) / pd.Timedelta(days=1)  # ty:ignore[unresolved-attribute]
         ) / 365.2425
 
         # Create candidate thresholds u based on quantiles
@@ -855,5 +855,5 @@ class ReturnPeriodModel:
             fontsize=16,
             fontweight="bold",
         )
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.tight_layout()
         return fig

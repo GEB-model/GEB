@@ -81,25 +81,27 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
 
 
 def read_array(fp: Path) -> np.ndarray:
-    """Load a numpy array from a .npz or .zarr file.
+    """Load a numpy array from a .zarr file.
 
     Args:
         fp: The path to the .npz or .zarr file.
 
     Returns:
         The numpy array.
-
-    Raises:
-        ValueError: If the file format is not supported.
     """
-    if fp.suffix == ".npz":
-        return np.load(fp)["data"]
-    elif fp.suffix == ".zarr":
-        zarr_object = zarr.load(fp)
-        assert isinstance(zarr_object, np.ndarray)
-        return zarr_object
-    else:
-        raise ValueError(f"Unsupported file format: {fp.suffix}")
+    zarr_object = zarr.load(fp)
+    assert isinstance(zarr_object, np.ndarray)
+    return zarr_object
+
+
+def write_array(arr: np.ndarray, fp: Path) -> None:
+    """Save a numpy array to a .zarr file.
+
+    Args:
+        arr: The numpy array to save.
+        fp: The path to the output .zarr file.
+    """
+    zarr.save_array(fp, arr, overwrite=True)  # ty:ignore[invalid-argument-type]
 
 
 @overload
@@ -138,62 +140,42 @@ def read_grid(
 
     Returns:
         The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
-
-    Raises:
-        ValueError: If the file format is not supported.
     """
-    if filepath.suffix == ".tif":
-        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
-        with rasterio.open(filepath) as src:
-            data: TwoDArray | ThreeDArray = src.read(layer)
-            data: TwoDArray | ThreeDArray = (
-                data.astype(np.float32) if data.dtype == np.float64 else data
-            )
-            if return_transform_and_crs:
-                return data, src.transform, src.crs
-            else:
-                return data
-
-    elif filepath.suffix == ".zarr":
-        store: zarr.storage.LocalStore = zarr.storage.LocalStore(
-            filepath, read_only=True
+    store: zarr.storage.LocalStore = zarr.storage.LocalStore(filepath, read_only=True)
+    group: zarr.Group = zarr.open_group(store, mode="r")
+    data_array: zarr.Array | zarr.Group = group[filepath.stem]
+    assert isinstance(data_array, zarr.Array)
+    data = data_array[:]
+    assert isinstance(data, np.ndarray)
+    data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
+    if data.dtype == np.float64:
+        data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
+    assert data.ndim in (2, 3)
+    if return_transform_and_crs:
+        x_array: zarr.Array | zarr.Group = group["x"]
+        assert isinstance(x_array, zarr.Array)
+        x = x_array[:]
+        assert isinstance(x, np.ndarray)
+        y_array: zarr.Array | zarr.Group = group["y"]
+        assert isinstance(y_array, zarr.Array)
+        y = y_array[:]
+        assert isinstance(y, np.ndarray)
+        x_diff: float = np.diff(x[:]).mean().item()
+        y_diff: float = np.diff(y[:]).mean().item()
+        transform: Affine = Affine(
+            a=x_diff,
+            b=0,
+            c=x[0] - x_diff / 2,
+            d=0,
+            e=y_diff,
+            f=y[0] - y_diff / 2,
         )
-        group: zarr.Group = zarr.open_group(store, mode="r")
-        data_array: zarr.Array | zarr.Group = group[filepath.stem]
-        assert isinstance(data_array, zarr.Array)
-        data = data_array[:]
-        assert isinstance(data, np.ndarray)
-        data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
-        if data.dtype == np.float64:
-            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
-        assert data.ndim in (2, 3)
-        if return_transform_and_crs:
-            x_array: zarr.Array | zarr.Group = group["x"]
-            assert isinstance(x_array, zarr.Array)
-            x = x_array[:]
-            assert isinstance(x, np.ndarray)
-            y_array: zarr.Array | zarr.Group = group["y"]
-            assert isinstance(y_array, zarr.Array)
-            y = y_array[:]
-            assert isinstance(y, np.ndarray)
-            x_diff: float = np.diff(x[:]).mean().item()
-            y_diff: float = np.diff(y[:]).mean().item()
-            transform: Affine = Affine(
-                a=x_diff,
-                b=0,
-                c=x[0] - x_diff / 2,
-                d=0,
-                e=y_diff,
-                f=y[0] - y_diff / 2,
-            )
-            crs = data_array.attrs["_CRS"]
-            assert isinstance(crs, dict)
-            wkt: str = crs["wkt"]
-            return data, transform, wkt
-        else:
-            return data
+        crs = data_array.attrs["_CRS"]
+        assert isinstance(crs, dict)
+        wkt: str = crs["wkt"]
+        return data, transform, wkt
     else:
-        raise ValueError("File format not supported.")
+        return data
 
 
 def read_geom(filepath: str | Path) -> gpd.GeoDataFrame:

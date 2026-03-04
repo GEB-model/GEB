@@ -101,15 +101,27 @@ def balance_check(
     store = 0
 
     if how == "cellwise":
-        inflow = np.add.reduce(influxes)
-        outflow = np.add.reduce(outfluxes)
+        influx = np.add.reduce(influxes)
+        outflux = np.add.reduce(outfluxes)
         prestorage = np.add.reduce(prestorages)
         poststorage = np.add.reduce(poststorages)
 
-        balance = inflow - outflow + prestorage - poststorage
+        balance = influx - outflux + prestorage - poststorage
 
         if np.isnan(balance).any():
-            raise ValueError("Balance check failed, NaN values found.")
+            for kind, array in zip(
+                ["influx", "outflux", "prestorage", "poststorage"],
+                [influxes, outfluxes, prestorages, poststorages],
+            ):
+                for i, component in enumerate(array, start=1):
+                    if np.isnan(component).any():
+                        raise ValueError(
+                            f"NaN values found in {kind} component {i} (1-indexed)."
+                        )
+            else:
+                raise ValueError(
+                    "NaN values found in balance calculation, but could not identify component (shouldn't happen)."
+                )
 
         if balance.size == 0:
             return True

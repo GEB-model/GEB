@@ -190,8 +190,33 @@ WATER_BALANCE_REPORT_CONFIG = {
 
 ENERGY_BALANCE_REPORT_CONFIG = {
     "hydrology.landsurface": {
-        "_energy_balance_soil_temperature_top_layer_C": {
-            "varname": "HRU.var.soil_temperature_C[0]",
+        "_energy_balance_soil_temperature_layer_0_C": {
+            "varname": ".soil_temperature_C[0]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_1_C": {
+            "varname": ".soil_temperature_C[1]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_2_C": {
+            "varname": ".soil_temperature_C[2]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_3_C": {
+            "varname": ".soil_temperature_C[3]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_4_C": {
+            "varname": ".soil_temperature_C[4]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_5_C": {
+            "varname": ".soil_temperature_C[5]",
             "type": "HRU",
             "function": "weightedmean",
         },
@@ -615,34 +640,8 @@ class Reporter:
                         routing = self.model.hydrology.routing
                         outflow_rivers = routing.outflow_rivers
                         all_rivers = routing.rivers
-                        routing = self.model.hydrology.routing
-                        outflow_rivers = routing.outflow_rivers
-                        all_rivers = routing.rivers
 
                         outflow_reporters = {}
-
-                        def get_upstream_represented_xys(
-                            river_id: int,
-                        ) -> list[tuple[int, int]]:
-                            """Recursively find the nearest represented upstream rivers.
-
-                            Args:
-                                river_id: The ID of the river to find the upstream represented rivers for.
-
-                            Returns:
-                                A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
-                            """
-                            river = all_rivers.loc[river_id]
-                            if river["represented_in_grid"]:
-                                return [river["hydrography_xy"][-1]]
-
-                            upstream_rivers = all_rivers[
-                                all_rivers["downstream_ID"] == river_id
-                            ]
-                            xys = []
-                            for idx, _ in upstream_rivers.iterrows():
-                                xys.extend(get_upstream_represented_xys(idx))
-                            return xys
 
                         def get_upstream_represented_xys(
                             river_id: int,
