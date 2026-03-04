@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from geb.hydrology.landcovers import NON_PADDY_IRRIGATED
-from geb.hydrology.soil import infiltration
+from geb.hydrology.landsurface.water import infiltration
 from tests.testconfig import output_folder
 
 

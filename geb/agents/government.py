@@ -156,10 +156,10 @@ class Government(AgentBaseClass):
 
         forest_mask = hydrology.HRU.var.land_use_type == FOREST
         for prop in (
-            "ws",
-            "wfc",
-            "wwp",
-            "wres",
+            "water_content_saturated_m",
+            "water_content_field_capacity_m",
+            "water_content_wilting_point_m",
+            "water_content_residual_m",
             "saturated_hydraulic_conductivity_m_per_s",
             "bubbling_pressure_cm",
             "lambda_pore_size_distribution",

@@ -164,7 +164,7 @@ else:
 xr.set_options(use_bottleneck=False, keep_attrs=True)
 
 # raise all numpy warnings as errors, to catch potential issues early on
-np.seterr(all="raise")
+np.seterr(divide="raise", over="raise", under="ignore", invalid="raise")
 
 # force solving of all warnings as errors, to catch potential issues early on
 warnings.simplefilter(action="error", category=FutureWarning)
