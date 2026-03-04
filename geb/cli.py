@@ -1,8 +1,11 @@
 """Command line interface for GEB."""
 
+import datetime
 import functools
+import json
 import subprocess
 import sys
+from operator import attrgetter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -10,6 +13,7 @@ import click
 
 from geb import GEB_PACKAGE_DIR, __version__
 from geb.build.data_catalog import NewDataCatalog
+from geb.evaluate import Evaluate
 from geb.runner import (
     ALTER_FROM_MODEL_DEFAULT,
     BUILD_DEFAULT,
@@ -379,8 +383,16 @@ def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
                     # Try float
                     value = float(value)
                 except ValueError:
-                    # Keep as string
-                    pass
+                    try:
+                        # Try parsing as ISO format date (YYYY-MM-DD)
+                        value = datetime.date.fromisoformat(value)
+                    except ValueError:
+                        try:
+                            # Try parsing as ISO format datetime
+                            value = datetime.datetime.fromisoformat(value)
+                        except ValueError:
+                            # Keep as string
+                            pass
             params[key] = value
         else:
             click.echo(
@@ -448,40 +460,23 @@ def update(*args: Any, **kwargs: Any) -> None:
     update_fn(*args, **kwargs)
 
 
-@cli.command()
-@click_run_options()
-@click.option(
-    "--method",
-    default="hydrology.evaluate_discharge",
-    help="Single evaluation method to run, e.g. 'hydrology.evaluate_discharge'.",
+@cli.command(
+    context_settings=dict(
+        ignore_unknown_options=True, allow_extra_args=True, help_option_names=[]
+    )
 )
+@click.argument("method", default="hydrology.evaluate_discharge")
+@click_run_options()
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
-@click.option(
-    "--include-spinup",
-    is_flag=True,
-    default=False,
-    help="Include spinup in evaluation.",
-)
-@click.option(
-    "--include-yearly-plots",
-    is_flag=True,
-    default=False,
-    help="Create yearly plots in evaluation.",
-)
-@click.option(
-    "--correct-discharge-observations",
-    is_flag=True,
-    default=False,
-    help="correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries for the difference in upstream area between the discharge_observations station and the simulated discharge",
-)
+@click.option("--help", is_flag=True, help="Show this message and exit.")
+@click.pass_context
 def evaluate(
+    ctx: click.Context,
     method: str,
     spinup_name: str,
     run_name: str,
-    include_spinup: bool,
-    include_yearly_plots: bool,
-    correct_discharge_observations: bool,
+    help: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     config: dict[str, Any] | Path = CONFIG_DEFAULT,
     profiling: bool = PROFILING_DEFAULT,
@@ -490,30 +485,129 @@ def evaluate(
 ) -> None:
     """Evaluate model, for example by comparing observed and simulated discharge.
 
+    Accepts additional parameter assignments in the form key=value to pass to the evaluation method.
+    Strings "true" and "false" (case-insensitive) are converted to True and False.
+
+    Additional help can be retrieved for a specific method like this:
+    `geb evaluate [METHOD] --help`
+
     Args:
+        ctx: Click context containing extra arguments.
         method: Single evaluation method to run, e.g. `hydrology.evaluate_discharge`.
         spinup_name: Name of the evaluation run.
         run_name: Name of the run to evaluate.
-        include_spinup: Include spinup in evaluation.
-        include_yearly_plots: Create yearly plots in evaluation.
-        correct_discharge_observations: correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries
-            for the difference in upstream area between the discharge_observations station and the simulated discharge.
+        help: Show this message and exit.
         working_directory: Working directory for the model.
         config: Path to the model configuration file or a dict with the config.
         profiling: If True, run the model with profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
         timing: If True, run the model with timing, printing the time taken for specific methods
     """
+    if help:
+        # Check if the user specifically requested help for the command or a method.
+        # If 'method' was explicitly provided by the user (and is not just the default),
+        # we show the help for that specific method.
+        is_method_help = (
+            ctx.get_parameter_source("method") != click.core.ParameterSource.DEFAULT
+        )
+
+        if not is_method_help:
+            click.echo(ctx.get_help())
+            ctx.exit()
+
+        # If it's method help, show method docstring
+
+        try:
+            evaluator = Evaluate(None)  # type: ignore
+            attr = attrgetter(method)(evaluator)
+            click.echo(f"\nHelp for method '{method}':\n")
+            if attr.__doc__:
+                click.echo(attr.__doc__)
+            else:
+                click.echo("No documentation found for this method.")
+        except Exception:
+            click.echo(f"Error: Method '{method}' not found.")
+            available_methods = []
+            try:
+                evaluator = Evaluate(None)  # type: ignore
+                # List methods in sub-evaluators
+                for sub_name in evaluator.sub_evaluators:
+                    sub_eval = getattr(evaluator, sub_name)
+                    for attr_name in dir(sub_eval):
+                        if not attr_name.startswith("_") and callable(
+                            getattr(sub_eval, attr_name)
+                        ):
+                            available_methods.append(f"{sub_name}.{attr_name}")
+            except Exception:
+                pass
+
+            if available_methods:
+                click.echo("\nAvailable methods are:")
+                for m in sorted(available_methods):
+                    click.echo(f"  - {m}")
+        ctx.exit()
+
     method_name = method.replace("-", "_").strip()
-    run_model_with_method(
+    # Parse extra arguments from ctx.args
+    # Supports --key value or --key=value formats
+    extra_args = {}
+    i = 0
+    while i < len(ctx.args):
+        arg = ctx.args[i]
+        key = None
+        value = None
+
+        if arg.startswith("--"):
+            if "=" in arg:
+                # Handle --key=value
+                parts = arg[2:].split("=", 1)
+                key = parts[0]
+                value = parts[1]
+                i += 1
+            else:
+                # Handle --key value
+                key = arg[2:]
+                if i + 1 < len(ctx.args) and not ctx.args[i + 1].startswith("--"):
+                    value = ctx.args[i + 1]
+                    i += 2
+                else:
+                    # Flag case: --key without value
+                    value = "true"
+                    i += 1
+        else:
+            click.echo(
+                f"Warning: Ignoring invalid argument '{arg}'. Expected format: --key value or --key=value",
+                err=True,
+            )
+            i += 1
+            continue
+
+        if key:
+            # Try to convert value to appropriate type
+            if value.lower() == "true":
+                value = True
+            elif value.lower() == "false":
+                value = False
+            else:
+                try:
+                    # Try int first
+                    value = int(value)
+                except ValueError:
+                    try:
+                        # Try float
+                        value = float(value)
+                    except ValueError:
+                        # Keep as string
+                        pass
+            extra_args[key] = value
+
+    result = run_model_with_method(
         method="evaluate",
         method_args={
             "method": method_name,
             "spinup_name": spinup_name,
             "run_name": run_name,
-            "include_spinup": include_spinup,
-            "include_yearly_plots": include_yearly_plots,
-            "correct_discharge_observations": correct_discharge_observations,
+            **extra_args,
         },
         working_directory=working_directory,
         config=config,
@@ -521,6 +615,11 @@ def evaluate(
         optimize=optimize,
         timing=timing,
     )
+
+    # If the result is a dictionary, print it as JSON to stdout
+    # This allows piping metrics to other tools or Snakemake
+    if isinstance(result, dict):
+        click.echo(json.dumps(result))
 
 
 @cli.command()
@@ -581,6 +680,11 @@ def data_catalog(method: str) -> None:
         ["calibrate", "sensitivity", "multirun", "benchmark"], case_sensitive=True
     ),
 )
+@click.argument(
+    "target",
+    required=False,
+    type=str,
+)
 @click.option(
     "--cores",
     "-c",
@@ -611,6 +715,7 @@ def data_catalog(method: str) -> None:
 @click.argument("snakemake_args", nargs=-1, type=click.UNPROCESSED)
 def workflow(
     workflow_name: str,
+    target: str | None,
     cores: str,
     profile: Path | None,
     dryrun: bool,
@@ -626,13 +731,14 @@ def workflow(
     - multirun: Multiple scenario runs
 
     Examples:
-        geb workflow calibrate --cores 8
+        geb workflow calibrate hydrology --cores 8
         geb workflow calibrate --profile profiles/cluster
         geb workflow calibrate -co REGION=geul -co NGEN=10
         geb workflow sensitivity --dryrun
 
     Args:
         workflow_name: Name of the workflow to run.
+        target: Optional calibration target (e.g., 'hydrology').
         cores: Number of cores to use.
         profile: Snakemake profile directory.
         dryrun: Whether to perform a dry run.
@@ -659,6 +765,11 @@ def workflow(
         if configfile.exists():
             cmd.extend(["--configfile", str(configfile)])
 
+        # Add target as config override if provided
+        config_overrides_dict = {}
+        if target:
+            config_overrides_dict["TARGET"] = target
+
         # Add profile if specified and exists
         if profile is not None:
             if not profile.is_absolute():
@@ -677,7 +788,6 @@ def workflow(
             cmd.append("-n")
 
         # Process config overrides
-        config_overrides_dict = {}
         if config_override:
             for override in config_override:
                 if "=" in override:
@@ -696,6 +806,16 @@ def workflow(
 
         # Add additional snakemake arguments
         cmd.extend(snakemake_args)
+
+        # Snakemake uses a lock file to prevent multiple runs in the same directory.
+        # However, often when a process is interrupted (e.g., by Ctrl+C) the lock file is not removed,
+        # which prevents running the workflow again until the lock file is manually removed.
+        # However, we leave it to the user to ensure they don't run multiple workflows
+        # so we unlock any existing lock file at the start of the workflow.
+        result = subprocess.run(cmd + ["--unlock"], check=True)
+        if result.returncode != 0:
+            click.echo("Error: Failed to unlock Snakemake lock file.", err=True)
+            sys.exit(result.returncode)
 
         # Print command
         click.echo(f"Running: {' '.join(cmd)}")

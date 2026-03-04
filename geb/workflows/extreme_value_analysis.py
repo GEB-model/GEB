@@ -54,13 +54,15 @@ def fit_gpd_lmoments(
     if n < 6:
         raise ValueError("Too few exceedances for reliable fit")
 
+    l1: np.float64
+    l2: np.float64
     if fixed_shape is not None:
-        l1 = lmoment(y, order=[1], standardize=False)
+        (l1,) = lmoment(y, order=[1], standardize=False)
         xi = fixed_shape
         # Use l1 to estimate sigma: sigma = l1 * (1 - xi)
         sigma = l1 * (1.0 - xi)
     elif fixed_scale is not None:
-        l1 = lmoment(y, order=[1], standardize=False)
+        (l1,) = lmoment(y, order=[1], standardize=False)
         sigma = fixed_scale
         # Use l1 to estimate xi: l1 = sigma / (1 - xi) -> 1 - xi = sigma / l1 -> xi = 1 - sigma / l1
         if abs(l1) < 1e-12:

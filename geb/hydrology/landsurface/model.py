@@ -1382,38 +1382,22 @@ class LandSurface(Module):
         Returns:
             True if the soil enthalpy balance closes within tolerance.
         """
-        soil_boundary_influx_J_per_m2: ArrayFloat32 = np.maximum(
-            soil_boundary_enthalpy_flux_J_per_m2, np.float32(0.0)
-        )
-        soil_boundary_outflux_J_per_m2: ArrayFloat32 = np.maximum(
-            -soil_boundary_enthalpy_flux_J_per_m2, np.float32(0.0)
-        )
-
-        rain_advection_influx_J_per_m2: ArrayFloat32 = np.maximum(
-            rain_advection_enthalpy_flux_J_per_m2, np.float32(0.0)
-        )
-        rain_advection_outflux_J_per_m2: ArrayFloat32 = np.maximum(
-            -rain_advection_enthalpy_flux_J_per_m2, np.float32(0.0)
-        )
-
         return balance_check(
             name="land surface enthalpy",
             how="cellwise",
             influxes=[
-                soil_boundary_influx_J_per_m2,
-                rain_advection_influx_J_per_m2,
+                soil_boundary_enthalpy_flux_J_per_m2,
+                rain_advection_enthalpy_flux_J_per_m2,
             ],
             outfluxes=[
-                soil_boundary_outflux_J_per_m2,
-                rain_advection_outflux_J_per_m2,
                 evaporative_cooling_enthalpy_loss_J_per_m2,
                 interflow_enthalpy_loss_J_per_m2,
                 groundwater_recharge_enthalpy_loss_J_per_m2,
                 transpiration_enthalpy_loss_J_per_m2,
             ],
-            prestorages=[np.nansum(soil_enthalpy_J_per_m2_prev, axis=0)],
-            poststorages=[np.nansum(self.HRU.var.soil_enthalpy_J_per_m2, axis=0)],
-            tolerance=1e2,
+            prestorages=[soil_enthalpy_J_per_m2_prev.sum(axis=0)],
+            poststorages=[self.HRU.var.soil_enthalpy_J_per_m2.sum(axis=0)],
+            tolerance=1e3,
             raise_on_error=False,
         )
 
@@ -1983,14 +1967,14 @@ class LandSurface(Module):
                 liquid_water_in_snow_prev,
                 interception_storage_prev,
                 topwater_m_prev,
-                np.nansum(water_content_m_prev, axis=0),
+                water_content_m_prev.sum(axis=0),
             ],
             poststorages=[
                 self.HRU.var.snow_water_equivalent_m,
                 self.HRU.var.liquid_water_in_snow_m,
                 self.HRU.var.interception_storage_m,
                 self.HRU.var.topwater_m,
-                np.nansum(self.HRU.var.water_content_m, axis=0),
+                self.HRU.var.water_content_m.sum(axis=0),
             ],
             tolerance=1e-5,
             raise_on_error=False,

@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
-from matplotlib.cm import get_cmap
+from matplotlib import colormaps as mcolormaps
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
@@ -909,8 +909,6 @@ def _plot_discharge_validation_graphs(
 
     if include_yearly_plots:
         years_to_plot: list[int] = sorted(validation_df.index.year.unique())  # ty:ignore[unresolved-attribute]
-        print("yearly plots!!!")
-        print(years_to_plot)
         for year in years_to_plot:
             one_year_df: pd.DataFrame = validation_df[validation_df.index.year == year]  # ty:ignore[unresolved-attribute]
             if one_year_df.empty:
@@ -1097,7 +1095,8 @@ class Hydrology:
         include_spinup: bool = False,
         include_yearly_plots: bool = True,
         correct_discharge_observations: bool = False,
-    ) -> None:
+        create_plots: bool = True,
+    ) -> dict[str, float | None]:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
         Compares simulated discharge from the GEB model with observed discharge data from
@@ -1117,6 +1116,10 @@ class Hydrology:
             include_yearly_plots: Whether to create plots for every year showing the evaluation.
             correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
                 in upstream area between the discharge observations station and the discharge from GEB.
+            create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
+
+        Returns:
+            Dictionary containing mean metrics (KGE, NSE, R).
 
         Raises:
             FileNotFoundError: If the run folder does not exist in the report directory.
@@ -1161,13 +1164,6 @@ class Hydrology:
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )
 
-        GEB_discharge = read_zarr(
-            self.model.output_folder
-            / "report"
-            / run_name
-            / "hydrology.routing"
-            / "discharge_daily.zarr"
-        )
         print(f"Loaded discharge simulation from {run_name} run.")
 
         # check if run file exists, if not, raise an error
@@ -1196,24 +1192,10 @@ class Hydrology:
                     discharge_obs_series.columns = ["Q"]
                 discharge_obs_series.name = "Q"
 
-                # check if there is data in the model time period
-                start_date = GEB_discharge.time.min().values
-                end_date = GEB_discharge.time.max().values
-                data_check = discharge_obs_series[
-                    (discharge_obs_series.index >= start_date)
-                    & (discharge_obs_series.index <= end_date)
-                ].dropna()  # filter the dataframe to the model time period
-                if len(data_check) < 365:
-                    print(
-                        f"Station {ID} has only {len(data_check)} days of data, less than 1 year. Skipping."
-                    )
-                    continue
-
                 # extract the properties from the snapping dataframe
                 discharge_observations_station_name = snapped_locations.loc[
                     ID
                 ].discharge_observations_station_name
-                snapped_xy_coords = snapped_locations.loc[ID].snapped_grid_pixel_xy
                 discharge_observations_station_coords = snapped_locations.loc[
                     ID
                 ].discharge_observations_station_coords
@@ -1240,18 +1222,19 @@ class Hydrology:
 
                 KGE, NSE, R = _calculate_discharge_validation_metrics(validation_df)
 
-                _plot_discharge_validation_graphs(
-                    station_id=ID,
-                    validation_df=validation_df,
-                    station_name=discharge_observations_station_name,
-                    upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
-                    kge=KGE,
-                    nse=NSE,
-                    r_value=R,
-                    eval_plot_folder=eval_plot_folder,
-                    include_yearly_plots=include_yearly_plots,
-                    frequency=freq_label,
-                )
+                if create_plots:
+                    _plot_discharge_validation_graphs(
+                        station_id=ID,
+                        validation_df=validation_df,
+                        station_name=discharge_observations_station_name,
+                        upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                        kge=KGE,
+                        nse=NSE,
+                        r_value=R,
+                        eval_plot_folder=eval_plot_folder,
+                        include_yearly_plots=include_yearly_plots,
+                        frequency=freq_label,
+                    )
 
                 # attach to the evaluation dataframe
                 evaluation_per_station.append(
@@ -1269,7 +1252,7 @@ class Hydrology:
 
         if len(evaluation_per_station) == 0:
             # Create empty evaluation dataframe with proper structure
-            empty_evaluation_df = pd.DataFrame(
+            evaluation_df = pd.DataFrame(
                 columns=np.array(
                     [
                         "station_name",
@@ -1280,42 +1263,28 @@ class Hydrology:
                         "NSE",
                         "R",
                     ]
-                )
-            ).set_index(pd.Index([], name="station_ID"))
-
-            # Save empty evaluation metrics as Excel file
-            empty_evaluation_df.to_excel(
-                eval_result_folder / "evaluation_metrics.xlsx",
-                index=True,
+                ),
+                index=pd.Index([], name="station_ID"),
             )
-
-            # Create empty GeoDataFrame and save as parquet
-            empty_evaluation_gdf = gpd.GeoDataFrame(
-                empty_evaluation_df,
-                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
-                crs="EPSG:4326",
-            )
-            empty_evaluation_gdf.to_parquet(
-                eval_result_folder / "evaluation_metrics.geoparquet",
-            )
-
         else:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
-            evaluation_df.to_excel(
-                eval_result_folder / "evaluation_metrics.xlsx",
-                index=True,
-            )
 
-            # Save evaluation metrics as as excel and parquet file
-            evaluation_gdf = gpd.GeoDataFrame(
-                evaluation_df,
-                geometry=gpd.points_from_xy(evaluation_df.x, evaluation_df.y),
-                crs="EPSG:4326",
-            )  # create a geodataframe from the evaluation dataframe
-            evaluation_gdf.to_parquet(
-                eval_result_folder / "evaluation_metrics.geoparquet",
-            )
+        evaluation_df.to_excel(
+            eval_result_folder / "evaluation_metrics.xlsx",
+            index=True,
+        )
 
+        # Save evaluation metrics as as excel and parquet file
+        evaluation_gdf = gpd.GeoDataFrame(
+            evaluation_df,
+            geometry=gpd.points_from_xy(evaluation_df.x, evaluation_df.y),
+            crs="EPSG:4326",
+        )  # create a geodataframe from the evaluation dataframe
+        evaluation_gdf.to_parquet(
+            eval_result_folder / "evaluation_metrics.geoparquet",
+        )
+
+        if create_plots:
             _plot_discharge_validation_map(
                 evaluation_gdf=evaluation_gdf,
                 region_shapefile=region_shapefile,
@@ -1331,6 +1300,8 @@ class Hydrology:
                 rivers=rivers,
             )
 
+            print("Discharge evaluation dashboard created.")
+
             outflow_plot_count: int = _plot_outflow_discharge_timeseries(
                 output_folder=self.model.output_folder,
                 run_name=run_name,
@@ -1340,7 +1311,19 @@ class Hydrology:
             )
             print(f"Created {outflow_plot_count} outflow discharge plots.")
 
-            print("Discharge evaluation dashboard created.")
+        # Return mean metrics if available
+        if not evaluation_df.empty:
+            return {
+                "KGE": float(evaluation_df["KGE"].mean()),
+                "NSE": float(evaluation_df["NSE"].mean()),
+                "R": float(evaluation_df["R"].mean()),
+            }
+        else:
+            return {
+                "KGE": None,
+                "NSE": None,
+                "R": None,
+            }
 
     def skill_score_graphs(
         self,
@@ -2781,7 +2764,7 @@ class Hydrology:
         flatten("", hierarchy)
 
         df = pd.DataFrame(flat)
-        df_yearly = df.resample("Y").sum()
+        df_yearly = df.resample("YE").sum()
         df_yearly.to_csv(folder / "water_balance_yearly.csv")
         print("Water balance yearly values saved.")
 
@@ -2801,9 +2784,9 @@ class Hydrology:
         legend_labels = []
 
         # Colormaps
-        input_cmap = get_cmap("Blues")
-        output_cmap = get_cmap("Set3")
-        storage_cmap = get_cmap("Greens")
+        input_cmap = mcolormaps["Blues"]
+        output_cmap = mcolormaps["Set3"]
+        storage_cmap = mcolormaps["Greens"]
 
         # Assign distinct colors per column
         input_colors = {

@@ -694,10 +694,14 @@ class GEBModel(Module):
 
         self.hazard_driver.floods.get_return_period_maps()
 
-    def evaluate(self, *args: Any, **kwargs: Any) -> None:
-        """Call the evaluator to evaluate the model results."""
+    def evaluate(self, *args: Any, **kwargs: Any) -> Any:
+        """Call the evaluator to evaluate the model results.
+
+        Returns:
+            The result of the evaluation method.
+        """
         print("Evaluating model...")
-        self.evaluator.run(*args, **kwargs)
+        return self.evaluator.run(*args, **kwargs)
 
     @property
     def current_day_of_year(self) -> int:
