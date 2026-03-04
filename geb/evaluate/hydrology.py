@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
-from matplotlib.cm import get_cmap
+from matplotlib import colormaps as mcolormaps
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
@@ -2764,7 +2764,7 @@ class Hydrology:
         flatten("", hierarchy)
 
         df = pd.DataFrame(flat)
-        df_yearly = df.resample("Y").sum()
+        df_yearly = df.resample("YE").sum()
         df_yearly.to_csv(folder / "water_balance_yearly.csv")
         print("Water balance yearly values saved.")
 
@@ -2784,9 +2784,9 @@ class Hydrology:
         legend_labels = []
 
         # Colormaps
-        input_cmap = get_cmap("Blues")
-        output_cmap = get_cmap("Set3")
-        storage_cmap = get_cmap("Greens")
+        input_cmap = mcolormaps["Blues"]
+        output_cmap = mcolormaps["Set3"]
+        storage_cmap = mcolormaps["Greens"]
 
         # Assign distinct colors per column
         input_colors = {
