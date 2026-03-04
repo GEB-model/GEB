@@ -32,6 +32,15 @@ class Evaluate:
         self.energy = Energy(model, self)
         self.meteorological_forecasts = MeteorologicalForecasts(model, self)
 
+    @property
+    def sub_evaluators(self) -> list[str]:
+        """Returns a list of available sub-evaluators."""
+        return [
+            attr
+            for attr, value in self.__dict__.items()
+            if not attr.startswith("_") and attr != "model"
+        ]
+
     def run(
         self,
         method: str,
@@ -62,11 +71,14 @@ class Evaluate:
                 f"Method {method} is not implemented in Evaluate class."
             ) from exc
 
-        attr(
-            spinup_name=spinup_name,
-            run_name=run_name,
+        # Merge spinup_name and run_name into kwargs to pass them all as keyword arguments
+        all_kwargs = {
+            "spinup_name": spinup_name,
+            "run_name": run_name,
             **kwargs,
-        )
+        }
+
+        attr(**all_kwargs)
 
     @property
     def output_folder_evaluate(self) -> Path:

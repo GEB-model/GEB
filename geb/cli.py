@@ -4,6 +4,7 @@ import datetime
 import functools
 import subprocess
 import sys
+from operator import attrgetter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -11,6 +12,7 @@ import click
 
 from geb import GEB_PACKAGE_DIR, __version__
 from geb.build.data_catalog import NewDataCatalog
+from geb.evaluate import Evaluate
 from geb.runner import (
     ALTER_FROM_MODEL_DEFAULT,
     BUILD_DEFAULT,
@@ -457,40 +459,23 @@ def update(*args: Any, **kwargs: Any) -> None:
     update_fn(*args, **kwargs)
 
 
-@cli.command()
-@click_run_options()
-@click.option(
-    "--method",
-    default="hydrology.evaluate_discharge",
-    help="Single evaluation method to run, e.g. 'hydrology.evaluate_discharge'.",
+@cli.command(
+    context_settings=dict(
+        ignore_unknown_options=True, allow_extra_args=True, help_option_names=[]
+    )
 )
+@click.argument("method", default="hydrology.evaluate_discharge")
+@click_run_options()
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
-@click.option(
-    "--include-spinup",
-    is_flag=True,
-    default=False,
-    help="Include spinup in evaluation.",
-)
-@click.option(
-    "--include-yearly-plots",
-    is_flag=True,
-    default=False,
-    help="Create yearly plots in evaluation.",
-)
-@click.option(
-    "--correct-discharge-observations",
-    is_flag=True,
-    default=False,
-    help="correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries for the difference in upstream area between the discharge_observations station and the simulated discharge",
-)
+@click.option("--help", is_flag=True, help="Show this message and exit.")
+@click.pass_context
 def evaluate(
+    ctx: click.Context,
     method: str,
     spinup_name: str,
     run_name: str,
-    include_spinup: bool,
-    include_yearly_plots: bool,
-    correct_discharge_observations: bool,
+    help: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     config: dict[str, Any] | Path = CONFIG_DEFAULT,
     profiling: bool = PROFILING_DEFAULT,
@@ -499,30 +484,104 @@ def evaluate(
 ) -> None:
     """Evaluate model, for example by comparing observed and simulated discharge.
 
+    Accepts additional parameter assignments in the form key=value to pass to the evaluation method.
+    Strings "true" and "false" (case-insensitive) are converted to True and False.
+
+    Additional help can be retrieved for a specific method like this:
+    `geb evaluate [METHOD] --help`
+
     Args:
+        ctx: Click context containing extra arguments.
         method: Single evaluation method to run, e.g. `hydrology.evaluate_discharge`.
         spinup_name: Name of the evaluation run.
         run_name: Name of the run to evaluate.
-        include_spinup: Include spinup in evaluation.
-        include_yearly_plots: Create yearly plots in evaluation.
-        correct_discharge_observations: correct_discharge_observations can be flagged to correct the discharge_observations discharge timeseries
-            for the difference in upstream area between the discharge_observations station and the simulated discharge.
+        help: Show this message and exit.
         working_directory: Working directory for the model.
         config: Path to the model configuration file or a dict with the config.
         profiling: If True, run the model with profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
         timing: If True, run the model with timing, printing the time taken for specific methods
     """
+    if help:
+        # Check if the user specifically requested help for the command or a method.
+        # If 'method' was explicitly provided by the user (and is not just the default),
+        # we show the help for that specific method.
+        is_method_help = (
+            ctx.get_parameter_source("method") != click.core.ParameterSource.DEFAULT
+        )
+
+        if not is_method_help:
+            click.echo(ctx.get_help())
+            ctx.exit()
+
+        # If it's method help, show method docstring
+
+        try:
+            evaluator = Evaluate(None)  # type: ignore
+            attr = attrgetter(method)(evaluator)
+            click.echo(f"\nHelp for method '{method}':\n")
+            if attr.__doc__:
+                click.echo(attr.__doc__)
+            else:
+                click.echo("No documentation found for this method.")
+        except Exception:
+            click.echo(f"Error: Method '{method}' not found.")
+            available_methods = []
+            try:
+                evaluator = Evaluate(None)  # type: ignore
+                # List methods in sub-evaluators
+                for sub_name in evaluator.sub_evaluators:
+                    sub_eval = getattr(evaluator, sub_name)
+                    for attr_name in dir(sub_eval):
+                        if not attr_name.startswith("_") and callable(
+                            getattr(sub_eval, attr_name)
+                        ):
+                            available_methods.append(f"{sub_name}.{attr_name}")
+            except Exception:
+                pass
+
+            if available_methods:
+                click.echo("\nAvailable methods are:")
+                for m in sorted(available_methods):
+                    click.echo(f"  - {m}")
+        ctx.exit()
+
     method_name = method.replace("-", "_").strip()
+    # Parse extra arguments as key=value pairs
+    extra_args = {}
+    for arg in ctx.args:
+        if "=" in arg:
+            key, value = arg.split("=", 1)
+            # Try to convert value to appropriate type
+            if value.lower() == "true":
+                value = True
+            elif value.lower() == "false":
+                value = False
+            else:
+                try:
+                    # Try int first
+                    value = int(value)
+                except ValueError:
+                    try:
+                        # Try float
+                        value = float(value)
+                    except ValueError:
+                        # Keep as string
+                        pass
+            extra_args[key] = value
+        else:
+            click.echo(
+                f"Warning: Ignoring invalid argument '{arg}'. Expected format: key=value",
+                err=True,
+            )
+
     run_model_with_method(
         method="evaluate",
         method_args={
             "method": method_name,
             "spinup_name": spinup_name,
             "run_name": run_name,
-            "include_spinup": include_spinup,
-            "include_yearly_plots": include_yearly_plots,
-            "correct_discharge_observations": correct_discharge_observations,
+            **extra_args,
         },
         working_directory=working_directory,
         config=config,

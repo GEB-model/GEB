@@ -909,8 +909,6 @@ def _plot_discharge_validation_graphs(
 
     if include_yearly_plots:
         years_to_plot: list[int] = sorted(validation_df.index.year.unique())  # ty:ignore[unresolved-attribute]
-        print("yearly plots!!!")
-        print(years_to_plot)
         for year in years_to_plot:
             one_year_df: pd.DataFrame = validation_df[validation_df.index.year == year]  # ty:ignore[unresolved-attribute]
             if one_year_df.empty:
@@ -1097,6 +1095,7 @@ class Hydrology:
         include_spinup: bool = False,
         include_yearly_plots: bool = True,
         correct_discharge_observations: bool = False,
+        create_plots: bool = True,
     ) -> None:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
@@ -1117,6 +1116,7 @@ class Hydrology:
             include_yearly_plots: Whether to create plots for every year showing the evaluation.
             correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
                 in upstream area between the discharge observations station and the discharge from GEB.
+            create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
 
         Raises:
             FileNotFoundError: If the run folder does not exist in the report directory.
@@ -1193,7 +1193,6 @@ class Hydrology:
                 discharge_observations_station_name = snapped_locations.loc[
                     ID
                 ].discharge_observations_station_name
-                snapped_xy_coords = snapped_locations.loc[ID].snapped_grid_pixel_xy
                 discharge_observations_station_coords = snapped_locations.loc[
                     ID
                 ].discharge_observations_station_coords
@@ -1220,18 +1219,19 @@ class Hydrology:
 
                 KGE, NSE, R = _calculate_discharge_validation_metrics(validation_df)
 
-                _plot_discharge_validation_graphs(
-                    station_id=ID,
-                    validation_df=validation_df,
-                    station_name=discharge_observations_station_name,
-                    upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
-                    kge=KGE,
-                    nse=NSE,
-                    r_value=R,
-                    eval_plot_folder=eval_plot_folder,
-                    include_yearly_plots=include_yearly_plots,
-                    frequency=freq_label,
-                )
+                if create_plots:
+                    _plot_discharge_validation_graphs(
+                        station_id=ID,
+                        validation_df=validation_df,
+                        station_name=discharge_observations_station_name,
+                        upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                        kge=KGE,
+                        nse=NSE,
+                        r_value=R,
+                        eval_plot_folder=eval_plot_folder,
+                        include_yearly_plots=include_yearly_plots,
+                        frequency=freq_label,
+                    )
 
                 # attach to the evaluation dataframe
                 evaluation_per_station.append(
@@ -1281,31 +1281,32 @@ class Hydrology:
             eval_result_folder / "evaluation_metrics.geoparquet",
         )
 
-        _plot_discharge_validation_map(
-            evaluation_gdf=evaluation_gdf,
-            region_shapefile=region_shapefile,
-            rivers=rivers,
-            eval_result_folder=eval_result_folder,
-        )
+        if create_plots:
+            _plot_discharge_validation_map(
+                evaluation_gdf=evaluation_gdf,
+                region_shapefile=region_shapefile,
+                rivers=rivers,
+                eval_result_folder=eval_result_folder,
+            )
 
-        _create_discharge_folium_map(
-            evaluation_gdf=evaluation_gdf,
-            eval_plot_folder=eval_plot_folder,
-            eval_result_folder=eval_result_folder,
-            region_shapefile=region_shapefile,
-            rivers=rivers,
-        )
+            _create_discharge_folium_map(
+                evaluation_gdf=evaluation_gdf,
+                eval_plot_folder=eval_plot_folder,
+                eval_result_folder=eval_result_folder,
+                region_shapefile=region_shapefile,
+                rivers=rivers,
+            )
 
-        outflow_plot_count: int = _plot_outflow_discharge_timeseries(
-            output_folder=self.model.output_folder,
-            run_name=run_name,
-            eval_plot_folder=eval_plot_folder,
-            include_spinup=include_spinup,
-            spinup_name=spinup_name,
-        )
-        print(f"Created {outflow_plot_count} outflow discharge plots.")
+            print("Discharge evaluation dashboard created.")
 
-        print("Discharge evaluation dashboard created.")
+            outflow_plot_count: int = _plot_outflow_discharge_timeseries(
+                output_folder=self.model.output_folder,
+                run_name=run_name,
+                eval_plot_folder=eval_plot_folder,
+                include_spinup=include_spinup,
+                spinup_name=spinup_name,
+            )
+            print(f"Created {outflow_plot_count} outflow discharge plots.")
 
     def skill_score_graphs(
         self,
