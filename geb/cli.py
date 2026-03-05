@@ -178,6 +178,9 @@ def click_run_options() -> Any:
 
             Returns:
                 The result of the wrapped function.
+
+            Raises:
+                click.ClickException: If RAM profiling is requested on Windows.
             """
             if kwargs.get("profile_ram") and IS_WINDOWS:
                 raise click.ClickException(
@@ -315,6 +318,9 @@ def click_build_options(
 
             Returns:
             The result of the wrapped function.
+
+            Raises:
+                click.ClickException: If RAM profiling is requested on Windows.
             """
             if kwargs.get("profile_ram") and IS_WINDOWS:
                 raise click.ClickException(
@@ -531,6 +537,9 @@ def evaluate(
         profile_ram: If True, run the model with RAM profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
         timing: If True, run the model with timing, printing the time taken for specific methods
+
+    Raises:
+        click.ClickException: If RAM profiling is requested on Windows.
     """
     if help:
         # Check if the user specifically requested help for the command or a method.
