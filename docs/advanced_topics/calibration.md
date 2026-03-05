@@ -49,7 +49,9 @@ The `calibration_targets` section directly maps optimization goals to the GEB ev
 
 - **method**: This corresponds to a command that can be run via `geb evaluate <method>`. Any evaluation method registered in the GEB CLI (e.g., `hydrology.evaluate_discharge`) AND which returns a dictionary with one ore multiple scores can be used as a calibration target.
 - **metric**: Because `geb evaluate` returns a dictionary of metrics, this field specifies which key from that dictionary should be used for the optimization (e.g., `KGE`, `NSE`, `R`, or any custom metric returned by the method).
-- **weight**: Used for multi-objective weighting. 
+- **weight**: Used to define the optimization direction and relative importance. Only the sign is used to determine if a maximization or minimization is performed:
+    - **Positive (e.g., `1.0`)**: Maximize the metric.
+    - **Negative (e.g., `-1.0`)**: Minimize the metric.
 
 ## Running Calibration
 
@@ -60,6 +62,7 @@ geb workflow calibrate hydrology --cores 8
 ```
 
 The workflow will:
+
 1. Initialize and build a base model.
 2. Generate an initial population of individuals.
 3. For each generation:

@@ -154,14 +154,14 @@ rule build_base:
 
 rule generate_initial_parameters:
     input: "base_build.done"
-    output: f"generation_0_{CALIBRATION_TARGET}_population.yml"
+    output: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TARGET)
     run:
         with open(output[0], "w") as f:
             yaml.dump({"individuals": INITIAL_POPULATION}, f, default_flow_style=False)
 
 rule generate_individual_parameters:
     input:
-        pop_file=lambda wildcards: f"generation_0_{CALIBRATION_TARGET}_population.yml" if int(wildcards.gen) == 0 else f"generation_{int(wildcards.gen) - 1}_{CALIBRATION_TARGET}_next.yml",
+        pop_file=lambda wildcards: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TARGET) if int(wildcards.gen) == 0 else "calibration/generation_{0}_{1}_next.yml".format(int(wildcards.gen) - 1, CALIBRATION_TARGET),
         checkpoint_done=lambda wildcards: checkpoints.create_next_generation.get(gen=int(wildcards.gen) - 1).output if int(wildcards.gen) > 0 else []
     output: params=RUNS_DIR + "/{gen}_{ind}/parameters.yml"
     run:
@@ -263,35 +263,32 @@ rule evaluate_individual:
             raise ValueError(f"No targets found for {CALIBRATION_TARGET}")
 
         all_metrics = {}
-        weighted_fitness_sum = 0.0
-        total_weight = 0.0
 
         for target_name, target_info in targets.items():
             method, metric_key, weight = target_info["method"], target_info["metric"], float(target_info["weight"])
-            cmd = f"geb evaluate {method} -wd {run_dir} --create_plots false"
-            stdout = run_command(cmd, log[0], f"Eval failed for {target_name}")
+            cmd = "geb evaluate {0} -wd {1} --create_plots false".format(method, run_dir)
+            stdout = run_command(cmd, log[0], "Eval failed for {0}".format(target_name))
 
             try:
-                metrics_dict = json.loads(stdout.strip().split("\n")[-1])
+                # The output should be a JSON string on the last line
+                lines = [l.strip() for l in stdout.strip().split("\n") if l.strip()]
+                metrics_dict = json.loads(lines[-1])
                 metric_value = float(metrics_dict[metric_key])
                 all_metrics[target_name] = {"value": metric_value, "metric": metric_key, "method": method, "weight": weight}
-                weighted_fitness_sum += metric_value * weight
-                total_weight += weight
             except Exception as e:
-                raise RuntimeError(f"Failed to parse metrics for {target_name}: {e}")
+                raise RuntimeError("Failed to parse metrics for {0}: {1}. Raw output: {2}".format(target_name, e, stdout))
 
-        if total_weight <= 0: raise ValueError("Total weight <= 0")
         with open(output[0], "w") as f:
-            yaml.dump({"fitness": weighted_fitness_sum/total_weight, "targets": all_metrics}, f)
+            yaml.dump({"targets": all_metrics}, f)
 
 checkpoint create_next_generation:
     input:
         fitness_files=lambda wildcards: [RUNS_DIR + "/{gen}_{i:03d}/fitness.yml".format(gen=wildcards.gen, i=i) for i in range(MU if int(wildcards.gen) == 0 else LAMBDA)],
-        prev_pop=lambda wildcards: f"generation_0_{CALIBRATION_TARGET}_population.yml" if int(wildcards.gen) == 0 else f"generation_{int(wildcards.gen) - 1}_{CALIBRATION_TARGET}_next.yml"
+        prev_pop=lambda wildcards: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TARGET) if int(wildcards.gen) == 0 else "calibration/generation_{gen_prev}_{target}_next.yml".format(gen_prev=int(wildcards.gen) - 1, target=CALIBRATION_TARGET)
     output:
-        selected_pop=f"generation_{{gen}}_{CALIBRATION_TARGET}_selected.yml",
-        summary=f"generation_{{gen}}_{CALIBRATION_TARGET}_summary.yml",
-        next_pop=f"generation_{{gen}}_{CALIBRATION_TARGET}_next.yml"
+        selected_pop="calibration/generation_{gen}_{target}_selected.yml".format(target=CALIBRATION_TARGET, gen="{gen}"),
+        summary="calibration/generation_{gen}_{target}_summary.yml".format(target=CALIBRATION_TARGET, gen="{gen}"),
+        next_pop="calibration/generation_{gen}_{target}_next.yml".format(target=CALIBRATION_TARGET, gen="{gen}")
     run:
         gen = int(wildcards.gen)
         with open(input.prev_pop, "r") as f: pop_data = yaml.safe_load(f)
@@ -301,11 +298,13 @@ checkpoint create_next_generation:
             path_parts = Path(fitness_file).parent.name.split("_")
             curr_gen, curr_ind = int(path_parts[0]), path_parts[1]
             with open(fitness_file, "r") as f: fitness_data = yaml.safe_load(f)
-            label = f"{curr_gen}_{curr_ind}"
+            label = "{0}_{1}".format(curr_gen, curr_ind)
             ind_data = next((ind.copy() for ind in pop_data["individuals"] if ind["label"] == label), None)
             if ind_data:
-                fit_val = fitness_data["fitness"]
-                ind_data["fitness"] = fit_val if isinstance(fit_val, list) else [fit_val]
+                # We extract individual metric values into a tuple for DEAP multi-objective handling
+                # DEAP 'weights' already handle maximization (+1) vs minimization (-1)
+                fit_tuple = tuple(t["value"] for t in fitness_data["targets"].values())
+                ind_data["fitness"] = fit_tuple
                 individuals_with_fitness.append(ind_data)
         
         with open(output.selected_pop, "w") as f: yaml.dump({"individuals": individuals_with_fitness}, f, default_flow_style=False)
@@ -314,7 +313,7 @@ checkpoint create_next_generation:
             deap_individuals = []
             for ind_data in individuals_with_fitness:
                 ind = creator.Individual(ind_data["values"])
-                ind.fitness.values = tuple(ind_data["fitness"])
+                ind.fitness.values = ind_data["fitness"]
                 deap_individuals.append(ind)
             
             selected = toolbox.select(deap_individuals, MU)
@@ -323,7 +322,7 @@ checkpoint create_next_generation:
             for child in offspring:
                 for j in range(len(child)): child[j] = max(0.0, min(1.0, child[j]))
             
-            offspring_data = [{"label": f"{gen + 1}_{i:03d}", "generation": gen + 1, "individual_id": f"{i:03d}", "values": [float(x) for x in child]} for i, child in enumerate(offspring)]
+            offspring_data = [{"label": "{0}_{1:03d}".format(gen + 1, i), "generation": gen + 1, "individual_id": "{0:03d}".format(i), "values": [float(x) for x in child]} for i, child in enumerate(offspring)]
             with open(output.next_pop, "w") as f: yaml.dump({"individuals": offspring_data}, f, default_flow_style=False)
         else:
             with open(output.next_pop, "w") as f: yaml.dump({"individuals": []}, f, default_flow_style=False)
@@ -331,24 +330,23 @@ checkpoint create_next_generation:
         summary_data = {
             "generation": gen,
             "num_individuals": len(individuals_with_fitness),
-            "fitnesses": [ind["fitness"] for ind in individuals_with_fitness],
+            "fitness_tuples": [list(ind["fitness"]) for ind in individuals_with_fitness],
+            # Mean/Max/Min of the first objective as a proxy for summary (or full breakdown)
             "mean_fitness": [float(np.mean([ind["fitness"][i] for ind in individuals_with_fitness])) for i in range(len(individuals_with_fitness[0]["fitness"]))],
-            "max_fitness": [float(np.max([ind["fitness"][i] for ind in individuals_with_fitness])) for i in range(len(individuals_with_fitness[0]["fitness"]))],
-            "min_fitness": [float(np.min([ind["fitness"][i] for ind in individuals_with_fitness])) for i in range(len(individuals_with_fitness[0]["fitness"]))],
         }
         with open(output.summary, "w") as f: yaml.dump(summary_data, f, default_flow_style=False)
 
 def aggregate_checkpoint_outputs(wildcards):
     checkpoints.create_next_generation.get(gen=NGEN - 1)
-    return [f"generation_{gen}_{CALIBRATION_TARGET}_selected.yml" for gen in range(NGEN)]
+    return ["calibration/generation_{gen}_{target}_selected.yml".format(gen=gen, target=CALIBRATION_TARGET) for gen in range(NGEN)]
 
 rule complete_calibration:
     input: aggregate_checkpoint_outputs
-    output: touch(f"calibration_{CALIBRATION_TARGET}_complete.done")
+    output: touch("calibration/calibration_{target}_complete.done".format(target=CALIBRATION_TARGET))
     run:
         all_individuals = []
         for gen in range(NGEN):
-            with open(f"generation_{gen}_{CALIBRATION_TARGET}_selected.yml", "r") as f:
+            with open("calibration/generation_{gen}_{target}_selected.yml".format(gen=gen, target=CALIBRATION_TARGET), "r") as f:
                 all_individuals.extend(yaml.safe_load(f)["individuals"])
         
         deap_all = []
@@ -362,5 +360,5 @@ rule complete_calibration:
         pf.update(deap_all)
         
         pareto_data = [{"label": ind.label, "values": [float(x) for x in ind], "fitness": list(ind.fitness.values)} for ind in pf]
-        with open(f"calibration_{CALIBRATION_TARGET}_pareto_front.yml", "w") as f:
+        with open("calibration/calibration_{target}_pareto_front.yml".format(target=CALIBRATION_TARGET), "w") as f:
             yaml.dump({"target": CALIBRATION_TARGET, "pareto_front": pareto_data}, f, default_flow_style=False)
