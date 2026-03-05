@@ -38,10 +38,7 @@ class Agents:
 
         Returns:
             Dictionary containing:
-                - simulated_data: DataFrame with simulated dryproofing and wetproofing counts
-                - observed_data: DataFrame with observed adaptation rates
-                - ratios: DataFrame with simulated/observed ratios for each measure
-                - summary: Dict with aggregate statistics (mean ratios, counts)
+            - balanced_ratio_score: A summary metric of how well the simulated adaptation matches observed data, where 1 is a perfect match and values <1 indicate underestimation
 
         Note:
             Observed data must be configured in the model config under
@@ -64,8 +61,6 @@ class Agents:
         if simulated_df is None or simulated_df.empty:
             return {"error": "No simulated adaptation data found"}
 
-        print(simulated_df)
-
         # Load observed adaptation data from config
         observed_df, config_total_households = self._load_observed_adaptation_data()
         if observed_df is None or observed_df.empty:
@@ -74,10 +69,7 @@ class Agents:
         # Align the two datasets temporally
         aligned_sim, aligned_obs = self._align_datasets(simulated_df, observed_df)
 
-        print(aligned_sim)
-        print(aligned_obs)
-
-        # Determine total households (argument > observed_adaptation config > fallback)
+        # Determine total households (observed_adaptation config > fallback)
         if config_total_households is not None:
             total_households = int(config_total_households)
         else:
@@ -179,7 +171,6 @@ class Agents:
         wetproofing = []
         not_adapting = []
 
-        print(f"Aggregating {len(times)} timesteps...")
         for t in range(len(times)):
             # Get timestep data (will compute this chunk of dask array)
             timestep_data = values[t, :]
@@ -234,7 +225,6 @@ class Agents:
             }
         )
 
-        print(df)
         return df, total_hh
 
     def _align_datasets(
@@ -272,10 +262,6 @@ class Agents:
 
         sim_aligned = merged[sim_cols].reset_index(drop=True)
         obs_aligned = merged[obs_cols].reset_index(drop=True)
-
-        print(
-            f"Exact date match: found {len(sim_aligned)} dates with data in both simulated and observed"
-        )
 
         return sim_aligned, obs_aligned
 
@@ -347,7 +333,6 @@ class Agents:
         # Save ratios to CSV
         output_path = output_folder / f"household_adaptation_ratios_{run_name}.csv"
         ratios.to_csv(output_path, index=False)
-        print(f"Saved adaptation ratios to {output_path}")
 
     def _calculate_balanced_ratio_metric(
         self, ratios_df: pd.DataFrame, ratio_columns: list[str] | None = None
@@ -457,11 +442,6 @@ class Agents:
         balanced = self._calculate_balanced_ratio_metric(
             ratios_df, ratio_columns=["dryproofing_ratio", "wetproofing_ratio"]
         )
-
-        # Print summary for logging
-        print(f"Dryproofing stats: {dry_stats}")
-        print(f"Wetproofing stats: {wet_stats}")
-        print(f"Balanced metric: {balanced}")
 
         # Return only the balanced score
         return balanced["balanced_ratio_score"]
