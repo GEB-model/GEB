@@ -858,10 +858,15 @@ class AsyncGriddedForcingReader:
                 f"Variable {self.variable_name} does not use NaN as fill value, AsyncGriddedForcingReader requires NaN fill value for retry workaround."
             )
 
-        # Cache tracking
-        self.current_start_index = -1
-        self.current_end_index = -1
-        self.current_data: ThreeDArrayFloat32 | None = None
+        # The on-disk chunk size along the time dimension - we always load full chunks
+        # from disk (e.g. 7 * 24 = 168 for weekly hourly data).
+        self.time_chunk_size: int = int(self.array.chunks[0])
+
+        # Chunk-aligned cache: holds the start index and data for the currently loaded chunk.
+        self.current_chunk_start_index: int = -1
+        self.current_chunk_data: ThreeDArrayFloat32 | None = None
+        # The time-index at which a background preload has been (or is being) fetched.
+        self.preloaded_chunk_start_index: int = -1
         self.preloaded_data_future: asyncio.Task | None = None
 
         # Async event loop setup
@@ -933,109 +938,132 @@ class AsyncGriddedForcingReader:
                     f"Async load failed after {attempts} attempts for indices {start_index}:{end_index}"
                 )
 
-    async def preload_next(
-        self, start_index: int, end_index: int, n: int
-    ) -> ThreeDArrayFloat32 | None:
-        """Preload next timestep asynchronously.
+    async def preload_chunk(self, chunk_start: int) -> ThreeDArrayFloat32 | None:
+        """Preload the chunk starting at chunk_start asynchronously.
+
+        Args:
+            chunk_start: The time index at which the chunk to preload begins.
 
         Returns:
-            The preloaded data, or None if out of bounds.
+            The preloaded chunk data, or None if beyond available data.
         """
-        if end_index + n < self.time_size:
-            return await self.load_await(start_index + n, end_index + n)
-        return None
+        if chunk_start >= self.time_size:
+            return None
+        chunk_end: int = min(chunk_start + self.time_chunk_size, self.time_size)
+        return await self.load_await(chunk_start, chunk_end)
 
     async def read_timestep_async(
-        self, start_index: int, end_index: int, n: int
-    ) -> ThreeDArrayFloat32:
-        """Core async read with safe preload caching.
+        self, start_index: int, end_index: int
+    ) -> tuple[ThreeDArrayFloat32, np.datetime64]:
+        """Core async read with chunk-aligned caching and background preloading.
 
-        This method ensures that only one read operation (including preloading)
-        occurs at a time. It fetches the requested data, updates the cache,
-        and then triggers a background task to preload the next timestep.
+        Loads the full on-disk chunk that contains the requested timesteps,
+        caches it, and schedules the next chunk for background preloading so
+        that subsequent requests within the same or the next chunk are cheap.
 
         Args:
             start_index: The starting index of the time slice to read.
-            end_index: The ending index of the time slice to read.
-            n: The number of timesteps in a single read operation, used for preloading.
+            end_index: The exclusive ending index of the time slice to read.
 
         Returns:
-            The requested data slice as a NumPy array.
+            A tuple of (requested data slice as a NumPy array, start datetime of the slice).
 
         Raises:
-            ValueError: If the requested index is out of bounds.
+            ValueError: If the requested index is out of bounds or spans more
+                than one on-disk chunk.
             IOError: If the async read returns incomplete data.
         """
         if start_index < 0 or end_index > self.time_size:
             raise ValueError(f"Index out of bounds ({start_index}:{end_index})")
 
+        n: int = end_index - start_index
+        start_date: np.datetime64 = self.datetime_index[start_index]
+
+        # Determine which on-disk chunk this request falls in.
+        chunk_start: int = (start_index // self.time_chunk_size) * self.time_chunk_size
+        chunk_end: int = min(chunk_start + self.time_chunk_size, self.time_size)
+        offset: int = start_index - chunk_start
+
+        # Requests must be aligned with chunk boundaries and never cross it.
+        # This simplifies the reader and ensures that the source data is saved
+        # efficiently for the intended access pattern.
+        if n > self.time_chunk_size:
+            raise ValueError(
+                f"Requested {n} timesteps exceeds on-disk chunk size {self.time_chunk_size}."
+            )
+        if (start_index % n != 0) or (offset + n > (chunk_end - chunk_start)):
+            raise ValueError(
+                f"Requested slice {start_index}:{end_index} is not aligned with "
+                f"the chunk size {self.time_chunk_size} or spacing {n}."
+            )
+
         assert self.async_lock is not None
         async with self.async_lock:
-            data: npt.NDArray[Any] | None = None
+            chunk_data: ThreeDArrayFloat32 | None = None
 
-            # Cache hit
+            # Cache hit: the required chunk is already in memory.
             if (
-                self.current_data is not None
-                and start_index == self.current_start_index
-                and end_index == self.current_end_index
+                self.current_chunk_data is not None
+                and self.current_chunk_start_index == chunk_start
             ):
-                data = self.current_data
+                chunk_data = self.current_chunk_data
 
-            # Check Preload
+            # Preload hit: the required chunk was being preloaded in the background.
             elif (
                 self.preloaded_data_future is not None
-                and self.current_start_index + n == start_index
+                and self.preloaded_chunk_start_index == chunk_start
             ):
                 try:
-                    data = await self.preloaded_data_future
+                    chunk_data = await self.preloaded_data_future
                 except Exception:
-                    pass
+                    chunk_data = None
 
-            # Load if needed
-            if data is None:
+            # Cache miss: cancel any pending (wrong) preload and load from disk.
+            if chunk_data is None:
                 if self.preloaded_data_future and not self.preloaded_data_future.done():
                     self.preloaded_data_future.cancel()
                     try:
                         await self.preloaded_data_future
                     except asyncio.CancelledError:
                         pass
-                data = await self.load_await(start_index, end_index)
+                chunk_data = await self.load_await(chunk_start, chunk_end)
 
-            # Consistency check
-            if data.shape[0] != (end_index - start_index):
+            expected_chunk_len: int = chunk_end - chunk_start
+            if chunk_data.shape[0] != expected_chunk_len:
                 raise IOError(
                     "Async read returned incomplete data; possible disk contention"
                 )
 
-            # Update Cache
-            self.current_start_index = start_index
-            self.current_end_index = end_index
-            self.current_data = data
+            # Update the chunk cache.
+            self.current_chunk_start_index = chunk_start
+            self.current_chunk_data = chunk_data
 
-            # Schedule next preload
+            # Schedule preload of the next chunk unless it is already in flight.
+            next_chunk_start: int = chunk_start + self.time_chunk_size
             assert self.loop is not None
-            if self.preloaded_data_future and not self.preloaded_data_future.done():
-                self.preloaded_data_future.cancel()
-                try:
-                    await self.preloaded_data_future
-                except asyncio.CancelledError:
-                    pass
+            if self.preloaded_chunk_start_index != next_chunk_start:
+                if self.preloaded_data_future and not self.preloaded_data_future.done():
+                    self.preloaded_data_future.cancel()
+                    try:
+                        await self.preloaded_data_future
+                    except asyncio.CancelledError:
+                        pass
+                self.preloaded_chunk_start_index = next_chunk_start
+                self.preloaded_data_future = self.loop.create_task(
+                    self.preload_chunk(next_chunk_start)
+                )
 
-            self.preloaded_data_future = self.loop.create_task(
-                self.preload_next(start_index, end_index, n)
-            )
+            # Slice out only the requested timesteps from the cached chunk.
+            return chunk_data[offset : offset + n], start_date
 
-            return data
-
-    def get_index(self, date: datetime.datetime, n: int) -> int:
+    def get_index(self, date: datetime.datetime) -> int:
         """Get the time index for a given datetime.
 
-        Optimized for sequential access by checking the current and next indices
-        before performing a full search.
+        Uses binary search for correctness and falls back to an O(1) check
+        against the current chunk boundaries for the common sequential-access case.
 
         Args:
             date: The datetime to find the index for.
-            n: The step size for the 'next' index check.
 
         Returns:
             The integer index for the given date.
@@ -1044,46 +1072,105 @@ class AsyncGriddedForcingReader:
             ValueError: If the date is not found in the time index.
         """
         numpy_date = np.datetime64(date, "ns")
-        if (
-            self.current_start_index != -1
-            and self.datetime_index[self.current_start_index] == numpy_date
-        ):
-            return self.current_start_index
-        elif (
-            self.current_start_index != -1
-            and self.current_start_index + n < self.time_size
-            and self.datetime_index[self.current_start_index + n] == numpy_date
-        ):
-            return self.current_start_index + n
-        else:
-            indices = np.where(self.datetime_index == numpy_date)[0]
-            if indices.size == 0:
-                raise ValueError(f"Date {date} not found in {self.filepath}")
-            return indices[0]
 
-    def read_timestep(self, date: datetime.datetime, n: int = 1) -> npt.NDArray[Any]:
-        """Public synchronous entrypoint; blocks until async result ready.
+        # Very fast (lol): check whether the date falls within the currently loaded chunk.
+        if self.current_chunk_start_index >= 0:
+            chunk_end: int = min(
+                self.current_chunk_start_index + self.time_chunk_size, self.time_size
+            )
+            chunk_slice = self.datetime_index[
+                self.current_chunk_start_index : chunk_end
+            ]
+            local_idx: npt.NDArray[np.intp] = np.where(chunk_slice == numpy_date)[0]
+            if local_idx.size > 0:
+                return int(self.current_chunk_start_index + local_idx[0])
+
+        # Still fast: check whether the date falls within the next chunk.
+        # This the most logical for climate data. That the model requests the next
+        # chunk.
+        next_chunk_start: int = self.current_chunk_start_index + self.time_chunk_size
+        if self.current_chunk_start_index >= 0 and next_chunk_start < self.time_size:
+            next_chunk_end: int = min(
+                next_chunk_start + self.time_chunk_size, self.time_size
+            )
+            next_chunk_slice = self.datetime_index[next_chunk_start:next_chunk_end]
+            local_idx_next: npt.NDArray[np.intp] = np.where(
+                next_chunk_slice == numpy_date
+            )[0]
+            if local_idx_next.size > 0:
+                return int(next_chunk_start + local_idx_next[0])
+
+        # Full search via binary search (handles non-sequential access)
+        # This should happen on the very first access and when the model were
+        # to jump around in time, which it typically shouldn't do.
+        idx: int = int(np.searchsorted(self.datetime_index, numpy_date))
+        if idx >= self.time_size or self.datetime_index[idx] != numpy_date:
+            raise ValueError(f"Date {date} not found in {self.filepath}")
+        return idx
+
+    def read_timestep(
+        self, date: datetime.datetime, n: int = 1
+    ) -> tuple[npt.NDArray[Any], np.datetime64]:
+        """Return n timesteps starting at date, loading from the on-disk chunk as needed.
+
+        On the first call (or whenever the required chunk is not cached) the full
+        on-disk chunk is fetched from disk and the next chunk is queued for
+        background pre-loading. Subsequent calls for timesteps within the same
+        chunk are served entirely from memory.
+
+        Args:
+            date: Start datetime of the slice to return.
+            n: Number of consecutive timesteps to return. Must not exceed the
+               on-disk chunk size along the time dimension.
 
         Returns:
-            The requested data slice.
+            A tuple of (Array of shape (n, y, x) with dtype float32, start datetime of the slice as np.datetime64).
 
         Raises:
-            ValueError: If the requested time range exceeds available data.
+            ValueError: If the requested range exceeds available data or the
+                on-disk chunk size.
         """
-        start_index = self.get_index(date, n)
-        end_index = start_index + n
+        start_index: int = self.get_index(date)
+        end_index: int = start_index + n
         if end_index > self.time_size:
             raise ValueError(
                 f"Requested {n} timesteps from {date} exceeds available range"
             )
 
+        start_date: np.datetime64 = self.datetime_index[start_index]
+
         if self.asynchronous:
-            coro = self.read_timestep_async(start_index, end_index, n)
+            coro = self.read_timestep_async(start_index, end_index)
             assert isinstance(self.loop, asyncio.AbstractEventLoop)
             future = asyncio.run_coroutine_threadsafe(coro, self.loop)
             return future.result()
         else:
-            return self.load(start_index, end_index)
+            # Synchronous path: respect chunk alignment for consistency.
+            chunk_start: int = (
+                start_index // self.time_chunk_size
+            ) * self.time_chunk_size
+            chunk_end: int = min(chunk_start + self.time_chunk_size, self.time_size)
+            offset: int = start_index - chunk_start
+
+            # Requests must be aligned with chunk boundaries and never cross it.
+            if n > self.time_chunk_size:
+                raise ValueError(
+                    f"Requested {n} timesteps exceeds on-disk chunk size {self.time_chunk_size}."
+                )
+            if (start_index % n != 0) or (offset + n > (chunk_end - chunk_start)):
+                raise ValueError(
+                    f"Requested slice {start_index}:{end_index} is not aligned with "
+                    f"the chunk size {self.time_chunk_size} or spacing {n}."
+                )
+
+            if (
+                self.current_chunk_data is None
+                or self.current_chunk_start_index != chunk_start
+            ):
+                self.current_chunk_data = self.load(chunk_start, chunk_end)
+                self.current_chunk_start_index = chunk_start
+
+            return self.current_chunk_data[offset : offset + n], start_date
 
     def close(self) -> None:
         """Clean up this instance's async resources."""

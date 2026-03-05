@@ -1,4 +1,6 @@
 # dev
+
+# v1.0.0b11
 - Reforestation: add government forest planting policy and soil modification workflow.
 - Convert suitable cropland/grassland to forest; update soils and remove farmers.
 - Reorganized `geb/hydrology/` by moving land surface-related modules (`landsurface.py`, `evapotranspiration.py`, `interception.py`, `snow_glaciers.py`, `potential_evapotranspiration.py`) into a new `geb/hydrology/landsurface/` package.
@@ -48,7 +50,8 @@
 - Speedup pr_gev calculation in build.
 - Simplify report function arguments.
 - Report water balance evaluation plot to evaluate folder.
-
+- Save climate data in weekly chunks, also read in weekly chunks -> significant speedup (~15% is some tests).
+- Use full penman-monteith for setup_SPEI.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
@@ -59,6 +62,9 @@ To support this version:
      - re-run `setup_crops`: `geb update -b build.yml::setup_crops`
      - re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
      - re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
+
+Recommended:
+- Re-run `setup_forcing` and `setup_SPEI` for a significant speedup and better SPEI estimation: `geb update -b build.yml::setup_forcing` and `geb update -b build.yml::setup_SPEI`
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.

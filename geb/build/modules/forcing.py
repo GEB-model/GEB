@@ -22,10 +22,14 @@ import xclim.indices as xci
 import xclim.indices.stats as xcistats
 from dateutil.relativedelta import relativedelta
 from matplotlib.colors import ListedColormap
+from numba import njit
 from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
+from geb.hydrology.landsurface.potential_evapotranspiration import (
+    get_reference_evapotranspiration,
+)
 from geb.workflows.raster import create_temp_zarr, resample_like
 
 from ...workflows.io import calculate_scaling
@@ -47,17 +51,19 @@ def plot_normal_forcing(
         4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5}
     )  # Create 4 subplots stacked vertically
 
-    data = (
-        (da * ~mask).sum(dim=("y", "x")) / (~mask).sum()
-    ).compute()  # Area-weighted average
+    data = (da.mean(dim=("y", "x"))).compute()
     assert not np.isnan(data.values).any(), (
         "data contains NaN values"
     )  # ensure no NaNs in data
 
     plot_timeline(da, data, name, axes[0])  # Plot the entire timeline on the first axis
 
+    first_day_is_january_first: bool = (data.time[0].dt.dayofyear).item() == 1
     for i in range(0, 3):  # plot the first three years on separate axes
-        year = data.time[0].dt.year + i  # get the year to plot
+        # If the first day is not January 1st, we start plotting from the next year to avoid plotting incomplete years
+        year = (
+            data.time[0].dt.year + i + (0 if first_day_is_january_first else 1)
+        )  # get the year to plot.
         year_data = data.sel(
             time=data.time.dt.year == year
         )  # select data for that year
@@ -69,7 +75,7 @@ def plot_normal_forcing(
                 axes[i + 1],  # axis to plot on
             )
 
-    fp = report_dir / (name + "_timeline.png")  # file path for saving the timeline plot
+    fp = report_dir / (name + "_timeline.svg")  # file path for saving the timeline plot
     fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
     plt.savefig(fp)  # save the timeline plot
     plt.close(fig)  # close the figure to free memory
@@ -491,10 +497,13 @@ def plot_timeline(
     if "units" in da.attrs:
         ax.set_ylabel(da.attrs["units"])
     ax.set_xlim(data.time[0], data.time[-1])
-    ax.set_ylim(data.min().item(), data.max().item() * 1.1)
+    minimum = data.min().item()
+    maximum = data.max().item()
+    maximum = maximum if maximum != minimum else minimum + 1  # avoid zero range
+    ax.set_ylim(minimum, maximum + (maximum - minimum) * 1.1)
     significant_digits: int = 6
     ax.set_title(
-        f"{name} - mean: {data.mean().item():.{significant_digits}f} - min: {data.min().item():.{significant_digits}f} - max: {data.max().item():.{significant_digits}f}"
+        f"{name} - mean: {data.mean().item():.{significant_digits}f} - min: {minimum:.{significant_digits}f} - max: {maximum:.{significant_digits}f}"
     )
 
 
@@ -580,8 +589,8 @@ class Forcing(BuildModelBase):
             da,
             name=name,
             filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            time_chunks_per_shard=get_chunk_size(da) // (7 * 24),
+            time_chunksize=7 * 24,
             **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
@@ -658,8 +667,8 @@ class Forcing(BuildModelBase):
             da,
             name=name,
             filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            time_chunks_per_shard=get_chunk_size(da) // (7 * 24),
+            time_chunksize=7 * 24,
             **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
@@ -713,8 +722,8 @@ class Forcing(BuildModelBase):
             da,
             name=name,
             filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            time_chunks_per_shard=get_chunk_size(da) // (7 * 24),
+            time_chunksize=7 * 24,
             **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
@@ -771,8 +780,8 @@ class Forcing(BuildModelBase):
             da,
             name=name,
             filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            time_chunks_per_shard=get_chunk_size(da) // (7 * 24),
+            time_chunksize=7 * 24,
             **kwargs,
         )
 
@@ -832,8 +841,8 @@ class Forcing(BuildModelBase):
             da,
             name=name,
             filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            time_chunks_per_shard=get_chunk_size(da) // (7 * 24),
+            time_chunksize=7 * 24,
             **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
@@ -889,8 +898,8 @@ class Forcing(BuildModelBase):
             da,
             name=name,
             filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            time_chunks_per_shard=get_chunk_size(da) // (7 * 24),
+            time_chunksize=7 * 24,
             **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
@@ -951,8 +960,8 @@ class Forcing(BuildModelBase):
             da,
             name=name,
             filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            time_chunks_per_shard=get_chunk_size(da) // (7 * 24),
+            time_chunksize=7 * 24,
             **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
@@ -1021,7 +1030,8 @@ class Forcing(BuildModelBase):
         era5_loader: partial = partial(
             era5_store.read,
             start_date=self.start_date - relativedelta(years=1),
-            end_date=self.end_date,
+            end_date=self.end_date
+            + relativedelta(days=1),  # add one day to include the end date
             bounds=self.grid["mask"].rio.bounds(recalc=True),
         )
 
@@ -1033,6 +1043,8 @@ class Forcing(BuildModelBase):
         # ensure no negative values for precipitation, which may arise due to float precision
         pr_hourly: xr.DataArray = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
         pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(pr_hourly)
+
+        return
 
         tas: xr.DataArray = era5_loader("t2m")
         self.set_tas_2m_K(tas)
@@ -1128,25 +1140,77 @@ class Forcing(BuildModelBase):
             "window_months must be greater than or equal to 1 (otherwise we have no sliding window)"
         )
 
-        # assert input data have the same coordinates
-        tasmin_2m_K = self.other["climate/tas_2m_K"].resample(time="D").min()
-        tasmax_2m_K = self.other["climate/tas_2m_K"].resample(time="D").max()
-        pr_kg_per_m2_per_s = (
-            self.other["climate/pr_kg_per_m2_per_s"].resample(time="D").mean()
-        )
-
-        assert np.array_equal(pr_kg_per_m2_per_s.x, tasmin_2m_K.x)
-        assert np.array_equal(pr_kg_per_m2_per_s.y, tasmin_2m_K.y)
-
         assert calibration_period_start < calibration_period_end, (
             f"Start date {calibration_period_start} must be earlier than end date {calibration_period_end}."
         )
 
-        if not self.other[
-            "climate/pr_kg_per_m2_per_s"
-        ].time.min().dt.date <= calibration_period_start and self.other[
-            "climate/pr_kg_per_m2_per_s"
-        ].time.max().dt.date >= calibration_period_end - timedelta(days=1):
+        @njit(parallel=True, cache=True)
+        def _get_pet_vectorized(
+            temperature_K: np.ndarray,
+            dewpoint_temperature_K: np.ndarray,
+            surface_pressure_Pa: np.ndarray,
+            rlds_W_per_m2: np.ndarray,
+            rsds_W_per_m2: np.ndarray,
+            wind_u_m_per_s: np.ndarray,
+            wind_v_m_per_s: np.ndarray,
+        ) -> np.ndarray:
+            # Calculate wind speed from u and v components and PET for each pixel
+            # This function now receives 2D spatial blocks (y, x) per time step/chunk
+            # while xarray handles the time dimension automatically.
+
+            wind_speed_m_per_s = np.sqrt(wind_u_m_per_s**2 + wind_v_m_per_s**2)
+            res = get_reference_evapotranspiration(
+                temperature_K - np.float32(273.15),
+                dewpoint_temperature_K - np.float32(273.15),
+                surface_pressure_Pa,
+                rlds_W_per_m2,
+                rsds_W_per_m2,
+                wind_speed_m_per_s,
+                np.float32(0.0),
+            )
+            # res[0] is reference ET in (m/h) as per FAO-56 and standard GEB hydrology.
+            reference_et_m_per_h = res[0]
+            return reference_et_m_per_h
+
+        self.logger.info("Calculating potential evapotranspiration...")
+        # Rechunking to larger chunks in time can significantly improve PET calculation
+        # speed by reducing Dask overhead, especially as PET is computed per-pixel across time.
+        # This function handles (y, x) spatial core dimensions while Dask manages the time dimension.
+        potential_evapotranspiration = (
+            xr.apply_ufunc(
+                _get_pet_vectorized,
+                self.other["climate/tas_2m_K"],
+                self.other["climate/dewpoint_tas_2m_K"],
+                self.other["climate/ps_pascal"],
+                self.other["climate/rlds_W_per_m2"],
+                self.other["climate/rsds_W_per_m2"],
+                self.other["climate/wind_u10m_m_per_s"],
+                self.other["climate/wind_v10m_m_per_s"],
+                input_core_dims=[
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                ],
+                output_core_dims=[["y", "x"]],
+                dask="parallelized",
+                output_dtypes=[np.float32],
+            )
+            * 1000
+            / 3600
+        )  # convert from m/hour to kg/m2/s (assuming liquid water density of 1000 kg/m3)
+
+        # ensure input data have the same coordinates
+        pr_kg_per_m2_per_s = self.other["climate/pr_kg_per_m2_per_s"]
+
+        if (
+            not pr_kg_per_m2_per_s.time.min().dt.date <= calibration_period_start
+            and pr_kg_per_m2_per_s.time.max().dt.date
+            >= calibration_period_end - timedelta(days=1)
+        ):
             forcing_start_date = (
                 self.other["climate/pr_kg_per_m2_per_s"].time.min().dt.date.item()
             )
@@ -1158,35 +1222,15 @@ class Forcing(BuildModelBase):
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )
 
-        pet = xci.potential_evapotranspiration(
-            tasmin=tasmin_2m_K,
-            tasmax=tasmax_2m_K,
-            # hurs=self.other["climate/hurs"],
-            # rsds=self.other["climate/rsds"],
-            # rlds=self.other["climate/rlds"],
-            # rsus=self.full_like(
-            #     self.other["climate/rsds"],
-            #     fill_value=0,
-            #     nodata=np.nan,
-            #     attrs=self.other["climate/rsds"].attrs,
-            # ),
-            # rlus=self.full_like(
-            #     self.other["climate/rsds"],
-            #     fill_value=0,
-            #     nodata=np.nan,
-            #     attrs=self.other["climate/rsds"].attrs,
-            # ),
-            # sfcWind=self.other["climate/sfcwind"],
-            method="BR65",
-        ).astype(np.float32)
-
         # Compute the potential evapotranspiration
-        water_budget = xci.water_budget(pr=pr_kg_per_m2_per_s, evspsblpot=pet)
-
-        water_budget = water_budget.resample(time="MS").mean(keep_attrs=True)
+        water_budget = pr_kg_per_m2_per_s.resample(time="MS").mean(
+            method="blockwise"
+        ) - potential_evapotranspiration.resample(time="MS").mean(method="blockwise")
+        water_budget = water_budget.rio.write_crs("EPSG:4326")
         water_budget.attrs["_FillValue"] = np.nan
+        water_budget.attrs["units"] = "kg m-2 s-1"
 
-        temp_xy_chunk_size = 50
+        temp_xy_chunk_size: int = 50
 
         self.logger.info("Exporting temporary water budget to zarr")
         with create_temp_zarr(
@@ -1194,7 +1238,7 @@ class Forcing(BuildModelBase):
             name="tmp_water_budget_file",
             x_chunksize=temp_xy_chunk_size,
             y_chunksize=temp_xy_chunk_size,
-            time_chunksize=50,
+            time_chunksize=water_budget.time.size,
             time_chunks_per_shard=None,
         ) as water_budget:
             water_budget = water_budget.chunk(
@@ -1211,7 +1255,9 @@ class Forcing(BuildModelBase):
             # also reducing the risk of overfitting, especially with limited data.
             # When empirical data suggest that the climatic water balance values are significantly shifted,
             # a non-zero floc may better fit the distribution. However, this is not typical in routine applications.
-            SPEI = xci.standardized_precipitation_evapotranspiration_index(
+            water_budget_min: float = float(water_budget.min().compute().item())
+
+            SPEI: xr.DataArray = xci.standardized_precipitation_evapotranspiration_index(
                 wb=water_budget,
                 cal_start=calibration_period_start.strftime("%Y-%m-%d"),
                 cal_end=calibration_period_end.strftime("%Y-%m-%d"),
@@ -1220,7 +1266,7 @@ class Forcing(BuildModelBase):
                 dist="fisk",  # log-logistic distribution
                 method="APP",  # approximative method
                 fitkwargs={
-                    "floc": water_budget.min().compute().item()
+                    "floc": water_budget_min
                 },  # location parameter, assures that the distribution is always positive
             ).astype(np.float32)
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
@@ -256,9 +256,18 @@ class ForcingLoader(ABC):
             if substeps_to_forecast > 0:
                 # TODO: The reader breaks when loading less than n timesteps, so we load n and slice
                 # the data
-                non_forecast_data: npt.NDArray[np.float32] = self.reader.read_timestep(
+                non_forecast_data_all, normal_start_date = self.reader.read_timestep(
                     dt, n=self.n
-                )[:substeps_to_forecast, :, :]
+                )
+
+                if normal_start_date != np.datetime64(dt, "ns"):
+                    raise ValueError(
+                        f"Standard reader returned data starting at {normal_start_date}, but expected {dt}."
+                    )
+
+                non_forecast_data: npt.NDArray[np.float32] = non_forecast_data_all[
+                    :substeps_to_forecast, :, :
+                ]
 
                 forecast_data: npt.NDArray[np.float32] = self.ds_forecast.isel(
                     time=slice(None, self.n - substeps_to_forecast)
@@ -277,7 +286,12 @@ class ForcingLoader(ABC):
                     )
                 ).values
         else:
-            data: npt.NDArray[np.float32] = self.reader.read_timestep(dt, n=self.n)
+            data_all, normal_start_date = self.reader.read_timestep(dt, n=self.n)
+            if normal_start_date != np.datetime64(dt, "ns"):
+                raise ValueError(
+                    f"Standard reader returned data starting at {normal_start_date}, but expected {dt}."
+                )
+            data: npt.NDArray[np.float32] = data_all
 
         interpolated: npt.NDArray[np.float32] = self.interpolate(data)
         valid: bool = self.validate(interpolated)
@@ -859,7 +873,15 @@ class Forcing(Module):
             Forcing data as a numpy array or float.
         """
         if dt is None:
-            dt: datetime = self.model.current_time
+            # the forcing data is the accumulated data over the current hour.
+            # Therefore, we load the data for the end of the hour to ensure we get
+            # the accumulated value for the day.
+            # For instantaneous values like temperature, we load the data for the
+            # start with the first full hour of the day. Perhaps it would
+            # be very slightly better to take the midpoint of the hour, but this
+            # would make the code more complex and the difference should be negligible,
+            # so we take the start of the hour for simplicity.
+            dt: datetime = self.model.current_time + timedelta(hours=1)
 
         return self[name].load(dt)
 
