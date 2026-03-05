@@ -577,7 +577,9 @@ def write_zarr(
             chunks.update({"time": min(time_chunksize, da.sizes["time"])})
             if time_chunks_per_shard is not None:
                 shards = chunks.copy()
-                shards["time"] = time_chunks_per_shard * chunks["time"]
+                shards["time"] = min(
+                    time_chunks_per_shard * chunks["time"], da.time.size
+                )
 
         if compressor is None:
             compressor: ZstdCodec = ZstdCodec(

@@ -507,21 +507,20 @@ def plot_timeline(
     )
 
 
-def get_chunk_size(da: xr.DataArray, target: float | int = 1e8) -> int:
+def get_chunk_size(da: xr.DataArray) -> int:
     """Calculate the optimal chunk size for the given xarray DataArray based on the target size.
 
     Args:
         da: The xarray DataArray for which to calculate the chunk size.
-        target: The target size in bytes. Default is 1e8 (100 MB).
 
     Returns:
         The calculated chunk size in bytes.
     """
-    spatial_size = da.x.size * da.y.size
+    size = da.x.size * da.y.size * da.chunksizes["time"][0] * da.dtype.itemsize
     # Include member dimension if it exists
     if "member" in da.dims:
-        spatial_size *= da.member.size
-    return int(target / (da.dtype.itemsize * spatial_size))
+        size *= da.member.size
+    return size
 
 
 class Forcing(BuildModelBase):
@@ -546,7 +545,6 @@ class Forcing(BuildModelBase):
         precision: float,
         offset: float,
         create_plots: bool = False,
-        time_chunksize: int | None = 7 * 24,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Generic method to set a forcing variable with common preprocessing and scaling.
@@ -560,7 +558,6 @@ class Forcing(BuildModelBase):
             precision: The precision for scaling calculation.
             offset: The offset for scaling calculation.
             create_plots: If True, create plots for the forcing data.
-            time_chunksize: The size of the time chunks.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -583,14 +580,14 @@ class Forcing(BuildModelBase):
             ),
         ]
 
-        time_chunks_per_shard = get_chunk_size(da) // (time_chunksize or 1)
+        time_chunks_per_shard = int(1e8 / get_chunk_size(da))
 
         da: xr.DataArray = self.set_other(
             da,
             name=name,
             filters=filters,
             time_chunks_per_shard=time_chunks_per_shard,
-            time_chunksize=time_chunksize,
+            time_chunksize=da.chunksizes["time"][0],
             **kwargs,
         )
 
@@ -622,7 +619,7 @@ class Forcing(BuildModelBase):
         # maximum rainfall in one hour was 304.8 mm in 1956 in Holt, Missouri, USA
         # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
         # we take a wide margin of 500 mm/h
-        # this function is currently daily, so the hourly value should be save
+        # this function is currently daily, so the hourly value should be safe
         min_value = 0.0
         max_value = 500 / 3600  # convert to kg/m2/s
         precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
@@ -645,20 +642,13 @@ class Forcing(BuildModelBase):
         )
 
         if create_plots and "forecasts" in name.lower():
-            # Check if GIF files already exist before creating them
-            gif_fp_regular = self.report_dir / f"{name.replace('/', '_')}_animation.gif"
-            gif_fp_accumulated = (
-                self.report_dir / f"{name.replace('/', '_')}_animation_accumulated.gif"
-            )
             create_gif_climate_data_over_time(
                 self.report_dir, self.geom["mask"], da, name, accumulated=False
             )
-            self.logger.info(f"Created a GIF animation: {gif_fp_regular.name}")
 
             create_gif_climate_data_over_time(
                 self.report_dir, self.geom["mask"], da, name, accumulated=True
             )
-            self.logger.info(f"Created a GIF animation: {gif_fp_accumulated.name}")
         return da
 
     def set_rsds_W_per_m2(
@@ -913,7 +903,7 @@ class Forcing(BuildModelBase):
         min_SPEI = -3.09
         max_SPEI = 3.09
         return self._set_forcing_variable(
-            da,
+            da.chunk({"time": 1}),
             name=name,
             attrs={
                 "units": "-",
@@ -947,7 +937,7 @@ class Forcing(BuildModelBase):
             bounds=self.grid["mask"].rio.bounds(recalc=True),
         )
 
-        pr_hourly: xr.DataArray = era5_loader(variable="tp")
+        pr_hourly: xr.DataArray = era5_loader(variable="tp").chunk({"time": 7 * 24})
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
         )  # convert from m/hr to kg/m2/s
@@ -958,30 +948,30 @@ class Forcing(BuildModelBase):
             pr_hourly, create_plots=create_plots
         )
 
-        tas: xr.DataArray = era5_loader("t2m")
+        tas: xr.DataArray = era5_loader("t2m").chunk({"time": 7 * 24})
         self.set_tas_2m_K(tas, create_plots=create_plots)
 
-        dew_point_tas: xr.DataArray = era5_loader("d2m")
+        dew_point_tas: xr.DataArray = era5_loader("d2m").chunk({"time": 7 * 24})
         self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
 
         rsds: xr.DataArray = (
             era5_loader("ssrd") / 3600  # convert from J/m2/(per timestep) to W/m2
-        )  # surface_solar_radiation_downwards
+        ).chunk({"time": 7 * 24})  # surface_solar_radiation_downwards
         self.set_rsds_W_per_m2(rsds, create_plots=create_plots)
 
         # surface_thermal_radiation_downwards
-        rlds: xr.DataArray = (
-            era5_loader("strd") / 3600
+        rlds: xr.DataArray = (era5_loader("strd") / 3600).chunk(
+            {"time": 7 * 24}
         )  # convert from J/m2/(per timestep) to W/m2
         self.set_rlds_W_per_m2(rlds, create_plots=create_plots)
 
-        pressure: xr.DataArray = era5_loader("sp")
+        pressure: xr.DataArray = era5_loader("sp").chunk({"time": 7 * 24})
         self.set_ps_pascal(pressure, create_plots=create_plots)
 
-        u_wind: xr.DataArray = era5_loader("u10")
+        u_wind: xr.DataArray = era5_loader("u10").chunk({"time": 7 * 24})
         self.set_wind_10m_m_per_s(u_wind, direction="u", create_plots=create_plots)
 
-        v_wind: xr.DataArray = era5_loader("v10")
+        v_wind: xr.DataArray = era5_loader("v10").chunk({"time": 7 * 24})
         self.set_wind_10m_m_per_s(v_wind, direction="v", create_plots=create_plots)
 
         elevation_forcing: xr.DataArray = self.get_elevation_forcing(pr_hourly)
@@ -1203,7 +1193,7 @@ class Forcing(BuildModelBase):
                 time_chunksize=10,
                 time_chunks_per_shard=None,
             ) as SPEI:
-                self.set_SPEI(SPEI.chunk({"time": 1}), create_plots=create_plots)
+                self.set_SPEI(SPEI, create_plots=create_plots)
 
                 self.logger.info("calculating GEV parameters...")
 
