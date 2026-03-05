@@ -154,14 +154,14 @@ rule build_base:
 
 rule generate_initial_parameters:
     input: "base_build.done"
-    output: RUNS_DIR + f"/generation_0_population.yml"
+    output: f"generation_0_{CALIBRATION_TARGET}_population.yml"
     run:
         with open(output[0], "w") as f:
             yaml.dump({"individuals": INITIAL_POPULATION}, f, default_flow_style=False)
 
 rule generate_individual_parameters:
     input:
-        pop_file=lambda wildcards: RUNS_DIR + f"/generation_0_population.yml" if int(wildcards.gen) == 0 else RUNS_DIR + f"/generation_{int(wildcards.gen) - 1}_next.yml",
+        pop_file=lambda wildcards: f"generation_0_{CALIBRATION_TARGET}_population.yml" if int(wildcards.gen) == 0 else f"generation_{int(wildcards.gen) - 1}_{CALIBRATION_TARGET}_next.yml",
         checkpoint_done=lambda wildcards: checkpoints.create_next_generation.get(gen=int(wildcards.gen) - 1).output if int(wildcards.gen) > 0 else []
     output: params=RUNS_DIR + "/{gen}_{ind}/parameters.yml"
     run:
@@ -287,11 +287,11 @@ rule evaluate_individual:
 checkpoint create_next_generation:
     input:
         fitness_files=lambda wildcards: [RUNS_DIR + "/{gen}_{i:03d}/fitness.yml".format(gen=wildcards.gen, i=i) for i in range(MU if int(wildcards.gen) == 0 else LAMBDA)],
-        prev_pop=lambda wildcards: RUNS_DIR + f"/generation_0_population.yml" if int(wildcards.gen) == 0 else RUNS_DIR + f"/generation_{int(wildcards.gen) - 1}_next.yml"
+        prev_pop=lambda wildcards: f"generation_0_{CALIBRATION_TARGET}_population.yml" if int(wildcards.gen) == 0 else f"generation_{int(wildcards.gen) - 1}_{CALIBRATION_TARGET}_next.yml"
     output:
-        selected_pop=RUNS_DIR + f"/generation_{{gen}}_selected.yml",
-        summary=RUNS_DIR + f"/generation_{{gen}}_summary.yml",
-        next_pop=RUNS_DIR + f"/generation_{{gen}}_next.yml"
+        selected_pop=f"generation_{{gen}}_{CALIBRATION_TARGET}_selected.yml",
+        summary=f"generation_{{gen}}_{CALIBRATION_TARGET}_summary.yml",
+        next_pop=f"generation_{{gen}}_{CALIBRATION_TARGET}_next.yml"
     run:
         gen = int(wildcards.gen)
         with open(input.prev_pop, "r") as f: pop_data = yaml.safe_load(f)
@@ -340,7 +340,7 @@ checkpoint create_next_generation:
 
 def aggregate_checkpoint_outputs(wildcards):
     checkpoints.create_next_generation.get(gen=NGEN - 1)
-    return [RUNS_DIR + f"/generation_{gen}_selected.yml" for gen in range(NGEN)]
+    return [f"generation_{gen}_{CALIBRATION_TARGET}_selected.yml" for gen in range(NGEN)]
 
 rule complete_calibration:
     input: aggregate_checkpoint_outputs
@@ -348,7 +348,7 @@ rule complete_calibration:
     run:
         all_individuals = []
         for gen in range(NGEN):
-            with open(RUNS_DIR + f"/generation_{gen}_selected.yml", "r") as f:
+            with open(f"generation_{gen}_{CALIBRATION_TARGET}_selected.yml", "r") as f:
                 all_individuals.extend(yaml.safe_load(f)["individuals"])
         
         deap_all = []
