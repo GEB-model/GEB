@@ -35,24 +35,24 @@ def load_model_config():
         return yaml.safe_load(f)
 
 MODEL_CONFIG = load_model_config()
-CALIBRATION_TARGET = config.get("TARGET", None)
+CALIBRATION_TRACK = config.get("TRACK", None)
 
-if CALIBRATION_TARGET is None:
-    print("Error: calibration target must be specified for calibration workflows. For example 'geb workflow calibrate hydrology'")
+if CALIBRATION_TRACK is None:
+    print("Error: calibration track must be specified for calibration workflows. For example 'geb workflow calibrate hydrology'")
     sys.exit(1)
 
 # Ensure the calibration and target section exist
 if "calibration" not in MODEL_CONFIG:
     raise ValueError("No 'calibration' section found in model.yml")
-if CALIBRATION_TARGET not in MODEL_CONFIG["calibration"]:
+if CALIBRATION_TRACK not in MODEL_CONFIG["calibration"]:
     available = list(MODEL_CONFIG["calibration"].keys())
     raise KeyError(
-        f"Calibration target '{CALIBRATION_TARGET}' not found in model.yml. "
-        f"Available targets/sections: {available}"
+        f"Calibration track '{CALIBRATION_TRACK}' not found in model.yml. "
+        f"Available tracks/sections: {available}"
     )
 
-CALIBRATION_CONFIG = MODEL_CONFIG["calibration"][CALIBRATION_TARGET]
-RUNS_DIR = config.get("RUNS_DIR", f"calibration/{CALIBRATION_TARGET}")
+CALIBRATION_CONFIG = MODEL_CONFIG["calibration"][CALIBRATION_TRACK]
+RUNS_DIR = f"calibration/{CALIBRATION_TRACK}"
 
 # DEAP Settings
 NGEN = CALIBRATION_CONFIG["DEAP"]["ngen"]
@@ -71,13 +71,25 @@ N_PARAMETERS = len(PARAMETERS)
 
 # Target Weights
 CALIBRATION_TARGETS = CALIBRATION_CONFIG["calibration_targets"]
-weights = [float(target_info["weight"]) for target_info in CALIBRATION_TARGETS.values()]
+weights = [target_info["weight"] for target_info in CALIBRATION_TARGETS.values()]
+for weight in weights:
+    if not isinstance(weight, (int, float)):
+        raise ValueError(f"Invalid weight value: {weight}. Weights must be numeric.")
 
-# --- Helpers ---
+# --- DEAP Initialization ---
 
-def get_calibration_config(model_config: dict) -> dict:
-    """Helper to get the calibration section for the current target."""
-    return model_config.get("calibration", {}).get(CALIBRATION_TARGET, {})
+creator.create("FitnessMulti", base.Fitness, weights=weights)
+creator.create("Individual", array.array, typecode="d", fitness=creator.FitnessMulti)
+
+toolbox = base.Toolbox()
+toolbox.register("attr_float", random.uniform, 0, 1)
+toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, N_PARAMETERS)
+toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+toolbox.register("mate", tools.cxBlend, alpha=CALIBRATION_CONFIG["DEAP"]["blend_alpha"])
+toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=CALIBRATION_CONFIG["DEAP"]["gaussian_sigma"], indpb=CALIBRATION_CONFIG["DEAP"]["gaussian_indpb"])
+toolbox.register("select", tools.selNSGA2)
+
+random.seed(42)
 
 def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") -> str | None:
     """Helper function to run a GEB command, log output, and return captured stdout."""
@@ -109,38 +121,6 @@ def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") 
 
     return process.stdout
 
-# --- DEAP Initialization ---
-
-creator.create("FitnessMulti", base.Fitness, weights=weights)
-creator.create("Individual", array.array, typecode="d", fitness=creator.FitnessMulti)
-
-toolbox = base.Toolbox()
-toolbox.register("attr_float", random.uniform, 0, 1)
-toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, N_PARAMETERS)
-toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-toolbox.register("mate", tools.cxBlend, alpha=CALIBRATION_CONFIG["DEAP"]["blend_alpha"])
-toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=CALIBRATION_CONFIG["DEAP"]["gaussian_sigma"], indpb=CALIBRATION_CONFIG["DEAP"]["gaussian_indpb"])
-toolbox.register("select", tools.selNSGA2)
-
-random.seed(42)
-
-def generate_initial_population():
-    population = toolbox.population(n=MU)
-    individuals = []
-    for i, ind in enumerate(population):
-        label = "0_{:03d}".format(i)
-        individuals.append({
-            "label": label,
-            "generation": 0,
-            "individual_id": "{:03d}".format(i),
-            "values": [float(x) for x in ind]
-        })
-    return individuals
-
-INITIAL_POPULATION = generate_initial_population()
-
-# --- Rules ---
-
 rule init_base:
     output: touch("base_init.done")
     log: "logs/base_init.log"
@@ -154,14 +134,24 @@ rule build_base:
 
 rule generate_initial_parameters:
     input: "base_build.done"
-    output: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TARGET)
+    output: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TRACK)
     run:
+        population = toolbox.population(n=MU)
+        individuals = []
+        for i, ind in enumerate(population):
+            label = "0_{:03d}".format(i)
+            individuals.append({
+                "label": label,
+                "generation": 0,
+                "individual_id": "{:03d}".format(i),
+                "values": [float(x) for x in ind]
+            })
         with open(output[0], "w") as f:
-            yaml.dump({"individuals": INITIAL_POPULATION}, f, default_flow_style=False)
+            yaml.dump({"individuals": individuals}, f, default_flow_style=False)
 
 rule generate_individual_parameters:
     input:
-        pop_file=lambda wildcards: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TARGET) if int(wildcards.gen) == 0 else "calibration/generation_{0}_{1}_next.yml".format(int(wildcards.gen) - 1, CALIBRATION_TARGET),
+        pop_file=lambda wildcards: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TRACK) if int(wildcards.gen) == 0 else "calibration/generation_{0}_{1}_next.yml".format(int(wildcards.gen) - 1, CALIBRATION_TRACK),
         checkpoint_done=lambda wildcards: checkpoints.create_next_generation.get(gen=int(wildcards.gen) - 1).output if int(wildcards.gen) > 0 else []
     output: params=RUNS_DIR + "/{gen}_{ind}/parameters.yml"
     run:
@@ -223,10 +213,9 @@ rule set_individual_parameters:
         
         param_args = " ".join(f"{k}={v}" for k, v in actual_params.items())
         model_config = parse_config(run_dir / "model.yml")
-        calib_config = get_calibration_config(model_config)
         
         datetime_args = "general.spinup_time={0} general.start_time={1} general.end_time={2}".format(
-            calib_config["spinup_time"], calib_config["start_time"], calib_config["end_time"]
+            CALIBRATION_CONFIG["spinup_time"], CALIBRATION_CONFIG["start_time"], CALIBRATION_CONFIG["end_time"]
         )
         
         cmd = "geb set -c model.yml --working-directory {0} {1} {2} report=null report._discharge_stations+=true".format(
@@ -249,6 +238,8 @@ rule run_individual:
     run:
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         run_command(f"geb run -wd {run_dir}", log[0], f"Main run failed for {wildcards.gen}_{wildcards.ind}")
+        shutil.rmtree(run_dir / "simulation_root")
+        shutil.rmtree(run_dir / "input")
 
 rule evaluate_individual:
     input: RUNS_DIR + "/{gen}_{ind}/run.done"
@@ -257,10 +248,9 @@ rule evaluate_individual:
     run:
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         model_config = parse_config(run_dir / "model.yml")
-        calib_config = get_calibration_config(model_config)
-        targets = calib_config.get("calibration_targets", {})
+        targets = CALIBRATION_CONFIG.get("calibration_targets", {})
         if not targets:
-            raise ValueError(f"No targets found for {CALIBRATION_TARGET}")
+            raise ValueError(f"No targets found for {CALIBRATION_TRACK} in model.yml")
 
         all_metrics = {}
 
@@ -281,14 +271,16 @@ rule evaluate_individual:
         with open(output[0], "w") as f:
             yaml.dump({"targets": all_metrics}, f)
 
+        shutil.rmtree(run_dir / "output")
+
 checkpoint create_next_generation:
     input:
         fitness_files=lambda wildcards: [RUNS_DIR + "/{gen}_{i:03d}/fitness.yml".format(gen=wildcards.gen, i=i) for i in range(MU if int(wildcards.gen) == 0 else LAMBDA)],
-        prev_pop=lambda wildcards: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TARGET) if int(wildcards.gen) == 0 else "calibration/generation_{gen_prev}_{target}_next.yml".format(gen_prev=int(wildcards.gen) - 1, target=CALIBRATION_TARGET)
+        prev_pop=lambda wildcards: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TRACK) if int(wildcards.gen) == 0 else "calibration/generation_{gen_prev}_{target}_next.yml".format(gen_prev=int(wildcards.gen) - 1, target=CALIBRATION_TRACK)
     output:
-        selected_pop="calibration/generation_{gen}_{target}_selected.yml".format(target=CALIBRATION_TARGET, gen="{gen}"),
-        summary="calibration/generation_{gen}_{target}_summary.yml".format(target=CALIBRATION_TARGET, gen="{gen}"),
-        next_pop="calibration/generation_{gen}_{target}_next.yml".format(target=CALIBRATION_TARGET, gen="{gen}")
+        selected_pop="calibration/generation_{gen}_{target}_selected.yml".format(target=CALIBRATION_TRACK, gen="{gen}"),
+        summary="calibration/generation_{gen}_{target}_summary.yml".format(target=CALIBRATION_TRACK, gen="{gen}"),
+        next_pop="calibration/generation_{gen}_{target}_next.yml".format(target=CALIBRATION_TRACK, gen="{gen}")
     run:
         gen = int(wildcards.gen)
         with open(input.prev_pop, "r") as f: pop_data = yaml.safe_load(f)
@@ -338,15 +330,15 @@ checkpoint create_next_generation:
 
 def aggregate_checkpoint_outputs(wildcards):
     checkpoints.create_next_generation.get(gen=NGEN - 1)
-    return ["calibration/generation_{gen}_{target}_selected.yml".format(gen=gen, target=CALIBRATION_TARGET) for gen in range(NGEN)]
+    return ["calibration/generation_{gen}_{target}_selected.yml".format(gen=gen, target=CALIBRATION_TRACK) for gen in range(NGEN)]
 
 rule complete_calibration:
     input: aggregate_checkpoint_outputs
-    output: touch("calibration/calibration_{target}_complete.done".format(target=CALIBRATION_TARGET))
+    output: touch("calibration/calibration_{target}_complete.done".format(target=CALIBRATION_TRACK))
     run:
         all_individuals = []
         for gen in range(NGEN):
-            with open("calibration/generation_{gen}_{target}_selected.yml".format(gen=gen, target=CALIBRATION_TARGET), "r") as f:
+            with open("calibration/generation_{gen}_{target}_selected.yml".format(gen=gen, target=CALIBRATION_TRACK), "r") as f:
                 all_individuals.extend(yaml.safe_load(f)["individuals"])
         
         deap_all = []
@@ -360,5 +352,5 @@ rule complete_calibration:
         pf.update(deap_all)
         
         pareto_data = [{"label": ind.label, "values": [float(x) for x in ind], "fitness": list(ind.fitness.values)} for ind in pf]
-        with open("calibration/calibration_{target}_pareto_front.yml".format(target=CALIBRATION_TARGET), "w") as f:
-            yaml.dump({"target": CALIBRATION_TARGET, "pareto_front": pareto_data}, f, default_flow_style=False)
+        with open("calibration/calibration_{target}_pareto_front.yml".format(target=CALIBRATION_TRACK), "w") as f:
+            yaml.dump({"target": CALIBRATION_TRACK, "pareto_front": pareto_data}, f, default_flow_style=False)
