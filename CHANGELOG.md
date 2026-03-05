@@ -1,4 +1,6 @@
 # dev
+
+# v1.0.0b13
 - combine fabdem loading of elevation and forcing for saving some data on disk
 - add memory profiler memray. Use option e.g., geb spinup --profile-memory
 - renamed speed profiler to --profile-speed
