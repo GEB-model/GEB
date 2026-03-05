@@ -68,8 +68,8 @@ report:
 
 calibration:
   hydrology:
-    spinup_time: 1990-01-01
-    start_time: 2000-01-01
+    spinup_time: 1960-01-01
+    start_time: 1990-01-01
     end_time: 2023-12-31
     calibration_targets:
       KGE_discharge:

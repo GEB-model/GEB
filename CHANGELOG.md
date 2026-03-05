@@ -1,6 +1,6 @@
 # dev
 
-# v1.0.0b11
+# v1.0.0b12
 - Reforestation: add government forest planting policy and soil modification workflow.
 - Convert suitable cropland/grassland to forest; update soils and remove farmers.
 - Reorganized `geb/hydrology/` by moving land surface-related modules (`landsurface.py`, `evapotranspiration.py`, `interception.py`, `snow_glaciers.py`, `potential_evapotranspiration.py`) into a new `geb/hydrology/landsurface/` package.
@@ -66,7 +66,7 @@ To support this version:
 Recommended:
 - Re-run `setup_forcing` and `setup_SPEI` for a significant speedup and better SPEI estimation: `geb update -b build.yml::setup_forcing` and `geb update -b build.yml::setup_SPEI`
 
-# v1.0.0b10
+# v1.0.0b11
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
 - Fix GPU instability in SFINCS by disabling h73table parameter that was causing crashes during GPU-accelerated flood simulations.
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.

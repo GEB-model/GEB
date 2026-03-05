@@ -3002,8 +3002,11 @@ class CropFarmers(AgentBaseClass):
         Returns:
             npt.NDArray[np.floating]: Per-farmer parameters with shape ``(n_farmers, 2)``,
                 columns ``[a, b]`` for ``y = a * exp(b * X)``.
+
+        Raises:
+            ValueError: If any group has insufficient valid data for fitting (less than 2 valid
         """
-        # Create groups (unchanged)
+        # Create groups
         group_indices, n_groups = self.create_unique_groups(self.well_status)
         assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
 
@@ -3065,6 +3068,8 @@ class CropFarmers(AgentBaseClass):
             a_array[g] = a
             b_array[g] = b
             r_squared_array[g] = r2
+            if np.isnan(r2):
+                raise ValueError(f"Group {g} has insufficient valid data for fitting.")
 
         # Assign per farmer (cols: intercept=a, slope=b)
         farmer_params = np.column_stack(
