@@ -3,6 +3,7 @@
 import copy
 import datetime
 import logging
+import warnings
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -89,8 +90,6 @@ class GEBModel(Module):
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
-
-        self.mask = read_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
 
@@ -594,8 +593,9 @@ class GEBModel(Module):
         end_time_exclusive = self.run_start
 
         if end_time_exclusive.year - current_time.year < 10:
-            print(
-                "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
+            warnings.warn(
+                "Spinup time is less than 10 years. This is not recommended and may lead to issues later.",
+                UserWarning,
             )
 
         timestep_length = datetime.timedelta(days=1)
@@ -821,52 +821,6 @@ class GEBModel(Module):
     def crs(self) -> int:
         """Get the coordinate reference system (CRS) of the model."""
         return 4326
-
-    @property
-    def bounds(self) -> tuple[float, float, float, float]:
-        """Get the bounding box of the model's mask.
-
-        Returns:
-            A tuple representing the bounding box in the format (minx, miny, maxx, maxy).
-        """
-        total_bounds = self.mask.total_bounds
-        return (total_bounds[0], total_bounds[1], total_bounds[2], total_bounds[3])
-
-    @property
-    def xmin(self) -> float:
-        """Get the minimum x-coordinate of the model's bounding box.
-
-        Returns:
-            Minimum x-coordinate of the bounding box.
-        """
-        return self.bounds[0]
-
-    @property
-    def xmax(self) -> float:
-        """Get the maximum x-coordinate of the model's bounding box.
-
-        Returns:
-            Maximum x-coordinate of the bounding box.
-        """
-        return self.bounds[2]
-
-    @property
-    def ymin(self) -> float:
-        """Get the minimum y-coordinate of the model's bounding box.
-
-        Returns:
-            Minimum y-coordinate of the bounding box.
-        """
-        return self.bounds[1]
-
-    @property
-    def ymax(self) -> float:
-        """Get the maximum y-coordinate of the model's bounding box.
-
-        Returns:
-            Maximum y-coordinate of the bounding box.
-        """
-        return self.bounds[3]
 
     def close(self) -> None:
         """Finalizes the model."""
