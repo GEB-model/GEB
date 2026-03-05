@@ -185,18 +185,13 @@ class LandSurface(BuildModelBase):
         xmax: float = bounds[2] + buffer
         ymax: float = bounds[3] + buffer
 
-        fabdem: xr.DataArray = (
-            self.data_catalog.fetch(
-                "fabdem",
-                xmin=xmin,
-                xmax=xmax,
-                ymin=ymin,
-                ymax=ymax,
-                prefix="hydrodynamics",
-            )
-            .read(prefix="hydrodynamics")
-            .compute()
-        )
+        fabdem: xr.DataArray = self.data_catalog.fetch(
+            "fabdem",
+            xmin=xmin - 0.5,  # extra buffer to also support forcing
+            xmax=xmax + 0.5,  # extra buffer to also support forcing
+            ymin=ymin - 0.5,  # extra buffer to also support forcing
+            ymax=ymax + 0.5,  # extra buffer to also support forcing
+        ).read()
 
         target: xr.DataArray = self.subgrid["mask"]
         assert target.rio.crs is not None, "target grid must have a crs"
