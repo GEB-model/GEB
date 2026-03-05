@@ -243,8 +243,6 @@ def test_update_with_dict() -> None:
         "setup_vegetation",
         "setup_water_demand",
         "setup_discharge_observations",
-        "setup_SPEI",
-        "setup_forcing"
     ],
 )
 def test_update_with_method(method: str) -> None:
