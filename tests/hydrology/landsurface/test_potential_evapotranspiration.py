@@ -13,15 +13,15 @@ from geb.hydrology.landcovers import (
     PADDY_IRRIGATED,
     SEALED,
 )
-from geb.hydrology.potential_evapotranspiration import (
+from geb.hydrology.landsurface.potential_evapotranspiration import (
     W_per_m2_to_MJ_per_m2_per_hour,
     adjust_wind_speed_log_profile,
     get_CO2_induced_crop_factor_adustment,
     get_crop_factor_from_lai,
     get_crop_factors_and_root_depths,
     get_net_solar_radiation,
-    get_potential_bare_soil_evaporation,
     get_potential_evapotranspiration,
+    get_potential_interception_evaporation,
     get_potential_transpiration,
     get_psychrometric_constant,
     get_slope_of_saturation_vapour_pressure_curve,
@@ -31,7 +31,7 @@ from geb.hydrology.potential_evapotranspiration import (
     penman_monteith,
 )
 
-from ..testconfig import output_folder
+from ...testconfig import output_folder
 
 
 def test_get_vapour_pressure() -> None:
@@ -201,19 +201,30 @@ def test_penman_monteith_night() -> None:
 
 def test_get_potential_transpiration() -> None:
     """Test the calculation of potential transpiration."""
-    potential_transpiration_m = get_potential_transpiration(
+    # Test with LAI=0 (no transpiration)
+    potential_transpiration_m, potential_evaporation_m = get_potential_transpiration(
         potential_evapotranspiration_m=np.float32(5.0),
-        potential_bare_soil_evaporation_m=np.float32(2.0),
+        leaf_area_index=np.float32(0.0),
     )
-    expected_value = np.float32(3.0)
-    assert np.isclose(potential_transpiration_m, expected_value, rtol=1e-6)
+    expected_transpiration = np.float32(0.0)
+    expected_evaporation = np.float32(5.0)
+    assert np.isclose(potential_transpiration_m, expected_transpiration, rtol=1e-6)
+    assert np.isclose(potential_evaporation_m, expected_evaporation, rtol=1e-6)
 
-    potential_transpiration_m = get_potential_transpiration(
+    # Test with LAI such that attenuation is ~0.3678 (LAI=2.0)
+    potential_transpiration_m, potential_evaporation_m = get_potential_transpiration(
         potential_evapotranspiration_m=np.float32(5.0),
-        potential_bare_soil_evaporation_m=np.float32(6.0),
+        leaf_area_index=np.float32(2.0),
     )
-    expected_value = np.float32(0.0)
-    assert np.isclose(potential_transpiration_m, expected_value, rtol=1e-6)
+    # extinction_coefficient = 0.5, LAI = 2.0 -> k*LAI = 1.0
+    # attenuation = exp(-1) = 0.367879...
+    # (1 - 0.367879...) * 5.0 = 0.632120... * 5.0 = 3.16060...
+    expected_transpiration = (np.float32(1.0) - np.exp(np.float32(-1.0))) * np.float32(
+        5.0
+    )
+    expected_evaporation = (np.exp(np.float32(-1.0))) * np.float32(5.0)
+    assert np.isclose(potential_transpiration_m, expected_transpiration, rtol=1e-6)
+    assert np.isclose(potential_evaporation_m, expected_evaporation, rtol=1e-6)
 
 
 def test_get_potential_evapotranspiration() -> None:
@@ -256,15 +267,24 @@ def test_get_potential_evapotranspiration() -> None:
     assert np.isclose(potential_evapotranspiration_m, expected_value, rtol=1e-6)
 
 
-def test_get_potential_bare_soil_evaporation() -> None:
-    """Test the calculation of potential bare soil evaporation."""
-    reference_evapotranspiration_grass_m = np.float32(5.0)
-    bare_soil_evaporation = get_potential_bare_soil_evaporation(
-        reference_evapotranspiration_grass_m,
-    )
+def test_get_potential_interception_evaporation() -> None:
+    """Test the calculation of potential interception evaporation."""
+    reference_evapotranspiration_water_m = np.float32(6.0)
+    potential_evapotranspiration_m = np.float32(5.0)
 
-    expected_value = np.float32(1.0)
-    assert np.isclose(bare_soil_evaporation, expected_value, rtol=1e-6)
+    # It should be min(ET_water, ET_pot)
+    potential_interception = get_potential_interception_evaporation(
+        reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m,
+        potential_evapotranspiration_m=potential_evapotranspiration_m,
+    )
+    assert np.isclose(potential_interception, 5.0, rtol=1e-6)
+
+    # Test with ET_water < ET_pot
+    potential_interception_low = get_potential_interception_evaporation(
+        reference_evapotranspiration_water_m_per_hour=np.float32(4.0),
+        potential_evapotranspiration_m=np.float32(5.0),
+    )
+    assert np.isclose(potential_interception_low, 4.0, rtol=1e-6)
 
 
 def test_get_CO2_induced_crop_factor_adustment() -> None:
@@ -367,7 +387,7 @@ def test_get_crop_factors_and_root_depths() -> None:
     # first crop in initial stage, second crop halfway in second stage, third crop fully grown, fourth crop halfway in last stage
     # fifth is forest, sixth is grassland, seventh is sealed, eighth is open water
     expected_crop_factor = np.array(
-        [0.6, 0.75, 1.2, 1.05, 0.985168, 1.000112, np.nan, np.nan], dtype=np.float32
+        [0.6, 0.75, 1.2, 1.05, 0.985168, 1.000112, 0.0, 0.0], dtype=np.float32
     )
     expected_root_depth = np.array(
         [
@@ -377,8 +397,8 @@ def test_get_crop_factors_and_root_depths() -> None:
             0.2 + (1.0 - 0.2) * 95 / 100,  # not irrigated, crop 0
             2.0,  # forest
             0.1,  # grassland
-            np.nan,  # sealed
-            np.nan,  # open water
+            0.0,  # sealed
+            0.0,  # open water
         ],
         dtype=np.float32,
     )

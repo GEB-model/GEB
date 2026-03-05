@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 import geopandas as gpd
 import yaml
+from pydantic import BaseModel, ValidationError
 from shapely.geometry import box
 
 from geb import GEB_PACKAGE_DIR
@@ -33,6 +34,7 @@ from geb.build.__init__ import (
 )
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
+from geb.config_schema import Config
 from geb.model import GEBModel
 from geb.workflows.io import WorkingDirectory, read_params
 from geb.workflows.methods import multi_level_merge
@@ -90,7 +92,9 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
 
 
 def parse_config(
-    config_path: dict | Path | str, current_directory: Path | None = None
+    config_path: dict | Path | str,
+    current_directory: Path | None = None,
+    schema: type[BaseModel] | None = None,
 ) -> dict[str, Any]:
     """Parse config.
 
@@ -100,6 +104,7 @@ def parse_config(
         config_path: Path to the config file or a dict with the config.
         current_directory: Current directory to resolve relative paths.
             If None, the current working directory is used.
+        schema: Pydantic schema to validate the config against.
 
     Returns:
         Full model configuation of the model without any remaining 'inherits' keys.
@@ -122,7 +127,9 @@ def parse_config(
         inherit_config_path = config["inherits"]
         inherit_config_path = inherit_config_path.format(**os.environ)
         # replace {VAR} with environment variable VAR if it exists
-        inherit_config_path = os.path.expandvars(inherit_config_path)
+        inherit_config_path = os.environ.get(
+            inherit_config_path, os.path.expandvars(inherit_config_path)
+        )
         # if inherits is not an absolute path, we assume it is relative to the config file
         if not Path(inherit_config_path).is_absolute():
             inherit_config_path = current_directory / config["inherits"]
@@ -135,19 +142,18 @@ def parse_config(
             "inherits"
         ]  # remove inherits key from config to avoid infinite recursion
         config = multi_level_merge(inherited_config, config)
-        config = parse_config(config, current_directory=current_directory)
+        config = parse_config(
+            config, current_directory=current_directory, schema=schema
+        )
 
     # Validate config
-    from pydantic import ValidationError
-
-    from geb.config_schema import Config
-
-    try:
-        Config(**config)
-    except ValidationError as e:
-        # We warn instead of raising an error to allow for extra fields or partial configs
-        # during development, but ideally this should be strict.
-        logging.warning(f"Configuration validation failed: {e}")
+    if schema is not None:
+        try:
+            schema(**config)
+        except ValidationError as e:
+            # We warn instead of raising an error to allow for extra fields or partial configs
+            # during development, but ideally this should be strict.
+            logging.warning(f"Configuration validation failed: {e}")
 
     return config
 
@@ -193,7 +199,7 @@ def run_model_with_method(
     optimize: bool = OPTIMIZE_DEFAULT,
     method_args: dict = {},
     close_after_run: bool = True,
-) -> GEBModel:
+) -> Any:
     """Run model with a specific method.
 
     Args:
@@ -207,7 +213,7 @@ def run_model_with_method(
         close_after_run: If True, close the model after running the method. Defaults to True.
 
     Returns:
-        Instance of GEBModel
+        The result of the method run or the GEBModel instance if no method was run.
 
     Raises:
         SystemExit: If the model is restarted in optimized mode.
@@ -222,8 +228,10 @@ def run_model_with_method(
         command: list[str] = [sys.executable, "-O"] + sys.argv
         raise SystemExit(subprocess.run(command).returncode)
 
-    def run_operation() -> GEBModel:
-        config_parsed: dict[str, Any] = parse_config(config)
+    def run_operation() -> Any:
+        from geb.config_schema import Config
+
+        config_parsed: dict[str, Any] = parse_config(config, schema=Config)
         files: dict[str, Any] = parse_config(
             read_params(Path("input/files.yml"))
             if "files" not in config_parsed["general"]
@@ -231,12 +239,13 @@ def run_model_with_method(
         )
 
         geb = GEBModel(config=config_parsed, files=files, timing=timing)
+        result = geb
         if method is not None:
-            getattr(geb, method)(**method_args)
+            result = getattr(geb, method)(**method_args)
         if close_after_run:
             geb.close()
 
-        return geb
+        return result or geb
 
     with WorkingDirectory(working_directory):
         return _run_with_optional_profiling(
@@ -373,7 +382,7 @@ def get_builder(
     Returns:
         Instance of the model builder.
     """
-    config = parse_config(config)
+    config = parse_config(config, schema=Config)
     input_folder = Path(config["general"]["input_folder"])
 
     data_catalog = customize_data_catalog(data_catalog, data_root=data_root)
@@ -515,7 +524,7 @@ def set_fn(
         KeyError: If a specified key does not exist in the config and cannot be created.
     """
     with WorkingDirectory(working_directory):
-        config_dict: dict[str, Any] = parse_config(config)
+        config_dict: dict[str, Any] = parse_config(config, schema=Config)
         for key, value in kwargs.items():
             if key.endswith("+"):
                 key: str = key[:-1]
@@ -595,7 +604,7 @@ def build_fn(
         }
         model.build(
             methods=methods,
-            region=parse_config(config)["general"]["region"],
+            region=parse_config(config, schema=Config)["general"]["region"],
             continue_=continue_,
         )
 
@@ -635,6 +644,10 @@ def alter_fn(
 
     def alter_operation() -> None:
         original_config: Path = from_model / config
+        if not original_config.exists():
+            raise FileNotFoundError(
+                f"Config file {original_config} does not exist in the original model. Cannot create alternative model based on it."
+            )
 
         # if config does not exist, create a new config that inherits from the original model
         if not config.exists():
@@ -656,7 +669,7 @@ def alter_fn(
             with open(config, "w") as f:
                 yaml.dump(raw_config, f, default_flow_style=False, sort_keys=False)
 
-        config_from_original_model = parse_config(from_model / config)
+        config_from_original_model = parse_config(from_model / config, schema=Config)
         input_folder: Path = Path(config_from_original_model["general"]["input_folder"])
 
         original_input_path: Path = from_model / input_folder

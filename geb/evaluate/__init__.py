@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from operator import attrgetter
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .agents import Agents
+from .energy import Energy
 from .hydrology import Hydrology
 from .meteorological_forecasts import MeteorologicalForecasts
 
@@ -30,17 +31,25 @@ class Evaluate:
         self.model: GEBModel = model
         self.agents = Agents(model, self)
         self.hydrology = Hydrology(model, self)
+        self.energy = Energy(model, self)
         self.meteorological_forecasts = MeteorologicalForecasts(model, self)
+
+    @property
+    def sub_evaluators(self) -> list[str]:
+        """Returns a list of available sub-evaluators."""
+        return [
+            attr
+            for attr, value in self.__dict__.items()
+            if not attr.startswith("_") and attr != "model"
+        ]
 
     def run(
         self,
-        method: str = "hydrology.evaluate_discharge",
+        method: str,
         spinup_name: str = "spinup",
         run_name: str = "default",
-        include_spinup: bool = False,
-        include_yearly_plots: bool = True,
-        correct_discharge_observations: bool = False,
-    ) -> None:
+        **kwargs: Any,
+    ) -> Any:
         """Run a single evaluation method.
 
         Args:
@@ -48,9 +57,10 @@ class Evaluate:
                 `hydrology.evaluate_discharge`.
             spinup_name: Name of the spinup run. Defaults to "spinup".
             run_name: Name of the run to evaluate. Defaults to "default".
-            include_spinup: If True, includes the spinup run in the evaluation.
-            include_yearly_plots: If True, creates plots for every year showing the evaluation
-            correct_discharge_observations: If True, corrects the observed discharge values.
+            **kwargs: Additional keyword arguments to pass to the evaluation method.
+
+        Returns:
+            The result of the evaluation method.
 
         Raises:
             AttributeError: If the specified method is not implemented in the Evaluate class.
@@ -66,13 +76,15 @@ class Evaluate:
                 f"Method {method} is not implemented in Evaluate class."
             ) from exc
 
-        attr(
-            spinup_name=spinup_name,
-            run_name=run_name,
-            include_spinup=include_spinup,
-            include_yearly_plots=include_yearly_plots,
-            correct_discharge_observations=correct_discharge_observations,
-        )
+        # Merge spinup_name and run_name into kwargs to pass them all as keyword arguments
+        all_kwargs = {
+            "spinup_name": spinup_name,
+            "run_name": run_name,
+            **kwargs,
+        }
+
+        # Run the method and return the result
+        return attr(**all_kwargs)
 
     @property
     def output_folder_evaluate(self) -> Path:

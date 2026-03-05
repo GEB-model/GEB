@@ -6,7 +6,7 @@ relations used by the infiltration routine.
 
 import numpy as np
 
-from geb.hydrology.soil import (
+from geb.hydrology.landsurface.water import (
     calculate_green_ampt_cumulative_infiltration,
     calculate_green_ampt_time_from_infiltration,
 )

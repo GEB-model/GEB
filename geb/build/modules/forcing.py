@@ -1135,8 +1135,8 @@ class Forcing(BuildModelBase):
             self.other["climate/pr_kg_per_m2_per_s"].resample(time="D").mean()
         )
 
-        assert np.array_equal(self.other["climate/pr_kg_per_m2_per_s"].x, tasmin_2m_K.x)
-        assert np.array_equal(self.other["climate/pr_kg_per_m2_per_s"].y, tasmin_2m_K.y)
+        assert np.array_equal(pr_kg_per_m2_per_s.x, tasmin_2m_K.x)
+        assert np.array_equal(pr_kg_per_m2_per_s.y, tasmin_2m_K.y)
 
         assert calibration_period_start < calibration_period_end, (
             f"Start date {calibration_period_start} must be earlier than end date {calibration_period_end}."
@@ -1277,17 +1277,19 @@ class Forcing(BuildModelBase):
         pr: xr.DataArray = (
             self.other["climate/pr_kg_per_m2_per_s"] * 3600
         )  # convert to mm/hour
-        pr_monthly: xr.DataArray = pr.resample(time="M").sum(dim="time", skipna=True)
 
+        # Calculate monthly totals and then yearly max.
         pr_yearly_max = (
-            pr_monthly.groupby("time.year")
-            .max(dim="time", skipna=True)
-            .rename({"year": "time"})
-            .chunk({"time": -1})
-            .compute()
-        )
+            pr.resample(time="MS")  # MS = Month Start
+            .sum(method="blockwise")
+            .resample(time="YS")  # YS = Year Start
+            .max(method="blockwise")
+        ).chunk({"time": -1})
 
-        gev_pr = xci.stats.fit(pr_yearly_max, dist="genextreme").compute()
+        gev_pr = xcistats.fit(
+            pr_yearly_max,
+            dist="genextreme",
+        ).compute()
 
         self.set_other(
             gev_pr.sel(dparams="c").astype(np.float32), name="climate/pr_gev_c"

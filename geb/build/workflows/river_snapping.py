@@ -276,9 +276,7 @@ def snap_point_to_river_network(
         ),
         "snapped_grid_pixel_xy": closest_river_point_and_xy[1],
         "geb_uparea_subgrid": (
-            (river_cell_in_subgrid.x.item(), river_cell_in_subgrid.y.item())
-            if include_uparea
-            else None
+            river_cell_in_subgrid.item() if include_uparea else None
         ),
         "geb_uparea_grid": (
             upstream_area_grid.isel(

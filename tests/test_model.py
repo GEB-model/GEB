@@ -439,7 +439,32 @@ def test_evaluate_water_circle() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate() -> None:
+def test_evaluate_evaluate_discharge() -> None:
+    """Test model evaluation functionality.
+
+    Verifies that model outputs can be evaluated and analyzed
+    for correctness and consistency. Checks that the evaluation
+    returns a dictionary containing expected metrics.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "method": "hydrology.evaluate_discharge",
+            "include_yearly_plots": False,
+        }
+        args["method_args"] = method_args
+        result = run_model_with_method(method="evaluate", **args)
+
+        # Verify that the result is a dictionary and contains expected keys
+        assert isinstance(result, dict)
+        assert "KGE" in result
+        assert "NSE" in result
+        assert "R" in result
+        assert isinstance(result["KGE"], (float, int))
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate_evaluate_water_balance() -> None:
     """Test model evaluation functionality.
 
     Verifies that model outputs can be evaluated and analyzed
@@ -449,8 +474,26 @@ def test_evaluate() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "method": "hydrology.evaluate_discharge",
+            "method": "hydrology.water_balance",
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate_energy() -> None:
+    """Test energy evaluation functionality.
+
+    Verifies that model outputs can be evaluated and analyzed
+    for correctness and consistency. Does not check the evaluation
+    results itself. Just if it can be run.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "method": "energy.plot_soil_temperature",
             "include_yearly_plots": False,
+            "run_name": "spinup",
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from geb.geb_types import ArrayFloat32
-from geb.hydrology.snow_glaciers import (
+from geb.hydrology.landsurface.snow_glaciers import (
     calculate_albedo,
     calculate_melt,
     calculate_runoff,
@@ -18,7 +18,7 @@ from geb.hydrology.snow_glaciers import (
     update_snow_temperature,
 )
 
-from ..testconfig import output_folder
+from ...testconfig import output_folder
 
 output_folder_snow = output_folder / "snow_glaciers"
 output_folder_snow.mkdir(exist_ok=True)
@@ -1404,9 +1404,9 @@ def _plot_scenario_results(
     axs[4].legend()
     axs[4].grid(True)
     axs[4].axhline(0, color="black", linestyle="-", linewidth=0.8)
-    #
+
     axs[-1].set_xlabel("Time (hours)")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.tight_layout()
     plot_path = (
         output_folder_snow / f"scenario_{scenario_name.replace(' ', '_').lower()}.png"
     )

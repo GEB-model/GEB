@@ -1,4 +1,9 @@
 # dev
+- Reforestation: add government forest planting policy and soil modification workflow.
+- Convert suitable cropland/grassland to forest; update soils and remove farmers.
+- Reorganized `geb/hydrology/` by moving land surface-related modules (`landsurface.py`, `evapotranspiration.py`, `interception.py`, `snow_glaciers.py`, `potential_evapotranspiration.py`) into a new `geb/hydrology/landsurface/` package.
+- Split `soil.py` into `geb/hydrology/landsurface/water.py` (soil hydraulic processes) and `geb/hydrology/landsurface/energy.py` (soil thermal processes).
+- Add Leaf Area Index (LAI) integration in soil net radiation calculation to account for canopy shielding and emission.
 - Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
 - Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.
 - Add frequency labels (hourly/daily) to extreme value analysis and validation plot titles.
@@ -26,6 +31,11 @@
 - Move aquastat to new data catalog.
 - Add OECD Income Distribution Database (IDD) to the new data catalog.
 - Move Coast-RP to new data catalog.
+- Add heat conductivity to deeper soil layers (still missing influence of water).
+- Consider soil heat flux in pennmann-monteith.
+- Turn of sensible and turbulent heat fluxes in case there is snow.
+- Include evaporative cooling and advective heat transport from rainfall. 
+- Add a daily soil enthalpy balance check.
 - Generalize river snapping.
 - Setup example preprocessing for retention basins.
 - Fix: Add iso codes for GDL regions where those are missing 
@@ -35,16 +45,20 @@
 - Fix: fix bug of farms that are smaller than the subgrid size 
 - Fix: fix bug of countries that are not in trade regions (GLOBIOM) 
 - Raise error when progress.txt contains duplicates 
+- Speedup pr_gev calculation in build.
+- Simplify report function arguments.
+- Report water balance evaluation plot to evaluate folder.
 
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
 - Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`
 - Re-run `setup_discharge_observations`: `geb update -b build.yml::setup_discharge_observations`
-- re-run `setup_household_characteristics`: `geb update -b build yml::setup_household_characteristics`
-- re-run `setup_crops`: `geb update -b build.yml::setup_crops`
-- re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
-- re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
+- Only in case of build errors (or later in spinup/run):
+     - re-run `setup_household_characteristics`: `geb update -b build yml::setup_household_characteristics`
+     - re-run `setup_crops`: `geb update -b build.yml::setup_crops`
+     - re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
+     - re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
 
 # v1.0.0b10
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
