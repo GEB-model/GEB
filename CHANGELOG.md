@@ -1,4 +1,6 @@
 # dev
+- Only create plots during forcing setup if specifically requested with new `create_plots` argument.
+- Combine code in forcing.py so that it is more easy to maintain.
 
 # v1.0.0b13
 - combine fabdem loading of elevation and forcing for saving some data on disk
