@@ -1044,8 +1044,6 @@ class Forcing(BuildModelBase):
         pr_hourly: xr.DataArray = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
         pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(pr_hourly)
 
-        return
-
         tas: xr.DataArray = era5_loader("t2m")
         self.set_tas_2m_K(tas)
 
