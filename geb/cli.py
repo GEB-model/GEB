@@ -39,6 +39,8 @@ from geb.runner import (
 from geb.workflows.io import WorkingDirectory
 from geb.workflows.raster import rechunk_zarr_file
 
+IS_WINDOWS = sys.platform == "win32"
+
 
 @click.group()
 @click.version_option(__version__, message="GEB version: %(version)s")
@@ -150,7 +152,9 @@ def click_run_options() -> Any:
             "--profile-ram",
             is_flag=True,
             default=PROFILE_RAM_DEFAULT,
-            help="Run GEB with RAM profiling (using memray). If this option is used a .bin file is saved in the working directory.",
+            help="Run GEB with RAM profiling (using memray). If this option is used a .bin file is saved in the working directory."
+            if not IS_WINDOWS
+            else "RAM profiling is not supported on Windows.",
         )
         @click.option(
             "--optimize",
@@ -175,6 +179,10 @@ def click_run_options() -> Any:
             Returns:
                 The result of the wrapped function.
             """
+            if kwargs.get("profile_ram") and IS_WINDOWS:
+                raise click.ClickException(
+                    "RAM profiling with memray is not supported on Windows."
+                )
             return func(*args, **kwargs)
 
         return wrapper
@@ -293,7 +301,9 @@ def click_build_options(
             "--profile-ram",
             is_flag=True,
             default=PROFILE_RAM_DEFAULT,
-            help="Run with RAM profiling (using memray). If this option is used, a .bin file is saved in the profiling directory.",
+            help="Run with RAM profiling (using memray). If this option is used, a .bin file is saved in the profiling directory."
+            if not IS_WINDOWS
+            else "RAM profiling is not supported on Windows.",
         )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -306,6 +316,10 @@ def click_build_options(
             Returns:
             The result of the wrapped function.
             """
+            if kwargs.get("profile_ram") and IS_WINDOWS:
+                raise click.ClickException(
+                    "RAM profiling with memray is not supported on Windows."
+                )
             return func(*args, **kwargs)
 
         return wrapper
@@ -615,6 +629,11 @@ def evaluate(
                         # Keep as string
                         pass
             extra_args[key] = value
+
+    if profile_ram and IS_WINDOWS:
+        raise click.ClickException(
+            "RAM profiling with memray is not supported on Windows."
+        )
 
     result = run_model_with_method(
         method="evaluate",
