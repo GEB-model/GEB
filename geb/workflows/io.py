@@ -178,17 +178,17 @@ def read_grid(
         return data
 
 
-def read_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+def read_geom(filepath: str | Path, **kwargs: Any) -> gpd.GeoDataFrame:
     """Load a geometry for the GEB model from disk.
 
     Args:
         filepath: Path to the geometry file.
+        **kwargs: Additional keyword arguments to pass to `gpd.read_parquet`.
 
     Returns:
         A GeoDataFrame containing the geometries.
-
     """
-    return gpd.read_parquet(filepath)
+    return gpd.read_parquet(filepath, **kwargs)
 
 
 def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
