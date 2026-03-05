@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import geopandas as gpd
+import memray
 import yaml
+from memray.reporters.flamegraph import FlameGraphReporter
 from pydantic import BaseModel, ValidationError
 from shapely.geometry import box
 
@@ -39,13 +41,14 @@ from geb.model import GEBModel
 from geb.workflows.io import WorkingDirectory, read_params
 from geb.workflows.methods import multi_level_merge
 
-PROFILING_DEFAULT: bool = False
 OPTIMIZE_DEFAULT: bool = False
 TIMING_DEFAULT: bool = False
 WORKING_DIRECTORY_DEFAULT: Path = Path(".")
 CONFIG_DEFAULT: Path = Path("model.yml")
 UPDATE_DEFAULT: Path = Path("update.yml")
 BUILD_DEFAULT: Path = Path("build.yml")
+PROFILE_SPEED_DEFAULT: bool = False
+PROFILE_RAM_DEFAULT: bool = False
 
 DATA_CATALOG_DEFAULT: Path = GEB_PACKAGE_DIR / "data_catalog.yml"
 DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
@@ -195,7 +198,8 @@ def run_model_with_method(
     config: dict | str | Path = CONFIG_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     timing: bool = TIMING_DEFAULT,
-    profiling: bool = PROFILING_DEFAULT,
+    profile_speed: bool = PROFILE_SPEED_DEFAULT,
+    profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
     method_args: dict = {},
     close_after_run: bool = True,
@@ -207,7 +211,8 @@ def run_model_with_method(
         config: Path to the model configuration file or a dict with the config.
         working_directory: Working directory for the model.
         timing: If True, run the model with timing, printing the time taken for specific methods.
-        profiling: If True, run the model with profiling.
+        profile_speed: If True, run the model with speed profiling.
+        profile_ram: If True, run the model with RAM profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
         method_args: Optional arguments to pass to the method.
         close_after_run: If True, close the model after running the method. Defaults to True.
@@ -249,15 +254,16 @@ def run_model_with_method(
 
     with WorkingDirectory(working_directory):
         return _run_with_optional_profiling(
-            profiling,
+            profile_speed,
+            profile_ram,
             run_operation,
-            name=f"run_{method if method is not None else 'wo_method'}",
+            name=method if method is not None else "wo_method",
         )
 
 
-def _dump_profile(profile: cProfile.Profile, name: str) -> None:
+def _dump_speed_profile(profile: cProfile.Profile, name: str) -> None:
     """
-    Persist profiling statistics to disk in both binary and human-readable formats.
+    Persist speed profiling statistics to disk in both binary and human-readable formats.
 
     Args:
         profile: Profile instance containing execution statistics.
@@ -267,39 +273,65 @@ def _dump_profile(profile: cProfile.Profile, name: str) -> None:
     profiling_folder.mkdir(exist_ok=True)
 
     # Save binary data for visualization in tools like SnakeViz or RunSnakeRun
-    binary_path = profiling_folder / f"{name}.prof"
+    binary_path = profiling_folder / f"{name}_speed.prof"
     profile.dump_stats(binary_path)
 
     # Save human-readable summary
-    text_path = profiling_folder / f"{name}_summary.txt"
+    text_path = profiling_folder / f"{name}_speed_summary.txt"
     with open(text_path, "w", encoding="utf-8") as stream:
         stats = pstats.Stats(profile, stream=stream)
         stats.strip_dirs().sort_stats("cumtime").print_stats()
 
 
 def _run_with_optional_profiling(
-    profiling: bool, operation: Callable[[], ResultType], name: str
+    profile_speed: bool,
+    profile_ram: bool,
+    operation: Callable[[], ResultType],
+    name: str,
 ) -> ResultType:
-    """Run an operation with optional profiling.
+    """Run an operation with optional speed and RAM profiling.
 
     Args:
-        profiling: Whether profiling should be enabled.
+        profile_speed: Whether speed profiling should be enabled.
+        profile_ram: Whether RAM profiling should be enabled.
         operation: Callable containing the operation to execute.
         name: Name of the operation being executed, used for profiling output.
 
     Returns:
         Return value from the operation.
     """
-    if not profiling:
+    if not profile_speed and not profile_ram:
         return operation()
 
-    profile = cProfile.Profile()
-    profile.enable()
+    profiling_folder = Path("profiling")
+    profiling_folder.mkdir(exist_ok=True)
+
+    # Initialize profiles
+    speed_profiler = None
+    if profile_speed:
+        speed_profiler = cProfile.Profile()
+        speed_profiler.enable()
+
+    ram_profiler_tracker = None
+    if profile_ram:
+        ram_path = profiling_folder / f"{name}_ram.bin"
+        ram_profiler_tracker = memray.Tracker(ram_path)
+        ram_profiler_tracker.__enter__()
+
     try:
         result = operation()
     finally:
-        profile.disable()
-        _dump_profile(profile, name)
+        if speed_profiler:
+            speed_profiler.disable()
+            _dump_speed_profile(speed_profiler, name)
+        if ram_profiler_tracker:
+            ram_profiler_tracker.__exit__(None, None, None)
+
+            ram_bin = profiling_folder / f"{name}_ram.bin"
+            ram_html = profiling_folder / f"{name}_ram.html"
+            reporter = FlameGraphReporter.from_bin_file(ram_bin)  # ty:ignore[unresolved-attribute]
+            with open(ram_html, "w", encoding="utf-8") as f:
+                reporter.render(f)
 
     return result
 
@@ -570,7 +602,8 @@ def build_fn(
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: Path = DATA_ROOT_DEFAULT,
     continue_: bool = False,
-    profiling: bool = PROFILING_DEFAULT,
+    profile_speed: bool = PROFILE_SPEED_DEFAULT,
+    profile_ram: bool = PROFILE_RAM_DEFAULT,
 ) -> None:
     """Build model.
 
@@ -582,7 +615,8 @@ def build_fn(
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
         continue_: Continue previous build if it was interrupted or failed.
-        profiling: If True, run the build with profiling.
+        profile_speed: If True, run the build with speed profiling.
+        profile_ram: If True, run the build with RAM profiling.
     """
     build_config_input: Path | dict[str, Any] = build_config
 
@@ -609,7 +643,9 @@ def build_fn(
         )
 
     with WorkingDirectory(working_directory):
-        _run_with_optional_profiling(profiling, build_operation, name="build")
+        _run_with_optional_profiling(
+            profile_speed, profile_ram, build_operation, name="build"
+        )
 
 
 def alter_fn(
@@ -620,7 +656,8 @@ def alter_fn(
     from_model: Path = ALTER_FROM_MODEL_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: Path = DATA_ROOT_DEFAULT,
-    profiling: bool = PROFILING_DEFAULT,
+    profile_speed: bool = PROFILE_SPEED_DEFAULT,
+    profile_ram: bool = PROFILE_RAM_DEFAULT,
 ) -> None:
     """Create alternative version from base model with only changed files.
 
@@ -637,7 +674,8 @@ def alter_fn(
         from_model: Folder for the existing model.
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
-        profiling: If True, run the alter flow with profiling.
+        profile_speed: If True, run the alter flow with speed profiling.
+        profile_ram: If True, run the alter flow with RAM profiling.
     """
     from_model: Path = Path(from_model)
     build_config_input: Path | dict[str, Any] = build_config
@@ -708,17 +746,20 @@ def alter_fn(
         )
 
     with WorkingDirectory(working_directory):
-        _run_with_optional_profiling(profiling, alter_operation, name="alter")
+        _run_with_optional_profiling(
+            profile_speed, profile_ram, alter_operation, name="alter"
+        )
 
 
 def update_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
-    build_config: Path = BUILD_DEFAULT,
+    build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: Path = DATA_ROOT_DEFAULT,
-    profiling: bool = PROFILING_DEFAULT,
+    profile_speed: bool = PROFILE_SPEED_DEFAULT,
+    profile_ram: bool = PROFILE_RAM_DEFAULT,
 ) -> None:
     """Update model.
 
@@ -729,7 +770,8 @@ def update_fn(
         working_directory: Working directory for the model.
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
-        profiling: If True, run the update flow with profiling.
+        profile_speed: If True, run the update flow with speed profiling.
+        profile_ram: If True, run the update flow with RAM profiling.
     """
     build_config_input: Path | dict[str, Any] = build_config
 
@@ -819,7 +861,9 @@ def update_fn(
         model.update(methods=methods)
 
     with WorkingDirectory(working_directory):
-        _run_with_optional_profiling(profiling, update_operation, name="update")
+        _run_with_optional_profiling(
+            profile_speed, profile_ram, update_operation, name="update"
+        )
 
 
 def share_fn(

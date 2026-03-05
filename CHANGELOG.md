@@ -1,4 +1,7 @@
 # dev
+- combine fabdem loading of elevation and forcing for saving some data on disk
+- add memory profiler memray. Use option e.g., geb spinup --profile-memory
+- renamed speed profiler to --profile-speed
 
 # v1.0.0b12
 - Reforestation: add government forest planting policy and soil modification workflow.
