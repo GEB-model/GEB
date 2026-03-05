@@ -21,6 +21,7 @@ from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
 
 from geb.geb_types import ArrayFloat32, ArrayInt64
+from geb.workflows.io import read_geom
 
 
 def export_rivers(
@@ -46,7 +47,7 @@ def import_rivers(model_root: Path, postfix: str = "") -> gpd.GeoDataFrame:
     Returns:
         A GeoDataFrame containing the river segments.
     """
-    return gpd.read_parquet(model_root / f"rivers{postfix}.geoparquet")
+    return read_geom(model_root / f"rivers{postfix}.geoparquet")
 
 
 def read_flood_depth(

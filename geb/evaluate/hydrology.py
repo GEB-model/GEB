@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 from geb.workflows.extreme_value_analysis import (
     ReturnPeriodModel,
 )
-from geb.workflows.io import read_zarr, write_zarr
+from geb.workflows.io import read_geom, read_table, read_zarr, write_zarr
 from geb.workflows.timeseries import regularize_discharge_timeseries
 
 
@@ -1138,10 +1138,10 @@ class Hydrology:
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 
         # load input data files
-        discharge_observations_hourly: pd.DataFrame = pd.read_parquet(
+        discharge_observations_hourly: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_hourly"]
         )
-        discharge_observations_daily: pd.DataFrame = pd.read_parquet(
+        discharge_observations_daily: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_daily"]
         )
 
@@ -1154,13 +1154,13 @@ class Hydrology:
                 discharge_observations_daily
             )
 
-        region_shapefile = gpd.read_parquet(
+        region_shapefile = read_geom(
             self.model.files["geom"]["mask"]
         )  # load the region shapefile
-        rivers = gpd.read_parquet(
+        rivers = read_geom(
             self.model.files["geom"]["routing/rivers"]
         )  # load the rivers shapefiles
-        snapped_locations = gpd.read_parquet(
+        snapped_locations = read_geom(
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )
 
@@ -1824,14 +1824,14 @@ class Hydrology:
             obs = read_zarr(observation)
             print("obs CRS", obs.rio.crs)
             sim = flood_map.rio.reproject_match(obs)
-            rivers = gpd.read_parquet(
+            rivers = read_geom(
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
                 / "group_0"
                 / "rivers.geoparquet"
             ).to_crs(obs.rio.crs)
-            region = gpd.read_parquet(
+            region = read_geom(
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"

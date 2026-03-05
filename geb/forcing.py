@@ -8,11 +8,10 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 import xarray as xr
 
 from geb.geb_types import ArrayFloat32, ArrayFloat64, ThreeDArrayFloat32
-from geb.workflows.io import read_grid
+from geb.workflows.io import read_grid, read_table
 
 from .module import Module
 from .workflows.io import AsyncGriddedForcingReader
@@ -695,7 +694,7 @@ class CO2:
 
     def __init__(self, model: GEBModel) -> None:
         """Initialize the CO2 loader."""
-        self.df = pd.read_parquet(model.files["table"]["climate/CO2_ppm"])
+        self.df = read_table(model.files["table"]["climate/CO2_ppm"])
 
     def load(self, time: datetime) -> float:
         """Load CO2 concentration data for a given time.

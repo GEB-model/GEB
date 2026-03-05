@@ -19,7 +19,7 @@ import yaml
 from numpy.typing import NDArray
 
 from geb.geb_types import ArrayStr
-from geb.workflows.io import read_geom
+from geb.workflows.io import read_geom, read_table
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -1236,7 +1236,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    pd.read_parquet(filename),
+                    read_table(filename),
                 )
             elif filename.suffix == ".yml":
                 with open(filename, "r") as f:
