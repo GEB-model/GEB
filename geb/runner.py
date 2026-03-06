@@ -12,6 +12,7 @@ import sys
 import tempfile
 import zipfile
 from collections.abc import Callable
+from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
 from typing import Any, TypeVar
@@ -19,7 +20,6 @@ from typing import Any, TypeVar
 import geopandas as gpd
 import memray
 import yaml
-from memray.reporters.flamegraph import FlameGraphReporter
 from pydantic import BaseModel, ValidationError
 from shapely.geometry import box
 
@@ -261,23 +261,24 @@ def run_model_with_method(
         )
 
 
-def _dump_speed_profile(profile: cProfile.Profile, name: str) -> None:
+def _dump_speed_profile(profile: cProfile.Profile, name: str, date: str) -> None:
     """
     Persist speed profiling statistics to disk in both binary and human-readable formats.
 
     Args:
         profile: Profile instance containing execution statistics.
         name: Identifier used for naming the output files.
+        date: Date string for unique file naming.
     """
     profiling_folder = Path("profiling")
     profiling_folder.mkdir(exist_ok=True)
 
     # Save binary data for visualization in tools like SnakeViz or RunSnakeRun
-    binary_path = profiling_folder / f"{name}_speed.prof"
+    binary_path = profiling_folder / f"{name}_speed_{date}.prof"
     profile.dump_stats(binary_path)
 
     # Save human-readable summary
-    text_path = profiling_folder / f"{name}_speed_summary.txt"
+    text_path = profiling_folder / f"{name}_speed_summary_{date}.txt"
     with open(text_path, "w", encoding="utf-8") as stream:
         stats = pstats.Stats(profile, stream=stream)
         stats.strip_dirs().sort_stats("cumtime").print_stats()
@@ -303,6 +304,8 @@ def _run_with_optional_profiling(
     if not profile_speed and not profile_ram:
         return operation()
 
+    date: str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     profiling_folder = Path("profiling")
     profiling_folder.mkdir(exist_ok=True)
 
@@ -314,7 +317,9 @@ def _run_with_optional_profiling(
 
     ram_profiler_tracker = None
     if profile_ram:
-        ram_path = profiling_folder / f"{name}_ram.bin"
+        ram_path: Path = profiling_folder / f"{name}_ram_{date}.bin"
+        if ram_path.exists():
+            ram_path.unlink()  # Remove existing RAM profile if it exists
         ram_profiler_tracker = memray.Tracker(ram_path)
         ram_profiler_tracker.__enter__()
 
@@ -323,15 +328,23 @@ def _run_with_optional_profiling(
     finally:
         if speed_profiler:
             speed_profiler.disable()
-            _dump_speed_profile(speed_profiler, name)
+            _dump_speed_profile(speed_profiler, name, date)
         if ram_profiler_tracker:
             ram_profiler_tracker.__exit__(None, None, None)
 
-            ram_bin = profiling_folder / f"{name}_ram.bin"
-            ram_html = profiling_folder / f"{name}_ram.html"
-            reporter = FlameGraphReporter.from_bin_file(ram_bin)  # ty:ignore[unresolved-attribute]
-            with open(ram_html, "w", encoding="utf-8") as f:
-                reporter.render(f)
+            ram_bin: Path = profiling_folder / f"{name}_ram_{date}.bin"
+            ram_html: Path = profiling_folder / f"{name}_ram_{date}.html"
+            reporter_cmd: list[str | Path] = [
+                sys.executable,
+                "-m",
+                "memray",
+                "flamegraph",
+                "-f",
+                "-o",
+                ram_html,
+                ram_bin,
+            ]
+            subprocess.run(reporter_cmd, check=True)
 
     return result
 
@@ -631,7 +644,7 @@ def build_fn(
             data_provider,
             data_root,
         )
-        methods = {
+        methods: dict[str, Any] = {
             method: args
             for method, args in parsed_build_config.items()
             if not method.startswith("_")
