@@ -3,6 +3,7 @@
 - Combine code in forcing.py so that it is more easy to maintain.
 - Remove unused setup_land_use_parameters.
 - Pre-process GRDC data to zarr with chunks for faster future reads.
+- Add object size profile when speed-profile is used.
 
 # v1.0.0b13
 - combine fabdem loading of elevation and forcing for saving some data on disk

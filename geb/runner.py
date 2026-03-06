@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import geopandas as gpd
 import memray
@@ -233,7 +233,7 @@ def run_model_with_method(
         command: list[str] = [sys.executable, "-O"] + sys.argv
         raise SystemExit(subprocess.run(command).returncode)
 
-    def run_operation() -> Any:
+    def run_operation(close_after_run: bool = close_after_run) -> Any:
         from geb.config_schema import Config
 
         config_parsed: dict[str, Any] = parse_config(config, schema=Config)
@@ -247,6 +247,12 @@ def run_model_with_method(
         result = geb
         if method is not None:
             result = getattr(geb, method)(**method_args)
+
+        # If we are profiling, we don't close the model here, but return it
+        # so it can be profiled while open. The profiler wrapper will handle closing.
+        if (profile_speed or profile_ram) and close_after_run:
+            return result, geb
+
         if close_after_run:
             geb.close()
 
@@ -283,11 +289,14 @@ def _dump_speed_profile(profile: cProfile.Profile, name: str, date: str) -> None
         stats = pstats.Stats(profile, stream=stream)
         stats.strip_dirs().sort_stats("cumtime").print_stats()
 
+    print(f"Speed profile saved to: {binary_path}")
+    print(f"Speed profile summary saved to: {text_path}")
+
 
 def _run_with_optional_profiling(
     profile_speed: bool,
     profile_ram: bool,
-    operation: Callable[[], ResultType],
+    operation: Callable[..., ResultType],
     name: str,
 ) -> ResultType:
     """Run an operation with optional speed and RAM profiling.
@@ -324,7 +333,35 @@ def _run_with_optional_profiling(
         ram_profiler_tracker.__enter__()
 
     try:
-        result = operation()
+        if profile_ram:
+            # We wrap the operation to allow capturing objects just before it finishes
+            # but while the GEBModel instance is still alive.
+            pass
+
+        # If we are profiling, we tell the operation not to close the model
+        # so we can profile it while it is still open.
+        if profile_speed or profile_ram:
+            run_output: Any = operation(close_after_run=False)
+        else:
+            run_output: Any = operation()
+
+        result: ResultType
+        geb_to_close: Any = None
+
+        if (profile_speed or profile_ram) and isinstance(run_output, tuple):
+            result = cast(ResultType, run_output[0])
+            geb_to_close = run_output[1]
+        else:
+            result = cast(ResultType, run_output)
+
+        # Capture objects while they are still in scope (and model is not closed if profiling)
+        if profile_ram:
+            _dump_ram_object_profile(name, date, keep_alive=geb_to_close)
+
+        # Close model if we manually deferred it for profiling
+        if geb_to_close is not None:
+            # Use getattr to avoid type check complaining about unknown method
+            getattr(geb_to_close, "close")()
     finally:
         if speed_profiler:
             speed_profiler.disable()
@@ -339,14 +376,176 @@ def _run_with_optional_profiling(
                 "-m",
                 "memray",
                 "flamegraph",
+                "--temporal",
                 "-f",
                 "-o",
                 ram_html,
                 ram_bin,
             ]
             subprocess.run(reporter_cmd, check=True)
+            print(f"RAM flamegraph saved to: {ram_html}")
 
     return result
+
+
+def _dump_ram_object_profile(name: str, date: str, keep_alive: Any = None) -> None:
+    """Dump deep memory usage of the 100 largest objects in memory.
+
+    Args:
+        name: Name of the operation.
+        date: Date string for naming.
+        keep_alive: Optional object to keep in scope during profiling.
+    """
+    import gc
+
+    import numpy as np
+    import pandas as pd
+    from geopandas import GeoDataFrame, GeoSeries
+
+    def get_deep_size(obj: Any) -> int:
+        """Get deep size of object, including numpy and pandas buffers.
+
+        Args:
+            obj: The object to measure.
+
+        Returns:
+            The size of the object in bytes.
+        """
+        # Handle cases where obj might be a proxy or a weakref that died during traversal
+        try:
+            from geb.store import DynamicArray
+
+            if isinstance(obj, np.ndarray):
+                return int(obj.nbytes)
+            if isinstance(obj, DynamicArray):
+                # DynamicArray._data is the underlying numpy buffer (max_n size)
+                return int(obj._data.nbytes)
+            if isinstance(obj, (pd.DataFrame, pd.Series, GeoDataFrame, GeoSeries)):
+                # memory_usage(deep=True) includes the underlying buffer and string contents
+                usage = obj.memory_usage(deep=True)
+                return int(usage.sum() if hasattr(usage, "sum") else usage)
+            return sys.getsizeof(obj)
+        except (ReferenceError, AttributeError):
+            # If the object died or is inaccessible, it's essentially 0 bytes now
+            return 0
+
+    # Capture objects and their sizes safely
+    objects_with_sizes: list[tuple[Any, int]] = []
+
+    # We identify our own internal structures to skip them in the report
+    internal_ids = {id(objects_with_sizes), id(get_deep_size)}
+
+    for obj in gc.get_objects():
+        try:
+            current_id = id(obj)
+            # Skip if this is one of our own tracking objects
+            if current_id in internal_ids:
+                continue
+
+            # We skip some very common small types to speed up and reduce ReferenceError risk
+            if isinstance(obj, (int, str, float, bool, type(None))):
+                continue
+            size = get_deep_size(obj)
+            if size > 0:
+                objects_with_sizes.append((obj, size))
+        except (ReferenceError, AttributeError):
+            continue
+
+    # Get total memory and count
+    total_objects_count = len(objects_with_sizes)
+    total_memory_bytes = sum(size for _, size in objects_with_sizes)
+
+    # Sort and get top 100
+    top_objects_with_size = sorted(
+        objects_with_sizes, key=lambda x: x[1], reverse=True
+    )[:100]
+
+    profiling_folder = Path("profiling")
+    txt_path = profiling_folder / f"{name}_ram_objects_{date}.txt"
+
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write("=" * 80 + "\n")
+        f.write(f"RAM OBJECT PROFILE: {name}\n")
+        f.write(f"DATE: {date}\n")
+        f.write("=" * 80 + "\n\n")
+
+        f.write("SUMMARY STATISTICS:\n")
+        f.write(f"  Total tracked objects (non-trivial): {total_objects_count:,}\n")
+        f.write(
+            f"  Total memory of tracked objects: {total_memory_bytes / 1024 / 1024:.2f} MB\n"
+        )
+        f.write(
+            f"  Average tracked object size: {total_memory_bytes / max(1, total_objects_count):.2f} bytes\n\n"
+        )
+
+        f.write("TOP 100 LARGEST OBJECTS:\n")
+        f.write("-" * 80 + "\n")
+        f.write(
+            f"{'Size (MB)':>10} | {'Type':<30} | {'Identity/Repr (truncated)':<35}\n"
+        )
+        f.write("-" * 80 + "\n")
+
+        for obj, size in top_objects_with_size:
+            size_mb = size / 1024 / 1024
+            obj_type = str(type(obj))
+            try:
+                # Replace newlines with spaces to keep it on one line
+                obj_repr = repr(obj).replace("\n", " ").replace("\r", " ")
+                # Allow very long representations now
+                if len(obj_repr) > 1000:
+                    obj_repr = obj_repr[:997] + "..."
+            except Exception:
+                obj_repr = "<REPR FAILED>"
+
+            f.write(f"{size_mb:10.4f} | {obj_type[:30]:<30} | {obj_repr}\n")
+
+            # Try to find what refers to this object (where it is referenced from)
+            try:
+                referrers = gc.get_referrers(obj)
+                # Filter out the objects we just created in this function
+                actual_referrers = [
+                    ref
+                    for ref in referrers
+                    if ref is not obj
+                    and ref is not objects_with_sizes
+                    and not isinstance(ref, (list, dict, tuple))
+                    or (isinstance(ref, (dict, list)) and len(ref) > 0)
+                ][:3]
+
+                if actual_referrers:
+                    f.write(f"{'':>10} | {'  Referenced by:':<30} | ")
+                    ref_reprs = []
+                    for ref in actual_referrers:
+                        ref_type = type(ref).__name__
+                        ref_name = ""
+
+                        # Try to find the variable name if the referrer is a dict (like __dict__)
+                        if isinstance(ref, dict):
+                            for key, val in ref.items():
+                                if val is obj:
+                                    ref_name = f"['{key}'] "
+                                    break
+                        elif hasattr(ref, "__dict__"):
+                            ref_dict = getattr(ref, "__dict__")
+                            for key, val in ref_dict.items():
+                                if val is obj:
+                                    ref_name = f".{key} "
+                                    break
+
+                        try:
+                            r_repr = repr(ref).replace("\n", " ")
+                            if len(r_repr) > 500:
+                                r_repr = r_repr[:497] + "..."
+                        except Exception:
+                            r_repr = "<REPR FAILED>"
+                        ref_reprs.append(f"{ref_type}{ref_name}({r_repr})")
+                    f.write(" | ".join(ref_reprs) + "\n")
+            except Exception:
+                pass
+
+        f.write("-" * 80 + "\n")
+
+    print(f"RAM object profile saved to: {txt_path}")
 
 
 def get_model_builder_class(custom_model: None | str) -> type:
