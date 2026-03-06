@@ -42,12 +42,36 @@ class GRDC(Adapter):
             )
             input("\033[91mPress Enter after placing the file to continue...\033[0m")
 
+        # Unpack the zip file to disk if it hasn't been done yet
+        # The zip usually contains a single .nc file
+        zarr_path = self.path.with_suffix(".zarr")
+
+        if not zarr_path.exists():
+            print(f"Processing the downloaded GRDC data from {self.path}...")
+            with zipfile.ZipFile(self.path, "r") as zip_file:
+                netcdf_files = [f for f in zip_file.namelist() if f.endswith(".nc")]
+                if len(netcdf_files) == 1:
+                    with (
+                        zip_file.open(netcdf_files[0]) as source,
+                        tempfile.NamedTemporaryFile(suffix=".nc") as tmp_file,
+                    ):
+                        tmp_file.write(source.read())
+                        tmp_file.flush()
+
+                        # Open and process for Zarr with chunking
+                        ds = xr.open_dataset(tmp_file.name)
+
+                        # Use -1 to indicate no chunking on other dimensions
+                        ds["runoff_mean"] = ds["runoff_mean"].chunk({"id": 100})
+
+                        ds.to_zarr(zarr_path, mode="w", consolidated=False)
+
         return self
 
     def read(self, **kwargs: Any) -> xr.Dataset:
         """Read the processed data from storage.
 
-        Unpacks the zip file and reads the contained .nc file into an xarray Dataset.
+        Reads the unpacked .zarr file directly.
 
         Args:
             **kwargs: Additional keyword arguments to pass to the reader function.
@@ -55,26 +79,13 @@ class GRDC(Adapter):
         Returns:
             The processed data as a Dataset
         """
-        # Handle zip file containing single .nc file
-        with zipfile.ZipFile(self.path, "r") as zip_file:
-            netcdf_files = [f for f in zip_file.namelist() if f.endswith(".nc")]
-            assert len(netcdf_files) == 1, "Expected exactly one .nc file in the zip."
-            nc_filename = netcdf_files[0]
+        zarr_path = self.path.with_suffix(".zarr")
+        if not zarr_path.exists():
+            self.fetch("")
 
-            # Extract to temporary file instead of reading into memory
-            with tempfile.NamedTemporaryFile(suffix=".nc") as tmp_file:
-                with zip_file.open(nc_filename) as zip_content:
-                    tmp_file.write(zip_content.read())
-                tmp_file_path = tmp_file.name
+        discharge_observations: xr.Dataset = xr.open_zarr(zarr_path)
 
-                # Open dataset from temporary file
-                # Load the dataset into memory to avoid issues with closed files
-                discharge_observations: xr.Dataset = xr.open_dataset(
-                    tmp_file_path
-                ).load()
-
-        # rename geo_x and geo_y to x and y
-        discharge_observations: xr.Dataset = discharge_observations.rename(
+        discharge_observations = discharge_observations.rename(
             {"geo_x": "x", "geo_y": "y"}
         )
 
