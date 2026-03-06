@@ -53,16 +53,17 @@ from geb.geb_types import (
 zarr.config.set({"codec_pipeline.fill_missing_chunks": False})
 
 
-def read_table(fp: Path) -> pd.DataFrame:
+def read_table(fp: Path, **kwargs: Any) -> pd.DataFrame:
     """Load a parquet file as a pandas DataFrame.
 
     Args:
         fp: The path to the parquet file.
+        kwargs: Additional keyword arguments to pass to `pd.read_parquet`.
 
     Returns:
         The pandas DataFrame.
     """
-    return pd.read_parquet(fp, engine="pyarrow")
+    return pd.read_parquet(fp, engine="pyarrow", **kwargs)
 
 
 def write_table(df: pd.DataFrame, fp: Path) -> None:
