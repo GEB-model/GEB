@@ -33,7 +33,7 @@ from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
 from shapely.ops import unary_union
 
-from geb import GEB_PACKAGE_DIR
+from geb import GEB_PACKAGE_DIR, __version__
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.workflows.io import (
@@ -2932,6 +2932,11 @@ class GEBModel(
         """Path to the progress file that contains the build progress."""
         return Path(self.root, "progress.txt")
 
+    @property
+    def version_path(self) -> Path:
+        """Path to the version file that contains the build version."""
+        return Path(self.root, "version.txt")
+
     def write_file_library(self) -> None:
         """Writes the file library to disk.
 
@@ -3326,6 +3331,7 @@ class GEBModel(
             root: The root directory path.
         """
         self._root = Path(root).absolute()
+        self._root.mkdir(parents=True, exist_ok=True)
 
     @property
     def report_dir(self) -> Path:
@@ -3457,7 +3463,7 @@ class GEBModel(
         build_method.log_time_taken()
 
     def build(
-        self, region: dict, methods: dict[str, dict[str, Any] | None], continue_: bool
+        self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
     ) -> None:
         """Build the model with the specified region and methods.
 
@@ -3469,7 +3475,7 @@ class GEBModel(
         Raises:
             ValueError: If "setup_region" is not in methods when building a new model.
         """
-        methods: dict[str, dict[str, Any] | None] = methods or {}
+        methods: dict[str, dict[str, Any]] = methods or {}
         if "setup_region" not in methods:
             raise ValueError(
                 '"setup_region" must be present in methods when building a new model.'
@@ -3485,6 +3491,9 @@ class GEBModel(
             # for new build, remove existing files path and progress file
             self.files_path.unlink(missing_ok=True)
             self.progress_path.unlink(missing_ok=True)
+            self.version_path.unlink(missing_ok=True)
+
+            self.version_path.write_text(__version__)
 
         self.run_methods(
             methods,

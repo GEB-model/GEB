@@ -199,7 +199,6 @@ class CropFarmersVariables(Bucket):
     water_costs_m3_reservoir: float
     water_costs_m3_groundwater: float
     field_indices_by_farmer: DynamicArray
-    subdistrict_map: TwoDArrayInt32
     risk_aversion: DynamicArray
     discount_rate: DynamicArray
     intention_factor: DynamicArray
@@ -456,17 +455,6 @@ class CropFarmers(AgentBaseClass):
         self.var.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["adaptation_well"]["lifespan"]
-
-        # load map of all subdistricts
-        self.var.subdistrict_map = read_grid(
-            self.model.files["region_subgrid"]["region_ids"]
-        )
-        region_mask = read_grid(self.model.files["region_subgrid"]["mask"])
-        self.HRU_regions_map = np.zeros_like(self.HRU.mask, dtype=np.int8)
-        self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
-            region_mask == 0
-        ]
-        self.HRU_regions_map = self.HRU.convert_subgrid_to_HRU(self.HRU_regions_map)
 
         self.crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"

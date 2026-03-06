@@ -393,25 +393,32 @@ class LandSurface(BuildModelBase):
         region_mask.attrs["_FillValue"] = None
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
-        bounds = self.geom["regions"].total_bounds
-        xmin: float = bounds[0] - 0.1
-        ymin: float = bounds[1] - 0.1
-        xmax: float = bounds[2] + 0.1
-        ymax: float = bounds[3] + 0.1
+        # Get the combined bounds of regions and subbasins to ensure coverage of both
+        buffer = 0.1
 
-        land_use: xr.DataArray = (
+        regions_bounds = self.geom["regions"].total_bounds
+        subbasins_bounds = self.geom["routing/subbasins"].total_bounds
+
+        xmin = min(regions_bounds[0], subbasins_bounds[0]) - buffer
+        ymin = min(regions_bounds[1], subbasins_bounds[1]) - buffer
+        xmax = max(regions_bounds[2], subbasins_bounds[2]) + buffer
+        ymax = max(regions_bounds[3], subbasins_bounds[3]) + buffer
+
+        land_use_classification: xr.DataArray = (
             self.data_catalog.fetch(land_cover)
             .read(xmin, ymin, xmax, ymax)
             .chunk({"x": 1000, "y": 1000})
         )
 
-        reprojected_land_use: xr.DataArray = resample_chunked(
-            land_use, region_mask.chunk({"x": 1000, "y": 1000}), method="nearest"
+        land_use_classification = self.set_other(
+            land_use_classification,
+            name="landcover/classification",
         )
 
-        reprojected_land_use: xr.DataArray = self.set_region_subgrid(
-            reprojected_land_use,
-            name="landsurface/original_land_use",
+        reprojected_land_use: xr.DataArray = resample_chunked(
+            land_use_classification,
+            region_mask.chunk({"x": 1000, "y": 1000}),
+            method="nearest",
         )
 
         region_ids: xr.DataArray = rasterize_like(
@@ -470,55 +477,14 @@ class LandSurface(BuildModelBase):
         cultivated_land = snap_to_grid(cultivated_land, self.subgrid)
         self.set_subgrid(cultivated_land, name="landsurface/cultivated_land")
 
-    @build_method(depends_on=[], required=True)
+    @build_method(depends_on=[], required=False)
     def setup_land_use_parameters(
         self,
         land_cover: str = "esa_worldcover_2021",
     ) -> None:
-        """Sets up the land use parameters for the model.
-
-        Args:
-            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021'.
-
-        Notes:
-            This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
-            interpolating the data to the model grid. It first retrieves the land use dataset from the `data_catalog`, and
-            then retrieves the maximum root depth and root fraction data for each land use type. It then
-            interpolates the data to the model grid using the specified interpolation method and sets the resulting grids as
-            attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}', where
-            {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
-            the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.).
-
-            Additionally, this method sets up the crop coefficient and interception capacity data for each land use type by
-            retrieving the corresponding data from the land use dataset and interpolating it to the model grid. The crop
-            coefficient data is set as attributes of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
-            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
-            data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
-            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
-
-            The resulting land use parameters are set as attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}',
-            where {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
-            the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.). The crop coefficient data is set as attributes
-            of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
-            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
-            data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
-            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
-        """
-        bounds = self.geom["routing/subbasins"].total_bounds
-        buffer = 0.1
-
-        xmin = bounds[0] - buffer
-        ymin = bounds[1] - buffer
-        xmax = bounds[2] + buffer
-        ymax = bounds[3] + buffer
-
-        landcover_classification: xr.DataArray = self.data_catalog.fetch(
-            land_cover
-        ).read(xmin, ymin, xmax, ymax)
-
-        landcover_classification = self.set_other(
-            landcover_classification,
-            name="landcover/classification",
+        """This method is removed."""
+        self.logger.warning(
+            "setup_land_use_parameters is removed, please remove it from your build configuration"
         )
 
     @build_method(depends_on=[], required=False)

@@ -407,25 +407,44 @@ def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
     for arg in ctx.args:
         if "=" in arg:
             key, value = arg.split("=", 1)
+
             # Try to convert value to appropriate type
-            try:
-                # Try int first
-                value = int(value)
-            except ValueError:
+            def is_float(element: str) -> bool:
                 try:
-                    # Try float
-                    value = float(value)
+                    float(element)
+                    return True
                 except ValueError:
-                    try:
-                        # Try parsing as ISO format date (YYYY-MM-DD)
-                        value = datetime.date.fromisoformat(value)
-                    except ValueError:
-                        try:
-                            # Try parsing as ISO format datetime
-                            value = datetime.datetime.fromisoformat(value)
-                        except ValueError:
-                            # Keep as string
-                            pass
+                    return False
+
+            def is_date(element: str) -> bool:
+                try:
+                    datetime.date.fromisoformat(element)
+                    return True
+                except ValueError:
+                    return False
+
+            def is_datetime(element: str) -> bool:
+                try:
+                    datetime.datetime.fromisoformat(element)
+                    return True
+                except ValueError:
+                    return False
+
+            if value.isdigit():
+                value = int(value)
+            elif is_float(value):
+                value = float(value)
+            elif is_date(value):
+                value = datetime.date.fromisoformat(value)
+            elif is_datetime(value):
+                value = datetime.datetime.fromisoformat(value)
+            elif value.lower() == "true":
+                value = True
+            elif value.lower() == "false":
+                value = False
+            else:
+                value: str = value  # Keep as string if it cannot be converted to a more specific type
+
             params[key] = value
         else:
             click.echo(

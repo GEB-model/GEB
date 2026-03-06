@@ -322,8 +322,19 @@ class _build_method:
 
     def log_time_taken(self) -> None:
         """Log the time taken for each method in the dependency tree."""
-        for method, time_taken in self.time_taken.items():
-            self.logger.info(f"Method {method} took {time_taken:.2f} seconds.")
+        total_time: float = sum(self.time_taken.values())
+
+        sorted_by_time = sorted(
+            self.time_taken.items(), key=lambda item: item[1], reverse=False
+        )
+
+        for method, time_taken in sorted_by_time:
+            percentage: float = (time_taken / total_time) * 100
+            self.logger.info(
+                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%)."
+            )
+
+        self.logger.info(f"Total time taken: {total_time:.2f} seconds.")
 
     @property
     def methods(self) -> list[str]:

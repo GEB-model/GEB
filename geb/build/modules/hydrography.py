@@ -1362,7 +1362,7 @@ class Hydrography(BuildModelBase):
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[unresolved-attribute]
             1979, "01"
         )
         ref = xr.open_dataset(ref_file)
@@ -1382,7 +1382,7 @@ class Hydrography(BuildModelBase):
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+                f = self.old_data_catalog.get_source("GTSM_surge").path.format(
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1440,7 +1440,7 @@ class Hydrography(BuildModelBase):
         )
 
         # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[possibly-missing-attribute]
+        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}

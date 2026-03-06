@@ -53,16 +53,17 @@ from geb.geb_types import (
 zarr.config.set({"codec_pipeline.fill_missing_chunks": False})
 
 
-def read_table(fp: Path) -> pd.DataFrame:
+def read_table(fp: Path, **kwargs: Any) -> pd.DataFrame:
     """Load a parquet file as a pandas DataFrame.
 
     Args:
         fp: The path to the parquet file.
+        kwargs: Additional keyword arguments to pass to `pd.read_parquet`.
 
     Returns:
         The pandas DataFrame.
     """
-    return pd.read_parquet(fp, engine="pyarrow")
+    return pd.read_parquet(fp, engine="pyarrow", **kwargs)
 
 
 def write_table(df: pd.DataFrame, fp: Path) -> None:
@@ -160,21 +161,23 @@ def read_grid(
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
         assert isinstance(y, np.ndarray)
-        x_diff: float = np.diff(x[:]).mean().item()
-        y_diff: float = np.diff(y[:]).mean().item()
+        x_diff: float = np.diff(x[:]).mean().item()  # ty:ignore[invalid-argument-type]
+        y_diff: float = np.diff(y[:]).mean().item()  # ty:ignore[invalid-argument-type]
         transform: Affine = Affine(
             a=x_diff,
             b=0,
-            c=x[0] - x_diff / 2,
+            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type]
             d=0,
             e=y_diff,
-            f=y[0] - y_diff / 2,
+            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type]
         )
         crs = data_array.attrs["_CRS"]
         assert isinstance(crs, dict)
-        wkt: str = crs["wkt"]
+        wkt: str = crs["wkt"]  # ty:ignore[invalid-argument-type]
+        store.close()
         return data, transform, wkt
     else:
+        store.close()
         return data
 
 
@@ -577,7 +580,9 @@ def write_zarr(
             chunks.update({"time": min(time_chunksize, da.sizes["time"])})
             if time_chunks_per_shard is not None:
                 shards = chunks.copy()
-                shards["time"] = time_chunks_per_shard * chunks["time"]
+                shards["time"] = min(
+                    time_chunks_per_shard * chunks["time"], da.time.size
+                )
 
         if compressor is None:
             compressor: ZstdCodec = ZstdCodec(
