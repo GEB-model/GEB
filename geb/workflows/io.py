@@ -173,8 +173,10 @@ def read_grid(
         crs = data_array.attrs["_CRS"]
         assert isinstance(crs, dict)
         wkt: str = crs["wkt"]  # ty:ignore[invalid-argument-type]
+        store.close()
         return data, transform, wkt
     else:
+        store.close()
         return data
 
 
