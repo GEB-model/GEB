@@ -11,8 +11,12 @@ from pathlib import Path
 # Get configuration with defaults
 # LARGE_SCALE_DIR and CLUSTER_PREFIX are read from config/large_scale.yml so that
 # users only need to change them in one place.
+# When not set in the config, fall back to GEB_ROOT env var (always exported by
+# the snake alias) so that symlinked paths are preserved.  Using workflow.basedir
+# directly would resolve symlinks and break target-path matching.
+_geb_root = os.environ.get("GEB_ROOT", str(Path(workflow.basedir).parent))
 CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "Europe")
-LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", str(Path(workflow.basedir).parent.parent / "models" / "large_scale"))
+LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", str(Path(_geb_root).parent / "models" / "large_scale"))
 EVALUATION_METHODS = config.get("EVALUATION_METHODS", "hydrology.plot_discharge,hydrology.evaluate_discharge")
 
 # Cache for basin areas to avoid repeated file reads
@@ -55,7 +59,7 @@ def get_resources(cluster_name):
     Partition limits and our allocations:
       - defq:    limit ~251 GB → allocate 240 GB
       - ivm:     limit ~110 GB → allocate 105 GB
-      - ivm-fat: limit ~755 GB → allocate 400 GB
+      - ivm-fat: limit ~755 GB → allocate 700 GB
 
     Routing strategy: Minimize use of memory-constrained `ivm` partition.
     Only the smallest basins (<100k km²) go to ivm; everything else goes
@@ -65,7 +69,8 @@ def get_resources(cluster_name):
         cluster_name: Name of the cluster directory (e.g. "Europe_007").
 
     Returns:
-        Tuple of (memory_mb, partition_name, partition_arg_string).
+        Tuple of (memory_mb, partition_name). The executor plugin maps
+        slurm_partition directly to --partition, so no partition_arg is needed.
     """
     area_km2 = get_basin_area_km2(cluster_name)
 
@@ -75,7 +80,6 @@ def get_resources(cluster_name):
     except ValueError:
         cluster_index = 0
 
-    # Partition assignment: minimize ivm usage due to its ~110 GB memory limit
     if area_km2 >= 500000:
         # Very large basins: alternate defq / ivm-fat for load balancing
         partition_index = 0 if (cluster_index % 2 == 0) else 2
@@ -90,18 +94,15 @@ def get_resources(cluster_name):
     # Allocate near-maximum memory for each partition
     if partition_index == 0:
         partition = "defq"
-        partition_arg = ""  # defq is the default queue
-        memory_mb = 300000  # 300 GB (limit ~251 GB)
+        memory_mb = 240000  # 240 GB, safely below the ~251 GB node limit
     elif partition_index == 1:
         partition = "ivm"
-        partition_arg = "--partition=ivm"
-        memory_mb = 105000  # 105 GB (limit ~110 GB)
+        memory_mb = 105000  # 105 GB, safely below the ~110 GB node limit
     else:  # partition_index == 2
         partition = "ivm-fat"
-        partition_arg = "--partition=ivm-fat"
-        memory_mb = 400000  # 400 GB (limit ~755 GB)
+        memory_mb = 700000  # 700 GB, safely below the ~755 GB node limit
 
-    return memory_mb, partition, partition_arg
+    return memory_mb, partition
 
 # Dynamically discover cluster directories (run only once)
 def get_cluster_names():
@@ -111,7 +112,6 @@ def get_cluster_names():
         return []
     
     cluster_dirs = []
-    # Use explicit pattern to avoid f-string issues with Snakemake 7.x
     for cluster_dir in large_scale_path.glob("Europe_*"):
         if cluster_dir.is_dir() and (cluster_dir / "base").exists():
             cluster_dirs.append(cluster_dir.name)
@@ -162,10 +162,12 @@ rule build_cluster:
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
-        cpus=2,
+        cpus_per_task=2,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
-        partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
-        slurm_account="ivm"
+        slurm_account="ivm",
+        # Consume 1 ivm_fat_slots token for ivm-fat jobs so Snakemake's scheduler
+        # prevents two jobs from sharing the single 773 GB node243 simultaneously.
+        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0
     shell:
         """
         mkdir -p $(dirname {log})
@@ -187,10 +189,10 @@ rule spinup_cluster:
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
-        cpus=6,
+        cpus_per_task=6,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
-        partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
-        slurm_account="ivm"
+        slurm_account="ivm",
+        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0
     shell:
         """
         mkdir -p $(dirname {log})
@@ -212,10 +214,10 @@ rule run_cluster:
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
-        cpus=8,
+        cpus_per_task=8,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
-        partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
-        slurm_account="ivm"
+        slurm_account="ivm",
+        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0
     shell:
         """
         mkdir -p $(dirname {log})
@@ -243,9 +245,8 @@ rule evaluate_cluster:
     resources:
         mem_mb=16000,
         runtime=11520,  # 8 days
-        cpus=2,
+        cpus_per_task=2,
         slurm_partition="ivm",
-        partition_arg="--partition=ivm",
         slurm_account="ivm"
     shell:
         """
@@ -352,7 +353,6 @@ if PARALLEL_MODE:
             mem_mb=60000 * PARALLEL_BATCH_SIZE,
             runtime=11520,
             slurm_partition="defq",
-            partition_arg="",
             slurm_account="ivm"
         log:
             LARGE_SCALE_DIR + "/.parallel/logs/build_batch_{batch_id}.log"
@@ -406,7 +406,6 @@ if PARALLEL_MODE:
             mem_mb=60000 * PARALLEL_BATCH_SIZE,
             runtime=11520,
             slurm_partition="defq",
-            partition_arg="",
             slurm_account="ivm"
         log:
             LARGE_SCALE_DIR + "/.parallel/logs/spinup_batch_{batch_id}.log"
@@ -455,7 +454,6 @@ if PARALLEL_MODE:
             mem_mb=60000 * PARALLEL_BATCH_SIZE,
             runtime=11520,
             slurm_partition="defq",
-            partition_arg="",
             slurm_account="ivm"
         log:
             LARGE_SCALE_DIR + "/.parallel/logs/run_batch_{batch_id}.log"
@@ -507,7 +505,6 @@ if PARALLEL_MODE:
             mem_mb=16000 * PARALLEL_BATCH_SIZE,
             runtime=11520,
             slurm_partition="ivm",
-            partition_arg="--partition=ivm",
             slurm_account="ivm"
         log:
             LARGE_SCALE_DIR + "/.parallel/logs/evaluate_batch_{batch_id}.log"
