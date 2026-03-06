@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = "==3.13.*"
 resolution-markers = [
     "platform_machine == 'ARM64' and sys_platform == 'win32'",
@@ -591,18 +591,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/4c/13/7d740c5849255756bc17888787313b61fd38a0a8304fc4f073dfc46122aa/comm-0.2.3.tar.gz", hash = "sha256:2dc8048c10962d55d7ad693be1e7045d891b7ce8d999c97963a5e3e99c055971", size = 6319, upload-time = "2025-07-25T14:02:04.452Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/97/891a0971e1e4a8c5d2b20bbe0e524dc04548d2307fee33cdeba148fd4fc7/comm-0.2.3-py3-none-any.whl", hash = "sha256:c615d91d75f7f04f095b30d1c1711babd43bdc6419c1be9886a85f2f4e489417", size = 7294, upload-time = "2025-07-25T14:02:02.896Z" },
-]
-
-[[package]]
-name = "conda-inject"
-version = "1.3.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pyyaml" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/a8/8dc86113c65c949cc72d651461d6e4c544b3302a85ed14a5298829e6a419/conda_inject-1.3.2.tar.gz", hash = "sha256:0b8cde8c47998c118d8ff285a04977a3abcf734caf579c520fca469df1cd0aac", size = 3635, upload-time = "2024-05-27T12:20:58.873Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/4c/fc30b69fb4062aee57e3ab7ff493647c4220144908f0839c619f912045bf/conda_inject-1.3.2-py3-none-any.whl", hash = "sha256:6e641b408980c2814e3e527008c30749117909a21ff47392f07ef807da93a564", size = 4133, upload-time = "2024-05-27T12:20:57.332Z" },
 ]
 
 [[package]]
@@ -2339,7 +2327,7 @@ name = "linkify-it-py"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "uc-micro-py", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "uc-micro-py" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2e/c9/06ea13676ef354f0af6169587ae292d3e2406e212876a413bf9eece4eb23/linkify_it_py-2.1.0.tar.gz", hash = "sha256:43360231720999c10e9328dc3691160e27a718e280673d444c38d7d3aaa3b98b", size = 29158, upload-time = "2026-03-01T07:48:47.683Z" }
 wheels = [
@@ -2411,7 +2399,7 @@ wheels = [
 
 [package.optional-dependencies]
 linkify = [
-    { name = "linkify-it-py", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "linkify-it-py" },
 ]
 
 [[package]]
@@ -2578,9 +2566,9 @@ name = "memray"
 version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
-    { name = "rich", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
-    { name = "textual", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "jinja2" },
+    { name = "rich" },
+    { name = "textual" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/36/18/5df5995a7b142e12ab194f4b2fd1473efd51f4f622dfe47f3c013c3c11f7/memray-1.19.1.tar.gz", hash = "sha256:7fcf306eae2c00144920b01913f42fa7f235af7a80fa3226ab124672a5cb1d8f", size = 2395421, upload-time = "2025-10-16T02:26:51.513Z" }
 wheels = [
@@ -4421,8 +4409,8 @@ name = "rich"
 version = "14.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
-    { name = "pygments", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "markdown-it-py" },
+    { name = "pygments" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b3/c6/f3b320c27991c46f43ee9d856302c70dc2d0fb2dba4842ff739d5f46b393/rich-14.3.3.tar.gz", hash = "sha256:b8daa0b9e4eef54dd8cf7c86c03713f53241884e814f4e2f5fb342fe520f639b", size = 230582, upload-time = "2026-02-19T17:23:12.474Z" }
 wheels = [
@@ -4431,7 +4419,7 @@ wheels = [
 
 [[package]]
 name = "rioxarray"
-version = "0.21.0"
+version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
@@ -4440,9 +4428,9 @@ dependencies = [
     { name = "rasterio" },
     { name = "xarray" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/ba/9b70c0e33159244b264aed7b331ff349bc0a3a4ac50e8bea08729bf6ae53/rioxarray-0.21.0.tar.gz", hash = "sha256:a292d96f4d6412c05ff09629b72523ae2e9c42598183f5e9c555fc368f867c0f", size = 56555, upload-time = "2026-01-26T17:15:46.783Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4b/04/9e43477ab0fce7c4c949e1131bfae55ec5228da4ba30f55760660db224b2/rioxarray-0.22.0.tar.gz", hash = "sha256:3f55f23a632ffd9eff13463634227f4afbbcf298947536e161f6cf2ce88d4373", size = 61337, upload-time = "2026-03-06T17:11:00.16Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/aa/4ba81b24acf2b05cb00fd7603f84e5088af72596839f85c23c6ff5d249d7/rioxarray-0.21.0-py3-none-any.whl", hash = "sha256:f8793822f09ab7de3a82ffe711beff4cdf313a860ff86df0942f3385374ac562", size = 64940, upload-time = "2026-01-26T17:15:45.648Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/dd/0b2c68495331ba36af783139baaa94693ef310d484d458c11dfa1357287d/rioxarray-0.22.0-py3-none-any.whl", hash = "sha256:db0aa55cd36a95060968f2e6574107829def29d43a563560b90bc642d0bd6a3b", size = 72018, upload-time = "2026-03-06T17:10:58.965Z" },
 ]
 
 [[package]]
@@ -4838,42 +4826,6 @@ wheels = [
 ]
 
 [[package]]
-name = "snakemake-interface-logger-plugins"
-version = "2.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "snakemake-interface-common" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/92/2fe4fa879a5d4408cad6db5330cd4ebd352e47529cb0fdfdf8ebf73f2920/snakemake_interface_logger_plugins-2.0.0.tar.gz", hash = "sha256:0e8ff2af4c55ca140d6ea1c1540e733a4b3944abae48fe0eaf6a707e5797cd17", size = 13767, upload-time = "2025-09-28T19:51:55.094Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/1f/f0848d750e7ca675e2cc0ea5e14135f432db498e8ad8cf746a19108e9d55/snakemake_interface_logger_plugins-2.0.0-py3-none-any.whl", hash = "sha256:c06a6779528a60f0362049c3adfb558e64d071769691718c810ef3057fdb9ff3", size = 12293, upload-time = "2025-09-28T19:51:53.556Z" },
-]
-
-[[package]]
-name = "snakemake-interface-report-plugins"
-version = "1.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "snakemake-interface-common" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/18/d6/6160ed98de665d6871dd356597dbf726688cc786e88668359ca37b7d9f54/snakemake_interface_report_plugins-1.3.0.tar.gz", hash = "sha256:fc9495298bec4e69721ab8afe6d6d88a86966fda2eeb003db56b9a88b86d5934", size = 4283, upload-time = "2025-10-31T10:52:36.55Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/f0/df73f6abc9b5910e43612ae28c7b6f666af80c4edd46a216ef47599ab6cb/snakemake_interface_report_plugins-1.3.0-py3-none-any.whl", hash = "sha256:78da3931f70e79eef51e5645a40b172929e555fe4d86ff45d6b856e521a379db", size = 7251, upload-time = "2025-10-31T10:52:35.474Z" },
-]
-
-[[package]]
-name = "snakemake-interface-scheduler-plugins"
-version = "2.0.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "snakemake-interface-common" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/88/d9/d480807d2cfc2d132bc760d877d45ec8fbe620a24200ec4d2697c4a26031/snakemake_interface_scheduler_plugins-2.0.2.tar.gz", hash = "sha256:2797e8fa9019d983132c2b403f14d6fcd3c5ad4c8d8a66b984b4740a71cacc46", size = 8642, upload-time = "2025-10-20T13:58:12.988Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/d0/f4e9894c8aaf37efe3bf1afe15ee3cf0546d82b2713a589e266ee47bf2ef/snakemake_interface_scheduler_plugins-2.0.2-py3-none-any.whl", hash = "sha256:b9ddfa508bd480711de1770dfb24f3b813cfa3cd0f862f0127ef721ae5346915", size = 10766, upload-time = "2025-10-20T13:58:11.898Z" },
-]
-
-[[package]]
 name = "snakemake-interface-storage-plugins"
 version = "4.3.3"
 source = { registry = "https://pypi.org/simple" }
@@ -5050,12 +5002,12 @@ name = "textual"
 version = "8.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py", extra = ["linkify"], marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
-    { name = "mdit-py-plugins", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
-    { name = "platformdirs", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
-    { name = "pygments", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
-    { name = "rich", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
-    { name = "typing-extensions", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "markdown-it-py", extra = ["linkify"] },
+    { name = "mdit-py-plugins" },
+    { name = "platformdirs" },
+    { name = "pygments" },
+    { name = "rich" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/08/c6bcb1e3c4c9528ec9049f4ac685afdafc72866664270f0deb416ccbba2a/textual-8.0.2.tar.gz", hash = "sha256:7b342f3ee9a5f2f1bd42d7b598cae00ff1275da68536769510db4b7fe8cabf5d", size = 6099270, upload-time = "2026-03-03T20:23:46.858Z" }
 wheels = [
@@ -5455,16 +5407,16 @@ wheels = [
 
 [[package]]
 name = "xarray"
-version = "2025.11.0"
+version = "2026.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "packaging" },
     { name = "pandas" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/39/ad/b072c970cfb2e2724509bf1e8d7fb4084cc186a90d486c9ac4a48ff83186/xarray-2025.11.0.tar.gz", hash = "sha256:d7a4aa4500edbfd60676b1613db97da309ab144cac0bcff0cbf483c61c662af1", size = 3072276, upload-time = "2025-11-17T16:12:09.167Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/03/e3353b72e518574b32993989d8f696277bf878e9d508c7dd22e86c0dab5b/xarray-2026.2.0.tar.gz", hash = "sha256:978b6acb018770554f8fd964af4eb02f9bcc165d4085dbb7326190d92aa74bcf", size = 3111388, upload-time = "2026-02-13T22:20:50.18Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/86/b4/cfa7aa56807dd2d9db0576c3440b3acd51bae6207338ec5610d4878e5c9b/xarray-2025.11.0-py3-none-any.whl", hash = "sha256:986893b995de4a948429356a3897d78e634243c1cac242bd59d03832b9d72dd1", size = 1375447, upload-time = "2025-11-17T16:12:07.123Z" },
+    { url = "https://files.pythonhosted.org/packages/99/92/545eb2ca17fc0e05456728d7e4378bfee48d66433ae3b7e71948e46826fb/xarray-2026.2.0-py3-none-any.whl", hash = "sha256:e927d7d716ea71dea78a13417970850a640447d8dd2ceeb65c5687f6373837c9", size = 1405358, upload-time = "2026-02-13T22:20:47.847Z" },
 ]
 
 [[package]]
@@ -5569,7 +5521,7 @@ wheels = [
 
 [[package]]
 name = "xugrid"
-version = "0.14.3"
+version = "0.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dask" },
@@ -5581,9 +5533,9 @@ dependencies = [
     { name = "scipy" },
     { name = "xarray" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f0/fe/a91ca5690e012264b81c54b2c705b77ff8cb5679311b6871d819bfd6d4ea/xugrid-0.14.3.tar.gz", hash = "sha256:5c9828f71b476b5ef8863a05eafe400d9e857ebd58bf8f06a3f476c8c267af09", size = 181895, upload-time = "2025-11-11T20:06:17.868Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/38/053d9d506dfcccd7541d3e6a2d8b8616eb20ab4adc2b015e8685ee814eb6/xugrid-0.15.0.tar.gz", hash = "sha256:7ca0e19a81d1f5ec9d57f70086c92efdd2efb93943cbb1fab18b293885294ebb", size = 193033, upload-time = "2026-03-06T09:29:33.354Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/07/1922a0c20ed4c95769937619d2c0217ee3f665a8b967438277d3f40860e4/xugrid-0.14.3-py3-none-any.whl", hash = "sha256:844baba108b62d5a947063067135ec9f525765b8a8e56a5e8923865770f4a9a5", size = 145299, upload-time = "2025-11-11T20:06:16.498Z" },
+    { url = "https://files.pythonhosted.org/packages/da/d4/dfa0030423d06e9d82950bda1da02f9c4af6a66fc44b843851208626e835/xugrid-0.15.0-py3-none-any.whl", hash = "sha256:94f35d261978f02c4f2fa38321c420eb22a6211f75fa5a11f768573432c49442", size = 151480, upload-time = "2026-03-06T09:29:31.714Z" },
 ]
 
 [[package]]
