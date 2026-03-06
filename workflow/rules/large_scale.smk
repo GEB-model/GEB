@@ -11,8 +11,13 @@ from pathlib import Path
 # Get configuration with defaults
 # LARGE_SCALE_DIR and CLUSTER_PREFIX are read from config/large_scale.yml so that
 # users only need to change them in one place.
+# When not set in the config, fall back to GEB_ROOT env var (always exported by
+# the snake alias) so that symlinked paths are preserved.  Using workflow.basedir
+# directly would resolve symlinks and break target-path matching.
+import os as _os
+_geb_root = _os.environ.get("GEB_ROOT", str(Path(workflow.basedir).parent))
 CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "Europe")
-LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", str(Path(workflow.basedir).parent.parent / "models" / "large_scale"))
+LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", str(Path(_geb_root).parent / "models" / "large_scale"))
 EVALUATION_METHODS = config.get("EVALUATION_METHODS", "hydrology.plot_discharge,hydrology.evaluate_discharge")
 
 # Cache for basin areas to avoid repeated file reads
@@ -55,7 +60,7 @@ def get_resources(cluster_name):
     Partition limits and our allocations:
       - defq:    limit ~251 GB → allocate 240 GB
       - ivm:     limit ~110 GB → allocate 105 GB
-      - ivm-fat: limit ~755 GB → allocate 400 GB
+      - ivm-fat: limit ~755 GB → allocate 700 GB
 
     Routing strategy: Minimize use of memory-constrained `ivm` partition.
     Only the smallest basins (<100k km²) go to ivm; everything else goes
@@ -76,12 +81,9 @@ def get_resources(cluster_name):
     except ValueError:
         cluster_index = 0
 
-    if area_km2 >= 150000:
-        # Medium and large basins: peak RSS is unpredictable from area alone
-        # (e.g. Europe_017 at 282k km2 peaked at 267 GB while Europe_005 at
-        # 350k km2 only used 96 GB). Route all to ivm-fat to be safe.
-        partition = "ivm-fat"
-        memory_mb = 700000  # 700 GB, safely below the ~755 GB node limit
+    if area_km2 >= 500000:
+        # Very large basins: alternate defq / ivm-fat for load balancing
+        partition_index = 0 if (cluster_index % 2 == 0) else 2
     elif area_km2 >= 100000:
         # Medium/large basins: alternate defq / ivm-fat (avoid ivm entirely)
         partition_index = 0 if (cluster_index % 2 == 0) else 2
@@ -94,15 +96,12 @@ def get_resources(cluster_name):
     if partition_index == 0:
         partition = "defq"
         memory_mb = 240000  # 240 GB, safely below the ~251 GB node limit
-    else:
-        # Tiny basins (<100k km2): spread across defq and ivm to balance load.
-        # Only 1-in-3 go to the memory-constrained ivm partition.
-        if cluster_index % 3 == 0:
-            partition = "ivm"
-            memory_mb = 105000  # 105 GB, safely below the ~110 GB node limit
-        else:
-            partition = "defq"
-            memory_mb = 240000  # 240 GB, safely below the ~251 GB node limit
+    elif partition_index == 1:
+        partition = "ivm"
+        memory_mb = 105000  # 105 GB, safely below the ~110 GB node limit
+    else:  # partition_index == 2
+        partition = "ivm-fat"
+        memory_mb = 700000  # 700 GB, safely below the ~755 GB node limit
 
     return memory_mb, partition
 
