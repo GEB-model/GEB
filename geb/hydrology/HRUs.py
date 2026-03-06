@@ -11,8 +11,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import xarray as xr
+import zarr
 from affine import Affine
 from numba import njit
+from numpy.typing import DTypeLike
 from scipy.spatial import KDTree
 
 from geb.geb_types import (
@@ -22,6 +24,7 @@ from geb.geb_types import (
     ArrayFloat32,
     ArrayFloat64,
     ArrayInt32,
+    ArrayInt64,
     ArrayWithScalar,
     T_ArrayNumber,
     T_OneorTwoDArray,
@@ -350,17 +353,45 @@ class Grid(BaseVariables):
         """
         return np.full(self.mask.shape, *args, **kwargs)
 
-    def full_compressed(self, *args: Any, **kwargs: Any) -> ArrayFloat32:
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.float64], **kwargs: Any
+    ) -> ArrayFloat64: ...
+
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.int32], **kwargs: Any
+    ) -> ArrayInt32: ...
+
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.int64] = ..., **kwargs: Any
+    ) -> ArrayInt64: ...
+
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.bool_], **kwargs: Any
+    ) -> ArrayBool: ...
+
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.float32] = ..., **kwargs: Any
+    ) -> ArrayFloat32: ...
+
+    def full_compressed(
+        self, fill_value: Any, dtype: DTypeLike = np.float32, **kwargs: Any
+    ) -> Array:
         """Return a full array with size of compressed array. Takes any other argument normally used in np.full.
 
         Args:
-            *args: Variable length argument list.
+            fill_value: Value to fill the array with.
+            dtype: Data type of the array. Defaults to np.float32.
             **kwargs: Arbitrary keyword arguments.
 
         Returns:
             array: Full array of compressed size.
         """
-        return np.full(self.compressed_size, *args, **kwargs)
+        return np.full(self.compressed_size, fill_value, dtype=dtype, **kwargs)
 
     @overload
     def compress(self, array: TwoDArrayWithScalar) -> ArrayWithScalar: ...
@@ -660,8 +691,16 @@ class HRUs(BaseVariables):
         self.data: Data = data
         self.model: GEBModel = model
 
-        subgrid_mask = read_grid(self.model.files["subgrid"]["mask"])
-        submask_height, submask_width = subgrid_mask.shape
+        subgrid: zarr.Group = zarr.open_group(
+            self.model.files["subgrid"]["mask"], mode="r"
+        )
+        assert isinstance(subgrid, zarr.Group)
+        y = subgrid["y"]
+        x = subgrid["x"]
+        assert isinstance(y, zarr.Array) and isinstance(x, zarr.Array)
+
+        submask_height: int = y.size
+        submask_width: int = x.size
 
         self.scaling = submask_height // self.data.grid.shape[0]
         assert submask_width // self.data.grid.shape[1] == self.scaling
@@ -769,6 +808,7 @@ class HRUs(BaseVariables):
         land_use_classes: TwoDArrayInt32,
         mask: TwoDArrayBool,
         scaling: int,
+        initial_size: int,
     ) -> tuple[
         ArrayInt32,
         ArrayFloat32,
@@ -784,6 +824,7 @@ class HRUs(BaseVariables):
             land_use_classes: CWatM land use class map [0-5].
             mask: Mask of the normal grid cells.
             scaling: Scaling between mask and maximum resolution of HRUs.
+            initial_size: Initial size for HRU arrays.
 
         Returns:
             land_use_array: Land use of each HRU.
@@ -799,12 +840,36 @@ class HRUs(BaseVariables):
 
         n_nonmasked_cells = mask.size - mask.sum()
         grid_to_HRU = np.full(n_nonmasked_cells, -1, dtype=np.int32)
-        # var_to_HRU_uncompressed = np.full(mask.size, -1, dtype=np.int32)
-        HRU_to_grid = np.full(farms.size, -1, dtype=np.int32)
-        land_use_array = np.full(farms.size, -1, dtype=np.int32)
-        land_use_size = np.full(farms.size, -1, dtype=np.int32)
-        land_use_owner = np.full(farms.size, -1, dtype=np.int32)
         linear_mapping = np.full(farms.shape, -1, dtype=np.int32)
+
+        HRU_to_grid = np.full(initial_size, -1, dtype=np.int32)
+        land_use_array = np.full(initial_size, -1, dtype=np.int32)
+        land_use_size = np.full(initial_size, -1, dtype=np.int32)
+        land_use_owner = np.full(initial_size, -1, dtype=np.int32)
+
+        def resize_arrays(
+            hru_to_grid: ArrayInt32,
+            land_use_array: ArrayInt32,
+            land_use_size: ArrayInt32,
+            land_use_owner: ArrayInt32,
+            new_size: int,
+        ) -> tuple[ArrayInt32, ArrayInt32, ArrayInt32, ArrayInt32]:
+            new_hru_to_grid = np.full(new_size, -1, dtype=np.int32)
+            new_land_use_array = np.full(new_size, -1, dtype=np.int32)
+            new_land_use_size = np.full(new_size, -1, dtype=np.int32)
+            new_land_use_owner = np.full(new_size, -1, dtype=np.int32)
+
+            new_hru_to_grid[: hru_to_grid.size] = hru_to_grid
+            new_land_use_array[: land_use_array.size] = land_use_array
+            new_land_use_size[: land_use_size.size] = land_use_size
+            new_land_use_owner[: land_use_owner.size] = land_use_owner
+
+            return (
+                new_hru_to_grid,
+                new_land_use_array,
+                new_land_use_size,
+                new_land_use_owner,
+            )
 
         HRU = 0
         var_cell_count_compressed = 0
@@ -838,6 +903,19 @@ class HRUs(BaseVariables):
                         if farm == -1:  # if area is not a farm
                             continue
                         if farm != prev_farm:
+                            if HRU >= HRU_to_grid.size:
+                                res_res = resize_arrays(
+                                    HRU_to_grid,
+                                    land_use_array,
+                                    land_use_size,
+                                    land_use_owner,
+                                    int(HRU_to_grid.size * 1.5) + 1,
+                                )
+                                HRU_to_grid = res_res[0]
+                                land_use_array = res_res[1]
+                                land_use_size = res_res[2]
+                                land_use_owner = res_res[3]
+
                             assert land_use_array[HRU] == -1
                             assert land_use == 1  # must be one because farm
                             land_use_array[HRU] = land_use
@@ -869,6 +947,19 @@ class HRUs(BaseVariables):
                         if farm != -1:
                             continue
                         if land_use != prev_land_use:
+                            if HRU >= HRU_to_grid.size:
+                                res_res = resize_arrays(
+                                    HRU_to_grid,
+                                    land_use_array,
+                                    land_use_size,
+                                    land_use_owner,
+                                    int(HRU_to_grid.size * 1.5) + 1,
+                                )
+                                HRU_to_grid = res_res[0]
+                                land_use_array = res_res[1]
+                                land_use_size = res_res[2]
+                                land_use_owner = res_res[3]
+
                             assert land_use_array[HRU] == -1
                             land_use_array[HRU] = land_use
                             assert land_use_size[HRU] == -1
@@ -929,9 +1020,18 @@ class HRUs(BaseVariables):
         land_use_classes = read_grid(
             self.model.files["subgrid"]["landsurface/land_use_classes"]
         )
-        return self.create_HRUs_numba(
-            self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
+        initial_size = (
+            np.unique(self.data.farms).size + (self.data.grid.mask == 0).sum()
         )
+
+        res = self.create_HRUs_numba(
+            self.data.farms,
+            land_use_classes,
+            self.data.grid.mask,
+            self.scaling,
+            initial_size,
+        )
+        return res
 
     def zeros(self, size: int, dtype: type, *args: Any, **kwargs: Any) -> Array:
         """Return an array of zeros with given size. Takes any other argument normally used in np.zeros.
