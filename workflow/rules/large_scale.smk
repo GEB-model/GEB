@@ -14,8 +14,7 @@ from pathlib import Path
 # When not set in the config, fall back to GEB_ROOT env var (always exported by
 # the snake alias) so that symlinked paths are preserved.  Using workflow.basedir
 # directly would resolve symlinks and break target-path matching.
-import os as _os
-_geb_root = _os.environ.get("GEB_ROOT", str(Path(workflow.basedir).parent))
+_geb_root = os.environ.get("GEB_ROOT", str(Path(workflow.basedir).parent))
 CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "Europe")
 LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", str(Path(_geb_root).parent / "models" / "large_scale"))
 EVALUATION_METHODS = config.get("EVALUATION_METHODS", "hydrology.plot_discharge,hydrology.evaluate_discharge")
