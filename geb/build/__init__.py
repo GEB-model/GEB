@@ -3457,7 +3457,7 @@ class GEBModel(
         build_method.log_time_taken()
 
     def build(
-        self, region: dict, methods: dict[str, dict[str, Any] | None], continue_: bool
+        self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
     ) -> None:
         """Build the model with the specified region and methods.
 
@@ -3469,7 +3469,7 @@ class GEBModel(
         Raises:
             ValueError: If "setup_region" is not in methods when building a new model.
         """
-        methods: dict[str, dict[str, Any] | None] = methods or {}
+        methods: dict[str, dict[str, Any]] = methods or {}
         if "setup_region" not in methods:
             raise ValueError(
                 '"setup_region" must be present in methods when building a new model.'

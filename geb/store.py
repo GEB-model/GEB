@@ -380,7 +380,7 @@ class DynamicArray:
 
     def __setitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
+        key: int | slice | NDArray[np.integer] | NDArray[np.bool_],
         value: Any,
     ) -> None:
         """
@@ -433,7 +433,7 @@ class DynamicArray:
 
     def __getitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_] | list,
+        key: int | slice | NDArray[np.integer] | NDArray[np.bool_] | list,
     ) -> DynamicArray | NDArray[Any]:
         """
         Retrieve item(s) or a sliced DynamicArray.

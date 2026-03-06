@@ -55,14 +55,14 @@ def process_station_data(
 
     # Resample to hourly if frequency is higher than hourly (e.g., 15 min -> 1 h).
     # If frequency is already hourly or lower (e.g., daily), keep as is.
-    assert Q_station.index.freq is not None  # ty:ignore[possibly-missing-attribute]
-    if Q_station.index.freq < pd.Timedelta(hours=1):  # ty:ignore[possibly-missing-attribute]
+    assert Q_station.index.freq is not None  # ty:ignore[unresolved-attribute]
+    if Q_station.index.freq < pd.Timedelta(hours=1):  # ty:ignore[unresolved-attribute]
         Q_station = Q_station.resample("h", label="left").mean()
-    elif Q_station.index.freq > pd.Timedelta(  # ty:ignore[possibly-missing-attribute]
+    elif Q_station.index.freq > pd.Timedelta(  # ty:ignore[unresolved-attribute]
         hours=1
-    ) and Q_station.index.freq < pd.Timedelta(days=1):  # ty:ignore[possibly-missing-attribute]
+    ) and Q_station.index.freq < pd.Timedelta(days=1):  # ty:ignore[unresolved-attribute]
         Q_station = Q_station.resample("D", label="left").mean()
-    elif Q_station.index.freq > pd.Timedelta(days=1):  # ty:ignore[possibly-missing-attribute]
+    elif Q_station.index.freq > pd.Timedelta(days=1):  # ty:ignore[unresolved-attribute]
         raise ValueError(
             f"Time step of station {station} is larger than 1 day. Please ensure the time step is hourly or daily."
         )

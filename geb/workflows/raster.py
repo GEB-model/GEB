@@ -1040,7 +1040,9 @@ def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
 
 
 def resample_like(
-    source: xr.DataArray, target: xr.DataArray, method: str = "bilinear"
+    source: xr.DataArray,
+    target: xr.DataArray,
+    method: Literal["bilinear", "nearest", "conservative"] = "bilinear",
 ) -> xr.DataArray:
     """Resample the source DataArray to match the target DataArray's grid.
 
@@ -1077,7 +1079,7 @@ def resample_like(
         dst = regridder.conservative(
             target,  # ty: ignore[invalid-argument-type]
             latitude_coord="y",
-            output_chunks={**source.chunksizes, **target.chunksizes},
+            output_chunks={**source.chunksizes, **target.chunksizes},  # ty:ignore[invalid-argument-type]
         )
     elif method == "nearest":
         dst = regridder.nearest(target)  # ty: ignore[invalid-argument-type]

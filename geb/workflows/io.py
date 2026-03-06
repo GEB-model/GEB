@@ -160,19 +160,19 @@ def read_grid(
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
         assert isinstance(y, np.ndarray)
-        x_diff: float = np.diff(x[:]).mean().item()
-        y_diff: float = np.diff(y[:]).mean().item()
+        x_diff: float = np.diff(x[:]).mean().item()  # ty:ignore[invalid-argument-type]
+        y_diff: float = np.diff(y[:]).mean().item()  # ty:ignore[invalid-argument-type]
         transform: Affine = Affine(
             a=x_diff,
             b=0,
-            c=x[0] - x_diff / 2,
+            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type]
             d=0,
             e=y_diff,
-            f=y[0] - y_diff / 2,
+            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type]
         )
         crs = data_array.attrs["_CRS"]
         assert isinstance(crs, dict)
-        wkt: str = crs["wkt"]
+        wkt: str = crs["wkt"]  # ty:ignore[invalid-argument-type]
         return data, transform, wkt
     else:
         return data

@@ -615,7 +615,9 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         horizontal_dam = gpd.GeoDataFrame(geometry=horizontal_line, crs=subbasins.crs)
 
         # combine both dams into one GeoDataFrame
-        multiple_dams = pd.concat([vertical_dam, horizontal_dam], ignore_index=True)
+        multiple_dams: gpd.GeoDataFrame = pd.concat(
+            [vertical_dam, horizontal_dam], ignore_index=True
+        )  # ty:ignore[invalid-assignment]
 
         start_time: datetime = datetime(2000, 1, 1, 0)
         end_time: datetime = datetime(2000, 1, 10, 0)
