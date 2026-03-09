@@ -597,6 +597,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         bare_soil_evaporation_m,
         transpiration_m,
         potential_transpiration_m,
+        potential_evapotranspiration_m,
         soil_boundary_enthalpy_flux_J_per_m2,
         rain_advection_enthalpy_flux_J_per_m2,
         evaporative_cooling_enthalpy_loss_J_per_m2,

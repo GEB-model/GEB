@@ -12,6 +12,7 @@ The calibration workflow organizes individual model runs in the format:
 
 import subprocess
 import os
+import shutil
 import sys
 import random
 import yaml
@@ -239,7 +240,6 @@ rule run_individual:
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         run_command(f"geb run -wd {run_dir}", log[0], f"Main run failed for {wildcards.gen}_{wildcards.ind}")
         shutil.rmtree(run_dir / "simulation_root")
-        shutil.rmtree(run_dir / "input")
 
 rule evaluate_individual:
     input: RUNS_DIR + "/{gen}_{ind}/run.done"
@@ -272,6 +272,7 @@ rule evaluate_individual:
             yaml.dump({"targets": all_metrics}, f)
 
         shutil.rmtree(run_dir / "output")
+        shutil.rmtree(run_dir / "input")
 
 checkpoint create_next_generation:
     input:

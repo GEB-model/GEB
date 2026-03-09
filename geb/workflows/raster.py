@@ -1212,7 +1212,7 @@ def resample_chunked(
         name=source.name,
         attrs=source.attrs.copy(),
     )
-    da.rio.set_crs(source.rio.crs)
+    da: xr.DataArray = da.rio.write_crs(source.rio.crs)
     return da
 
 
@@ -1491,6 +1491,7 @@ def create_temp_zarr(
             time_chunksize=time_chunksize,
             time_chunks_per_shard=time_chunks_per_shard,
             progress=True,
+            compression_level=1,
         )
         yield temp_da
 

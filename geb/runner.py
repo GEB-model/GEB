@@ -173,6 +173,8 @@ def create_logger(fp: Path) -> logging.Logger:
     # remove any previous handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
+
+    logger.propagate = False
     # set log level to debug
     logger.setLevel(logging.DEBUG)
     # create console handler and set level to debug
@@ -233,7 +235,9 @@ def run_model_with_method(
         command: list[str] = [sys.executable, "-O"] + sys.argv
         raise SystemExit(subprocess.run(command).returncode)
 
-    def run_operation(close_after_run: bool = close_after_run) -> Any:
+    def run_operation(
+        close_after_run: bool = close_after_run, logger: logging.Logger | None = None
+    ) -> Any:
         from geb.config_schema import Config
 
         config_parsed: dict[str, Any] = parse_config(config, schema=Config)
@@ -243,7 +247,12 @@ def run_model_with_method(
             else config_parsed["general"]["files"]
         )
 
-        geb = GEBModel(config=config_parsed, files=files, timing=timing)
+        geb = GEBModel(
+            config=config_parsed,
+            files=files,
+            timing=timing,
+            logger=logger,
+        )
         result = geb
         if method is not None:
             result = getattr(geb, method)(**method_args)
@@ -425,7 +434,7 @@ def _dump_ram_object_profile(name: str, date: str, keep_alive: Any = None) -> No
                 usage = obj.memory_usage(deep=True)
                 return int(usage.sum() if hasattr(usage, "sum") else usage)
             return sys.getsizeof(obj)
-        except (ReferenceError, AttributeError):
+        except ReferenceError, AttributeError:
             # If the object died or is inaccessible, it's essentially 0 bytes now
             return 0
 
@@ -448,7 +457,7 @@ def _dump_ram_object_profile(name: str, date: str, keep_alive: Any = None) -> No
             size = get_deep_size(obj)
             if size > 0:
                 objects_with_sizes.append((obj, size))
-        except (ReferenceError, AttributeError):
+        except ReferenceError, AttributeError:
             continue
 
     # Get total memory and count

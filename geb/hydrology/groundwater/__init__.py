@@ -76,18 +76,15 @@ class GroundWater(Module):
         self.grid.var.groundwater_hydraulic_conductivity_m_per_day = (
             self.hydrology.grid.load(
                 self.model.files["grid"]["groundwater/hydraulic_conductivity"],
-                layer=None,
             )
         )
 
         self.grid.var.specific_yield = self.hydrology.grid.load(
             self.model.files["grid"]["groundwater/specific_yield"],
-            layer=None,
         )
 
         self.grid.var.layer_boundary_elevation = self.hydrology.grid.load(
             self.model.files["grid"]["groundwater/layer_boundary_elevation"],
-            layer=None,
         )
 
         # recession_coefficient = self.hydrology.grid.load(

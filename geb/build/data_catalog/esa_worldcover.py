@@ -5,10 +5,10 @@ from __future__ import annotations
 import math
 from typing import Any
 
-import rasterio
 import rioxarray  # noqa: F401 – registers .rio accessor on xarray
 import xarray as xr
-from rioxarray.merge import merge_arrays
+from shapely.geometry import box
+from shapely.geometry.base import BaseGeometry
 
 from .base import Adapter
 
@@ -2672,31 +2672,36 @@ AVAILABLE_TILES: set[str] = {
 }
 
 
-def _s3_tile_urls(xmin: float, ymin: float, xmax: float, ymax: float) -> list[str]:
-    """Return S3 URLs for all 3°×3° tiles that overlap the bounding box.
+def _s3_tile_urls(geom: BaseGeometry) -> list[str]:
+    """Return S3 URLs for all 3°×3° tiles that intersect with the geometry.
 
     Args:
-        xmin: Minimum x-coordinate (longitude).
-        ymin: Minimum y-coordinate (latitude).
-        xmax: Maximum x-coordinate (longitude).
-        ymax: Maximum y-coordinate (latitude).
+        geom: The geometry used to filter intersecting tiles.
 
     Returns:
-        List of S3 URLs for all tiles covering the bounding box.
+        List of S3 URLs for all tiles intersecting the geometry.
     """
-    lat_start = math.floor(ymin / _TILE_SIZE_DEG) * _TILE_SIZE_DEG
-    lon_start = math.floor(xmin / _TILE_SIZE_DEG) * _TILE_SIZE_DEG
+    xmin, ymin, xmax, ymax = geom.bounds
+
+    lat_start: float = math.floor(ymin / _TILE_SIZE_DEG) * _TILE_SIZE_DEG
+    lon_start: float = math.floor(xmin / _TILE_SIZE_DEG) * _TILE_SIZE_DEG
     urls: list[str] = []
-    lat = lat_start
+    lat: float = lat_start
     while lat < ymax:
-        lon = lon_start
+        lon: float = lon_start
         while lon < xmax:
-            NS = "N" if lat >= 0 else "S"
-            EW = "E" if lon >= 0 else "W"
-            TILE = f"{NS}{abs(lat):02.0f}{EW}{abs(lon):03.0f}"
+            NS: str = "N" if lat >= 0 else "S"
+            EW: str = "E" if lon >= 0 else "W"
+            TILE: str = f"{NS}{abs(lat):02.0f}{EW}{abs(lon):03.0f}"
             if TILE in AVAILABLE_TILES:
-                filename = f"ESA_WorldCover_10m_2021_v200_{TILE}_Map.tif"
-                urls.append(f"s3://{_S3_BUCKET}/{_S3_TILE_PATH}/{filename}")
+                # Create tile bounding box to check intersection
+                tile_bbox: BaseGeometry = box(
+                    lon, lat, lon + _TILE_SIZE_DEG, lat + _TILE_SIZE_DEG
+                )
+                # Only include tile if it actually intersects with the geometry
+                if tile_bbox.intersects(geom):
+                    filename: str = f"ESA_WorldCover_10m_2021_v200_{TILE}_Map.tif"
+                    urls.append(f"s3://{_S3_BUCKET}/{_S3_TILE_PATH}/{filename}")
             lon += _TILE_SIZE_DEG
         lat += _TILE_SIZE_DEG
     return urls
@@ -2726,53 +2731,55 @@ class ESAWorldCover(Adapter):
         """
         return self
 
-    def read(
-        self,
-        xmin: float,
-        ymin: float,
-        xmax: float,
-        ymax: float,
-    ) -> xr.DataArray:
-        """Read ESA WorldCover data for the specified bounding box from AWS S3.
+    def read(self, geom: BaseGeometry) -> xr.DataArray:
+        """Read ESA WorldCover data for the specified geometry by downloading tiles.
 
         Args:
-            xmin: Minimum x-coordinate (longitude).
-            ymin: Minimum y-coordinate (latitude).
-            xmax: Maximum x-coordinate (longitude).
-            ymax: Maximum y-coordinate (latitude).
+            geom: The geometry to read data for.
 
         Returns:
-            xarray.DataArray: The ESA WorldCover data for the specified bounding box.
+            The ESA WorldCover data for the specified geometry.
 
         Raises:
-            ValueError: If no tiles are found for the specified bounding box.
+            ValueError: If no tiles are found for the specified geometry.
         """
-        tile_urls = _s3_tile_urls(xmin, ymin, xmax, ymax)
+        tile_urls: list[str] = _s3_tile_urls(geom)
         if not tile_urls:
-            raise ValueError(
-                f"No ESA WorldCover tiles found for bbox ({xmin}, {ymin}, {xmax}, {ymax})."
+            raise ValueError(f"No ESA WorldCover tiles found for geom: {geom}")
+
+        xmin, ymin, xmax, ymax = geom.bounds
+        arrays: list[xr.DataArray] = []
+
+        for url in tile_urls:
+            # Type ignore since rioxarray.open_rasterio returns a union type,
+            # but for .tif files it typically returns a DataArray.
+            da: Any = rioxarray.open_rasterio(
+                url,
+                chunks={"x": 1024, "y": 1024},
             )
+            assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
 
-        # GDAL config locally so it does not affect other S3 operations
-        with rasterio.Env(AWS_NO_SIGN_REQUEST="YES", AWS_DEFAULT_REGION=_S3_REGION):
-            arrays: list[xr.DataArray] = []
-            for url in tile_urls:
-                # Convert s3:// URL to GDAL /vsis3/ path
-                vsi_path = "/vsis3/" + url[len("s3://") :]
-                da = rioxarray.open_rasterio(vsi_path, chunks={"x": 3000, "y": 3000})
-                assert isinstance(da, xr.DataArray), (
-                    f"Expected DataArray, got {type(da)}"
-                )
-                arrays.append(da.sel(band=1))
-
-            assert len(arrays) > 0, (
-                f"No ESA WorldCover S3 tiles found for bbox ({xmin}, {ymin}, {xmax}, {ymax})."
-            )
-
-            merged = merge_arrays(arrays) if len(arrays) > 1 else arrays[0]
-            merged = merged.sel(
+            # Slice to bounding box extent and select first band before clipping to save memory
+            da = da.sel(band=1).sel(
                 x=slice(xmin, xmax),
                 y=slice(ymax, ymin),
             )
+            arrays.append(da)
+
+        if len(arrays) > 1:
+            # Merge using coordinate-based combining. Type ignore as combine_by_coords
+            # can return Dataset or DataArray.
+            merged: Any = xr.combine_by_coords(
+                arrays,
+                join="outer",
+                combine_attrs="drop_conflicts",
+                fill_value=arrays[0].rio.nodata,
+            )
+            assert isinstance(merged, xr.DataArray), (
+                f"Expected DataArray, got {type(merged)}"
+            )
+            assert merged.dtype == arrays[0].dtype
+        else:
+            merged: xr.DataArray = arrays[0]
 
         return merged
