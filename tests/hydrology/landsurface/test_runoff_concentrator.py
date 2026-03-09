@@ -217,6 +217,7 @@ def test_apply_triangular_visualization() -> None:
     plt.savefig(output_folder / "runoff_concentration_response.svg")
     plt.close()
 
+
 def test_apply_triangular_varying_buffer_lengths_visualization() -> None:
     """Visualize how a rainfall peak is distributed with varying peak hours."""
     lag_time_hours = 96
@@ -235,8 +236,12 @@ def test_apply_triangular_varying_buffer_lengths_visualization() -> None:
         buffer = np.zeros((lag_time_hours, n_cells), dtype=np.float64)
         weights = triangular_weights(p, lag_time_hours)
         apply_triangular(flow_pulse, weights, buffer)
-        
-        plt.plot(range(lag_time_hours), buffer[:, 0], label=f"Peak Hour = {p}h (Duration = {p*2}h)")
+
+        plt.plot(
+            range(lag_time_hours),
+            buffer[:, 0],
+            label=f"Peak Hour = {p}h (Duration = {p * 2}h)",
+        )
 
     plt.xlabel("Time [hours]")
     plt.ylabel("Outflow Fraction [-] / h")
@@ -257,7 +262,7 @@ def test_apply_triangular_varying_peaks_event_visualization() -> None:
 
     # Simulate 6-hour rainfall event, 1 unit of water total spread evenly
     flow_event = np.zeros((n_steps, n_cells), dtype=np.float32)
-    flow_event[2:8, 0] = 1.0 / 6.0 
+    flow_event[2:8, 0] = 1.0 / 6.0
 
     plt.figure(figsize=(10, 6))
 
@@ -266,25 +271,38 @@ def test_apply_triangular_varying_peaks_event_visualization() -> None:
         buffer = np.zeros((lag_time_hours, n_cells), dtype=np.float64)
         weights = triangular_weights(p, lag_time_hours)
         apply_triangular(flow_event, weights, buffer)
-        
-        plt.plot(range(lag_time_hours), buffer[:, 0], label=f"Peak Hour = {p}h (Duration = {p*2}h)")
+
+        plt.plot(
+            range(lag_time_hours),
+            buffer[:, 0],
+            label=f"Peak Hour = {p}h (Duration = {p * 2}h)",
+        )
 
     # Plot the rainfall itself
     rainfall_plot = np.zeros(lag_time_hours)
     rainfall_plot[2:8] = flow_event[2:8, 0]
-    
+
     # We use a secondary axis or just plot it directly since values are compatible
-    plt.bar(range(lag_time_hours), rainfall_plot, alpha=0.3, color='gray', label='Rainfall Event (t=2 to t=8)')
+    plt.bar(
+        range(lag_time_hours),
+        rainfall_plot,
+        alpha=0.3,
+        color="gray",
+        label="Rainfall Event (t=2 to t=8)",
+    )
 
     plt.xlabel("Time [hours]")
     plt.ylabel("Outflow Depth [m] / h")
-    plt.title("Runoff Concentration Response to 6h Rainfall Event\n(Varying Runoff Peak Hours)")
+    plt.title(
+        "Runoff Concentration Response to 6h Rainfall Event\n(Varying Runoff Peak Hours)"
+    )
     plt.legend()
     plt.grid(True)
     plt.xlim(0, 72)
     plt.tight_layout()
     plt.savefig(output_folder / "runoff_varying_peaks_event.svg")
     plt.close()
+
 
 def test_apply_triangular_successive_events_visualization() -> None:
     """Visualize how successive rainfall events combine in the runoff buffer."""
@@ -306,14 +324,24 @@ def test_apply_triangular_successive_events_visualization() -> None:
         buffer = np.zeros((lag_time_hours, n_cells), dtype=np.float64)
         weights = triangular_weights(p, lag_time_hours)
         apply_triangular(flow_events, weights, buffer)
-        
-        plt.plot(range(lag_time_hours), buffer[:, 0], label=f"Peak Hour = {p}h (Duration = {p*2}h)")
+
+        plt.plot(
+            range(lag_time_hours),
+            buffer[:, 0],
+            label=f"Peak Hour = {p}h (Duration = {p * 2}h)",
+        )
 
     # Plot the rainfall itself
     rainfall_plot = np.zeros(lag_time_hours)
     rainfall_plot[:n_steps] = flow_events[:, 0]
-    
-    plt.bar(range(lag_time_hours), rainfall_plot, alpha=0.3, color='gray', label='Rainfall Events (t=4-8, t=20-24)')
+
+    plt.bar(
+        range(lag_time_hours),
+        rainfall_plot,
+        alpha=0.3,
+        color="gray",
+        label="Rainfall Events (t=4-8, t=20-24)",
+    )
 
     plt.xlabel("Time [hours]")
     plt.ylabel("Depth [m] / h")
