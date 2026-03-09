@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
@@ -1446,7 +1447,6 @@ class LandSurface(Module):
         leaf_area_index_forest = self.grid.compress(
             read_grid(
                 self.model.files["other"]["vegetation/leaf_area_index_forest"],
-                layer=None,
             )
         )
         self.HRU.var.leaf_area_index_forest = self.hydrology.to_HRU(
@@ -1456,7 +1456,6 @@ class LandSurface(Module):
         leaf_area_index_grassland_like = self.grid.compress(
             read_grid(
                 self.model.files["other"]["vegetation/leaf_area_index_grassland_like"],
-                layer=None,
             )
         )
         self.HRU.var.leaf_area_index_grassland_like = self.hydrology.to_HRU(
@@ -1482,57 +1481,50 @@ class LandSurface(Module):
 
     def setup_soil_properties(self) -> None:
         """Setup soil properties for the land surface module."""
-        # Soil properties
-        self.HRU.var.soil_layer_height_m: TwoDArrayFloat32 = (
-            self.HRU.convert_subgrid_to_HRU(
-                read_grid(
-                    self.model.files["subgrid"]["soil/soil_layer_height_m"],
-                    layer=None,
-                ),
-                method="mean",
+
+        def load_soil_layers_to_HRU(filepath: Path) -> TwoDArrayFloat32:
+            """Memory efficient loading of soil layers directly to HRU size.
+
+            Args:
+                filepath: Path to the .zarr file.
+
+            Returns:
+                Compressed array of shape (layers, HRUs).
+            """
+            output: TwoDArrayFloat32 = np.full(
+                (N_SOIL_LAYERS, self.HRU.compressed_size), np.nan, dtype=np.float32
             )
-        )
 
-        self.HRU.var.depth_to_bedrock_m: ArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            read_grid(
-                self.model.files["subgrid"]["soil/depth_to_bedrock_m"],
-                layer=None,
-            ),
-            method="mean",
-        )
+            for i in range(N_SOIL_LAYERS):
+                layer_data = read_grid(filepath, layer=i)
+                assert layer_data.ndim == 2
+                self.HRU.convert_subgrid_to_HRU_numba(
+                    layer_data,
+                    self.HRU.var.linear_mapping,
+                    output[i],
+                    nodatavalue=np.nan,
+                    method="mean",
+                )
+                del layer_data  # free memory immediately after use
 
-        organic_carbon_percentage: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            read_grid(
-                self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
-                layer=None,
-            ),
-            method="mean",
+            return output
+
+        self.HRU.var.soil_layer_height_m: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+            self.model.files["subgrid"]["soil/soil_layer_height_m"]
         )
-        bulk_density_kg_per_dm3: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            read_grid(
+        organic_carbon_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+            self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
+        )
+        self.HRU.var.bulk_density_kg_per_dm3: TwoDArrayFloat32 = (
+            load_soil_layers_to_HRU(
                 self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"],
-                layer=None,
-            ),
-            method="mean",
-        )
-        self.HRU.var.bulk_density_kg_per_dm3 = bulk_density_kg_per_dm3
-        self.HRU.var.silt_percentage: TwoDArrayFloat32 = (
-            self.HRU.convert_subgrid_to_HRU(
-                read_grid(
-                    self.model.files["subgrid"]["soil/silt_percentage"],
-                    layer=None,
-                ),
-                method="mean",
             )
         )
-        self.HRU.var.clay_percentage: TwoDArrayFloat32 = (
-            self.HRU.convert_subgrid_to_HRU(
-                read_grid(
-                    self.model.files["subgrid"]["soil/clay_percentage"],
-                    layer=None,
-                ),
-                method="mean",
-            )
+        self.HRU.var.silt_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+            self.model.files["subgrid"]["soil/silt_percentage"],
+        )
+        self.HRU.var.clay_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+            self.model.files["subgrid"]["soil/clay_percentage"],
         )
 
         # calculate sand content based on silt and clay content (together they should sum to 100%)
@@ -1548,7 +1540,7 @@ class LandSurface(Module):
 
         thetas: TwoDArrayFloat32 = thetas_toth(
             organic_carbon_percentage=organic_carbon_percentage,
-            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
             is_top_soil=is_top_soil,
             clay=self.HRU.var.clay_percentage,
             silt=self.HRU.var.silt_percentage,
@@ -1627,7 +1619,7 @@ class LandSurface(Module):
             kv_wosten(
                 silt=self.HRU.var.silt_percentage,
                 clay=self.HRU.var.clay_percentage,
-                bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+                bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
                 organic_carbon_percentage=organic_carbon_percentage,
                 is_topsoil=is_top_soil,
             )
@@ -1653,7 +1645,7 @@ class LandSurface(Module):
         )
 
         self.HRU.var.solid_heat_capacity_J_per_m2_K = get_heat_capacity_solid_fraction(
-            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
             layer_thickness_m=self.HRU.var.soil_layer_height_m,
         )
 

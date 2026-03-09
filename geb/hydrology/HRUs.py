@@ -285,7 +285,6 @@ class Grid(BaseVariables):
         mask, self.transform, self.crs = read_grid(
             self.model.files["grid"]["mask"],
             return_transform_and_crs=True,
-            layer=1,
         )
         self.mask = mask.astype(bool)
         self.gt = self.transform.to_gdal()
@@ -470,14 +469,14 @@ class Grid(BaseVariables):
     ) -> ThreeDArray: ...
 
     def load(
-        self, filepath: Path, compress: bool = True, layer: int | None = 1
+        self, filepath: Path, compress: bool = True, layer: int | None = None
     ) -> Array | TwoDArray | ThreeDArray:
         """Load array from disk.
 
         Args:
             filepath: Filepath of map.
             compress: Whether to compress array.
-            layer: Layer to load from file. Defaults to 1. If None, all layers are loaded.
+            layer: Layer to load from file. If None, all layers are loaded. Defaults to None.
 
         Returns:
             array: Loaded array.
