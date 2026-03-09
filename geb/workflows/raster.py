@@ -1212,7 +1212,7 @@ def resample_chunked(
         name=source.name,
         attrs=source.attrs.copy(),
     )
-    da.rio.set_crs(source.rio.crs)
+    da.rio.write_crs(source.rio.crs)
     return da
 
 
