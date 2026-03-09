@@ -21,7 +21,6 @@ from geb.workflows.raster import (
     repeat_grid,
     resample_chunked,
     resample_like,
-    snap_to_grid,
 )
 
 from ..workflows.soilgrids import load_soilgrids
@@ -302,7 +301,7 @@ class LandSurface(BuildModelBase):
 
         self.set_params(DEMs, name="hydrodynamics/DEM_config")
 
-    @build_method(depends_on=[], required=True)
+    @build_method(depends_on=["setup_coastal_sfincs_model_regions"], required=True)
     def setup_regions_and_land_use(
         self,
         region_database: str = "GADM_level1",
@@ -380,7 +379,6 @@ class LandSurface(BuildModelBase):
         pad_maxx = max(regions_bounds[2], mask_bounds[2]) + abs(resolution_x) / 2.0
         pad_maxy = max(regions_bounds[3], mask_bounds[3]) + abs(resolution_y) / 2.0
 
-        # TODO: Is there a better way to do this?
         region_mask, region_subgrid_slice = pad_xy(
             self.subgrid["mask"],
             pad_minx,
@@ -399,83 +397,90 @@ class LandSurface(BuildModelBase):
         regions_bounds = self.geom["regions"].total_bounds
         subbasins_bounds = self.geom["routing/subbasins"].total_bounds
 
-        xmin = min(regions_bounds[0], subbasins_bounds[0]) - buffer
-        ymin = min(regions_bounds[1], subbasins_bounds[1]) - buffer
-        xmax = max(regions_bounds[2], subbasins_bounds[2]) + buffer
-        ymax = max(regions_bounds[3], subbasins_bounds[3]) + buffer
-
-        land_use_classification: xr.DataArray = (
-            self.data_catalog.fetch(land_cover)
-            .read(xmin, ymin, xmax, ymax)
-            .chunk({"x": 1000, "y": 1000})
+        union_geometry = (
+            self.geom["regions"]
+            .union_all()
+            .union(self.geom["routing/subbasins"].union_all())
+            .union(self.geom["coastal/low_elevation_coastal_zone_mask"].union_all())
         )
+        xmin = union_geometry.bounds[0] - buffer
+        ymin = union_geometry.bounds[1] - buffer
+        xmax = union_geometry.bounds[2] + buffer
+        ymax = union_geometry.bounds[3] + buffer
 
-        land_use_classification = self.set_other(
-            land_use_classification,
+        land_use_classification_source: xr.DataArray = self.data_catalog.fetch(
+            land_cover
+        ).read(union_geometry)
+
+        self.set_other(
+            land_use_classification_source.rio.clip(
+                [
+                    self.geom["routing/subbasins"].union_all(),
+                    self.geom["coastal/low_elevation_coastal_zone_mask"].union_all(),
+                ],
+                drop=True,
+                all_touched=True,
+            ),
             name="landcover/classification",
         )
 
-        reprojected_land_use: xr.DataArray = resample_chunked(
-            land_use_classification,
-            region_mask.chunk({"x": 1000, "y": 1000}),
+        land_use_classification_source_region_subgrid: xr.DataArray = resample_chunked(
+            land_use_classification_source,
+            region_mask,
             method="nearest",
         )
 
-        region_ids: xr.DataArray = rasterize_like(
+        subgrid_region_ids: xr.DataArray = rasterize_like(
             gdf=self.geom["regions"],
             column="region_id",
             raster=region_mask,
             dtype=np.int32,
             nodata=-1,
             all_touched=True,
-        ).compute()
-        region_ids: xr.DataArray = self.set_region_subgrid(
-            region_ids, name="region_ids"
         )
+        self.set_region_subgrid(subgrid_region_ids, name="region_ids")
 
-        full_region_land_use_classes = reclassify(
-            reprojected_land_use,
-            {
-                reprojected_land_use.attrs[
-                    "_FillValue"
-                ]: 5,  # no data, set to permanent water bodies because ocean
-                10: 0,  # tree cover
-                20: 1,  # shrubland
-                30: 1,  # grassland
-                40: 1,  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
-                50: 4,  # built-up
-                60: 1,  # bare / sparse vegetation
-                70: 1,  # snow and ice
-                80: 5,  # permanent water bodies
-                90: 1,  # herbaceous wetland
-                95: 5,  # mangroves
-                100: 1,  # moss and lichen
+        land_use_classification_source_subgrid = (
+            land_use_classification_source_region_subgrid.isel(region_subgrid_slice)
+        ).astype(np.int16)
+        land_use_classification_source_subgrid = xr.where(
+            ~self.subgrid["mask"], land_use_classification_source_subgrid, -1
+        )
+        land_use_classes_subgrid = reclassify(
+            land_use_classification_source_subgrid,
+            remap_dict={
+                -1: np.int8(-1),  # outside of the model domain
+                0: np.int8(
+                    5
+                ),  # map nodata in source to permanent water bodies, as these are mostly ocean in the land cover dataset
+                10: np.int8(0),  # tree cover
+                20: np.int8(1),  # shrubland
+                30: np.int8(1),  # grassland
+                40: np.int8(
+                    1
+                ),  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
+                50: np.int8(4),  # built-up
+                60: np.int8(1),  # bare / sparse vegetation
+                70: np.int8(1),  # snow and ice
+                80: np.int8(5),  # permanent water bodies
+                90: np.int8(1),  # herbaceous wetland
+                95: np.int8(5),  # mangroves
+                100: np.int8(1),  # moss and lichen
             },
-        ).astype(np.int32)
-        full_region_land_use_classes.attrs["_FillValue"] = -1
-
-        full_region_land_use_classes = self.set_region_subgrid(
-            full_region_land_use_classes,
-            name="landsurface/full_region_land_use_classes",
         )
+        land_use_classes_subgrid.attrs["_FillValue"] = -1
+        self.set_subgrid(land_use_classes_subgrid, name="landsurface/land_use_classes")
 
         cultivated_land_full_region = xr.where(
-            (full_region_land_use_classes == 1) & (reprojected_land_use == 40),
+            land_use_classification_source_region_subgrid == 40,
             True,
             False,
         )
+
         cultivated_land_full_region.attrs["_FillValue"] = None
-        cultivated_land_full_region = self.set_region_subgrid(
+        self.set_region_subgrid(
             cultivated_land_full_region, name="landsurface/full_region_cultivated_land"
         )
-
-        land_use_classes = full_region_land_use_classes.isel(region_subgrid_slice)
-        land_use_classes = snap_to_grid(land_use_classes, self.subgrid)
-        self.set_subgrid(land_use_classes, name="landsurface/land_use_classes")
-
-        cultivated_land = cultivated_land_full_region.isel(region_subgrid_slice)
-        cultivated_land = snap_to_grid(cultivated_land, self.subgrid)
-        self.set_subgrid(cultivated_land, name="landsurface/cultivated_land")
 
     @build_method(depends_on=[], required=False)
     def setup_land_use_parameters(
@@ -542,18 +547,14 @@ class LandSurface(BuildModelBase):
             variable="BDTICM_M_250m_ll"
         )
         assert isinstance(depth_to_bedrock_cm, xr.DataArray)
-        depth_to_bedrock_cm = (
-            depth_to_bedrock_cm.isel(
-                get_window(
-                    depth_to_bedrock_cm.x,
-                    depth_to_bedrock_cm.y,
-                    self.bounds,
-                    buffer=10,
-                ),
-            )
-            .astype(np.float32)
-            .compute()
-        )
+        depth_to_bedrock_cm = depth_to_bedrock_cm.isel(
+            get_window(
+                depth_to_bedrock_cm.x,
+                depth_to_bedrock_cm.y,
+                self.bounds,
+                buffer=10,
+            ),
+        ).astype(np.float32)
         depth_to_bedrock_cm: xr.DataArray = convert_nodata(depth_to_bedrock_cm, np.nan)
         depth_to_bedrock_m: xr.DataArray = (
             depth_to_bedrock_cm / 100

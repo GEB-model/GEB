@@ -55,6 +55,7 @@ class GEBModel(Module):
         self,
         config: dict,
         files: dict,
+        logger: logging.Logger | None = None,
         mode: str = "w",
         timing: bool = False,
     ) -> None:
@@ -63,6 +64,7 @@ class GEBModel(Module):
         Args:
             config: A dictionary containing the model configuration.
             files: A dictionary containing the paths to the input files.
+            logger: A logging.Logger instance to use for logging. If None, a default logger will be created.
             mode: Run model writing mode "w", or reading mode "r". Defaults to "w" for writing.
                 If "r", the model will not write any output files, but will read from existing files.
             timing: Whether to log timing of modules. Defaults to False.
@@ -71,8 +73,7 @@ class GEBModel(Module):
             ValueError: If the mode is not 'r' or 'w'.
         """
         self.config: dict[str, Any] = copy.deepcopy(config)  # model configuration
-        self.logger: logging.Logger = self.create_logger()
-
+        self.logger = logger or logging.getLogger(__name__)  # model logger
         self.timing = timing  # whether to log timing of modules
         self.mode = mode  # mode of the model, either 'r' (read) or 'w' (write)
         if self.mode not in ["r", "w"]:
@@ -837,7 +838,7 @@ class GEBModel(Module):
                     if hasattr(forcing_loader, "reader"):
                         forcing_loader.reader.close()
 
-    def __enter__(self) -> "GEBModel":
+    def __enter__(self) -> GEBModel:
         """Enters the context of the model.
 
         Returns:

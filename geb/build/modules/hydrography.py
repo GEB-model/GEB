@@ -1008,31 +1008,33 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_coastlines(self) -> None:
         """Sets up the coastlines for the model."""
-        if not self.geom["routing/subbasins"]["is_coastal"].any():
-            self.logger.info("No coastal basins found, skipping setup_coastlines")
-            return
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            # load the coastline from the data catalog
+            coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
 
-        # load the coastline from the data catalog
-        coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
+            # clip the coastline to overlapping with mask
+            coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
+            # merge all coastlines into a single linestring
+            coastlines = gpd.GeoDataFrame(
+                geometry=[coastlines.union_all()], crs=coastlines.crs
+            )
 
-        # clip the coastline to overlapping with mask
-        coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
-        # merge all coastlines into a single linestring
-        coastlines = gpd.GeoDataFrame(
-            geometry=[coastlines.union_all()], crs=coastlines.crs
-        )
+            # write to model files
+            self.set_geom(coastlines, name="coastal/coastlines")
 
-        # write to model files
-        self.set_geom(coastlines, name="coastal/coastlines")
-
-        # create rectangular box around coastlines
-        if not coastlines.empty:
-            bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
-            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
-            bbox_gdf.geometry = bbox_gdf.geometry.buffer(
-                0.04, join_style=2
-            )  # buffer by 0.04 degree
-            self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+            # create rectangular box around coastlines
+            if not coastlines.empty:
+                bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
+                bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
+                bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                    0.04, join_style=2
+                )  # buffer by 0.04 degree
+                self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+        else:
+            self.logger.info("No coastal basins found, setting empty coastlines")
+            empty_gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+            self.set_geom(empty_gdf, name="coastal/coastlines")
+            self.set_geom(empty_gdf, name="coastal/coastline_bbox")
 
     @build_method(required=True)
     def setup_osm_land_polygons(
@@ -1060,33 +1062,43 @@ class Hydrography(BuildModelBase):
     @build_method(depends_on=["setup_coastlines"], required=True)
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
-        if not self.geom["routing/subbasins"]["is_coastal"].any():
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            # load elevation data
+            elevation = self.other["DEM/fabdem"]
+            # load the lecz mask
+            low_elevation_coastal_zone_mask = (
+                self.create_low_elevation_coastal_zone_mask()
+            )
+
+            # add small buffer to ensure connection of 'islands' with coastlines
+            low_elevation_coastal_zone_mask.geometry = (
+                low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+            )
+
+            # sample the minimum elevation present in the lecz mask
+            mask = elevation.rio.clip(
+                low_elevation_coastal_zone_mask.geometry,
+                low_elevation_coastal_zone_mask.crs,
+                all_touched=True,
+                drop=False,
+            )
+
+            initial_water_levels = float(np.nanmin(mask.values))
+
+            low_elevation_coastal_zone_mask["initial_water_level"] = (
+                initial_water_levels
+            )
+        else:
             self.logger.info(
                 "No coastal basins found, skipping setup_coastal_sfincs_model_regions"
             )
-            return
+            low_elevation_coastal_zone_mask = gpd.GeoDataFrame(
+                geometry=[], crs=self.geom["mask"].crs
+            )
+            low_elevation_coastal_zone_mask["initial_water_level"] = pd.Series(
+                dtype=np.float32
+            )
 
-        # load elevation data
-        elevation = self.other["DEM/fabdem"]
-        # load the lecz mask
-        low_elevation_coastal_zone_mask = self.create_low_elevation_coastal_zone_mask()
-
-        # add small buffer to ensure connection of 'islands' with coastlines
-        low_elevation_coastal_zone_mask.geometry = (
-            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
-        )
-
-        # sample the minimum elevation present in the lecz mask
-        mask = elevation.rio.clip(
-            low_elevation_coastal_zone_mask.geometry,
-            low_elevation_coastal_zone_mask.crs,
-            all_touched=True,
-            drop=False,
-        )
-
-        initial_water_levels = float(np.nanmin(mask.values))
-
-        low_elevation_coastal_zone_mask["initial_water_level"] = initial_water_levels
         self.set_geom(
             low_elevation_coastal_zone_mask,
             name="coastal/low_elevation_coastal_zone_mask",

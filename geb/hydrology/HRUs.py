@@ -285,7 +285,6 @@ class Grid(BaseVariables):
         mask, self.transform, self.crs = read_grid(
             self.model.files["grid"]["mask"],
             return_transform_and_crs=True,
-            layer=1,
         )
         self.mask = mask.astype(bool)
         self.gt = self.transform.to_gdal()
@@ -470,14 +469,14 @@ class Grid(BaseVariables):
     ) -> ThreeDArray: ...
 
     def load(
-        self, filepath: Path, compress: bool = True, layer: int | None = 1
+        self, filepath: Path, compress: bool = True, layer: int | None = None
     ) -> Array | TwoDArray | ThreeDArray:
         """Load array from disk.
 
         Args:
             filepath: Filepath of map.
             compress: Whether to compress array.
-            layer: Layer to load from file. Defaults to 1. If None, all layers are loaded.
+            layer: Layer to load from file. If None, all layers are loaded. Defaults to None.
 
         Returns:
             array: Loaded array.
@@ -617,8 +616,10 @@ class HRUVariables(Bucket):
     nearest_river_grid_cell: ArrayInt32
     linear_mapping: TwoDArrayInt32
     crop_age_days_map: ArrayInt32
-    potential_transpiration_crop_life: ArrayFloat32
-    transpiration_crop_life: ArrayFloat32
+    potential_evapotranspiration_crop_life: ArrayFloat32
+    actual_evapotranspiration_crop_life: ArrayFloat32
+    actual_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
+    potential_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
     crop_map: ArrayInt32
     topwater: ArrayFloat32
     soil_layer_height_m: TwoDArrayFloat32
@@ -642,8 +643,6 @@ class HRUVariables(Bucket):
     leaf_area_index_grassland_like: TwoDArrayFloat32
     interception_capacity_forest_m: TwoDArrayFloat32
     interception_capacity_grassland_like_m: TwoDArrayFloat32
-    transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
-    potential_transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
     cell_length: ArrayFloat32
     water_depth_in_field: ArrayFloat32
     slope_m_per_m: ArrayFloat32

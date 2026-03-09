@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 import zipfile
 from typing import Any
 
@@ -48,23 +47,23 @@ class GRDC(Adapter):
 
         if not zarr_path.exists():
             print(f"Processing the downloaded GRDC data from {self.path}...")
+            netcdf_file = zarr_path.with_suffix(".nc")
             with zipfile.ZipFile(self.path, "r") as zip_file:
-                netcdf_files = [f for f in zip_file.namelist() if f.endswith(".nc")]
-                if len(netcdf_files) == 1:
-                    with (
-                        zip_file.open(netcdf_files[0]) as source,
-                        tempfile.NamedTemporaryFile(suffix=".nc") as tmp_file,
-                    ):
-                        tmp_file.write(source.read())
-                        tmp_file.flush()
+                with (
+                    zip_file.open("GRDC-Daily.nc") as source,
+                ):
+                    netcdf_file.write_bytes(source.read())
 
-                        # Open and process for Zarr with chunking
-                        ds = xr.open_dataset(tmp_file.name)
+                    with xr.open_dataset(
+                        netcdf_file, engine="netcdf4", cache=False
+                    ) as ds:
+                        data = ds.load()
 
-                        # Use -1 to indicate no chunking on other dimensions
-                        ds["runoff_mean"] = ds["runoff_mean"].chunk({"id": 100})
+                    data["runoff_mean"] = data["runoff_mean"].chunk({"id": 100})
 
-                        ds.to_zarr(zarr_path, mode="w", consolidated=False)
+                    data.to_zarr(zarr_path, mode="w", consolidated=False)
+
+                    netcdf_file.unlink()  # Remove the temporary .nc file
 
         return self
 
