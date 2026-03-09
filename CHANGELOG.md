@@ -5,6 +5,11 @@
 - Pre-process GRDC data to zarr with chunks for faster future reads.
 - Add object size profile when speed-profile is used.
 - Add version of when build was made.
+- Switch to Python 3.14
+- Make land surface build process more efficient and cleanup. As part of this update, only the original land cover within the SFINCS regions is saved. Therefore, this now depends on setup_coastal_sfincs_model_regions.
+
+To support this version:
+- Move `setup_coastlines` and `setup_coastal_sfincs_model_regions` to above `setup_regions_and_land_use` in your build.yml.
 
 # v1.0.0b13
 - combine fabdem loading of elevation and forcing for saving some data on disk

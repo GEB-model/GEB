@@ -1,6 +1,10 @@
 setup_region:
   subgrid_factor: 20
 
+setup_coastlines:
+
+setup_coastal_sfincs_model_regions:
+
 set_time_range:
   start_date: 1960-01-01
   end_date: 2024-12-31
@@ -377,8 +381,4 @@ setup_CO2_concentration:
 
 setup_global_ocean_mean_dynamic_topography:
 
-setup_coastlines:
-
 setup_osm_land_polygons:
-
-setup_coastal_sfincs_model_regions:
