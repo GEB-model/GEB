@@ -36,7 +36,6 @@ from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
-from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.zstd import ZstdCodec
 from zarr.errors import ZarrUserWarning
@@ -130,23 +129,33 @@ def read_grid(
 
 
 def read_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
+    filepath: Path,
+    layer: int | None = None,
+    return_transform_and_crs: bool = False,
 ) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
     """Load a raster grid from a .tif or .zarr file.
 
     Args:
         filepath: The path to the .tif or .zarr file.
-        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is 1.
+        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is None.
         return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
 
     Returns:
         The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
+
+    Raises:
+        ValueError: If layer is specified but data is not 3-dimensional.
     """
     store: zarr.storage.LocalStore = zarr.storage.LocalStore(filepath, read_only=True)
     group: zarr.Group = zarr.open_group(store, mode="r")
     data_array: zarr.Array | zarr.Group = group[filepath.stem]
     assert isinstance(data_array, zarr.Array)
-    data = data_array[:]
+    if layer is not None:
+        if not data_array.ndim == 3:
+            raise ValueError("Data must be 3-dimensional to select a layer")
+        data = data_array[layer]
+    else:
+        data = data_array[:]
     assert isinstance(data, np.ndarray)
     data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
     if data.dtype == np.float64:
@@ -500,7 +509,7 @@ def write_zarr(
     time_chunksize: int = 1,
     time_chunks_per_shard: int | None = 30,
     filters: list = [],
-    compressor: None | BytesBytesCodec = None,
+    compression_level: int = 22,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
@@ -515,7 +524,7 @@ def write_zarr(
         time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
             to disable sharding.
         filters: A list of filters to apply. Default is [].
-        compressor: The compressor to use. Default is None, using the default Blosc compressor.
+        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 22.
         progress: Whether to show a progress bar. Default is True.
 
     Returns:
@@ -584,10 +593,9 @@ def write_zarr(
                     time_chunks_per_shard * chunks["time"], da.time.size
                 )
 
-        if compressor is None:
-            compressor: ZstdCodec = ZstdCodec(
-                level=22,
-            )
+        compressor: ZstdCodec = ZstdCodec(
+            level=compression_level,
+        )
 
         check_buffer_size(da, chunks_or_shards=shards if shards else chunks)
 
