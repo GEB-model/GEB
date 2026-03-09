@@ -1858,20 +1858,20 @@ class CropFarmers(AgentBaseClass):
     def get_yield_ratio(
         self,
         harvest: np.ndarray,
-        actual_transpiration: npt.NDArray[np.float32],
-        potential_transpiration: npt.NDArray[np.float32],
-        actual_transpiration_per_crop_stage: npt.NDArray[np.float32],
-        potential_transpiration_per_crop_stage: npt.NDArray[np.float32],
+        actual_evapotranspiration: npt.NDArray[np.float32],
+        potential_evapotranspiration: npt.NDArray[np.float32],
+        actual_evapotranspiration_per_crop_stage: npt.NDArray[np.float32],
+        potential_evapotranspiration_per_crop_stage: npt.NDArray[np.float32],
         crop_map: np.ndarray,
     ) -> np.ndarray:
         """Gets yield ratio for each crop given the ratio between actual and potential evapostranspiration during growth.
 
         Args:
             harvest: Map of crops that are harvested.
-            actual_transpiration: Actual evapotranspiration during crop growth period.
-            potential_transpiration: Potential evapotranspiration during crop growth period.
-            actual_transpiration_per_crop_stage: Actual evapotranspiration per crop stage.
-            potential_transpiration_per_crop_stage: Potential evapotranspiration per crop stage.
+            actual_evapotranspiration: Actual evapotranspiration during crop growth period.
+            potential_evapotranspiration: Potential evapotranspiration during crop growth period.
+            actual_evapotranspiration_per_crop_stage: Actual evapotranspiration per crop stage.
+            potential_evapotranspiration_per_crop_stage: Potential evapotranspiration per crop stage.
             crop_map: Subarray of type of crop grown.
 
         Returns:
@@ -1883,12 +1883,12 @@ class CropFarmers(AgentBaseClass):
         if self.var.crop_data_type == "GAEZ":
             yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_GAEZ(
                 crop_map[harvest],
-                evaporation_ratio=actual_transpiration[harvest]
-                / potential_transpiration[harvest],
-                evaporation_ratio_per_crop_stage=actual_transpiration_per_crop_stage[
+                evaporation_ratio=actual_evapotranspiration[harvest]
+                / potential_evapotranspiration[harvest],
+                evaporation_ratio_per_crop_stage=actual_evapotranspiration_per_crop_stage[
                     :, harvest
                 ]
-                / potential_transpiration_per_crop_stage[:, harvest],
+                / potential_evapotranspiration_per_crop_stage[:, harvest],
                 KyT=self.var.crop_data["KyT"].values,
                 Ky1=self.var.crop_data["Ky1"].values,
                 Ky2a=self.var.crop_data["Ky2a"].values,
@@ -1900,7 +1900,8 @@ class CropFarmers(AgentBaseClass):
         elif self.var.crop_data_type == "MIRCA2000":
             yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_MIRCA2000(
                 crop_map[harvest],
-                actual_transpiration[harvest] / potential_transpiration[harvest],
+                actual_evapotranspiration[harvest]
+                / potential_evapotranspiration[harvest],
                 self.var.crop_data["a"].values,
                 self.var.crop_data["b"].values,
                 self.var.crop_data["P0"].values,
@@ -2052,11 +2053,11 @@ class CropFarmers(AgentBaseClass):
             # Get yield ratio for the harvested crops
             yield_ratio_per_field = self.get_yield_ratio(
                 harvest,
-                self.HRU.var.actual_evapotranspiration_crop_life,
-                self.HRU.var.potential_evapotranspiration_crop_life,
-                self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage,
-                self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage,
-                self.HRU.var.crop_map,
+                actual_evapotranspiration=self.HRU.var.actual_evapotranspiration_crop_life,
+                potential_evapotranspiration=self.HRU.var.potential_evapotranspiration_crop_life,
+                actual_evapotranspiration_per_crop_stage=self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage,
+                potential_evapotranspiration_per_crop_stage=self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage,
+                crop_map=self.HRU.var.crop_map,
             )
             assert (yield_ratio_per_field >= 0).all()
 
