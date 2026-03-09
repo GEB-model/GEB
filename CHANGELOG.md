@@ -10,6 +10,7 @@
 - Yield is now computed from actual evapotranspiration and potential evapotranspiration rather than acual transpiration and potential transpiration. This is in line with GAEZ documentation, and also fixes a divide by 0 error.
 
 To support this version:
+- Update to Python 3.14. If using uv, first ensure it uv is updated `uv self update`, then run `uv sync` to update Python and packages.
 - Move `setup_coastlines` and `setup_coastal_sfincs_model_regions` to above `setup_regions_and_land_use` in your build.yml.
 
 # v1.0.0b13
