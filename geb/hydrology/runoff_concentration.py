@@ -70,7 +70,7 @@ def apply_triangular(
         hourly_inflow_m: 2D array with shape (24, n_cells) containing
             the hourly inflow for the current day.
         weights: 1D array with shape (lag_time_hours,) containing the triangular weights.
-        buffer_m: 2D array with shape (lag_time_hours, n_cells) representing
+        buffer_m: 2D array with shape (lag_time_hours, n_cells) representing rolling buffer to accumulate weighted inflow. This array is modified in place.
 
     """
     buffer_size_hours: int = len(weights)
