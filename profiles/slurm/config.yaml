@@ -9,7 +9,10 @@
 executor: slurm
 
 # Job management
-jobs: 8
+# 7 = cluster limit for concurrent jobs (excluding the coordinator job itself).
+# All 18 cluster jobs are submitted upfront; SLURM queues them and starts each
+# one as soon as a node becomes free.
+jobs: 7
 max-jobs-per-second: 2
 max-status-checks-per-second: 0.5
 

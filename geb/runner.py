@@ -1163,12 +1163,12 @@ def init_multiple_fn(
     geometry_bounds: str,
     target_area_km2: float,
     cluster_prefix: str,
+    init_multiple_dir: str,
     region_shapefile: str | None = None,
     skip_merged_geometries: bool = False,
     skip_visualization: bool = False,
     min_bbox_efficiency: float = 0.99,
     ocean_outlets_only: bool = False,
-    init_multiple_dir: str = "large_scale",
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -1186,10 +1186,11 @@ def init_multiple_fn(
         skip_visualization: If True, skip creating visualization map (faster).
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
         ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
-        init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created.
+        init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created (e.g. 'large_scale' or 'large_scale2').
 
     Raises:
-        FileNotFoundError: If the example folder does not exist.
+        FileNotFoundError: If the example folder does not exist, or if the parent
+            models/ directory does not exist.
         ValueError: If geometry_bounds format is invalid.
     """
     # set paths
@@ -1202,8 +1203,16 @@ def init_multiple_fn(
     data_catalog_instance = NewDataCatalog()
     logger = create_logger(working_directory / "init_multiple.log")
 
-    # Create the models/init_multiple_dir directory structure
+    # Create the models/init_multiple_dir directory structure.
+    # models_dir is the parent 'models' folder expected at <cwd>/../models;
+    # init_multiple_dir_path is the target subdirectory to create.
     models_dir = Path.cwd().parent / "models"
+    if not models_dir.is_dir():
+        raise FileNotFoundError(
+            f"Models directory not found: {models_dir}\n"
+            "Run 'geb init-multiple' from within the GEB repository root, "
+            f"or ensure a 'models' directory exists at {models_dir}."
+        )
     init_multiple_dir_path: Path = models_dir / init_multiple_dir
     init_multiple_dir_path.mkdir(parents=True, exist_ok=True)
 
