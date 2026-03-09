@@ -68,7 +68,7 @@ def load_soilgrids(
         ds_variable: xr.DataArray = ds_variable.where(
             ~mask, ds_variable.attrs["_FillValue"]
         )
-        ds_variable = ds_variable.rio.set_crs(4326)
+        ds_variable = ds_variable.rio.write_crs(4326)
         ds_variable.name = variable_name
         ds.append(ds_variable)
 
