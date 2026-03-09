@@ -173,6 +173,8 @@ def create_logger(fp: Path) -> logging.Logger:
     # remove any previous handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
+
+    logger.propagate = False
     # set log level to debug
     logger.setLevel(logging.DEBUG)
     # create console handler and set level to debug
@@ -233,7 +235,9 @@ def run_model_with_method(
         command: list[str] = [sys.executable, "-O"] + sys.argv
         raise SystemExit(subprocess.run(command).returncode)
 
-    def run_operation(close_after_run: bool = close_after_run) -> Any:
+    def run_operation(
+        close_after_run: bool = close_after_run, logger: logging.Logger | None = None
+    ) -> Any:
         from geb.config_schema import Config
 
         config_parsed: dict[str, Any] = parse_config(config, schema=Config)
@@ -243,7 +247,12 @@ def run_model_with_method(
             else config_parsed["general"]["files"]
         )
 
-        geb = GEBModel(config=config_parsed, files=files, timing=timing)
+        geb = GEBModel(
+            config=config_parsed,
+            files=files,
+            timing=timing,
+            logger=logger,
+        )
         result = geb
         if method is not None:
             result = getattr(geb, method)(**method_args)
