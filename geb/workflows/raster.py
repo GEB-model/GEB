@@ -1491,6 +1491,7 @@ def create_temp_zarr(
             time_chunksize=time_chunksize,
             time_chunks_per_shard=time_chunks_per_shard,
             progress=True,
+            compression_level=1,
         )
         yield temp_da
 
