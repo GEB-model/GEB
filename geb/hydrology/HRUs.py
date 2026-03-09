@@ -616,8 +616,10 @@ class HRUVariables(Bucket):
     nearest_river_grid_cell: ArrayInt32
     linear_mapping: TwoDArrayInt32
     crop_age_days_map: ArrayInt32
-    potential_transpiration_crop_life: ArrayFloat32
-    transpiration_crop_life: ArrayFloat32
+    potential_evapotranspiration_crop_life: ArrayFloat32
+    actual_evapotranspiration_crop_life: ArrayFloat32
+    actual_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
+    potential_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
     crop_map: ArrayInt32
     topwater: ArrayFloat32
     soil_layer_height_m: TwoDArrayFloat32
@@ -641,8 +643,6 @@ class HRUVariables(Bucket):
     leaf_area_index_grassland_like: TwoDArrayFloat32
     interception_capacity_forest_m: TwoDArrayFloat32
     interception_capacity_grassland_like_m: TwoDArrayFloat32
-    transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
-    potential_transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
     cell_length: ArrayFloat32
     water_depth_in_field: ArrayFloat32
     slope_m_per_m: ArrayFloat32

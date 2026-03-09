@@ -7,6 +7,7 @@
 - Add version of when build was made.
 - Switch to Python 3.14
 - Make land surface build process more efficient and cleanup. As part of this update, only the original land cover within the SFINCS regions is saved. Therefore, this now depends on setup_coastal_sfincs_model_regions.
+- Yield is now computed from actual evapotranspiration and potential evapotranspiration rather than acual transpiration and potential transpiration. This is in line with GAEZ documentation, and also fixes a divide by 0 error.
 
 To support this version:
 - Move `setup_coastlines` and `setup_coastal_sfincs_model_regions` to above `setup_regions_and_land_use` in your build.yml.

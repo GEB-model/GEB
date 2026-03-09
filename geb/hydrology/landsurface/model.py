@@ -189,6 +189,7 @@ def land_surface_model(
     ArrayFloat32,
     ArrayFloat32,
     ArrayFloat32,
+    ArrayFloat32,
 ]:
     """The main land surface model of GEB.
 
@@ -270,6 +271,7 @@ def land_surface_model(
         - bare_soil_evaporation: Evaporation from bare soil in meters.
         - transpiration_m: Transpiration in meters.
         - potential_transpiration_m: Potential transpiration in meters.
+        - potential_evapotranspiration_m: Potential evapotranspiration in meters.
     """
     CO2_induced_crop_factor_adustment = get_CO2_induced_crop_factor_adustment(CO2_ppm)
 
@@ -297,6 +299,7 @@ def land_surface_model(
     open_water_evaporation_m = np.zeros_like(snow_water_equivalent_m)
     bare_soil_evaporation = np.zeros_like(snow_water_equivalent_m)
     potential_transpiration_m = np.zeros_like(snow_water_equivalent_m)
+    potential_evapotranspiration_m = np.zeros_like(snow_water_equivalent_m)
     transpiration_m = np.zeros_like(snow_water_equivalent_m)
     groundwater_recharge_m = np.zeros_like(snow_water_equivalent_m)
 
@@ -439,23 +442,24 @@ def land_surface_model(
 
             sublimation_m[i] += sublimation_m_cell_hour
 
-            potential_evapotranspiration_m: np.float32 = get_potential_evapotranspiration(
+            potential_evapotranspiration_m_cell: np.float32 = get_potential_evapotranspiration(
                 reference_evapotranspiration_grass_m=reference_evapotranspiration_grass_m_hour_cell,
                 crop_factor=crop_factor[i],
                 CO2_induced_crop_factor_adustment=CO2_induced_crop_factor_adustment,
             )
+            potential_evapotranspiration_m[i] += potential_evapotranspiration_m_cell
 
             (
                 potential_transpiration_m_cell_hour,
                 potential_direct_evaporation_m,  # Updates the potential direct evaporation
             ) = get_potential_transpiration(
-                potential_evapotranspiration_m=potential_evapotranspiration_m,
+                potential_evapotranspiration_m=potential_evapotranspiration_m_cell,
                 leaf_area_index=leaf_area_index[i],
             )
 
             potential_interception_evaporation_m: np.float32 = get_potential_interception_evaporation(
                 reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m_hour_cell,
-                potential_evapotranspiration_m=potential_evapotranspiration_m,
+                potential_evapotranspiration_m=potential_evapotranspiration_m_cell,
             )
             (
                 interception_storage_m[i],
@@ -1044,6 +1048,7 @@ def land_surface_model(
         bare_soil_evaporation,
         transpiration_m,
         potential_transpiration_m,
+        potential_evapotranspiration_m,
         soil_boundary_enthalpy_flux_J_per_m2,
         rain_advection_enthalpy_flux_J_per_m2,
         evaporative_cooling_enthalpy_loss_J_per_m2,
@@ -1911,6 +1916,7 @@ class LandSurface(Module):
             bare_soil_evaporation_m,
             transpiration_m,
             potential_transpiration_m,
+            potential_evapotranspiration_m,
             soil_boundary_enthalpy_flux_J_per_m2,
             rain_advection_enthalpy_flux_J_per_m2,
             evaporative_cooling_enthalpy_loss_J_per_m2,
@@ -2044,18 +2050,18 @@ class LandSurface(Module):
 
         growing_crop_mask = self.HRU.var.crop_map != -1
 
-        self.HRU.var.transpiration_crop_life[growing_crop_mask] += transpiration_m[
-            growing_crop_mask
-        ]
-        self.HRU.var.potential_transpiration_crop_life[growing_crop_mask] += (
-            potential_transpiration_m[growing_crop_mask]
+        self.HRU.var.actual_evapotranspiration_crop_life[growing_crop_mask] += (
+            actual_evapotranspiration_m[growing_crop_mask]
         )
-        self.HRU.var.transpiration_crop_life_per_crop_stage[
+        self.HRU.var.potential_evapotranspiration_crop_life[growing_crop_mask] += (
+            potential_evapotranspiration_m[growing_crop_mask]
+        )
+        self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage[
             crop_sub_stage[growing_crop_mask], growing_crop_mask
-        ] += transpiration_m[growing_crop_mask]
-        self.HRU.var.potential_transpiration_crop_life_per_crop_stage[
+        ] += actual_evapotranspiration_m[growing_crop_mask]
+        self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage[
             crop_sub_stage[growing_crop_mask], growing_crop_mask
-        ] += potential_transpiration_m[growing_crop_mask]
+        ] += potential_evapotranspiration_m[growing_crop_mask]
 
         reference_evapotranspiration_water_m = self.hydrology.to_grid(
             HRU_data=reference_evapotranspiration_water_m,
