@@ -106,18 +106,6 @@ def write_array(arr: np.ndarray, fp: Path) -> None:
 
 @overload
 def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
-) -> TwoDArray: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
-) -> tuple[TwoDArray, Affine, str]: ...
-
-
-@overload
-def read_grid(
     filepath: Path, layer: None = None, return_transform_and_crs: bool = False
 ) -> ThreeDArray: ...
 
@@ -126,6 +114,18 @@ def read_grid(
 def read_grid(
     filepath: Path, layer: None = None, return_transform_and_crs: bool = True
 ) -> tuple[ThreeDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+) -> TwoDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+) -> tuple[TwoDArray, Affine, str]: ...
 
 
 def read_grid(
