@@ -289,7 +289,7 @@ def test_spinup() -> None:
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
         geb: GEBModel = run_model_with_method(
-            method="spinup", **args, close_after_run=False
+            method="spinup", **args, close_after_run=False, timing=True
         )
 
         routing_report_folder: Path = (
