@@ -18,7 +18,7 @@ The figure below shows a schematic overview of GEB.
 
 GEB builds on, couples and extends several models, depicted in the figure below.
 
-![image](images/models_overview.svg)
+![image](https://raw.githubusercontent.com/GEB-model/GEB/refs/heads/jens-optimize-forcing-build/docs/images/models_overview.svg)
 
 1.  Burek, Peter, et al. "Development of the Community Water Model (CWatM v1.04) A high-resolution hydrological model for global and regional assessment of integrated water resources management." (2019).
 2.  Langevin, Christian D., et al. Documentation for the MODFLOW 6 groundwater flow model. No. 6-A55. US Geological Survey, 2017.
