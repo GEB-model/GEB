@@ -434,7 +434,7 @@ def _dump_ram_object_profile(name: str, date: str, keep_alive: Any = None) -> No
                 usage = obj.memory_usage(deep=True)
                 return int(usage.sum() if hasattr(usage, "sum") else usage)
             return sys.getsizeof(obj)
-        except (ReferenceError, AttributeError):
+        except ReferenceError, AttributeError:
             # If the object died or is inaccessible, it's essentially 0 bytes now
             return 0
 
@@ -457,7 +457,7 @@ def _dump_ram_object_profile(name: str, date: str, keep_alive: Any = None) -> No
             size = get_deep_size(obj)
             if size > 0:
                 objects_with_sizes.append((obj, size))
-        except (ReferenceError, AttributeError):
+        except ReferenceError, AttributeError:
             continue
 
     # Get total memory and count
