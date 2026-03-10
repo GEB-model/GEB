@@ -124,11 +124,9 @@ class GEBModel(Module):
         for v_str in VERSION_UPDATES.keys():
             v = Version(v_str)
             if v > stored_v and v <= current_v and VERSION_UPDATES[v_str]:
-                self.logger.error(
-                    f"Version mismatch: input data version is {version_info}, but current model version is {__version__}. "
-                    "Please run 'geb update-version' to update the model to the current version."
-                )
-                exit(1)
+                error = f"Version mismatch: input data version is {version_info}, but current model version is {__version__}. Please run 'geb update-version' to update the model to the current version."
+                self.logger.error(error)
+                raise RuntimeError(error)
 
     def restore(self, store_location: Path, timestep: int, n_timesteps: int) -> None:
         """Restore the model state to the original state given by the function input.
