@@ -28,6 +28,7 @@ import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
+from packaging.version import Version
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
@@ -36,6 +37,7 @@ from shapely.ops import unary_union
 from geb import GEB_PACKAGE_DIR, __version__
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
+from geb.build.version_updates import VERSION_UPDATES
 from geb.workflows.io import (
     read_params,
     write_array,
@@ -2006,6 +2008,66 @@ class GEBModel(
         self.other = DelayedReader(reader=read_zarr)
         self.files = {}
 
+        self.maybe_update_version()
+
+    def set_current_version(self) -> None:
+        """Set the current version in the version file."""
+        self.logger.info(
+            f"Setting version in version file to current version: {__version__}"
+        )
+        self.version_path.write_text(__version__)
+
+    def version_is_current(self) -> bool:
+        """Check if the version in the version file is the same as the current version.
+
+        Returns:
+            True if the version is current, False otherwise.
+        """
+        if not self.version_path.exists():
+            return False
+        version_info = self.version_path.read_text()
+        return version_info == __version__
+
+    def maybe_update_version(self) -> None:
+        """Check if the version in the version file is the same as the current version.
+
+        If the version is not current, print a warning with the updates that need to be made to update to the current version.
+        """
+        # No version file exists, so we create one with the current version
+        if not self.version_path.exists():
+            self.set_current_version()
+            return
+        version_info = self.version_path.read_text()
+        if self.version_is_current():
+            self.logger.info("Version is already current.")
+        else:
+            self.logger.warning(
+                f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
+            )
+            # Find and print all updates between the stored version and the current version
+            current_v = Version(__version__)
+            stored_v = Version(version_info)
+
+            versions = sorted(VERSION_UPDATES.keys(), key=Version)
+            updates_to_print = []
+            for v_str in versions:
+                v = Version(v_str)
+                if v > stored_v and v <= current_v:
+                    updates_to_print.extend(VERSION_UPDATES[v_str])
+
+            if updates_to_print:
+                updates_msg = "\n- ".join(updates_to_print)
+                self.set_current_version()
+                self.logger.warning(
+                    f"Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE."
+                )
+                exit(1)
+            else:
+                self.logger.info(
+                    "No specific updates found for this version. Updated version file."
+                )
+                self.set_current_version()
+
     @property
     def logger(self) -> logging.Logger:
         """Get the logger."""
@@ -3474,6 +3536,7 @@ class GEBModel(
 
         Raises:
             ValueError: If "setup_region" is not in methods when building a new model.
+            ValueError: If continue is requested but the code version does not match the build version.
         """
         methods: dict[str, dict[str, Any]] = methods or {}
         if "setup_region" not in methods:
@@ -3486,14 +3549,21 @@ class GEBModel(
 
         # if not continuing, remove existing files path
         if continue_:
+            if not self.version_is_current():
+                raise ValueError(
+                    "Cannot continue build: version mismatch. The version of the existing build is different from the current version of the code. This likely means that the code was updated since the last build. To continue, either restore the old version of the code or start a new build."
+                )
+
             self.read()
         else:
             # for new build, remove existing files path and progress file
             self.files_path.unlink(missing_ok=True)
             self.progress_path.unlink(missing_ok=True)
-            self.version_path.unlink(missing_ok=True)
 
-            self.version_path.write_text(__version__)
+            # Fresh build so remove the version file and set
+            # to current version.
+            self.version_path.unlink(missing_ok=True)
+            self.set_current_version()
 
         self.run_methods(
             methods,

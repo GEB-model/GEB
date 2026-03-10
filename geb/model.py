@@ -14,9 +14,11 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
+from packaging.version import Version
 
-from geb import GEB_PACKAGE_DIR
+from geb import GEB_PACKAGE_DIR, __version__
 from geb.agents import Agents
+from geb.build.version_updates import VERSION_UPDATES
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
@@ -81,6 +83,8 @@ class GEBModel(Module):
                 "Mode must be either 'r' (read) or 'w' (write)"
             )  # validate mode
 
+        self.check_data_version()
+
         Module.__init__(self, self, create_var=False)  # initialize the Module class
 
         self._multiverse_name = None  # name of the multiverse, if any
@@ -97,6 +101,34 @@ class GEBModel(Module):
         self.evaluator = Evaluate(self)  # initialize the evaluator
 
         self.plantFATE = []  # Empty list to hold plantFATE models. If forests are not used, this will be empty
+
+    def check_data_version(self) -> None:
+        """Check if the model version of the data matches the current model version.
+
+        If the version file does not exist, it will ignore the check.
+        If the version file exists, but there are no updates between the data version
+        and the current model version, it will also ignore the check.
+        """
+        version_path = self.input_folder / "version.txt"
+        if not version_path.exists():
+            return
+
+        version_info = version_path.read_text()
+        if Version(version_info) == Version(__version__):
+            return
+
+        # find and print all updates between the stored version and the current version
+        current_v = Version(__version__)
+        stored_v = Version(version_info)
+
+        for v_str in VERSION_UPDATES.keys():
+            v = Version(v_str)
+            if v > stored_v and v <= current_v and VERSION_UPDATES[v_str]:
+                self.logger.error(
+                    f"Version mismatch: input data version is {version_info}, but current model version is {__version__}. "
+                    "Please run 'geb update-version' to update the model to the current version."
+                )
+                exit(1)
 
     def restore(self, store_location: Path, timestep: int, n_timesteps: int) -> None:
         """Restore the model state to the original state given by the function input.
