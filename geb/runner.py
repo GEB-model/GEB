@@ -972,6 +972,58 @@ def alter_fn(
         )
 
 
+def update_version_fn(
+    data_catalog: Path = DATA_CATALOG_DEFAULT,
+    config: Path | dict[str, Any] = CONFIG_DEFAULT,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    data_provider: str = DATA_PROVIDER_DEFAULT,
+    data_root: Path = DATA_ROOT_DEFAULT,
+    profile_speed: bool = PROFILE_SPEED_DEFAULT,
+    profile_ram: bool = PROFILE_RAM_DEFAULT,
+    **kwargs: Any,
+) -> None:
+    """Update the model version file to the current model version.
+
+    This function initializes the GEBModelBuild, which automatically checks and updates
+    the version file if it is outdated, printing any necessary update instructions.
+
+    Args:
+        data_catalog: Path to the data catalog file.
+        config: Path to the model configuration file.
+        working_directory: Working directory for the model.
+        data_provider: Data variant to use from data catalog.
+        data_root: Root folder where the data is located.
+        profile_speed: If True, run the update flow with speed profiling.
+        profile_ram: If True, run the update flow with RAM profiling.
+        **kwargs: Additional keyword arguments.
+    """
+
+    def update_version_operation() -> None:
+        parsed_config = parse_config(config, schema=Config)
+        input_folder = Path(parsed_config["general"]["input_folder"])
+        custom_model = (
+            parsed_config["general"]["custom_model"]
+            if "custom_model" in parsed_config["general"]
+            else None
+        )
+
+        data_catalog_path = customize_data_catalog(data_catalog, data_root=data_root)
+        logger = create_logger(Path("update-version.log"))
+
+        builder_class = get_model_builder_class(custom_model)
+        builder_class(
+            logger=logger,
+            root=input_folder,
+            data_catalog=str(data_catalog_path),
+            data_provider=data_provider,
+        )
+
+    with WorkingDirectory(working_directory):
+        _run_with_optional_profiling(
+            profile_speed, profile_ram, update_version_operation, name="update-version"
+        )
+
+
 def update_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,

@@ -35,6 +35,7 @@ from geb.runner import (
     set_fn,
     share_fn,
     update_fn,
+    update_version_fn,
 )
 from geb.workflows.io import WorkingDirectory
 from geb.workflows.raster import rechunk_zarr_file
@@ -510,6 +511,17 @@ def update(*args: Any, **kwargs: Any) -> None:
         **kwargs: Keyword arguments to pass to the update function.
     """
     update_fn(*args, **kwargs)
+
+
+@cli.command()
+@click_build_options()
+def update_version(*args: Any, **kwargs: Any) -> None:
+    """Update the model version file to the current model version.
+
+    This command initializes the GEBModel, which automatically checks and updates
+    the version file if it is outdated, printing any necessary update instructions.
+    """
+    update_version_fn(*args, **kwargs)
 
 
 @cli.command(
