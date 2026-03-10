@@ -752,6 +752,17 @@ def test_kinematic(
         dt=15,
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
+        # retention arrays: full arrays for all river cells
+        retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
+        retention_max_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
+        retention_node_id=np.full(mask.sum(), -1, dtype=np.int32),
+        controlled_retention=np.zeros(mask.sum(), dtype=bool),
+        retention_activation_threshold_controlled_m3_s=np.zeros(
+            mask.sum(), dtype=np.float32
+        ),
+        retention_activation_threshold_uncontrolled_m3_s=np.zeros(
+            mask.sum(), dtype=np.float32
+        ),
     )
 
     sideflow = np.array(
@@ -764,10 +775,33 @@ def test_kinematic(
         dtype=np.float32,
     )[mask]
 
-    router.step(
+    (
+        Q_new,
+        actual_evaporation_m3,
+        over_abstraction_m3,
+        waterbody_storage_m3,
+        waterbody_inflow_m3,
+        outflow_at_pits_m3,
+        retention_storage_m3_out,
+        retention_inflow_m3,
+        retention_outflow_m3,
+    ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=np.ndarray(0, dtype=np.float64),
+        retention_max_storage_m3=np.ndarray(0, dtype=np.float64),
+        retention_node_id=np.ndarray(0, dtype=np.int32),
+        controlled_retention=np.ndarray(0, dtype=bool),
+        retention_activation_threshold_controlled_m3_s=np.ndarray(0, dtype=np.float64),
+        retention_activation_threshold_uncontrolled_m3_s=np.ndarray(
+            0, dtype=np.float64
+        ),
     )
+
+    # Optional: simple assertions to check results are numeric and non-negative
+    assert Q_new.shape[0] == mask.sum()
+    assert not np.isnan(Q_new).any()
+    assert (Q_new >= 0.0).all()
