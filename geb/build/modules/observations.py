@@ -55,14 +55,14 @@ def process_station_data(
 
     # Resample to hourly if frequency is higher than hourly (e.g., 15 min -> 1 h).
     # If frequency is already hourly or lower (e.g., daily), keep as is.
-    assert Q_station.index.freq is not None  # ty:ignore[possibly-missing-attribute]
-    if Q_station.index.freq < pd.Timedelta(hours=1):  # ty:ignore[possibly-missing-attribute]
+    assert Q_station.index.freq is not None  # ty:ignore[unresolved-attribute]
+    if Q_station.index.freq < pd.Timedelta(hours=1):  # ty:ignore[unresolved-attribute]
         Q_station = Q_station.resample("h", label="left").mean()
-    elif Q_station.index.freq > pd.Timedelta(  # ty:ignore[possibly-missing-attribute]
+    elif Q_station.index.freq > pd.Timedelta(  # ty:ignore[unresolved-attribute]
         hours=1
-    ) and Q_station.index.freq < pd.Timedelta(days=1):  # ty:ignore[possibly-missing-attribute]
+    ) and Q_station.index.freq < pd.Timedelta(days=1):  # ty:ignore[unresolved-attribute]
         Q_station = Q_station.resample("D", label="left").mean()
-    elif Q_station.index.freq > pd.Timedelta(days=1):  # ty:ignore[possibly-missing-attribute]
+    elif Q_station.index.freq > pd.Timedelta(days=1):  # ty:ignore[unresolved-attribute]
         raise ValueError(
             f"Time step of station {station} is larger than 1 day. Please ensure the time step is hourly or daily."
         )
@@ -148,20 +148,28 @@ class Observations(BuildModelBase):
             crs="EPSG:4326",
         )
 
-        # Assume GRDC is daily and extract it
-        if "runoff_mean" in discharge_observations.data_vars:
-            obs_daily = (
-                discharge_observations.runoff_mean.astype(np.float32)
-                .to_dataframe()
-                .reset_index()
-                .pivot(index="time", columns="id", values="runoff_mean")
-            )
-            obs_daily.index.name = "time"
-            # Replace -999 with NaN in GRDC data
-            obs_daily = obs_daily.replace(-999, np.nan)
-
         # Track which IDs belong to which frequency
         hourly_ids = set()
+        daily_ids = set()
+
+        # Filter metadata by region first
+        region_obs_metadata = obs_metadata[
+            obs_metadata.geometry.within(region_mask.geometry.union_all())
+        ]
+
+        needed_ids = region_obs_metadata["discharge_observations_station_ID"].tolist()
+
+        # Select only filtered IDs from the xarray dataset before converting to dataframe
+        obs_daily = (
+            discharge_observations.runoff_mean.sel(id=needed_ids)
+            .astype(np.float32)
+            .to_dataframe()
+            .reset_index()
+            .pivot(index="time", columns="id", values="runoff_mean")
+        )
+        obs_daily.index.name = "time"
+        # Replace -999 with NaN in GRDC data
+        obs_daily = obs_daily.replace(-999, np.nan)
         daily_ids = set(obs_daily.columns.tolist())
 
         if custom_river_stations is not None:

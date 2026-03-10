@@ -20,6 +20,7 @@ libmf6.so
 ssh_script
 .gemini/
 /model/
+._.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

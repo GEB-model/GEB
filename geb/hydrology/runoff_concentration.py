@@ -5,13 +5,109 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+from numba import njit
 
-from geb.geb_types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.module import Module
 from geb.workflows import balance_check
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
+
+
+def triangular_weights(peak_hour: float, lag_time_hours: int) -> ArrayFloat32:
+    """Compute triangular weights for given peak lag time.
+
+    Args:
+        peak_hour: Peak lag time in hours.
+        lag_time_hours: Maximum lag time in hours.
+
+    Returns:
+        1D array of shape (lag_time_hours,) containing the weights.
+    """
+    weights: ArrayFloat32 = np.zeros(lag_time_hours, dtype=np.float32)
+    accumulated_area_prev: float = 0.0
+    normalization_factor: float = 2.0 * peak_hour**2
+
+    for lag in range(lag_time_hours):
+        hour_index = float(lag + 1)
+        # Mirror index for the falling limb of the triangle
+        falling_limb_index: float = 2.0 * peak_hour - hour_index
+
+        # Area under the rising limb: (t^2) / (2 * peak^2)
+        rising_area_fraction: float = (hour_index**2) / normalization_factor
+        # Area under the falling limb: 1 - ((2*peak - t)^2) / (2 * peak^2)
+        falling_area_fraction: float = (
+            1.0 - (falling_limb_index**2) / normalization_factor
+        )
+
+        if hour_index <= peak_hour:
+            accumulated_area_current: float = rising_area_fraction
+        else:
+            accumulated_area_current: float = falling_area_fraction
+
+        # Clamp at 1.0 if we go beyond the base of the triangle
+        if falling_limb_index <= 0.0:
+            accumulated_area_current = 1.0
+
+        weight: float = accumulated_area_current - accumulated_area_prev
+        accumulated_area_prev = accumulated_area_current
+        weights[lag] = float(weight)
+
+    weights /= weights.sum()  # ensure sum is exactly 1.0
+    return weights
+
+
+@njit(cache=True)
+def apply_triangular(
+    hourly_inflow_m: TwoDArrayFloat32,  # shape (24, n_cells)
+    weights: ArrayFloat32,  # shape (lag_time_hours,)
+    buffer_m: TwoDArrayFloat32,  # shape (lag_time_hours, n_cells)
+) -> None:
+    """Apply triangular weighting to distribute hourly inflow into a buffer.
+
+    Args:
+        hourly_inflow_m: 2D array with shape (24, n_cells) containing
+            the hourly inflow for the current day.
+        weights: 1D array with shape (lag_time_hours,) containing the triangular weights.
+        buffer_m: 2D array with shape (lag_time_hours, n_cells) representing rolling buffer to accumulate weighted inflow. This array is modified in place.
+
+    """
+    buffer_size_hours: int = len(weights)
+    daily_timesteps: int = hourly_inflow_m.shape[0]  # = 24 hours
+
+    # For each hourly timestep in the current day
+    for t in range(daily_timesteps):
+        inflow_at_hour_t = hourly_inflow_m[t]  # shape (n_cells,)
+
+        # Distribute the inflow at hour t over the future lag period
+        for k in range(buffer_size_hours):
+            weight = weights[k]
+            if weight == 0.0:
+                continue
+
+            # Calculate the target hour in the buffer
+            target_hour_index = t + k
+            if target_hour_index < buffer_size_hours:
+                buffer_m[target_hour_index] += weight * inflow_at_hour_t
+
+
+def advance_buffer(buffer_m: TwoDArrayFloat32, timesteps_to_advance_hours: int) -> None:
+    """Shift buffer forward by a given number of hours, removing handled water.
+
+    Args:
+        buffer_m: The rolling water buffer.
+        timesteps_to_advance_hours: Number of hours (typically 24) to advance.
+    """
+    buffer_capacity_hours = buffer_m.shape[0]
+    if timesteps_to_advance_hours >= buffer_capacity_hours:
+        buffer_m[:] = 0.0
+        return
+
+    # Shift flow forward in time
+    buffer_m[:-timesteps_to_advance_hours] = buffer_m[timesteps_to_advance_hours:]
+    # Reset the trailing part of the buffer
+    buffer_m[-timesteps_to_advance_hours:] = 0.0
 
 
 class RunoffConcentrator(Module):
@@ -22,14 +118,12 @@ class RunoffConcentrator(Module):
     rolling buffer to carry over runoff to future days.
     """
 
-    overland_runoff_storage_end_m3: np.float64
-
     def __init__(
         self,
         model: GEBModel,
         hydrology: Hydrology,
-        lagtime: int = 48,
-        runoff_peak: float = 3.0,
+        lag_time_hours: int = 48,
+        runoff_peak_hour: float = 3.0,
     ) -> None:
         """Initialize the runoff concentrator model.
 
@@ -38,8 +132,11 @@ class RunoffConcentrator(Module):
         Args:
             model: The GEB model instance.
             hydrology: The hydrology module instance.
-            lagtime: int = 48 hours,
-            runoff_peak: float = 3.0 hours,
+            lag_time_hours: int = 48 hours,
+            runoff_peak_hour: float = 3.0 hours,
+
+        Raises:
+            ValueError: If lag_time_hours is insufficient for the given runoff_peak_hour.
         """
         super().__init__(model)
         self.hydrology = hydrology
@@ -47,87 +144,40 @@ class RunoffConcentrator(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.lagtime: int = lagtime
-        self.runoff_peak: float = runoff_peak
-        self.overland_runoff_storage_end_m3 = np.float64(0.0)
+        self.lag_time_hours: int = lag_time_hours
+        self.runoff_peak_hour: float = runoff_peak_hour
 
-        # precompute triangular weights
-        self.weights_runoff = self._triangular_weights(runoff_peak)
+        # Check if lag time is sufficient to contain the triangular weighting of the entire day.
+        # The base of the triangle is at 2 * peak_hour. The latest runoff comes at hour 24.
+        max_required_buffer_hours = 24 + int(np.ceil(2 * runoff_peak_hour))
+        if lag_time_hours < max_required_buffer_hours:
+            raise ValueError(
+                f"Insufficient lag_time_hours ({lag_time_hours}). "
+                f"For a peak of {runoff_peak_hour}h, the buffer must be at least "
+                f"{max_required_buffer_hours} hours to avoid losing water at the end of the day."
+            )
 
         if self.model.in_spinup:
             self.spinup()
 
-    def _triangular_weights(self, peak: float) -> ArrayFloat64:
-        """Compute triangular weights for given peak lag time.
-
-        Returns:
-            1D array of shape (lagtime,) containing the weights.
-        """
-        weights: ArrayFloat64 = np.zeros(self.lagtime, dtype=np.float64)
-        areaFractionOld: float = 0.0
-        div: float = 2.0 * peak**2
-
-        for lag in range(self.lagtime):
-            lag1 = float(lag + 1)
-            lag1alt: float = 2.0 * peak - lag1
-            area: float = (lag1**2) / div
-            areaAlt: float = 1.0 - (lag1alt**2) / div
-
-            if lag1 <= peak:
-                areaFractionSum: float = area
-            else:
-                areaFractionSum: float = areaAlt
-
-            if lag1alt <= 0.0:
-                areaFractionSum = 1.0
-
-            areaFraction: float = areaFractionSum - areaFractionOld
-            areaFractionOld: float = areaFractionSum
-            weights[lag] = areaFraction
-
-        weights /= weights.sum()  # normalize
-        return weights
-
     def _apply_triangular(
         self,
-        flow: TwoDArrayFloat64,  # shape (24, n_cells)
-        weights: ArrayFloat64,  # shape (lagtime,)
+        hourly_inflow_m: TwoDArrayFloat32,  # shape (24, n_cells)
+        weights: ArrayFloat32,  # shape (lag_time_hours,)
     ) -> None:
-        """Apply triangular weighting to the flow and update the buffer."""
-        lag: int = len(weights)
-        n_steps: int = flow.shape[0]  # = 24
+        """Apply triangular weighting to distribute hourly inflow into the model's buffer."""
+        apply_triangular(hourly_inflow_m, weights, self.grid.var.overland_flow_buffer)
 
-        # For each hourly timestep
-        for t in range(n_steps):
-            ft = flow[t]  # shape (n_cells,)
-
-            # Route contribution to buffer positions t+k
-            for k in range(lag):
-                w = weights[k]
-                if w == 0.0:
-                    continue
-
-                idx = t + k
-                if idx < lag:
-                    self.grid.var.buffer[idx] += w * ft
-                # else: future contribution beyond lagtime is dropped
-
-    def _advance_buffer(self, n_steps: int) -> None:
-        """Shift buffer forward by n_steps."""
-        if n_steps >= self.lagtime:
-            self.grid.var.buffer[:] = 0.0
-            return
-
-        # Shift forward
-        self.grid.var.buffer[:-n_steps] = self.grid.var.buffer[n_steps:]
-        self.grid.var.buffer[-n_steps:] = 0.0
+    def _advance_buffer(self, hours_to_advance: int) -> None:
+        """Shift the model's water buffer forward in time."""
+        advance_buffer(self.grid.var.overland_flow_buffer, hours_to_advance)
 
     def step(
         self,
-        interflow_m: TwoDArrayFloat64,  # shape (24, n_cells)
+        interflow_m: TwoDArrayFloat32,  # shape (24, n_cells)
         baseflow_m: ArrayFloat32,  # shape (n_cells,)
-        runoff_m: TwoDArrayFloat64,  # shape (24, n_cells)
-    ) -> TwoDArrayFloat64:
+        runoff_m: TwoDArrayFloat32,  # shape (24, n_cells)
+    ) -> TwoDArrayFloat32:
         """Concentrate runoff using triangular weighting.
 
         Currently being developed. For now, we only apply it to runoff and leave baseflow
@@ -153,62 +203,47 @@ class RunoffConcentrator(Module):
         assert baseflow_m.ndim == 1
         assert runoff_m.ndim == 2
 
-        n_steps: int
-        n_cells: int
-        n_steps, n_cells = runoff_m.shape
-
-        # Advance buffer by one day (24 hours)
-        self._advance_buffer(n_steps)
-        overland_runoff_storage_start_m: TwoDArrayFloat64 = (
-            self.grid.var.buffer.copy().astype(np.float64)
-        )
-        overland_runoff_storage_start_m3: float = (
-            overland_runoff_storage_start_m * self.grid.var.cell_area
-        ).sum()
-
-        # Baseflow is distributed evenly across 24 substeps
-        baseflow_per_step: ArrayFloat64 = (baseflow_m / n_steps).astype(np.float64)
-        baseflow_array: TwoDArrayFloat64 = np.broadcast_to(
-            baseflow_per_step, (n_steps, n_cells)
-        )  # Create array that matches the shape of the runoff
-
-        # Apply triangular weighting to (for now only) runoff
-        self._apply_triangular(runoff_m, self.weights_runoff)
-
-        outflow_runoff_m: TwoDArrayFloat64 = (
-            self.grid.var.buffer[:n_steps].copy()
-        )  # Outflow is only the first 24 buffer steps which equals 24 hourly outflows
-        total_outflow_m: TwoDArrayFloat64 = (
-            outflow_runoff_m + baseflow_array + interflow_m
-        )  # Get total outflow (including baseflow and interflow which did not change)
-        overland_runoff_storage_end_m: TwoDArrayFloat64 = (
-            self.grid.var.buffer[n_steps:].copy().astype(np.float64)
-        )  # Everything that is stored for the next day
-        self.overland_runoff_storage_end_m3 = (
-            overland_runoff_storage_end_m * self.grid.var.cell_area
-        ).sum()
-
-        outflow_m3: float = (
-            (outflow_runoff_m * self.grid.var.cell_area).sum()
-            + (interflow_m * self.grid.var.cell_area).sum()
-            + (baseflow_array * self.grid.var.cell_area).sum()
-        )
-
-        inflow_m3: float = (
-            (runoff_m * self.grid.var.cell_area).sum()
-            + (interflow_m * self.grid.var.cell_area).sum()
-            + (baseflow_array * self.grid.var.cell_area).sum()
-        )
+        daily_hours: int = runoff_m.shape[0]
 
         if __debug__:
+            buffer_prev_m: TwoDArrayFloat32 = self.grid.var.overland_flow_buffer.copy()
+
+        # Apply triangular weighting to runoff inflow
+        self._apply_triangular(runoff_m, self.grid.var.overland_flow_buffer_weights)
+
+        # Outflow is the first 24 buffer steps (the current day)
+        outflow_runoff_m: TwoDArrayFloat32 = self.grid.var.overland_flow_buffer[
+            :daily_hours
+        ].copy()
+
+        baseflow_per_hour: ArrayFloat32 = (baseflow_m / daily_hours).astype(np.float32)
+
+        # Baseflow is distributed evenly across the day
+        total_outflow_m: TwoDArrayFloat32 = (
+            outflow_runoff_m + baseflow_per_hour + interflow_m
+        )
+
+        # Advance buffer by one day (24 hours) to discard today's flow and prepare for tomorrow
+        self._advance_buffer(daily_hours)
+
+        if __debug__:
+            inflow_per_cell_m: ArrayFloat32 = (
+                runoff_m.sum(axis=0) + interflow_m.sum(axis=0) + baseflow_m
+            )
+            outflow_per_cell_m: ArrayFloat32 = total_outflow_m.sum(axis=0)
+            storage_pre_per_cell_m: ArrayFloat32 = buffer_prev_m.sum(axis=0)
+            storage_post_per_cell_m: ArrayFloat32 = (
+                self.grid.var.overland_flow_buffer.sum(axis=0)
+            )
+
             balance_check(
-                name="RunoffConcentrator daily water balance",
-                how="sum",
-                influxes=[inflow_m3],
-                outfluxes=[outflow_m3],
-                prestorages=[overland_runoff_storage_start_m3],
-                poststorages=[self.overland_runoff_storage_end_m3],
-                tolerance=1,
+                name="runoff concentration daily",
+                how="cellwise",
+                influxes=[inflow_per_cell_m],
+                outfluxes=[outflow_per_cell_m],
+                prestorages=[storage_pre_per_cell_m],
+                poststorages=[storage_post_per_cell_m],
+                tolerance=1e-5,
                 raise_on_error=False,
             )
 
@@ -224,19 +259,11 @@ class RunoffConcentrator(Module):
         return "hydrology.runoff_concentrator"
 
     def spinup(self) -> None:
-        """Initialize variables needed for the runoff concentration model.
+        """Initialize variables needed for the runoff concentration model."""
+        self.grid.var.overland_flow_buffer = np.tile(
+            self.grid.full_compressed(0.0, dtype=np.float32), (self.lag_time_hours, 1)
+        )
 
-        Returns:
-            None
-        """
-        self.grid.var.buffer = np.stack(
-            [
-                self.grid.full_compressed(0.0, dtype=np.float64)
-                for _ in range(self.lagtime)
-            ],
-            axis=0,
-        ).astype(np.float64)
-
-        self.weights_runoff: ArrayFloat64 = self._triangular_weights(self.runoff_peak)
-
-        return None
+        self.grid.var.overland_flow_buffer_weights = triangular_weights(
+            self.runoff_peak_hour, self.lag_time_hours
+        )

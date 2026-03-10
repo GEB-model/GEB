@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from geb.hydrology.soil import get_green_ampt_params
+from geb.hydrology.landsurface.water import get_green_ampt_params
 
 
 def test_get_green_ampt_params_start_of_infiltration() -> None:

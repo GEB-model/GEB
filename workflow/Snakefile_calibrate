@@ -1,10 +1,7 @@
 """Snakemake workflow for GEB model calibration using DEAP."""
 
 # Configuration - can be overridden via command line or config file
-# configfile: "workflow/config/calibrate.yml"  # Now using model.yml calibration section
-
-# Include common rules shared across workflows
-include: "rules/common.smk"
+# configfile: "workflow/config/calibrate.yml"
 
 # Include calibration-specific rules
 include: "rules/calibrate.smk"
@@ -12,4 +9,4 @@ include: "rules/calibrate.smk"
 # Main target
 rule all:
     input:
-        "calibration_complete.done"
+        "calibration/calibration_{target}_complete.done".format(target=CALIBRATION_TRACK)

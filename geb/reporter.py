@@ -8,7 +8,6 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -20,7 +19,7 @@ from zarr.codecs import ZstdCodec
 from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.workflows.io import fast_rmtree
+from geb.workflows.io import fast_rmtree, read_geom
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
@@ -190,8 +189,33 @@ WATER_BALANCE_REPORT_CONFIG = {
 
 ENERGY_BALANCE_REPORT_CONFIG = {
     "hydrology.landsurface": {
-        "_energy_balance_soil_temperature_top_layer_C": {
-            "varname": "HRU.var.soil_temperature_C[0]",
+        "_energy_balance_soil_temperature_layer_0_C": {
+            "varname": ".soil_temperature_C[0]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_1_C": {
+            "varname": ".soil_temperature_C[1]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_2_C": {
+            "varname": ".soil_temperature_C[2]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_3_C": {
+            "varname": ".soil_temperature_C[3]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_4_C": {
+            "varname": ".soil_temperature_C[4]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_energy_balance_soil_temperature_layer_5_C": {
+            "varname": ".soil_temperature_C[5]",
             "type": "HRU",
             "function": "weightedmean",
         },
@@ -590,7 +614,7 @@ class Reporter:
             for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
                     if module_name == "_discharge_stations" and module_values is True:
-                        stations = gpd.read_parquet(
+                        stations = read_geom(
                             self.model.files["geom"][
                                 "discharge/discharge_snapped_locations"
                             ]

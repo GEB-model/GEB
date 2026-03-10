@@ -33,7 +33,7 @@ from geb.geb_types import Array, ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows import balance_check
-from geb.workflows.io import read_grid
+from geb.workflows.io import read_geom, read_grid
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -489,7 +489,7 @@ class WaterBodies(Module):
         Returns:
             A GeoDataFrame containing the water body data with the index set to the mapped water body IDs.
         """
-        waterbody_data = gpd.read_parquet(
+        waterbody_data = read_geom(
             self.model.files["geom"]["waterbodies/waterbody_data"],
         )
         # drop all data that is not in the original ids

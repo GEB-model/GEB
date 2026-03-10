@@ -200,10 +200,10 @@ class MeritBasins(Adapter):
                 del gdf
             del gdfs
 
-            merged = merged.set_crs("EPSG:4326")  # ty:ignore[invalid-assignment]
+            merged = merged.write_crs("EPSG:4326")
 
             ascending: bool = True
-            merged = merged.sort_values(by="COMID", ascending=ascending)  # ty:ignore[invalid-assignment]
+            merged = merged.sort_values(by="COMID", ascending=ascending)
 
             # Use a temporary file to avoid partial writes in case of errors
             with tempfile.NamedTemporaryFile(

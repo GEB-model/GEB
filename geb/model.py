@@ -3,10 +3,11 @@
 import copy
 import datetime
 import logging
+import warnings
 from pathlib import Path
 from time import time
 from types import TracebackType
-from typing import Any, overload
+from typing import Any, cast, overload
 
 import geopandas as gpd
 import numpy as np
@@ -54,6 +55,7 @@ class GEBModel(Module):
         self,
         config: dict,
         files: dict,
+        logger: logging.Logger | None = None,
         mode: str = "w",
         timing: bool = False,
     ) -> None:
@@ -62,6 +64,7 @@ class GEBModel(Module):
         Args:
             config: A dictionary containing the model configuration.
             files: A dictionary containing the paths to the input files.
+            logger: A logging.Logger instance to use for logging. If None, a default logger will be created.
             mode: Run model writing mode "w", or reading mode "r". Defaults to "w" for writing.
                 If "r", the model will not write any output files, but will read from existing files.
             timing: Whether to log timing of modules. Defaults to False.
@@ -70,8 +73,7 @@ class GEBModel(Module):
             ValueError: If the mode is not 'r' or 'w'.
         """
         self.config: dict[str, Any] = copy.deepcopy(config)  # model configuration
-        self.logger: logging.Logger = self.create_logger()
-
+        self.logger = logger or logging.getLogger(__name__)  # model logger
         self.timing = timing  # whether to log timing of modules
         self.mode = mode  # mode of the model, either 'r' (read) or 'w' (write)
         if self.mode not in ["r", "w"]:
@@ -89,8 +91,6 @@ class GEBModel(Module):
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
-
-        self.mask = read_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
 
@@ -559,7 +559,7 @@ class GEBModel(Module):
         assert n_timesteps > 0, "End time is before or identical to start time"
 
         # create var bucket
-        self.var: GEBModelVariables = self.store.create_bucket("var")
+        self.var = cast(GEBModelVariables, self.store.create_bucket("var"))
 
         # initialize the model
         self._initialize(
@@ -594,8 +594,9 @@ class GEBModel(Module):
         end_time_exclusive = self.run_start
 
         if end_time_exclusive.year - current_time.year < 10:
-            print(
-                "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
+            warnings.warn(
+                "Spinup time is less than 10 years. This is not recommended and may lead to issues later.",
+                UserWarning,
             )
 
         timestep_length = datetime.timedelta(days=1)
@@ -617,7 +618,9 @@ class GEBModel(Module):
         #     }
         # }
 
-        self.var: GEBModelVariables = self.store.create_bucket("var")
+        self.var: GEBModelVariables = cast(
+            GEBModelVariables, self.store.create_bucket("var")
+        )
 
         self.check_time_range()
         self._initialize(
@@ -692,10 +695,14 @@ class GEBModel(Module):
 
         self.hazard_driver.floods.get_return_period_maps()
 
-    def evaluate(self, *args: Any, **kwargs: Any) -> None:
-        """Call the evaluator to evaluate the model results."""
+    def evaluate(self, *args: Any, **kwargs: Any) -> Any:
+        """Call the evaluator to evaluate the model results.
+
+        Returns:
+            The result of the evaluation method.
+        """
         print("Evaluating model...")
-        self.evaluator.run(*args, **kwargs)
+        return self.evaluator.run(*args, **kwargs)
 
     @property
     def current_day_of_year(self) -> int:
@@ -816,52 +823,6 @@ class GEBModel(Module):
         """Get the coordinate reference system (CRS) of the model."""
         return 4326
 
-    @property
-    def bounds(self) -> tuple[float, float, float, float]:
-        """Get the bounding box of the model's mask.
-
-        Returns:
-            A tuple representing the bounding box in the format (minx, miny, maxx, maxy).
-        """
-        total_bounds = self.mask.total_bounds
-        return (total_bounds[0], total_bounds[1], total_bounds[2], total_bounds[3])
-
-    @property
-    def xmin(self) -> float:
-        """Get the minimum x-coordinate of the model's bounding box.
-
-        Returns:
-            Minimum x-coordinate of the bounding box.
-        """
-        return self.bounds[0]
-
-    @property
-    def xmax(self) -> float:
-        """Get the maximum x-coordinate of the model's bounding box.
-
-        Returns:
-            Maximum x-coordinate of the bounding box.
-        """
-        return self.bounds[2]
-
-    @property
-    def ymin(self) -> float:
-        """Get the minimum y-coordinate of the model's bounding box.
-
-        Returns:
-            Minimum y-coordinate of the bounding box.
-        """
-        return self.bounds[1]
-
-    @property
-    def ymax(self) -> float:
-        """Get the maximum y-coordinate of the model's bounding box.
-
-        Returns:
-            Maximum y-coordinate of the bounding box.
-        """
-        return self.bounds[3]
-
     def close(self) -> None:
         """Finalizes the model."""
         if (
@@ -877,7 +838,7 @@ class GEBModel(Module):
                     if hasattr(forcing_loader, "reader"):
                         forcing_loader.reader.close()
 
-    def __enter__(self) -> "GEBModel":
+    def __enter__(self) -> GEBModel:
         """Enters the context of the model.
 
         Returns:

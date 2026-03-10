@@ -610,23 +610,8 @@ class Fabdem(Adapter):
         da: xr.DataArray = merge.merge_arrays(das)
         return da
 
-    def get_filepath(self, prefix: str) -> Path:
-        """Get the local file path for the FABDEM data.
-
-        Args:
-            prefix: Prefix for the local storage path.
-
-        Returns:
-            Path to the local FABDEM data file.
-        """
-        assert self.root is not None, (
-            "Root directory must be set before calling get_filepath"
-        )
-        filepath: Path = self.root / f"{prefix}_{self.filename}"
-        return filepath
-
     def fetch(
-        self, url: str, xmin: float, xmax: float, ymin: float, ymax: float, prefix: str
+        self, url: str, xmin: float, xmax: float, ymin: float, ymax: float
     ) -> Fabdem:
         """Download FABDEM tiles intersecting a bbox.
 
@@ -636,7 +621,6 @@ class Fabdem(Adapter):
             ymin: Minimum latitude of area of interest (degrees).
             ymax: Maximum latitude of area of interest (degrees).
             url: Base URL of the FABDEM server.
-            prefix: Prefix for the local storage path.
 
         Returns:
             The Fabdem instance.
@@ -644,46 +628,39 @@ class Fabdem(Adapter):
         Raises:
             RuntimeError: If no tiles could be downloaded.
         """
-        filepath: Path = self.get_filepath(prefix)
-        if (filepath).exists():
-            return self
+        if not self.is_ready:
+            tiles: list[tuple[int, int]] = self._tiles_for_bbox(xmin, xmax, ymin, ymax)
 
-        tiles: list[tuple[int, int]] = self._tiles_for_bbox(xmin, xmax, ymin, ymax)
+            with tempfile.TemporaryDirectory() as temp_dir_str:
+                temp_dir: Path = Path(temp_dir_str)
+                results: list[Path] = []
 
-        with tempfile.TemporaryDirectory() as temp_dir_str:
-            temp_dir: Path = Path(temp_dir_str)
-            results: list[Path] = []
+                for lat_min, lon_min in tqdm(tiles, desc="Downloading FABDEM tiles"):
+                    tile_filename = self._compose_tile_filename(lat_min, lon_min)
+                    tile_url: str = f"{url}/{tile_filename}"
 
-            for lat_min, lon_min in tqdm(tiles, desc="Downloading FABDEM tiles"):
-                tile_filename = self._compose_tile_filename(lat_min, lon_min)
-                tile_url: str = f"{url}/{tile_filename}"
+                    tif_paths: list[Path] = self._download_and_extract_tile(
+                        tile_url, temp_dir, tile_filename, xmin, xmax, ymin, ymax
+                    )
+                    # Add all extracted TIF files (already filtered during extraction)
+                    results.extend(tif_paths)
 
-                tif_paths: list[Path] = self._download_and_extract_tile(
-                    tile_url, temp_dir, tile_filename, xmin, xmax, ymin, ymax
-                )
-                # Add all extracted TIF files (already filtered during extraction)
-                results.extend(tif_paths)
+                if not results:
+                    raise RuntimeError("No FABDEM tiles could be downloaded.")
 
-            if not results:
-                raise RuntimeError("No FABDEM tiles could be downloaded.")
+                da: xr.DataArray = self._merge_fabdem_tiles(results)
+                da = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
+                da = convert_nodata(da, np.nan)
 
-            da: xr.DataArray = self._merge_fabdem_tiles(results)
-            da = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
-            da = convert_nodata(da, np.nan)
-
-            write_zarr(da, filepath, crs=da.rio.crs)
+                write_zarr(da, self.path, crs=da.rio.crs)
 
         return self
 
-    def read(self, prefix: str) -> xr.DataArray:
+    def read(self) -> xr.DataArray:
         """Read the FABDEM data as an xarray DataArray.
-
-        Args:
-            prefix: Prefix for the local storage path.
 
         Returns:
             xarray DataArray with FABDEM data.
         """
-        filepath: Path = self.get_filepath(prefix)
-        da: xr.DataArray = read_zarr(filepath)
+        da: xr.DataArray = read_zarr(self.path)
         return da

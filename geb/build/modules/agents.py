@@ -2,6 +2,7 @@
 
 import math
 import unicodedata
+import warnings
 from datetime import datetime
 from typing import Any
 
@@ -1214,9 +1215,14 @@ class Agents(BuildModelBase):
 
                 if len(holdings) == 1 and len(area) == 1:
                     n_holdings = (
-                        holdings["< 1 Ha"].replace("..", np.nan).astype(float).iloc[0]
+                        holdings["< 1 Ha"]
+                        .replace("..", np.nan)
+                        .astype(np.float64)
+                        .iloc[0]
                     )
-                    area_ha = area["< 1 Ha"].replace("..", np.nan).astype(float).iloc[0]
+                    area_ha = (
+                        area["< 1 Ha"].replace("..", np.nan).astype(np.float64).iloc[0]
+                    )
 
                     if pd.notna(n_holdings) and n_holdings > 0 and pd.notna(area_ha):
                         if (area_ha / n_holdings) < subgrid_cell_area_ha:
@@ -1314,7 +1320,7 @@ class Agents(BuildModelBase):
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
                     .replace("..", np.nan)
-                    .astype(float)
+                    .astype(np.float64)
                 )
                 agricultural_area_db_ha = (
                     region_farm_sizes.loc[
@@ -1324,7 +1330,7 @@ class Agents(BuildModelBase):
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
                     .replace("..", np.nan)
-                    .astype(float)
+                    .astype(np.float64)
                 )
 
                 # Calculate average sizes for each bin
@@ -1498,7 +1504,7 @@ class Agents(BuildModelBase):
 
             total_cultivated_land_area_db = agricultural_area_db.sum()
 
-            n_cells_per_size_class = pd.Series(0, index=region_n_holdings.index)
+            n_cells_per_size_class = pd.Series(0.0, index=region_n_holdings.index)
 
             for size_class in agricultural_area_db.index:
                 if (
@@ -1687,7 +1693,12 @@ class Agents(BuildModelBase):
             buildings_no_name1 = buildings[buildings["NAME_1"].isnull()]
             if not buildings_no_name1.empty:
                 # Precompute centroids for unmatched buildings
-                unmatched_centroids = buildings_no_name1.geometry.centroid
+                # because the buildings are very small, we can ignore the warning about calculations
+                # of centroids in a geographic coordinate system
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=UserWarning)
+                    unmatched_centroids = buildings_no_name1.geometry.centroid
+
                 # Build spatial index over GADM level 1 geometries once
                 gadm_sindex = gadm_level1.sindex
                 for building_idx, centroid in zip(
@@ -1760,7 +1771,9 @@ class Agents(BuildModelBase):
         buildings = self.geom["assets/open_building_map"]
 
         # Vectorized centroid extraction
-        centroids = buildings.geometry.centroid
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            centroids = buildings.geometry.centroid
         buildings["lon"] = centroids.x
         buildings["lat"] = centroids.y
 
@@ -2024,14 +2037,14 @@ class Agents(BuildModelBase):
                         )
                         agents_allocated_to_building = agents_in_grid_cell.iloc[
                             households_to_put_in_building
-                        ]
+                        ].copy()
                         lat_agents = np.array(buildings_grid_cell["lat"])[building_idx]
                         lon_agents = np.array(buildings_grid_cell["lon"])[building_idx]
-                        agents_allocated_to_building["coord_Y"] = lat_agents
-                        agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["building_id_of_household"] = (
-                            np.array(buildings_grid_cell["id"])[building_idx]
-                        )
+                        agents_allocated_to_building.loc[:, "coord_Y"] = lat_agents
+                        agents_allocated_to_building.loc[:, "coord_X"] = lon_agents
+                        agents_allocated_to_building.loc[
+                            :, "building_id_of_household"
+                        ] = np.array(buildings_grid_cell["id"])[building_idx]
 
                         allocated_agents = pd.concat(
                             [allocated_agents, agents_allocated_to_building]
@@ -2052,18 +2065,18 @@ class Agents(BuildModelBase):
                             )
                             agents_allocated_to_building = agents_in_grid_cell.iloc[
                                 indices_to_allocate
-                            ]
+                            ].copy()
                             lat_agents = np.array(buildings_grid_cell["lat"])[
                                 building_idx
                             ]
                             lon_agents = np.array(buildings_grid_cell["lon"])[
                                 building_idx
                             ]
-                            agents_allocated_to_building["coord_Y"] = lat_agents
-                            agents_allocated_to_building["coord_X"] = lon_agents
-                            agents_allocated_to_building["building_id_of_household"] = (
-                                np.array(buildings_grid_cell["id"])[building_idx]
-                            )
+                            agents_allocated_to_building.loc[:, "coord_Y"] = lat_agents
+                            agents_allocated_to_building.loc[:, "coord_X"] = lon_agents
+                            agents_allocated_to_building.loc[
+                                :, "building_id_of_household"
+                            ] = np.array(buildings_grid_cell["id"])[building_idx]
 
                             allocated_agents = pd.concat(
                                 [allocated_agents, agents_allocated_to_building]
@@ -2527,16 +2540,16 @@ class Agents(BuildModelBase):
 
                 region_risk_aversion_data = preferences_global[
                     preferences_global["ISO3"] == donor_country
-                ]
+                ].copy()
 
                 self.logger.info(
                     f"Missing risk aversion data for {ISO3}, filling with {donor_country} instead."
                 )
                 # ensure that the country and ISO3 represent the original country, not the donor country
-                region_risk_aversion_data["Country"] = [
+                region_risk_aversion_data.loc[:, "Country"] = [
                     key for key, val in COUNTRY_NAME_TO_ISO3.items() if val == ISO3
                 ]
-                region_risk_aversion_data["ISO3"] = ISO3
+                region_risk_aversion_data.loc[:, "ISO3"] = ISO3
 
             region_risk_aversion_data = region_risk_aversion_data[
                 [
@@ -2680,7 +2693,7 @@ class Agents(BuildModelBase):
         all_features: dict[str, gpd.GeoDataFrame] = self.data_catalog.fetch(
             "open_street_map"
         ).read(
-            self.region.unary_union,
+            self.region.union_all(),
             feature_types=feature_types,
         )
 

@@ -493,13 +493,13 @@ def generate_surge_hydrograph(
         )
         plt.plot(
             df_after_peak["mean"].values * (1 / 6),
-            df_after_peak.index.values,
+            df_after_peak.index.values,  # ty:ignore[invalid-argument-type]
             color="green",
             linewidth=3,
             linestyle="--",
         )
         plt.fill_betweenx(
-            df_before_peak.index.values,
+            df_before_peak.index.values,  # ty:ignore[invalid-argument-type]
             -df_before_peak["25th"].values * (1 / 6),
             -df_before_peak["75th"].values * (1 / 6),
             fc="green",
@@ -507,7 +507,7 @@ def generate_surge_hydrograph(
             label="P 25th-75th",
         )
         plt.fill_betweenx(
-            df_after_peak.index.values,
+            df_after_peak.index.values,  # ty:ignore[invalid-argument-type]
             df_after_peak["25th"].values * (1 / 6),
             df_after_peak["75th"].values * (1 / 6),
             fc="green",

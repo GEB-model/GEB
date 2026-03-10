@@ -199,7 +199,6 @@ class CropFarmersVariables(Bucket):
     water_costs_m3_reservoir: float
     water_costs_m3_groundwater: float
     field_indices_by_farmer: DynamicArray
-    subdistrict_map: TwoDArrayInt32
     risk_aversion: DynamicArray
     discount_rate: DynamicArray
     intention_factor: DynamicArray
@@ -457,17 +456,6 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_well"]["lifespan"]
 
-        # load map of all subdistricts
-        self.var.subdistrict_map = read_grid(
-            self.model.files["region_subgrid"]["region_ids"]
-        )
-        region_mask = read_grid(self.model.files["region_subgrid"]["mask"])
-        self.HRU_regions_map = np.zeros_like(self.HRU.mask, dtype=np.int8)
-        self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
-            region_mask == 0
-        ]
-        self.HRU_regions_map = self.HRU.convert_subgrid_to_HRU(self.HRU_regions_map)
-
         self.crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"
         )
@@ -475,17 +463,17 @@ class CropFarmers(AgentBaseClass):
         # Test with a high variable for now
         self.var.total_spinup_time = 20
 
-        self.HRU.var.transpiration_crop_life = self.HRU.full_compressed(
+        self.HRU.var.actual_evapotranspiration_crop_life = self.HRU.full_compressed(
             0, dtype=np.float32
         )
-        self.HRU.var.potential_transpiration_crop_life = self.HRU.full_compressed(
+        self.HRU.var.potential_evapotranspiration_crop_life = self.HRU.full_compressed(
             0, dtype=np.float32
         )
-        self.HRU.var.transpiration_crop_life_per_crop_stage = np.zeros(
-            (6, self.HRU.var.transpiration_crop_life.size), dtype=np.float32
+        self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage = np.zeros(
+            (6, self.HRU.var.actual_evapotranspiration_crop_life.size), dtype=np.float32
         )
-        self.HRU.var.potential_transpiration_crop_life_per_crop_stage = np.zeros(
-            (6, self.HRU.var.potential_transpiration_crop_life.size),
+        self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage = np.zeros(
+            (6, self.HRU.var.potential_evapotranspiration_crop_life.size),
             dtype=np.float32,
         )
         self.HRU.var.crop_map = np.full_like(self.HRU.var.land_owners, -1)
@@ -1411,13 +1399,13 @@ class CropFarmers(AgentBaseClass):
             fraction_irrigated_field=self.var.fraction_irrigated_field.data,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             crop_map=self.HRU.var.crop_map,
-            topwater=self.HRU.var.topwater,
+            topwater=self.HRU.var.topwater_m,
             root_depth_m=root_depth_m,
             soil_layer_height=self.HRU.var.soil_layer_height_m,
-            field_capacity=self.HRU.var.wfc,
-            wilting_point=self.HRU.var.wwp,
-            w=self.HRU.var.w,
-            ws=self.HRU.var.ws,
+            field_capacity=self.HRU.var.water_content_field_capacity_m,
+            wilting_point=self.HRU.var.water_content_wilting_point_m,
+            w=self.HRU.var.water_content_m,
+            ws=self.HRU.var.water_content_saturated_m,
             saturated_hydraulic_conductivity_m_per_day=self.HRU.var.saturated_hydraulic_conductivity_m_per_s
             * np.float32(86400),
             remaining_irrigation_limit_m3_reservoir=self.var.remaining_irrigation_limit_m3_reservoir.data,
@@ -1870,20 +1858,20 @@ class CropFarmers(AgentBaseClass):
     def get_yield_ratio(
         self,
         harvest: np.ndarray,
-        actual_transpiration: npt.NDArray[np.float32],
-        potential_transpiration: npt.NDArray[np.float32],
-        actual_transpiration_per_crop_stage: npt.NDArray[np.float32],
-        potential_transpiration_per_crop_stage: npt.NDArray[np.float32],
+        actual_evapotranspiration: npt.NDArray[np.float32],
+        potential_evapotranspiration: npt.NDArray[np.float32],
+        actual_evapotranspiration_per_crop_stage: npt.NDArray[np.float32],
+        potential_evapotranspiration_per_crop_stage: npt.NDArray[np.float32],
         crop_map: np.ndarray,
     ) -> np.ndarray:
         """Gets yield ratio for each crop given the ratio between actual and potential evapostranspiration during growth.
 
         Args:
             harvest: Map of crops that are harvested.
-            actual_transpiration: Actual evapotranspiration during crop growth period.
-            potential_transpiration: Potential evapotranspiration during crop growth period.
-            actual_transpiration_per_crop_stage: Actual evapotranspiration per crop stage.
-            potential_transpiration_per_crop_stage: Potential evapotranspiration per crop stage.
+            actual_evapotranspiration: Actual evapotranspiration during crop growth period.
+            potential_evapotranspiration: Potential evapotranspiration during crop growth period.
+            actual_evapotranspiration_per_crop_stage: Actual evapotranspiration per crop stage.
+            potential_evapotranspiration_per_crop_stage: Potential evapotranspiration per crop stage.
             crop_map: Subarray of type of crop grown.
 
         Returns:
@@ -1895,12 +1883,12 @@ class CropFarmers(AgentBaseClass):
         if self.var.crop_data_type == "GAEZ":
             yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_GAEZ(
                 crop_map[harvest],
-                evaporation_ratio=actual_transpiration[harvest]
-                / potential_transpiration[harvest],
-                evaporation_ratio_per_crop_stage=actual_transpiration_per_crop_stage[
+                evaporation_ratio=actual_evapotranspiration[harvest]
+                / potential_evapotranspiration[harvest],
+                evaporation_ratio_per_crop_stage=actual_evapotranspiration_per_crop_stage[
                     :, harvest
                 ]
-                / potential_transpiration_per_crop_stage[:, harvest],
+                / potential_evapotranspiration_per_crop_stage[:, harvest],
                 KyT=self.var.crop_data["KyT"].values,
                 Ky1=self.var.crop_data["Ky1"].values,
                 Ky2a=self.var.crop_data["Ky2a"].values,
@@ -1912,7 +1900,8 @@ class CropFarmers(AgentBaseClass):
         elif self.var.crop_data_type == "MIRCA2000":
             yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_MIRCA2000(
                 crop_map[harvest],
-                actual_transpiration[harvest] / potential_transpiration[harvest],
+                actual_evapotranspiration[harvest]
+                / potential_evapotranspiration[harvest],
                 self.var.crop_data["a"].values,
                 self.var.crop_data["b"].values,
                 self.var.crop_data["P0"].values,
@@ -2064,11 +2053,11 @@ class CropFarmers(AgentBaseClass):
             # Get yield ratio for the harvested crops
             yield_ratio_per_field = self.get_yield_ratio(
                 harvest,
-                self.HRU.var.transpiration_crop_life,
-                self.HRU.var.potential_transpiration_crop_life,
-                self.HRU.var.transpiration_crop_life_per_crop_stage,
-                self.HRU.var.potential_transpiration_crop_life_per_crop_stage,
-                self.HRU.var.crop_map,
+                actual_evapotranspiration=self.HRU.var.actual_evapotranspiration_crop_life,
+                potential_evapotranspiration=self.HRU.var.potential_evapotranspiration_crop_life,
+                actual_evapotranspiration_per_crop_stage=self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage,
+                potential_evapotranspiration_per_crop_stage=self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage,
+                crop_map=self.HRU.var.crop_map,
             )
             assert (yield_ratio_per_field >= 0).all()
 
@@ -2183,8 +2172,8 @@ class CropFarmers(AgentBaseClass):
             self.income_farmer = np.zeros(self.var.n, dtype=np.float32)
 
         # Reset transpiration values for harvested fields
-        self.HRU.var.transpiration_crop_life[harvest] = 0
-        self.HRU.var.potential_transpiration_crop_life[harvest] = 0
+        self.HRU.var.actual_evapotranspiration_crop_life[harvest] = 0
+        self.HRU.var.potential_evapotranspiration_crop_life[harvest] = 0
 
         # Update crop and land use maps after harvest
         self.HRU.var.crop_map[harvest] = -1
@@ -3002,8 +2991,11 @@ class CropFarmers(AgentBaseClass):
         Returns:
             npt.NDArray[np.floating]: Per-farmer parameters with shape ``(n_farmers, 2)``,
                 columns ``[a, b]`` for ``y = a * exp(b * X)``.
+
+        Raises:
+            ValueError: If any group has insufficient valid data for fitting (less than 2 valid
         """
-        # Create groups (unchanged)
+        # Create groups
         group_indices, n_groups = self.create_unique_groups(self.well_status)
         assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
 
@@ -3065,6 +3057,8 @@ class CropFarmers(AgentBaseClass):
             a_array[g] = a
             b_array[g] = b
             r_squared_array[g] = r2
+            if np.isnan(r2):
+                raise ValueError(f"Group {g} has insufficient valid data for fitting.")
 
         # Assign per farmer (cols: intercept=a, slope=b)
         farmer_params = np.column_stack(
@@ -5591,7 +5585,9 @@ class CropFarmers(AgentBaseClass):
             "Farmer index must be less than the number of agents."
         )
 
-        del self.var.activation_order_by_elevation_fixed
+        # Delete cached activation order if it exists
+        if hasattr(self.var, "activation_order_by_elevation_fixed"):
+            del self.var.activation_order_by_elevation_fixed
 
         last_farmer_HRUs = get_farmer_HRUs(
             self.var.field_indices, self.var.field_indices_by_farmer.data, -1

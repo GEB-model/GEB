@@ -1040,7 +1040,9 @@ def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
 
 
 def resample_like(
-    source: xr.DataArray, target: xr.DataArray, method: str = "bilinear"
+    source: xr.DataArray,
+    target: xr.DataArray,
+    method: Literal["bilinear", "nearest", "conservative"] = "bilinear",
 ) -> xr.DataArray:
     """Resample the source DataArray to match the target DataArray's grid.
 
@@ -1077,7 +1079,7 @@ def resample_like(
         dst = regridder.conservative(
             target,  # ty: ignore[invalid-argument-type]
             latitude_coord="y",
-            output_chunks={**source.chunksizes, **target.chunksizes},
+            output_chunks={**source.chunksizes, **target.chunksizes},  # ty:ignore[invalid-argument-type]
         )
     elif method == "nearest":
         dst = regridder.nearest(target)  # ty: ignore[invalid-argument-type]
@@ -1210,7 +1212,7 @@ def resample_chunked(
         name=source.name,
         attrs=source.attrs.copy(),
     )
-    da.rio.set_crs(source.rio.crs)
+    da: xr.DataArray = da.rio.write_crs(source.rio.crs)
     return da
 
 
@@ -1489,6 +1491,7 @@ def create_temp_zarr(
             time_chunksize=time_chunksize,
             time_chunks_per_shard=time_chunks_per_shard,
             progress=True,
+            compression_level=1,
         )
         yield temp_da
 
