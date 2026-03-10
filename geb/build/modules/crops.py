@@ -776,10 +776,7 @@ class Crops(BuildModelBase):
                     .set_index("crop")
                     .transpose()
                     .reindex(index=all_years_faostat, columns=all_crops_faostat)
-                )
-                # set all dtypes to float64
-                for col in region_faostat.columns:
-                    region_faostat[col] = region_faostat[col].astype(np.float64)
+                ).astype(np.float64)
 
                 region_faostat["ISO3"] = ISO3
                 donor_data[ISO3] = region_faostat

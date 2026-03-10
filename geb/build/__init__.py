@@ -3273,8 +3273,8 @@ class GEBModel(
         Returns:
             The subgrid factor as an integer.
         """
-        subgrid_factor: int = self.subgrid.dims["x"] // self.grid.dims["x"]
-        assert subgrid_factor == self.subgrid.dims["y"] // self.grid.dims["y"]
+        subgrid_factor: int = self.subgrid.sizes["x"] // self.grid.sizes["x"]
+        assert subgrid_factor == self.subgrid.sizes["y"] // self.grid.sizes["y"]
         return subgrid_factor
 
     @property

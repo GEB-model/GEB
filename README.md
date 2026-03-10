@@ -12,13 +12,11 @@ The figure below shows a schematic overview of GEB.
 
 ### Applications
 
+> Bril, V. C., de Bruijn, J., de Moel, H., Sadana, T., Busker, T., Botzen, W. J. W., & Aerts, J. C. J. H.: Assessing the effectiveness of nature-based solutions and building-level flood risk reduction measures: An open-source coupled Model. Water Resources Research, 62, e2025WR041436, [https://doi.org/10.1029/2025WR041436](https://doi.org/10.1029/2025WR041436), 2026.
+
 > Kalthof, M. W. M. L., de Bruijn, J., de Moel, H., Kreibich, H., and Aerts, J. C. J. H.: Adaptive behavior of farmers under consecutive droughts results in more vulnerable farmers: a large-scale agent-based modeling analysis in the Bhima basin, India, NHESS, [https://doi.org/10.5194/nhess-25-1013-2025](https://doi.org/10.5194/nhess-25-1013-2025), 2025.
 
 ## Building on the shoulders of giants
-
-GEB builds on, couples and extends several models, depicted in the figure below.
-
-![image](https://raw.githubusercontent.com/GEB-model/GEB/refs/heads/jens-optimize-forcing-build/docs/images/models_overview.svg)
 
 1.  Burek, Peter, et al. "Development of the Community Water Model (CWatM v1.04) A high-resolution hydrological model for global and regional assessment of integrated water resources management." (2019).
 2.  Langevin, Christian D., et al. Documentation for the MODFLOW 6 groundwater flow model. No. 6-A55. US Geological Survey, 2017.

@@ -72,7 +72,9 @@ def load_soilgrids(
         ds_variable.name = variable_name
         ds.append(ds_variable)
 
-    ds: xr.Dataset = xr.merge(ds, join="exact").transpose("soil_layer", "y", "x")
+    ds: xr.Dataset = xr.merge(ds, join="exact", compat="identical").transpose(
+        "soil_layer", "y", "x"
+    )
     ds = ds.compute()
 
     # soilgrids uses conversion factors as specified here:
