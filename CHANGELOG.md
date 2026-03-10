@@ -1,4 +1,4 @@
-# dev
+# v1.0.0b14
 - Only create plots during forcing setup if specifically requested with new `create_plots` argument.
 - Combine code in forcing.py so that it is more easy to maintain.
 - Remove unused setup_land_use_parameters.
@@ -9,6 +9,7 @@
 - Make land surface build process more efficient and cleanup. As part of this update, only the original land cover within the SFINCS regions is saved. Therefore, this now depends on setup_coastal_sfincs_model_regions.
 - Yield is now computed from actual evapotranspiration and potential evapotranspiration rather than actual transpiration and potential transpiration. This is in line with GAEZ documentation, and also fixes a divide by 0 error.
 - Refactor runoff concentration, and solve very small WB bug due to order of operations.
+- There is now a new check to check the data version against the model version. If there is a mismatch, an error is given and the user is suggested how to update to the new model version. This only works for fresh builds. If you want to force this behaviour on already existing builds, run `geb update-version`.
 
 To support this version:
 - Update to Python 3.14. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.

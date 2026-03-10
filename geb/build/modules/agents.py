@@ -1451,7 +1451,7 @@ class Agents(BuildModelBase):
                             <= max_expected_area * (1 + tolerance)
                         ):
                             # Correct farmsize data by adjusting to the nearest valid boundary
-                            self.logger.info(
+                            self.logger.warning(
                                 f"farm sizes correction for: {ISO3} - Size class '{size_class}' area ({actual_area:.2f} ha) "
                                 f"outside expected range [{min_expected_area * (1 - tolerance):.2f}, "
                                 f"{max_expected_area * (1 + tolerance):.2f}] ha. Correcting..."
