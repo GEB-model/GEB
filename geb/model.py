@@ -108,6 +108,9 @@ class GEBModel(Module):
         If the version file does not exist, it will ignore the check.
         If the version file exists, but there are no updates between the data version
         and the current model version, it will also ignore the check.
+
+        Raises:
+            RuntimeError: If the version file exists and there are updates between the data version and the current model version.
         """
         version_path = self.input_folder / "version.txt"
         if not version_path.exists():

@@ -2032,6 +2032,9 @@ class GEBModel(
         """Check if the version in the version file is the same as the current version.
 
         If the version is not current, print a warning with the updates that need to be made to update to the current version.
+
+        Raises:
+            RuntimeError: If the version is not current and updates need to be made.
         """
         # No version file exists, so we create one with the current version
         if not self.version_path.exists():
