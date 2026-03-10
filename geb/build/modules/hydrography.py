@@ -1059,7 +1059,7 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(depends_on=["setup_coastlines"], required=True)
+    @build_method(depends_on=["setup_coastlines", "setup_elevation"], required=True)
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         if self.geom["routing/subbasins"]["is_coastal"].any():
@@ -1336,7 +1336,9 @@ class Hydrography(BuildModelBase):
                 f = self.old_data_catalog.get_source("GTSM").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
-                ds = xr.open_dataset(f, chunks={"time": -1})
+                # Open without dask chunks to avoid threaded scheduler
+                # segfault in xarray's _apply_mask when computing to_pandas()
+                ds = xr.open_dataset(f)
                 subset = ds.isel(stations=station_idx).drop_vars(
                     ["station_x_coordinate", "station_y_coordinate"]
                 )
@@ -1397,7 +1399,9 @@ class Hydrography(BuildModelBase):
                 f = self.old_data_catalog.get_source("GTSM_surge").path.format(
                     year, f"{month:02d}"
                 )
-                ds = xr.open_dataset(f, chunks={"time": -1})
+                # Open without dask chunks to avoid threaded scheduler
+                # segfault in xarray's _apply_mask when computing to_pandas()
+                ds = xr.open_dataset(f)
                 subset = ds.isel(stations=station_idx).drop_vars(
                     ["station_x_coordinate", "station_y_coordinate"]
                 )

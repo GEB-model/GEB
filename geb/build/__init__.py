@@ -1261,14 +1261,12 @@ def create_multi_basin_configs(
     # Create full build.yml in init_multiple_dir directory
     print("Creating build.yml in main init multiple directory...")
     build_config_path = working_directory / "build.yml"
-    # Read build config from geul example and automatically copy it
-    geul_build_path = GEB_PACKAGE_DIR / "examples" / "geul" / "build.yml"
 
-    print(f"Reading build configuration from: {geul_build_path}")
-
-    # Copy geul build.yml content directly to init_multiple_dir build.yml
-    with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
-        dst.write(src.read())
+    # Write a build.yml that inherits from the geul example, mirroring
+    # how model.yml inherits from reasonable_default_config.yml
+    build_config_content = 'inherits: "{GEB_PACKAGE_DIR}/examples/geul/build.yml"\n'
+    with open(build_config_path, "w") as f:
+        f.write(build_config_content)
 
     print(f"Created build.yml in {working_directory}")
 

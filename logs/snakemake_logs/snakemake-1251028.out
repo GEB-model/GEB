@@ -1,0 +1,43 @@
+Running via sbatch
+Job ID: 1251028
+Node: node013
+
+Models directory: /scistor/ivm/tbr910/GEB/models/large_scale2
+
+Executing Snakemake workflow:
+  Target: build_all
+  Max jobs: 8
+  Profile: slurm
+  Working directory: /scistor/ivm/tbr910/GEB/GEB/workflow
+
+Log file: /scistor/ivm/tbr910/GEB/GEB/logs/snakemake_logs/snakemake_build_all_20260310_124625.log
+
+Unlocking workflow directory...
+Using profile ../profiles/slurm for setting default command line arguments.
+Config file config/large_scale.yml is extended by additional config specified via the command line.
+host: node013
+Building DAG of jobs...
+You are running snakemake in a SLURM job context. This is not recommended, as it may lead to unexpected behavior. If possible, please run Snakemake directly on the login node.
+SLURM run ID: geb_fe7ae6b5-b468-43f0-9cc8-e3bd9485ba01
+MinJobAge 300s (>= 120s). 'squeue' should work reliably for status queries.
+Using shell: /usr/bin/bash
+Provided remote nodes: 8
+Provided resources: ivm_fat_slots=Resource("ivm_fat_slots", 1)
+Job stats:
+job              count
+-------------  -------
+build_all            1
+build_cluster       18
+total               19
+
+Select jobs to execute...
+Execute 8 jobs...
+Job 9 has been submitted with SLURM jobid 1251029 (log: logs/snakemake_logs/rule_build_cluster/Europe_008/1251029.log).
+Job 10 has been submitted with SLURM jobid 1251030 (log: logs/snakemake_logs/rule_build_cluster/Europe_009/1251030.log).
+Job 7 has been submitted with SLURM jobid 1251031 (log: logs/snakemake_logs/rule_build_cluster/Europe_006/1251031.log).
+Job 3 has been submitted with SLURM jobid 1251032 (log: logs/snakemake_logs/rule_build_cluster/Europe_002/1251032.log).
+Job 11 has been submitted with SLURM jobid 1251033 (log: logs/snakemake_logs/rule_build_cluster/Europe_010/1251033.log).
+Job 12 has been submitted with SLURM jobid 1251034 (log: logs/snakemake_logs/rule_build_cluster/Europe_011/1251034.log).
+Job 13 has been submitted with SLURM jobid 1251035 (log: logs/snakemake_logs/rule_build_cluster/Europe_012/1251035.log).
+Job 8 has been submitted with SLURM jobid 1251036 (log: logs/snakemake_logs/rule_build_cluster/Europe_007/1251036.log).
+Select jobs to execute...
