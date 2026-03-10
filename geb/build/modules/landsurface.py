@@ -343,7 +343,9 @@ class LandSurface(BuildModelBase):
             .rename(columns={"GID_0": "ISO3"})
         )
 
-        global_countries["geometry"] = global_countries.centroid
+        global_countries["geometry"] = global_countries.to_crs(
+            "ESRI:54009"
+        ).centroid.to_crs(global_countries.crs)
         global_countries = global_countries.set_index("ISO3")
 
         self.set_geom(global_countries, name="global_countries")
@@ -401,8 +403,11 @@ class LandSurface(BuildModelBase):
             self.geom["regions"]
             .union_all()
             .union(self.geom["routing/subbasins"].union_all())
-            .union(self.geom["coastal/low_elevation_coastal_zone_mask"].union_all())
         )
+        if len(self.geom["coastal/low_elevation_coastal_zone_mask"]) > 0:
+            union_geometry = union_geometry.union(
+                self.geom["coastal/low_elevation_coastal_zone_mask"].union_all()
+            )
         xmin = union_geometry.bounds[0] - buffer
         ymin = union_geometry.bounds[1] - buffer
         xmax = union_geometry.bounds[2] + buffer
@@ -412,12 +417,18 @@ class LandSurface(BuildModelBase):
             land_cover
         ).read(union_geometry)
 
+        # we want to save the original land use data for the flood model
+        # but also not save more data than necessary, as the land use classification source can be quite large.
+        # therefore we clip the land use classification source to the union of the subbasins and
+        # coastal low elevation zone
+        flood_mask = [self.geom["routing/subbasins"].union_all()]
+        if len(self.geom["coastal/low_elevation_coastal_zone_mask"]) > 0:
+            flood_mask.append(
+                self.geom["coastal/low_elevation_coastal_zone_mask"].union_all()
+            )
         self.set_other(
             land_use_classification_source.rio.clip(
-                [
-                    self.geom["routing/subbasins"].union_all(),
-                    self.geom["coastal/low_elevation_coastal_zone_mask"].union_all(),
-                ],
+                flood_mask,
                 drop=True,
                 all_touched=True,
             ),
