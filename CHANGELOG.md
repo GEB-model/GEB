@@ -1,4 +1,7 @@
 # dev
+- Cleanup logging situation in model. Now each method (except init-multiple) should created their own log file in the logs directory and no additional logs *should* be created.
+- Fix several warnings throughout model. And do not ignore some warnings globally.
+- Add custom and improved logging in calibration snakemake workflow.
 
 # v1.0.0b15
 - Switch back to Python 3.13 due to netcdf reading errors.
