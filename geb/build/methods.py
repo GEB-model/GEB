@@ -3,7 +3,6 @@
 import functools
 import inspect
 import logging
-from logging import Logger
 from pathlib import Path
 from time import time
 from typing import Any, Iterable
@@ -11,11 +10,9 @@ from typing import Any, Iterable
 import matplotlib.pyplot as plt
 import networkx as nx
 
-logger: Logger = logging.getLogger("GEB")
-
 __all__: list[str] = ["build_method"]
 
-from typing import Any, Protocol
+from typing import Protocol
 
 
 class NamedCallable(Protocol):
@@ -25,11 +22,41 @@ class NamedCallable(Protocol):
 
 
 class _build_method:
-    def __init__(self, logger: logging.Logger) -> None:
-        self.logger = logger
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self.logger: logging.Logger | None = logger
         self.tree = nx.DiGraph()
         self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
+
+    def _resolve_logger(
+        self, call_args: tuple[Any, ...] | None = None
+    ) -> logging.Logger:
+        """Resolve the logger for build method logging.
+
+        Uses the logger on the bound model instance when available.
+        For module-level operations, the logger must be assigned explicitly
+        (for example via `build_method.logger = instance.logger`).
+
+        Args:
+            call_args: Positional arguments passed to a wrapped build method.
+
+        Returns:
+            Logger to use for logging build method messages.
+
+        Raises:
+            RuntimeError: If no logger is available.
+        """
+        if call_args:
+            instance: Any = call_args[0]
+            instance_logger: Any = getattr(instance, "logger", None)
+            if isinstance(instance_logger, logging.Logger):
+                return instance_logger
+        if self.logger is None:
+            raise RuntimeError(
+                "build_method logger is not set. Ensure the owning class sets "
+                "build_method.logger before invoking build methods."
+            )
+        return self.logger
 
     def __call__(
         self,
@@ -54,9 +81,10 @@ class _build_method:
         def partial_decorator(func: NamedCallable) -> NamedCallable:
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                self.logger.info(f"Running method: {func.__name__}")
+                active_logger: logging.Logger = self._resolve_logger(args)
+                active_logger.info(f"Running method: {func.__name__}")
                 for key, value in kwargs.items():
-                    self.logger.debug(f"{func.__name__}.{key}: {value}")
+                    active_logger.debug(f"{func.__name__}.{key}: {value}")
 
                 start_time: float = time()
                 value: Any = func(*args, **kwargs)
@@ -65,7 +93,7 @@ class _build_method:
                 elapsed_time: float = end_time - start_time
 
                 self.time_taken[func.__name__] = elapsed_time
-                self.logger.info(
+                active_logger.info(
                     f"Completed {func.__name__} in {elapsed_time:.2f} seconds"
                 )
                 return value
@@ -151,7 +179,7 @@ class _build_method:
                         f"Method {method} depends on {dependency}, "
                         "which is not a build function."
                     )
-        self.logger.debug("Builder dependency tree validation passed.")
+        self._resolve_logger().debug("Builder dependency tree validation passed.")
 
     def validate_methods(
         self, methods: dict[str, Any], validate_order: bool = True
@@ -322,6 +350,7 @@ class _build_method:
 
     def log_time_taken(self) -> None:
         """Log the time taken for each method in the dependency tree."""
+        active_logger: logging.Logger = self._resolve_logger()
         total_time: float = sum(self.time_taken.values())
 
         sorted_by_time = sorted(
@@ -330,11 +359,11 @@ class _build_method:
 
         for method, time_taken in sorted_by_time:
             percentage: float = (time_taken / total_time) * 100
-            self.logger.info(
+            active_logger.info(
                 f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%)."
             )
 
-        self.logger.info(f"Total time taken: {total_time:.2f} seconds.")
+        active_logger.info(f"Total time taken: {total_time:.2f} seconds.")
 
     @property
     def methods(self) -> list[str]:
@@ -346,4 +375,4 @@ class _build_method:
         return sorted(list(self.tree.nodes))
 
 
-build_method = _build_method(logger=logger)
+build_method = _build_method()

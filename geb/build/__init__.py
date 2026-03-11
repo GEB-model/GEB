@@ -1976,6 +1976,7 @@ class GEBModel(
             data_provider: Data provider to use for the data catalog. Default is "default".
         """
         self._logger = logger
+        build_method.logger = logger
         self._old_data_catalog = DataCatalog(
             data_libs=[data_catalog], logger=self._logger, fallback_lib=None
         )
@@ -2081,6 +2082,10 @@ class GEBModel(
     @logger.setter
     def logger(self, value: logging.Logger) -> None:
         self._logger = value
+        build_method.logger = value
+        # Ensure that child classes use the updated logger
+        if hasattr(self, "_old_data_catalog"):
+            self._old_data_catalog.logger = value
 
     @property
     def old_data_catalog(self) -> DataCatalog:
