@@ -827,8 +827,17 @@ def solve_soil_enthalpy_column(
                 snow_depth_m,
                 snow_thermal_conductivity_W_per_m_K,
             ) = calculate_snow_thermal_properties(snow_water_equivalent_m)
-            conductance_distance_m: np.float32 = np.float32(snow_depth_m) * np.float32(
-                0.5
+
+            # Very thin residual snow can otherwise produce unrealistically large
+            # conductive coupling and destabilize the float32 tridiagonal solve.
+            # We mirror the 1 cm lower bound already used in the snow temperature
+            # update so that trace snow still insulates weakly rather than acting as
+            # an almost-zero-thickness conductive sheet.
+            effective_snow_depth_m: np.float32 = max(
+                np.float32(snow_depth_m), np.float32(0.01)
+            )
+            conductance_distance_m: np.float32 = (
+                effective_snow_depth_m * np.float32(0.5)
             )
             snow_conductance_W_per_m2_K = (
                 snow_thermal_conductivity_W_per_m_K / conductance_distance_m

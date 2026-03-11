@@ -368,7 +368,7 @@ def land_surface_model(
                 soil_emissivity=SOIL_EMISSIVITY,
                 soil_albedo=SOIL_ALBEDO,
                 leaf_area_index=leaf_area_index[i],
-                snow_water_equivalent_m=snow_water_equivalent_m_cell,
+                snow_water_equivalent_m=np.float32(snow_water_equivalent_m_cell),
                 snow_temperature_C=snow_temperature_C_cell,
                 topwater_m=topwater_m[i],
             )
