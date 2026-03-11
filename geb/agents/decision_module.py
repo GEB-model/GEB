@@ -1145,47 +1145,13 @@ class DecisionModule:
             EU_wind=EU_wind,
         )
 
-        # # 2) compute U0 (no-event utility) in the same wealth convention
-        # amenity_adjusted = np.asarray(amenity_value, dtype=np.float32) * np.float32(
-        #     amenity_weight
-        # )
-        # W0 = np.maximum(
-        #     np.float32(1.0),
-        #     wealth.astype(np.float32) + income.astype(np.float32) + amenity_adjusted,
-        # )
+       
 
-        # if sigma == 1:
-        #     U0 = np.log(W0)
-        # else:
-        #     s = np.float32(sigma)
-        #     U0 = (W0 ** (1 - s)) / (1 - s)
-
-        # # 3) perceived total hazard probabilities (consistent with other code: cap at 0.998 per event)
-        # rp = np.asarray(risk_perception, dtype=np.float32).reshape(-1)
-        # p_f = np.asarray(p_flood, dtype=np.float32).reshape(-1)
-        # p_w = np.asarray(p_wind, dtype=np.float32).reshape(-1)
-
-        # P_f = np.sum(np.minimum(p_f[:, None] * rp[None, :], np.float32(0.998)), axis=0)
-        # P_w = np.sum(np.minimum(p_w[:, None] * rp[None, :], np.float32(0.998)), axis=0)
-        # P_none = np.maximum(np.float32(0.0), np.float32(1.0) - P_f - P_w)
-
-        # eps = np.float32(1e-8)
-
-        # # 4) back out "event-conditional EU" for each hazard from the single-hazard mixture
-        # EU_flood_event = (EU_flood - (np.float32(1.0) - P_f) * U0) / np.maximum(
-        #     P_f, eps
-        # )
-        # EU_wind_event = (EU_wind - (np.float32(1.0) - P_w) * U0) / np.maximum(P_w, eps)
-
-        # # 5) combine into one multi-hazard EU without double counting no-event utility
-        # EU_no_insure_array = P_f * EU_flood_event + P_w * EU_wind_event + P_none * U0
-
-        # return np.asarray(EU_no_insure_array, dtype=np.float32).reshape(-1)
-
-    def calcEU_insure_multirisk_residual_CATNAT(
+    def calcEU_insure_multirisk_residual(
         self,
         geom_id,
         n_agents: int,
+        insurance_scheme: str,
         wealth: np.ndarray,
         income: np.ndarray,
         expenditure_cap: float,
@@ -1248,13 +1214,13 @@ class DecisionModule:
         damages_flood = expected_damages_flood.copy()
         damages_wind = expected_damages_wind.copy()
 
-        if adapted_floodproofing is not None:
-            idx_flood = np.where(adapted_floodproofing == 1)[0]
-            damages_flood[:, idx_flood] = expected_damages_floodadapted[:, idx_flood]
-
-        if adapted_windshutters is not None:
-            idx_wind = np.where(adapted_windshutters == 1)[0]
-            damages_wind[:, idx_wind] = expected_damages_windadapted[:, idx_wind]
+        if insurance_scheme != "catnat":
+            if adapted_floodproofing is not None:
+                idx_flood = np.where(adapted_floodproofing == 1)[0]
+                damages_flood[:, idx_flood] = expected_damages_floodadapted[:, idx_flood]
+            if adapted_windshutters is not None:
+                idx_wind = np.where(adapted_windshutters == 1)[0]
+                damages_wind[:, idx_wind] = expected_damages_windadapted[:, idx_wind]
 
         # Sort by probabilities (keep p as 1-D vectors)
         flood_order = np.argsort(p_flood)
@@ -1283,18 +1249,18 @@ class DecisionModule:
         damages_wind_insured = damages_wind * np.float32(1.0 - deductible)
 
         # CAT-NAT premium
-        premium, premium_reinsured, premium_private = self.Insurance_premium_CATNAT(
+        premium, premium_reinsured, premium_private = self.Insurance_premium(
+            scheme=insurance_scheme,
             expected_damages_flood=damages_flood_insured,
             p_flood=p_flood,
             expected_damages_wind=damages_wind_insured,
             p_wind=p_wind,
-            operating_insurer=operating_insurer,
         )
 
-        premium = np.asarray(premium, dtype=np.float32).reshape(-1)  # NEW
+        #premium = np.asarray(premium, dtype=np.float32).reshape(-1)  # NEW
         wealth_after_premium = wealth.astype(np.float32) - premium.astype(
             np.float32
-        )  # NEW
+        ) 
 
         EU_flood_ins = self.calcEU_do_nothing_flood(
             geom_id=kwargs.get("geom_id", "NoID"),
@@ -1373,99 +1339,17 @@ class DecisionModule:
             # premium_public,
         )
 
-    # def Insurance_premium_PPP(
-    #     self,
-    #     expected_damages_flood: np.ndarray,
-    #     p_flood: np.ndarray,
-    #     expected_damages_wind: np.ndarray,
-    #     p_wind: np.ndarray,
-    #     operating_insurer: float = 0.3,
-    #     method: str = "household",
-    #     public_reinsurer: float = 0.0,
-    # ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    #     """
-    #     Compute insurance premium under a public-private partnership (PPP) scheme.
 
-    #     Args:
-    #         expected_damages_flood (np.ndarray): _description_
-    #         p_flood (np.ndarray): _description_
-    #         expected_damages_wind (np.ndarray): _description_
-    #         p_wind (np.ndarray): _description_
-    #         adapted_floodproofing (np.ndarray, optional): _description_. Defaults to None.
-    #         adapted_windshutters (np.ndarray, optional): _description_. Defaults to None.
-    #         deductible (float, optional): _description_. Defaults to 0.1.
-    #         operating_insurer (float, optional): _description_. Defaults to 0.3.
-    #         method (str, optional): _description_. Defaults to "household".
-    #         public_reinsurer (float, optional): _description_. Defaults to 0.0.
-
-    #     Returns:
-    #         premium_total: total premium per household
-    #         premium_public: premium paid by public sector
-    #         premium_private: premium paid by private insurer
-    #     """
-
-    #     def calc_EAD(
-    #         damages: np.ndarray, probabilities: np.ndarray, method="household"
-    #     ) -> np.ndarray:
-    #         """
-    #         Calculate Expected Annual Damages (EAD) with trapezoidal integration.
-
-    #         Args:
-    #             damages (np.ndarray): _description_
-    #             probabilities (np.ndarray): _description_
-    #             method (str, optional): _description_. Defaults to "household".
-
-    #         Returns:
-    #             EAD_
-    #         """
-    #         idx = np.argsort(probabilities)
-    #         probabilities = probabilities[idx]
-    #         damages = damages[idx, :]
-
-    #         if method == "regional":
-    #             # Sum across households first
-    #             damages = damages.sum(axis=1, keepdims=True)
-
-    #         return np.trapezoid(damages, x=probabilities, axis=0)
-
-    #     # Calculate EADs (revisit what does it line mean)
-    #     EAD_flood = (
-    #         calc_EAD(expected_damages_flood, p_flood, method=method)
-    #         if expected_damages_flood.size
-    #         else np.zeros(expected_damages_wind.shape[1])
-    #     )
-    #     EAD_wind = (
-    #         calc_EAD(expected_damages_wind, p_wind, method=method)
-    #         if expected_damages_wind.size
-    #         else np.zeros(expected_damages_flood.shape[1])
-    #     )
-
-    #     EAD_total = EAD_flood + EAD_wind
-
-    #     # Base premium with operating_insurer factor
-    #     premium = EAD_total * (1.0 + operating_insurer)
-
-    #     # Split premium between public and private sector contributions
-    #     if public_reinsurer > 0:
-    #         premium_public = premium * public_reinsurer
-    #         premium_private = premium * (1 - public_reinsurer)
-    #     else:
-    #         premium_public = np.zeros_like(premium)
-    #         premium_private = premium
-
-    #     return premium, premium_public, premium_private
-
-    def Insurance_premium_CATNAT(
+    def premium_CATNAT(
         self,
         expected_damages_flood: np.ndarray,
         p_flood: np.ndarray,
         expected_damages_wind: np.ndarray,
         p_wind: np.ndarray,
         operating_insurer: float = 0.3,
-        catnat_surcharge: float = 0.20,
+        #catnat_surcharge: float = 0.20,
         reinsurance_share: float = 0.5,
         method: str = "household",
-        pooled: bool = True,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Insurance premium calculation including CATNAT scheme.
@@ -1485,42 +1369,130 @@ class DecisionModule:
             tuple[np.ndarray, np.ndarray, np.ndarray]: _description_
         """
 
-        def calc_EAD(
-            damages: np.ndarray, probabilities: np.ndarray, method: str = "household"
-        ) -> np.ndarray:
-            idx = np.argsort(probabilities)
-            probabilities = probabilities[idx]
-            damages = damages[idx, :]
+        # def calc_EAD(
+        #     damages: np.ndarray, probabilities: np.ndarray, method: str = "household"
+        # ) -> np.ndarray:
+        #     idx = np.argsort(probabilities)
+        #     probabilities = probabilities[idx]
+        #     damages = damages[idx, :]
 
-            if method == "regional":
-                damages = damages.sum(axis=1, keepdims=True)
-            return np.trapezoid(damages, x=probabilities, axis=0)
+        #     if method == "regional":
+        #         damages = damages.sum(axis=1, keepdims=True)
+        #     return np.trapezoid(damages, x=probabilities, axis=0)
 
         EAD_flood = (
-            calc_EAD(expected_damages_flood, p_flood, method)
+           self.calc_EAD(expected_damages_flood, p_flood, method)
             if expected_damages_flood.size
             else np.zeros(expected_damages_wind.shape[1])
         )
 
         EAD_wind = (
-            calc_EAD(expected_damages_wind, p_wind, method)
+            self.calc_EAD(expected_damages_wind, p_wind, method)
             if expected_damages_wind.size
             else np.zeros(expected_damages_flood.shape[1])
         )
 
-        EAD_total = EAD_flood + EAD_wind
+        EAD_total = np.mean(EAD_flood + EAD_wind)
 
-        if pooled:
-            ead_mean = float(np.mean(EAD_total))
-            EAD_total = np.full_like(EAD_total, ead_mean, dtype=np.float32)
+        premium_total = EAD_total * (1.0 + operating_insurer)
 
-        premium_risk = EAD_total * (1.0 + operating_insurer)
-
-        premium_catnat = catnat_surcharge * premium_risk
-        premium_total = premium_risk + premium_catnat
 
         # upstreaam split
-        premium_reinsured = premium_catnat * reinsurance_share
+        premium_reinsured = premium_total * reinsurance_share
         premium_retained = premium_total - premium_reinsured
 
         return premium_total, premium_reinsured, premium_retained
+    
+    def premium_private_market(
+        self,
+        expected_damages_flood,
+        p_flood,
+        expected_damages_wind,
+        p_wind,
+        operating_insurer=0.3,
+    ):
+        
+        
+        EAD_flood = self.calc_EAD(expected_damages_flood, p_flood)
+        EAD_wind = self.calc_EAD(expected_damages_wind, p_wind)
+
+        EAD_total = EAD_flood + EAD_wind
+
+        premium = EAD_total * (1 + operating_insurer)
+
+        premium_reinsured = np.zeros_like(premium)
+        premium_private = premium
+
+        return premium, premium_reinsured, premium_private
+    
+    def premium_reform(
+        self,
+        expected_damages_flood: np.ndarray,
+        p_flood: np.ndarray,
+        expected_damages_wind: np.ndarray,
+        p_wind: np.ndarray,
+        operating_insurer: float = 0.3,
+        solidarity_share: float = 0.4,
+        #catnat_surcharge: float = 0.15,
+        reinsurance_share: float = 0.5,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Hybrid insurance reform system:
+        - risk-based premiums
+        - partial solidarity pooling
+        - public reinsurance layer
+        - incentives for risk reduction
+
+        Returns
+        -------
+        premium_total
+        premium_reinsured
+        premium_private
+        """
+        
+        EAD_flood = self.calc_EAD(expected_damages_flood, p_flood)
+        
+
+        
+        EAD_wind = self.calc_EAD(expected_damages_wind, p_wind)
+        
+
+        EAD_household = EAD_flood + EAD_wind
+
+   
+        premium_total = EAD_household * (1.0 + operating_insurer)
+
+
+        premium_reinsured = premium_total * reinsurance_share
+
+        premium_private = premium_total - premium_reinsured
+
+        return (
+            premium_total.astype(np.float32),
+            premium_reinsured.astype(np.float32),
+            premium_private.astype(np.float32),
+        )
+    
+    def calc_EAD(self,damages: np.ndarray, probabilities: np.ndarray, method="household"):
+        idx = np.argsort(probabilities)
+        probabilities = probabilities[idx]
+        damages = damages[idx, :]
+
+        if method == "regional":
+            damages = damages.sum(axis=1, keepdims=True)
+
+        return np.trapezoid(damages, x=probabilities, axis=0)
+    
+    def Insurance_premium(self, scheme: str, **kwargs):
+
+        if scheme == "catnat":
+            return self.premium_CATNAT(**kwargs)
+
+        elif scheme == "private":
+            return self.premium_private_market(**kwargs)
+
+        elif scheme == "reform":
+            return self.premium_reform(**kwargs)
+
+        else:
+            raise ValueError("Unknown insurance scheme")
