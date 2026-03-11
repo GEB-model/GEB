@@ -1,3 +1,7 @@
+# dev
+- Switch liquid water in snow and snow water equivalent to float64 to avoid floating point imprecision in thick snow layers.
+- In case of water balance or enthalpy error export data for single cell that can be used to fix and test water balance seperately.
+
 # v1.0.0b14
 - Only create plots during forcing setup if specifically requested with new `create_plots` argument.
 - Combine code in forcing.py so that it is more easy to maintain.

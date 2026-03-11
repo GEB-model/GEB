@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import numpy as np
 from numba import njit, prange  # noqa: F401
 
 from geb.geb_types import (
     ArrayFloat32,
+    ArrayFloat64,
     ArrayInt32,
     TwoDArrayBool,
     TwoDArrayFloat32,
@@ -130,8 +131,8 @@ def land_surface_model(
     root_depth_m: ArrayFloat32,
     topwater_m: ArrayFloat32,
     variable_runoff_shape_beta: ArrayFloat32,
-    snow_water_equivalent_m: ArrayFloat32,
-    liquid_water_in_snow_m: ArrayFloat32,
+    snow_water_equivalent_m: ArrayFloat64,
+    liquid_water_in_snow_m: ArrayFloat64,
     snow_temperature_C: ArrayFloat32,
     interception_storage_m: ArrayFloat32,
     interception_capacity_m: ArrayFloat32,
@@ -170,8 +171,8 @@ def land_surface_model(
     ArrayFloat32,
     ArrayFloat32,
     TwoDArrayFloat32,
-    ArrayFloat32,
-    ArrayFloat32,
+    ArrayFloat64,
+    ArrayFloat64,
     ArrayFloat32,
     ArrayFloat32,
     ArrayFloat32,
@@ -291,30 +292,30 @@ def land_surface_model(
     reference_evapotranspiration_water_m = np.zeros_like(pr_kg_per_m2_per_s)
 
     # total per day variables for water balance
-    reference_evapotranspiration_grass_m = np.zeros_like(snow_water_equivalent_m)
-    rain_m = np.zeros_like(snow_water_equivalent_m)
-    snow_m = np.zeros_like(snow_water_equivalent_m)
-    sublimation_m = np.zeros_like(snow_water_equivalent_m)
-    interception_evaporation_m = np.zeros_like(snow_water_equivalent_m)
-    open_water_evaporation_m = np.zeros_like(snow_water_equivalent_m)
-    bare_soil_evaporation = np.zeros_like(snow_water_equivalent_m)
-    potential_transpiration_m = np.zeros_like(snow_water_equivalent_m)
-    potential_evapotranspiration_m = np.zeros_like(snow_water_equivalent_m)
-    transpiration_m = np.zeros_like(snow_water_equivalent_m)
-    groundwater_recharge_m = np.zeros_like(snow_water_equivalent_m)
+    reference_evapotranspiration_grass_m = np.zeros_like(slope_m_per_m)
+    rain_m = np.zeros_like(slope_m_per_m)
+    snow_m = np.zeros_like(slope_m_per_m)
+    sublimation_m = np.zeros_like(slope_m_per_m)
+    interception_evaporation_m = np.zeros_like(slope_m_per_m)
+    open_water_evaporation_m = np.zeros_like(slope_m_per_m)
+    bare_soil_evaporation = np.zeros_like(slope_m_per_m)
+    potential_transpiration_m = np.zeros_like(slope_m_per_m)
+    potential_evapotranspiration_m = np.zeros_like(slope_m_per_m)
+    transpiration_m = np.zeros_like(slope_m_per_m)
+    groundwater_recharge_m = np.zeros_like(slope_m_per_m)
 
     # Daily integrated enthalpy flux diagnostics [J/m2].
     # Positive values indicate energy entering the soil enthalpy reservoir.
-    soil_boundary_enthalpy_flux_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
-    rain_advection_enthalpy_flux_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
+    soil_boundary_enthalpy_flux_J_per_m2 = np.zeros_like(slope_m_per_m)
+    rain_advection_enthalpy_flux_J_per_m2 = np.zeros_like(slope_m_per_m)
 
     # Positive values indicate energy leaving the soil enthalpy reservoir.
-    evaporative_cooling_enthalpy_loss_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
-    interflow_enthalpy_loss_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
-    groundwater_recharge_enthalpy_loss_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
-    transpiration_enthalpy_loss_J_per_m2 = np.zeros_like(snow_water_equivalent_m)
+    evaporative_cooling_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
+    interflow_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
+    groundwater_recharge_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
+    transpiration_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
 
-    for i in prange(snow_water_equivalent_m.size):  # ty: ignore[not-iterable]
+    for i in prange(slope_m_per_m.size):  # ty: ignore[not-iterable]
         pr_kg_per_m2_per_s_cell = pr_kg_per_m2_per_s[:, i]
         tas_2m_K_cell = tas_2m_K[:, i]
         dewpoint_tas_2m_K_cell = dewpoint_tas_2m_K[:, i]
@@ -367,7 +368,7 @@ def land_surface_model(
                 soil_emissivity=SOIL_EMISSIVITY,
                 soil_albedo=SOIL_ALBEDO,
                 leaf_area_index=leaf_area_index[i],
-                snow_water_equivalent_m=snow_water_equivalent_m_cell,
+                snow_water_equivalent_m=np.float32(snow_water_equivalent_m_cell),
                 snow_temperature_C=snow_temperature_C_cell,
                 topwater_m=topwater_m[i],
             )
@@ -483,7 +484,7 @@ def land_surface_model(
             )
 
             # if there is snow, we assume no soil evaporation or transpiration can occur
-            if snow_water_equivalent_m_cell > np.float32(0.0):
+            if snow_water_equivalent_m_cell > np.float64(0.0):
                 potential_direct_evaporation_m = np.float32(0.0)
                 potential_transpiration_m_cell_hour = np.float32(0.0)
 
@@ -1082,8 +1083,8 @@ class LandSurfaceInputs(NamedTuple):
     root_depth_m: ArrayFloat32
     topwater_m: ArrayFloat32
     variable_runoff_shape_beta: ArrayFloat32
-    snow_water_equivalent_m: ArrayFloat32
-    liquid_water_in_snow_m: ArrayFloat32
+    snow_water_equivalent_m: ArrayFloat64
+    liquid_water_in_snow_m: ArrayFloat64
     snow_temperature_C: ArrayFloat32
     interception_storage_m: ArrayFloat32
     interception_capacity_m: ArrayFloat32
@@ -1127,8 +1128,8 @@ class LandSurfaceVariables(Bucket):
     silt_percentage: TwoDArrayFloat32
     bulk_density_kg_per_dm3: TwoDArrayFloat32
     soil_layer_height: TwoDArrayFloat32
-    snow_water_equivalent_m: ArrayFloat32
-    liquid_water_in_snow_m: ArrayFloat32
+    snow_water_equivalent_m: ArrayFloat64
+    liquid_water_in_snow_m: ArrayFloat64
     snow_temperature_C: ArrayFloat32
     interception_storage_m: ArrayFloat32
     variable_runoff_shape_beta: TwoDArrayFloat32
@@ -1308,8 +1309,8 @@ class LandSurface(Module):
         land_surface_inputs: LandSurfaceInputs,
         water_content_m_prev: TwoDArrayFloat32,
         topwater_m_prev: ArrayFloat32,
-        snow_water_equivalent_prev: ArrayFloat32,
-        liquid_water_in_snow_prev: ArrayFloat32,
+        snow_water_equivalent_prev: ArrayFloat64,
+        liquid_water_in_snow_prev: ArrayFloat64,
         snow_temperature_C_prev: ArrayFloat32,
         interception_storage_prev: ArrayFloat32,
         soil_enthalpy_J_per_m2_prev: TwoDArrayFloat32,
@@ -1318,6 +1319,7 @@ class LandSurface(Module):
         wetting_front_suction_head_prev: ArrayFloat32,
         wetting_front_moisture_deficit_prev: ArrayFloat32,
         green_ampt_active_layer_idx_prev: ArrayInt32,
+        index: int,
     ) -> LandSurfaceInputs:
         """Build a snapshot of land surface inputs for error reproduction.
 
@@ -1335,23 +1337,46 @@ class LandSurface(Module):
             wetting_front_suction_head_prev: Pre-call wetting front suction head (m).
             wetting_front_moisture_deficit_prev: Pre-call wetting front moisture deficit (-).
             green_ampt_active_layer_idx_prev: Pre-call Green-Ampt active layer index (-).
+            index: Index to slice all inputs for (isolates a single cell).
 
         Returns:
             Snapshot of model inputs that reproduces the failure context.
         """
+        # isolate the failing cell while keeping original ranks (dimensions)
+        sliced_fields = {}
+        for field in land_surface_inputs._fields:
+            val = getattr(land_surface_inputs, field)
+            if isinstance(val, np.ndarray):
+                if val.ndim == 1:
+                    sliced_fields[field] = val[index : index + 1]
+                elif val.ndim == 2:
+                    sliced_fields[field] = val[:, index : index + 1]
+                else:
+                    sliced_fields[field] = val
+            else:
+                sliced_fields[field] = val
+
+        land_surface_inputs = LandSurfaceInputs(**sliced_fields)
+
         error_inputs: LandSurfaceInputs = land_surface_inputs._replace(
-            water_content_m=water_content_m_prev,
-            topwater_m=topwater_m_prev,
-            snow_water_equivalent_m=snow_water_equivalent_prev,
-            liquid_water_in_snow_m=liquid_water_in_snow_prev,
-            snow_temperature_C=snow_temperature_C_prev,
-            interception_storage_m=interception_storage_prev,
-            soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2_prev,
-            deep_soil_temperature_C=deep_soil_temperature_C_prev,
-            wetting_front_depth_m=wetting_front_depth_prev,
-            wetting_front_suction_head_m=wetting_front_suction_head_prev,
-            wetting_front_moisture_deficit=wetting_front_moisture_deficit_prev,
-            green_ampt_active_layer_idx=green_ampt_active_layer_idx_prev,
+            water_content_m=water_content_m_prev[:, index : index + 1],
+            topwater_m=topwater_m_prev[index : index + 1],
+            snow_water_equivalent_m=snow_water_equivalent_prev[index : index + 1],
+            liquid_water_in_snow_m=liquid_water_in_snow_prev[index : index + 1],
+            snow_temperature_C=snow_temperature_C_prev[index : index + 1],
+            interception_storage_m=interception_storage_prev[index : index + 1],
+            soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2_prev[:, index : index + 1],
+            deep_soil_temperature_C=deep_soil_temperature_C_prev[index : index + 1],
+            wetting_front_depth_m=wetting_front_depth_prev[index : index + 1],
+            wetting_front_suction_head_m=wetting_front_suction_head_prev[
+                index : index + 1
+            ],
+            wetting_front_moisture_deficit=wetting_front_moisture_deficit_prev[
+                index : index + 1
+            ],
+            green_ampt_active_layer_idx=green_ampt_active_layer_idx_prev[
+                index : index + 1
+            ],
         )
         return error_inputs
 
@@ -1365,7 +1390,7 @@ class LandSurface(Module):
         interflow_enthalpy_loss_J_per_m2: ArrayFloat32,
         groundwater_recharge_enthalpy_loss_J_per_m2: ArrayFloat32,
         transpiration_enthalpy_loss_J_per_m2: ArrayFloat32,
-    ) -> bool:
+    ) -> tuple[Literal[False], int] | tuple[Literal[True], None]:
         """Check closure of the daily soil enthalpy budget.
 
         Notes:
@@ -1390,9 +1415,9 @@ class LandSurface(Module):
                 transpiration withdrawals from soil/topwater (J/m2, positive out).
 
         Returns:
-            True if the soil enthalpy balance closes within tolerance.
+            A tuple with a boolean and the index of the max imbalance.
         """
-        return balance_check(
+        result = balance_check(
             name="land surface enthalpy",
             how="cellwise",
             influxes=[
@@ -1409,17 +1434,20 @@ class LandSurface(Module):
             poststorages=[self.HRU.var.soil_enthalpy_J_per_m2.sum(axis=0)],
             tolerance=1e3,
             raise_on_error=False,
+            return_max_imbalance_index=True,
         )
+
+        return result
 
     def spinup(self) -> None:
         """Spinup function for the land surface module."""
         self.HRU.var.topwater_m = self.HRU.full_compressed(0.0, dtype=np.float32)
 
         self.HRU.var.snow_water_equivalent_m = self.HRU.full_compressed(
-            0.0, dtype=np.float32
+            0.0, dtype=np.float64
         )
         self.HRU.var.liquid_water_in_snow_m = self.HRU.full_compressed(
-            0.0, dtype=np.float32
+            0.0, dtype=np.float64
         )
         self.HRU.var.snow_temperature_C = self.HRU.full_compressed(
             0.0, dtype=np.float32
@@ -1721,10 +1749,10 @@ class LandSurface(Module):
             AssertionError: If any of the debug assertions fail.
         """
         if __debug__:
-            snow_water_equivalent_prev: ArrayFloat32 = (
+            snow_water_equivalent_prev: ArrayFloat64 = (
                 self.HRU.var.snow_water_equivalent_m.copy()
             )
-            liquid_water_in_snow_prev: ArrayFloat32 = (
+            liquid_water_in_snow_prev: ArrayFloat64 = (
                 self.HRU.var.liquid_water_in_snow_m.copy()
             )
             interception_storage_prev: ArrayFloat32 = (
@@ -1945,90 +1973,80 @@ class LandSurface(Module):
             water_content_m=self.HRU.var.water_content_m[1:, :],
         )
 
-        if not balance_check(
-            name="land surface 1",
-            how="cellwise",
-            influxes=[
-                pr_kg_per_m2_per_s.sum(axis=0)
-                * 3.6,  # from kg/m2/s to m/hr and sum over hours to make it day (but then re-arranged for efficiency)
-                actual_irrigation_consumption_m,
-                capillar_rise_m,
-            ],
-            outfluxes=[
-                -sublimation_or_deposition_m,
-                interception_evaporation_m,
-                open_water_evaporation_m,
-                runoff_m.sum(axis=0),  # sum over hours to make it day
-                interflow_m.sum(axis=0),  # sum over hours to make it day
-                groundwater_recharge_m,
-                bare_soil_evaporation_m,
-                transpiration_m,
-            ],
-            prestorages=[
-                snow_water_equivalent_prev,
-                liquid_water_in_snow_prev,
-                interception_storage_prev,
-                topwater_m_prev,
-                water_content_m_prev.sum(axis=0),
-            ],
-            poststorages=[
-                self.HRU.var.snow_water_equivalent_m,
-                self.HRU.var.liquid_water_in_snow_m,
-                self.HRU.var.interception_storage_m,
-                self.HRU.var.topwater_m,
-                self.HRU.var.water_content_m.sum(axis=0),
-            ],
-            tolerance=1e-5,
-            raise_on_error=False,
-        ):
-            error_inputs: LandSurfaceInputs = self._snapshot_land_surface_inputs_for_error(
-                land_surface_inputs=land_surface_inputs,
-                water_content_m_prev=water_content_m_prev,
-                topwater_m_prev=topwater_m_prev,
-                snow_water_equivalent_prev=snow_water_equivalent_prev,
-                liquid_water_in_snow_prev=liquid_water_in_snow_prev,
-                snow_temperature_C_prev=snow_temperature_C_prev,
-                interception_storage_prev=interception_storage_prev,
-                soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
-                deep_soil_temperature_C_prev=deep_soil_temperature_C_prev,
-                wetting_front_depth_prev=wetting_front_depth_prev,
-                wetting_front_suction_head_prev=wetting_front_suction_head_prev,
-                wetting_front_moisture_deficit_prev=wetting_front_moisture_deficit_prev,
-                green_ampt_active_layer_idx_prev=green_ampt_active_layer_idx_prev,
+        if __debug__:
+            water_balance_result = balance_check(
+                name="land surface 1",
+                how="cellwise",
+                influxes=[
+                    pr_kg_per_m2_per_s.sum(axis=0) * 3.6,
+                    actual_irrigation_consumption_m,
+                    capillar_rise_m,
+                ],
+                outfluxes=[
+                    -sublimation_or_deposition_m,
+                    interception_evaporation_m,
+                    open_water_evaporation_m,
+                    runoff_m.sum(axis=0),
+                    interflow_m.sum(axis=0),
+                    groundwater_recharge_m,
+                    bare_soil_evaporation_m,
+                    transpiration_m,
+                ],
+                prestorages=[
+                    snow_water_equivalent_prev,
+                    liquid_water_in_snow_prev,
+                    interception_storage_prev,
+                    topwater_m_prev,
+                    water_content_m_prev.sum(axis=0),
+                ],
+                poststorages=[
+                    self.HRU.var.snow_water_equivalent_m,
+                    self.HRU.var.liquid_water_in_snow_m,
+                    self.HRU.var.interception_storage_m,
+                    self.HRU.var.topwater_m,
+                    self.HRU.var.water_content_m.sum(axis=0),
+                ],
+                tolerance=1e-5,
+                raise_on_error=False,
+                return_max_imbalance_index=True,
             )
-            np.savez(
-                self.model.diagnostics_folder / "landsurface_model_error.npz",
-                **error_inputs._asdict(),
-            )
-            raise AssertionError("Land surface water balance check failed.")
 
-        if not self._check_soil_enthalpy_balance(
-            soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
-            soil_boundary_enthalpy_flux_J_per_m2=soil_boundary_enthalpy_flux_J_per_m2,
-            rain_advection_enthalpy_flux_J_per_m2=rain_advection_enthalpy_flux_J_per_m2,
-            evaporative_cooling_enthalpy_loss_J_per_m2=evaporative_cooling_enthalpy_loss_J_per_m2,
-            interflow_enthalpy_loss_J_per_m2=interflow_enthalpy_loss_J_per_m2,
-            groundwater_recharge_enthalpy_loss_J_per_m2=groundwater_recharge_enthalpy_loss_J_per_m2,
-            transpiration_enthalpy_loss_J_per_m2=transpiration_enthalpy_loss_J_per_m2,
-        ):
-            error_inputs = self._snapshot_land_surface_inputs_for_error(
-                land_surface_inputs=land_surface_inputs,
-                water_content_m_prev=water_content_m_prev,
-                topwater_m_prev=topwater_m_prev,
-                snow_water_equivalent_prev=snow_water_equivalent_prev,
-                liquid_water_in_snow_prev=liquid_water_in_snow_prev,
-                snow_temperature_C_prev=snow_temperature_C_prev,
-                interception_storage_prev=interception_storage_prev,
+            is_water_balanced, water_imbalance_index = water_balance_result
+
+            if not is_water_balanced and water_imbalance_index is not None:
+                error_inputs = self._snapshot_land_surface_inputs_for_error(
+                    land_surface_inputs=land_surface_inputs,
+                    water_content_m_prev=water_content_m_prev,
+                    topwater_m_prev=topwater_m_prev,
+                    snow_water_equivalent_prev=snow_water_equivalent_prev,
+                    liquid_water_in_snow_prev=liquid_water_in_snow_prev,
+                    snow_temperature_C_prev=snow_temperature_C_prev,
+                    interception_storage_prev=interception_storage_prev,
+                    soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
+                    deep_soil_temperature_C_prev=deep_soil_temperature_C_prev,
+                    wetting_front_depth_prev=wetting_front_depth_prev,
+                    wetting_front_suction_head_prev=wetting_front_suction_head_prev,
+                    wetting_front_moisture_deficit_prev=wetting_front_moisture_deficit_prev,
+                    green_ampt_active_layer_idx_prev=green_ampt_active_layer_idx_prev,
+                    index=water_imbalance_index,
+                )
+                diag_path = (
+                    self.model.diagnostics_folder
+                    / f"diagnostic_water_error_cell_{water_imbalance_index}.npz"
+                )
+                np.savez(diag_path, **error_inputs._asdict())
+                self.model.logger.error(
+                    f"Water imbalance detected at index {water_imbalance_index}. Diagnostic data exported to {diag_path}"
+                )
+                # Re-run the model for the failing cell with the isolated inputs to confirm that the error can be reproduced
+                land_surface_model(**error_inputs._asdict())
+
+                raise AssertionError(
+                    f"Land surface water balance check failed at HRU index {water_imbalance_index}."
+                )
+
+            enthalpy_balance_result = self._check_soil_enthalpy_balance(
                 soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
-                deep_soil_temperature_C_prev=deep_soil_temperature_C_prev,
-                wetting_front_depth_prev=wetting_front_depth_prev,
-                wetting_front_suction_head_prev=wetting_front_suction_head_prev,
-                wetting_front_moisture_deficit_prev=wetting_front_moisture_deficit_prev,
-                green_ampt_active_layer_idx_prev=green_ampt_active_layer_idx_prev,
-            )
-            np.savez(
-                self.model.diagnostics_folder / "landsurface_enthalpy_error.npz",
-                **error_inputs._asdict(),
                 soil_boundary_enthalpy_flux_J_per_m2=soil_boundary_enthalpy_flux_J_per_m2,
                 rain_advection_enthalpy_flux_J_per_m2=rain_advection_enthalpy_flux_J_per_m2,
                 evaporative_cooling_enthalpy_loss_J_per_m2=evaporative_cooling_enthalpy_loss_J_per_m2,
@@ -2036,7 +2054,40 @@ class LandSurface(Module):
                 groundwater_recharge_enthalpy_loss_J_per_m2=groundwater_recharge_enthalpy_loss_J_per_m2,
                 transpiration_enthalpy_loss_J_per_m2=transpiration_enthalpy_loss_J_per_m2,
             )
-            raise AssertionError("Land surface enthalpy balance check failed.")
+
+            is_enthalpy_balanced, enthalpy_imbalance_index = enthalpy_balance_result
+
+            if not is_enthalpy_balanced and enthalpy_imbalance_index is not None:
+                error_inputs = self._snapshot_land_surface_inputs_for_error(
+                    land_surface_inputs=land_surface_inputs,
+                    water_content_m_prev=water_content_m_prev,
+                    topwater_m_prev=topwater_m_prev,
+                    snow_water_equivalent_prev=snow_water_equivalent_prev,
+                    liquid_water_in_snow_prev=liquid_water_in_snow_prev,
+                    snow_temperature_C_prev=snow_temperature_C_prev,
+                    interception_storage_prev=interception_storage_prev,
+                    soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
+                    deep_soil_temperature_C_prev=deep_soil_temperature_C_prev,
+                    wetting_front_depth_prev=wetting_front_depth_prev,
+                    wetting_front_suction_head_prev=wetting_front_suction_head_prev,
+                    wetting_front_moisture_deficit_prev=wetting_front_moisture_deficit_prev,
+                    green_ampt_active_layer_idx_prev=green_ampt_active_layer_idx_prev,
+                    index=enthalpy_imbalance_index,
+                )
+                diag_path = (
+                    self.model.diagnostics_folder
+                    / f"diagnostic_enthalpy_error_cell_{enthalpy_imbalance_index}.npz"
+                )
+                np.savez(
+                    diag_path,
+                    **error_inputs._asdict(),
+                )
+                self.model.logger.error(
+                    f"Enthalpy imbalance detected at index {enthalpy_imbalance_index}. Diagnostic data exported to {diag_path}"
+                )
+                raise AssertionError(
+                    f"Land surface enthalpy balance check failed at HRU index {enthalpy_imbalance_index}."
+                )
 
         actual_evapotranspiration_m = (
             interception_evaporation_m
