@@ -1365,6 +1365,8 @@ class LandSurface(Module):
             liquid_water_in_snow_m=liquid_water_in_snow_prev[index : index + 1],
             snow_temperature_C=snow_temperature_C_prev[index : index + 1],
             interception_storage_m=interception_storage_prev[index : index + 1],
+            soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2_prev[:, index : index + 1],
+            deep_soil_temperature_C=deep_soil_temperature_C_prev[index : index + 1],
             wetting_front_depth_m=wetting_front_depth_prev[index : index + 1],
             wetting_front_suction_head_m=wetting_front_suction_head_prev[
                 index : index + 1
@@ -2079,12 +2081,6 @@ class LandSurface(Module):
                 np.savez(
                     diag_path,
                     **error_inputs._asdict(),
-                    soil_boundary_enthalpy_flux_J_per_m2=soil_boundary_enthalpy_flux_J_per_m2,
-                    rain_advection_enthalpy_flux_J_per_m2=rain_advection_enthalpy_flux_J_per_m2,
-                    evaporative_cooling_enthalpy_loss_J_per_m2=evaporative_cooling_enthalpy_loss_J_per_m2,
-                    interflow_enthalpy_loss_J_per_m2=interflow_enthalpy_loss_J_per_m2,
-                    groundwater_recharge_enthalpy_loss_J_per_m2=groundwater_recharge_enthalpy_loss_J_per_m2,
-                    transpiration_enthalpy_loss_J_per_m2=transpiration_enthalpy_loss_J_per_m2,
                 )
                 self.model.logger.error(
                     f"Enthalpy imbalance detected at index {enthalpy_imbalance_index}. Diagnostic data exported to {diag_path}"
