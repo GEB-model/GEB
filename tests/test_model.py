@@ -924,6 +924,7 @@ def test_multiverse() -> None:
                     + forecast_issue_date.strftime("%Y%m%dT%H%M%S.zarr")
                 ),
                 mode="w",
+                consolidated=False,
             )
 
         mean_discharge_after_forecast: dict[str | int, float] = geb.multiverse(
