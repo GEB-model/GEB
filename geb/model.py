@@ -411,7 +411,7 @@ class GEBModel(Module):
 
         t1 = time()
         self.logger.info(
-            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}finished {self.current_time} ({round(t1 - t0, 4)}s)",
+            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}step {self.current_time.date()}  took {round(t1 - t0, 4)}s",
         )
 
         self.current_timestep += 1

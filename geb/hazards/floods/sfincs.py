@@ -817,7 +817,7 @@ class SFINCSRootModel:
             outflow_gdf = gpd.GeoDataFrame({"geometry": [outflow_point]}, crs=self.crs)
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
-        boundary = area.unary_union.boundary
+        boundary = area.union_all().boundary
 
         for river_idx, river in self.active_rivers[
             self.active_rivers["is_downstream_outflow"]  # any outflow river

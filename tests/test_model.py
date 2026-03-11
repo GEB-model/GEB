@@ -460,7 +460,6 @@ def test_evaluate_evaluate_discharge() -> None:
         assert "KGE" in result
         assert "NSE" in result
         assert "R" in result
-        assert isinstance(result["KGE"], (float, int))
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

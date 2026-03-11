@@ -180,11 +180,17 @@ def create_logger(name: str) -> logging.Logger:
     ch: logging.StreamHandler[TextIO] = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
     # create formatter
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s", datefmt="%d-%m %H:%M:%S"
+    )
     # add formatter to ch
     ch.setFormatter(formatter)
     # add ch to logger
     logger.addHandler(ch)
+
+    # prevent double logging
+    logger.propagate = False
+
     # add file handler
     folder = Path("logs")
     folder.mkdir(exist_ok=True, parents=True)
