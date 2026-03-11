@@ -1,5 +1,7 @@
 """The main GEB model class. This class is used to initialize and run the model."""
 
+from __future__ import annotations
+
 import copy
 import datetime
 import logging
