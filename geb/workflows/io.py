@@ -1,5 +1,7 @@
 """I/O related functions and classes for the GEB project."""
 
+from __future__ import annotations
+
 import asyncio
 import datetime
 import hashlib
@@ -1685,7 +1687,7 @@ def create_hash_from_parameters(
             value = value.item()
         try:
             json.dumps(value)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             raise ValueError(f"Value {value} is not JSON serializable")
         return value
 
