@@ -2,7 +2,7 @@
 
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b15": [
-        "[manual] Update to Python 3.14. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.",
+        "[manual] Go back to Python 3.13. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.",
     ],
     "1.0.0b14": [
         "[manual] Update to Python 3.14. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.",
