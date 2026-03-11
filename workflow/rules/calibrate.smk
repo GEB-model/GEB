@@ -19,10 +19,16 @@ import yaml
 import numpy as np
 import pandas as pd
 import json
+import logging
+from datetime import datetime
 from deap import base, creator, tools, algorithms
 import array
 from pathlib import Path
 from geb.runner import parse_config
+from snakemake.logging import logger as snakemake_logger
+
+# silence snakemake logging, in favour of our own progress messages and logging within each step
+snakemake_logger.setLevel(logging.WARNING)
 
 # --- Configuration & Setup ---
 
@@ -79,6 +85,29 @@ for weight in weights:
 
 # --- DEAP Initialization ---
 
+def get_progress_message(wildcards, action):
+    """Helper to generate a detailed progress message for individual steps."""
+    gen = wildcards.gen
+    ind = wildcards.ind
+    total = MU if int(gen) == 0 else LAMBDA
+    
+    # Count done files for the current generation
+    path = Path(RUNS_DIR)
+    n_params = len(list(path.glob(f"{gen}_*/parameters.yml")))
+    n_init = len(list(path.glob(f"{gen}_*/init.done")))
+    n_altered = len(list(path.glob(f"{gen}_*/altered.done")))
+    n_params_set = len(list(path.glob(f"{gen}_*/params_set.done")))
+    n_spinup = len(list(path.glob(f"{gen}_*/spinup.done")))
+    n_run = len(list(path.glob(f"{gen}_*/run.done")))
+    n_eval = len(list(path.glob(f"{gen}_*/fitness.yml")))
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    return (
+        f"[{timestamp}] {action} for gen {gen}, ind {ind}. "
+        f"Progress: {n_params}/{total} create, {n_init}/{total} init, {n_altered}/{total} alter, "
+        f"{n_params_set}/{total} set, {n_spinup}/{total} spinup, {n_run}/{total} run, {n_eval}/{total} evaluate."
+    )
+
 creator.create("FitnessMulti", base.Fitness, weights=weights)
 creator.create("Individual", array.array, typecode="d", fitness=creator.FitnessMulti)
 
@@ -97,7 +126,7 @@ def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") 
     env = os.environ.copy()
     env["GEB_OVERRIDE_PROGRESSBAR_DT"] = "10"
 
-    print(f"\n[GEB] Running: {cmd}")
+    # print(f"[GEB] Running: {cmd}")
     
     process = subprocess.run(
         cmd, 
@@ -125,17 +154,20 @@ def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") 
 rule init_base:
     output: touch("base_init.done")
     log: "logs/base_init.log"
+    message: "Initializing base GEB model..."
     run: run_command("geb init --overwrite", log[0], "Failed to initialize base model")
 
 rule build_base:
     input: "base_init.done"
     output: touch("base_build.done")
     log: "logs/base_build.log"
+    message: "Building base GEB model..."
     run: run_command("geb build --continue", log[0], "Failed to build base model")
 
 rule generate_initial_parameters:
     input: "base_build.done"
     output: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TRACK)
+    message: "Generating initial DEAP population for {CALIBRATION_TRACK}..."
     run:
         population = toolbox.population(n=MU)
         individuals = []
@@ -156,6 +188,7 @@ rule generate_individual_parameters:
         checkpoint_done=lambda wildcards: checkpoints.create_next_generation.get(gen=int(wildcards.gen) - 1).output if int(wildcards.gen) > 0 else []
     output: params=RUNS_DIR + "/{gen}_{ind}/parameters.yml"
     run:
+        print(get_progress_message(wildcards, "Defining parameters"))
         with open(input.pop_file, "r") as f:
             pop_data = yaml.safe_load(f)
         
@@ -186,6 +219,7 @@ rule init_individual:
     output: touch(RUNS_DIR + "/{gen}_{ind}/init.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/init.log"
     run:
+        print(get_progress_message(wildcards, "Initializing folder"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
@@ -197,6 +231,7 @@ rule alter_individual:
     output: touch(RUNS_DIR + "/{gen}_{ind}/altered.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/alter.log"
     run:
+        print(get_progress_message(wildcards, "Altering model configuration"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         cmd = f"geb alter --from-model ../../../. -wd {run_dir}"
         run_command(cmd, log[0], f"Failed to alter model {wildcards.gen}_{wildcards.ind}")
@@ -208,6 +243,7 @@ rule set_individual_parameters:
     output: touch(RUNS_DIR + "/{gen}_{ind}/params_set.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/set_params.log"
     run:
+        print(get_progress_message(wildcards, "Setting param values"))
         with open(input.parameters, "r") as f: params_data = yaml.safe_load(f)
         actual_params = params_data["parameters"]
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
@@ -229,6 +265,7 @@ rule spinup_individual:
     output: touch(RUNS_DIR + "/{gen}_{ind}/spinup.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/spinup.log"
     run:
+        print(get_progress_message(wildcards, "Performing spinup"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         run_command(f"geb spinup -wd {run_dir}", log[0], f"Spinup failed for {wildcards.gen}_{wildcards.ind}")
 
@@ -237,6 +274,7 @@ rule run_individual:
     output: touch(RUNS_DIR + "/{gen}_{ind}/run.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/run.log"
     run:
+        print(get_progress_message(wildcards, "Performing run"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         run_command(f"geb run -wd {run_dir}", log[0], f"Main run failed for {wildcards.gen}_{wildcards.ind}")
         shutil.rmtree(run_dir / "simulation_root")
@@ -246,6 +284,7 @@ rule evaluate_individual:
     output: RUNS_DIR + "/{gen}_{ind}/fitness.yml"
     log: RUNS_DIR + "/{gen}_{ind}/logs/evaluate.log"
     run:
+        print(get_progress_message(wildcards, "Evaluating fitness"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         model_config = parse_config(run_dir / "model.yml")
         targets = CALIBRATION_CONFIG.get("calibration_targets", {})
@@ -282,6 +321,7 @@ checkpoint create_next_generation:
         selected_pop="calibration/generation_{gen}_{target}_selected.yml".format(target=CALIBRATION_TRACK, gen="{gen}"),
         summary="calibration/generation_{gen}_{target}_summary.yml".format(target=CALIBRATION_TRACK, gen="{gen}"),
         next_pop="calibration/generation_{gen}_{target}_next.yml".format(target=CALIBRATION_TRACK, gen="{gen}")
+    message: "Aggregating fitness and creating next generation for {wildcards.gen}..."
     run:
         gen = int(wildcards.gen)
         with open(input.prev_pop, "r") as f: pop_data = yaml.safe_load(f)
@@ -336,6 +376,7 @@ def aggregate_checkpoint_outputs(wildcards):
 rule complete_calibration:
     input: aggregate_checkpoint_outputs
     output: touch("calibration/calibration_{target}_complete.done".format(target=CALIBRATION_TRACK))
+    message: "Finalizing calibration for {CALIBRATION_TRACK} and computing Pareto front..."
     run:
         all_individuals = []
         for gen in range(NGEN):
