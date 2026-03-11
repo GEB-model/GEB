@@ -296,7 +296,7 @@ checkpoint create_next_generation:
             if ind_data:
                 # We extract individual metric values into a tuple for DEAP multi-objective handling
                 # DEAP 'weights' already handle maximization (+1) vs minimization (-1)
-                fit_tuple = tuple(t["value"] for t in fitness_data["targets"].values())
+                fit_tuple = [t["value"] for t in fitness_data["targets"].values()]
                 ind_data["fitness"] = fit_tuple
                 individuals_with_fitness.append(ind_data)
         
