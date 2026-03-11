@@ -1,4 +1,7 @@
 # dev
+
+# v1.0.0b15
+- Switch back to Python 3.13 due to netcdf reading errors.
 - Switch liquid water in snow and snow water equivalent to float64 to avoid floating point imprecision in thick snow layers.
 - In case of water balance or enthalpy error export data for single cell that can be used to fix and test water balance seperately.
 
