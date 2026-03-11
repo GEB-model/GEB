@@ -5,7 +5,6 @@ Source code can be found on https://doi.org/10.5281/zenodo.7912730.
 
 import itertools
 import os
-import warnings
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -21,8 +20,6 @@ from pandas.plotting import (
 from geb.workflows.io import read_geom
 
 from ....workflows.io import read_table
-
-warnings.filterwarnings("ignore")
 
 
 def linear_detrend_with_nan(
