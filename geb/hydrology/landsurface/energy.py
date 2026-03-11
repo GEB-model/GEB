@@ -836,8 +836,8 @@ def solve_soil_enthalpy_column(
             effective_snow_depth_m: np.float32 = max(
                 np.float32(snow_depth_m), np.float32(0.01)
             )
-            conductance_distance_m: np.float32 = (
-                effective_snow_depth_m * np.float32(0.5)
+            conductance_distance_m: np.float32 = effective_snow_depth_m * np.float32(
+                0.5
             )
             snow_conductance_W_per_m2_K = (
                 snow_thermal_conductivity_W_per_m_K / conductance_distance_m
