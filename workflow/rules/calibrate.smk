@@ -153,16 +153,26 @@ def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") 
 
 rule init_base:
     output: touch("base_init.done")
-    log: "logs/base_init.log"
+    log: "logs/snakemake_base_init.log"
     message: "Initializing base GEB model..."
-    run: run_command("geb init --overwrite", log[0], "Failed to initialize base model")
+    run: 
+        if not Path("model.yml").exists():
+            run_command("geb init --overwrite", log[0], "Failed to initialize base model")
+        else:
+            with open(log[0], "a") as log_file:
+                log_file.write(f"model.yml already exists, skipping 'geb init'\n")
 
 rule build_base:
     input: "base_init.done"
     output: touch("base_build.done")
-    log: "logs/base_build.log"
+    log: "logs/snakemake_base_build.log"
     message: "Building base GEB model..."
-    run: run_command("geb build --continue", log[0], "Failed to build base model")
+    run: 
+        if not Path("input/build_complete.txt").exists():
+            run_command("geb build --continue", log[0], "Failed to build base model")
+        else:
+            with open(log[0], "a") as log_file:
+                log_file.write(f"base_build.done already exists, skipping 'geb build'\n")
 
 rule generate_initial_parameters:
     input: "base_build.done"
@@ -217,7 +227,7 @@ rule init_individual:
         params=RUNS_DIR + "/{gen}_{ind}/parameters.yml",
         base_build="base_build.done"
     output: touch(RUNS_DIR + "/{gen}_{ind}/init.done")
-    log: RUNS_DIR + "/{gen}_{ind}/logs/init.log"
+    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_init.log"
     run:
         print(get_progress_message(wildcards, "Initializing folder"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
@@ -229,7 +239,7 @@ rule init_individual:
 rule alter_individual:
     input: RUNS_DIR + "/{gen}_{ind}/init.done"
     output: touch(RUNS_DIR + "/{gen}_{ind}/altered.done")
-    log: RUNS_DIR + "/{gen}_{ind}/logs/alter.log"
+    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_alter.log"
     run:
         print(get_progress_message(wildcards, "Altering model configuration"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
@@ -241,7 +251,7 @@ rule set_individual_parameters:
         altered_done=RUNS_DIR + "/{gen}_{ind}/altered.done",
         parameters=RUNS_DIR + "/{gen}_{ind}/parameters.yml",
     output: touch(RUNS_DIR + "/{gen}_{ind}/params_set.done")
-    log: RUNS_DIR + "/{gen}_{ind}/logs/set_params.log"
+    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake/set_params.log"
     run:
         print(get_progress_message(wildcards, "Setting param values"))
         with open(input.parameters, "r") as f: params_data = yaml.safe_load(f)
@@ -263,7 +273,7 @@ rule set_individual_parameters:
 rule spinup_individual:
     input: RUNS_DIR + "/{gen}_{ind}/params_set.done"
     output: touch(RUNS_DIR + "/{gen}_{ind}/spinup.done")
-    log: RUNS_DIR + "/{gen}_{ind}/logs/spinup.log"
+    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_spinup.log"
     run:
         print(get_progress_message(wildcards, "Performing spinup"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
@@ -272,7 +282,7 @@ rule spinup_individual:
 rule run_individual:
     input: RUNS_DIR + "/{gen}_{ind}/spinup.done"
     output: touch(RUNS_DIR + "/{gen}_{ind}/run.done")
-    log: RUNS_DIR + "/{gen}_{ind}/logs/run.log"
+    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_run.log"
     run:
         print(get_progress_message(wildcards, "Performing run"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
@@ -282,7 +292,7 @@ rule run_individual:
 rule evaluate_individual:
     input: RUNS_DIR + "/{gen}_{ind}/run.done"
     output: RUNS_DIR + "/{gen}_{ind}/fitness.yml"
-    log: RUNS_DIR + "/{gen}_{ind}/logs/evaluate.log"
+    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_evaluate.log"
     run:
         print(get_progress_message(wildcards, "Evaluating fitness"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
@@ -310,7 +320,6 @@ rule evaluate_individual:
         with open(output[0], "w") as f:
             yaml.dump({"targets": all_metrics}, f)
 
-        shutil.rmtree(run_dir / "output")
         shutil.rmtree(run_dir / "input")
 
 checkpoint create_next_generation:
