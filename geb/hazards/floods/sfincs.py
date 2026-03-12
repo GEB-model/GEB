@@ -627,7 +627,7 @@ class SFINCSRootModel:
         )
 
         sf.plot_basemap(
-            fn_out=str(self.figures_path / "basemap.png"),
+            fn_out=str((self.figures_path / "basemap.png").resolve()),
             vmin=math.floor(self.elevation.min()),
             vmax=max(
                 math.ceil(self.elevation.max()), 1
