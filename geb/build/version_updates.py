@@ -4,11 +4,8 @@ VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b16": [
         "[manual] Order in build.yml from top must be `setup_region`, `set_time_range`, `set_ssp`, `setup_hydrography`, `setup_elevation`",
     ],
-    "1.0.0b15": [
-        "[manual] Go back to Python 3.13. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.",
-    ],
+    "1.0.0b15": [],
     "1.0.0b14": [
-        "[manual] Update to Python 3.14. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.",
         "[manual] Move `setup_coastlines` and `setup_coastal_sfincs_model_regions` to above `setup_regions_and_land_use` in your build.yml.",
     ],
     "1.0.0b13": [],
