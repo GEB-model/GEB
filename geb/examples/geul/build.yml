@@ -1,10 +1,6 @@
 setup_region:
   subgrid_factor: 20
 
-setup_coastlines:
-
-setup_coastal_sfincs_model_regions:
-
 set_time_range:
   start_date: 1960-01-01
   end_date: 2024-12-31
@@ -14,14 +10,18 @@ set_ssp:
 
 setup_hydrography:
 
+setup_elevation:
+
+setup_coastlines:
+
+setup_coastal_sfincs_model_regions:
+
 setup_assets:
   feature_types:
   - roads
   - rails
 
 setup_gtsm_station_data:
-
-setup_elevation:
 
 setup_regions_and_land_use:
   region_database: GADM_level1
