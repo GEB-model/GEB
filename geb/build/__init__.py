@@ -307,6 +307,7 @@ def get_sink_subbasin_id_for_geom(
 def get_all_downstream_subbasins_in_geom(
     data_catalog: NewDataCatalog,
     geom: gpd.GeoDataFrame,
+    ocean_outlets_only: bool,
     logger: logging.Logger,
 ) -> list[int]:
     """Find all downstream subbasins (with NextDownID = 0) that intersect with the given geometry.
@@ -314,6 +315,7 @@ def get_all_downstream_subbasins_in_geom(
     Args:
         data_catalog: Data catalog containing the MERIT basins.
         geom: GeoDataFrame containing the geometry to find the downstream subbasins for.
+        ocean_outlets_only: If True, only include subbasins that flow to the ocean.
         logger: Logger for progress tracking.
 
     Returns:
@@ -351,9 +353,26 @@ def get_all_downstream_subbasins_in_geom(
     downstream_subbasins = river_network.loc[intersecting_subbasins]
     downstream_subbasins = downstream_subbasins[downstream_subbasins["NextDownID"] == 0]
 
-    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
-
-    return downstream_subbasins.index.tolist()
+    if ocean_outlets_only:
+        logger.info("Filtering for ocean outlets only (NextDownID = 0)...")
+        coastlines = data_catalog.fetch("open_street_map_coastlines").read()
+        coastlines = coastlines.cx[
+            subbasins.total_bounds[0] : subbasins.total_bounds[2],
+            subbasins.total_bounds[1] : subbasins.total_bounds[3],
+        ]
+        candidates = subbasins.loc[downstream_subbasins.index]
+        # Buffer distance expressed in degrees (assumes geographic CRS); used to
+        # capture subbasins that are close to, but not exactly on, the coastline.
+        buffer_distance_deg = 0.1
+        buffered = candidates.geometry.buffer(buffer_distance_deg)
+        mask = buffered.intersects(coastlines.union_all())
+        # Get verified IDs
+        downstream_subbasins = candidates.index[mask].tolist()
+        logger.info(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
+        return downstream_subbasins
+    else:
+        logger.info(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
+        return downstream_subbasins.index.tolist()
 
 
 def get_subbasin_upstream_areas(
@@ -1274,16 +1293,18 @@ def create_multi_basin_configs(
 
     print(f"Created build.yml in {working_directory}")
 
-    # Create model.yml in init_multiple_dir directory that inherits from reasonable default
+    # Create model.yml in init_multiple_dir directory and copy the geul example
     print("Creating model.yml in init_multiple_dir directory...")
     model_config_path = working_directory / "model.yml"
 
-    # Define the model configuration content with inheritance from reasonable default
-    model_config_content = """inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
-"""
+    # Read build config from geul example and automatically copy it
+    geul_config_path = GEB_PACKAGE_DIR / "examples" / "geul" / "model.yml"
 
-    with open(model_config_path, "w") as f:
-        f.write(model_config_content)
+    print(f"Reading model configuration from: {geul_config_path}")
+
+    # Copy geul model.yml content directly to init_multiple_dir model.yml
+    with open(geul_config_path, "r") as src, open(model_config_path, "w") as dst:
+        dst.write(src.read())
 
     print(f"Created model.yml in {working_directory}")
 

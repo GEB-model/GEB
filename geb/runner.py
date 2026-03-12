@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, TextIO, TypeVar, cast
 
 import geopandas as gpd
-import memray
 import yaml
 from pydantic import BaseModel, ValidationError
 from shapely.geometry import box
@@ -348,6 +347,8 @@ def _run_with_optional_profiling(
 
     ram_profiler_tracker = None
     if profile_ram:
+        import memray
+
         ram_path: Path = profiling_folder / f"{name}_ram_{date}.bin"
         if ram_path.exists():
             ram_path.unlink()  # Remove existing RAM profile if it exists
@@ -1326,9 +1327,11 @@ def init_multiple_fn(
         logger = create_logger("init_multiple")
 
     # Create the models/init_multiple_dir directory structure.
-    # models_dir is the parent 'models' folder expected at <cwd>/../models;
+    # models_dir is the parent 'models' folder expected at the parent of GEB repository.
     # init_multiple_dir_path is the target subdirectory to create.
-    models_dir = Path.cwd().parent / "models"
+    models_dir = Path(__file__).parents[2] / "models"
+    if region_shapefile:
+        region_shapefile: Path = Path(region_shapefile)
     if not models_dir.is_dir():
         raise FileNotFoundError(
             f"Models directory not found: {models_dir}\n"
@@ -1340,26 +1343,40 @@ def init_multiple_fn(
 
     # create river
     logger.info("Starting multiple model initialization")
-    logger.info(f"Using geometry bounds: {geometry_bounds}")
     logger.info(f"Target area: {target_area_km2:,.0f} km²")
 
     logger.info("Loading river network...")
     river_graph = get_river_graph(data_catalog_instance)
 
-    # Parse geometry bounds and convert to geodataframe
-    bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
-    if len(bounds) != 4:
-        raise ValueError(
-            "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
-        )
-    xmin, ymin, xmax, ymax = bounds
+    # Create bounding box geometry or read region shapefile
+    if not region_shapefile:
+        logger.info(f"Using geometry bounds: {geometry_bounds}")
+        # Parse geometry bounds and convert to geodataframe
+        bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
+        if len(bounds) != 4:
+            raise ValueError(
+                "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
+            )
+        xmin, ymin, xmax, ymax = bounds
 
-    bbox_geom = gpd.GeoDataFrame(
-        geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
-    )
+        bbox_geom = gpd.GeoDataFrame(
+            geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
+        )
+    else:
+        logger.info(f"Using region shapefile: {region_shapefile}")
+        region_shapefile_path: Path = working_directory / region_shapefile
+        if not region_shapefile_path.exists():
+            raise FileNotFoundError(
+                f"Region shapefile not found at: {region_shapefile_path}"
+            )
+        bbox_geom = gpd.read_file(region_shapefile_path)
+
+    # check crs bounding box geometry
+    if bbox_geom.crs != "EPSG:4326":
+        bbox_geom = bbox_geom.to_crs("EPSG:4326")
 
     downstream_subbasins = get_all_downstream_subbasins_in_geom(
-        data_catalog_instance, bbox_geom, logger
+        data_catalog_instance, bbox_geom, ocean_outlets_only, logger
     )  # get all downstream subbasins in the bounding box geometry
 
     if not downstream_subbasins:
