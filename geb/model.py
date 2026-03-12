@@ -359,7 +359,7 @@ class GEBModel(Module):
                     forecast_issue_dates.append(dt)  # append the date to the list
                 else:
                     raise RuntimeError(
-                        f"orecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'. Skipping this file."
+                        f"Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
                     )
 
             forecast_issue_dates = list(
