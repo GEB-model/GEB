@@ -1810,7 +1810,7 @@ class Agents(BuildModelBase):
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
         single_household_per_building: bool = False,
-        redundancy_array_size=20e6,
+        redundancy_array_size: int = 20e6,
     ) -> None:
         """New method to set up household characteristics for agents using GLOPOP-S data. This method is still under development and may not be fully functional.
 
@@ -1881,7 +1881,9 @@ class Agents(BuildModelBase):
                 buildings["occupancy"].str.contains("RES|UNK", na=False)
             ]
             if residential_buildings_model_region.empty:
-                self.logger.info(f"No residential buildings found for GDL code: {GDL_code}")
+                self.logger.info(
+                    f"No residential buildings found for GDL code: {GDL_code}"
+                )
                 continue
 
             GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
