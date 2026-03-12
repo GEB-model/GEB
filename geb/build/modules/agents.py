@@ -1861,10 +1861,11 @@ class Agents(BuildModelBase):
         # setup buildings in region for household allocation
         all_buildings_model_region = self.assign_buildings_to_grid_cells(GDL_regions)
 
-        for GDL_code in all_buildings_model_region:
-            # initiate dictionary to store results for this region
-            household_characteristics_region = {}
+        # collect household characteristics for all regions; initialized once to avoid
+        # overwriting results for earlier regions during the loop
+        household_characteristics_region = {}  # type: dict[str, Any]
 
+        for GDL_code in all_buildings_model_region:
             buildings = all_buildings_model_region[GDL_code]
             # filter to residential buildings
             # check if occupancy column contains RES or UNK string (unknown occupancy assumed residential)
