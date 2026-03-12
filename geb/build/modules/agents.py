@@ -1986,7 +1986,6 @@ class Agents(BuildModelBase):
                     replace=sampled_households.size > n_buildings,
                 )
 
-
                 n_agents_allocated = end
 
             household_ids = household_ids[:n_agents_allocated]
