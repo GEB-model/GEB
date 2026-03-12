@@ -1989,12 +1989,35 @@ class Agents(BuildModelBase):
                 end = n_agents_allocated + sampled_households.size
 
                 household_ids[n_agents_allocated:end] = sampled_households
-                building_ids[n_agents_allocated:end] = np.random.choice(
-                    buildings_in_cell["id"].values,
-                    size=sampled_households.size,
-                    replace=sampled_households.size > n_buildings,
-                )
+                building_ids_in_cell = buildings_in_cell["id"].values
 
+                if sampled_households.size <= n_buildings:
+                    # When the number of sampled households does not exceed the
+                    # number of buildings, we can sample buildings without
+                    # replacement while still allowing some buildings to host
+                    # zero households, matching the previous behaviour.
+                    building_ids_sampled = np.random.choice(
+                        building_ids_in_cell,
+                        size=sampled_households.size,
+                        replace=False,
+                    )
+                else:
+                    # When more households than buildings are allocated in a cell,
+                    # first assign one household to every building (ensuring that
+                    # no building is left without households), then distribute the
+                    # remaining households across buildings with replacement.
+                    first_building_ids = np.random.permutation(building_ids_in_cell)
+                    n_remaining = sampled_households.size - n_buildings
+                    additional_building_ids = np.random.choice(
+                        building_ids_in_cell,
+                        size=n_remaining,
+                        replace=True,
+                    )
+                    building_ids_sampled = np.concatenate(
+                        [first_building_ids, additional_building_ids]
+                    )
+
+                building_ids[n_agents_allocated:end] = building_ids_sampled
                 n_agents_allocated = end
                 if end > redundancy_array_size:
                     raise ValueError(
