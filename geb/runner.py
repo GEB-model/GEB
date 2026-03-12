@@ -1266,10 +1266,9 @@ def init_multiple_fn(
     logger = create_logger(working_directory / "init_multiple.log")
 
     # Create the models/init_multiple_dir directory structure.
-    # models_dir is the parent 'models' folder expected at <cwd>/../models;
+    # models_dir is the parent 'models' folder expected at the parent of GEB repository.
     # init_multiple_dir_path is the target subdirectory to create.
-    models_dir = Path.cwd().parent / "models"
-
+    models_dir = Path(__file__).parents[2] / "models"
     if region_shapefile:
         region_shapefile: Path = Path(region_shapefile)
     if not models_dir.is_dir():
@@ -1315,12 +1314,8 @@ def init_multiple_fn(
     if bbox_geom.crs != "EPSG:4326":
         bbox_geom = bbox_geom.to_crs("EPSG:4326")
 
-    bbox_geom = gpd.GeoDataFrame(
-        geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
-    )
-
     downstream_subbasins = get_all_downstream_subbasins_in_geom(
-        data_catalog_instance, bbox_geom, logger
+        data_catalog_instance, bbox_geom, ocean_outlets_only, logger
     )  # get all downstream subbasins in the bounding box geometry
 
     if not downstream_subbasins:
@@ -1338,18 +1333,6 @@ def init_multiple_fn(
         min_bbox_efficiency=min_bbox_efficiency,
     )
 
-    if ocean_outlets_only:
-        logger.info("Filtering coastal basins to ocean outlets only...")
-        # Load coastlines
-        coastlines = data_catalog.fetch("open_street_map_coastlines").read()
-        # clip coastlines to the bounding box of the subbasins for performance
-        coastlines = coastlines.cx[
-            bbox_geom.total_bounds[0] : bbox_geom.total_bounds[2],
-            bbox_geom.total_bounds[1] : bbox_geom.total_bounds[3],
-        ]
-        # check whether coastal basins intersect with coastlines
-        # Only select candidate basins first
-        candidates = subbasins.loc[coastal_basin_ids]
 
     logger.info(f"Created {len(clusters)} clusters")
 
