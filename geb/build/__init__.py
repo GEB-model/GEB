@@ -361,10 +361,22 @@ def get_all_downstream_subbasins_in_geom(
             subbasins.total_bounds[1] : subbasins.total_bounds[3],
         ]
         candidates = subbasins.loc[downstream_subbasins.index]
-        buffered = candidates.geometry.buffer(0.1)
-        mask = buffered.intersects(coastlines.union_all())
+        # Buffer distance expressed in degrees (assumes geographic CRS); used to
+        # capture subbasins that are close to, but not exactly on, the coastline.
+        buffer_distance_deg = 0.1
+        buffered = candidates.geometry.buffer(buffer_distance_deg)
+        # Use a spatial join to find buffered subbasins that intersect any coastline
+        # feature. This avoids constructing a single, potentially very large, unioned
+        # coastline geometry and leverages the spatial index instead.
+        buffered_gdf = gpd.GeoDataFrame(
+            {"COMID": candidates.index},
+            geometry=buffered,
+            index=candidates.index,
+            crs=candidates.crs,
+        )
+        joined = gpd.sjoin(buffered_gdf, coastlines, how="inner", predicate="intersects")
         # Get verified IDs
-        coastal_basin_ids = candidates.index[mask].tolist()
+        coastal_basin_ids = joined.index.unique().tolist()
 
         # remove any coastal basins that do not intersect with coastlines from subbasins
         downstream_subbasins = coastal_basin_ids
