@@ -1,10 +1,10 @@
 """Tests for visualisation workflows."""
 
-from pathlib import Path
-
 import matplotlib.pyplot as plt
 
 from geb.workflows.visualise import plot_sunburst
+
+from .testconfig import output_folder
 
 
 def test_plot_sunburst_simple() -> None:
@@ -27,7 +27,7 @@ def test_plot_sunburst_simple() -> None:
     assert isinstance(fig, plt.Figure)
 
     # Check if we can save it
-    output_path = Path("tests/tmp/test_sunburst_simple.svg")
+    output_path = output_folder / "test_sunburst_simple.svg"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path)
     assert output_path.exists()
