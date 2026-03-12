@@ -251,7 +251,7 @@ rule set_individual_parameters:
         altered_done=RUNS_DIR + "/{gen}_{ind}/altered.done",
         parameters=RUNS_DIR + "/{gen}_{ind}/parameters.yml",
     output: touch(RUNS_DIR + "/{gen}_{ind}/params_set.done")
-    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake/set_params.log"
+    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_set_params.log"
     run:
         print(get_progress_message(wildcards, "Setting param values"))
         with open(input.parameters, "r") as f: params_data = yaml.safe_load(f)
