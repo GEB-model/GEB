@@ -393,7 +393,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             folder="faostat_prices",
             local_version=1,
             filename="faostat_prices.parquet",
-            cache="local",
+            cache="global",
         ),
         "url": "https://bulks-faostat.fao.org/production/Prices_E_All_Data.zip",
         "source": {
