@@ -3350,7 +3350,7 @@ class CropFarmers(AgentBaseClass):
             self.var.yearly_SPEI_probability[new_id_final, :]
         )
         timer_crops.finish_split("final steps")
-        print(timer_crops)
+        self.model.logger.debug(timer_crops)
 
     def adapt_irrigation_well(
         self,
@@ -5520,14 +5520,14 @@ class CropFarmers(AgentBaseClass):
             shift_and_reset_matrix(self.var.yearly_potential_income)
             shift_and_reset_matrix(self.var.insured_yearly_income)
 
-            print(timer)
+            self.model.logger.debug(timer)
         # if self.model.current_timestep == 100:
         #     self.add_agent(indices=(np.array([310, 309]), np.array([69, 69])))
         # if self.model.current_timestep == 105:
         #     self.remove_agent(farmer_idx=1000)
 
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.report(locals())
 

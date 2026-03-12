@@ -4,6 +4,7 @@ The groundwater module uses MODFLOW to simulate groundwater flow and interaction
 with surface water and the unsaturated zone.
 """
 
+import logging
 import math
 from copy import deepcopy
 from pathlib import Path
@@ -31,6 +32,8 @@ from geb.workflows.raster import calculate_cell_area_m2, compress
 
 from ..testconfig import GEB_PACKAGE_DIR, output_folder, tmp_folder
 
+logger: logging.Logger = logging.getLogger(__name__)
+
 
 class ModFlowParams(TypedDict):
     """Type definition for ModFlowSimulation parameters."""
@@ -48,6 +51,7 @@ class ModFlowParams(TypedDict):
     heads_update_callback: Callable[[ArrayFloat64], None]
     verbose: bool
     never_load_from_disk: bool
+    logger: logging.Logger
 
 
 def decompress(
@@ -126,6 +130,7 @@ default_params: ModFlowParams = {
     "verbose": True,
     "never_load_from_disk": True,
     "heads_update_callback": lambda heads: None,
+    "logger": logger,
 }
 
 

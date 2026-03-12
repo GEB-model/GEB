@@ -460,7 +460,7 @@ class WaterDemand(Module):
                 tolerance=10000,
             )
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.report(locals())
 

@@ -143,6 +143,7 @@ class GroundWater(Module):
             basin_mask=self.model.hydrology.grid.mask,
             heads=self.grid.var.heads,
             hydraulic_conductivity=self.grid.var.groundwater_hydraulic_conductivity_m_per_day,
+            logger=self.model.logger,
             verbose=False,
             heads_update_callback=self.heads_update_callback,
         )

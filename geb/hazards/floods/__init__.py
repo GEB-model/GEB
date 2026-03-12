@@ -269,7 +269,9 @@ class Floods(Module):
         Returns:
             The built or read SFINCSRootModel instance.
         """
-        sfincs_model = SFINCSRootModel(self.model.simulation_root, name)
+        sfincs_model = SFINCSRootModel(
+            self.model.simulation_root, name, logger=self.model.logger
+        )
         for entry in self.DEM_config:
             entry["elevtn"] = read_zarr(
                 self.model.files["other"][entry["path"]]

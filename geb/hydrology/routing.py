@@ -1612,7 +1612,7 @@ class Routing(Module):
             np.float64
         ).sum()
         if over_abstraction_m3.sum() > 100:
-            print(
+            self.model.logger.warning(
                 f"Total over-abstraction in routing step is {total_over_abstraction_m3:.2f} m³"
             )
 
