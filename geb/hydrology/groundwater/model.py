@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 from pathlib import Path
@@ -238,6 +239,7 @@ class ModFlowSimulation:
         hydraulic_conductivity: TwoDArrayFloat32,
         heads: TwoDArrayFloat64,
         heads_update_callback: Callable,
+        logger: logging.Logger,
         min_remaining_layer_storage_m: float = 0.1,
         verbose: bool = False,
         never_load_from_disk: bool = False,
@@ -261,6 +263,7 @@ class ModFlowSimulation:
             never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input
                 will be loaded from disk if it exists and the input parameters have not changed.
         """
+        self.logger = logger
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
         self.heads_update_callback = heads_update_callback
         self.basin_mask = basin_mask
@@ -282,9 +285,11 @@ class ModFlowSimulation:
         self.hydraulic_conductivity_drainage = hydraulic_conductivity[0]
 
         arguments = dict(locals())
+
         arguments.pop("working_directory")
         arguments.pop("modflow_bin_folder")
         arguments.pop("self")
+        arguments.pop("logger")  # not hashable and not neededß
         arguments.pop("heads_update_callback")  # not hashable and not needed
         arguments.pop(
             "heads"
@@ -297,7 +302,7 @@ class ModFlowSimulation:
         if not self.load_from_disk(arguments):
             try:
                 if self.verbose:
-                    print("Creating MODFLOW model")
+                    self.logger.info("Creating MODFLOW model")
 
                 sim = self.get_simulation(
                     gt,
@@ -314,7 +319,7 @@ class ModFlowSimulation:
                 raise
             # sim.run_simulation()
         elif self.verbose:
-            print("Loading MODFLOW model from disk")
+            self.logger.info("Loading MODFLOW model from disk")
 
         self.load_bmi(heads, modflow_bin_folder)
 
@@ -1185,12 +1190,11 @@ class ModFlowSimulation:
         If the model has already been finalized or was never
         initialised, this method will silently pass.
         """
-        print("Finalizing MODFLOW model")
         try:
             self.mf6.finalize()
         except InputError:
             pass
-        print("MODFLOW model finalized")
+        self.logger.info("MODFLOW model finalized")
 
     def restore(self, heads: TwoDArrayFloat64) -> None:
         """Restore the model to a previous state by setting the heads.
