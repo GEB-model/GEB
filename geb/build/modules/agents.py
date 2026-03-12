@@ -1866,6 +1866,10 @@ class Agents(BuildModelBase):
         household_characteristics_region = {}  # type: dict[str, Any]
 
         for GDL_code in all_buildings_model_region:
+            self.logger.info(f"Setting up household characteristics for {GDL_code}...")
+            if GDL_code[:3] in skip_countries_ISO3:
+                self.logger.info(f"Skipping {GDL_code[:3]}")
+
             buildings = all_buildings_model_region[GDL_code]
             # filter to residential buildings
             # check if occupancy column contains RES or UNK string (unknown occupancy assumed residential)
