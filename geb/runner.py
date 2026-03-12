@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import geopandas as gpd
-import memray
 import yaml
 from pydantic import BaseModel, ValidationError
 from shapely.geometry import box
@@ -335,6 +334,8 @@ def _run_with_optional_profiling(
 
     ram_profiler_tracker = None
     if profile_ram:
+        import memray
+
         ram_path: Path = profiling_folder / f"{name}_ram_{date}.bin"
         if ram_path.exists():
             ram_path.unlink()  # Remove existing RAM profile if it exists
@@ -1268,6 +1269,9 @@ def init_multiple_fn(
     # models_dir is the parent 'models' folder expected at <cwd>/../models;
     # init_multiple_dir_path is the target subdirectory to create.
     models_dir = Path.cwd().parent / "models"
+
+    if region_shapefile:
+        region_shapefile: Path = Path(region_shapefile)
     if not models_dir.is_dir():
         raise FileNotFoundError(
             f"Models directory not found: {models_dir}\n"
@@ -1279,19 +1283,37 @@ def init_multiple_fn(
 
     # create river
     logger.info("Starting multiple model initialization")
-    logger.info(f"Using geometry bounds: {geometry_bounds}")
     logger.info(f"Target area: {target_area_km2:,.0f} km²")
 
     logger.info("Loading river network...")
     river_graph = get_river_graph(data_catalog_instance)
 
-    # Parse geometry bounds and convert to geodataframe
-    bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
-    if len(bounds) != 4:
-        raise ValueError(
-            "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
+    # Create bounding box geometry or read region shapefile
+    if not region_shapefile:
+        logger.info(f"Using geometry bounds: {geometry_bounds}")
+        # Parse geometry bounds and convert to geodataframe
+        bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
+        if len(bounds) != 4:
+            raise ValueError(
+                "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
+            )
+        xmin, ymin, xmax, ymax = bounds
+
+        bbox_geom = gpd.GeoDataFrame(
+            geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
         )
-    xmin, ymin, xmax, ymax = bounds
+    else:
+        logger.info(f"Using region shapefile: {region_shapefile}")
+        region_shapefile_path: Path = working_directory / region_shapefile
+        if not region_shapefile_path.exists():
+            raise FileNotFoundError(
+                f"Region shapefile not found at: {region_shapefile_path}"
+            )
+        bbox_geom = gpd.read_file(region_shapefile_path)
+
+    # check crs bounding box geometry
+    if bbox_geom.crs != "EPSG:4326":
+        bbox_geom = bbox_geom.to_crs("EPSG:4326")
 
     bbox_geom = gpd.GeoDataFrame(
         geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
@@ -1315,6 +1337,19 @@ def init_multiple_fn(
         river_graph=river_graph,
         min_bbox_efficiency=min_bbox_efficiency,
     )
+
+    if ocean_outlets_only:
+        logger.info("Filtering coastal basins to ocean outlets only...")
+        # Load coastlines
+        coastlines = data_catalog.fetch("open_street_map_coastlines").read()
+        # clip coastlines to the bounding box of the subbasins for performance
+        coastlines = coastlines.cx[
+            bbox_geom.total_bounds[0] : bbox_geom.total_bounds[2],
+            bbox_geom.total_bounds[1] : bbox_geom.total_bounds[3],
+        ]
+        # check whether coastal basins intersect with coastlines
+        # Only select candidate basins first
+        candidates = subbasins.loc[coastal_basin_ids]
 
     logger.info(f"Created {len(clusters)} clusters")
 
