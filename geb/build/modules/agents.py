@@ -2061,7 +2061,10 @@ class Agents(BuildModelBase):
                     GLOPOP_S_region.loc[household_ids][column]
                 )
             household_characteristics["building_id_of_household"] = building_ids
-            household_characteristics["location"] = locations[households_with_region]
+            household_characteristics["location"] = np.round(
+                locations[households_with_region].astype(np.float32),
+                5,
+            )
             household_characteristics["region_id"] = region_ids
 
             # ensure that all households have a region assigned
