@@ -1881,7 +1881,7 @@ class Agents(BuildModelBase):
                 buildings["occupancy"].str.contains("RES|UNK", na=False)
             ]
             if residential_buildings_model_region.empty:
-                print(f"No residential buildings found for GDL code: {GDL_code}")
+                self.logger.info(f"No residential buildings found for GDL code: {GDL_code}")
                 continue
 
             GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
