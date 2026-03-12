@@ -258,6 +258,7 @@ class ModFlowSimulation:
             hydraulic_conductivity: The hydraulic conductivity of the model grid (m/day).
             heads: The initial heads of the model grid (m).
             heads_update_callback: A callback function to update the heads in the GEB model after each time step.
+            logger: A logger instance to log information about the model.
             min_remaining_layer_storage_m: The minimum remaining layer storage in m, defaults to 0.1. More storage cannot be abstracted with wells.
             verbose: Whether to print debug information, defaults to False.
             never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input

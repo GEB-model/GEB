@@ -1722,6 +1722,7 @@ class SFINCSSimulation:
         Args:
             sfincs_root_model_path: Path to the root SFINCS model directory.
             sfincs_root_model_name: Name of the root SFINCS model.
+            logger: A logging.Logger instance for logging messages.
             simulation_name: A string representing the name of the simulation.
                 Also used to create the path to write the file to disk.
             start_time: The start time of the simulation as a datetime object.
