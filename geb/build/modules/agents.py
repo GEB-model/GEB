@@ -1810,6 +1810,7 @@ class Agents(BuildModelBase):
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
         single_household_per_building: bool = False,
+        redundancy_array_size=20e6,
     ) -> None:
         """New method to set up household characteristics for agents using GLOPOP-S data. This method is still under development and may not be fully functional.
 
@@ -1817,6 +1818,9 @@ class Agents(BuildModelBase):
             maximum_age: The maximum age for the head of household. Default is 85.
             skip_countries_ISO3: A list of ISO3 country codes to skip when setting up household characteristics.
             single_household_per_building: If True, only one household will be allocated per building. Default is False.
+            redundancy_array_size: The size of the redundancy array used for preallocating region arrays of household characteristics. Default is 20 million, which should be sufficient for most regions. Adjust if you encounter memory issues or if you have very large regions.
+        Raises:
+            ValueError: If there are more buildings in the GDL region than the specified redundancy_array_size, which is used for preallocating arrays of household characteristics. In this case, consider increasing the redundancy_array_size parameter.
         """
         # create list of attibutes to include (and include name to store to)
         rename = {
@@ -1964,8 +1968,8 @@ class Agents(BuildModelBase):
             buildings_by_cell = residential_buildings_model_region.groupby("grid_idx")
 
             n_agents_allocated = 0
-            household_ids = np.full(int(100e6), -1, dtype=np.int32)
-            building_ids = np.full(int(100e6), -1, dtype=np.int32)
+            household_ids = np.full(int(redundancy_array_size), -1, dtype=np.int32)
+            building_ids = np.full(int(redundancy_array_size), -1, dtype=np.int32)
 
             for grid_cell, households_in_cell in households_by_cell.items():
                 if grid_cell not in buildings_by_cell.groups:
@@ -1992,6 +1996,10 @@ class Agents(BuildModelBase):
                 )
 
                 n_agents_allocated = end
+                if end > redundancy_array_size:
+                    raise ValueError(
+                        "Number of buildings in region exceeds redundancy array size, consider increasing redundancy_array_size parameter."
+                    )
 
             household_ids = household_ids[:n_agents_allocated]
             building_ids = building_ids[:n_agents_allocated]
