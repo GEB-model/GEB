@@ -290,7 +290,7 @@ class ModFlowSimulation:
         arguments.pop("working_directory")
         arguments.pop("modflow_bin_folder")
         arguments.pop("self")
-        arguments.pop("logger")  # not hashable and not neededß
+        arguments.pop("logger")  # not hashable and not needed
         arguments.pop("heads_update_callback")  # not hashable and not needed
         arguments.pop(
             "heads"
