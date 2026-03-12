@@ -187,7 +187,7 @@ class GroundWater(Module):
                 ],
                 prestorages=[groundwater_storage_pre.astype(np.float64)],
                 poststorages=[self.modflow.groundwater_content_m3.astype(np.float64)],
-                tolerance=500,  # 500 m3
+                tolerance=groundwater_recharge_m.size,  # maximum of 1m3 per cell
             )
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area

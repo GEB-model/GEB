@@ -276,7 +276,7 @@ class GEBModel(Module):
                         da=forecast_data[loader_name].sel(member=member),
                     )
 
-            print(f"Running forecast member {member}")  # debugging print
+            self.logger.info(f"Running forecast member {member}")
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
 
             if return_mean_discharge:
@@ -293,7 +293,7 @@ class GEBModel(Module):
                 n_timesteps=self.n_timesteps,
             )  # restore the initial state of the multiverse
 
-        print("Forecast finished, restoring all conditions...")  # debugging print
+        self.logger.info("Forecast finished, restoring all conditions...")
 
         # after ALL forecast members have been processed, restore the model to the state before the multiverse
         # so the n_timesteps is restored to the number of the full model run
@@ -324,6 +324,8 @@ class GEBModel(Module):
         If configured, this function will also run the model in multiverse mode
         for the current timestep, using forecast data if available.
 
+        Raises:
+            RuntimeError: If forecast file for the current timestep is not found when forecasts are enabled in the config.
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
@@ -356,9 +358,9 @@ class GEBModel(Module):
                     )  # convert the string to a datetime object
                     forecast_issue_dates.append(dt)  # append the date to the list
                 else:
-                    print(
-                        f"Warning: Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'. Skipping this file."
-                    )  # print a warning if the format is invalid
+                    raise RuntimeError(
+                        f"Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
+                    )
 
             forecast_issue_dates = list(
                 set(forecast_issue_dates)
@@ -379,7 +381,7 @@ class GEBModel(Module):
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
-                        print(
+                        self.logger.info(
                             f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
                         self.agents.households.create_flood_probability_maps(
@@ -408,9 +410,8 @@ class GEBModel(Module):
         self.report(locals())
 
         t1 = time()
-        print(
-            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}finished {self.current_time} ({round(t1 - t0, 4)}s)",
-            flush=True,
+        self.logger.info(
+            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}step {self.current_time.date()} took {round(t1 - t0, 4)}s",
         )
 
         self.current_timestep += 1
@@ -522,7 +523,7 @@ class GEBModel(Module):
 
         self.step_to_end()
 
-        print("Model run finished, finalizing report...")
+        self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
 
     def run_yearly(self) -> None:
@@ -571,7 +572,7 @@ class GEBModel(Module):
 
         self.step_to_end()
 
-        print("Model run finished, finalizing report...")
+        self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
 
     def refresh_agent_attributes(self, agent_type: str = "households") -> None:
@@ -608,7 +609,7 @@ class GEBModel(Module):
         )
 
         # save initial household attributes
-        print(f"Refreshing household attributes for {agent_type}...")
+        self.logger.info(f"Refreshing household attributes for {agent_type}...")
         path: Path = self.store.path
         name = getattr(self.agents, agent_type).name
         self.logger.debug(f"Saving {name}.var")
@@ -672,7 +673,7 @@ class GEBModel(Module):
 
         self.step_to_end()
 
-        print("Spinup finished, saving conditions at end of spinup...")
+        self.logger.info("Spinup finished, saving conditions at end of spinup...")
         self.store.save()
 
         self.reporter.finalize()
@@ -736,7 +737,7 @@ class GEBModel(Module):
         Returns:
             The result of the evaluation method.
         """
-        print("Evaluating model...")
+        self.logger.info("Evaluating model...")
         return self.evaluator.run(*args, **kwargs)
 
     @property
@@ -1051,42 +1052,3 @@ class GEBModel(Module):
             Name of the module.
         """
         return ""
-
-    def create_logger(self) -> logging.Logger:
-        """Create a logger for the model.
-
-        Returns:
-            Logger instance for the model.
-        """
-        logger: logging.Logger = logging.getLogger("GEB")
-
-        if (
-            self.config
-            and "logging" in self.config
-            and "loglevel" in self.config["logging"]
-        ):
-            loglevel = self.config["logging"]["loglevel"]
-        else:
-            loglevel = "INFO"
-        logger.setLevel(logging.getLevelName(loglevel))
-
-        if (
-            self.config
-            and "logging" in self.config
-            and "logfile" in self.config["logging"]
-        ):
-            logfile = self.config["logging"]["logfile"]
-        else:
-            logfile = "GEB.log"
-
-        formatter = logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
-
-        file_handler = logging.FileHandler(logfile, mode="w")
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-
-        stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(formatter)
-        logger.addHandler(stream_handler)
-
-        return logger

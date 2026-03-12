@@ -61,6 +61,15 @@ def test_fill_discharge_gaps() -> None:
                 False,
                 False,
             ],
+            "is_downstream_outflow": [
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+            ],
         },
     )
     Q_filled: ArrayFloat32 = fill_discharge_gaps(
@@ -116,6 +125,15 @@ def test_fill_discharge_gaps_with_waterbodies() -> None:
                 [4],  # single cell river with no nans
             ],
             "is_further_downstream_outflow": [
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+            ],
+            "is_downstream_outflow": [
                 False,
                 False,
                 False,

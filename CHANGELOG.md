@@ -1,5 +1,11 @@
 # dev
 
+# v1.0.0b16
+- Cleanup logging situation in model. Now each method (except init-multiple) should created their own log file in the logs directory and no additional logs *should* be created.
+- Fix several warnings throughout model. And do not ignore some warnings globally.
+- Add custom and improved logging in calibration snakemake workflow.
+- In calibration, only run init and build if model.yml and build was not completed respectively.
+
 # v1.0.0b15
 - Switch back to Python 3.13 due to netcdf reading errors.
 - Switch liquid water in snow and snow water equivalent to float64 to avoid floating point imprecision in thick snow layers.

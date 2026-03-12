@@ -1999,6 +1999,7 @@ class GEBModel(
             data_provider: Data provider to use for the data catalog. Default is "default".
         """
         self._logger = logger
+        build_method.logger = logger
         self._old_data_catalog = DataCatalog(
             data_libs=[data_catalog], logger=self._logger, fallback_lib=None
         )
@@ -2084,12 +2085,9 @@ class GEBModel(
             if updates_to_print:
                 updates_msg = "\n- ".join(updates_to_print)
                 self.set_current_version()
-                self.logger.warning(
-                    f"IMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE.\n"
-                )
-                raise RuntimeError(
-                    "Model version is outdated. Please make the necessary updates and run the model build again."
-                )
+                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
+                self.logger.error(error)
+                raise RuntimeError(error)
             else:
                 self.logger.info(
                     "No specific updates found for this version. Updated version file."
@@ -2104,6 +2102,10 @@ class GEBModel(
     @logger.setter
     def logger(self, value: logging.Logger) -> None:
         self._logger = value
+        build_method.logger = value
+        # Ensure that child classes use the updated logger
+        if hasattr(self, "_old_data_catalog"):
+            self._old_data_catalog.logger = value
 
     @property
     def old_data_catalog(self) -> DataCatalog:
@@ -3023,6 +3025,11 @@ class GEBModel(
         return Path(self.root, "progress.txt")
 
     @property
+    def build_complete_path(self) -> Path:
+        """Path to the file that indicates that the build is complete."""
+        return Path(self.root, "build_complete.txt")
+
+    @property
     def version_path(self) -> Path:
         """Path to the version file that contains the build version."""
         return Path(self.root, "version.txt")
@@ -3599,6 +3606,8 @@ class GEBModel(
             record_progress=True,
             continue_=continue_,
         )
+
+        self.build_complete_path.write_text("Build complete")
 
     def update(
         self,

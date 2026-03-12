@@ -92,6 +92,7 @@ class OpenBuildingMap(Adapter):
             engine="pyogrio",
             mask=geom,
             columns=["id", "occupancy", "floorspace", "height", "geometry"],
+            layer="building",
         )
         # mask buildings to region geom
         buildings = buildings[buildings.intersects(geom)]
