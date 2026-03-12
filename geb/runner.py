@@ -1394,7 +1394,6 @@ def init_multiple_fn(
         min_bbox_efficiency=min_bbox_efficiency,
     )
 
-
     logger.info(f"Created {len(clusters)} clusters")
 
     # Verify example folder exists

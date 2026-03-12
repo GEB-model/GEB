@@ -367,7 +367,7 @@ def get_all_downstream_subbasins_in_geom(
         coastal_basin_ids = candidates.index[mask].tolist()
 
         # remove any coastal basins that do not intersect with coastlines from subbasins
-        downstream_subbasins= coastal_basin_ids
+        downstream_subbasins = coastal_basin_ids
         logger.info(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
         return downstream_subbasins
     else:
@@ -1307,8 +1307,6 @@ def create_multi_basin_configs(
         dst.write(src.read())
 
     print(f"Created model.yml in {working_directory}")
-
-
 
     cluster_directories = []
 
