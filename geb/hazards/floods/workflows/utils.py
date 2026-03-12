@@ -206,6 +206,7 @@ def read_flood_depth(
 
     output_path: Path = model_root / "flood_depth_all_time_steps.png"
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
     return flood_depth_m
 
 

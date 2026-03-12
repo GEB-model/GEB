@@ -642,13 +642,14 @@ class SFINCSRootModel:
             crs=self.mask.rio.crs,
         )
 
-        sf.plot_basemap(
+        fig, _ = sf.plot_basemap(
             fn_out=str(self.figures_path / "basemap.png"),
             vmin=math.floor(self.elevation.min()),
             vmax=max(
                 math.ceil(self.elevation.max()), 1
             ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
         )
+        plt.close(fig)
 
         self.is_build_from_scratch = True
 
@@ -1811,16 +1812,18 @@ class SFINCSSimulation:
         self.sfincs_model.write_config()
 
         if self.write_figures:
-            self.sfincs_model.plot_forcing(
+            fig, _ = self.sfincs_model.plot_forcing(
                 fn_out=str(self.figures_path / "forcing.png")
             )
-            self.sfincs_model.plot_basemap(
+            plt.close(fig)
+            fig, _ = self.sfincs_model.plot_basemap(
                 fn_out=str(self.figures_path / "basemap.png"),
                 vmin=math.floor(self.root_model.elevation.min()),
                 vmax=max(
                     math.ceil(self.root_model.elevation.max()), 1
                 ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324)
             )
+            plt.close(fig)
 
     def set_forcing_from_grid(
         self, nodes: gpd.GeoDataFrame, discharge_grid: xr.DataArray
@@ -2032,16 +2035,18 @@ class SFINCSSimulation:
         self.print_forcing_volume()
 
         if self.write_figures:
-            self.sfincs_model.plot_basemap(
+            fig, _ = self.sfincs_model.plot_basemap(
                 fn_out=str(self.figures_path / "src_points_check.png"),
                 vmin=math.floor(self.root_model.elevation.min()),
                 vmax=max(
                     math.ceil(self.root_model.elevation.max()), 1
                 ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
             )
-            self.sfincs_model.plot_forcing(
+            plt.close(fig)
+            fig, _ = self.sfincs_model.plot_forcing(
                 fn_out=str(self.figures_path / "forcing.png")
             )
+            plt.close(fig)
 
     def set_accumulated_runoff_forcing(
         self,
