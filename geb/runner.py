@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, TextIO, TypeVar, cast
 
 import geopandas as gpd
 import memray
@@ -161,33 +161,42 @@ def parse_config(
     return config
 
 
-def create_logger(fp: Path) -> logging.Logger:
+def create_logger(name: str) -> logging.Logger:
     """Create logger with console and file handler.
 
     Args:
-        fp: Path to the log file.
+        name: Name of the logger.
     Returns:
         Logger instance.
     """
-    logger = logging.getLogger("GEB")
-    # remove any previous handlers
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
+    logger: logging.Logger = logging.getLogger(name)
 
-    logger.propagate = False
+    if logger.handlers:
+        return logger
+
     # set log level to debug
     logger.setLevel(logging.DEBUG)
     # create console handler and set level to debug
-    ch = logging.StreamHandler()
+    ch: logging.StreamHandler[TextIO] = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
     # create formatter
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s", datefmt="%d-%m %H:%M:%S"
+    )
     # add formatter to ch
     ch.setFormatter(formatter)
     # add ch to logger
     logger.addHandler(ch)
+
+    # prevent double logging
+    logger.propagate = False
+
     # add file handler
-    Path(fp).parent.mkdir(exist_ok=True, parents=True)
+    folder = Path("logs")
+    folder.mkdir(exist_ok=True, parents=True)
+    fp = folder / f"{name}.log"
+    if fp.exists():
+        fp.unlink()  # remove existing log file if it exists
     fh = logging.FileHandler(fp)
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)
@@ -236,7 +245,7 @@ def run_model_with_method(
         raise SystemExit(subprocess.run(command).returncode)
 
     def run_operation(
-        close_after_run: bool = close_after_run, logger: logging.Logger | None = None
+        logger: logging.Logger, close_after_run: bool = close_after_run
     ) -> Any:
         from geb.config_schema import Config
 
@@ -253,6 +262,7 @@ def run_model_with_method(
             timing=timing,
             logger=logger,
         )
+
         result = geb
         if method is not None:
             result = getattr(geb, method)(**method_args)
@@ -273,6 +283,7 @@ def run_model_with_method(
             profile_ram,
             run_operation,
             name=method if method is not None else "wo_method",
+            logger=create_logger(name=method if method is not None else "wo_method"),
         )
 
 
@@ -307,6 +318,7 @@ def _run_with_optional_profiling(
     profile_ram: bool,
     operation: Callable[..., ResultType],
     name: str,
+    logger: logging.Logger,
 ) -> ResultType:
     """Run an operation with optional speed and RAM profiling.
 
@@ -315,12 +327,13 @@ def _run_with_optional_profiling(
         profile_ram: Whether RAM profiling should be enabled.
         operation: Callable containing the operation to execute.
         name: Name of the operation being executed, used for profiling output.
+        logger: Logger instance to pass to the operation.
 
     Returns:
         Return value from the operation.
     """
     if not profile_speed and not profile_ram:
-        return operation()
+        return operation(logger=logger)
 
     date: str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -350,9 +363,9 @@ def _run_with_optional_profiling(
         # If we are profiling, we tell the operation not to close the model
         # so we can profile it while it is still open.
         if profile_speed or profile_ram:
-            run_output: Any = operation(close_after_run=False)
+            run_output: Any = operation(close_after_run=False, logger=logger)
         else:
-            run_output: Any = operation()
+            run_output: Any = operation(logger=logger)
 
         result: ResultType
         geb_to_close: Any = None
@@ -361,7 +374,7 @@ def _run_with_optional_profiling(
             result = cast(ResultType, run_output[0])
             geb_to_close = run_output[1]
         else:
-            result = cast(ResultType, run_output)
+            result = run_output
 
         # Capture objects while they are still in scope (and model is not closed if profiling)
         if profile_ram:
@@ -618,6 +631,7 @@ def customize_data_catalog(data_catalog: Path, data_root: None | Path = None) ->
 def get_builder(
     config: Path | dict[str, Any],
     data_catalog: Path,
+    logger: logging.Logger,
     custom_model: str | None,
     data_provider: str | None,
     data_root: Path | None,
@@ -627,6 +641,7 @@ def get_builder(
     Args:
         config: Path to the model configuration file.
         data_catalog: Path to the data catalog file.
+        logger: Logger instance to pass to the model builder.
         custom_model: Name of the custom model to use. If None, the default GEBModelBuild is used.
             custom_models are available in the geb.build.custom_models module.
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
@@ -643,7 +658,7 @@ def get_builder(
     arguments = {
         "root": input_folder,
         "data_catalog": data_catalog,
-        "logger": create_logger(Path("build.log")),
+        "logger": logger,
         "data_provider": data_provider,
     }
 
@@ -676,8 +691,6 @@ def init_fn(
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
     Raises:
-        FileExistsError: If the config or build config file already exists and overwrite is False.
-        FileNotFoundError: If the example folder does not exist.
         ValueError: If both basin_id and ISO3 are set.
 
     """
@@ -692,7 +705,9 @@ def init_fn(
     if not working_directory.exists():
         working_directory.mkdir(parents=True, exist_ok=True)
 
-    with WorkingDirectory(working_directory):
+    def init_operation(logger: logging.Logger, **kwargs: Any) -> None:
+        logger.info("Initializing model from example '%s'.", from_example)
+
         if config.exists() and not overwrite:
             raise FileExistsError(
                 f"Config file {config} already exists. Please remove it or use a different name, or use --overwrite."
@@ -746,6 +761,22 @@ def init_fn(
         shutil.copy(example_folder / BUILD_DEFAULT, build_config)
         shutil.copy(example_folder / UPDATE_DEFAULT, update_config)
 
+        logger.info(
+            "Initialized model files: %s, %s, %s",
+            config,
+            build_config,
+            update_config,
+        )
+
+    with WorkingDirectory(working_directory):
+        _run_with_optional_profiling(
+            PROFILE_SPEED_DEFAULT,
+            PROFILE_RAM_DEFAULT,
+            init_operation,
+            name="init",
+            logger=create_logger(name="init"),
+        )
+
 
 def set_fn(
     config: Path,
@@ -772,11 +803,11 @@ def set_fn(
         config: Path to the model configuration file.
         working_directory: Working directory for the model.
         **kwargs: Keyword arguments to set in the config file.
-
-    Raises:
-        KeyError: If a specified key does not exist in the config and cannot be created.
     """
-    with WorkingDirectory(working_directory):
+
+    def set_operation(logger: logging.Logger, **kwargs: Any) -> None:
+        logger.info("Updating model configuration values.")
+
         config_dict: dict[str, Any] = parse_config(config, schema=Config)
         for key, value in kwargs.items():
             if key.endswith("+"):
@@ -814,6 +845,17 @@ def set_fn(
         with open(config, "w") as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
+        logger.info("Updated configuration file: %s", config)
+
+    with WorkingDirectory(working_directory):
+        _run_with_optional_profiling(
+            PROFILE_SPEED_DEFAULT,
+            PROFILE_RAM_DEFAULT,
+            set_operation,
+            name="set",
+            logger=create_logger(name="set"),
+        )
+
 
 def build_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
@@ -841,16 +883,17 @@ def build_fn(
     """
     build_config_input: Path | dict[str, Any] = build_config
 
-    def build_operation() -> None:
+    def build_operation(logger: logging.Logger, **kwargs: Any) -> None:
         parsed_build_config = parse_config(build_config_input)
         model = get_builder(
             config,
             data_catalog,
-            parsed_build_config["_custom_model"]
+            logger=logger,
+            custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider,
-            data_root,
+            data_provider=data_provider,
+            data_root=data_root,
         )
         methods: dict[str, Any] = {
             method: args
@@ -865,7 +908,11 @@ def build_fn(
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
-            profile_speed, profile_ram, build_operation, name="build"
+            profile_speed,
+            profile_ram,
+            build_operation,
+            name="build",
+            logger=create_logger(name="build"),
         )
 
 
@@ -901,7 +948,7 @@ def alter_fn(
     from_model: Path = Path(from_model)
     build_config_input: Path | dict[str, Any] = build_config
 
-    def alter_operation() -> None:
+    def alter_operation(logger: logging.Logger, **kwargs: Any) -> None:
         original_config: Path = from_model / config
         if not original_config.exists():
             raise FileNotFoundError(
@@ -950,11 +997,12 @@ def alter_fn(
         model = get_builder(
             config,
             data_catalog,
-            parsed_build_config["_custom_model"]
+            logger=logger,
+            custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider,
-            data_root,
+            data_provider=data_provider,
+            data_root=data_root,
         )
         methods = {
             method: args
@@ -968,7 +1016,11 @@ def alter_fn(
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
-            profile_speed, profile_ram, alter_operation, name="alter"
+            profile_speed,
+            profile_ram,
+            alter_operation,
+            name="alter",
+            logger=create_logger(name="alter"),
         )
 
 
@@ -998,7 +1050,7 @@ def update_version_fn(
         **kwargs: Additional keyword arguments.
     """
 
-    def update_version_operation() -> None:
+    def update_version_operation(logger: logging.Logger, **kwargs: Any) -> None:
         parsed_config = parse_config(config, schema=Config)
         input_folder = Path(parsed_config["general"]["input_folder"])
         custom_model = (
@@ -1008,7 +1060,6 @@ def update_version_fn(
         )
 
         data_catalog_path = customize_data_catalog(data_catalog, data_root=data_root)
-        logger = create_logger(Path("update-version.log"))
 
         builder_class = get_model_builder_class(custom_model)
         builder_class(
@@ -1020,7 +1071,11 @@ def update_version_fn(
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
-            profile_speed, profile_ram, update_version_operation, name="update-version"
+            profile_speed,
+            profile_ram,
+            update_version_operation,
+            name="update-version",
+            logger=create_logger(name="update-version"),
         )
 
 
@@ -1048,7 +1103,7 @@ def update_fn(
     """
     build_config_input: Path | dict[str, Any] = build_config
 
-    def update_operation() -> None:
+    def update_operation(logger: logging.Logger, **kwargs: Any) -> None:
         if isinstance(build_config_input, Path):
             build_config_list: list[str] = str(build_config_input).split("::")
             build_config_file: Path = Path(build_config_list[0])
@@ -1124,18 +1179,23 @@ def update_fn(
         model = get_builder(
             config,
             data_catalog,
-            parsed_build_config["_custom_model"]
+            logger=logger,
+            custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider,
-            data_root,
+            data_provider=data_provider,
+            data_root=data_root,
         )
 
         model.update(methods=methods)
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
-            profile_speed, profile_ram, update_operation, name="update"
+            profile_speed,
+            profile_ram,
+            update_operation,
+            name="update",
+            logger=create_logger(name="update"),
         )
 
 
@@ -1262,7 +1322,8 @@ def init_multiple_fn(
 
     # Initialize data catalog and logger
     data_catalog_instance = NewDataCatalog()
-    logger = create_logger(working_directory / "init_multiple.log")
+    with WorkingDirectory(working_directory):
+        logger = create_logger("init_multiple")
 
     # Create the models/init_multiple_dir directory structure.
     # models_dir is the parent 'models' folder expected at <cwd>/../models;
