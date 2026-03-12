@@ -705,7 +705,7 @@ def init_fn(
     if not working_directory.exists():
         working_directory.mkdir(parents=True, exist_ok=True)
 
-    def init_operation(logger: logging.Logger) -> None:
+    def init_operation(logger: logging.Logger, **kwargs: Any) -> None:
         logger.info("Initializing model from example '%s'.", from_example)
 
         if config.exists() and not overwrite:
@@ -805,7 +805,7 @@ def set_fn(
         **kwargs: Keyword arguments to set in the config file.
     """
 
-    def set_operation(logger: logging.Logger) -> None:
+    def set_operation(logger: logging.Logger, **kwargs: Any) -> None:
         logger.info("Updating model configuration values.")
 
         config_dict: dict[str, Any] = parse_config(config, schema=Config)
@@ -883,7 +883,7 @@ def build_fn(
     """
     build_config_input: Path | dict[str, Any] = build_config
 
-    def build_operation(logger: logging.Logger) -> None:
+    def build_operation(logger: logging.Logger, **kwargs: Any) -> None:
         parsed_build_config = parse_config(build_config_input)
         model = get_builder(
             config,
@@ -948,7 +948,7 @@ def alter_fn(
     from_model: Path = Path(from_model)
     build_config_input: Path | dict[str, Any] = build_config
 
-    def alter_operation(logger: logging.Logger) -> None:
+    def alter_operation(logger: logging.Logger, **kwargs: Any) -> None:
         original_config: Path = from_model / config
         if not original_config.exists():
             raise FileNotFoundError(
@@ -1050,7 +1050,7 @@ def update_version_fn(
         **kwargs: Additional keyword arguments.
     """
 
-    def update_version_operation(logger: logging.Logger) -> None:
+    def update_version_operation(logger: logging.Logger, **kwargs: Any) -> None:
         parsed_config = parse_config(config, schema=Config)
         input_folder = Path(parsed_config["general"]["input_folder"])
         custom_model = (
@@ -1103,7 +1103,7 @@ def update_fn(
     """
     build_config_input: Path | dict[str, Any] = build_config
 
-    def update_operation(logger: logging.Logger) -> None:
+    def update_operation(logger: logging.Logger, **kwargs: Any) -> None:
         if isinstance(build_config_input, Path):
             build_config_list: list[str] = str(build_config_input).split("::")
             build_config_file: Path = Path(build_config_list[0])
