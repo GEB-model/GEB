@@ -2062,12 +2062,9 @@ class GEBModel(
             if updates_to_print:
                 updates_msg = "\n- ".join(updates_to_print)
                 self.set_current_version()
-                self.logger.warning(
-                    f"IMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE.\n"
-                )
-                raise RuntimeError(
-                    "Model version is outdated. Please make the necessary updates and run the model build again."
-                )
+                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you aleady did this, you can ignore this.\n"
+                self.logger.error(error)
+                raise RuntimeError(error)
             else:
                 self.logger.info(
                     "No specific updates found for this version. Updated version file."
