@@ -255,6 +255,8 @@ def run_model_with_method(
             else config_parsed["general"]["files"]
         )
 
+        t0 = datetime.now()
+
         geb = GEBModel(
             config=config_parsed,
             files=files,
@@ -262,9 +264,13 @@ def run_model_with_method(
             logger=logger,
         )
 
+        t1 = datetime.now()
+
         result = geb
         if method is not None:
             result = getattr(geb, method)(**method_args)
+
+        t2 = datetime.now()
 
         # If we are profiling, we don't close the model here, but return it
         # so it can be profiled while open. The profiler wrapper will handle closing.
@@ -273,6 +279,17 @@ def run_model_with_method(
 
         if close_after_run:
             geb.close()
+
+        t3 = datetime.now()
+
+        logger.info(f"Model run time: {(t3 - t0).total_seconds():.2f} seconds")
+        logger.info(f"  - Initialization time: {(t1 - t0).total_seconds():.2f} seconds")
+        if method is not None:
+            logger.info(
+                f"  - Method '{method}' time: {(t2 - t1).total_seconds():.2f} seconds"
+            )
+        if close_after_run:
+            logger.info(f"  - Closing time: {(t3 - t2).total_seconds():.2f} seconds")
 
         return result or geb
 
