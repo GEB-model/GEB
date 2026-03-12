@@ -1952,55 +1952,45 @@ class Agents(BuildModelBase):
                 GLOPOP_S_region["age_household_head"] == np.iinfo(np.uint16).max
             ).any()
 
-            # create all households
-            GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
-            n_households = GLOPOP_households_region.size
-            grid_cells_GLOPOP_region = np.unique(GLOPOP_S_region["GRID_CELL"])
+            # pre-group households by grid cell
+            households_by_cell = GLOPOP_S_region.groupby("GRID_CELL")["HID"].unique()
+
+            # pre-group buildings by grid cell
+            buildings_by_cell = residential_buildings_model_region.groupby("grid_idx")
+
             n_agents_allocated = 0
             household_ids = np.full(int(100e6), -1, dtype=np.int32)
             building_ids = np.full(int(100e6), -1, dtype=np.int32)
-            # create an agent for each building in residential_buildings_model_region
-            for grid_cell in grid_cells_GLOPOP_region:
-                # sample households for this cell
-                households_in_cell = np.unique(
-                    GLOPOP_S_region.loc[
-                        GLOPOP_S_region["GRID_CELL"] == grid_cell, "HID"
-                    ].values
+
+            for grid_cell, households_in_cell in households_by_cell.items():
+                if grid_cell not in buildings_by_cell.groups:
+                    continue
+
+                buildings_in_cell = buildings_by_cell.get_group(grid_cell)
+                n_buildings = buildings_in_cell.shape[0]
+
+                sampled_households = np.random.choice(
+                    households_in_cell,
+                    size=n_buildings
+                    if single_household_per_building
+                    else np.max([n_buildings, households_in_cell.size]),
+                    replace=households_in_cell.size < n_buildings,
                 )
-                if households_in_cell.size == 0:
-                    continue
 
-                buildings_in_cell = residential_buildings_model_region[
-                    residential_buildings_model_region["grid_idx"] == grid_cell
-                ]
-                if buildings_in_cell.empty:
-                    continue
+                end = n_agents_allocated + sampled_households.size
 
-                if households_in_cell.size < buildings_in_cell.shape[0]:
-                    sampled_households = np.random.choice(
-                        households_in_cell,
-                        size=buildings_in_cell.shape[0],
-                        replace=True,
-                    )
-                else:
-                    sampled_households = np.random.choice(
-                        households_in_cell,
-                        size=buildings_in_cell.shape[0],
-                        replace=False,
-                    )
-                assert sampled_households.size == buildings_in_cell.shape[0]
-                household_ids[
-                    n_agents_allocated : n_agents_allocated + sampled_households.size
-                ] = sampled_households
-                building_ids[
-                    n_agents_allocated : n_agents_allocated + sampled_households.size
-                ] = buildings_in_cell["id"].values
-                n_agents_allocated += sampled_households.size
+                household_ids[n_agents_allocated:end] = sampled_households
+                building_ids[n_agents_allocated:end] = np.random.choice(
+                    buildings_in_cell["id"].values,
+                    size=sampled_households.size,
+                    replace=sampled_households.size > n_buildings,
+                )
 
-            # trim arrays
+
+                n_agents_allocated = end
+
             household_ids = household_ids[:n_agents_allocated]
             building_ids = building_ids[:n_agents_allocated]
-
             # set locations
             locations = (
                 residential_buildings_model_region.set_index("id")
