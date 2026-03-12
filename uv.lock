@@ -549,14 +549,14 @@ wheels = [
 
 [[package]]
 name = "click"
-version = "8.3.1"
+version = "8.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065, upload-time = "2025-11-15T20:45:42.706Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/2e/0090cbf739cee7d23781ad4b89a9894a41538e4fcf4c31dcdd705b78eb8b/click-8.1.8.tar.gz", hash = "sha256:ed53c9d8990d83c2a27deae68e4ee337473f6330c040a31d4225c9574d16096a", size = 226593, upload-time = "2024-12-21T18:38:44.339Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/98/78/01c019cdb5d6498122777c1a43056ebb3ebfeef2076d9d026bfe15583b2b/click-8.3.1-py3-none-any.whl", hash = "sha256:981153a64e25f12d547d3426c367a4857371575ee7ad18df2a6183ab0545b2a6", size = 108274, upload-time = "2025-11-15T20:45:41.139Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/d4/7ebdbd03970677812aac39c869717059dbb71a4cfc033ca6e5221787892c/click-8.1.8-py3-none-any.whl", hash = "sha256:63c132bbbed01578a06712a2d1f497bb62d9c1c0d329b7903a866228027263b2", size = 98188, upload-time = "2024-12-21T18:38:41.666Z" },
 ]
 
 [[package]]
@@ -688,7 +688,7 @@ wheels = [
 
 [[package]]
 name = "copernicusmarine"
-version = "2.2.3"
+version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "arcosparse" },
@@ -706,9 +706,9 @@ dependencies = [
     { name = "xarray" },
     { name = "zarr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c8/1c/2fc95a24f6b4130755b7dc229354e830edae6f4defafc1fb8695e5a22d1d/copernicusmarine-2.2.3.tar.gz", hash = "sha256:093c329eb8b135a501e86ddd235283613002b60c1fc7523d7ea87865a6fc50f9", size = 87036, upload-time = "2025-10-16T12:09:01.575Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/44/00046a7501626ddb83feaf1be2da870190fac9cf4c27266ea98430ed932c/copernicusmarine-2.3.0.tar.gz", hash = "sha256:6506022e261e4adbdd8e35a9733a48f0fa3c5bca1da2c1cfb2d0a54c5a775460", size = 93070, upload-time = "2026-01-15T16:38:26.078Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/8e/a7c24edf1fbe6cf490ec3816334e221110632727824cd07b151805fef293/copernicusmarine-2.2.3-py3-none-any.whl", hash = "sha256:1e57d21977746fc59b43903b2e2b890a2709fafafd96e818bf1e9c44247b7f69", size = 115346, upload-time = "2025-10-16T12:08:59.589Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/b7/4a3e7885c524cc1da667c414e97ac12a81051596146bec99e0113429f759/copernicusmarine-2.3.0-py3-none-any.whl", hash = "sha256:ed48fe06979fe658af045f0ba5756d4cb35a2754f67cc3a8b636062f2c28a501", size = 125296, upload-time = "2026-01-15T16:38:24.31Z" },
 ]
 
 [[package]]
