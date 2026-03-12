@@ -1313,7 +1313,7 @@ class SFINCSRootModel:
                     f"Discharge all zero for river {idx}, assigning zeros."
                 )
                 for T in return_periods:
-                    self.rivers.loc[idx, f"{prefix}_{T}"] = 0.0
+                    rivers.loc[idx, f"{prefix}_{T}"] = 0.0
                 continue
 
             if not isinstance(discharge.index, pd.DatetimeIndex):
