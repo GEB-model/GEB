@@ -2071,7 +2071,6 @@ class Agents(BuildModelBase):
             assert not (household_characteristics["region_id"] == -1).any()
             household_characteristics_region[GDL_code] = household_characteristics
         # now export all household characteristics for all regions
-        result = {}
         for characteristic in next(
             iter(household_characteristics_region.values())
         ).keys():
