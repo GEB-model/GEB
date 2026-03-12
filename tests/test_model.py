@@ -33,7 +33,6 @@ from geb.runner import parse_config
 from geb.workflows.io import (
     WorkingDirectory,
     read_zarr,
-    write_params,
     write_zarr,
 )
 
@@ -118,24 +117,6 @@ def test_init_coastal(clean_working_directory: bool) -> None:
             **args,
             overwrite=True,
         )
-
-        build_config = parse_config("build.yml")
-        build_config = {
-            key: value
-            for key, value in build_config.items()
-            if key
-            in (
-                "setup_region",
-                "setup_hydrography",
-                "setup_elevation",
-                "setup_global_ocean_mean_dynamic_topography",
-                "setup_coastlines",
-                "setup_osm_land_polygons",
-                "setup_coastal_sfincs_model_regions",
-                "setup_gtsm_station_data",
-            )
-        }
-        write_params(build_config, Path("build.yml"))
 
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
