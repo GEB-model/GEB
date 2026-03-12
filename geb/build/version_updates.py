@@ -1,6 +1,9 @@
 """This module contains the version updates for the GEB model. It is used to keep track of the changes that need to be made when updating the model to a new version. The VERSION_UPDATES dictionary contains the version as the key and a list of updates as the value. Each update is a string that describes the change that needs to be made. This module is imported in the build module and used to display the updates when running `geb update-version`."""
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b16": [
+        "[manual] Order in build.yml from top must be `setup_region`, `set_time_range`, `set_ssp`, `setup_hydrography`, `setup_elevation`",
+    ],
     "1.0.0b15": [
         "[manual] Go back to Python 3.13. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.",
     ],
