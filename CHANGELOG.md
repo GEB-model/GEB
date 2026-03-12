@@ -1,5 +1,9 @@
 # dev
 
+# v1.0.0b17
+- Synchronize start and end dates in reasonable default config and example.
+- Add .zenodo.json
+
 # v1.0.0b16
 - Cleanup logging situation in model. Now each method (except init-multiple) should created their own log file in the logs directory and no additional logs *should* be created.
 - Fix several warnings throughout model. And do not ignore some warnings globally.
