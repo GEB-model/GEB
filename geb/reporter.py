@@ -223,6 +223,25 @@ ENERGY_BALANCE_REPORT_CONFIG = {
     },
 }
 
+CALIBRATION_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
+    "hydrology.routing": {
+        "discharge_hourly": {
+            "varname": "grid.var.discharge_m3_s_per_substep",
+            "type": "grid",
+            "format": "zarr",
+            "single_file": "true",
+            "function": None,
+        },
+    },
+    "agents.households": {
+        "adaptation_type": {
+            "varname": "var.adaptation_type",
+            "type": "agents",
+            "function": None,
+        },
+    },
+}
+
 
 def get_fill_value(
     data: np.ndarray[Any] | DynamicArray,
@@ -576,7 +595,7 @@ class Reporter:
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
         - _energy_balance: if set to True, a standard set of variables to monitor the energy balance is reported.
-
+        - _calibration: if set to True, a standard set of variables for calibration is reported.
         Args:
             model: The GEB model instance.
             clean: If True, the report folder is cleaned at the start of the model run.
@@ -701,6 +720,12 @@ class Reporter:
                             report_config = multi_level_merge(
                                 report_config,
                                 ENERGY_BALANCE_REPORT_CONFIG,
+                            )
+                    elif module_name == "_calibration":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                CALIBRATION_REPORT_CONFIG,
                             )
                     else:
                         raise ValueError(

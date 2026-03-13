@@ -150,7 +150,183 @@ rule build_base:
     input: "base_init.done"
     output: touch("base_build.done")
     log: "logs/base_build.log"
-    run: run_command("geb build --continue", log[0], "Failed to build base model")
+    run: run_command("geb build", log[0], "Failed to build base model")
+
+rule generate_flood_maps:
+    input: "base_build.done"
+    output: touch(RUNS_DIR + "/flood_maps.done")
+    log: RUNS_DIR + "/logs/generate_flood_maps.log"
+    run:
+        # Copy only the configured return-period maps (e.g. 2.zarr, 25.zarr)
+        # from canonical model output into the calibration run directory.
+        from pathlib import Path
+        import shutil
+        from geb.runner import parse_config
+
+        # Locate the canonical flood_maps folder by probing likely repo roots
+        def _find_flood_maps_folder() -> tuple[Path, list[Path]]:
+            candidates: list[Path] = []
+            try:
+                f = Path(__file__).resolve()
+                # add a few parents of the rule file
+                for i in range(1, 6):
+                    if len(f.parents) >= i:
+                        candidates.append(f.parents[i - 1])
+            except Exception:
+                pass
+
+            # add current working directory and its parents
+            cwd = Path.cwd().resolve()
+            candidates.append(cwd)
+            for i in range(1, 6):
+                if len(cwd.parents) >= i:
+                    candidates.append(cwd.parents[i - 1])
+
+            # dedupe while preserving order
+            seen = set()
+            uniq: list[Path] = []
+            for c in candidates:
+                if c not in seen:
+                    seen.add(c)
+                    uniq.append(c)
+
+            for root in uniq:
+                p = root / "models" / "geul" / "output" / "flood_maps"
+                if p.exists():
+                    return p, uniq
+
+            # fallback to relative path (may still fail)
+            return Path("models") / "geul" / "output" / "flood_maps", uniq
+
+        src, probed_candidates = _find_flood_maps_folder()
+        # Diagnostic: write out probed candidates and resolved src
+        try:
+            with open(log[0], "a") as fh:
+                fh.write(f"Probed candidates for flood_maps (in order):\n")
+                for c in probed_candidates:
+                    fh.write(str(c) + "\n")
+                fh.write(f"Resolved src path: {src}\n")
+                fh.write(f"src.exists: {src.exists()}\n")
+                # list src contents if present
+                if src.exists():
+                    try:
+                        fh.write("Contents of src:\n")
+                        for p in sorted(src.iterdir()):
+                            fh.write(" - " + p.name + ("/" if p.is_dir() else "") + "\n")
+                    except Exception as e:
+                        fh.write("Failed to list src contents: " + str(e) + "\n")
+        except Exception:
+            pass
+        dst = Path(RUNS_DIR) / "output" / "flood_maps"
+
+        if not src.exists():
+            with open(log[0], "a") as fh:
+                fh.write(f"Source flood maps not found at {src}\n")
+            raise RuntimeError(
+                f"Source flood maps not found at {src}. Run 'geb exec estimate_return_periods -wd models/geul' first."
+            )
+
+        # read return periods using parse_config so 'inherits' is resolved
+        try:
+            # Ensure any `{GEB_PACKAGE_DIR}` inherits can be resolved
+            import os
+            from geb import GEB_PACKAGE_DIR
+            os.environ.setdefault("GEB_PACKAGE_DIR", str(GEB_PACKAGE_DIR))
+
+            # Prefer any of the previously probed candidate roots to find the
+            # repository `models/geul/model.yml`. When Snakemake loads rules
+            # from site-packages, `__file__` can point into the virtualenv, so
+            # using fixed parents[] is brittle. Use `probed_candidates` (from
+            # _find_flood_maps_folder) to locate the real repo root.
+            model_cfg_path = None
+            try:
+                # If `src` (the canonical flood_maps folder) was resolved above,
+                # derive the repository model.yml from it. `src` should be at:
+                # <repo_root>/models/geul/output/flood_maps, so `src.parents[2]`
+                # points to the `geul` folder.
+                if src.exists():
+                    candidate = src.parents[2] / "model.yml"
+                    if candidate.exists():
+                        model_cfg_path = candidate
+                if model_cfg_path is None:
+                    for root in probed_candidates:
+                        candidate = Path(root) / "models" / "geul" / "model.yml"
+                        if candidate.exists():
+                            model_cfg_path = candidate
+                            break
+            except Exception:
+                model_cfg_path = None
+
+            if model_cfg_path is None:
+                # fallback: relative path from the repository working dir
+                model_cfg_path = Path("models") / "geul" / "model.yml"
+
+            # Diagnostic: record model_cfg_path and existence
+            try:
+                with open(log[0], "a") as fh:
+                    fh.write(f"Attempting parse_config on: {model_cfg_path}\n")
+                    fh.write(f"model_cfg_path.exists: {model_cfg_path.exists()}\n")
+                    if model_cfg_path.exists():
+                        try:
+                            fh.write("--- model.yml (safe load) ---\n")
+                            import yaml as _yaml
+                            fh.write(_yaml.safe_load(model_cfg_path.read_text()).__repr__() + "\n")
+                        except Exception as e:
+                            fh.write("safe_load of model.yml failed: " + str(e) + "\n")
+            except Exception:
+                pass
+
+            model_cfg = parse_config(model_cfg_path, current_directory=model_cfg_path.parent)
+            # write parse_config result for debugging
+            try:
+                with open(log[0], "a") as fh:
+                    fh.write("--- parse_config result keys ---\n")
+                    if isinstance(model_cfg, dict):
+                        for k in sorted(model_cfg.keys()):
+                            fh.write(str(k) + "\n")
+                    else:
+                        fh.write(f"parse_config returned non-dict: {type(model_cfg)}\n")
+            except Exception:
+                pass
+
+            return_periods = model_cfg.get("hazards", {}).get("floods", {}).get("return_periods", [])
+        except Exception as e:
+            try:
+                with open(log[0], "a") as fh:
+                    fh.write("parse_config raised exception:\n")
+                    import traceback as _tb
+                    fh.write(_tb.format_exc())
+            except Exception:
+                pass
+            return_periods = []
+
+        if not return_periods:
+            with open(log[0], "a") as fh:
+                fh.write("No return periods configured in models/geul/model.yml; nothing to copy.\n")
+            raise RuntimeError("No return periods found in models/geul/model.yml")
+
+        missing = []
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        for rp in return_periods:
+            src_rp = src / f"{rp}.zarr"
+            dst_rp = dst / f"{rp}.zarr"
+            if not src_rp.exists():
+                missing.append(str(src_rp))
+                continue
+            if dst_rp.exists():
+                shutil.rmtree(dst_rp)
+            shutil.copytree(src_rp, dst_rp)
+
+        if missing:
+            with open(log[0], "a") as fh:
+                fh.write("Missing return-period maps:\n")
+                for m in missing:
+                    fh.write(m + "\n")
+            raise RuntimeError(
+                "Not all expected return-period maps were found in models/geul/output/flood_maps."
+            )
+
+        Path(output[0]).touch()
 
 rule generate_initial_parameters:
     input: "base_build.done"
@@ -173,10 +349,23 @@ rule generate_individual_parameters:
         if individual_data is None:
             raise ValueError(f"Individual {label} not found in population file")
         
-        actual_params = {
-            param_config["variable"]: float(param_config["min"] + individual_data["values"][i] * (param_config["max"] - param_config["min"]))
-            for i, (param_name, param_config) in enumerate(PARAMETERS.items())
-        }
+        actual_params = {}
+        for i, (param_name, param_config) in enumerate(PARAMETERS.items()):
+            # compute raw value in the parameter's range
+            raw_value = param_config["min"] + individual_data["values"][i] * (param_config["max"] - param_config["min"])
+            # preserve float parameters if min or max is a float, otherwise use integer
+            try:
+                is_float = isinstance(param_config["min"], float) or isinstance(param_config["max"], float)
+            except Exception:
+                is_float = False
+
+            if is_float:
+                actual = float(raw_value)
+            else:
+                # round to nearest integer for integer parameters
+                actual = int(round(raw_value))
+
+            actual_params[param_config["variable"]] = actual
         
         Path(output.params).parent.mkdir(parents=True, exist_ok=True)
         with open(output.params, "w") as f:
@@ -200,6 +389,41 @@ rule init_individual:
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
         with open(run_dir / "build.yml", "w") as f: f.write("# Empty build config\n")
         with open(run_dir / "update.yml", "w") as f: f.write("# Empty update config\n")
+
+        # Ensure the run has an `output/flood_maps` path that points to the
+        # centralized calibration flood maps. Some environments (e.g. HPC
+        # workers) may not allow symlinks; in that case we fall back to copying
+        # the maps into the run dir so `agents.households` can read them at
+        # `run_dir/output/flood_maps/{rp}.zarr`.
+        try:
+            out_dir = run_dir / "output"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            link = out_dir / "flood_maps"
+            target = Path(RUNS_DIR) / "output" / "flood_maps"
+            if link.exists() or link.is_symlink():
+                try:
+                    if link.is_dir() and not link.is_symlink():
+                        import shutil
+                        shutil.rmtree(link)
+                    else:
+                        link.unlink()
+                except Exception:
+                    pass
+
+            try:
+                # create relative symlink when possible
+                rel = os.path.relpath(str(target), start=str(out_dir))
+                link.symlink_to(rel)
+            except Exception:
+                # fallback: copy the folder contents if target exists
+                import shutil
+                if target.exists():
+                    try:
+                        shutil.copytree(target, link)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 rule alter_individual:
     input: RUNS_DIR + "/{gen}_{ind}/init.done"
@@ -229,17 +453,51 @@ rule set_individual_parameters:
             calib_config["spinup_time"], calib_config["start_time"], calib_config["end_time"]
         )
         
-        cmd = "geb set -c model.yml --working-directory {0} {1} {2} report=null report._discharge_stations+=true".format(
-            run_dir, param_args, datetime_args
-        )
+        cmd = "geb set -c model.yml --working-directory {0} {1} {2} report=null report._config.chunk_target_size_bytes+=100000000 report._config.compression_level+=9 report._discharge_stations+=true report._calibration+=true".format(run_dir, param_args, datetime_args)
         run_command(cmd, log[0], f"Failed to set parameters for {wildcards.gen}_{wildcards.ind}")
 
 rule spinup_individual:
-    input: RUNS_DIR + "/{gen}_{ind}/params_set.done"
+    input:
+        params=RUNS_DIR + "/{gen}_{ind}/params_set.done",
+        flood_maps=RUNS_DIR + "/flood_maps.done"
     output: touch(RUNS_DIR + "/{gen}_{ind}/spinup.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/spinup.log"
     run:
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
+        # Diagnostic: record whether run_dir/output/flood_maps exists and list contents
+        try:
+            with open(log[0], "a") as fh:
+                fh.write("\n--- Diagnostic: flood_maps visibility before spinup ---\n")
+                fh.write(f"run_dir: {run_dir}\n")
+                out_fm = run_dir / "output" / "flood_maps"
+                fh.write(f"run_dir/output exists: {(run_dir / 'output').exists()}\n")
+                fh.write(f"run_dir/output/flood_maps exists: {out_fm.exists()}\n")
+                fh.write(f"run_dir/output/flood_maps is_symlink: {out_fm.is_symlink()}\n")
+                try:
+                    if out_fm.exists():
+                        fh.write("Contents:\n")
+                        for p in sorted(out_fm.iterdir()):
+                            fh.write(" - " + p.name + ("/" if p.is_dir() else "") + "\n")
+                    else:
+                        fh.write("run_dir/output/flood_maps not present\n")
+                except Exception as e:
+                    fh.write(f"Listing run_dir/output/flood_maps failed: {e}\n")
+
+                # also list the centralized calibration flood_maps
+                try:
+                    central = Path(RUNS_DIR) / "output" / "flood_maps"
+                    fh.write(f"central flood_maps: {central}\n")
+                    fh.write(f"central exists: {central.exists()}\n")
+                    if central.exists():
+                        fh.write("Central contents:\n")
+                        for p in sorted(central.iterdir()):
+                            fh.write(" - " + p.name + ("/" if p.is_dir() else "") + "\n")
+                except Exception as e:
+                    fh.write(f"Listing central flood_maps failed: {e}\n")
+                fh.write("--- end diagnostic ---\n\n")
+        except Exception:
+            pass
+
         run_command(f"geb spinup -wd {run_dir}", log[0], f"Spinup failed for {wildcards.gen}_{wildcards.ind}")
 
 rule run_individual:
@@ -268,7 +526,7 @@ rule evaluate_individual:
 
         for target_name, target_info in targets.items():
             method, metric_key, weight = target_info["method"], target_info["metric"], float(target_info["weight"])
-            cmd = f"geb evaluate {method} -wd {run_dir} --create_plots false"
+            cmd = f"geb evaluate {method} -wd {run_dir}"
             stdout = run_command(cmd, log[0], f"Eval failed for {target_name}")
 
             try:

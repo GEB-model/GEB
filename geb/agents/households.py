@@ -585,6 +585,7 @@ class Households(AgentBaseClass):
         self.var.expenditure_cap = self.model.config["agent_settings"]["households"][
             "expected_utility"
         ]["flood_risk_calculations"]["adaptation_financing"]["expenditure_cap"]
+
         annual_adaptation_costs_dryproofing: float = np.asarray(
             self.var.total_adaptation_costs_dryproofing.data
         ) * (

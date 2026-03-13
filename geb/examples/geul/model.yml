@@ -22,20 +22,73 @@ general:
     subbasin: 23011134
 hazards:
   floods:
-    simulate: false
+    simulate: true
+    overwrite: true
     grid_size_multiplier: 4
     subgrid: true
     flood_risk: false
     gpu: auto
     ncpus: auto # can be number or 'auto', use less cpus when running on interactive session
-    overwrite: auto
     coastal_only: false
     return_periods:
       - 2
+      - 25
+      - 50
+      - 100
+      - 200
+      - 500
       - 1000
     events:
       - start_time: 2021-07-12 09:00:00
         end_time: 2021-07-20 09:00:00
+
+agent_settings:
+  households:
+    adapt: true
+    adapt_to_actual_floods: true
+    include_VVEs_and_woningcorporaties: true
+    warning_response: false
+    water_demand:
+      method: custom_value
+      custom_value:
+        value: 3.0
+    adjust_demand_factor: 1
+    expected_utility:
+      flood_risk_calculations:
+        risk_perception:
+          base: 1.6
+          coef: -2.5
+          max: 10
+          min: 0.01
+        adaptation_financing:
+          expenditure_cap: 0.06
+          loan_duration: 16
+          loan_interest_rate: 0.04
+    observed_adaptation:
+      timestamps:
+        - 2021-07-01
+        - 2021-08-01
+      dryproofing_percentage:
+        - 10
+        - 15
+      wetproofing_percentage:
+        - 15
+        - 20
+    total_households: 3000
+  industry:
+    disable_water_demand: false
+  government:
+    subsidies:
+      enabled: false
+      frequency: always
+      selected_households: all
+      dryproofing_subsidy_value: 100000
+      wetproofing_subsidy_value: 100000
+    risk_communication:
+      enabled: false
+      frequency: always
+      selected_households: all  
+      percentage_increase_risk_perception: 20
 
 report:
   hydrology.landsurface:
@@ -65,6 +118,11 @@ report:
       varname: var.channel_abstraction_m3_by_farmer
       type: agents
       function: mean
+  agents.households:
+    adaptation_type:
+      varname: var.adaptation_type
+      type: agents
+      function: null
 
 calibration:
   hydrology:
@@ -107,3 +165,39 @@ calibration:
           variable: agent_settings.farmers.return_fraction
           min: 0.3
           max: 0.8
+  household_adaptation:
+      spinup_time: 1960-01-01
+      start_time: 1994-01-01
+      end_time: 2024-12-30
+      calibration_targets:
+        balanced_ratio_score:
+          method: agents.evaluate_household_adaptation
+          metric: balanced_ratio_score
+          weight: 1.0
+      DEAP:
+        ngen: 10
+        mu: 20
+        lambda_: 10
+        select_best: 10
+        crossover_prob: 0.7
+        mutation_prob: 0.3
+        blend_alpha: 0.15
+        gaussian_sigma: 0.3
+        gaussian_indpb: 0.3
+      parameters:
+        max_risk_perception:
+          variable: agent_settings.households.expected_utility.flood_risk_calculations.risk_perception.max
+          min: 1
+          max: 10
+        loan_duration:
+          variable: agent_settings.households.expected_utility.flood_risk_calculations.adaptation_financing.loan_duration
+          min: 5
+          max: 30
+        loan_interest_rate:
+          variable: agent_settings.households.expected_utility.flood_risk_calculations.adaptation_financing.loan_interest_rate
+          min: 0.01
+          max: 0.1
+        expenditure_cap:
+          variable: agent_settings.households.expected_utility.flood_risk_calculations.adaptation_financing.expenditure_cap
+          min: 0.1
+          max: 1.0
