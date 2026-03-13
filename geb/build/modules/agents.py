@@ -1821,6 +1821,7 @@ class Agents(BuildModelBase):
             skip_countries_ISO3: A list of ISO3 country codes to skip when setting up household characteristics.
             single_household_per_building: If True, only one household will be allocated per building. Default is False.
             redundancy_array_size: The size of the redundancy array used for preallocating region arrays of household characteristics. Default is 20 million, which should be sufficient for most regions. Adjust if you encounter memory issues or if you have very large regions.            occupancy_type: A list of strings to filter the building occupancy types for residential buildings. Default is ["RES", "UNK"].
+            occupancy_type: A list of strings to filter the building occupancy types for residential buildings. Default is ["RES", "UNK"].
             minimum_building_size_m2: Minimum building size in m2 to be considered for household allocation. If None, no minimum size is applied. Default is None.
 
         Raises:
