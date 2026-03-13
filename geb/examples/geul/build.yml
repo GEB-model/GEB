@@ -10,9 +10,9 @@ set_ssp:
 
 setup_hydrography:
 
-setup_elevation:
-
 setup_coastlines:
+
+setup_elevation:
 
 setup_coastal_sfincs_model_regions:
 

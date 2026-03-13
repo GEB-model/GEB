@@ -23,6 +23,8 @@ import numpy as np
 import rioxarray as rxr
 import xarray as xr
 from rioxarray import merge
+from shapely.geometry import box
+from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
 
 from geb.workflows.io import fetch_and_save, read_zarr, write_zarr
@@ -436,72 +438,53 @@ class Fabdem(Adapter):
 
         return f"{ns_min}{abs_lat_min:02d}{ew_min}{abs_lon_min:03d}-{ns_max}{abs_lat_max:02d}{ew_max}{abs_lon_max:03d}_FABDEM_V1-2.zip"
 
-    def _tiles_for_bbox(
-        self, xmin: float, xmax: float, ymin: float, ymax: float
-    ) -> list[tuple[int, int]]:
-        """Compute all 10x10-degree lower-left tile coordinates intersecting a bbox.
+    def _tiles_for_mask(self, mask: BaseGeometry) -> list[tuple[int, int]]:
+        """Compute all 10x10-degree lower-left tile coordinates intersecting a mask.
 
         Args:
-            xmin: Minimum longitude (degrees).
-            xmax: Maximum longitude (degrees).
-            ymin: Minimum latitude (degrees).
-            ymax: Maximum latitude (degrees).
+            mask: The geometry used to filter intersecting tiles.
 
         Returns:
             Sorted list of (lat_min, lon_min) integer tuples on 10-degree grid.
-
-        Raises:
-            ValueError: If bbox is invalid.
         """
-        if xmax <= xmin:
-            raise ValueError("xmax must be greater than xmin.")
-        if ymax <= ymin:
-            raise ValueError("ymax must be greater than ymin.")
-
-        # Clamp to plausible world bounds
-        xmin_c = max(-180.0, xmin)
-        xmax_c = min(180.0, xmax)
-        ymin_c = max(-90.0, ymin)
-        ymax_c = min(90.0, ymax)
+        xmin, ymin, xmax, ymax = mask.bounds
 
         # Align to 10-degree grid (lower-left corners)
         def floor10(v: float) -> int:
-            return int(v // 10) * 10
+            return int(np.floor(v / 10) * 10)
 
-        lat_start = floor10(ymin_c)
-        lon_start = floor10(xmin_c)
+        lat_start = floor10(ymin)
+        lon_start = floor10(xmin)
 
         tiles: list[tuple[int, int]] = []
         lat = lat_start
-        while lat < ymax_c:
+        while lat < ymax:
             lon = lon_start
-            while lon < xmax_c:
-                tiles.append((lat, lon))
+            while lon < xmax:
+                # Create tile bounding box to check intersection
+                tile_bbox = box(lon, lat, lon + 10, lat + 10)
+                # Only include tile if it actually intersects with the mask
+                if tile_bbox.intersects(mask):
+                    tiles.append((lat, lon))
                 lon += 10
             lat += 10
         # Unique and sorted for reproducibility
         tiles = sorted(set(tiles))
         return tiles
 
-    def _tif_intersects_bbox(
+    def _tif_intersects_mask(
         self,
         tif_filename: str,
-        xmin: float,
-        xmax: float,
-        ymin: float,
-        ymax: float,
+        mask: BaseGeometry,
     ) -> bool:
-        """Check if a GeoTIFF file in a ZIP intersects with the bounding box.
+        """Check if a GeoTIFF file in a ZIP intersects with the mask.
 
         Args:
             tif_filename: Name of the TIF file within the ZIP.
-            xmin: Minimum longitude of bbox (degrees).
-            xmax: Maximum longitude of bbox (degrees).
-            ymin: Minimum latitude of bbox (degrees).
-            ymax: Maximum latitude of bbox (degrees).
+            mask: The geometry to check intersection against.
 
         Returns:
-            True if the TIF intersects with the bbox, False otherwise.
+            True if the TIF intersects with the mask, False otherwise.
         """
         # Parse bounds from filename
         # FABDEM TIF filenames follow pattern like "N00E000.tif" for 1x1 degree cells
@@ -531,33 +514,26 @@ class Fabdem(Adapter):
             lon_max: int = lon_val + 1
 
         # Check for intersection
-        return not (
-            lon_max <= xmin or lon_min >= xmax or lat_max <= ymin or lat_min >= ymax
-        )
+        tif_bbox = box(lon_min, lat_min, lon_max, lat_max)
+        return tif_bbox.intersects(mask)
 
     def _download_and_extract_tile(
         self,
         tile_url: str,
         temp_dir: Path,
         tile_filename: str,
-        xmin: float,
-        xmax: float,
-        ymin: float,
-        ymax: float,
+        mask: BaseGeometry,
     ) -> list[Path]:
-        """Download a tile ZIP and extract only GeoTIFF files that intersect with the bbox.
+        """Download a tile ZIP and extract only GeoTIFF files that intersect with the mask.
 
         Args:
             tile_url: URL of the tile ZIP file.
             temp_dir: Temporary directory to extract to.
             tile_filename: Filename of the tile ZIP.
-            xmin: Minimum longitude of bbox (degrees).
-            xmax: Maximum longitude of bbox (degrees).
-            ymin: Minimum latitude of bbox (degrees).
-            ymax: Maximum latitude of bbox (degrees).
+            mask: The geometry to check intersection against.
 
         Returns:
-            List of paths to the extracted GeoTIFF files that intersect with the bbox.
+            List of paths to the extracted GeoTIFF files that intersect with the mask.
 
         Raises:
             RuntimeError: If download or extraction fails after all retries.
@@ -589,8 +565,8 @@ class Fabdem(Adapter):
 
             extracted_paths: list[Path] = []
             for tif_filename in tif_files:
-                # Check if this TIF intersects with bbox before extracting
-                if self._tif_intersects_bbox(tif_filename, xmin, xmax, ymin, ymax):
+                # Check if this TIF intersects with mask before extracting
+                if self._tif_intersects_mask(tif_filename, mask):
                     zip_ref.extract(tif_filename, temp_dir)
                     extracted_paths.append(temp_dir / tif_filename)
 
@@ -610,17 +586,12 @@ class Fabdem(Adapter):
         da: xr.DataArray = merge.merge_arrays(das)
         return da
 
-    def fetch(
-        self, url: str, xmin: float, xmax: float, ymin: float, ymax: float
-    ) -> Fabdem:
-        """Download FABDEM tiles intersecting a bbox.
+    def fetch(self, url: str, mask: BaseGeometry) -> Fabdem:
+        """Download FABDEM tiles intersecting a mask.
 
         Args:
-            xmin: Minimum longitude of area of interest (degrees).
-            xmax: Maximum longitude of area of interest (degrees).
-            ymin: Minimum latitude of area of interest (degrees).
-            ymax: Maximum latitude of area of interest (degrees).
             url: Base URL of the FABDEM server.
+            mask: The geometry used to filter intersecting tiles.
 
         Returns:
             The Fabdem instance.
@@ -629,7 +600,7 @@ class Fabdem(Adapter):
             RuntimeError: If no tiles could be downloaded.
         """
         if not self.is_ready:
-            tiles: list[tuple[int, int]] = self._tiles_for_bbox(xmin, xmax, ymin, ymax)
+            tiles: list[tuple[int, int]] = self._tiles_for_mask(mask)
 
             with tempfile.TemporaryDirectory() as temp_dir_str:
                 temp_dir: Path = Path(temp_dir_str)
@@ -640,7 +611,7 @@ class Fabdem(Adapter):
                     tile_url: str = f"{url}/{tile_filename}"
 
                     tif_paths: list[Path] = self._download_and_extract_tile(
-                        tile_url, temp_dir, tile_filename, xmin, xmax, ymin, ymax
+                        tile_url, temp_dir, tile_filename, mask
                     )
                     # Add all extracted TIF files (already filtered during extraction)
                     results.extend(tif_paths)
@@ -649,7 +620,8 @@ class Fabdem(Adapter):
                     raise RuntimeError("No FABDEM tiles could be downloaded.")
 
                 da: xr.DataArray = self._merge_fabdem_tiles(results)
-                da = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
+                # Clip to the mask and set data outside the mask to NaN
+                da = da.rio.clip([mask], all_touched=True, drop=True)
                 da = convert_nodata(da, np.nan)
 
                 write_zarr(da, self.path, crs=da.rio.crs)

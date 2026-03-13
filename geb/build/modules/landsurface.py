@@ -94,7 +94,7 @@ class LandSurface(BuildModelBase):
             name="cell_area",
         )
 
-    @build_method(depends_on=["setup_hydrography"], required=True)
+    @build_method(depends_on=["setup_hydrography", "setup_coastlines"], required=True)
     def setup_elevation(
         self,
         DEMs: list[dict[str, str | float]] = [
@@ -156,6 +156,10 @@ class LandSurface(BuildModelBase):
         if not isinstance(DEMs, list) or not all(isinstance(DEM, dict) for DEM in DEMs):
             raise ValueError("DEMs must be provided as a list of dictionaries.")
 
+        potential_flood_area_with_buffer = (
+            self.geom["routing/subbasins"].union_all().buffer(0.1)
+        )
+
         if self.geom["routing/subbasins"]["is_coastal"].any():
             # deltaDTM must be present if coastal DEMs are used
             if not any(DEM.get("name", "") == "delta_dtm" for DEM in DEMs):
@@ -168,28 +172,34 @@ class LandSurface(BuildModelBase):
                     DEM["zmin"] = DEM["coastal_zmin"]
                 if "coastal_zmax" in DEM:
                     DEM["zmax"] = DEM["coastal_zmax"]
+
+            coastlines = self.geom["coastal/coastlines"]
+            potential_flood_area_with_buffer = potential_flood_area_with_buffer.union(
+                coastlines.buffer(0.2).union_all()
+            )
+
+            delta_dtm: xr.DataArray = self.data_catalog.fetch(
+                "delta_dtm",
+                mask=potential_flood_area_with_buffer,
+            ).read(mask=potential_flood_area_with_buffer)
+
+            # Create low elevation coastal zone mask based on DeltaDTM
+            low_elevation_coastal_zone = delta_dtm < 10
+            low_elevation_coastal_zone.values = (
+                low_elevation_coastal_zone.values.astype(np.float32)
+            )
+            self.set_other(
+                low_elevation_coastal_zone,
+                name="landsurface/low_elevation_coastal_zone",
+            )  # Maybe remove this
+
         else:
             # Remove coastal DEMs if no coastal subbasins are present
             DEMs = [DEM for DEM in DEMs if not DEM.get("coastal_only", False)]
 
-        # here we use the bounds of all subbasins, which may include downstream
-        # subbasins that are not part of the study area
-        bounds: tuple[float, float, float, float] = tuple(
-            self.geom["routing/subbasins"].total_bounds
-        )
-
-        buffer: float = 0.5
-        xmin: float = bounds[0] - buffer
-        ymin: float = bounds[1] - buffer
-        xmax: float = bounds[2] + buffer
-        ymax: float = bounds[3] + buffer
-
         fabdem: xr.DataArray = self.data_catalog.fetch(
             "fabdem",
-            xmin=xmin - 0.5,  # extra buffer to also support forcing
-            xmax=xmax + 0.5,  # extra buffer to also support forcing
-            ymin=ymin - 0.5,  # extra buffer to also support forcing
-            ymax=ymax + 0.5,  # extra buffer to also support forcing
+            mask=potential_flood_area_with_buffer,
         ).read()
 
         target: xr.DataArray = self.subgrid["mask"]
@@ -207,23 +217,7 @@ class LandSurface(BuildModelBase):
                 DEM_raster: xr.DataArray = fabdem
 
             elif DEM["name"] == "delta_dtm":
-                DEM_raster: xr.DataArray = self.data_catalog.fetch(
-                    "delta_dtm",
-                    xmin=xmin,
-                    xmax=xmax,
-                    ymin=ymin,
-                    ymax=ymax,
-                ).read()
-
-                # Create low elevation coastal zone mask based on DeltaDTM
-                low_elevation_coastal_zone = DEM_raster < 10
-                low_elevation_coastal_zone.values = (
-                    low_elevation_coastal_zone.values.astype(np.float32)
-                )
-                self.set_other(
-                    low_elevation_coastal_zone,
-                    name="landsurface/low_elevation_coastal_zone",
-                )  # Maybe remove this
+                DEM_raster: xr.DataArray = delta_dtm
 
             elif DEM["name"] == "gebco":
                 DEM_raster: xr.DataArray = self.data_catalog.fetch("gebco").read()
@@ -271,22 +265,14 @@ class LandSurface(BuildModelBase):
                             f"DEM at path '{DEM['path']}' does not have a nodata value defined."
                         )
 
-            if "bands" in DEM_raster.dims:
+            if "band" in DEM_raster.dims:
                 DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
 
-            DEM_raster: xr.DataArray = DEM_raster.isel(
-                get_window(
-                    DEM_raster.x,
-                    DEM_raster.y,
-                    tuple(
-                        self.geom["routing/subbasins"]
-                        .to_crs(DEM_raster.rio.crs)
-                        .total_bounds
-                    ),
-                    buffer=100,
-                    raise_on_out_of_bounds=False,
-                    raise_on_buffer_out_of_bounds=False,
-                ),
+            DEM_raster = DEM_raster.rio.clip(
+                [potential_flood_area_with_buffer],
+                crs=4326,  # crs of the potential_flood_area_with_buffer
+                all_touched=True,
+                drop=True,
             )
 
             DEM_raster = convert_nodata(
@@ -404,36 +390,23 @@ class LandSurface(BuildModelBase):
         regions_bounds = self.geom["regions"].total_bounds
         subbasins_bounds = self.geom["routing/subbasins"].total_bounds
 
-        union_geometry = (
-            self.geom["regions"]
-            .union_all()
-            .union(self.geom["routing/subbasins"].union_all())
+        potential_flood_area_with_buffer = (
+            self.geom["routing/subbasins"].union_all().buffer(0.1)
         )
-        if len(self.geom["coastal/low_elevation_coastal_zone_mask"]) > 0:
-            union_geometry = union_geometry.union(
-                self.geom["coastal/low_elevation_coastal_zone_mask"].union_all()
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            potential_flood_area_with_buffer = potential_flood_area_with_buffer.union(
+                self.geom["coastal/low_elevation_coastal_zone_mask"]
+                .union_all()
+                .buffer(0.2)
             )
-        xmin = union_geometry.bounds[0] - buffer
-        ymin = union_geometry.bounds[1] - buffer
-        xmax = union_geometry.bounds[2] + buffer
-        ymax = union_geometry.bounds[3] + buffer
 
         land_use_classification_source: xr.DataArray = self.data_catalog.fetch(
             land_cover
-        ).read(union_geometry)
+        ).read(self.geom["regions"].union_all().union(potential_flood_area_with_buffer))
 
-        # we want to save the original land use data for the flood model
-        # but also not save more data than necessary, as the land use classification source can be quite large.
-        # therefore we clip the land use classification source to the union of the subbasins and
-        # coastal low elevation zone
-        flood_mask = [self.geom["routing/subbasins"].union_all()]
-        if len(self.geom["coastal/low_elevation_coastal_zone_mask"]) > 0:
-            flood_mask.append(
-                self.geom["coastal/low_elevation_coastal_zone_mask"].union_all()
-            )
         self.set_other(
             land_use_classification_source.rio.clip(
-                flood_mask,
+                [potential_flood_area_with_buffer],
                 drop=True,
                 all_touched=True,
             ),

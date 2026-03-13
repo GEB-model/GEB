@@ -3,6 +3,7 @@
 - Close all open figures in SFINCS to reduce memory usage.
 - Several fixes in sfincs.py to avoid futurewarnings for pandas 3.0.
 - Compress forcing data to 1D. This makes the input folder significantly smaller (~50% depending on the area).
+- Reduce area that elevation and land use maps are written for reducing size on disk.
 
 # v1.0.0b17
 - Synchronize start and end dates in reasonable default config and example.
