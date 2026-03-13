@@ -1159,6 +1159,9 @@ class Reporter:
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
+        elif type_ == "scalar":
+            pass  # no processing needed for scalar values
+
         else:
             raise ValueError(
                 f"Type {type_} not recognized. Check your configuration for {module_name}.{name}."
