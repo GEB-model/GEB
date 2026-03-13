@@ -169,7 +169,7 @@ class ECMWFForecasts(Adapter):
         bounds_str: str = f"{bounds[3]}/{bounds[0]}/{bounds[1]}/{bounds[2]}"  # setup bounds -- > bounds should be in North/West/South/East format for MARS
 
         forecast_date_list = pd.date_range(
-            forecast_start, forecast_end, freq="24H"
+            forecast_start, forecast_end, freq="24h"
         )  # Generate list of forecast dates at 24-hour intervals
         earliest_allowed_date = date(2010, 1, 1)  # Set earliest allowed forecast date
         for forecast_date in forecast_date_list:  # Loop through all forecast dates
@@ -451,7 +451,7 @@ class ECMWFForecasts(Adapter):
                 f"Timesteps in the forecast are not hourly, resampling to hourly. Found timesteps: {np.unique(ds.step.diff('step').astype(np.int64) / 1e9 / 3600)} hours"
             )  # Log the current timesteps found in the data
 
-            ds = ds.resample(step="1H").interpolate(
+            ds = ds.resample(step="1h").interpolate(
                 "linear"
             )  # Resample to hourly timesteps using linear interpolation
             # convert back to float32
