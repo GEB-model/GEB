@@ -332,9 +332,9 @@ class CropFarmers(AgentBaseClass):
         )
 
         # diversions
-        self.diversions = load_economic_data(
-            self.model.files["dict"]["socioeconomics/diversions"]
-        )
+        # self.diversions = load_economic_data(
+        #     self.model.files["dict"]["socioeconomics/diversions"]
+        # )
 
         # irrigation prices
         self.operation_cost_surface = load_economic_data(
@@ -356,15 +356,15 @@ class CropFarmers(AgentBaseClass):
             self.model.files["dict"]["socioeconomics/capital_cost_drip"]
         )
 
-        self.surface_fraction = load_economic_data(
-            self.model.files["dict"]["irrigation/surface"]
-        )
-        self.sprinkler_fraction = load_economic_data(
-            self.model.files["dict"]["irrigation/sprinkler"]
-        )
-        self.drip_fraction = load_economic_data(
-            self.model.files["dict"]["irrigation/drip"]
-        )
+        # self.surface_fraction = load_economic_data(
+        #     self.model.files["dict"]["irrigation/surface"]
+        # )
+        # self.sprinkler_fraction = load_economic_data(
+        #     self.model.files["dict"]["irrigation/sprinkler"]
+        # )
+        # self.drip_fraction = load_economic_data(
+        #     self.model.files["dict"]["irrigation/drip"]
+        # )
 
         self.rng_irrigation = np.random.default_rng(42)
 
@@ -432,9 +432,12 @@ class CropFarmers(AgentBaseClass):
         self.price_adjustment_drip = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["adaptation_sprinkler"]["price_adjustment_drip"]
+        # self.base_efficiency = self.model.config["agent_settings"]["farmers"][
+        #     "expected_utility"
+        # ]["adaptation_sprinkler"]["base_efficiency"]
         self.base_efficiency = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
-        ]["adaptation_sprinkler"]["base_efficiency"]
+        ]["adaptation_sprinkler"].get("base_efficiency", None)
         self.static_water_price = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["water_price"]["static"]
@@ -446,10 +449,10 @@ class CropFarmers(AgentBaseClass):
             ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
             self.water_costs_m3_reservoir = self.model.config["agent_settings"][
                 "farmers"
-            ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
+            ]["expected_utility"]["water_price"]["water_costs_m3_reservoir"]
             self.water_costs_m3_groundwater = self.model.config["agent_settings"][
                 "farmers"
-            ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+            ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
 
         self.allocation_reduction = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
@@ -530,10 +533,10 @@ class CropFarmers(AgentBaseClass):
         ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
         self.var.water_costs_m3_reservoir = self.model.config["agent_settings"][
             "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
+        ]["expected_utility"]["water_price"]["water_costs_m3_reservoir"]
         self.var.water_costs_m3_groundwater = self.model.config["agent_settings"][
             "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+        ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
 
         # Irr efficiency variables
         self.var.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
@@ -550,7 +553,8 @@ class CropFarmers(AgentBaseClass):
             region_mask == 0
         ]
         self.var.HRU_regions_map = self.HRU.convert_subgrid_to_HRU(
-            self.var.HRU_regions_map
+            # self.var.HRU_regions_map
+            self.HRU_regions_map
         )
 
         self.crop_prices = load_regional_crop_data_from_dict(
@@ -1116,7 +1120,13 @@ class CropFarmers(AgentBaseClass):
         # 5 is water costs, 6 is personal insurance, 7 is index insurance last is total
         # Columns are the individual loans, i.e. if there are 2 loans for 2 wells, the first and second slot is used
 
-        self.var.n_loans = self.var.adaptations.shape[1] + 2
+        # self.var.n_loans = self.var.adaptations.shape[1] + 2
+        # Ensure loan_type dimension can index WATER_COSTS + 1.
+        # loan_type indices are used directly, so we need n_loans >= WATER_COSTS + 2.
+        self.var.n_loans = max(
+            self.var.adaptations.shape[1] + 2,
+            WATER_COSTS + 2,
+        )
 
         self.var.all_loans_annual_cost = DynamicArray(
             n=self.var.n,
@@ -4870,7 +4880,10 @@ class CropFarmers(AgentBaseClass):
                 self.save_yearly_spei()
                 self.save_yearly_pr()
 
-            if self.base_efficiency:
+            # if self.base_efficiency:
+            #     assert isinstance(self.base_efficiency, float)
+            #     self.var.irrigation_efficiency[:] = self.base_efficiency
+            if self.base_efficiency is not None:
                 assert isinstance(self.base_efficiency, float)
                 self.var.irrigation_efficiency[:] = self.base_efficiency
 
