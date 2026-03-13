@@ -1811,7 +1811,7 @@ class Agents(BuildModelBase):
         skip_countries_ISO3: list[str] = [],
         single_household_per_building: bool = True,
         occupancy_type: list[str] = ["RES"],  # ["RES", "UNK"],
-        minimum_building_size: int | None = 30,
+        minimum_building_size_m2: int | None = 30,
         redundancy_array_size: int = 20e6,
     ) -> None:
         """New method to set up household characteristics for agents using GLOPOP-S data. This method is still under development and may not be fully functional.
@@ -1879,11 +1879,30 @@ class Agents(BuildModelBase):
                 self.logger.info(f"Skipping {GDL_code[:3]}")
 
             buildings = all_buildings_model_region[GDL_code]
-            # filter to residential buildings
-            # check if occupancy column contains RES or UNK string (unknown occupancy assumed residential)
+
+            # filter to residential buildings specified in occupancy_type
+            occupancy_type_joined = "|".join(occupancy_type)
             residential_buildings_model_region = buildings[
-                buildings["occupancy"].str.contains("RES|UNK", na=False)
+                buildings["occupancy"].str.contains(occupancy_type_joined, na=False)
             ]
+
+            # Optional filter to include minimum building size for household allocation
+            if minimum_building_size_m2 is not None:
+                projected_crs = gpd.GeoSeries(
+                    [GDL_regions.geometry.union_all()], crs=GDL_regions.crs
+                ).estimate_utm_crs()
+                buildings_reprojected = residential_buildings_model_region.to_crs(
+                    projected_crs
+                )
+                residential_buildings_model_region = (
+                    residential_buildings_model_region.assign(
+                        building_size_m2=buildings_reprojected.geometry.area
+                    )
+                )
+                residential_buildings_model_region = residential_buildings_model_region[
+                    residential_buildings_model_region["building_size_m2"]
+                    >= minimum_building_size_m2
+                ]
             if residential_buildings_model_region.empty:
                 self.logger.info(
                     f"No residential buildings found for GDL code: {GDL_code}"
