@@ -9,4 +9,4 @@ include: "rules/calibrate.smk"
 # Main target
 rule all:
     input:
-        f"calibration_{CALIBRATION_TARGET}_complete.done"
+        "calibration/calibration_{target}_complete.done".format(target=CALIBRATION_TRACK)

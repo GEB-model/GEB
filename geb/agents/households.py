@@ -13,14 +13,13 @@ import osmnx as ox
 import pandas as pd
 import xarray as xr
 from pyproj import CRS
-from rasterio.features import shapes
+from rasterio.features import rasterize, shapes
 from rasterio.transform import Affine
-from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
 from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
-from geb.workflows.io import read_params
+from geb.workflows.io import read_geom, read_params
 
 from ..hydrology.landcovers import (
     FOREST,
@@ -638,7 +637,7 @@ class Households(AgentBaseClass):
         households = self.var.household_points.copy()
 
         # Associate households with their postal codes to use it later in the warning function
-        postal_codes: gpd.GeoDataFrame = gpd.read_parquet(
+        postal_codes: gpd.GeoDataFrame = read_geom(
             self.model.files["geom"]["postal_codes"]
         )
         postal_codes["postcode"] = postal_codes["postcode"].astype(str)
@@ -1134,7 +1133,7 @@ class Households(AgentBaseClass):
 
         for range_id in range_ids:
             # Build path to probability map
-            prob_map = Path(
+            prob_path = Path(
                 self.model.output_folder
                 / "prob_maps"
                 / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
@@ -1142,38 +1141,34 @@ class Households(AgentBaseClass):
             )
 
             # Open the probability map
-            prob_map = read_zarr(prob_map)
-            affine = prob_map.rio.transform()
-            prob_map = np.asarray(prob_map.values)
+            prob_da = read_zarr(prob_path)
 
-            # Get the pixel values for each postal code
-            stats = zonal_stats(
-                postal_codes,
-                prob_map,
-                affine=affine,
-                raster_out=True,
+            if postal_codes.crs != prob_da.rio.crs:
+                postal_codes = postal_codes.to_crs(prob_da.rio.crs)
+
+            # Rasterize postal codes to the same grid as the probability map
+            pc_mask = rasterize(
+                ((geom, i) for i, geom in enumerate(postal_codes.geometry)),
+                out_shape=(prob_da.rio.height, prob_da.rio.width),
+                transform=prob_da.rio.transform(),
                 all_touched=True,
-                nodata=np.nan,
+                fill=-1,
             )
 
             # Iterate through each postal code and check how many pixels exceed the threshold
-            for i, postalcode in enumerate(stats):
-                pixel_values = postalcode["mini_raster_array"]
-                postal_code = postal_codes.iloc[i]["postcode"]
+            for i, pc_row in postal_codes.iterrows():
+                postal_code = pc_row["postcode"]
 
-                # Only get the values that are within the postal code
-                postalcode_pixels = pixel_values[~pixel_values.mask]
+                # Get the values for this postal code from the probability map
+                valid_pixels = prob_da.values.squeeze()[pc_mask == i]
 
-                # Calculate the number of pixels with flood prob above the threshold
-                n_above = np.sum(postalcode_pixels >= prob_threshold)
-
-                # Calculate the total number of pixels within the postal code
-                n_total = len(postalcode_pixels)
+                n_total = len(valid_pixels)
 
                 if n_total == 0:
                     print(f"No valid pixels found for postal code {postal_code}")
-                    continue
+                    percentage = 0
                 else:
+                    n_above = np.sum(valid_pixels >= prob_threshold)
                     percentage = n_above / n_total
 
                 if percentage >= area_threshold:
@@ -1228,7 +1223,7 @@ class Households(AgentBaseClass):
         self.get_critical_facilities()
 
         # Assign critical facilities to postal codes
-        critical_facilities = gpd.read_parquet(
+        critical_facilities = read_geom(
             self.model.files["geom"]["assets/critical_facilities"]
         )
         self.assign_critical_facilities_to_postal_codes(
@@ -1236,16 +1231,12 @@ class Households(AgentBaseClass):
         )
 
         # Get energy substations and assign them to postal codes
-        substations = gpd.read_parquet(
-            self.model.files["geom"]["assets/energy_substations"]
-        )
+        substations = read_geom(self.model.files["geom"]["assets/energy_substations"])
         self.assign_energy_substations_to_postal_codes(substations, postal_codes)
 
     def get_critical_facilities(self) -> None:
         """Extract critical infrastructure elements (vulnerable and emergency facilities) from OSM using the catchment polygon as boundary."""
-        catchment_boundary = gpd.read_parquet(
-            self.model.files["geom"]["catchment_boundary"]
-        )
+        catchment_boundary = read_geom(self.model.files["geom"]["catchment_boundary"])
 
         # OSM needs a shapely geometry in EPSG:4326
         catchment_boundary = catchment_boundary.to_crs(epsg=4326)
@@ -1446,19 +1437,17 @@ class Households(AgentBaseClass):
         households = self.var.household_points.copy()
 
         # Load substations and critical facilities
-        substations = gpd.read_parquet(
-            self.model.files["geom"]["assets/energy_substations"]
-        )
-        critical_facilities = gpd.read_parquet(
+        substations = read_geom(self.model.files["geom"]["assets/energy_substations"])
+        critical_facilities = read_geom(
             self.model.files["geom"]["assets/critical_facilities"]
         )
 
         # Load postal codes with associated substations and critical facilities
         path = self.model.input_folder / "geom" / "assets"
-        postal_codes_with_substations = gpd.read_parquet(
+        postal_codes_with_substations = read_geom(
             path / "postal_codes_with_energy_substations.geoparquet"
         )
-        critical_facilities_with_postal_codes = gpd.read_parquet(
+        critical_facilities_with_postal_codes = read_geom(
             path / "critical_facilities_with_postal_codes.geoparquet"
         )
 
@@ -1481,14 +1470,11 @@ class Households(AgentBaseClass):
 
         # Open the probability map
         prob_map = read_zarr(prob_energy_hit_path)
-        affine = prob_map.rio.transform()
-        prob_array = np.asarray(prob_map.values)
 
         # Sample the probability map at the substations locations
-        sampled_probs = point_query(
-            substations, prob_array, affine=affine, interpolate="nearest"
-        )
-        substations["probability"] = sampled_probs
+        x = xr.DataArray(substations.geometry.x.values, dims="z")
+        y = xr.DataArray(substations.geometry.y.values, dims="z")
+        substations["probability"] = prob_map.sel(x=x, y=y, method="nearest").values
 
         # Filter substations that have a flood hit probability > threshold
         critical_hits_energy = substations[substations["probability"] >= prob_threshold]
@@ -1524,19 +1510,14 @@ class Households(AgentBaseClass):
 
         # Open the probability map
         prob_map = read_zarr(prob_critical_facilities_hit_path)
-        affine = prob_map.rio.transform()
-        prob_array = np.asarray(prob_map.values)
 
         # Sample the probability map at the facilities locations using their centroid (can be improved later to use whole area of the polygon)
         critical_facilities = critical_facilities.copy()
-
-        sampled_probs = point_query(
-            critical_facilities.geometry.centroid,
-            prob_array,
-            affine=affine,
-            interpolate="nearest",
-        )
-        critical_facilities["probability"] = sampled_probs
+        x = xr.DataArray(critical_facilities.geometry.centroid.x.values, dims="z")
+        y = xr.DataArray(critical_facilities.geometry.centroid.y.values, dims="z")
+        critical_facilities["probability"] = prob_map.sel(
+            x=x, y=y, method="nearest"
+        ).values
 
         # Filter facilities that have a flood hit probability > threshold
         critical_hits_facilities = critical_facilities[
@@ -1996,9 +1977,7 @@ class Households(AgentBaseClass):
     def load_objects(self) -> None:
         """Load buildings, roads, and rail geometries from model files."""
         # Load buildings
-        self.buildings = gpd.read_parquet(
-            self.model.files["geom"]["assets/open_building_map"]
-        )
+        self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
@@ -2012,20 +1991,18 @@ class Households(AgentBaseClass):
         )
 
         # Load roads
-        self.roads = gpd.read_parquet(self.model.files["geom"]["assets/roads"]).rename(
+        self.roads = read_geom(self.model.files["geom"]["assets/roads"]).rename(
             columns={"highway": "object_type"}
         )
 
         # Load rail
-        self.rail = gpd.read_parquet(self.model.files["geom"]["assets/rails"])
+        self.rail = read_geom(self.model.files["geom"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
         if self.model.config["general"]["forecasts"]["use"]:
             # Load postal codes --
             # TODO: maybe move it to another function? (not really an object)
-            self.postal_codes = gpd.read_parquet(
-                self.model.files["geom"]["postal_codes"]
-            )
+            self.postal_codes = read_geom(self.model.files["geom"]["postal_codes"])
 
     def load_max_damage_values(self) -> None:
         """Load maximum damage values from model files and store them in the model variables."""
@@ -2141,7 +2118,7 @@ class Households(AgentBaseClass):
         ]
 
         for road_type, path in road_types:
-            df = pd.read_parquet(self.model.files["table"][path])
+            df = read_table(self.model.files["table"][path])
             df = df.rename(columns={"damage_ratio": road_type})
 
             road_curves.append(df[[road_type]])
@@ -2151,14 +2128,14 @@ class Households(AgentBaseClass):
         self.var.road_curves = pd.concat([severity_column] + road_curves, axis=1)
         self.var.road_curves.set_index("severity", inplace=True)
 
-        self.var.forest_curve = pd.read_parquet(
+        self.var.forest_curve = read_table(
             self.model.files["table"]["damage_parameters/flood/land_use/forest/curve"]
         )
         self.var.forest_curve.set_index("severity", inplace=True)
         self.var.forest_curve = self.var.forest_curve.rename(
             columns={"damage_ratio": "forest"}
         )
-        self.var.agriculture_curve = pd.read_parquet(
+        self.var.agriculture_curve = read_table(
             self.model.files["table"][
                 "damage_parameters/flood/land_use/agriculture/curve"
             ]
@@ -2315,7 +2292,7 @@ class Households(AgentBaseClass):
         )
         self.buildings_content_curve_adapted = buildings_content_curve_adapted
 
-        self.var.rail_curve = pd.read_parquet(
+        self.var.rail_curve = read_table(
             self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
         )
         self.var.rail_curve.set_index("severity", inplace=True)

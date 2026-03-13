@@ -10,14 +10,18 @@ set_ssp:
 
 setup_hydrography:
 
+setup_elevation:
+
+setup_coastlines:
+
+setup_coastal_sfincs_model_regions:
+
 setup_assets:
   feature_types:
   - roads
   - rails
 
 setup_gtsm_station_data:
-
-setup_elevation:
 
 setup_regions_and_land_use:
   region_database: GADM_level1
@@ -30,8 +34,6 @@ setup_geomorphology:
 setup_economic_data:
 
 setup_soil:
-
-setup_land_use_parameters:
 
 setup_vegetation:
 
@@ -447,8 +449,4 @@ setup_CO2_concentration:
 
 setup_global_ocean_mean_dynamic_topography:
 
-setup_coastlines:
-
 setup_osm_land_polygons:
-
-setup_coastal_sfincs_model_regions:

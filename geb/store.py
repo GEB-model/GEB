@@ -19,7 +19,7 @@ import yaml
 from numpy.typing import NDArray
 
 from geb.geb_types import ArrayStr
-from geb.workflows.io import read_geom
+from geb.workflows.io import read_geom, read_table
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -380,7 +380,7 @@ class DynamicArray:
 
     def __setitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
+        key: int | slice | NDArray[np.integer] | NDArray[np.bool_],
         value: Any,
     ) -> None:
         """
@@ -433,7 +433,7 @@ class DynamicArray:
 
     def __getitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_] | list,
+        key: int | slice | NDArray[np.integer] | NDArray[np.bool_] | list,
     ) -> DynamicArray | NDArray[Any]:
         """
         Retrieve item(s) or a sliced DynamicArray.
@@ -1236,7 +1236,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    pd.read_parquet(filename),
+                    read_table(filename),
                 )
             elif filename.suffix == ".yml":
                 with open(filename, "r") as f:

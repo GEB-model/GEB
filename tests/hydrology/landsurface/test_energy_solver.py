@@ -178,5 +178,55 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
     assert np.isfinite(new_enthalpies_extreme[0])
 
 
+def test_solve_soil_enthalpy_column_tiny_snow_stays_stable() -> None:
+    """Test that trace snow cover does not over-couple the soil thermally."""
+    layer_thickness_m = np.array([0.1, 0.2, 0.4], dtype=np.float32)
+    porosity = np.full(3, 0.4, dtype=np.float32)
+    bulk_density_kg_per_dm3 = np.full(3, 1.3, dtype=np.float32)
+    sand_percentage = np.full(3, 50.0, dtype=np.float32)
+    volumetric_water_content = np.full(3, 0.2, dtype=np.float32)
+    solid_heat_capacity_J_per_m2_K = np.array(
+        [2.0e6 * depth_m for depth_m in layer_thickness_m], dtype=np.float32
+    )
+    thermal_conductivity_solid_W_per_m_K = np.full(3, 2.0, dtype=np.float32)
+
+    initial_temperature_C = np.float32(2.0)
+    water_heat_capacity_areal_J_per_m2_K = (
+        volumetric_water_content
+        * layer_thickness_m
+        * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
+    )
+    initial_enthalpy_J_per_m2 = (
+        solid_heat_capacity_J_per_m2_K + water_heat_capacity_areal_J_per_m2_K
+    ) * initial_temperature_C
+
+    new_enthalpies_J_per_m2, _, _ = solve_soil_enthalpy_column(
+        soil_enthalpies_J_per_m2=initial_enthalpy_J_per_m2.copy(),
+        layer_thicknesses_m=layer_thickness_m,
+        bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+        solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
+        thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K,
+        water_content_saturated_m=porosity * layer_thickness_m,
+        sand_percentage=sand_percentage,
+        water_content_m=volumetric_water_content * layer_thickness_m,
+        shortwave_radiation_W_per_m2=np.float32(0.0),
+        longwave_radiation_W_per_m2=np.float32(0.0),
+        air_temperature_K=np.float32(273.15),
+        wind_speed_10m_m_per_s=np.float32(2.0),
+        surface_pressure_pa=np.float32(101325.0),
+        timestep_seconds=np.float32(3600.0),
+        deep_soil_temperature_C=initial_temperature_C,
+        soil_emissivity=np.float32(0.95),
+        soil_albedo=np.float32(0.2),
+        leaf_area_index=np.float32(0.0),
+        snow_water_equivalent_m=np.float64(1.0e-8),
+        snow_temperature_C=np.float32(-2.0),
+        topwater_m=np.float32(0.0),
+    )
+
+    assert np.all(np.isfinite(new_enthalpies_J_per_m2))
+    assert np.sum(new_enthalpies_J_per_m2) > np.float32(-1.0e7)
+
+
 if __name__ == "__main__":
     test_solve_soil_enthalpy_column_energy_balance()

@@ -711,7 +711,7 @@ def fill_discharge_gaps(
     """
     filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
     for river_id, river in rivers.iterrows():
-        if river["is_further_downstream_outflow"]:
+        if river["is_further_downstream_outflow"] or river["is_downstream_outflow"]:
             continue  # skip rivers that are further downstream
         # iterate from upstream to downstream
         valid_discharge: np.float32 = np.float32(np.nan)
@@ -1612,7 +1612,7 @@ class Routing(Module):
             np.float64
         ).sum()
         if over_abstraction_m3.sum() > 100:
-            print(
+            self.model.logger.warning(
                 f"Total over-abstraction in routing step is {total_over_abstraction_m3:.2f} m³"
             )
 

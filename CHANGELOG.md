@@ -1,4 +1,47 @@
 # dev
+- Add loggers to groundwater model and SFINCS models.
+- Close all open figures in SFINCS to reduce memory usage.
+- Several fixes in sfincs.py to avoid futurewarnings for pandas 3.0.
+
+# v1.0.0b17
+- Synchronize start and end dates in reasonable default config and example.
+- Add .zenodo.json
+
+# v1.0.0b16
+- Cleanup logging situation in model. Now each method (except init-multiple) should created their own log file in the logs directory and no additional logs *should* be created.
+- Fix several warnings throughout model. And do not ignore some warnings globally.
+- Add custom and improved logging in calibration snakemake workflow.
+- In calibration, only run init and build if model.yml and build was not completed respectively.
+
+# v1.0.0b15
+- Switch back to Python 3.13 due to netcdf reading errors.
+- Switch liquid water in snow and snow water equivalent to float64 to avoid floating point imprecision in thick snow layers.
+- In case of water balance or enthalpy error export data for single cell that can be used to fix and test water balance seperately.
+
+# v1.0.0b14
+- Only create plots during forcing setup if specifically requested with new `create_plots` argument.
+- Combine code in forcing.py so that it is more easy to maintain.
+- Remove unused setup_land_use_parameters.
+- Pre-process GRDC data to zarr with chunks for faster future reads.
+- Add object size profile when speed-profile is used.
+- Add version of when build was made.
+- Switch to Python 3.14
+- Make land surface build process more efficient and cleanup. As part of this update, only the original land cover within the SFINCS regions is saved. Therefore, this now depends on setup_coastal_sfincs_model_regions.
+- Yield is now computed from actual evapotranspiration and potential evapotranspiration rather than actual transpiration and potential transpiration. This is in line with GAEZ documentation, and also fixes a divide by 0 error.
+- Refactor runoff concentration, and solve very small WB bug due to order of operations.
+- There is now a new check to check the data version against the model version. If there is a mismatch, an error is given and the user is suggested how to update to the new model version. This only works for fresh builds. If you want to force this behaviour on already existing builds, run `geb update-version`.
+
+To support this version:
+- Update to Python 3.14. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.
+- Move `setup_coastlines` and `setup_coastal_sfincs_model_regions` to above `setup_regions_and_land_use` in your build.yml.
+
+# v1.0.0b13
+- combine fabdem loading of elevation and forcing for saving some data on disk
+- add memory profiler memray. Use option e.g., geb spinup --profile-memory
+- renamed speed profiler to --profile-speed
+- remove return statement from setup_forcing that was left behind from a debugging session
+
+# v1.0.0b12
 - Reforestation: add government forest planting policy and soil modification workflow.
 - Convert suitable cropland/grassland to forest; update soils and remove farmers.
 - Reorganized `geb/hydrology/` by moving land surface-related modules (`landsurface.py`, `evapotranspiration.py`, `interception.py`, `snow_glaciers.py`, `potential_evapotranspiration.py`) into a new `geb/hydrology/landsurface/` package.
@@ -48,7 +91,8 @@
 - Speedup pr_gev calculation in build.
 - Simplify report function arguments.
 - Report water balance evaluation plot to evaluate folder.
-
+- Save climate data in weekly chunks, also read in weekly chunks -> significant speedup (~15% is some tests).
+- Use full penman-monteith for setup_SPEI.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
@@ -60,7 +104,10 @@ To support this version:
      - re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
      - re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
 
-# v1.0.0b10
+Recommended:
+- Re-run `setup_forcing` and `setup_SPEI` for a significant speedup and better SPEI estimation: `geb update -b build.yml::setup_forcing` and `geb update -b build.yml::setup_SPEI`
+
+# v1.0.0b11
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
 - Fix GPU instability in SFINCS by disabling h73table parameter that was causing crashes during GPU-accelerated flood simulations.
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
@@ -103,6 +150,10 @@ To support this version:
 - Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
+- Added a water level boundary for coastal rivers (for now set to zero).
+- Included detrending of tide data in estimation of hydrograph shape. 
+- Moved Global dynamic ocean topography to the new data catalog.
+- Implemented a padding of cells with values in Global dynamic ocean topography to extent the data to the coastline based on extrapolation.
 - Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
 - Update damagescanner to v1.0.0b1
 - Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
@@ -123,7 +174,6 @@ To support this version:
 - Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 - Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
 - Add and run `setup_vegetation` to `build.yml`. A good place is for example after `setup_soil`.
-- Run uv sync to update damagescanner
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 

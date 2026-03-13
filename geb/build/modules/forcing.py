@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
@@ -22,10 +23,15 @@ import xclim.indices as xci
 import xclim.indices.stats as xcistats
 from dateutil.relativedelta import relativedelta
 from matplotlib.colors import ListedColormap
+from numba import njit
 from zarr.codecs.numcodecs import FixedScaleOffset
+from zarr.errors import ZarrUserWarning
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
+from geb.hydrology.landsurface.potential_evapotranspiration import (
+    get_reference_evapotranspiration,
+)
 from geb.workflows.raster import create_temp_zarr, resample_like
 
 from ...workflows.io import calculate_scaling
@@ -47,17 +53,19 @@ def plot_normal_forcing(
         4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5}
     )  # Create 4 subplots stacked vertically
 
-    data = (
-        (da * ~mask).sum(dim=("y", "x")) / (~mask).sum()
-    ).compute()  # Area-weighted average
+    data = (da.mean(dim=("y", "x"))).compute()
     assert not np.isnan(data.values).any(), (
         "data contains NaN values"
     )  # ensure no NaNs in data
 
     plot_timeline(da, data, name, axes[0])  # Plot the entire timeline on the first axis
 
+    first_day_is_january_first: bool = (data.time[0].dt.dayofyear).item() == 1
     for i in range(0, 3):  # plot the first three years on separate axes
-        year = data.time[0].dt.year + i  # get the year to plot
+        # If the first day is not January 1st, we start plotting from the next year to avoid plotting incomplete years
+        year = (
+            data.time[0].dt.year + i + (0 if first_day_is_january_first else 1)
+        )  # get the year to plot.
         year_data = data.sel(
             time=data.time.dt.year == year
         )  # select data for that year
@@ -69,7 +77,7 @@ def plot_normal_forcing(
                 axes[i + 1],  # axis to plot on
             )
 
-    fp = report_dir / (name + "_timeline.png")  # file path for saving the timeline plot
+    fp = report_dir / (name + "_timeline.svg")  # file path for saving the timeline plot
     fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
     plt.savefig(fp)  # save the timeline plot
     plt.close(fig)  # close the figure to free memory
@@ -237,7 +245,7 @@ def plot_forecasts(
     plt.close(fig)  # Close figure to free memory
 
 
-def plot_gif(
+def create_gif_climate_data_over_time(
     report_dir: Path,
     geom_mask_boundary: Any,  # The boundary geometry for plotting catchment outline
     da: xr.DataArray,
@@ -491,28 +499,30 @@ def plot_timeline(
     if "units" in da.attrs:
         ax.set_ylabel(da.attrs["units"])
     ax.set_xlim(data.time[0], data.time[-1])
-    ax.set_ylim(data.min().item(), data.max().item() * 1.1)
+    minimum = data.min().item()
+    maximum = data.max().item()
+    maximum = maximum if maximum != minimum else minimum + 1  # avoid zero range
+    ax.set_ylim(minimum, maximum + (maximum - minimum) * 1.1)
     significant_digits: int = 6
     ax.set_title(
-        f"{name} - mean: {data.mean().item():.{significant_digits}f} - min: {data.min().item():.{significant_digits}f} - max: {data.max().item():.{significant_digits}f}"
+        f"{name} - mean: {data.mean().item():.{significant_digits}f} - min: {minimum:.{significant_digits}f} - max: {maximum:.{significant_digits}f}"
     )
 
 
-def get_chunk_size(da: xr.DataArray, target: float | int = 1e8) -> int:
+def get_chunk_size(da: xr.DataArray) -> int:
     """Calculate the optimal chunk size for the given xarray DataArray based on the target size.
 
     Args:
         da: The xarray DataArray for which to calculate the chunk size.
-        target: The target size in bytes. Default is 1e8 (100 MB).
 
     Returns:
         The calculated chunk size in bytes.
     """
-    spatial_size = da.x.size * da.y.size
+    size = da.x.size * da.y.size * da.chunksizes["time"][0] * da.dtype.itemsize
     # Include member dimension if it exists
     if "member" in da.dims:
-        spatial_size *= da.member.size
-    return int(target / (da.dtype.itemsize * spatial_size))
+        size *= da.member.size
+    return size
 
 
 class Forcing(BuildModelBase):
@@ -527,10 +537,92 @@ class Forcing(BuildModelBase):
         da.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         da.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
+    def _set_forcing_variable(
+        self,
+        da: xr.DataArray,
+        name: str,
+        attrs: dict[str, Any],
+        min_value: float,
+        max_value: float,
+        precision: float,
+        offset: float,
+        create_plots: bool = False,
+        **kwargs: Any,
+    ) -> xr.DataArray:
+        """Generic method to set a forcing variable with common preprocessing and scaling.
+
+        Args:
+            da: The xarray DataArray containing the forcing data.
+            name: The name to assign to the DataArray in the model.
+            attrs: Attributes to assign to the DataArray.
+            min_value: The minimum value for clipping.
+            max_value: The maximum value for clipping.
+            precision: The precision for scaling calculation.
+            offset: The offset for scaling calculation.
+            create_plots: If True, create plots for the forcing data.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray.
+        """
+        da.attrs = attrs
+        self.set_xy_attrs(da)
+
+        da = da.clip(min_value, max_value)
+
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, min_value, max_value, offset=offset, precision=precision
+        )
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=ZarrUserWarning,
+                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
+            )
+            filters: list = [
+                FixedScaleOffset(
+                    offset=offset,
+                    scale=scaling_factor,
+                    dtype=in_dtype,
+                    astype=out_dtype,
+                ),
+            ]
+
+        with warnings.catch_warnings():
+            # the last chunk may be smaller than the specified chunk size,
+            # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
+            # This warning can be safely ignored in this context.
+            warnings.filterwarnings(
+                "ignore",
+                category=RuntimeWarning,
+                message="invalid value encountered in cast",
+            )
+            warnings.filterwarnings(
+                "ignore",
+                category=ZarrUserWarning,
+                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
+            )
+
+            da: xr.DataArray = self.set_other(
+                da,
+                name=name,
+                filters=filters,
+                time_chunks_per_shard=int(1e8 / get_chunk_size(da)),
+                time_chunksize=da.chunksizes["time"][0],
+                **kwargs,
+            )
+
+        if create_plots:
+            plot_forcing(self.grid["mask"], self.report_dir, da, name)
+
+        return da
+
     def set_pr_kg_per_m2_per_s(
         self,
         da: xr.DataArray,
         name: str = "climate/pr_kg_per_m2_per_s",
+        create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Precipitation DataArray with appropriate attributes and scaling.
@@ -540,80 +632,52 @@ class Forcing(BuildModelBase):
         Args:
             da: The xarray DataArray containing the precipitation data.
             name: The name to assign to the DataArray in the model.
+            create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with precipitation data.
         """
-        da.attrs = {
-            "standard_name": "precipitation_flux",
-            "long_name": "Precipitation",
-            "units": "kg m-2 s-1",
-            "_FillValue": np.nan,
-        }
-        self.set_xy_attrs(da)
-
         # maximum rainfall in one hour was 304.8 mm in 1956 in Holt, Missouri, USA
         # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
         # we take a wide margin of 500 mm/h
-        # this function is currently daily, so the hourly value should be save
-        min_value: float = 0.0
-        max_value: float = 500 / 3600  # convert to kg/m2/s
-        precision: float = 0.01 / 3600  # 0.01 mm in kg/m2/s
+        # this function is currently daily, so the hourly value should be safe
+        min_value = 0.0
+        max_value = 500 / 3600  # convert to kg/m2/s
+        precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
-        da = da.clip(min_value, max_value)
-
-        offset: int = 0
-        scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, min_value, max_value, offset=offset, precision=precision
-        )
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=in_dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da: xr.DataArray = self.set_other(
+        da = self._set_forcing_variable(
             da,
             name=name,
-            filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            attrs={
+                "standard_name": "precipitation_flux",
+                "long_name": "Precipitation",
+                "units": "kg m-2 s-1",
+                "_FillValue": np.nan,
+            },
+            min_value=min_value,
+            max_value=max_value,
+            precision=precision,
+            offset=0.0,
+            create_plots=create_plots,
             **kwargs,
         )
-        plot_forcing(self.grid["mask"], self.report_dir, da, name)
-        if "forecasts" in name.lower():
-            # Check if GIF files already exist before creating them
-            gif_fp_regular = self.report_dir / f"{name.replace('/', '_')}_animation.gif"
-            gif_fp_accumulated = (
-                self.report_dir / f"{name.replace('/', '_')}_animation_accumulated.gif"
-            )
-            if not gif_fp_regular.exists():
-                plot_gif(
-                    self.report_dir, self.geom["mask"], da, name, accumulated=False
-                )
-                self.logger.info(f"Creating a GIF animation: {gif_fp_regular.name}")
-            else:
-                self.logger.info(
-                    f"GIF file {gif_fp_regular.name} already exists, skipping regular animation creation"
-                )
 
-            if not gif_fp_accumulated.exists():
-                plot_gif(self.report_dir, self.geom["mask"], da, name, accumulated=True)
-                self.logger.info(f"Creating a GIF animation: {gif_fp_accumulated.name}")
-            else:
-                self.logger.info(
-                    f"GIF file {gif_fp_accumulated.name} already exists, skipping accumulated animation creation"
-                )
+        if create_plots and "forecasts" in name.lower():
+            create_gif_climate_data_over_time(
+                self.report_dir, self.geom["mask"], da, name, accumulated=False
+            )
+
+            create_gif_climate_data_over_time(
+                self.report_dir, self.geom["mask"], da, name, accumulated=True
+            )
         return da
 
     def set_rsds_W_per_m2(
         self,
         da: xr.DataArray,
         name: str = "climate/rsds_W_per_m2",
+        create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Downwelling Shortwave Radiation DataArray with appropriate attributes and scaling.
@@ -623,52 +687,34 @@ class Forcing(BuildModelBase):
         Args:
             da: The xarray DataArray containing the shortwave radiation data.
             name: The name to assign to the DataArray in the model.
+            create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with shortwave radiation data.
         """
-        da.attrs = {
-            "standard_name": "surface_downwelling_shortwave_flux_in_air",
-            "long_name": "Surface Downwelling Shortwave Radiation",
-            "units": "W m-2",
-            "_FillValue": np.nan,
-        }
-        self.set_xy_attrs(da)
-
-        min_value: float = 0  # W/m2
-        max_value: float = 1361  # W/m2
-
-        da = da.clip(min_value, max_value)
-
-        offset = 0
-        scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, min_value, max_value, offset=offset, precision=0.1
-        )
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=in_dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da: xr.DataArray = self.set_other(
+        return self._set_forcing_variable(
             da,
             name=name,
-            filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            attrs={
+                "standard_name": "surface_downwelling_shortwave_flux_in_air",
+                "long_name": "Surface Downwelling Shortwave Radiation",
+                "units": "W m-2",
+                "_FillValue": np.nan,
+            },
+            min_value=0.0,
+            max_value=1361.0,
+            precision=0.1,
+            offset=0.0,
+            create_plots=create_plots,
             **kwargs,
         )
-        plot_forcing(self.grid["mask"], self.report_dir, da, name)
-        return da
 
     def set_rlds_W_per_m2(
         self,
         da: xr.DataArray,
         name: str = "climate/rlds_W_per_m2",
+        create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Downwelling Longwave Radiation DataArray with appropriate attributes and scaling.
@@ -678,52 +724,34 @@ class Forcing(BuildModelBase):
         Args:
             da: The xarray DataArray containing the longwave radiation data.
             name: The name to assign to the DataArray in the model.
+            create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with longwave radiation data.
         """
-        da.attrs = {
-            "standard_name": "surface_downwelling_longwave_flux_in_air",
-            "long_name": "Surface Downwelling Longwave Radiation",
-            "units": "W m-2",
-            "_FillValue": np.nan,
-        }
-        self.set_xy_attrs(da)
-
-        min_value: float = 0  # W/m2
-        max_value: float = 700  # W/m2
-
-        da = da.clip(min_value, max_value)
-
-        offset = 0
-        scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, min_value, max_value, offset=offset, precision=0.1
-        )
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=in_dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da: xr.DataArray = self.set_other(
+        return self._set_forcing_variable(
             da,
             name=name,
-            filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            attrs={
+                "standard_name": "surface_downwelling_longwave_flux_in_air",
+                "long_name": "Surface Downwelling Longwave Radiation",
+                "units": "W m-2",
+                "_FillValue": np.nan,
+            },
+            min_value=0.0,
+            max_value=700.0,
+            precision=0.1,
+            offset=0.0,
+            create_plots=create_plots,
             **kwargs,
         )
-        plot_forcing(self.grid["mask"], self.report_dir, da, name)
-        return da
 
     def set_tas_2m_K(
         self,
         da: xr.DataArray,
         name: str = "climate/tas_2m_K",
+        create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Air Temperature DataArray with appropriate attributes and scaling.
@@ -733,56 +761,35 @@ class Forcing(BuildModelBase):
         Args:
             da: The xarray DataArray containing the air temperature data.
             name: The name to assign to the DataArray in the model.
+            create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with air temperature data.
         """
-        da.attrs = {
-            "standard_name": "air_temperature",
-            "long_name": "Near-Surface Air Temperature",
-            "units": "K",
-            "_FillValue": np.nan,
-        }
-        self.set_xy_attrs(da)
-
         K_to_C = 273.15
-
-        min_value: float = -100 + K_to_C
-        max_value: float = 60 + K_to_C
-
-        da = da.clip(min_value, max_value)
-
-        offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, min_value, max_value, offset=offset, precision=0.1
-        )
-
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=in_dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da: xr.DataArray = self.set_other(
+        return self._set_forcing_variable(
             da,
             name=name,
-            filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            attrs={
+                "standard_name": "air_temperature",
+                "long_name": "Near-Surface Air Temperature",
+                "units": "K",
+                "_FillValue": np.nan,
+            },
+            min_value=-100 + K_to_C,
+            max_value=60 + K_to_C,
+            precision=0.1,
+            offset=-15 - K_to_C,  # average temperature on earth
+            create_plots=create_plots,
             **kwargs,
         )
-
-        plot_forcing(self.grid["mask"], self.report_dir, da, name)
-        return da
 
     def set_dewpoint_tas_2m_K(
         self,
         da: xr.DataArray,
         name: str = "climate/dewpoint_tas_2m_K",
+        create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Dewpoint Temperature DataArray with appropriate attributes and scaling.
@@ -792,57 +799,35 @@ class Forcing(BuildModelBase):
         Args:
             da: The xarray DataArray containing the dewpoint temperature data.
             name: The name to assign to the DataArray in the model.
+            create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with dewpoint temperature data.
         """
-        da.attrs = {
-            "standard_name": "air_temperature_dow_point",
-            "long_name": "Hourly Near-Surface Dewpoint Temperature",
-            "units": "K",
-            "_FillValue": np.nan,
-        }
-
         K_to_C: float = 273.15
-
-        min_value: float = -100 + K_to_C
-        max_value: float = 60 + K_to_C
-
-        # Set spatial (xy) attributes before clipping to ensure consistency
-        # with other forcing setters and avoid unexpected behavior.
-        self.set_xy_attrs(da)
-
-        da = da.clip(min_value, max_value)
-        offset: float = -15 - K_to_C  # average temperature on earth
-        scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, min_value, max_value, offset=offset, precision=0.1
-        )
-
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=in_dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da: xr.DataArray = self.set_other(
+        return self._set_forcing_variable(
             da,
             name=name,
-            filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            attrs={
+                "standard_name": "air_temperature_dow_point",
+                "long_name": "Hourly Near-Surface Dewpoint Temperature",
+                "units": "K",
+                "_FillValue": np.nan,
+            },
+            min_value=-100 + K_to_C,
+            max_value=60 + K_to_C,
+            precision=0.1,
+            offset=-15 - K_to_C,  # average temperature on earth
+            create_plots=create_plots,
             **kwargs,
         )
-        plot_forcing(self.grid["mask"], self.report_dir, da, name)
-        return da
 
     def set_ps_pascal(
         self,
         da: xr.DataArray,
         name: str = "climate/ps_pascal",
+        create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Air Pressure DataArray with appropriate attributes and scaling.
@@ -852,55 +837,35 @@ class Forcing(BuildModelBase):
         Args:
             da: The xarray DataArray containing the surface air pressure data.
             name: The name to assign to the DataArray in the model.
+            create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with surface air pressure data.
         """
-        da.attrs = {
-            "standard_name": "surface_air_pressure",
-            "long_name": "Surface Air Pressure",
-            "units": "Pa",
-            "_FillValue": np.nan,
-        }
-
-        min_value: float = 30_000  # Pa
-        max_value: float = 120_000  # Pa
-
-        da = da.clip(min_value, max_value)
-
-        self.set_xy_attrs(da)
-
-        offset: int = -100_000
-        scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, min_value, max_value, offset=offset, precision=10
-        )
-
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=in_dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da: xr.DataArray = self.set_other(
+        return self._set_forcing_variable(
             da,
             name=name,
-            filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            attrs={
+                "standard_name": "surface_air_pressure",
+                "long_name": "Surface Air Pressure",
+                "units": "Pa",
+                "_FillValue": np.nan,
+            },
+            min_value=30_000,
+            max_value=120_000,
+            precision=10,
+            offset=-100_000,
+            create_plots=create_plots,
             **kwargs,
         )
-        plot_forcing(self.grid["mask"], self.report_dir, da, name)
-        return da
 
     def set_wind_10m_m_per_s(
         self,
         da: xr.DataArray,
         direction: str,
         name: str = "climate/wind_{direction}10m_m_per_s",
+        create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Wind Speed DataArray with appropriate attributes and scaling.
@@ -911,55 +876,36 @@ class Forcing(BuildModelBase):
             da: The xarray DataArray containing the wind speed data.
             direction: The wind direction component (e.g., 'u' or 'v').
             name: The name to assign to the DataArray in the model.
+            create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with wind speed data.
         """
         name: str = name.format(direction=direction)
-        da.attrs = {
-            "standard_name": "wind_speed",
-            "long_name": "Near-Surface Wind Speed",
-            "units": "m s-1",
-            "_FillValue": np.nan,
-        }
-
-        min_value: float = -120  # m/s
-        max_value: float = 120  # m/s
-
-        da = da.clip(min_value, max_value)
-
-        self.set_xy_attrs(da)
-
-        offset = 0
-        # wind can be both positive and negative
-        # we assume a maximum wind speed of 120 m/s (432 km/h), which is a stronger
-        # than the strongest wind gust ever recorded on earth (113 m/s)
-        scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, min_value, max_value, offset=offset, precision=0.1
-        )
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=in_dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da: xr.DataArray = self.set_other(
+        return self._set_forcing_variable(
             da,
             name=name,
-            filters=filters,
-            time_chunks_per_shard=get_chunk_size(da) // 24,
-            time_chunksize=24,
+            attrs={
+                "standard_name": "wind_speed",
+                "long_name": "Near-Surface Wind Speed",
+                "units": "m s-1",
+                "_FillValue": np.nan,
+            },
+            min_value=-120,  # wind one way is negative
+            max_value=120,  # the opposite way is positive
+            precision=0.1,
+            offset=0,
+            create_plots=create_plots,
             **kwargs,
         )
-        plot_forcing(self.grid["mask"], self.report_dir, da, name)
-        return da
 
     def set_SPEI(
-        self, da: xr.DataArray, name: str = "climate/SPEI", **kwargs: Any
+        self,
+        da: xr.DataArray,
+        name: str = "climate/SPEI",
+        create_plots: bool = False,
+        **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Standard Precipitation Evapotranspiration Index (SPEI) DataArray with appropriate attributes and scaling.
 
@@ -968,51 +914,38 @@ class Forcing(BuildModelBase):
         Args:
             da: The xarray DataArray containing the SPEI data.
             name: The name to assign to the DataArray in the model.
+            create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with SPEI data.
         """
-        da.attrs = {
-            "units": "-",
-            "long_name": "Standard Precipitation Evapotranspiration Index",
-            "name": "spei",
-            "_FillValue": np.nan,
-        }
-        self.set_xy_attrs(da)
-
         # this range corresponds to probabilities of lower than 0.001 and higher than 0.999
         # which should be considered non-significant
         min_SPEI = -3.09
         max_SPEI = 3.09
-        da = da.clip(min=min_SPEI, max=max_SPEI)
-
-        offset = 0
-        scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, min_SPEI, max_SPEI, offset=offset, precision=0.001
-        )
-
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=in_dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da: xr.DataArray = self.set_other(
-            da,
+        return self._set_forcing_variable(
+            da.chunk({"time": 1}),
             name=name,
+            attrs={
+                "units": "-",
+                "long_name": "Standard Precipitation Evapotranspiration Index",
+                "name": "spei",
+                "_FillValue": np.nan,
+            },
+            min_value=min_SPEI,
+            max_value=max_SPEI,
+            precision=0.001,
+            offset=0,
+            create_plots=create_plots,
             **kwargs,
-            filters=filters,
-            time_chunks_per_shard=get_chunk_size(da),
         )
-        plot_forcing(self.grid["mask"], self.report_dir, da, name)
-        return da
 
-    def setup_forcing_ERA5(self) -> None:
+    def setup_forcing_ERA5(self, create_plots: bool = False) -> None:
         """Sets up the ERA5 forcing data for GEB.
+
+        Args:
+            create_plots: If True, create plots for the forcing data.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
@@ -1021,44 +954,47 @@ class Forcing(BuildModelBase):
         era5_loader: partial = partial(
             era5_store.read,
             start_date=self.start_date - relativedelta(years=1),
-            end_date=self.end_date,
+            end_date=self.end_date
+            + relativedelta(days=1),  # add one day to include the end date
             bounds=self.grid["mask"].rio.bounds(recalc=True),
         )
 
-        pr_hourly: xr.DataArray = era5_loader(variable="tp")
+        pr_hourly: xr.DataArray = era5_loader(variable="tp").chunk({"time": 7 * 24})
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
         )  # convert from m/hr to kg/m2/s
 
         # ensure no negative values for precipitation, which may arise due to float precision
         pr_hourly: xr.DataArray = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(pr_hourly)
+        pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(
+            pr_hourly, create_plots=create_plots
+        )
 
-        tas: xr.DataArray = era5_loader("t2m")
-        self.set_tas_2m_K(tas)
+        tas: xr.DataArray = era5_loader("t2m").chunk({"time": 7 * 24})
+        self.set_tas_2m_K(tas, create_plots=create_plots)
 
-        dew_point_tas: xr.DataArray = era5_loader("d2m")
-        self.set_dewpoint_tas_2m_K(dew_point_tas)
+        dew_point_tas: xr.DataArray = era5_loader("d2m").chunk({"time": 7 * 24})
+        self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
 
         rsds: xr.DataArray = (
             era5_loader("ssrd") / 3600  # convert from J/m2/(per timestep) to W/m2
-        )  # surface_solar_radiation_downwards
-        self.set_rsds_W_per_m2(rsds)
+        ).chunk({"time": 7 * 24})  # surface_solar_radiation_downwards
+        self.set_rsds_W_per_m2(rsds, create_plots=create_plots)
 
         # surface_thermal_radiation_downwards
-        rlds: xr.DataArray = (
-            era5_loader("strd") / 3600
+        rlds: xr.DataArray = (era5_loader("strd") / 3600).chunk(
+            {"time": 7 * 24}
         )  # convert from J/m2/(per timestep) to W/m2
-        self.set_rlds_W_per_m2(rlds)
+        self.set_rlds_W_per_m2(rlds, create_plots=create_plots)
 
-        pressure: xr.DataArray = era5_loader("sp")
-        self.set_ps_pascal(pressure)
+        pressure: xr.DataArray = era5_loader("sp").chunk({"time": 7 * 24})
+        self.set_ps_pascal(pressure, create_plots=create_plots)
 
-        u_wind: xr.DataArray = era5_loader("u10")
-        self.set_wind_10m_m_per_s(u_wind, direction="u")
+        u_wind: xr.DataArray = era5_loader("u10").chunk({"time": 7 * 24})
+        self.set_wind_10m_m_per_s(u_wind, direction="u", create_plots=create_plots)
 
-        v_wind: xr.DataArray = era5_loader("v10")
-        self.set_wind_10m_m_per_s(v_wind, direction="v")
+        v_wind: xr.DataArray = era5_loader("v10").chunk({"time": 7 * 24})
+        self.set_wind_10m_m_per_s(v_wind, direction="v", create_plots=create_plots)
 
         elevation_forcing: xr.DataArray = self.get_elevation_forcing(pr_hourly)
         self.set_other(
@@ -1070,11 +1006,13 @@ class Forcing(BuildModelBase):
     def setup_forcing(
         self,
         forcing: str = "ERA5",
+        create_plots: bool = False,
     ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
             forcing: The data source to use for the forcing data. Currently only ERA5 is supported.
+            create_plots: If True, create plots for the forcing data.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
@@ -1087,7 +1025,7 @@ class Forcing(BuildModelBase):
                 "ISIMIP forcing is not supported anymore. We switched fully to hourly forcing data."
             )
         elif forcing == "ERA5":
-            self.setup_forcing_ERA5()
+            self.setup_forcing_ERA5(create_plots=create_plots)
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
@@ -1099,6 +1037,7 @@ class Forcing(BuildModelBase):
         calibration_period_start: date = date(1981, 1, 1),
         calibration_period_end: date = date(2010, 1, 1),
         window_months: int = 12,
+        create_plots: bool = False,
     ) -> None:
         """Sets up the Standardized Precipitation Evapotranspiration Index (SPEI).
 
@@ -1117,6 +1056,7 @@ class Forcing(BuildModelBase):
             calibration_period_start: The start time of the reSPEI data in ISO 8601 format (YYYY-MM-DD).
             calibration_period_end: The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
             window_months: The window size in months for the SPEI calculation. Default is 12 months.
+            create_plots: If True, create plots for the forcing data.
 
         Raises:
             ValueError: If the input data do not have the same coordinates.
@@ -1128,25 +1068,77 @@ class Forcing(BuildModelBase):
             "window_months must be greater than or equal to 1 (otherwise we have no sliding window)"
         )
 
-        # assert input data have the same coordinates
-        tasmin_2m_K = self.other["climate/tas_2m_K"].resample(time="D").min()
-        tasmax_2m_K = self.other["climate/tas_2m_K"].resample(time="D").max()
-        pr_kg_per_m2_per_s = (
-            self.other["climate/pr_kg_per_m2_per_s"].resample(time="D").mean()
-        )
-
-        assert np.array_equal(pr_kg_per_m2_per_s.x, tasmin_2m_K.x)
-        assert np.array_equal(pr_kg_per_m2_per_s.y, tasmin_2m_K.y)
-
         assert calibration_period_start < calibration_period_end, (
             f"Start date {calibration_period_start} must be earlier than end date {calibration_period_end}."
         )
 
-        if not self.other[
-            "climate/pr_kg_per_m2_per_s"
-        ].time.min().dt.date <= calibration_period_start and self.other[
-            "climate/pr_kg_per_m2_per_s"
-        ].time.max().dt.date >= calibration_period_end - timedelta(days=1):
+        @njit(parallel=True, cache=True)
+        def _get_pet_vectorized(
+            temperature_K: np.ndarray,
+            dewpoint_temperature_K: np.ndarray,
+            surface_pressure_Pa: np.ndarray,
+            rlds_W_per_m2: np.ndarray,
+            rsds_W_per_m2: np.ndarray,
+            wind_u_m_per_s: np.ndarray,
+            wind_v_m_per_s: np.ndarray,
+        ) -> np.ndarray:
+            # Calculate wind speed from u and v components and PET for each pixel
+            # This function now receives 2D spatial blocks (y, x) per time step/chunk
+            # while xarray handles the time dimension automatically.
+
+            wind_speed_m_per_s = np.sqrt(wind_u_m_per_s**2 + wind_v_m_per_s**2)
+            res = get_reference_evapotranspiration(
+                temperature_K - np.float32(273.15),
+                dewpoint_temperature_K - np.float32(273.15),
+                surface_pressure_Pa,
+                rlds_W_per_m2,
+                rsds_W_per_m2,
+                wind_speed_m_per_s,
+                np.float32(0.0),
+            )
+            # res[0] is reference ET in (m/h) as per FAO-56 and standard GEB hydrology.
+            reference_et_m_per_h = res[0]
+            return reference_et_m_per_h
+
+        self.logger.info("Calculating potential evapotranspiration...")
+        # Rechunking to larger chunks in time can significantly improve PET calculation
+        # speed by reducing Dask overhead, especially as PET is computed per-pixel across time.
+        # This function handles (y, x) spatial core dimensions while Dask manages the time dimension.
+        potential_evapotranspiration = (
+            xr.apply_ufunc(
+                _get_pet_vectorized,
+                self.other["climate/tas_2m_K"],
+                self.other["climate/dewpoint_tas_2m_K"],
+                self.other["climate/ps_pascal"],
+                self.other["climate/rlds_W_per_m2"],
+                self.other["climate/rsds_W_per_m2"],
+                self.other["climate/wind_u10m_m_per_s"],
+                self.other["climate/wind_v10m_m_per_s"],
+                input_core_dims=[
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                    ["y", "x"],
+                ],
+                output_core_dims=[["y", "x"]],
+                dask="parallelized",
+                output_dtypes=[np.float32],
+            )
+            * 1000
+            / 3600
+        )  # convert from m/hour to kg/m2/s (assuming liquid water density of 1000 kg/m3)
+
+        # ensure input data have the same coordinates
+        pr_kg_per_m2_per_s = self.other["climate/pr_kg_per_m2_per_s"]
+
+        if (
+            not pr_kg_per_m2_per_s.time.min().dt.date <= calibration_period_start
+            and pr_kg_per_m2_per_s.time.max().dt.date
+            >= calibration_period_end - timedelta(days=1)
+        ):
             forcing_start_date = (
                 self.other["climate/pr_kg_per_m2_per_s"].time.min().dt.date.item()
             )
@@ -1158,35 +1150,15 @@ class Forcing(BuildModelBase):
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )
 
-        pet = xci.potential_evapotranspiration(
-            tasmin=tasmin_2m_K,
-            tasmax=tasmax_2m_K,
-            # hurs=self.other["climate/hurs"],
-            # rsds=self.other["climate/rsds"],
-            # rlds=self.other["climate/rlds"],
-            # rsus=self.full_like(
-            #     self.other["climate/rsds"],
-            #     fill_value=0,
-            #     nodata=np.nan,
-            #     attrs=self.other["climate/rsds"].attrs,
-            # ),
-            # rlus=self.full_like(
-            #     self.other["climate/rsds"],
-            #     fill_value=0,
-            #     nodata=np.nan,
-            #     attrs=self.other["climate/rsds"].attrs,
-            # ),
-            # sfcWind=self.other["climate/sfcwind"],
-            method="BR65",
-        ).astype(np.float32)
-
         # Compute the potential evapotranspiration
-        water_budget = xci.water_budget(pr=pr_kg_per_m2_per_s, evspsblpot=pet)
-
-        water_budget = water_budget.resample(time="MS").mean(keep_attrs=True)
+        water_budget = pr_kg_per_m2_per_s.resample(time="MS").mean(
+            method="blockwise"
+        ) - potential_evapotranspiration.resample(time="MS").mean(method="blockwise")
+        water_budget = water_budget.rio.write_crs("EPSG:4326")
         water_budget.attrs["_FillValue"] = np.nan
+        water_budget.attrs["units"] = "kg m-2 s-1"
 
-        temp_xy_chunk_size = 50
+        temp_xy_chunk_size: int = 50
 
         self.logger.info("Exporting temporary water budget to zarr")
         with create_temp_zarr(
@@ -1194,7 +1166,7 @@ class Forcing(BuildModelBase):
             name="tmp_water_budget_file",
             x_chunksize=temp_xy_chunk_size,
             y_chunksize=temp_xy_chunk_size,
-            time_chunksize=50,
+            time_chunksize=water_budget.time.size,
             time_chunks_per_shard=None,
         ) as water_budget:
             water_budget = water_budget.chunk(
@@ -1211,7 +1183,9 @@ class Forcing(BuildModelBase):
             # also reducing the risk of overfitting, especially with limited data.
             # When empirical data suggest that the climatic water balance values are significantly shifted,
             # a non-zero floc may better fit the distribution. However, this is not typical in routine applications.
-            SPEI = xci.standardized_precipitation_evapotranspiration_index(
+            water_budget_min: float = float(water_budget.min().compute().item())
+
+            SPEI: xr.DataArray = xci.standardized_precipitation_evapotranspiration_index(
                 wb=water_budget,
                 cal_start=calibration_period_start.strftime("%Y-%m-%d"),
                 cal_end=calibration_period_end.strftime("%Y-%m-%d"),
@@ -1220,7 +1194,7 @@ class Forcing(BuildModelBase):
                 dist="fisk",  # log-logistic distribution
                 method="APP",  # approximative method
                 fitkwargs={
-                    "floc": water_budget.min().compute().item()
+                    "floc": water_budget_min
                 },  # location parameter, assures that the distribution is always positive
             ).astype(np.float32)
 
@@ -1241,7 +1215,7 @@ class Forcing(BuildModelBase):
                 time_chunksize=10,
                 time_chunks_per_shard=None,
             ) as SPEI:
-                self.set_SPEI(SPEI)
+                self.set_SPEI(SPEI, create_plots=create_plots)
 
                 self.logger.info("calculating GEV parameters...")
 
@@ -1319,13 +1293,9 @@ class Forcing(BuildModelBase):
         xmax: float = xmax + buffer
         ymax: float = ymax + buffer
 
-        elevation: xr.DataArray = (
-            self.data_catalog.fetch(
-                "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="forcing"
-            )
-            .read(prefix="forcing")
-            .compute()
-        )
+        elevation: xr.DataArray = self.data_catalog.fetch(
+            "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax
+        ).read()
 
         # FABDEM has nodata values in the ocean, for which we can assume an elevation of 0 m
         elevation = xr.where(~np.isnan(elevation), elevation, 0, keep_attrs=True)

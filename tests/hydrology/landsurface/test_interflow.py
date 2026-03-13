@@ -285,8 +285,8 @@ def test_plot_interflow_moisture_response() -> None:
 
     plt.figure(figsize=(10, 6))
     plt.plot(w_range, interflows, "g-", label="Interflow")
-    plt.axvline(x=wfc, color="r", linestyle="--", label="Field Capacity")
-    plt.axvline(x=ws, color="k", linestyle=":", label="Saturation")
+    plt.axvline(x=wfc, color="r", linestyle="--", label="Field Capacity")  # ty:ignore[invalid-argument-type]
+    plt.axvline(x=ws, color="k", linestyle=":", label="Saturation")  # ty:ignore[invalid-argument-type]
     plt.xlabel("Soil Moisture (m)")
     plt.ylabel("Interflow (m/h)")
     plt.title("Interflow Response to Soil Moisture")

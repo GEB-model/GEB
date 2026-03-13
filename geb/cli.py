@@ -22,7 +22,8 @@ from geb.runner import (
     DATA_PROVIDER_DEFAULT,
     DATA_ROOT_DEFAULT,
     OPTIMIZE_DEFAULT,
-    PROFILING_DEFAULT,
+    PROFILE_RAM_DEFAULT,
+    PROFILE_SPEED_DEFAULT,
     TIMING_DEFAULT,
     UPDATE_DEFAULT,
     WORKING_DIRECTORY_DEFAULT,
@@ -34,9 +35,12 @@ from geb.runner import (
     set_fn,
     share_fn,
     update_fn,
+    update_version_fn,
 )
 from geb.workflows.io import WorkingDirectory
 from geb.workflows.raster import rechunk_zarr_file
+
+IS_WINDOWS = sys.platform == "win32"
 
 
 @click.group()
@@ -140,10 +144,18 @@ def click_run_options() -> Any:
         @click_config
         @working_directory_option
         @click.option(
-            "--profiling",
+            "--profile-speed",
             is_flag=True,
-            default=PROFILING_DEFAULT,
-            help="Run GEB with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
+            default=PROFILE_SPEED_DEFAULT,
+            help="Run GEB with speed profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
+        )
+        @click.option(
+            "--profile-ram",
+            is_flag=True,
+            default=PROFILE_RAM_DEFAULT,
+            help="Run GEB with RAM profiling (using memray). If this option is used a .bin file is saved in the working directory."
+            if not IS_WINDOWS
+            else "RAM profiling is not supported on Windows.",
         )
         @click.option(
             "--optimize",
@@ -167,7 +179,14 @@ def click_run_options() -> Any:
 
             Returns:
                 The result of the wrapped function.
+
+            Raises:
+                click.ClickException: If RAM profiling is requested on Windows.
             """
+            if kwargs.get("profile_ram") and IS_WINDOWS:
+                raise click.ClickException(
+                    "RAM profiling with memray is not supported on Windows."
+                )
             return func(*args, **kwargs)
 
         return wrapper
@@ -277,10 +296,18 @@ def click_build_options(
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @click.option(
-            "--profiling",
+            "--profile-speed",
             is_flag=True,
-            default=PROFILING_DEFAULT,
-            help="Run with profiling. If this option is used, profiling stats are saved in the profiling directory.",
+            default=PROFILE_SPEED_DEFAULT,
+            help="Run with speed profiling. If this option is used, profiling stats are saved in the profiling directory.",
+        )
+        @click.option(
+            "--profile-ram",
+            is_flag=True,
+            default=PROFILE_RAM_DEFAULT,
+            help="Run with RAM profiling (using memray). If this option is used, a .bin file is saved in the profiling directory."
+            if not IS_WINDOWS
+            else "RAM profiling is not supported on Windows.",
         )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -292,7 +319,14 @@ def click_build_options(
 
             Returns:
             The result of the wrapped function.
+
+            Raises:
+                click.ClickException: If RAM profiling is requested on Windows.
             """
+            if kwargs.get("profile_ram") and IS_WINDOWS:
+                raise click.ClickException(
+                    "RAM profiling with memray is not supported on Windows."
+                )
             return func(*args, **kwargs)
 
         return wrapper
@@ -374,25 +408,44 @@ def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
     for arg in ctx.args:
         if "=" in arg:
             key, value = arg.split("=", 1)
+
             # Try to convert value to appropriate type
-            try:
-                # Try int first
-                value = int(value)
-            except ValueError:
+            def is_float(element: str) -> bool:
                 try:
-                    # Try float
-                    value = float(value)
+                    float(element)
+                    return True
                 except ValueError:
-                    try:
-                        # Try parsing as ISO format date (YYYY-MM-DD)
-                        value = datetime.date.fromisoformat(value)
-                    except ValueError:
-                        try:
-                            # Try parsing as ISO format datetime
-                            value = datetime.datetime.fromisoformat(value)
-                        except ValueError:
-                            # Keep as string
-                            pass
+                    return False
+
+            def is_date(element: str) -> bool:
+                try:
+                    datetime.date.fromisoformat(element)
+                    return True
+                except ValueError:
+                    return False
+
+            def is_datetime(element: str) -> bool:
+                try:
+                    datetime.datetime.fromisoformat(element)
+                    return True
+                except ValueError:
+                    return False
+
+            if value.isdigit():
+                value = int(value)
+            elif is_float(value):
+                value = float(value)
+            elif is_date(value):
+                value = datetime.date.fromisoformat(value)
+            elif is_datetime(value):
+                value = datetime.datetime.fromisoformat(value)
+            elif value.lower() == "true":
+                value = True
+            elif value.lower() == "false":
+                value = False
+            else:
+                value: str = value  # Keep as string if it cannot be converted to a more specific type
+
             params[key] = value
         else:
             click.echo(
@@ -460,6 +513,17 @@ def update(*args: Any, **kwargs: Any) -> None:
     update_fn(*args, **kwargs)
 
 
+@cli.command()
+@click_build_options()
+def update_version(*args: Any, **kwargs: Any) -> None:
+    """Update the model version file to the current model version.
+
+    This command initializes the GEBModel, which automatically checks and updates
+    the version file if it is outdated, printing any necessary update instructions.
+    """
+    update_version_fn(*args, **kwargs)
+
+
 @cli.command(
     context_settings=dict(
         ignore_unknown_options=True, allow_extra_args=True, help_option_names=[]
@@ -479,7 +543,8 @@ def evaluate(
     help: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     config: dict[str, Any] | Path = CONFIG_DEFAULT,
-    profiling: bool = PROFILING_DEFAULT,
+    profile_speed: bool = PROFILE_SPEED_DEFAULT,
+    profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
     timing: bool = TIMING_DEFAULT,
 ) -> None:
@@ -499,9 +564,13 @@ def evaluate(
         help: Show this message and exit.
         working_directory: Working directory for the model.
         config: Path to the model configuration file or a dict with the config.
-        profiling: If True, run the model with profiling.
+        profile_speed: If True, run the model with speed profiling.
+        profile_ram: If True, run the model with RAM profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
         timing: If True, run the model with timing, printing the time taken for specific methods
+
+    Raises:
+        click.ClickException: If RAM profiling is requested on Windows.
     """
     if help:
         # Check if the user specifically requested help for the command or a method.
@@ -601,6 +670,11 @@ def evaluate(
                         pass
             extra_args[key] = value
 
+    if profile_ram and IS_WINDOWS:
+        raise click.ClickException(
+            "RAM profiling with memray is not supported on Windows."
+        )
+
     result = run_model_with_method(
         method="evaluate",
         method_args={
@@ -611,7 +685,8 @@ def evaluate(
         },
         working_directory=working_directory,
         config=config,
-        profiling=profiling,
+        profile_speed=profile_speed,
+        profile_ram=profile_ram,
         optimize=optimize,
         timing=timing,
     )
@@ -681,7 +756,7 @@ def data_catalog(method: str) -> None:
     ),
 )
 @click.argument(
-    "target",
+    "track",
     required=False,
     type=str,
 )
@@ -715,7 +790,7 @@ def data_catalog(method: str) -> None:
 @click.argument("snakemake_args", nargs=-1, type=click.UNPROCESSED)
 def workflow(
     workflow_name: str,
-    target: str | None,
+    track: str | None,
     cores: str,
     profile: Path | None,
     dryrun: bool,
@@ -738,7 +813,7 @@ def workflow(
 
     Args:
         workflow_name: Name of the workflow to run.
-        target: Optional calibration target (e.g., 'hydrology').
+        track: Optional calibration track (e.g., 'hydrology').
         cores: Number of cores to use.
         profile: Snakemake profile directory.
         dryrun: Whether to perform a dry run.
@@ -765,10 +840,10 @@ def workflow(
         if configfile.exists():
             cmd.extend(["--configfile", str(configfile)])
 
-        # Add target as config override if provided
+        # Add track as config override if provided
         config_overrides_dict = {}
-        if target:
-            config_overrides_dict["TARGET"] = target
+        if track is not None:
+            config_overrides_dict["TRACK"] = track
 
         # Add profile if specified and exists
         if profile is not None:
@@ -893,8 +968,8 @@ def workflow(
 )
 @click.option(
     "--init-multiple-dir",
-    default="large_scale",
-    help="Name of the subdirectory in models/ where the large scale model directories will be created. Defaults to 'large_scale'.",
+    required=True,
+    help="Name of the subdirectory in models/ where the large scale model directories will be created (e.g. 'large_scale' or 'large_scale2').",
 )
 @working_directory_option
 def init_multiple(*args: Any, **kwargs: Any) -> None:

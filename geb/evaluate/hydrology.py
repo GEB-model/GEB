@@ -17,7 +17,6 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import xarray as xr
 from matplotlib import colormaps as mcolormaps
 from matplotlib.colors import LightSource
@@ -27,6 +26,8 @@ from rasterio.crs import CRS  # ty:ignore[unresolved-import]
 from rasterio.features import geometry_mask
 from tqdm import tqdm
 
+from geb.workflows.visualise import plot_sunburst
+
 if TYPE_CHECKING:
     from geb.evaluate import Evaluate
     from geb.model import GEBModel
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 from geb.workflows.extreme_value_analysis import (
     ReturnPeriodModel,
 )
-from geb.workflows.io import read_zarr, write_zarr
+from geb.workflows.io import read_geom, read_table, read_zarr, write_zarr
 from geb.workflows.timeseries import regularize_discharge_timeseries
 
 
@@ -1138,10 +1139,10 @@ class Hydrology:
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 
         # load input data files
-        discharge_observations_hourly: pd.DataFrame = pd.read_parquet(
+        discharge_observations_hourly: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_hourly"]
         )
-        discharge_observations_daily: pd.DataFrame = pd.read_parquet(
+        discharge_observations_daily: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_daily"]
         )
 
@@ -1154,13 +1155,13 @@ class Hydrology:
                 discharge_observations_daily
             )
 
-        region_shapefile = gpd.read_parquet(
+        region_shapefile = read_geom(
             self.model.files["geom"]["mask"]
         )  # load the region shapefile
-        rivers = gpd.read_parquet(
+        rivers = read_geom(
             self.model.files["geom"]["routing/rivers"]
         )  # load the rivers shapefiles
-        snapped_locations = gpd.read_parquet(
+        snapped_locations = read_geom(
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )
 
@@ -1284,35 +1285,34 @@ class Hydrology:
             eval_result_folder / "evaluation_metrics.geoparquet",
         )
 
-        if create_plots:
-            _plot_discharge_validation_map(
-                evaluation_gdf=evaluation_gdf,
-                region_shapefile=region_shapefile,
-                rivers=rivers,
-                eval_result_folder=eval_result_folder,
-            )
-
-            _create_discharge_folium_map(
-                evaluation_gdf=evaluation_gdf,
-                eval_plot_folder=eval_plot_folder,
-                eval_result_folder=eval_result_folder,
-                region_shapefile=region_shapefile,
-                rivers=rivers,
-            )
-
-            print("Discharge evaluation dashboard created.")
-
-            outflow_plot_count: int = _plot_outflow_discharge_timeseries(
-                output_folder=self.model.output_folder,
-                run_name=run_name,
-                eval_plot_folder=eval_plot_folder,
-                include_spinup=include_spinup,
-                spinup_name=spinup_name,
-            )
-            print(f"Created {outflow_plot_count} outflow discharge plots.")
-
         # Return mean metrics if available
         if not evaluation_df.empty:
+            if create_plots:
+                _plot_discharge_validation_map(
+                    evaluation_gdf=evaluation_gdf,
+                    region_shapefile=region_shapefile,
+                    rivers=rivers,
+                    eval_result_folder=eval_result_folder,
+                )
+
+                _create_discharge_folium_map(
+                    evaluation_gdf=evaluation_gdf,
+                    eval_plot_folder=eval_plot_folder,
+                    eval_result_folder=eval_result_folder,
+                    region_shapefile=region_shapefile,
+                    rivers=rivers,
+                )
+
+                print("Discharge evaluation dashboard created.")
+
+                outflow_plot_count: int = _plot_outflow_discharge_timeseries(
+                    output_folder=self.model.output_folder,
+                    run_name=run_name,
+                    eval_plot_folder=eval_plot_folder,
+                    include_spinup=include_spinup,
+                    spinup_name=spinup_name,
+                )
+                print(f"Created {outflow_plot_count} outflow discharge plots.")
             return {
                 "KGE": float(evaluation_df["KGE"].mean()),
                 "NSE": float(evaluation_df["NSE"].mean()),
@@ -1433,18 +1433,15 @@ class Hydrology:
     def water_circle(
         self,
         run_name: str,
-        include_spinup: bool,
         spinup_name: str,
         *args: Any,
         export: bool = True,
         **kwargs: Any,
-    ) -> go.Figure:
+    ) -> plt.Figure:
         """Create a water circle plot for the GEB model.
 
         Adapted from: https://github.com/mikhailsmilovic/flowplot
         Also see the paper: https://doi.org/10.1088/1748-9326/ad18de
-
-        This method installs a headless version of Chrome if not already available,
 
         Args:
             run_name: Name of the run to evaluate.
@@ -1455,13 +1452,8 @@ class Hydrology:
             **kwargs: ignored.
 
         Returns:
-            A Plotly Figure object representing the water circle.
+            A matplotlib Figure object representing the water circle.
         """
-        import plotly.io as pio
-
-        # auto install chrome if not available
-        pio.get_chrome()
-
         folder = self.model.output_folder / "report" / run_name
 
         def read_csv_with_date_index(
@@ -1571,155 +1563,11 @@ class Hydrology:
                 sublimation_or_deposition
             )
 
-        # the size of a section is the sum of the flows in that section
-        # plus the size of the section itself. So if all of the section
-        # is made up of its children, the size of the section is 0.
-        water_circle_list: list[
-            tuple[str | None, str | None, str, float | int, str]
-        ] = []
-        color_map: dict[str, str] = {
-            "in": "#636EFA",
-            "out": "#EF5538",
-            "balance": "#000000",
-            "storage change": "#D2D2D3",
-        }
-
-        def add_flow(
-            water_circle_list: list[
-                tuple[str | None, str | None, str, float | int, str]
-            ],
-            color_map: dict[str, str],
-            root_section: str | None,
-            parent: str | None,
-            flow: str | None,
-            value: int | float | dict[str, Any],
-        ) -> tuple[
-            list[tuple[str | None, str | None, str, float | int, str]], dict[str, str]
-        ]:
-            """Recursive function to add flows to the water circle list.
-
-            Args:
-                water_circle_list: List of tuples containing the water circle data with parent, flow, and value.
-                color_map: Dictionary mapping flow names to colors.
-                root_section: Root section of the current flow hierarchy.
-                parent: Parent of the current flow section.
-                flow: Name of the current flow section.
-                value: Value of the current flow section, can be a number or a dictionary.
-                    If a number, it is a flow and added to the water circle list immediately.
-                    If a dictionary, it contains sub-sections, and it is processed recursively.
-
-                    If one of the sections is _self, it is the size of the remainder section itself.
-                    This is useful when not all of the section is made up of its children.
-
-            Raises:
-                ValueError: If the value type is not int, float, or dict.
-
-            Returns:
-                Updated water circle list with the new flow added.
-                Updated color map with the new flow color added.
-            """
-            if parent is not None and flow is None:
-                raise ValueError("Flow name cannot be None if parent is not None.")
-            elif flow is not None and parent is None:
-                raise ValueError("Parent cannot be None if flow name is not None.")
-
-            if isinstance(value, (int, float)):  # stopping condition
-                # adopt the color of the parent if it exists
-                assert flow is not None
-                if parent is not None:
-                    color_map[flow] = color_map[parent]
-                else:  # if no parent, this is a root section
-                    root_section = flow
-                water_circle_list.append(
-                    (root_section, parent, flow, value, color_map[flow])
-                )
-            elif isinstance(value, dict):
-                if parent is not None:  # adopt the color of the parent
-                    assert flow is not None
-                    color_map[flow] = color_map[parent]
-                else:  # if no parent, this is a root section
-                    root_section = flow
-                _self = 0
-                for sub_section, sub_value in value.items():
-                    if sub_section == "_self":
-                        _self = sub_value
-                        continue  # skip the _self section
-                    water_circle_list, color_map = add_flow(
-                        water_circle_list,
-                        color_map,
-                        root_section,
-                        flow,
-                        sub_section,
-                        sub_value,
-                    )
-                if flow is not None:
-                    water_circle_list.append(
-                        (root_section, parent, flow, _self, color_map[flow])
-                    )
-            else:
-                raise ValueError(
-                    f"Invalid value type for section '{flow}': {value}. Expected dict, int, or float."
-                )
-
-            return water_circle_list, color_map
-
-        water_circle_list, _ = add_flow(
-            water_circle_list,
-            color_map,
-            root_section=None,
-            parent=None,
-            flow=None,
-            value=hierarchy,
-        )
-
-        water_circle_df: pd.DataFrame = pd.DataFrame(
-            water_circle_list,
-            columns=np.array(["root_section", "parent", "flow", "value", "color"]),
-        )
-
-        if storage_change > 0:
-            category_order = ["in", "out", "storage change"]
-        else:
-            category_order = ["storage change", "in", "out"]
-
-        water_circle_df["root_section"] = pd.Categorical(
-            water_circle_df["root_section"],
-            categories=category_order,
-            ordered=True,
-        )
-        # sort the sections with storage change first
-        water_circle_df = water_circle_df.sort_values(
-            by=["root_section", "value"],
-            ascending=[True, False],
-        )
-
-        water_circle = go.Figure(
-            go.Sunburst(
-                labels=water_circle_df["flow"],
-                parents=water_circle_df["parent"],
-                values=water_circle_df["value"],
-                sort=False,
-                marker=dict(colors=water_circle_df["color"]),
-            )
-        )
-
-        water_circle.update_layout(margin=dict(l=20, r=20, t=20, b=45))
-        water_circle.update_layout(template="plotly_dark")
-        water_circle.update_layout(
-            plot_bgcolor="#000000",
-            paper_bgcolor="#000000",
-            title=dict(
-                text="water circle",
-                xanchor="center",
-                yanchor="bottom",
-                y=0.04,
-                x=0.5,
-            ),
-        )
+        water_circle = plot_sunburst(hierarchy, title="water circle")
 
         if export:
-            water_circle.write_image(
-                self.evaluator.output_folder_evaluate / "water_circle.svg", scale=5
+            water_circle.savefig(
+                self.evaluator.output_folder_evaluate / "water_circle.svg",
             )
 
         return water_circle
@@ -1825,14 +1673,14 @@ class Hydrology:
             obs = read_zarr(observation)
             print("obs CRS", obs.rio.crs)
             sim = flood_map.rio.reproject_match(obs)
-            rivers = gpd.read_parquet(
+            rivers = read_geom(
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
                 / "group_0"
                 / "rivers.geoparquet"
             ).to_crs(obs.rio.crs)
-            region = gpd.read_parquet(
+            region = read_geom(
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
