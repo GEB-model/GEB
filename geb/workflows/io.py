@@ -6,6 +6,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import math
 import os
 import platform
 import shutil
@@ -44,7 +45,6 @@ from zarr.errors import ZarrUserWarning
 
 from geb.geb_types import (
     ArrayDatetime64,
-    ArrayFloat64,
     ThreeDArray,
     ThreeDArrayFloat32,
     TwoDArray,
@@ -581,6 +581,14 @@ def write_zarr(
         da: xr.DataArray = da.drop_vars([v for v in da.coords if v not in da.dims])
 
         chunks, shards = {}, None
+
+        # for non spatiotemporal dimensions we use existing chunk sizes
+        for dim in da.dims:
+            if dim not in ("x", "y", "time"):
+                chunks[dim] = (
+                    da.chunksizes[dim][0] if dim in da.chunksizes else da.sizes[dim]
+                )
+
         if "y" in da.dims and "x" in da.dims:
             chunks.update(
                 {
@@ -590,16 +598,16 @@ def write_zarr(
             )
             da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
-        if "member" in da.dims:
-            member_chunksize = 1  # Use full size as default da.sizes["member"]
-            chunks.update({"member": member_chunksize})
-
         if "time" in da.dims:
             chunks.update({"time": min(time_chunksize, da.sizes["time"])})
             if time_chunks_per_shard is not None:
                 shards = chunks.copy()
                 shards["time"] = min(
-                    time_chunks_per_shard * chunks["time"], da.time.size
+                    time_chunks_per_shard * chunks["time"],
+                    (math.ceil(da.time.size / chunks["time"]))
+                    * chunks[
+                        "time"
+                    ],  # shard sizes must be an exact multiple of chunk sizes. Therefore, we round up the shard size to the nearest multiple of the chunk size that is greater than or equal to the desired shard size
                 )
 
         compressor: ZstdCodec = ZstdCodec(
@@ -886,7 +894,7 @@ class AsyncGriddedForcingReader:
 
         # Chunk-aligned cache: holds the start index and data for the currently loaded chunk.
         self.current_chunk_start_index: int = -1
-        self.current_chunk_data: ThreeDArrayFloat32 | None = None
+        self.current_chunk_data: TwoDArrayFloat32 | None = None
         # The time-index at which a background preload has been (or is being) fetched.
         self.preloaded_chunk_start_index: int = -1
         self.preloaded_data_future: asyncio.Task | None = None
@@ -909,7 +917,7 @@ class AsyncGriddedForcingReader:
             self.async_lock = None
             self.io_lock = None
 
-    def load(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
+    def load(self, start_index: int, end_index: int) -> TwoDArrayFloat32:
         """Safe synchronous load (only used if asynchronous=False).
 
         Returns:
@@ -918,11 +926,11 @@ class AsyncGriddedForcingReader:
         assert isinstance(self.array, zarr.Array)
         data = self.array[start_index:end_index]
         assert (
-            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 3
+            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 2
         )
         return data  # ty:ignore[invalid-return-type]
 
-    async def load_await(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
+    async def load_await(self, start_index: int, end_index: int) -> TwoDArrayFloat32:
         """Load data asynchronously via reusable async group.
 
         Returns:
@@ -940,15 +948,13 @@ class AsyncGriddedForcingReader:
 
             # Try up to 100 times
             for _ in range(attempts):
-                data = await arr.getitem(
-                    (slice(start_index, end_index), slice(None), slice(None))
-                )
+                data = await arr.getitem((slice(start_index, end_index), slice(None)))
 
                 if not np.any(np.isnan(data)):
                     assert (
                         isinstance(data, np.ndarray)
                         and data.dtype == np.float32
-                        and data.ndim == 3
+                        and data.ndim == 2
                     )
                     return data  # ty:ignore[invalid-return-type]
                 print(
@@ -960,7 +966,7 @@ class AsyncGriddedForcingReader:
                     f"Async load failed after {attempts} attempts for indices {start_index}:{end_index}"
                 )
 
-    async def preload_chunk(self, chunk_start: int) -> ThreeDArrayFloat32 | None:
+    async def preload_chunk(self, chunk_start: int) -> TwoDArrayFloat32 | None:
         """Preload the chunk starting at chunk_start asynchronously.
 
         Args:
@@ -976,7 +982,7 @@ class AsyncGriddedForcingReader:
 
     async def read_timestep_async(
         self, start_index: int, end_index: int
-    ) -> tuple[ThreeDArrayFloat32, np.datetime64]:
+    ) -> tuple[TwoDArrayFloat32, np.datetime64]:
         """Core async read with chunk-aligned caching and background preloading.
 
         Loads the full on-disk chunk that contains the requested timesteps,
@@ -1021,7 +1027,7 @@ class AsyncGriddedForcingReader:
 
         assert self.async_lock is not None
         async with self.async_lock:
-            chunk_data: ThreeDArrayFloat32 | None = None
+            chunk_data: TwoDArrayFloat32 | None = None
 
             # Cache hit: the required chunk is already in memory.
             if (
@@ -1216,24 +1222,6 @@ class AsyncGriddedForcingReader:
             except Exception:
                 pass
             self.thread.join(timeout=1)
-
-    @property
-    def x(self) -> ArrayFloat64:
-        """The x-coordinates of the grid."""
-        x_array = self.ds["x"]
-        assert isinstance(x_array, zarr.Array)
-        x = x_array[:]
-        assert isinstance(x, np.ndarray) and x.dtype == np.float64 and x.ndim == 1
-        return x  # ty:ignore[invalid-return-type]
-
-    @property
-    def y(self) -> ArrayFloat64:
-        """The y-coordinates of the grid."""
-        y_array = self.ds["y"]
-        assert isinstance(y_array, zarr.Array)
-        y = y_array[:]
-        assert isinstance(y, np.ndarray) and y.dtype == np.float64 and y.ndim == 1
-        return y  # ty:ignore[invalid-return-type]
 
 
 class WorkingDirectory:

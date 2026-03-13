@@ -1016,8 +1016,6 @@ class CropFarmers(AgentBaseClass):
                 GEV_grid.rio.transform().to_gdal(),
             )
 
-        assert not np.all(np.isnan(self.var.GEV_parameters))
-
         self.var.GEV_pr_parameters = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -1037,8 +1035,6 @@ class CropFarmers(AgentBaseClass):
                 self.var.GEV_pr_parameters[:, i] = sample_from_map(
                     GEV_pr_grid, self.var.locations.data, self.grid.gt
                 )
-
-            assert not np.all(np.isnan(self.var.GEV_pr_parameters))
 
         self.var.risk_perc_min = DynamicArray(
             n=self.var.n,

@@ -494,42 +494,42 @@ class Grid(BaseVariables):
     @property
     def pr_kg_per_m2_per_s(self) -> TwoDArrayFloat32:
         """Get precipitation rate for grid in kg/m²/s."""
-        return self.compress(self.model.forcing.load("pr_kg_per_m2_per_s"))
+        return self.model.forcing.load("pr_kg_per_m2_per_s")
 
     @property
     def ps_pascal(self) -> TwoDArrayFloat32:
         """Get surface pressure for grid in Pa."""
-        return self.compress(self.model.forcing.load("ps_pascal"))
+        return self.model.forcing.load("ps_pascal")
 
     @property
     def rlds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward longwave radiation for grid in W/m²."""
-        return self.compress(self.model.forcing.load("rlds_W_per_m2"))
+        return self.model.forcing.load("rlds_W_per_m2")
 
     @property
     def rsds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward shortwave radiation for grid in W/m²."""
-        return self.compress(self.model.forcing.load("rsds_W_per_m2"))
+        return self.model.forcing.load("rsds_W_per_m2")
 
     @property
     def tas_2m_K(self) -> TwoDArrayFloat32:
         """Get air temperature at 2m for grid in K."""
-        return self.compress(self.model.forcing.load("tas_2m_K"))
+        return self.model.forcing.load("tas_2m_K")
 
     @property
     def dewpoint_tas_2m_K(self) -> TwoDArrayFloat32:
         """Get dewpoint temperature at 2m for grid in K."""
-        return self.compress(self.model.forcing.load("dewpoint_tas_2m_K"))
+        return self.model.forcing.load("dewpoint_tas_2m_K")
 
     @property
     def wind_u10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get u-component of wind at 10m for grid in m/s."""
-        return self.compress(self.model.forcing.load("wind_u10m_m_per_s"))
+        return self.model.forcing.load("wind_u10m_m_per_s")
 
     @property
     def wind_v10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get v-component of wind at 10m for grid in m/s."""
-        return self.compress(self.model.forcing.load("wind_v10m_m_per_s"))
+        return self.model.forcing.load("wind_v10m_m_per_s")
 
     @property
     def spei_uncompressed(self) -> TwoDArrayFloat32:
@@ -565,10 +565,11 @@ class Grid(BaseVariables):
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        spei: ThreeDArrayFloat32 = self.model.forcing.load(name="SPEI", dt=spei_time)
-        assert spei.ndim == 3 and spei.shape[0] == 1
-        spei: TwoDArrayFloat32 = spei[0]
-        return spei
+        spei_compressed: TwoDArrayFloat32 = self.model.forcing.load(
+            name="SPEI", dt=spei_time
+        )
+        assert spei_compressed.ndim == 2 and spei_compressed.shape[0] == 1
+        return cast(TwoDArrayFloat32, self.decompress(spei_compressed[0]))
 
     @property
     def gev_c(self) -> xr.DataArray:

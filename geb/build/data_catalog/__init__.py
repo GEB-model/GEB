@@ -10,6 +10,7 @@ from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
+from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
@@ -61,9 +62,21 @@ data_catalog: dict[str, dict[str, Any]] = {
     "era5": {
         "adapter": DestinationEarth(),
         "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
+    },
+    "ecmwf_geopotential": {
+        "adapter": ECMWFGeopotential(
+            folder="ecmwf_geopotential",
+            filename="geo_1279l4_0.1x0.1.grib2_v4_unpack.nc",
+            local_version=1,
+            cache="global",
+        ),
+        "url": "https://confluence.ecmwf.int/download/attachments/140385202/geo_1279l4_0.1x0.1.grib2_v4_unpack.nc?version=1&modificationDate=1591983422003&api=v2",
         "source": {
-            "name": "ERA5",
+            "name": "ECMWF ERA5-Land geopotential",
             "author": "ECMWF",
+            "url": "https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#ERA5Land:datadocumentation-parameterlistingParameterlistings",
+            "license": "CC BY 4.0",
         },
     },
     "ecmwf_forecasts": {
