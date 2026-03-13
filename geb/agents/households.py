@@ -144,12 +144,13 @@ class Households(AgentBaseClass):
             self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
             self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
 
-        self.load_objects()
-        self.load_max_damage_values()
-        self.load_damage_curves()
-        if self.model.config["agent_settings"]["households"]["warning_response"]:
-            self.load_critical_infrastructure()  # ideally this should be done in the setup_assets when building the model
-            self.load_wlranges_and_measures()
+        if (not self.model.in_spinup) or self.config["adapt"]:
+            self.load_objects()
+            self.load_max_damage_values()
+            self.load_damage_curves()
+            if self.model.config["agent_settings"]["households"]["warning_response"]:
+                self.load_critical_infrastructure()  # ideally this should be done in the setup_assets when building the model
+                self.load_wlranges_and_measures()
 
         if self.model.in_spinup:
             self.spinup()
@@ -221,8 +222,12 @@ class Households(AgentBaseClass):
         # assign wealth based on income (dummy data, there are ratios available in literature)
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
-    def update_building_attributes(self) -> None:
-        """Update building attributes based on household data."""
+    def update_building_attributes(self, drop_not_flooded: bool = True) -> None:
+        """Update building attributes based on household data.
+
+        Args:
+            drop_not_flooded: If True, drop buildings that are not flooded. This can save memory and speed up the model.
+        """
         # Start by computing n occupants from the var.building_id_of_household array
         building_id_of_household_series = pd.Series(
             self.var.building_id_of_household.data
@@ -253,21 +258,32 @@ class Households(AgentBaseClass):
         flood_map = flood_map.rio.reproject(self.buildings.crs)
         flood_map = flood_map > 0  # convert to boolean mask
 
-        # convert flood map to polygons
+        # # convert flood map to polygons
         flood_map_polygons = from_landuse_raster_to_polygon(
             flood_map.values,
             flood_map.rio.transform(recalc=True),
             flood_map.rio.crs,
         )
 
-        flood_map_polygons_union = flood_map_polygons.union_all()
+        flood_map_polygons_union: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            [flood_map_polygons.unary_union],
+            columns=["geometry"],
+            crs=self.buildings.crs,
+        )
 
-        # Create a mask for buildings that overlap with the flood map
-        buildings_mask = self.buildings.geometry.intersects(flood_map_polygons_union)
+        # # Create a mask for buildings that overlap with the flood map
+        # buildings_mask = self.buildings.geometry.intersects(flood_map_polygons_union)
+        # 2. Spatial join (uses spatial index)
+        flooded_buildings = gpd.sjoin(
+            self.buildings, flood_map_polygons_union, predicate="intersects", how="left"
+        )
 
-        # Update the flood_proofed status for buildings that overlap with the flood map
-        self.buildings.loc[buildings_mask, "flooded"] = True
-        self.buildings["flooded"].fillna(False, inplace=True)
+        # 3. Flooded if match exists
+        self.buildings["flooded"] = flooded_buildings["index_right"].notna()
+
+        # drop buildings which are not flooded
+        if drop_not_flooded:
+            self.buildings = self.buildings[self.buildings["flooded"]]
 
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
@@ -1664,6 +1680,10 @@ class Households(AgentBaseClass):
         """Load buildings, roads, and rail geometries from model files."""
         # Load buildings
         self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
+        if hasattr(self, "flood_maps") and self.flood_maps is not None:
+            self.buildings = self.buildings.to_crs(
+                self.flood_maps[self.return_periods[0]].rio.crs
+            )
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
@@ -1983,17 +2003,13 @@ class Households(AgentBaseClass):
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
 
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
-            self.flood_maps[self.return_periods[0]].rio.crs
-        )
-
         # create a pandas data array for assigning damage to the agents:
         agent_df = pd.DataFrame(
             {"building_id_of_household": self.var.building_id_of_household}
         )
 
         # subset building to those exposed to flooding
-        buildings = buildings[buildings["flooded"]]
+        buildings = self.buildings[self.buildings["flooded"]].copy()
 
         # only calculate damages for buildings with more than 0 occupant
         buildings = buildings[buildings["n_occupants"] > 0]
