@@ -1134,6 +1134,11 @@ class Reporter:
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
+        else:
+            raise ValueError(
+                f"Type {type_} not recognized. Check your configuration for {module_name}.{name}."
+            )
+
         if module_name not in self.variables:
             self.variables[module_name] = {}
 
