@@ -268,6 +268,7 @@ class Grid(BaseVariables):
 
     var: GridVariables
     transform: Affine
+    cell_area_uncompressed: TwoDArrayFloat32
 
     def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize Grid class.
@@ -309,7 +310,9 @@ class Grid(BaseVariables):
         assert math.isclose(self.transform.a, -self.transform.e)
         self.cell_size = self.transform.a
 
-        self.cell_area_uncompressed = read_grid(self.model.files["grid"]["cell_area"])
+        self.cell_area_uncompressed = cast(
+            TwoDArrayFloat32, read_grid(self.model.files["grid"]["cell_area"])
+        )
 
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
@@ -604,8 +607,8 @@ class HRUVariables(Bucket):
     variable_runoff_shape_beta: ArrayFloat32
     interception_storage_m: ArrayFloat32
     snow_temperature_C: ArrayFloat32
-    liquid_water_in_snow_m: ArrayFloat32
-    snow_water_equivalent_m: ArrayFloat32
+    liquid_water_in_snow_m: ArrayFloat64
+    snow_water_equivalent_m: ArrayFloat64
     topwater_m: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
@@ -742,15 +745,7 @@ class HRUs(BaseVariables):
         """
         self.var: HRUVariables = cast(
             HRUVariables,
-            self.model.store.create_bucket(
-                "hydrology.HRU.var",
-                validator=lambda x: (
-                    isinstance(x, np.ndarray)
-                    and (
-                        not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32
-                    )
-                ),
-            ),
+            self.model.store.create_bucket("hydrology.HRU.var"),
         )
 
         (

@@ -143,6 +143,7 @@ class GroundWater(Module):
             basin_mask=self.model.hydrology.grid.mask,
             heads=self.grid.var.heads,
             hydraulic_conductivity=self.grid.var.groundwater_hydraulic_conductivity_m_per_day,
+            logger=self.model.logger,
             verbose=False,
             heads_update_callback=self.heads_update_callback,
         )
@@ -187,7 +188,7 @@ class GroundWater(Module):
                 ],
                 prestorages=[groundwater_storage_pre.astype(np.float64)],
                 poststorages=[self.modflow.groundwater_content_m3.astype(np.float64)],
-                tolerance=500,  # 500 m3
+                tolerance=groundwater_recharge_m.size,  # maximum of 1m3 per cell
             )
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area

@@ -304,7 +304,7 @@ class Hydrology(Data, Module):
         timer.finish_split("Hill slope erosion")
 
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.report(locals())
 

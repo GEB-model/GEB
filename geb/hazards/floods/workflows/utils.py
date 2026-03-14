@@ -206,6 +206,7 @@ def read_flood_depth(
 
     output_path: Path = model_root / "flood_depth_all_time_steps.png"
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
     return flood_depth_m
 
 
@@ -380,7 +381,7 @@ def check_docker_running() -> bool | None:
             capture_output=True,
         )
         return True
-    except subprocess.CalledProcessError, FileNotFoundError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         print("Docker not installed properly or not running properly.")
         return False
 
@@ -663,7 +664,7 @@ def get_discharge_and_river_parameters_by_river(
         river_width_beta_per_point = None
 
     discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
-    discharge_df.index.freq = "H"  # ty:ignore[invalid-assignment]
+    discharge_df.index.freq = "h"  # ty:ignore[invalid-assignment]
     river_parameters: pd.DataFrame = pd.DataFrame(
         index=np.array(river_IDs),
         columns=np.array(
@@ -725,17 +726,17 @@ def get_discharge_and_river_parameters_by_river(
     return discharge_df, river_parameters
 
 
-def select_most_downstream_point(
+def select_most_upstream_point(
     river: LineString, outflow_points: GeometryCollection
 ) -> Point:
-    """Select the most downstream point from a collection of outflow points.
+    """Select the most upstream point from a collection of outflow points.
 
     Args:
         river: LineString of the river geometry.
         outflow_points: GeometryCollection of outflow points (can contain Points and LineStrings).
 
     Returns:
-        The most downstream Point from the outflow_points.
+        The most upstream Point from the outflow_points.
 
     Raises:
         TypeError: If an unsupported geometry type is found in outflow_points.
@@ -752,14 +753,14 @@ def select_most_downstream_point(
                 f"Unsupported geometry type in outflow_points: {type(geom)}"
             )
 
-    most_downstream_point: Point = points[0]
-    most_downstream_point_loc: float = line_locate_point(river, most_downstream_point)
+    most_upstream_point: Point = points[0]
+    most_upstream_point_loc: float = line_locate_point(river, most_upstream_point)
     for point in points[1:]:
         loc = line_locate_point(river, point)
-        if loc > most_downstream_point_loc:
-            most_downstream_point = point
-            most_downstream_point_loc = loc
+        if loc < most_upstream_point_loc:
+            most_upstream_point = point
+            most_upstream_point_loc = loc
 
-    outflow_point: Point = most_downstream_point
+    outflow_point: Point = most_upstream_point
 
     return outflow_point

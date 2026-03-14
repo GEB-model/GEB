@@ -1,5 +1,7 @@
 """I/O related functions and classes for the GEB project."""
 
+from __future__ import annotations
+
 import asyncio
 import datetime
 import hashlib
@@ -395,9 +397,16 @@ def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     path: Path = Path(zarr_folder)
     if not path.exists():
         raise FileNotFoundError(f"Zarr folder {zarr_folder} does not exist")
-    ds: xr.Dataset = xr.open_dataset(
-        zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
-    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=ZarrUserWarning)
+        ds: xr.Dataset = xr.open_dataset(
+            zarr_folder,
+            engine="zarr",
+            chunks={},
+            consolidated=False,
+            mask_and_scale=False,
+        )
     if "spatial_ref" in ds.data_vars:
         spatial_ref_data = ds["spatial_ref"]
         ds = ds.drop_vars("spatial_ref")
@@ -1685,7 +1694,7 @@ def create_hash_from_parameters(
             value = value.item()
         try:
             json.dumps(value)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             raise ValueError(f"Value {value} is not JSON serializable")
         return value
 

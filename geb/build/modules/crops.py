@@ -1541,7 +1541,9 @@ class Crops(BuildModelBase):
                             break
                     if not found_valid_neighbor:
                         # No valid neighboring cells found, handle accordingly
-                        print(f"No valid data found for cell {i} and its neighbors.")
+                        self.logger.warning(
+                            f"No valid data found for cell {i} and its neighbors."
+                        )
                         continue  # Skip this cell
 
                 # Normalize fractions

@@ -2753,22 +2753,30 @@ class ESAWorldCover(Adapter):
         for url in tile_urls:
             # Type ignore since rioxarray.open_rasterio returns a union type,
             # but for .tif files it typically returns a DataArray.
-            da: Any = rioxarray.open_rasterio(
+            da = rioxarray.open_rasterio(
                 url,
-                chunks={"x": 1024, "y": 1024},
+                chunks={
+                    "x": 6000,
+                    "y": 6000,
+                },  # The orginal data is 36000 x 36000, so 6000 is exactly divisible and results in 36 total chunks (6 x 6)
             )
             assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
+            assert all(
+                [da.chunksizes["x"][0] == chunksize for chunksize in da.chunksizes["x"]]
+            ), f"Expected uniform chunk sizes along x, got {da.chunksizes['x']}"
+            assert all(
+                [da.chunksizes["y"][0] == chunksize for chunksize in da.chunksizes["y"]]
+            ), f"Expected uniform chunk sizes along y, got {da.chunksizes['y']}"
 
-            # Slice to bounding box extent and select first band before clipping to save memory
-            da = da.sel(band=1).sel(
-                x=slice(xmin, xmax),
-                y=slice(ymax, ymin),
-            )
+            assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
+            da: xr.DataArray = da.sel(band=1)
             arrays.append(da)
 
         if len(arrays) > 1:
             # Merge using coordinate-based combining. Type ignore as combine_by_coords
             # can return Dataset or DataArray.
+            # Because chunks are exactly dividing the original data, the chunks here will
+            # be "easy" to make
             merged: Any = xr.combine_by_coords(
                 arrays,
                 join="outer",
