@@ -1651,6 +1651,14 @@ class Hydrography(BuildModelBase):
         retention_basins = gpd.read_file(retention_basins).to_crs(
             self.grid["mask"].rio.crs
         )
+
+        # Replace empty or missing values in 'controlled_retention' with "uncontrolled"
+        retention_basins["controlled_retention"] = (
+            retention_basins["controlled_retention"]
+            .fillna("uncontrolled")
+            .replace("", "uncontrolled")
+        )
+
         rivers = self.geom["routing/rivers"]
 
         retention_basin_data = []
