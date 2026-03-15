@@ -52,22 +52,21 @@ def get_basin_area_km2(cluster_name):
 def get_resources(cluster_name):
     """Get memory allocation and SLURM partition based on basin size.
 
-    Memory strategy: route all jobs to nodes with enough physical memory to
-    prevent OOM failures.  The defq partition contains two 1 TB nodes
-    (node001/002, each 1008 GB) and several 251 GB nodes.  Requesting 900 GB
-    ensures SLURM places jobs only on the 1 TB nodes and the cgroup limit is
-    high enough to cover observed peak usage.
-
-    Empirical peak RSS observed in March 2026 runs:
-      -  87k km² basin:  254 GB  → ivm (128 GB) is too small; defq required
-      - 130k km² basin:  533 GB  → 300 GB defq allocation caused OOM
-      - 281k km² basin:  298 GB  → just under the old 300 GB limit
-      - 672k km² basin:  398 GB  → exceeded the old 300 GB limit
+    Memory strategy: request conservatively low mem_mb so SLURM does not filter
+    out the 257 GB small defq nodes (node003-015). Combined with --exclusive,
+    each job gets an entire node. Jobs that actually exceed a node's physical RAM
+    will be OOM-killed, which tells us the real minimum node size needed.
 
     Partition nodes and usable memory (from sinfo):
-      defq  node001/002:  ~1008 GB  ← target for all non-ivm-fat jobs
-      defq  node003-015:   ~251 GB  ← too small; avoided by requesting 900 GB
-      ivm-fat node243:     ~755 GB  ← dedicated fat node, serialised
+      defq  node001/002:  ~1008 GB
+      defq  node003-015:   ~251 GB
+      ivm-fat node243:     ~755 GB  ← 1 job at a time via --exclusive
+
+    Empirical peak RSS observed in March 2026 runs (update as data accumulates):
+      -  87k km² basin:  254 GB
+      - 130k km² basin:  533 GB
+      - 281k km² basin:  298 GB
+      - 672k km² basin:  398 GB
 
     Args:
         cluster_name: Name of the cluster directory (e.g. "Europe_007").
@@ -78,25 +77,14 @@ def get_resources(cluster_name):
     area_km2 = get_basin_area_km2(cluster_name)
 
     if area_km2 >= 700000:
-        # The very largest basins go to the dedicated ivm-fat node (755 GB).
-        # ivm_fat_slots=1 serialises all ivm-fat jobs since there is only one
-        # such node, preventing two jobs from competing for memory.
+        # Very large basins only fit on the dedicated 755 GB ivm-fat node.
         partition = "ivm-fat"
-        memory_mb = 700000  # 700 GB, safely below the ~755 GB node limit
-    elif area_km2 < 150000:
-        # Small basins: empirically need ~250-300 GB.  Requesting 480 GB allows
-        # two such jobs to co-schedule on a single 1031 GB node (480+480=960 GB),
-        # doubling throughput vs. the 900 GB tier where only 1 job fits per node.
-        partition = "defq"
-        memory_mb = 480000  # 480 GB → 2 jobs fit per 1031 GB node
+        memory_mb = 700000
     else:
-        # All other basins run on the two 1 TB defq nodes (node001/002).
-        # Empirical peak usage exceeds 500 GB for some basins, and even basins
-        # < 100k km² need > 250 GB, so the ivm partition (128 GB) and the
-        # small defq nodes (251 GB) are both insufficient.  Requesting 900 GB
-        # guarantees placement on node001/002 and avoids cgroup OOM kills.
-        partition = "defq"
-        memory_mb = 900000  # 900 GB, safely below the ~1031 GB node001/002 limit
+        # All other basins: allow SLURM to place on any defq node or on
+        # Allow SLURM to place on any free node in either partition.\n        # ivm-fat has only 1 node (node243), so --exclusive limits it to 1 job.
+        partition = "defq,ivm-fat"
+        memory_mb = 200000  # 200 GB — scheduling hint only, not a hard cap
 
     return memory_mb, partition
 
@@ -138,9 +126,10 @@ rule build_cluster:
         cpus_per_task=2,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
-        # Consume 1 ivm_fat_slots token for ivm-fat jobs so Snakemake's scheduler
-        # prevents two jobs from sharing the single 773 GB node243 simultaneously.
-        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0,
+        # --exclusive: SLURM gives each job a whole node. Since memory is not
+        # enforced for scheduling, --exclusive prevents co-location. Partition
+        # "defq,ivm-fat" lets SLURM use any free node in either partition.
+        slurm_extra="--exclusive",
     shell:
         """
         mkdir -p $(dirname {log})
@@ -165,7 +154,7 @@ rule spinup_cluster:
         cpus_per_task=6,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
-        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0,
+        slurm_extra="--exclusive",
     shell:
         """
         mkdir -p $(dirname {log})
@@ -190,7 +179,7 @@ rule run_cluster:
         cpus_per_task=8,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
-        ivm_fat_slots=lambda wildcards: 1 if get_resources(wildcards.cluster)[1] == "ivm-fat" else 0,
+        slurm_extra="--exclusive",
     shell:
         """
         mkdir -p $(dirname {log})
