@@ -933,9 +933,9 @@ def workflow(
 )
 @click.option(
     "--target-area-km2",
-    default=817e3,
+    default=420000,
     type=float,
-    help="Target cumulative upstream area per cluster in km². Defaults to 817,000 km².",
+    help="Target cumulative upstream area per cluster in km². Defaults to 420,000 km².",
 )
 @click.option(
     "--cluster-prefix",
