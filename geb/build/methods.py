@@ -3,16 +3,27 @@
 import functools
 import inspect
 import logging
+import threading
+from datetime import datetime
 from pathlib import Path
 from time import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol
 
 import matplotlib.pyplot as plt
 import networkx as nx
 
 __all__: list[str] = ["build_method"]
 
-from typing import Protocol
+
+def _rss_mb() -> float:
+    """Return current process RSS in MB via /proc/self/status; 0.0 if unavailable."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) / 1024  # kB → MB
+    except OSError:
+        pass
+    return 0.0
 
 
 class NamedCallable(Protocol):
@@ -27,6 +38,9 @@ class _build_method:
         self.tree = nx.DiGraph()
         self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
+        # Peak RSS memory (MB) measured during each build method via a background
+        # sampling thread. Populated automatically by the wrapper.
+        self.peak_memory_mb_per_method: dict[str, float] = {}
 
     def _resolve_logger(
         self, call_args: tuple[Any, ...] | None = None
@@ -86,15 +100,33 @@ class _build_method:
                 for key, value in kwargs.items():
                     active_logger.debug(f"{func.__name__}.{key}: {value}")
 
+                # Sample RSS every second in a background thread to capture the
+                # peak during this method without blocking execution.
+                _stop_event = threading.Event()
+                _peak_mb: float = 0.0
+
+                def _sample_memory() -> None:
+                    nonlocal _peak_mb
+                    while not _stop_event.wait(timeout=1.0):
+                        mb = _rss_mb()
+                        if mb > _peak_mb:
+                            _peak_mb = mb
+
+                threading.Thread(target=_sample_memory, daemon=True).start()
+
                 start_time: float = time()
                 value: Any = func(*args, **kwargs)
                 end_time: float = time()
 
+                _stop_event.set()
+
                 elapsed_time: float = end_time - start_time
 
                 self.time_taken[func.__name__] = elapsed_time
+                self.peak_memory_mb_per_method[func.__name__] = _peak_mb
                 active_logger.info(
                     f"Completed {func.__name__} in {elapsed_time:.2f} seconds"
+                    f" (peak RSS {_peak_mb:.0f} MB)"
                 )
                 return value
 
@@ -347,6 +379,53 @@ class _build_method:
             raise ValueError(
                 f"The following required methods are missing: {', '.join(missing_methods)}"
             )
+
+    def write_memory_stats(
+        self,
+        stats_path: Path,
+        cluster_name: str,
+        run_timestamp: datetime,
+    ) -> None:
+        """Append per-method peak-memory statistics to a shared Excel workbook.
+
+        Each call appends one row per build method to the sheet, recording the
+        cluster name, build timestamp, method name, peak RSS during the method,
+        and the wall-clock time taken.  The workbook is created on first use.
+
+        Args:
+            stats_path: Path to the Excel file (created if it does not exist).
+            cluster_name: Short name of the cluster (e.g. "Europe_004").
+            run_timestamp: Datetime at which the build run started.
+        """
+        import openpyxl  # noqa: PLC0415 – optional, only needed here
+
+        if not self.peak_memory_mb_per_method:
+            return
+
+        stats_path = Path(stats_path)
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if stats_path.exists():
+            wb = openpyxl.load_workbook(stats_path)
+        else:
+            wb = openpyxl.Workbook()
+            wb.active.title = "memory_stats"
+            wb.active.append(["cluster", "run_started_at", "method", "peak_memory_mb", "elapsed_s"])
+        ws = wb.active
+
+        for method, peak_mb in self.peak_memory_mb_per_method.items():
+            elapsed_s: float = self.time_taken.get(method, float("nan"))
+            ws.append(
+                [
+                    cluster_name,
+                    run_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    method,
+                    round(peak_mb, 1),
+                    round(elapsed_s, 1),
+                ]
+            )
+
+        wb.save(stats_path)
 
     def log_time_taken(self) -> None:
         """Log the time taken for each method in the dependency tree."""

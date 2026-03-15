@@ -640,7 +640,9 @@ def cluster_subbasins_following_coastline(
             outlet_coords = [
                 (oid, coords_array[subbasin_to_idx[oid]]) for oid in remaining_outlets
             ]
-            outlet_coords.sort(key=lambda x: (-x[1][1], -x[1][0]))  # Sort by -lat, -lon
+            outlet_coords.sort(
+                key=lambda x: (-x[1][1], -x[1][0])
+            )  # Sort by -lat, -lon (top-right corner)
             start_outlet = outlet_coords[0][0]
             logger.info(f"  Starting outlet: {start_outlet} (top-right corner)")
         else:
@@ -3536,6 +3538,8 @@ class GEBModel(
                         f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
                     )
 
+        build_run_started_at: datetime = datetime.now()
+
         for method in methods:
             if method in completed_methods:
                 self.logger.info(f"Skipping already completed method: {method}")
@@ -3554,6 +3558,23 @@ class GEBModel(
         self.logger.info("Finished!")
 
         build_method.log_time_taken()
+
+        # Write peak-memory stats only for cluster builds (…/<collection>/<cluster>/base/input).
+        root_abs: Path = Path(self.root).resolve()
+        if (
+            record_progress
+            and build_method.peak_memory_mb_per_method
+            and root_abs.parent.name == "base"
+        ):
+            try:
+                build_method.write_memory_stats(
+                    stats_path=root_abs.parent.parent.parent
+                    / "build_memory_stats.xlsx",
+                    cluster_name=root_abs.parent.parent.name,
+                    run_timestamp=build_run_started_at,
+                )
+            except Exception as exc:
+                self.logger.warning(f"Could not write memory stats: {exc}")
 
     def build(
         self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool

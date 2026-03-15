@@ -50,43 +50,53 @@ def get_basin_area_km2(cluster_name):
         return 30000.0  # Default area
 
 def get_resources(cluster_name):
-    """Get memory allocation, SLURM partition, and partition arg based on basin size.
+    """Get memory allocation and SLURM partition based on basin size.
 
-    Memory strategy: MAXIMIZE memory allocation to prevent OOM crashes.
-    Job failures are extremely costly (hours of lost compute time), so we
-    allocate near-maximum memory for each partition.
+    Memory strategy: route all jobs to nodes with enough physical memory to
+    prevent OOM failures.  The defq partition contains two 1 TB nodes
+    (node001/002, each 1008 GB) and several 251 GB nodes.  Requesting 900 GB
+    ensures SLURM places jobs only on the 1 TB nodes and the cgroup limit is
+    high enough to cover observed peak usage.
 
-    Partition limits and our allocations:
-      - defq:    limit ~257 GB → allocate 300 GB
-      - ivm:     limit ~128 GB → allocate 140 GB
-      - ivm-fat: limit ~773 GB → allocate 700 GB  (only 1 node, serialised via ivm_fat_slots=1)
+    Empirical peak RSS observed in March 2026 runs:
+      -  87k km² basin:  254 GB  → ivm (128 GB) is too small; defq required
+      - 130k km² basin:  533 GB  → 300 GB defq allocation caused OOM
+      - 281k km² basin:  298 GB  → just under the old 300 GB limit
+      - 672k km² basin:  398 GB  → exceeded the old 300 GB limit
 
-
+    Partition nodes and usable memory (from sinfo):
+      defq  node001/002:  ~1008 GB  ← target for all non-ivm-fat jobs
+      defq  node003-015:   ~251 GB  ← too small; avoided by requesting 900 GB
+      ivm-fat node243:     ~755 GB  ← dedicated fat node, serialised
 
     Args:
         cluster_name: Name of the cluster directory (e.g. "Europe_007").
 
     Returns:
-        Tuple of (memory_mb, partition_name). The executor plugin maps
-        slurm_partition directly to --partition, so no partition_arg is needed.
+        Tuple of (memory_mb, partition_name).
     """
     area_km2 = get_basin_area_km2(cluster_name)
 
     if area_km2 >= 700000:
-        # Only the very largest basins go to ivm-fat.  ivm_fat_slots=1 serialises
-        # all ivm-fat jobs (there is one ivm-fat node), so keeping this set small
-        # maximises overall throughput.
+        # The very largest basins go to the dedicated ivm-fat node (755 GB).
+        # ivm_fat_slots=1 serialises all ivm-fat jobs since there is only one
+        # such node, preventing two jobs from competing for memory.
         partition = "ivm-fat"
-        memory_mb = 700000  # 700 GB, safely below the ~773 GB node limit
-    elif area_km2 >= 100000:
-        # Medium/large basins: defq with exclusive node allocation.
-        # Observed peak ~160 GB; 300 GB gives a comfortable safety margin.
+        memory_mb = 700000  # 700 GB, safely below the ~755 GB node limit
+    elif area_km2 < 150000:
+        # Small basins: empirically need ~250-300 GB.  Requesting 480 GB allows
+        # two such jobs to co-schedule on a single 1031 GB node (480+480=960 GB),
+        # doubling throughput vs. the 900 GB tier where only 1 job fits per node.
         partition = "defq"
-        memory_mb = 300000  # 300 GB, safely below the ~257 GB node limit
+        memory_mb = 480000  # 480 GB → 2 jobs fit per 1031 GB node
     else:
-        # Small basins (< 100 k km²): ivm is sufficient and frees defq nodes.
-        partition = "ivm"
-        memory_mb = 140000  # 140 GB, safely below the ~128 GB node limit
+        # All other basins run on the two 1 TB defq nodes (node001/002).
+        # Empirical peak usage exceeds 500 GB for some basins, and even basins
+        # < 100k km² need > 250 GB, so the ivm partition (128 GB) and the
+        # small defq nodes (251 GB) are both insufficient.  Requesting 900 GB
+        # guarantees placement on node001/002 and avoids cgroup OOM kills.
+        partition = "defq"
+        memory_mb = 900000  # 900 GB, safely below the ~1031 GB node001/002 limit
 
     return memory_mb, partition
 
