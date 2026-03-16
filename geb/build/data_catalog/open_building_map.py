@@ -205,13 +205,13 @@ class OpenBuildingMap(Adapter):
             A GeoDataFrame with the GADM data.
         """
         gdf = Adapter.read(self, **kwargs)
-        # add x and y columns for building centroids
-        gdf["x"] = gdf.geometry.centroid.x
-        gdf["y"] = gdf.geometry.centroid.y
         if gdf.crs != "EPSG:4326":
             gdf.to_crs("EPSG:4326", inplace=True)
             self.model.logger.warning(
                 "OpenBuildingMap data was not in EPSG:4326. It has been reprojected to EPSG:4326 for consistency with other datasets. Please ensure that your model region and other datasets are also in EPSG:4326 to avoid issues with spatial joins and analyses."
             )
+        # add x and y columns for building centroids in EPSG:4326 (lon/lat)
+        gdf["x"] = gdf.geometry.centroid.x
+        gdf["y"] = gdf.geometry.centroid.y
         assert isinstance(gdf, gpd.GeoDataFrame)
         return gdf
