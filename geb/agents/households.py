@@ -1088,7 +1088,12 @@ class Households(AgentBaseClass):
         Returns:
             Copy of buildings with updated attributes from critical infrastructure data where spatial intersections occurred.
         """
-        buildings = self.buildings.copy()
+
+        buildings = gpd.GeoDataFrame(
+            self.buildings,
+            geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
+            crs="EPSG:4326",  # or whatever CRS your coordinates use
+        )
         # TODO: check if this function is needed with the new OBM data
 
         # Spatial join: find which facility features intersect which buildings
@@ -1117,7 +1122,7 @@ class Households(AgentBaseClass):
             if col_fac in joined.columns:
                 buildings[col] = joined[col_fac].combine_first(buildings[col])
 
-        return buildings
+        return pd.DataFrame(buildings).drop("geometry", axis=1)
 
     def assign_energy_substations_to_postal_codes(
         self, substations: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
