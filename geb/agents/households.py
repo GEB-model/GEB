@@ -1074,7 +1074,7 @@ class Households(AgentBaseClass):
         buildings.to_parquet(save_path)
 
         # Update the buildings (global variable) for later use
-        self.buildings = buildings
+        self.buildings = pd.DataFrame(buildings).drop("geometry", axis=1)
 
     def update_buildings_w_critical_infrastructure(
         self, critical_infrastructure: gpd.GeoDataFrame
@@ -1121,7 +1121,7 @@ class Households(AgentBaseClass):
             if col_fac in joined.columns:
                 buildings[col] = joined[col_fac].combine_first(buildings[col])
 
-        return pd.DataFrame(buildings).drop("geometry", axis=1)
+        return buildings
 
     def assign_energy_substations_to_postal_codes(
         self, substations: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
