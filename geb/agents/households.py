@@ -279,8 +279,6 @@ class Households(AgentBaseClass):
         )
 
         # # Create a mask for buildings that overlap with the flood map
-        # buildings_mask = self.buildings.geometry.intersects(flood_map_polygons_union)
-        # 2. Spatial join (uses spatial index)
         flooded_buildings = gpd.sjoin(
             buildings_centroid,
             flood_map_polygons_union,
@@ -288,7 +286,7 @@ class Households(AgentBaseClass):
             how="left",
         )
 
-        # 3. Flooded if match exists
+        # Flooded if match exists
         self.buildings["flooded"] = flooded_buildings["index_right"].notna()
 
         # drop buildings which are not flooded
@@ -1707,10 +1705,7 @@ class Households(AgentBaseClass):
             self.model.files["geom"]["assets/open_building_map"],
             columns=columns_to_load,
         )
-        # if hasattr(self, "flood_maps") and self.flood_maps is not None:
-        #     self.buildings = self.buildings.to_crs(
-        #         self.flood_maps[self.return_periods[0]].rio.crs
-        #     )
+
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
@@ -2034,9 +2029,6 @@ class Households(AgentBaseClass):
             filters=[("id", "in", flooded_building_ids)],
         )
 
-        # only calculate damages for buildings with more than 0 occupant
-        # buildings = building_geometries[building_geometries["n_occupants"] > 0]
-
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
 
@@ -2183,9 +2175,32 @@ class Households(AgentBaseClass):
             The total flood damages for the event for all assets and land use types.
 
         """
+        if "flooded" not in self.buildings.columns:
+            self.update_building_attributes()
+
         flood_depth: xr.DataArray = flood_depth.compute()
 
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_depth.rio.crs)
+        flooded_building_ids = np.array(self.buildings[self.buildings["flooded"]]["id"])
+
+        building_geometries = read_geom(
+            self.model.files["geom"]["assets/open_building_map"],
+            filters=[("id", "in", flooded_building_ids)],
+        )
+
+        # merge geometry into buildings dataframe
+        buildings = self.buildings.merge(
+            building_geometries[["id", "geometry"]],
+            on="id",
+            how="left",
+        )
+
+        # convert to GeoDataFrame
+        buildings = gpd.GeoDataFrame(
+            buildings, geometry="geometry", crs=building_geometries.crs
+        )
+
+        # reproject
+        buildings = buildings.to_crs(flood_depth.rio.crs)
 
         household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
             flood_depth.rio.crs
