@@ -1,6 +1,7 @@
 """This module contains the Households agent class for simulating household behavior in the GEB model."""
 
 from __future__ import annotations
+from distributed.utils_test import c
 
 import json
 from datetime import datetime, timedelta
@@ -222,7 +223,7 @@ class Households(AgentBaseClass):
         # assign wealth based on income (dummy data, there are ratios available in literature)
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
-    def update_building_attributes(self, drop_not_flooded: bool = True) -> None:
+    def update_building_attributes(self, drop_not_flooded: bool = False) -> None:
         """Update building attributes based on household data.
 
         Args:
@@ -255,7 +256,7 @@ class Households(AgentBaseClass):
         highest_return_period = self.return_periods.max()
         flood_map = self.flood_maps[highest_return_period].copy()
         # check if building geometry overlaps with flood map
-        flood_map = flood_map.rio.reproject(self.buildings.crs)
+        flood_map = flood_map.rio.reproject(self.buildings_centroid.crs)
         flood_map = flood_map > 0  # convert to boolean mask
 
         # # convert flood map to polygons
@@ -266,16 +267,19 @@ class Households(AgentBaseClass):
         )
 
         flood_map_polygons_union: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            [flood_map_polygons.unary_union],
+            [flood_map_polygons.union_all()],
             columns=["geometry"],
-            crs=self.buildings.crs,
+            crs=self.buildings_centroid.crs,
         )
 
         # # Create a mask for buildings that overlap with the flood map
         # buildings_mask = self.buildings.geometry.intersects(flood_map_polygons_union)
         # 2. Spatial join (uses spatial index)
         flooded_buildings = gpd.sjoin(
-            self.buildings, flood_map_polygons_union, predicate="intersects", how="left"
+            self.buildings_centroid,
+            flood_map_polygons_union,
+            predicate="intersects",
+            how="left",
         )
 
         # 3. Flooded if match exists
@@ -1679,18 +1683,35 @@ class Households(AgentBaseClass):
     def load_objects(self) -> None:
         """Load buildings, roads, and rail geometries from model files."""
         # Load buildings
-        self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
-        if hasattr(self, "flood_maps") and self.flood_maps is not None:
-            self.buildings = self.buildings.to_crs(
-                self.flood_maps[self.return_periods[0]].rio.crs
-            )
+        columns_to_load = [
+            "id",
+            "floorspace",
+            "occupancy",
+            "height",
+            # "geometry",
+            "x",
+            "y",
+            "NAME_1",
+            "TOTAL_REPL_COST_USD_SQM",
+            "COST_STRUCTURAL_USD_SQM",
+            "COST_NONSTRUCTURAL_USD_SQM",
+            "COST_CONTENTS_USD_SQM",
+        ]
+        self.buildings = read_table(
+            self.model.files["geom"]["assets/open_building_map"],
+            columns=columns_to_load,
+        )
+        # if hasattr(self, "flood_maps") and self.flood_maps is not None:
+        #     self.buildings = self.buildings.to_crs(
+        #         self.flood_maps[self.return_periods[0]].rio.crs
+        #     )
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
         self.buildings_centroid = gpd.GeoDataFrame(
-            geometry=self.buildings.to_crs(epsg=3857).centroid.to_crs(
-                self.buildings.crs
-            )
+            self.buildings,
+            geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
+            crs="EPSG:4326",  # or whatever CRS your coordinates use
         )
         self.buildings_centroid["object_type"] = (
             "building_unprotected"  # before it was "building_content"
@@ -2010,14 +2031,19 @@ class Households(AgentBaseClass):
 
         # subset building to those exposed to flooding
         buildings = self.buildings[self.buildings["flooded"]].copy()
+        flooded_building_ids = np.array(buildings["id"])
+        building_geometries = read_geom(
+            self.model.files["geom"]["assets/open_building_map"],
+            filters=[("id", "in", flooded_building_ids)],
+        )
 
         # only calculate damages for buildings with more than 0 occupant
-        buildings = buildings[buildings["n_occupants"] > 0]
+        # buildings = building_geometries[building_geometries["n_occupants"] > 0]
 
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
 
-            building_multicurve = buildings.copy()
+            building_multicurve = building_geometries.copy()
             multi_curves = {
                 "damages_structure": self.buildings_structure_curve[
                     "building_unprotected"
