@@ -2037,6 +2037,14 @@ class Households(AgentBaseClass):
             flood_map: xr.DataArray = self.flood_maps[return_period]
 
             building_multicurve = building_geometries.copy()
+
+            # Ensure building geometries are in the same CRS as the flood map, as the
+            # damage scanner assumes aligned CRSs between vector and raster data.
+            flood_crs = flood_map.rio.crs
+            if building_multicurve.crs is not None and flood_crs is not None:
+                if building_multicurve.crs != flood_crs:
+                    building_multicurve = building_multicurve.to_crs(flood_crs)
+
             multi_curves = {
                 "damages_structure": self.buildings_structure_curve[
                     "building_unprotected"
