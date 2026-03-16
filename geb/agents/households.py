@@ -2197,13 +2197,24 @@ class Households(AgentBaseClass):
         )
 
         # get the building ids of the flooded buildings
+        # reproject centroids to the flood raster CRS so we can sample depths directly
         buildings_centroids = buildings_centroids.to_crs(flood_depth.rio.crs)
-        building_points_with_depth = gpd.sjoin_nearest(
-            buildings_centroids,
-            flood_depth.rio.to_rasterio(),
-            how="left",
-            distance_col="distance",
+
+        # extract centroid coordinates in raster CRS
+        x_coords = buildings_centroids.geometry.x.values
+        y_coords = buildings_centroids.geometry.y.values
+
+        # sample raster at building centroids using nearest-neighbour interpolation
+        x_dim = flood_depth.rio.x_dim
+        y_dim = flood_depth.rio.y_dim
+        sampled_depths = flood_depth.interp(
+            {x_dim: ("points", x_coords), y_dim: ("points", y_coords)},
+            method="nearest",
         )
+
+        # attach sampled depths to building points; buildings with NaN depth are not flooded
+        building_points_with_depth = buildings_centroids.copy()
+        building_points_with_depth["depth"] = sampled_depths.values
         flooded_building_ids = building_points_with_depth[
             ~building_points_with_depth["depth"].isna()
         ]["id"].unique()
