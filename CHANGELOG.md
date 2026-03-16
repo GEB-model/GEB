@@ -5,6 +5,9 @@
 - Remove self.buildings_centroid as attribute (appears not to be used)
 - Load in buildings as pandas df, only load geometry data for flood damage calculations
 
+To support this version:
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`
+
 
 # v1.0.0b17
 - Synchronize start and end dates in reasonable default config and example.
@@ -106,7 +109,6 @@ To support this version:
      - re-run `setup_crops`: `geb update -b build.yml::setup_crops`
      - re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
      - re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
-- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`
 
 Recommended:
 - Re-run `setup_forcing` and `setup_SPEI` for a significant speedup and better SPEI estimation: `geb update -b build.yml::setup_forcing` and `geb update -b build.yml::setup_SPEI`
