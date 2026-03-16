@@ -205,5 +205,8 @@ class OpenBuildingMap(Adapter):
             A GeoDataFrame with the GADM data.
         """
         gdf = Adapter.read(self, **kwargs)
+        # add x and y columns for building centroids
+        gdf["x"] = gdf.geometry.centroid.x
+        gdf["y"] = gdf.geometry.centroid.y
         assert isinstance(gdf, gpd.GeoDataFrame)
         return gdf
