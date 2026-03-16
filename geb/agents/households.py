@@ -259,7 +259,7 @@ class Households(AgentBaseClass):
         buildings_centroid = gpd.GeoDataFrame(
             self.buildings,
             geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
-            crs="EPSG:4326",  # or whatever CRS your coordinates use
+            crs="EPSG:4326",
         )
 
         flood_map = flood_map.rio.reproject(buildings_centroid.crs)
@@ -1088,11 +1088,10 @@ class Households(AgentBaseClass):
         Returns:
             Copy of buildings with updated attributes from critical infrastructure data where spatial intersections occurred.
         """
-
         buildings = gpd.GeoDataFrame(
             self.buildings,
             geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
-            crs="EPSG:4326",  # or whatever CRS your coordinates use
+            crs="EPSG:4326",
         )
         # TODO: check if this function is needed with the new OBM data
 
