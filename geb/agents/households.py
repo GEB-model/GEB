@@ -1,7 +1,6 @@
 """This module contains the Households agent class for simulating household behavior in the GEB model."""
 
 from __future__ import annotations
-from distributed.utils_test import c
 
 import json
 from datetime import datetime, timedelta
