@@ -1,6 +1,7 @@
 """This module contains the Households agent class for simulating household behavior in the GEB model."""
 
 from __future__ import annotations
+from ty_extensions import Unknown
 
 import json
 from datetime import datetime, timedelta
@@ -2179,12 +2180,26 @@ class Households(AgentBaseClass):
             The total flood damages for the event for all assets and land use types.
 
         """
-        if "flooded" not in self.buildings.columns:
-            self.update_building_attributes()
-
         flood_depth: xr.DataArray = flood_depth.compute()
 
-        flooded_building_ids = np.array(self.buildings[self.buildings["flooded"]]["id"])
+        # subset building to those exposed to flooding
+        buildings_centroids = gpd.GeoDataFrame(
+            self.buildings,
+            geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
+            crs="EPSG:4326",
+        )
+
+        # get the building ids of the flooded buildings
+        buildings_centroids = buildings_centroids.to_crs(flood_depth.rio.crs)
+        building_points_with_depth = gpd.sjoin_nearest(
+            buildings_centroids,
+            flood_depth.rio.to_rasterio(),
+            how="left",
+            distance_col="distance",
+        )
+        flooded_building_ids = building_points_with_depth[
+            ~building_points_with_depth["depth"].isna()
+        ]["id"].unique()
 
         building_geometries = read_geom(
             self.model.files["geom"]["assets/open_building_map"],
