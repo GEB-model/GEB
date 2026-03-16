@@ -255,7 +255,14 @@ class Households(AgentBaseClass):
         highest_return_period = self.return_periods.max()
         flood_map = self.flood_maps[highest_return_period].copy()
         # check if building geometry overlaps with flood map
-        flood_map = flood_map.rio.reproject(self.buildings_centroid.crs)
+
+        buildings_centroid = gpd.GeoDataFrame(
+            self.buildings,
+            geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
+            crs="EPSG:4326",  # or whatever CRS your coordinates use
+        )
+
+        flood_map = flood_map.rio.reproject(buildings_centroid.crs)
         flood_map = flood_map > 0  # convert to boolean mask
 
         # # convert flood map to polygons
@@ -268,14 +275,14 @@ class Households(AgentBaseClass):
         flood_map_polygons_union: gpd.GeoDataFrame = gpd.GeoDataFrame(
             [flood_map_polygons.union_all()],
             columns=["geometry"],
-            crs=self.buildings_centroid.crs,
+            crs=buildings_centroid.crs,
         )
 
         # # Create a mask for buildings that overlap with the flood map
         # buildings_mask = self.buildings.geometry.intersects(flood_map_polygons_union)
         # 2. Spatial join (uses spatial index)
         flooded_buildings = gpd.sjoin(
-            self.buildings_centroid,
+            buildings_centroid,
             flood_map_polygons_union,
             predicate="intersects",
             how="left",
@@ -1707,14 +1714,6 @@ class Households(AgentBaseClass):
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
-        self.buildings_centroid = gpd.GeoDataFrame(
-            self.buildings,
-            geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
-            crs="EPSG:4326",  # or whatever CRS your coordinates use
-        )
-        self.buildings_centroid["object_type"] = (
-            "building_unprotected"  # before it was "building_content"
-        )
 
         # Load roads
         self.roads = read_geom(self.model.files["geom"]["assets/roads"]).rename(
@@ -1750,7 +1749,6 @@ class Households(AgentBaseClass):
         self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
-        self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         self.var.max_dam_rail = float(
             read_params(
