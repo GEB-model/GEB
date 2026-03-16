@@ -1255,7 +1255,7 @@ class SFINCSRootModel:
         fixed_scale: float | None = None,
         p_value_threshold: float = 0.05,
         selection_strategy: str = "first_significant",
-        write_figures: bool = False,
+        write_figures: bool = True,
         output_directory: Path | None = None,
     ) -> gpd.GeoDataFrame:
         """Assign return periods to rivers using GPD-POT analysis.

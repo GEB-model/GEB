@@ -643,7 +643,7 @@ class Floods(Module):
                     / "report"
                     / "default"
                     / "hydrology.routing"
-                    / "discharge_daily.zarr"
+                    / "discharge_hourly.zarr"
                 )
                 discharge_combined: xr.DataArray = xr.concat(
                     [self.discharge_spinup_ds, discharge_run], dim="time"

@@ -169,7 +169,7 @@ rule build_base:
     message: "Building base GEB model..."
     run: 
         if not Path("input/build_complete.txt").exists():
-            run_command("geb build --continue", log[0], "Failed to build base model")
+            run_command("geb build", log[0], "Failed to build base model")
         else:
             with open(log[0], "a") as log_file:
                 log_file.write(f"base_build.done already exists, skipping 'geb build'\n")
@@ -191,6 +191,182 @@ rule generate_initial_parameters:
             })
         with open(output[0], "w") as f:
             yaml.dump({"individuals": individuals}, f, default_flow_style=False)
+
+rule generate_flood_maps:
+    input: "base_build.done"
+    output: touch(RUNS_DIR + "/flood_maps.done")
+    log: RUNS_DIR + "/logs/generate_flood_maps.log"
+    run:
+        # Copy only the configured return-period maps (e.g. 2.zarr, 25.zarr)
+        # from canonical model output into the calibration run directory.
+        from pathlib import Path
+        import shutil
+        from geb.runner import parse_config
+
+        # Locate the canonical flood_maps folder by probing likely repo roots
+        def _find_flood_maps_folder() -> tuple[Path, list[Path]]:
+            candidates: list[Path] = []
+            try:
+                f = Path(__file__).resolve()
+                # add a few parents of the rule file
+                for i in range(1, 6):
+                    if len(f.parents) >= i:
+                        candidates.append(f.parents[i - 1])
+            except Exception:
+                pass
+
+            # add current working directory and its parents
+            cwd = Path.cwd().resolve()
+            candidates.append(cwd)
+            for i in range(1, 6):
+                if len(cwd.parents) >= i:
+                    candidates.append(cwd.parents[i - 1])
+
+            # dedupe while preserving order
+            seen = set()
+            uniq: list[Path] = []
+            for c in candidates:
+                if c not in seen:
+                    seen.add(c)
+                    uniq.append(c)
+
+            for root in uniq:
+                p = root / "models" / "geul" / "output" / "flood_maps"
+                if p.exists():
+                    return p, uniq
+
+            # fallback to relative path (may still fail)
+            return Path("models") / "geul" / "output" / "flood_maps", uniq
+
+        src, probed_candidates = _find_flood_maps_folder()
+        # Diagnostic: write out probed candidates and resolved src
+        try:
+            with open(log[0], "a") as fh:
+                fh.write(f"Probed candidates for flood_maps (in order):\n")
+                for c in probed_candidates:
+                    fh.write(str(c) + "\n")
+                fh.write(f"Resolved src path: {src}\n")
+                fh.write(f"src.exists: {src.exists()}\n")
+                # list src contents if present
+                if src.exists():
+                    try:
+                        fh.write("Contents of src:\n")
+                        for p in sorted(src.iterdir()):
+                            fh.write(" - " + p.name + ("/" if p.is_dir() else "") + "\n")
+                    except Exception as e:
+                        fh.write("Failed to list src contents: " + str(e) + "\n")
+        except Exception:
+            pass
+        dst = Path(RUNS_DIR) / "output" / "flood_maps"
+
+        if not src.exists():
+            with open(log[0], "a") as fh:
+                fh.write(f"Source flood maps not found at {src}\n")
+            raise RuntimeError(
+                f"Source flood maps not found at {src}. Run 'geb exec estimate_return_periods -wd models/geul' first."
+            )
+
+        # read return periods using parse_config so 'inherits' is resolved
+        try:
+            # Ensure any `{GEB_PACKAGE_DIR}` inherits can be resolved
+            import os
+            from geb import GEB_PACKAGE_DIR
+            os.environ.setdefault("GEB_PACKAGE_DIR", str(GEB_PACKAGE_DIR))
+
+            # Prefer any of the previously probed candidate roots to find the
+            # repository `models/geul/model.yml`. When Snakemake loads rules
+            # from site-packages, `__file__` can point into the virtualenv, so
+            # using fixed parents[] is brittle. Use `probed_candidates` (from
+            # _find_flood_maps_folder) to locate the real repo root.
+            model_cfg_path = None
+            try:
+                # If `src` (the canonical flood_maps folder) was resolved above,
+                # derive the repository model.yml from it. `src` should be at:
+                # <repo_root>/models/geul/output/flood_maps, so `src.parents[2]`
+                # points to the `geul` folder.
+                if src.exists():
+                    candidate = src.parents[2] / "model.yml"
+                    if candidate.exists():
+                        model_cfg_path = candidate
+                if model_cfg_path is None:
+                    for root in probed_candidates:
+                        candidate = Path(root) / "models" / "geul" / "model.yml"
+                        if candidate.exists():
+                            model_cfg_path = candidate
+                            break
+            except Exception:
+                model_cfg_path = None
+
+            if model_cfg_path is None:
+                # fallback: relative path from the repository working dir
+                model_cfg_path = Path("models") / "geul" / "model.yml"
+
+            # Diagnostic: record model_cfg_path and existence
+            try:
+                with open(log[0], "a") as fh:
+                    fh.write(f"Attempting parse_config on: {model_cfg_path}\n")
+                    fh.write(f"model_cfg_path.exists: {model_cfg_path.exists()}\n")
+                    if model_cfg_path.exists():
+                        try:
+                            fh.write("--- model.yml (safe load) ---\n")
+                            import yaml as _yaml
+                            fh.write(_yaml.safe_load(model_cfg_path.read_text()).__repr__() + "\n")
+                        except Exception as e:
+                            fh.write("safe_load of model.yml failed: " + str(e) + "\n")
+            except Exception:
+                pass
+
+            model_cfg = parse_config(model_cfg_path, current_directory=model_cfg_path.parent)
+            # write parse_config result for debugging
+            try:
+                with open(log[0], "a") as fh:
+                    fh.write("--- parse_config result keys ---\n")
+                    if isinstance(model_cfg, dict):
+                        for k in sorted(model_cfg.keys()):
+                            fh.write(str(k) + "\n")
+                    else:
+                        fh.write(f"parse_config returned non-dict: {type(model_cfg)}\n")
+            except Exception:
+                pass
+
+            return_periods = model_cfg.get("hazards", {}).get("floods", {}).get("return_periods", [])
+        except Exception as e:
+            try:
+                with open(log[0], "a") as fh:
+                    fh.write("parse_config raised exception:\n")
+                    import traceback as _tb
+                    fh.write(_tb.format_exc())
+            except Exception:
+                pass
+            return_periods = []
+
+        if not return_periods:
+            with open(log[0], "a") as fh:
+                fh.write("No return periods configured in models/geul/model.yml; nothing to copy.\n")
+            raise RuntimeError("No return periods found in models/geul/model.yml")
+
+        missing = []
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        for rp in return_periods:
+            src_rp = src / f"{rp}.zarr"
+            dst_rp = dst / f"{rp}.zarr"
+            if not src_rp.exists():
+                missing.append(str(src_rp))
+                continue
+            if dst_rp.exists():
+                shutil.rmtree(dst_rp)
+            shutil.copytree(src_rp, dst_rp)
+
+        if missing:
+            with open(log[0], "a") as fh:
+                fh.write("Missing return-period maps:\n")
+                for m in missing:
+                    fh.write(m + "\n")
+            raise RuntimeError(
+                "Not all expected return-period maps were found in models/geul/output/flood_maps."
+            )
+
+        Path(output[0]).touch()
 
 rule generate_individual_parameters:
     input:
@@ -387,7 +563,7 @@ rule evaluate_individual:
 
         for target_name, target_info in targets.items():
             method, metric_key, weight = target_info["method"], target_info["metric"], float(target_info["weight"])
-            cmd = "geb evaluate {0} -wd {1} --create_plots false".format(method, run_dir)
+            cmd = "geb evaluate {0} -wd {1}".format(method, run_dir)
             stdout = run_command(cmd, log[0], "Eval failed for {0}".format(target_name))
 
             try:
