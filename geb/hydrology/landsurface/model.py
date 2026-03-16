@@ -316,27 +316,26 @@ def land_surface_model(
     transpiration_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
 
     for i in prange(slope_m_per_m.size):  # ty: ignore[not-iterable]
-        pr_kg_per_m2_per_s_cell = pr_kg_per_m2_per_s[:, i]
-        tas_2m_K_cell = tas_2m_K[:, i]
-        dewpoint_tas_2m_K_cell = dewpoint_tas_2m_K[:, i]
-        ps_pascal_cell = ps_pascal[:, i]
-        rlds_W_per_m2_cell = rlds_W_per_m2[:, i]
-        rsds_W_per_m2_cell = rsds_W_per_m2[:, i]
-        wind_u10m_m_per_s_cell = wind_u10m_m_per_s[:, i]
-        wind_v10m_m_per_s_cell = wind_v10m_m_per_s[:, i]
-
+        # Keep references to the cell data
         snow_water_equivalent_m_cell = snow_water_equivalent_m[i]
         liquid_water_in_snow_m_cell = liquid_water_in_snow_m[i]
         snow_temperature_C_cell = snow_temperature_C[i]
 
         for hour in range(24):
-            tas_C: np.float32 = tas_2m_K_cell[hour] - np.float32(273.15)
-            dewpoint_tas_C: np.float32 = dewpoint_tas_2m_K_cell[hour] - np.float32(
-                273.15
-            )
+            # Climate values for current hour (contigous access [i, hour])
+            tas_2m_K_val = tas_2m_K[i, hour]
+            ps_pascal_val = ps_pascal[i, hour]
+            rlds_W_per_m2_val = rlds_W_per_m2[i, hour]
+            rsds_W_per_m2_val = rsds_W_per_m2[i, hour]
+            pr_val = pr_kg_per_m2_per_s[i, hour]
 
+            tas_C: np.float32 = tas_2m_K_val - np.float32(273.15)
+            dewpoint_tas_C: np.float32 = dewpoint_tas_2m_K[i, hour] - np.float32(273.15)
+
+            wind_u = wind_u10m_m_per_s[i, hour]
+            wind_v = wind_v10m_m_per_s[i, hour]
             wind_10m_m_per_s: np.float32 = np.sqrt(
-                wind_u10m_m_per_s_cell[hour] ** 2 + wind_v10m_m_per_s_cell[hour] ** 2
+                wind_u * wind_u + wind_v * wind_v
             )  # Wind speed at 10m height
 
             soil_enthalpy_before_solver_J_per_m2: np.float32 = soil_enthalpy_J_per_m2[
@@ -358,11 +357,11 @@ def land_surface_model(
                 water_content_saturated_m=water_content_saturated_m[:, i],
                 sand_percentage=sand_percentage[:, i],
                 water_content_m=water_content_m[:, i],
-                shortwave_radiation_W_per_m2=rsds_W_per_m2_cell[hour],
-                longwave_radiation_W_per_m2=rlds_W_per_m2_cell[hour],
-                air_temperature_K=tas_2m_K_cell[hour],
+                shortwave_radiation_W_per_m2=rsds_W_per_m2_val,
+                longwave_radiation_W_per_m2=rlds_W_per_m2_val,
+                air_temperature_K=tas_2m_K_val,
                 wind_speed_10m_m_per_s=wind_10m_m_per_s,
-                surface_pressure_pa=ps_pascal_cell[hour],
+                surface_pressure_pa=ps_pascal_val,
                 timestep_seconds=np.float32(3600.0),
                 deep_soil_temperature_C=deep_soil_temperature_C[i],
                 soil_emissivity=SOIL_EMISSIVITY,
@@ -386,9 +385,9 @@ def land_surface_model(
             ) = get_reference_evapotranspiration(
                 tas_C=tas_C,
                 dewpoint_tas_C=dewpoint_tas_C,
-                ps_pa=ps_pascal_cell[hour],
-                rlds_W_per_m2=rlds_W_per_m2_cell[hour],
-                rsds_W_per_m2=rsds_W_per_m2_cell[hour],
+                ps_pa=ps_pascal_val,
+                rlds_W_per_m2=rlds_W_per_m2_val,
+                rsds_W_per_m2=rsds_W_per_m2_val,
                 wind_10m_m_per_s=wind_10m_m_per_s,
                 soil_heat_flux_W_per_m2=soil_heat_flux_W_per_m2_cell,
             )
@@ -405,7 +404,7 @@ def land_surface_model(
             reference_evapotranspiration_grass_m[i] += (
                 reference_evapotranspiration_grass_m_hour_cell
             )
-            reference_evapotranspiration_water_m[hour, i] += (
+            reference_evapotranspiration_water_m[i, hour] += (
                 reference_evapotranspiration_water_m_hour_cell
             )
 
@@ -426,15 +425,15 @@ def land_surface_model(
                 _,  # sensible heat flux
                 _,  # latent heat flux
             ) = snow_model(
-                pr_kg_per_m2_per_s=pr_kg_per_m2_per_s_cell[hour],
+                pr_kg_per_m2_per_s=pr_val,
                 air_temperature_C=tas_C,
                 snow_water_equivalent_m=snow_water_equivalent_m_cell,
                 liquid_water_in_snow_m=liquid_water_in_snow_m_cell,
                 snow_temperature_C=snow_temperature_C_cell,
-                shortwave_radiation_W_per_m2=rsds_W_per_m2_cell[hour],
-                downward_longwave_radiation_W_per_m2=rlds_W_per_m2_cell[hour],
+                shortwave_radiation_W_per_m2=rsds_W_per_m2_val,
+                downward_longwave_radiation_W_per_m2=rlds_W_per_m2_val,
                 vapor_pressure_air_Pa=actual_vapour_pressure_Pa,
-                air_pressure_Pa=ps_pascal_cell[hour],
+                air_pressure_Pa=ps_pascal_val,
                 wind_10m_m_per_s=wind_10m_m_per_s,
             )
 
@@ -507,7 +506,7 @@ def land_surface_model(
             if land_use_type[i] == PADDY_IRRIGATED:
                 topwater_m[i] += groundwater_rise
             else:
-                runoff_m[hour, i] += groundwater_rise
+                runoff_m[i, hour] += groundwater_rise
 
             soil_is_frozen = frozen_fractions_cell[0] > np.float32(0.0)
 
@@ -543,7 +542,7 @@ def land_surface_model(
                 soil_layer_height_m=soil_layer_height[:, i],
                 lambda_pore_size_distribution=lambda_pore_size_distribution[:, i],
             )
-            runoff_m[hour, i] += direct_runoff_m
+            runoff_m[i, hour] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
 
             # Apply advective heat transport from infiltrating rain.
@@ -682,7 +681,7 @@ def land_surface_model(
                 max(np.float32(0.0), max_liquid_outflow_bottom_layer),
             )
 
-            interflow_m[hour, i] += interflow_cell_hour
+            interflow_m[i, hour] += interflow_cell_hour
             bottom_layer_advected_temperature_C = max(
                 bottom_layer_temperature_C, np.float32(0.0)
             )
@@ -880,7 +879,7 @@ def land_surface_model(
                     interflow_cell_hour, max(np.float32(0.0), max_liquid_outflow_layer)
                 )
 
-                interflow_m[hour, i] += interflow_cell_hour
+                interflow_m[i, hour] += interflow_cell_hour
                 layer_advected_temperature_C = max(layer_temperature_C, np.float32(0.0))
                 interflow_enthalpy_loss_J_per_m2_hour = (
                     interflow_cell_hour
@@ -926,8 +925,6 @@ def land_surface_model(
             )
 
             # Remove sensible enthalpy exported with transpired liquid water.
-            # This closes the soil enthalpy budget when transpiration withdraws
-            # water from soil layers and/or ponded topwater.
             for layer in range(N_SOIL_LAYERS):
                 transpired_from_layer_m: np.float32 = max(
                     np.float32(0.0),
@@ -1214,26 +1211,18 @@ class LandSurface(Module):
         Returns:
             Bundle of inputs for `land_surface_model`.
         """
-        pr_kg_per_m2_per_s_for_model: TwoDArrayFloat32 = np.asfortranarray(
-            pr_kg_per_m2_per_s
-        )
-        tas_2m_K_for_model: TwoDArrayFloat32 = np.asfortranarray(tas_2m_K)
-        dewpoint_tas_2m_K_for_model: TwoDArrayFloat32 = np.asfortranarray(
-            self.HRU.dewpoint_tas_2m_K
-        )
-        ps_pascal_for_model: TwoDArrayFloat32 = np.asfortranarray(self.HRU.ps_pascal)
-        rlds_W_per_m2_for_model: TwoDArrayFloat32 = np.asfortranarray(
-            self.HRU.rlds_W_per_m2
-        )
-        rsds_W_per_m2_for_model: TwoDArrayFloat32 = np.asfortranarray(
-            self.HRU.rsds_W_per_m2
-        )
-        wind_u10m_m_per_s_for_model: TwoDArrayFloat32 = np.asfortranarray(
-            self.HRU.wind_u10m_m_per_s
-        )
-        wind_v10m_m_per_s_for_model: TwoDArrayFloat32 = np.asfortranarray(
-            self.HRU.wind_v10m_m_per_s
-        )
+        pr_kg_per_m2_per_s_for_model: TwoDArrayFloat32 = pr_kg_per_m2_per_s
+
+        tas_2m_K_for_model: TwoDArrayFloat32 = tas_2m_K
+        dewpoint_tas_2m_K_for_model: TwoDArrayFloat32 = self.HRU.dewpoint_tas_2m_K
+        ps_pascal_for_model: TwoDArrayFloat32 = self.HRU.ps_pascal
+        rlds_W_per_m2_for_model: TwoDArrayFloat32 = self.HRU.rlds_W_per_m2
+
+        rsds_W_per_m2_for_model: TwoDArrayFloat32 = self.HRU.rsds_W_per_m2
+
+        wind_u10m_m_per_s_for_model: TwoDArrayFloat32 = self.HRU.wind_u10m_m_per_s
+        wind_v10m_m_per_s_for_model = self.HRU.wind_v10m_m_per_s
+
         CO2_ppm: np.float32 = np.float32(self.model.forcing.load("CO2_ppm"))
         groundwater_toplayer_conductivity_m_per_day: ArrayFloat32 = (
             self.hydrology.to_HRU(
@@ -1612,30 +1601,32 @@ class LandSurface(Module):
             self.HRU.var.lambda_pore_size_distribution,
         )
 
-        self.HRU.var.water_content_saturated_m = (
+        self.HRU.var.water_content_saturated_m = np.asfortranarray(
             thetas * self.HRU.var.soil_layer_height_m
         )
-        self.HRU.var.water_content_field_capacity_m = (
+        self.HRU.var.water_content_field_capacity_m = np.asfortranarray(
             thetafc * self.HRU.var.soil_layer_height_m
         )
-        self.HRU.var.water_content_wilting_point_m = (
+        self.HRU.var.water_content_wilting_point_m = np.asfortranarray(
             thetawp * self.HRU.var.soil_layer_height_m
         )
-        self.HRU.var.water_content_residual_m = (
+        self.HRU.var.water_content_residual_m = np.asfortranarray(
             thetar * self.HRU.var.soil_layer_height_m
         )
 
         # initial soil water storage between field capacity and wilting point
         # set soil moisture to nan where land use is not bioarea
-        self.HRU.var.water_content_m = np.where(
-            self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
-            (
-                self.HRU.var.water_content_field_capacity_m
-                - self.HRU.var.water_content_wilting_point_m
+        self.HRU.var.water_content_m = np.asfortranarray(
+            np.where(
+                self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
+                (
+                    self.HRU.var.water_content_field_capacity_m
+                    - self.HRU.var.water_content_wilting_point_m
+                )
+                * np.float32(0.2)
+                + self.HRU.var.water_content_wilting_point_m,
+                self.HRU.var.water_content_residual_m,
             )
-            * np.float32(0.2)
-            + self.HRU.var.water_content_wilting_point_m,
-            self.HRU.var.water_content_residual_m,
         )
         # for paddy irrigation flooded paddy fields
         self.HRU.var.topwater_m = self.HRU.full_compressed(0, dtype=np.float32)
@@ -1649,12 +1640,14 @@ class LandSurface(Module):
         # )
 
         self.HRU.var.saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = (
-            kv_wosten(
-                silt=self.HRU.var.silt_percentage,
-                clay=self.HRU.var.clay_percentage,
-                bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
-                organic_carbon_percentage=organic_carbon_percentage,
-                is_topsoil=is_top_soil,
+            np.asfortranarray(
+                kv_wosten(
+                    silt=self.HRU.var.silt_percentage,
+                    clay=self.HRU.var.clay_percentage,
+                    bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+                    organic_carbon_percentage=organic_carbon_percentage,
+                    is_topsoil=is_top_soil,
+                )
             )
         )
 
@@ -1677,9 +1670,11 @@ class LandSurface(Module):
             self.HRU.var.topwater_m.shape, dtype=np.float32
         )
 
-        self.HRU.var.solid_heat_capacity_J_per_m2_K = get_heat_capacity_solid_fraction(
-            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
-            layer_thickness_m=self.HRU.var.soil_layer_height_m,
+        self.HRU.var.solid_heat_capacity_J_per_m2_K = np.asfortranarray(
+            get_heat_capacity_solid_fraction(
+                bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+                layer_thickness_m=self.HRU.var.soil_layer_height_m,
+            )
         )
 
         # Initialize enthalpy state from the initial diagnostic temperature.
@@ -1691,8 +1686,8 @@ class LandSurface(Module):
 
         # Enthalpy is relative to 0 °C, so by initializing it as 0
         # we are assuming that the initial soil temperature is 0 °C and that all water is liquid.
-        self.HRU.var.soil_enthalpy_J_per_m2 = np.full_like(
-            self.HRU.var.soil_layer_height_m, 0.0, dtype=np.float32
+        self.HRU.var.soil_enthalpy_J_per_m2 = np.asfortranarray(
+            np.full_like(self.HRU.var.soil_layer_height_m, 0.0, dtype=np.float32)
         )
 
         self.HRU.var.solid_thermal_conductivity_W_per_m_K = (
@@ -1869,7 +1864,7 @@ class LandSurface(Module):
         pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s
         pr_total_m3 = (
             (
-                pr_kg_per_m2_per_s.astype(np.float64).mean(axis=0)
+                pr_kg_per_m2_per_s.astype(np.float64).mean(axis=1)
                 * self.HRU.var.cell_area
             ).sum()  # kg/s
             * 0.001  # to m3/s
@@ -1907,7 +1902,7 @@ class LandSurface(Module):
             self.HRU.var.deep_soil_temperature_C
             * (np.float32(1.0) - averaging_weight_alpha)
             + (
-                tas_2m_K.mean(axis=0).astype(np.float32) - 273.15
+                tas_2m_K.mean(axis=1).astype(np.float32) - 273.15
             )  # daily mean air temperature in Celsius
             * averaging_weight_alpha
         )
@@ -1978,7 +1973,7 @@ class LandSurface(Module):
                 name="land surface 1",
                 how="cellwise",
                 influxes=[
-                    pr_kg_per_m2_per_s.sum(axis=0) * 3.6,
+                    pr_kg_per_m2_per_s.sum(axis=1) * 3.6,
                     actual_irrigation_consumption_m,
                     capillar_rise_m,
                 ],
@@ -1986,8 +1981,8 @@ class LandSurface(Module):
                     -sublimation_or_deposition_m,
                     interception_evaporation_m,
                     open_water_evaporation_m,
-                    runoff_m.sum(axis=0),
-                    interflow_m.sum(axis=0),
+                    runoff_m.sum(axis=1),
+                    interflow_m.sum(axis=1),
                     groundwater_recharge_m,
                     bare_soil_evaporation_m,
                     transpiration_m,
@@ -2115,7 +2110,7 @@ class LandSurface(Module):
         ] += potential_evapotranspiration_m[growing_crop_mask]
 
         reference_evapotranspiration_water_m = self.hydrology.to_grid(
-            HRU_data=reference_evapotranspiration_water_m,
+            HRU_data=reference_evapotranspiration_water_m.transpose(),
             fn="weightedmean",
         )
         assert (reference_evapotranspiration_water_m >= 0).all()
@@ -2124,6 +2119,8 @@ class LandSurface(Module):
             reference_evapotranspiration_grass_m, pr_kg_per_m2_per_s
         )
         self.model.agents.crop_farmers.save_pr(pr_kg_per_m2_per_s)
+        runoff_m = runoff_m.transpose()
+        interflow_m = interflow_m.transpose()
         self.report(locals())
 
         return (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import bz2
 import datetime
 import hashlib
 import json
@@ -890,7 +891,7 @@ class AsyncGriddedForcingReader:
 
         # The on-disk chunk size along the time dimension - we always load full chunks
         # from disk (e.g. 7 * 24 = 168 for weekly hourly data).
-        self.time_chunk_size: int = int(self.array.chunks[0])
+        self.time_chunk_size: int = int(self.array.chunks[1])
 
         # Chunk-aligned cache: holds the start index and data for the currently loaded chunk.
         self.current_chunk_start_index: int = -1
@@ -924,7 +925,7 @@ class AsyncGriddedForcingReader:
             The requested data slice.
         """
         assert isinstance(self.array, zarr.Array)
-        data = self.array[start_index:end_index]
+        data = self.array[:, start_index:end_index]
         assert (
             isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 2
         )
@@ -948,7 +949,7 @@ class AsyncGriddedForcingReader:
 
             # Try up to 100 times
             for _ in range(attempts):
-                data = await arr.getitem((slice(start_index, end_index), slice(None)))
+                data = await arr.getitem((slice(None), slice(start_index, end_index)))
 
                 if not np.any(np.isnan(data)):
                     assert (
@@ -1057,7 +1058,7 @@ class AsyncGriddedForcingReader:
                 chunk_data = await self.load_await(chunk_start, chunk_end)
 
             expected_chunk_len: int = chunk_end - chunk_start
-            if chunk_data.shape[0] != expected_chunk_len:
+            if chunk_data.shape[1] != expected_chunk_len:
                 raise IOError(
                     "Async read returned incomplete data; possible disk contention"
                 )
@@ -1082,7 +1083,7 @@ class AsyncGriddedForcingReader:
                 )
 
             # Slice out only the requested timesteps from the cached chunk.
-            return chunk_data[offset : offset + n], start_date
+            return chunk_data[:, offset : offset + n], start_date
 
     def get_index(self, date: datetime.datetime) -> int:
         """Get the time index for a given datetime.
@@ -1198,7 +1199,7 @@ class AsyncGriddedForcingReader:
                 self.current_chunk_data = self.load(chunk_start, chunk_end)
                 self.current_chunk_start_index = chunk_start
 
-            return self.current_chunk_data[offset : offset + n], start_date
+            return self.current_chunk_data[:, offset : offset + n], start_date
 
     def close(self) -> None:
         """Clean up this instance's async resources."""
@@ -1469,6 +1470,7 @@ def fetch_and_save(
     timeout: float | int = 30,
     show_progress: bool = True,
     verbose: bool = True,
+    decompress: str | None = None,
 ) -> bool:
     """Fetches data from a URL and saves it to a file, with a retry mechanism.
 
@@ -1489,15 +1491,20 @@ def fetch_and_save(
         timeout: The timeout in seconds for HTTP requests.
         show_progress: Whether to show a progress bar during download.
         verbose: Whether to print download status messages. Default is True.
+        decompress: The decompression type to use. Supported values are 'bz2'. Default is None.
 
     Returns:
         True if the file was successfully downloaded, False otherwise.
 
     Raises:
         RuntimeError: If the download fails after all retries.
+        ValueError: If an unsupported decompression type is specified.
     """
     if file_path.exists() and not overwrite:
         return True
+
+    if decompress is not None and decompress != "bz2":
+        raise ValueError(f"Unsupported decompression type: {decompress}")
 
     if session is None:
         session = requests.Session()
@@ -1567,13 +1574,24 @@ def fetch_and_save(
                 if show_progress:
                     total_size = int(response.headers.get("content-length", 0))
                     progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-                    for data in response.iter_content(chunk_size=chunk_size):
-                        temp_file.write(data)
-                        progress_bar.update(len(data))
+                    if decompress == "bz2":
+                        decompressor = bz2.BZ2Decompressor()
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(decompressor.decompress(data))
+                            progress_bar.update(len(data))
+                    else:
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(data)
+                            progress_bar.update(len(data))
                     progress_bar.close()
                 else:
-                    for data in response.iter_content(chunk_size=chunk_size):
-                        temp_file.write(data)
+                    if decompress == "bz2":
+                        decompressor = bz2.BZ2Decompressor()
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(decompressor.decompress(data))
+                    else:
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(data)
 
                 # Close the temporary file
                 temp_file.close()

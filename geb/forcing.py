@@ -31,8 +31,8 @@ def generate_bilinear_interpolation_weights(
     src_y: ArrayFloat64,
     tgt_x: ArrayFloat64,
     tgt_y: ArrayFloat64,
-    mask: TwoDArrayBool,
-    src_mask: TwoDArrayBool,
+    mask: TwoDArrayBool | None = None,
+    src_mask: TwoDArrayBool | None = None,
 ) -> tuple[ArrayInt32, ArrayFloat32]:
     """
     Generates indices and weights for bilinear interpolation.
@@ -56,6 +56,8 @@ def generate_bilinear_interpolation_weights(
 
     Raises:
         ValueError: If target points are outside the source grid bounds.
+        ValueError: If source x or y coordinates are not monotonic.
+        ValueError: If source mask excludes cells needed for interpolation.
     """
     # Create the full grid of target points and flatten them
     # The 'xy' indexing creates a target grid of shape (len(tgt_y), len(tgt_x))
@@ -149,25 +151,31 @@ def generate_bilinear_interpolation_weights(
     idx10 = (iy + 1) * nx + ix
     idx11 = (iy + 1) * nx + (ix + 1)
 
-    if src_mask.shape != (ny, nx):
-        raise ValueError(
-            f"Source mask shape {src_mask.shape} does not match source grid shape {(ny, nx)}."
+    if src_mask is not None:
+        if src_mask.shape != (ny, nx):
+            raise ValueError(
+                f"Source mask shape {src_mask.shape} does not match source grid shape {(ny, nx)}."
+            )
+
+        compressed_index_lookup = np.full(nx * ny, -1, dtype=np.int32)
+        compressed_index_lookup[src_mask.reshape(-1)] = np.arange(
+            src_mask.sum(), dtype=np.int32
         )
 
-    compressed_index_lookup = np.full(nx * ny, -1, dtype=np.int32)
-    compressed_index_lookup[src_mask.reshape(-1)] = np.arange(
-        src_mask.sum(), dtype=np.int32
-    )
+        idx00 = compressed_index_lookup[idx00]
+        idx01 = compressed_index_lookup[idx01]
+        idx10 = compressed_index_lookup[idx10]
+        idx11 = compressed_index_lookup[idx11]
 
-    idx00 = compressed_index_lookup[idx00]
-    idx01 = compressed_index_lookup[idx01]
-    idx10 = compressed_index_lookup[idx10]
-    idx11 = compressed_index_lookup[idx11]
-
-    if np.any(idx00 < 0) or np.any(idx01 < 0) or np.any(idx10 < 0) or np.any(idx11 < 0):
-        raise ValueError(
-            "Source mask excludes cells needed by the bilinear interpolation stencils."
-        )
+        if (
+            np.any(idx00 < 0)
+            or np.any(idx01 < 0)
+            or np.any(idx10 < 0)
+            or np.any(idx11 < 0)
+        ):
+            raise ValueError(
+                "Source mask excludes cells needed by the bilinear interpolation stencils."
+            )
 
     # Stack indices and weights in a consistent order
     indices = np.stack([idx00, idx01, idx10, idx11], axis=1).astype(np.int32)
@@ -427,10 +435,22 @@ class ForcingLoader(ABC):
         Returns:
             The interpolated data array.
         """
-        data_flattened_xy_dims = data.reshape(data.shape[0], -1)
+        # data has shape (n_active_cells, n_timesteps)
         # the corner values must be gathered in the same order as the weights
-        corner_values = data_flattened_xy_dims[:, self.indices]
-        interpolated = np.sum(corner_values * self.weights[np.newaxis, :, :], axis=2)
+        corner_values = data[self.indices, :]  # (N_target, 4, n_timesteps)
+        from time import time
+
+        t0 = time()
+
+        # weights has shape (N_target, 4)
+        # corner_values has shape (N_target, 4, n_timesteps)
+        # We sum over the 4 corners (axis 1)
+        interpolated = np.sum(
+            corner_values * self.weights[:, :, np.newaxis], axis=1
+        )  # Result is (n_timesteps, N_target)
+
+        t1 = time()
+        print(f"Bilinear interpolation took {t1 - t0:.6f} seconds.")
 
         return interpolated
 
@@ -446,16 +466,16 @@ class ForcingLoader(ABC):
         Raises:
             ValueError: If the data shape does not match the expected dimensions.
         """
-        if v.shape[0] != self.n:
+        if v.shape[1] != self.n:
             raise ValueError(f"Data time dimension does not match expected n {self.n}.")
 
         if v.ndim != 2:
             raise ValueError(
                 f"Compressed data must be 2D, received array with shape {v.shape}."
             )
-        if v.shape[1] != self.output_size:
+        if v.shape[0] != self.output_size:
             raise ValueError(
-                f"Compressed data shape {v.shape[1]} does not match "
+                f"Compressed data shape {v.shape[0]} does not match "
                 f"expected number of active points {self.output_size}."
             )
 
@@ -557,12 +577,13 @@ class Temperature(ForcingLoader):
         Returns:
             The interpolated temperature data (compressed).
         """
+        # data has shape (n_source_cells, n_timesteps)
         temperature_sea_level = (
-            data - self.forcing_DEM_compressed[np.newaxis, :] * self.lapse_rate
+            data - self.forcing_DEM_compressed[:, np.newaxis] * self.lapse_rate
         )
         interpolated_temperature = (
             super().interpolate(temperature_sea_level)
-            + self.grid_DEM_compressed[np.newaxis, :] * self.lapse_rate
+            + self.grid_DEM_compressed[:, np.newaxis] * self.lapse_rate
         )
 
         return interpolated_temperature
@@ -664,8 +685,9 @@ class Pressure(ForcingLoader):
         Returns:
             The interpolated pressure data (compressed).
         """
+        # data has shape (n_source_cells, n_timesteps)
         pressure_sea_level = (
-            data / self.forcing_pressure_correction_factor[np.newaxis, :]
+            data / self.forcing_pressure_correction_factor[:, np.newaxis]
         )
 
         # Interpolate the sea level pressure
@@ -673,8 +695,10 @@ class Pressure(ForcingLoader):
 
         interpolated_pressure = (
             interpolated_pressure_sea_level
-            * self.grid_pressure_correction_factor[np.newaxis, :]
+            * self.grid_pressure_correction_factor[:, np.newaxis]
         )
+
+        return interpolated_pressure
 
         return interpolated_pressure
 

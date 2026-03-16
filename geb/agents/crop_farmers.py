@@ -1274,7 +1274,7 @@ class CropFarmers(AgentBaseClass):
 
         """
         # take mean pr for day and convert to mm/day
-        pr_mm_per_day = pr_kg_per_m2_per_s.sum(axis=0) * np.float32(3600)  # mm / day
+        pr_mm_per_day = pr_kg_per_m2_per_s.sum(axis=1) * np.float32(3600)  # mm / day
 
         pr_mm_per_day_per_farmer = np.bincount(
             self.HRU.var.land_owners[self.HRU.var.land_owners != -1],
@@ -1309,7 +1309,7 @@ class CropFarmers(AgentBaseClass):
                 the new day's deficit (higher values weight the current day more).
                 Defaults to 0.2.
         """
-        pr: npt.NDArray[np.float32] = pr_kg_per_m2_per_s.sum(axis=0) * np.float32(
+        pr: npt.NDArray[np.float32] = pr_kg_per_m2_per_s.sum(axis=1) * np.float32(
             3600 / 1000
         )  # m / day
         water_deficit_day_m3 = (

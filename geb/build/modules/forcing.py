@@ -26,12 +26,12 @@ from dateutil.relativedelta import relativedelta
 from matplotlib import colormaps as mcolormaps
 from matplotlib.colors import ListedColormap
 from numba import njit
-from scipy.ndimage import binary_dilation
 from zarr.codecs.numcodecs import FixedScaleOffset
 from zarr.errors import ZarrUserWarning
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
+from geb.forcing import generate_bilinear_interpolation_weights
 from geb.hydrology.landsurface.potential_evapotranspiration import (
     get_reference_evapotranspiration,
 )
@@ -629,8 +629,7 @@ class Forcing(BuildModelBase):
         The model mask and forcing data are not necessarily on the same grid. To
         avoid keeping unnecessary forcing cells while still supporting bilinear
         interpolation near the edge of the active area, the active model mask is
-        conservatively regridded to the forcing grid and then dilated by a small
-        number of forcing-grid cells.
+        conservatively regridded to the forcing grid.
 
         Args:
             forcing_grid: A forcing DataArray containing at least the spatial
@@ -645,12 +644,29 @@ class Forcing(BuildModelBase):
             {d: 0 for d in forcing_grid.dims if d not in ["x", "y"]}, drop=True
         ).chunk({"y": -1, "x": -1})
 
-        overlap_cells = (
-            (~self.grid["mask"])
-            .astype(np.float32)
-            .rio.reproject_match(forcing_target, resampling="max")
+        # We want to keep all forcing cells that are needed for bilinear interpolation
+        # of the active model cells.
+        # generate_bilinear_interpolation_weights will raise an error if any target
+        # points are outside the source grid bounds, which is what we want.
+
+        ny, nx = forcing_target.y.size, forcing_target.x.size
+        # We start with a mask where everything is kept (src_mask)
+        # because we don't know yet which ones we need.
+        src_mask = np.ones((ny, nx), dtype=bool)
+
+        indices, _ = generate_bilinear_interpolation_weights(
+            src_x=forcing_target.x.values,
+            src_y=forcing_target.y.values,
+            tgt_x=self.grid.x.values,
+            tgt_y=self.grid.y.values,
+            mask=self.grid["mask"].values,
+            src_mask=src_mask,
         )
-        overlap_cells = xr.where(~np.isnan(overlap_cells), overlap_cells, 0)
+
+        # entries in indices are flat indices into the forcing grid (ny, nx)
+        # we want to create a new mask that is True only for these indices.
+        keep_mask_flat = np.zeros(ny * nx, dtype=bool)
+        keep_mask_flat[np.unique(indices)] = True
 
         keep_mask = self.full_like(
             forcing_target,
@@ -659,10 +675,7 @@ class Forcing(BuildModelBase):
             dtype=bool,
             name="forcing_keep_mask",
         )
-        keep_mask.values = binary_dilation(
-            overlap_cells.values,
-            structure=np.ones((3, 3)),
-        )
+        keep_mask.values = keep_mask_flat.reshape((ny, nx))
 
         return keep_mask
 
@@ -720,6 +733,7 @@ class Forcing(BuildModelBase):
             self.set_other(mask, name=f"{name}_mask")
 
         da = da.clip(min_value, max_value)
+        da = da.transpose("idxs", "time")
 
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
             da, min_value, max_value, offset=offset, precision=precision
