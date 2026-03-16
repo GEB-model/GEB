@@ -261,11 +261,11 @@ class Households(AgentBaseClass):
             geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
             crs="EPSG:4326",
         )
+        buildings_centroid = buildings_centroid.to_crs(flood_map.rio.crs)  # Reproject building centroids to flood map CRS
 
-        flood_map = flood_map.rio.reproject(buildings_centroid.crs)
-        flood_map = flood_map > 0  # convert to boolean mask
 
         # # convert flood map to polygons
+        flood_map = flood_map > 0  # convert to boolean mask
         flood_map_polygons = from_landuse_raster_to_polygon(
             flood_map.values,
             flood_map.rio.transform(recalc=True),
@@ -2031,6 +2031,12 @@ class Households(AgentBaseClass):
         building_geometries = read_geom(
             self.model.files["geom"]["assets/open_building_map"],
             filters=[("id", "in", flooded_building_ids)],
+        )
+
+        building_geometries = building_geometries.merge(
+            buildings[["id", "object_type"]],
+            on="id",
+            how="left",
         )
 
         for i, return_period in enumerate(self.return_periods):
