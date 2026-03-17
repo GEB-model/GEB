@@ -1,14 +1,12 @@
 """This module contains the version updates for the GEB model. It is used to keep track of the changes that need to be made when updating the model to a new version. The VERSION_UPDATES dictionary contains the version as the key and a list of updates as the value. Each update is a string that describes the change that needs to be made. This module is imported in the build module and used to display the updates when running `geb update-version`."""
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b16": [
-        "[manual] Order in build.yml from top must be `setup_region`, `set_time_range`, `set_ssp`, `setup_hydrography`, `setup_elevation`",
+    "1.0.0b18": [
+        "[manual] Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.",
+        "[manual] Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.",
+        "[manual] Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.",
+        "[manual] Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.",
     ],
-    "1.0.0b15": [],
-    "1.0.0b14": [
-        "[manual] Move `setup_coastlines` and `setup_coastal_sfincs_model_regions` to above `setup_regions_and_land_use` in your build.yml.",
-    ],
-    "1.0.0b13": [],
     "1.0.0b12": [
         "[manual] Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.",
         "[manual] Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`.",

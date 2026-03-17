@@ -244,7 +244,7 @@ class GridVariables(Bucket):
     average_river_width: ArrayFloat32
     river_alpha: ArrayFloat32
     cell_area: ArrayFloat32
-    waterBodyID: ArrayInt32
+    waterbody_ids: ArrayInt32
     discharge_m3_s: ArrayFloat32
     discharge_in_rivers_m3_s_substep: ArrayFloat32
     waterbody_outflow_points: ArrayInt32
@@ -494,42 +494,42 @@ class Grid(BaseVariables):
     @property
     def pr_kg_per_m2_per_s(self) -> TwoDArrayFloat32:
         """Get precipitation rate for grid in kg/m²/s."""
-        return self.compress(self.model.forcing.load("pr_kg_per_m2_per_s"))
+        return self.model.forcing.load("pr_kg_per_m2_per_s")
 
     @property
     def ps_pascal(self) -> TwoDArrayFloat32:
         """Get surface pressure for grid in Pa."""
-        return self.compress(self.model.forcing.load("ps_pascal"))
+        return self.model.forcing.load("ps_pascal")
 
     @property
     def rlds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward longwave radiation for grid in W/m²."""
-        return self.compress(self.model.forcing.load("rlds_W_per_m2"))
+        return self.model.forcing.load("rlds_W_per_m2")
 
     @property
     def rsds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward shortwave radiation for grid in W/m²."""
-        return self.compress(self.model.forcing.load("rsds_W_per_m2"))
+        return self.model.forcing.load("rsds_W_per_m2")
 
     @property
     def tas_2m_K(self) -> TwoDArrayFloat32:
         """Get air temperature at 2m for grid in K."""
-        return self.compress(self.model.forcing.load("tas_2m_K"))
+        return self.model.forcing.load("tas_2m_K")
 
     @property
     def dewpoint_tas_2m_K(self) -> TwoDArrayFloat32:
         """Get dewpoint temperature at 2m for grid in K."""
-        return self.compress(self.model.forcing.load("dewpoint_tas_2m_K"))
+        return self.model.forcing.load("dewpoint_tas_2m_K")
 
     @property
     def wind_u10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get u-component of wind at 10m for grid in m/s."""
-        return self.compress(self.model.forcing.load("wind_u10m_m_per_s"))
+        return self.model.forcing.load("wind_u10m_m_per_s")
 
     @property
     def wind_v10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get v-component of wind at 10m for grid in m/s."""
-        return self.compress(self.model.forcing.load("wind_v10m_m_per_s"))
+        return self.model.forcing.load("wind_v10m_m_per_s")
 
     @property
     def spei_uncompressed(self) -> TwoDArrayFloat32:
@@ -565,10 +565,11 @@ class Grid(BaseVariables):
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        spei: ThreeDArrayFloat32 = self.model.forcing.load(name="SPEI", dt=spei_time)
-        assert spei.ndim == 3 and spei.shape[0] == 1
-        spei: TwoDArrayFloat32 = spei[0]
-        return spei
+        spei_compressed: TwoDArrayFloat32 = self.model.forcing.load(
+            name="SPEI", dt=spei_time
+        )
+        assert spei_compressed.ndim == 2 and spei_compressed.shape[1] == 1
+        return self.decompress(spei_compressed[:, 0])
 
     @property
     def gev_c(self) -> xr.DataArray:
@@ -1262,49 +1263,49 @@ class HRUs(BaseVariables):
     def pr_kg_per_m2_per_s(self) -> TwoDArrayFloat32:
         """Get precipitation rate for HRUs in kg/m²/s."""
         pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.data.grid.pr_kg_per_m2_per_s
-        return self.data.to_HRU(data=pr_kg_per_m2_per_s, fn=None)
+        return self.data.to_HRU(data=pr_kg_per_m2_per_s, fn=None, how="first")
 
     @property
     def ps_pascal(self) -> TwoDArrayFloat32:
         """Get surface pressure for HRUs in Pa."""
         ps_pascal: TwoDArrayFloat32 = self.data.grid.ps_pascal
-        return self.data.to_HRU(data=ps_pascal, fn=None)
+        return self.data.to_HRU(data=ps_pascal, fn=None, how="first")
 
     @property
     def rlds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward longwave radiation for HRUs in W/m²."""
         rlds_W_per_m2: TwoDArrayFloat32 = self.data.grid.rlds_W_per_m2
-        return self.data.to_HRU(data=rlds_W_per_m2, fn=None)
+        return self.data.to_HRU(data=rlds_W_per_m2, fn=None, how="first")
 
     @property
     def rsds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward shortwave radiation for HRUs in W/m²."""
         rsds_W_per_m2: TwoDArrayFloat32 = self.data.grid.rsds_W_per_m2
-        return self.data.to_HRU(data=rsds_W_per_m2, fn=None)
+        return self.data.to_HRU(data=rsds_W_per_m2, fn=None, how="first")
 
     @property
     def tas_2m_K(self) -> TwoDArrayFloat32:
         """Get air temperature at 2m for HRUs in K."""
         tas_2m_K: TwoDArrayFloat32 = self.data.grid.tas_2m_K
-        return self.data.to_HRU(data=tas_2m_K, fn=None)
+        return self.data.to_HRU(data=tas_2m_K, fn=None, how="first")
 
     @property
     def dewpoint_tas_2m_K(self) -> TwoDArrayFloat32:
         """Get dewpoint temperature at 2m for HRUs in K."""
         dewpoint_tas_2m_K: TwoDArrayFloat32 = self.data.grid.dewpoint_tas_2m_K
-        return self.data.to_HRU(data=dewpoint_tas_2m_K, fn=None)
+        return self.data.to_HRU(data=dewpoint_tas_2m_K, fn=None, how="first")
 
     @property
     def wind_u10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get u-component of wind at 10m for HRUs in m/s."""
         wind_u10m_m_per_s: TwoDArrayFloat32 = self.data.grid.wind_u10m_m_per_s
-        return self.data.to_HRU(data=wind_u10m_m_per_s, fn=None)
+        return self.data.to_HRU(data=wind_u10m_m_per_s, fn=None, how="first")
 
     @property
     def wind_v10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get v-component of wind at 10m for HRUs in m/s."""
         wind_v10m_m_per_s: TwoDArrayFloat32 = self.data.grid.wind_v10m_m_per_s
-        return self.data.to_HRU(data=wind_v10m_m_per_s, fn=None)
+        return self.data.to_HRU(data=wind_v10m_m_per_s, fn=None, how="first")
 
 
 class Data:
@@ -1338,7 +1339,11 @@ class Data:
         )
 
     def to_HRU(
-        self, *, data: T_OneorTwoDArray, fn: str | None = None
+        self,
+        *,
+        data: T_OneorTwoDArray,
+        fn: str | None = None,
+        how: Literal["first", "last"] = "last",
     ) -> T_OneorTwoDArray:
         """Function to convert from grid to HRU (Hydrologic Response Units).
 
@@ -1347,6 +1352,7 @@ class Data:
         Args:
             data (array-like): The grid data to be converted. If this parameter is set, `varname` must not be provided. Data should be an array where each element corresponds to grid cell values.
             fn (str or None): The name of the function to apply to the data before assigning it to HRUs. If `None`, the data is used as is. This is usually the case for variables that are independent of area, like temperature or precipitation fluxes. If 'weightedsplit', the data will be adjusted according to the ratios of land use within each HRU. This is important when dealing with variables that are area-dependent like precipitation or runoff volumes.
+            how (str): Whether the first or the last dimension found in the uncompressed array should be used intepreted as the dimension to be converted to HRU. This is relevant when the input data has more than 2 dimensions. For example, if the input data has shape (time, grid_cells), setting `how` to "first" will convert the grid_cells dimension to HRU, resulting in an output shape of (time, HRUs). Setting `how` to "last" will convert the time dimension to HRU, resulting in an output shape of (HRUs, time).
 
         Returns:
             output_data (array-like): Data converted to HRUs format. The structure and the type of the output depend on the input and the transformation function.
@@ -1368,12 +1374,8 @@ class Data:
             ```
         """
         assert not isinstance(data, list)
-        # make data same size as grid, but with last dimension being size of HRU
-        output_data = np.zeros(
-            (*data.shape[:-1], self.HRU.var.land_use_ratio.size), dtype=data.dtype
-        )
-
         if data.ndim == 1:
+            output_data = np.empty_like(self.HRU.var.land_use_ratio, dtype=data.dtype)
             to_HRU(
                 data,
                 self.HRU.var.grid_to_HRU,
@@ -1381,13 +1383,28 @@ class Data:
                 output_data=output_data,
                 fn=fn,
             )
-        elif data.ndim == 2:
-            for i in range(data.shape[0]):
+        elif data.ndim == 2 and how == "first":
+            output_data = np.empty(
+                (self.HRU.var.land_use_ratio.size, *data.shape[1:]), dtype=data.dtype
+            )
+            for i in range(data.shape[1]):
                 to_HRU(
-                    data[i],
+                    data[:, i],
                     self.HRU.var.grid_to_HRU,
                     self.HRU.var.land_use_ratio,
-                    output_data=output_data[i],
+                    output_data=output_data[:, i],
+                    fn=fn,
+                )
+        elif data.ndim == 2 and how == "last":
+            output_data = np.empty(
+                (*data.shape[:-1], self.HRU.var.land_use_ratio.size), dtype=data.dtype
+            )
+            for i in range(data.shape[0]):
+                to_HRU(
+                    data[i, :],
+                    self.HRU.var.grid_to_HRU,
+                    self.HRU.var.land_use_ratio,
+                    output_data=output_data[i, :],
                     fn=fn,
                 )
         else:

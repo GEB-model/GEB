@@ -3518,7 +3518,9 @@ class GEBModel(
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        build_method.validate_methods(methods, validate_order=validate_order)
+        methods = build_method.validate_methods(
+            methods, validate_order=validate_order, fix_order_if_broken=True
+        )
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (

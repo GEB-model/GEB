@@ -300,6 +300,7 @@ class WaterBodyVariables(Bucket):
     capacity: ArrayFloat64
     waterbody_type: ArrayInt32
     outflow_height: ArrayFloat32
+    waterbody_outflow_linear_mapping: ArrayInt32
 
 
 class WaterBodies(Module):
@@ -356,36 +357,35 @@ class WaterBodies(Module):
 
         """
         # load lakes/reservoirs map with a single ID for each lake/reservoir
-        waterBodyID_unmapped: np.ndarray = self.grid.load(
+        waterbody_id_unmapped: np.ndarray = self.grid.load(
             self.model.files["grid"]["waterbodies/waterbody_id"]
         )
-        self.grid.var.waterBodyID, self.var.waterbody_mapping = (
-            self.map_waterbodies_IDs(waterBodyID_unmapped)
+        self.grid.var.waterbody_ids, self.var.waterbody_mapping = (
+            self.map_waterbody_ids(waterbody_id_unmapped)
         )
 
-        # set discharge to NaN for all cells that are not part of a water body
+        # set discharge to NaN for all cells that are part of a water body
         self.grid.var.discharge_in_rivers_m3_s_substep[
-            self.grid.var.waterBodyID != -1
+            self.grid.var.waterbody_ids != -1
         ] = np.nan
 
         self.grid.var.waterbody_outflow_points = self.get_outflows(
-            self.grid.var.waterBodyID
+            self.grid.var.waterbody_ids
         )
+        self.var.waterbody_outflow_linear_mapping = np.where(
+            self.grid.var.waterbody_outflow_points != -1
+        )[0].astype(np.int32)
 
-        # we compress the waterbody_outflow_points, which we can later use to decompress
-        waterbody_ids = np.unique(
-            self.grid.var.waterbody_outflow_points[
-                self.grid.var.waterbody_outflow_points != -1
-            ]
-        )
+        assert (
+            self.map_to_grid_outflow(np.arange(self.n), fill_value=-1)
+            == self.grid.var.waterbody_outflow_points
+        ).all()
 
         self.var.waterbody_data = self.load_waterbody_data(
-            self.var.waterbody_mapping, waterBodyID_unmapped
+            self.var.waterbody_mapping, waterbody_id_unmapped
         )
         # sort the water bodies in the same order as the compressed water body IDs (waterbody_ids)
         self.var.waterbody_data = self.var.waterbody_data.sort_index()
-
-        assert np.array_equal(self.var.waterbody_data.index, waterbody_ids)
 
         self.var.waterbody_type = self.var.waterbody_data["waterbody_type"].values
         self.var.waterbody_ids_original = self.var.waterbody_data[
@@ -443,25 +443,25 @@ class WaterBodies(Module):
             < 1e-5
         ).all()
 
-    def map_waterbodies_IDs(
-        self, waterBodyID_unmapped: ArrayInt32
+    def map_waterbody_ids(
+        self, waterbody_id_unmapped: ArrayInt32
     ) -> tuple[ArrayInt32, ArrayInt32]:
         """Maps the water body IDs to a continuous range of IDs starting from 0.
 
         If there are no water bodies, it returns an array of -1.
 
         Args:
-            waterBodyID_unmapped: The original water body IDs from the grid.
+            waterbody_id_unmapped: The original water body IDs from the grid.
 
         Returns:
             A tuple containing:
-                - waterBodyID_mapped: The mapped water body IDs.
+                - waterbody_id_mapped: The mapped water body IDs.
                 - waterbody_mapping: The mapping from original IDs to mapped IDs.
         """
-        unique_waterbodies = np.unique(waterBodyID_unmapped)
+        unique_waterbodies = np.unique(waterbody_id_unmapped)
         unique_waterbodies = unique_waterbodies[unique_waterbodies != -1]
         if unique_waterbodies.size == 0:
-            return np.full_like(waterBodyID_unmapped, -1), np.full(
+            return np.full_like(waterbody_id_unmapped, -1), np.full(
                 1, -1, dtype=np.int32
             )
         else:
@@ -471,7 +471,7 @@ class WaterBodies(Module):
             waterbody_mapping[unique_waterbodies] = np.arange(
                 0, unique_waterbodies.size, dtype=np.int32
             )
-            return waterbody_mapping[waterBodyID_unmapped], waterbody_mapping
+            return waterbody_mapping[waterbody_id_unmapped], waterbody_mapping
 
     def load_waterbody_data(
         self,
@@ -509,14 +509,14 @@ class WaterBodies(Module):
         waterbody_data = waterbody_data.set_index("waterbody_id")
         return waterbody_data
 
-    def get_outflows(self, waterBodyID: ArrayInt32) -> ArrayInt32:
+    def get_outflows(self, waterbody_id: ArrayInt32) -> ArrayInt32:
         """Identifies the outflow points for each water body.
 
         Finds the cell with the highest upstream area in each water body as the outflow point.
         If there are multiple cells with the same upstream area, the one with the lowest elevation is chosen.
 
         Args:
-            waterBodyID: The mapped water body IDs from the grid.
+            waterbody_id: The mapped water body IDs from the grid.
 
         Returns:
             An array containing the outflow point for each water body.
@@ -525,16 +525,16 @@ class WaterBodies(Module):
         upstream_area_n_cells = self.hydrology.routing.grid.var.upstream_area_n_cells
         upstream_area_within_waterbodies = np.zeros_like(
             upstream_area_n_cells,
-            shape=waterBodyID.max() + 2,
+            shape=waterbody_id.max() + 2,
         )
         upstream_area_within_waterbodies[-1] = -1
         np.maximum.at(
             upstream_area_within_waterbodies,
-            waterBodyID[waterBodyID != -1],
-            upstream_area_n_cells[waterBodyID != -1],
+            waterbody_id[waterbody_id != -1],
+            upstream_area_n_cells[waterbody_id != -1],
         )
         upstream_area_within_waterbodies = np.take(
-            upstream_area_within_waterbodies, waterBodyID
+            upstream_area_within_waterbodies, waterbody_id
         )
 
         # in some cases the cell with the highest number of upstream cells
@@ -548,7 +548,7 @@ class WaterBodies(Module):
 
         waterbody_outflow_points = np.where(
             upstream_area_n_cells == upstream_area_within_waterbodies,
-            waterBodyID,
+            waterbody_id,
             -1,
         )
 
@@ -591,7 +591,7 @@ class WaterBodies(Module):
         if __debug__:
             # make sure that each water body has an outflow
             assert np.array_equal(
-                np.unique(waterbody_outflow_points), np.unique(waterBodyID)
+                np.unique(waterbody_outflow_points), np.unique(waterbody_id)
             )
             # make sure that each outflow point is only used once
             unique_outflow_points = np.unique(
@@ -819,22 +819,32 @@ class WaterBodies(Module):
         Returns:
             The number of lakes and reservoirs in the model.
         """
-        return self.var.capacity.size
+        return self.var.waterbody_outflow_linear_mapping.size
 
-    def decompress(self, array: Array) -> Array:
-        """Placeholder decompression function.
-
-        Other modules expect a decompress function to be present. However, since
-        the lakes and reservoirs module doesn't need to decompress any data,
-        this function simply returns the input array unchanged.
+    def map_to_grid_outflow(
+        self,
+        values_at_outflow_points: Array,
+        fill_value: float | int = np.nan,
+        out: Array | None = None,
+    ) -> Array:
+        """Maps values at the outflow points to the full grid.
 
         Args:
-            array: The input array to be "decompressed".
+            values_at_outflow_points: An array containing values at the outflow points of the water bodies.
+            fill_value: The value to fill in for grid cells that are not outflow points. Only used if out is None.
+            out: An optional array to write the output to. If None, a new array will be created.
 
         Returns:
-            The same array that was input, unchanged.
+            An array of the same shape as the grid, where the values at the outflow points are filled in and the rest is 0.
         """
-        return array
+        if out is None:
+            out: Array = np.full(
+                self.grid.compressed_size,
+                fill_value,
+                dtype=values_at_outflow_points.dtype,
+            )
+        out[self.var.waterbody_outflow_linear_mapping] = values_at_outflow_points
+        return out
 
     def step(self) -> None:
         """Dynamic part set lakes and reservoirs for each year."""
@@ -845,5 +855,4 @@ class WaterBodies(Module):
             if self.hydrology.dynamic_waterbodies:
                 raise NotImplementedError("dynamic_waterbodies not implemented yet")
 
-        # print(self.reservoir_fill_percentage.astype(int))
         self.report(locals())
