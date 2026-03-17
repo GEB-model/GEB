@@ -31,6 +31,7 @@ import pandas as pd
 import pyproj
 import rasterio
 import requests
+import rioxarray  # noqa: F401
 import s3fs
 import xarray as xr
 import yaml
