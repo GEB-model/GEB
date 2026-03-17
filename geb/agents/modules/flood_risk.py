@@ -1,9 +1,15 @@
 """This module contains the FloodRiskModule class, which is responsible for loading and managing flood risk data for the households in the model. It loads building, road, and rail geometries, as well as damage curves and maximum damage values for different asset types. It also loads flood maps for different return periods to be used in flood risk calculations."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr
+
+from ...workflows.damage_scanner import VectorScannerMultiCurves
 
 if TYPE_CHECKING:
     from geb.agents import Agents
@@ -326,3 +332,123 @@ class FloodRiskModule:
         self.households.var.rail_curve = self.households.var.rail_curve.rename(
             columns={"damage_ratio": "rail"}
         )
+
+    def calculate_building_flood_damages(
+        self, verbose: bool = True, export_building_damages: bool = False
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """This function calculates the flood damages for the households in the model.
+
+        It iterates over the return periods and calculates the damages for each household
+        based on the flood maps and the building footprints.
+
+        Args:
+            verbose: Verbosity flag.
+            export_building_damages: Whether to export the building damages to parquet files.
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
+        """
+        damages_do_not_adapt = np.zeros(
+            (self.households.return_periods.size, self.households.n), np.float32
+        )
+        damages_adapt = np.zeros(
+            (self.households.return_periods.size, self.households.n), np.float32
+        )
+
+        # create a pandas data array for assigning damage to the agents:
+        agent_df = pd.DataFrame(
+            {"building_id_of_household": self.households.var.building_id_of_household}
+        )
+
+        # subset building to those exposed to flooding
+        buildings = self.households.buildings[
+            self.households.buildings["flooded"]
+        ].copy()
+        flooded_building_ids = np.array(buildings["id"])
+        building_geometries = read_geom(
+            self.households.model.files["geom"]["assets/open_building_map"],
+            filters=[("id", "in", flooded_building_ids)],
+        )
+
+        building_geometries = building_geometries.merge(
+            buildings[["id", "object_type"]],
+            on="id",
+            how="left",
+        )
+
+        for i, return_period in enumerate(self.households.return_periods):
+            flood_map: xr.DataArray = self.households.flood_maps[return_period]
+
+            building_multicurve = building_geometries.copy()
+
+            # Ensure building geometries are in the same CRS as the flood map, as the
+            # damage scanner assumes aligned CRSs between vector and raster data.
+            flood_crs = flood_map.rio.crs
+            if building_multicurve.crs is not None and flood_crs is not None:
+                if building_multicurve.crs != flood_crs:
+                    building_multicurve = building_multicurve.to_crs(flood_crs)
+
+            multi_curves = {
+                "damages_structure": self.households.buildings_structure_curve[
+                    "building_unprotected"
+                ],
+                "damages_content": self.households.buildings_content_curve[
+                    "building_unprotected"
+                ],
+                "damages_structure_flood_proofed": self.households.buildings_structure_curve[
+                    "building_flood_proofed"
+                ],
+                "damages_content_flood_proofed": self.households.buildings_content_curve[
+                    "building_flood_proofed"
+                ],
+            }
+            damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
+                features=building_multicurve.rename(
+                    columns={
+                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
+                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
+                    }
+                ),
+                hazard=flood_map,
+                multi_curves=multi_curves,
+            )
+
+            # sum structure and content damages
+            damage_buildings["damages"] = (
+                damage_buildings["damages_structure"]
+                + damage_buildings["damages_content"]
+            )
+            damage_buildings["damages_flood_proofed"] = (
+                damage_buildings["damages_structure_flood_proofed"]
+                + damage_buildings["damages_content_flood_proofed"]
+            )
+            # concatenate damages to building_multicurve
+            building_multicurve = pd.concat(
+                [building_multicurve, damage_buildings], axis=1
+            )
+
+            if export_building_damages:
+                fn_for_export = self.households.model.output_folder / "building_damages"
+                fn_for_export.mkdir(parents=True, exist_ok=True)
+                building_multicurve.to_parquet(
+                    self.households.model.output_folder
+                    / "building_damages"
+                    / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
+                )
+            building_multicurve = building_multicurve[
+                ["id", "damages", "damages_flood_proofed"]
+            ]
+            # merged["damage"] is aligned with agents
+            damages_do_not_adapt[i], damages_adapt[i] = (
+                self.households.assign_damages_to_agents(
+                    agent_df,
+                    building_multicurve,
+                )
+            )
+            if verbose:
+                print(
+                    f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
+                )
+                print(
+                    f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
+                )
+        return damages_do_not_adapt, damages_adapt
