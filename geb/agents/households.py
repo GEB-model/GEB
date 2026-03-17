@@ -144,6 +144,7 @@ class Households(AgentBaseClass):
             self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
 
         if (not self.model.in_spinup) or self.config["adapt"]:
+            self.load_objects()
             self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
             if self.model.config["agent_settings"]["households"]["warning_response"]:
                 self.load_critical_infrastructure()  # ideally this should be done in the setup_assets when building the model
@@ -156,6 +157,46 @@ class Households(AgentBaseClass):
     def name(self) -> str:
         """Return the name of the agent type."""
         return "agents.households"
+
+    def load_objects(self) -> None:
+        """Load buildings, roads, and rail geometries from model files."""
+        # Load buildings
+        columns_to_load = [
+            "id",
+            "floorspace",
+            "occupancy",
+            "height",
+            # "geometry",
+            "x",
+            "y",
+            "NAME_1",
+            "TOTAL_REPL_COST_USD_SQM",
+            "COST_STRUCTURAL_USD_SQM",
+            "COST_NONSTRUCTURAL_USD_SQM",
+            "COST_CONTENTS_USD_SQM",
+        ]
+        self.buildings = read_table(
+            self.model.files["geom"]["assets/open_building_map"],
+            columns=columns_to_load,
+        )
+
+        self.buildings["object_type"] = (
+            "building_unprotected"  # before it was "building_structure"
+        )
+
+        # Load roads
+        self.roads = read_geom(self.model.files["geom"]["assets/roads"]).rename(
+            columns={"highway": "object_type"}
+        )
+
+        # Load rail
+        self.rail = read_geom(self.model.files["geom"]["assets/rails"])
+        self.rail["object_type"] = "rail"
+
+        if self.model.config["general"]["forecasts"]["use"]:
+            # Load postal codes --
+            # TODO: maybe move it to another function? (not really an object)
+            self.postal_codes = read_geom(self.model.files["geom"]["postal_codes"])
 
     def construct_income_distribution(self) -> None:
         """Construct a lognormal income distribution for the region."""

@@ -30,52 +30,9 @@ class FloodRiskModule:
         """
         self.model = model
         self.households = households
-        self.load_objects()
         self.load_damage_curves()
         self.load_max_damage_values()
         self.load_flood_maps()
-
-    def load_objects(self) -> None:
-        """Load buildings, roads, and rail geometries from model files."""
-        # Load buildings
-        columns_to_load = [
-            "id",
-            "floorspace",
-            "occupancy",
-            "height",
-            # "geometry",
-            "x",
-            "y",
-            "NAME_1",
-            "TOTAL_REPL_COST_USD_SQM",
-            "COST_STRUCTURAL_USD_SQM",
-            "COST_NONSTRUCTURAL_USD_SQM",
-            "COST_CONTENTS_USD_SQM",
-        ]
-        self.households.buildings = read_table(
-            self.model.files["geom"]["assets/open_building_map"],
-            columns=columns_to_load,
-        )
-
-        self.households.buildings["object_type"] = (
-            "building_unprotected"  # before it was "building_structure"
-        )
-
-        # Load roads
-        self.households.roads = read_geom(
-            self.model.files["geom"]["assets/roads"]
-        ).rename(columns={"highway": "object_type"})
-
-        # Load rail
-        self.households.rail = read_geom(self.model.files["geom"]["assets/rails"])
-        self.households.rail["object_type"] = "rail"
-
-        if self.model.config["general"]["forecasts"]["use"]:
-            # Load postal codes --
-            # TODO: maybe move it to another function? (not really an object)
-            self.households.postal_codes = read_geom(
-                self.model.files["geom"]["postal_codes"]
-            )
 
     def load_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
