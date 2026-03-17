@@ -2068,7 +2068,7 @@ class CropFarmers(AgentBaseClass):
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
             number_of_harvesting_fields = np.count_nonzero(harvested_crops)
-            self.logger.debug(
+            self.model.logger.debug(
                 f"Harvesting {number_of_harvesting_fields} fields with crops: "
                 f"{np.unique(harvested_crops[harvested_crops >= 0])}"
             )
@@ -2783,7 +2783,7 @@ class CropFarmers(AgentBaseClass):
 
         number_of_planted_fields = np.count_nonzero(plant_map >= 0)
         if number_of_planted_fields > 0:
-            self.logger.debug(
+            self.model.logger.debug(
                 f"Planting {number_of_planted_fields} fields with crops: "
                 f"{np.unique(plant_map[plant_map >= 0])}"
             )
