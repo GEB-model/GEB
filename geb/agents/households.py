@@ -15,7 +15,6 @@ import xarray as xr
 from pyproj import CRS
 from rasterio.features import rasterize, shapes
 from rasterio.transform import Affine
-from scipy import interpolate
 from shapely.geometry import shape
 
 from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
@@ -25,7 +24,7 @@ from ..hydrology.landcovers import (
     FOREST,
 )
 from ..store import Bucket, DynamicArray
-from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
+from ..workflows.damage_scanner import VectorScanner
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
@@ -1624,7 +1623,9 @@ class Households(AgentBaseClass):
         self.update_risk_perceptions()
 
         # calculate damages for adapting and not adapting households based on building footprints
-        damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
+        damages_do_not_adapt, damages_adapt = (
+            self.flood_risk_module.calculate_building_flood_damages()
+        )
 
         # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt_flood(
@@ -1685,20 +1686,6 @@ class Households(AgentBaseClass):
                 int(key): value for key, value in wlranges_and_measures.items()
             }
 
-    def create_damage_interpolators(self) -> None:
-        """This function creates interpolation functions for the damage curves."""
-        # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
-        self.buildings_content_curve_interpolator = interpolate.interp1d(
-            x=self.buildings_content_curve.index,
-            y=self.buildings_content_curve["building_unprotected"],
-            # fill_value="extrapolate",
-        )
-        self.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
-            x=self.buildings_content_curve_adapted.index,
-            y=self.buildings_content_curve_adapted["building_unprotected"],
-            # fill_value="extrapolate",
-        )
-
     def spinup(self) -> None:
         """This function runs the spin-up process for the household agents."""
         self.construct_income_distribution()
@@ -1725,116 +1712,6 @@ class Households(AgentBaseClass):
         damages_do_not_adapt = merged["damages"].to_numpy()
         damages_adapt = merged["damages_flood_proofed"].to_numpy()
 
-        return damages_do_not_adapt, damages_adapt
-
-    def calculate_building_flood_damages(
-        self, verbose: bool = True, export_building_damages: bool = False
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """This function calculates the flood damages for the households in the model.
-
-        It iterates over the return periods and calculates the damages for each household
-        based on the flood maps and the building footprints.
-
-        Args:
-            verbose: Verbosity flag.
-            export_building_damages: Whether to export the building damages to parquet files.
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-        """
-        damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
-        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
-
-        # create a pandas data array for assigning damage to the agents:
-        agent_df = pd.DataFrame(
-            {"building_id_of_household": self.var.building_id_of_household}
-        )
-
-        # subset building to those exposed to flooding
-        buildings = self.buildings[self.buildings["flooded"]].copy()
-        flooded_building_ids = np.array(buildings["id"])
-        building_geometries = read_geom(
-            self.model.files["geom"]["assets/open_building_map"],
-            filters=[("id", "in", flooded_building_ids)],
-        )
-
-        building_geometries = building_geometries.merge(
-            buildings[["id", "object_type"]],
-            on="id",
-            how="left",
-        )
-
-        for i, return_period in enumerate(self.return_periods):
-            flood_map: xr.DataArray = self.flood_maps[return_period]
-
-            building_multicurve = building_geometries.copy()
-
-            # Ensure building geometries are in the same CRS as the flood map, as the
-            # damage scanner assumes aligned CRSs between vector and raster data.
-            flood_crs = flood_map.rio.crs
-            if building_multicurve.crs is not None and flood_crs is not None:
-                if building_multicurve.crs != flood_crs:
-                    building_multicurve = building_multicurve.to_crs(flood_crs)
-
-            multi_curves = {
-                "damages_structure": self.buildings_structure_curve[
-                    "building_unprotected"
-                ],
-                "damages_content": self.buildings_content_curve["building_unprotected"],
-                "damages_structure_flood_proofed": self.buildings_structure_curve[
-                    "building_flood_proofed"
-                ],
-                "damages_content_flood_proofed": self.buildings_content_curve[
-                    "building_flood_proofed"
-                ],
-            }
-            damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
-                features=building_multicurve.rename(
-                    columns={
-                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
-                    }
-                ),
-                hazard=flood_map,
-                multi_curves=multi_curves,
-            )
-
-            # sum structure and content damages
-            damage_buildings["damages"] = (
-                damage_buildings["damages_structure"]
-                + damage_buildings["damages_content"]
-            )
-            damage_buildings["damages_flood_proofed"] = (
-                damage_buildings["damages_structure_flood_proofed"]
-                + damage_buildings["damages_content_flood_proofed"]
-            )
-            # concatenate damages to building_multicurve
-            building_multicurve = pd.concat(
-                [building_multicurve, damage_buildings], axis=1
-            )
-
-            if export_building_damages:
-                fn_for_export = self.model.output_folder / "building_damages"
-                fn_for_export.mkdir(parents=True, exist_ok=True)
-                building_multicurve.to_parquet(
-                    self.model.output_folder
-                    / "building_damages"
-                    / f"building_damages_rp{return_period}_{self.model.current_time.year}.parquet"
-                )
-            building_multicurve = building_multicurve[
-                ["id", "damages", "damages_flood_proofed"]
-            ]
-            # merged["damage"] is aligned with agents
-            damages_do_not_adapt[i], damages_adapt[i] = self.assign_damages_to_agents(
-                agent_df,
-                building_multicurve,
-            )
-            if verbose:
-                print(
-                    f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
-                )
-                print(
-                    f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
-                )
         return damages_do_not_adapt, damages_adapt
 
     def update_households_geodataframe_w_warning_variables(
