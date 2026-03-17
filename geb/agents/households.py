@@ -12,51 +12,21 @@ import numpy as np
 import osmnx as ox
 import pandas as pd
 import xarray as xr
-from pyproj import CRS
-from rasterio.features import rasterize, shapes
-from rasterio.transform import Affine
-from shapely.geometry import shape
+from rasterio.features import rasterize
 
-from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
+from geb.geb_types import ArrayFloat32
 from geb.workflows.io import read_geom
 
-from ..hydrology.landcovers import (
-    FOREST,
-)
 from ..store import Bucket, DynamicArray
-from ..workflows.damage_scanner import VectorScanner
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .modules.flood_risk import FloodRiskModule
+from .workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
     from geb.agents import Agents
     from geb.model import GEBModel
-
-
-def from_landuse_raster_to_polygon(
-    mask: TwoDArrayBool | TwoDArrayInt, transform: Affine, crs: str | int | CRS
-) -> gpd.GeoDataFrame:
-    """Convert raster data into separate GeoDataFrames for specified land use values.
-
-    Args:
-        mask: A 2D numpy array representing the land use raster, where each unique value corresponds to a different land use type.
-        transform: A rasterio Affine transform object that defines the spatial reference of the raster.
-        crs: The coordinate reference system (CRS) to use for the resulting GeoDataFrame.
-
-    Returns:
-        A GeoDataFrame containing polygons for the specified land use values.
-    """
-    shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
-
-    polygons = []
-    for geom, _ in shapes_gen:
-        polygons.append(shape(geom))
-
-    gdf = gpd.GeoDataFrame({"geometry": polygons}, crs=crs)
-
-    return gdf
 
 
 class HouseholdVariables(Bucket):
