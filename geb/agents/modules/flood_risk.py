@@ -1,10 +1,26 @@
-from geb.workflows.io import read_params, read_table, read_zarr, read_geom
-import pandas as pd
+"""This module contains the FloodRiskModule class, which is responsible for loading and managing flood risk data for the households in the model. It loads building, road, and rail geometries, as well as damage curves and maximum damage values for different asset types. It also loads flood maps for different return periods to be used in flood risk calculations."""
+
 import numpy as np
+import pandas as pd
+
+from geb.workflows.io import read_geom, read_params, read_table, read_zarr
+
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
 
 
 class FloodRiskModule:
-    def __init__(self, model, households):
+    """Module responsible for loading and managing flood risk data for the households in the model."""
+
+    def __init__(self, model: GEBModel, households: Agents) -> None:
+        """Initialize the FloodRiskModule with the model and households, and load all necessary data.
+
+        Args:
+            model (GEBModel): The main model instance containing configuration and file paths.
+            households (Agents): The households agent instance where the loaded data will be stored.
+
+        """
         self.model = model
         self.households = households
         self.load_objects()
