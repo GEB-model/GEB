@@ -110,12 +110,10 @@ class Households(AgentBaseClass):
         self.decision_module = DecisionModule()
 
         if self.config["adapt"]:
-            self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
-            self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
-
-        if (not self.model.in_spinup) or self.config["adapt"]:
             self.load_objects()
             self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
+            self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
+            self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
             if self.model.config["agent_settings"]["households"]["warning_response"]:
                 self.load_critical_infrastructure()  # ideally this should be done in the setup_assets when building the model
                 self.load_wlranges_and_measures()
