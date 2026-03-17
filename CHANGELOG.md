@@ -2,6 +2,12 @@
 - Add loggers to groundwater model and SFINCS models.
 - Close all open figures in SFINCS to reduce memory usage.
 - Several fixes in sfincs.py to avoid futurewarnings for pandas 3.0.
+- Remove self.buildings_centroid as attribute (appears not to be used)
+- Load in buildings as pandas df, only load geometry data for flood damage calculations
+
+To support this version:
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`
+
 
 # v1.0.0b17
 - Synchronize start and end dates in reasonable default config and example.
