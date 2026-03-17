@@ -521,11 +521,14 @@ class FloodRiskModule:
             # TODO: need to move the update of the actions takens by households to outside the flood function
 
             # Save the buildings with actions taken
-            buildings.to_parquet(
+            output_path = (
                 self.households.model.output_folder
                 / "action_maps"
                 / "buildings_with_protective_measures.geoparquet"
             )
+            # Ensure the action_maps directory exists before writing the file
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            buildings.to_parquet(output_path)
 
             # Assign object types for buildings centroid based on protective measures taken
             buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
