@@ -261,8 +261,9 @@ class Households(AgentBaseClass):
             geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
             crs="EPSG:4326",
         )
-        buildings_centroid = buildings_centroid.to_crs(flood_map.rio.crs)  # Reproject building centroids to flood map CRS
-
+        buildings_centroid = buildings_centroid.to_crs(
+            flood_map.rio.crs
+        )  # Reproject building centroids to flood map CRS
 
         # # convert flood map to polygons
         flood_map = flood_map > 0  # convert to boolean mask
