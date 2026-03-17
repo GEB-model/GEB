@@ -8,6 +8,7 @@
 - Load in buildings as pandas df, only load geometry data for flood damage calculations.
 - Make filling of discharge gaps a lot more efficient (quite some reduction in run speed).
 - Make it possible to specify the number of cores using `--cores`. Default is all cores (no change).
+- Make an option to auto-fix the build order if it is incorrect.
 
 # v1.0.0b17
 - Synchronize start and end dates in reasonable default config and example.
