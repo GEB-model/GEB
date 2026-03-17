@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr
 
