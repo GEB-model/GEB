@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from geb.workflows.io import read_geom, read_params, read_table, read_zarr
 from geb.hydrology.landcovers import FOREST
+from geb.workflows.io import read_geom, read_params, read_table, read_zarr
 
 from ...workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.helpers import from_landuse_raster_to_polygon
