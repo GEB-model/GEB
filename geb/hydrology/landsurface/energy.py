@@ -698,6 +698,21 @@ def solve_soil_enthalpy_column(
         snow_water_equivalent_m: Snow water equivalent (m).
         snow_temperature_C: Snow temperature (C).
         topwater_m: Standing water depth (m).
+        lower_diagonal_a: Lower diagonal for tridiagonal solver.
+        main_diagonal_b: Main diagonal for tridiagonal solver.
+        upper_diagonal_c: Upper diagonal for tridiagonal solver.
+        rhs_vector_d: Right-hand side vector for linear system.
+        tdma_c_prime: Workspace for tridiagonal solver.
+        tdma_d_prime: Workspace for tridiagonal solver.
+        enthalpies_new_iteration: Buffer for new enthalpies.
+        thermal_conductances_between_layer_centers_W_per_m2_K: Buffer for thermal conductances.
+        frozen_fraction_for_conductivity: Buffer for frozen fractions.
+        latent_heat_areal_J_per_m2_per_layer: Buffer for latent heat.
+        heat_capacity_liquid_J_per_m2_K_per_layer: Buffer for liquid heat capacity.
+        heat_capacity_frozen_J_per_m2_K_per_layer: Buffer for frozen heat capacity.
+        dT_dH_current_iteration: Buffer for temperature derivatives.
+        beta_current_iteration: Buffer for linearization intercepts.
+        enthalpies_current_iteration: Buffer for enthalpies of the current iteration.
 
     Returns:
         Tuple of:

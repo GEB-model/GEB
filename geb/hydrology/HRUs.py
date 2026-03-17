@@ -1352,6 +1352,7 @@ class Data:
         Args:
             data (array-like): The grid data to be converted. If this parameter is set, `varname` must not be provided. Data should be an array where each element corresponds to grid cell values.
             fn (str or None): The name of the function to apply to the data before assigning it to HRUs. If `None`, the data is used as is. This is usually the case for variables that are independent of area, like temperature or precipitation fluxes. If 'weightedsplit', the data will be adjusted according to the ratios of land use within each HRU. This is important when dealing with variables that are area-dependent like precipitation or runoff volumes.
+            how (str): Whether the first or the last dimension found in the uncompressed array should be used intepreted as the dimension to be converted to HRU. This is relevant when the input data has more than 2 dimensions. For example, if the input data has shape (time, grid_cells), setting `how` to "first" will convert the grid_cells dimension to HRU, resulting in an output shape of (time, HRUs). Setting `how` to "last" will convert the time dimension to HRU, resulting in an output shape of (HRUs, time).
 
         Returns:
             output_data (array-like): Data converted to HRUs format. The structure and the type of the output depend on the input and the transformation function.
