@@ -641,9 +641,25 @@ def solve_soil_enthalpy_column(
     soil_emissivity: np.float32,
     soil_albedo: np.float32,
     leaf_area_index: np.float32,
-    snow_water_equivalent_m: np.float64 = np.float64(0.0),
-    snow_temperature_C: np.float32 = np.float32(0.0),
-    topwater_m: np.float32 = np.float32(0.0),
+    snow_water_equivalent_m: np.float64,
+    snow_temperature_C: np.float32,
+    topwater_m: np.float32,
+    # Work buffers to avoid NRT allocations
+    lower_diagonal_a: np.ndarray,
+    main_diagonal_b: np.ndarray,
+    upper_diagonal_c: np.ndarray,
+    rhs_vector_d: np.ndarray,
+    tdma_c_prime: np.ndarray,
+    tdma_d_prime: np.ndarray,
+    enthalpies_new_iteration: np.ndarray,
+    thermal_conductances_between_layer_centers_W_per_m2_K: np.ndarray,
+    frozen_fraction_for_conductivity: np.ndarray,
+    latent_heat_areal_J_per_m2_per_layer: np.ndarray,
+    heat_capacity_liquid_J_per_m2_K_per_layer: np.ndarray,
+    heat_capacity_frozen_J_per_m2_K_per_layer: np.ndarray,
+    dT_dH_current_iteration: np.ndarray,
+    beta_current_iteration: np.ndarray,
+    enthalpies_current_iteration: np.ndarray,
 ) -> tuple[np.ndarray, np.float32, np.ndarray]:
     """Solve the soil enthalpy profile with an implicit scheme.
 
@@ -693,36 +709,18 @@ def solve_soil_enthalpy_column(
 
     # Keep the start-of-timestep state without copying; we never mutate the input array.
     enthalpies_at_start_of_timestep = soil_enthalpies_J_per_m2
-    enthalpies_current_iteration = soil_enthalpies_J_per_m2.copy()
 
-    dT_dH_current_iteration = np.zeros_like(soil_enthalpies_J_per_m2)
-    beta_current_iteration = np.zeros_like(soil_enthalpies_J_per_m2)
+    # Reset buffers
+    enthalpies_current_iteration[:] = soil_enthalpies_J_per_m2
+    dT_dH_current_iteration.fill(np.float32(0.0))
+    beta_current_iteration.fill(np.float32(0.0))
+    lower_diagonal_a.fill(np.float32(0.0))
+    main_diagonal_b.fill(np.float32(0.0))
+    upper_diagonal_c.fill(np.float32(0.0))
+    rhs_vector_d.fill(np.float32(0.0))
 
-    lower_diagonal_a = np.zeros(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
-    main_diagonal_b = np.zeros(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
-    upper_diagonal_c = np.zeros(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
-    rhs_vector_d = np.zeros(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
-
-    # Work arrays for allocation-free TDMA and iteration bookkeeping.
-    tdma_c_prime = np.empty(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
-    tdma_d_prime = np.empty(n_soil_layers, dtype=soil_enthalpies_J_per_m2.dtype)
-    enthalpies_new_iteration = np.empty_like(soil_enthalpies_J_per_m2)
-    thermal_conductances_between_layer_centers_W_per_m2_K = np.empty(
-        n_soil_layers - 1, dtype=soil_enthalpies_J_per_m2.dtype
-    )
-
-    # Freeze thermal conductivity during the timestep:
-    # compute it once from the start-of-timestep frozen fraction and reuse.
-    frozen_fraction_for_conductivity = np.empty_like(soil_enthalpies_J_per_m2)
-
-    # Precompute per-layer thermodynamic constants used in the scalar enthalpy diagnostics.
-    #
-    # These depend only on (water content, layer thickness, topwater) which we treat as fixed
-    # over this implicit solve. Precomputing once avoids recomputing them for every nonlinear
-    # iteration and layer.
-    latent_heat_areal_J_per_m2_per_layer = np.empty_like(soil_enthalpies_J_per_m2)
-    heat_capacity_liquid_J_per_m2_K_per_layer = np.empty_like(soil_enthalpies_J_per_m2)
-    heat_capacity_frozen_J_per_m2_K_per_layer = np.empty_like(soil_enthalpies_J_per_m2)
+    # Tridiagonal solver and bookkeeping arrays are assumed pre-allocated.
+    # No inplace initialization needed for empty/scratch buffers not used for accumulation.
 
     for layer_idx in range(n_soil_layers):
         topwater_layer_m = topwater_m if layer_idx == 0 else np.float32(0.0)
@@ -1005,7 +1003,7 @@ def solve_soil_enthalpy_column(
         final_net_radiation_flux_W_per_m2 + final_sensible_heat_flux_W_per_m2
     )
 
-    frozen_fractions_final = np.empty_like(soil_enthalpies_J_per_m2)
+    frozen_fractions_final = frozen_fraction_for_conductivity  # Reuse buffer for result
     for layer_idx in range(n_soil_layers):
         _, frozen_fraction, _, _ = get_phase_state(
             enthalpy_J_per_m2=enthalpies_current_iteration[layer_idx],

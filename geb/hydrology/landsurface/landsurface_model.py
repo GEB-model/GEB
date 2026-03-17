@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NamedTuple
@@ -19,7 +18,7 @@ from geb.geb_types import (
 )
 from geb.module import Module
 from geb.store import Bucket
-from geb.workflows import balance_check
+from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_grid
 
 from ..landcovers import PADDY_IRRIGATED, SEALED
@@ -109,10 +108,7 @@ def map_date_to_dekad(dt: datetime) -> int:
     return dekadal_index
 
 
-logger = logging.getLogger(__name__)
-
-
-@njit(parallel=True, cache=True)
+@njit(parallel=True, cache=True, fastmath=False)
 def land_surface_model(
     land_use_type: ArrayInt32,
     slope_m_per_m: ArrayFloat32,
@@ -287,36 +283,63 @@ def land_surface_model(
         groundwater_toplayer_conductivity_m_per_day
     ) / np.float32(24.0)
 
-    runoff_m = np.zeros_like(pr_kg_per_m2_per_s)
-    interflow_m = np.zeros_like(pr_kg_per_m2_per_s)
-    reference_evapotranspiration_water_m = np.zeros_like(pr_kg_per_m2_per_s)
+    num_cells = slope_m_per_m.size
+    runoff_m = np.zeros((num_cells, 24), dtype=np.float32)
+    interflow_m = np.zeros((num_cells, 24), dtype=np.float32)
+    reference_evapotranspiration_water_m = np.zeros((num_cells, 24), dtype=np.float32)
 
     # total per day variables for water balance
-    reference_evapotranspiration_grass_m = np.zeros_like(slope_m_per_m)
-    rain_m = np.zeros_like(slope_m_per_m)
-    snow_m = np.zeros_like(slope_m_per_m)
-    sublimation_m = np.zeros_like(slope_m_per_m)
-    interception_evaporation_m = np.zeros_like(slope_m_per_m)
-    open_water_evaporation_m = np.zeros_like(slope_m_per_m)
-    bare_soil_evaporation = np.zeros_like(slope_m_per_m)
-    potential_transpiration_m = np.zeros_like(slope_m_per_m)
-    potential_evapotranspiration_m = np.zeros_like(slope_m_per_m)
-    transpiration_m = np.zeros_like(slope_m_per_m)
-    groundwater_recharge_m = np.zeros_like(slope_m_per_m)
+    reference_evapotranspiration_grass_m = np.zeros(num_cells, dtype=np.float32)
+    rain_m = np.zeros(num_cells, dtype=np.float32)
+    snow_m = np.zeros(num_cells, dtype=np.float32)
+    sublimation_m = np.zeros(num_cells, dtype=np.float32)
+    interception_evaporation_m = np.zeros(num_cells, dtype=np.float32)
+    open_water_evaporation_m = np.zeros(num_cells, dtype=np.float32)
+    bare_soil_evaporation = np.zeros(num_cells, dtype=np.float32)
+    potential_transpiration_m = np.zeros(num_cells, dtype=np.float32)
+    potential_evapotranspiration_m = np.zeros(num_cells, dtype=np.float32)
+    transpiration_m = np.zeros(num_cells, dtype=np.float32)
+    groundwater_recharge_m = np.zeros(num_cells, dtype=np.float32)
 
     # Daily integrated enthalpy flux diagnostics [J/m2].
     # Positive values indicate energy entering the soil enthalpy reservoir.
-    soil_boundary_enthalpy_flux_J_per_m2 = np.zeros_like(slope_m_per_m)
-    rain_advection_enthalpy_flux_J_per_m2 = np.zeros_like(slope_m_per_m)
+    soil_boundary_enthalpy_flux_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
+    rain_advection_enthalpy_flux_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
 
     # Positive values indicate energy leaving the soil enthalpy reservoir.
-    evaporative_cooling_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
-    interflow_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
-    groundwater_recharge_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
-    transpiration_enthalpy_loss_J_per_m2 = np.zeros_like(slope_m_per_m)
+    evaporative_cooling_enthalpy_loss_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
+    interflow_enthalpy_loss_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
+    groundwater_recharge_enthalpy_loss_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
+    transpiration_enthalpy_loss_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
+
+    # Pre-allocate work buffers for solve_soil_enthalpy_column per cell to avoid NRT allocations in the hot loop.
+    # We allocate them for each cell in the prange loop to avoid cross-thread interference.
+    n_soil_layers = soil_enthalpy_J_per_m2.shape[0]
 
     for i in prange(slope_m_per_m.size):  # ty: ignore[not-iterable]
-        # Keep references to the cell data
+        # Pre-allocate cell-local buffers
+        lower_diagonal_a = np.zeros(n_soil_layers, dtype=np.float32)
+        main_diagonal_b = np.zeros(n_soil_layers, dtype=np.float32)
+        upper_diagonal_c = np.zeros(n_soil_layers, dtype=np.float32)
+        rhs_vector_d = np.zeros(n_soil_layers, dtype=np.float32)
+        tdma_c_prime = np.empty(n_soil_layers, dtype=np.float32)
+        tdma_d_prime = np.empty(n_soil_layers, dtype=np.float32)
+        enthalpies_new_iteration = np.empty(n_soil_layers, dtype=np.float32)
+        thermal_conductances_between_layer_centers_W_per_m2_K = np.empty(
+            n_soil_layers - 1, dtype=np.float32
+        )
+        frozen_fraction_for_conductivity = np.empty(n_soil_layers, dtype=np.float32)
+        latent_heat_areal_J_per_m2_per_layer = np.empty(n_soil_layers, dtype=np.float32)
+        heat_capacity_liquid_J_per_m2_K_per_layer = np.empty(
+            n_soil_layers, dtype=np.float32
+        )
+        heat_capacity_frozen_J_per_m2_K_per_layer = np.empty(
+            n_soil_layers, dtype=np.float32
+        )
+        dT_dH_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
+        beta_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
+        enthalpies_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
+
         snow_water_equivalent_m_cell = snow_water_equivalent_m[i]
         liquid_water_in_snow_m_cell = liquid_water_in_snow_m[i]
         snow_temperature_C_cell = snow_temperature_C[i]
@@ -343,7 +366,7 @@ def land_surface_model(
             ].sum()
 
             (
-                soil_enthalpy_J_per_m2[:, i],
+                soil_enthalpy_J_per_m2_cell_updated,
                 soil_heat_flux_W_per_m2_cell,
                 frozen_fractions_cell,
             ) = solve_soil_enthalpy_column(
@@ -370,7 +393,24 @@ def land_surface_model(
                 snow_water_equivalent_m=np.float32(snow_water_equivalent_m_cell),
                 snow_temperature_C=snow_temperature_C_cell,
                 topwater_m=topwater_m[i],
+                lower_diagonal_a=lower_diagonal_a,
+                main_diagonal_b=main_diagonal_b,
+                upper_diagonal_c=upper_diagonal_c,
+                rhs_vector_d=rhs_vector_d,
+                tdma_c_prime=tdma_c_prime,
+                tdma_d_prime=tdma_d_prime,
+                enthalpies_new_iteration=enthalpies_new_iteration,
+                thermal_conductances_between_layer_centers_W_per_m2_K=thermal_conductances_between_layer_centers_W_per_m2_K,
+                frozen_fraction_for_conductivity=frozen_fraction_for_conductivity,
+                latent_heat_areal_J_per_m2_per_layer=latent_heat_areal_J_per_m2_per_layer,
+                heat_capacity_liquid_J_per_m2_K_per_layer=heat_capacity_liquid_J_per_m2_K_per_layer,
+                heat_capacity_frozen_J_per_m2_K_per_layer=heat_capacity_frozen_J_per_m2_K_per_layer,
+                dT_dH_current_iteration=dT_dH_current_iteration,
+                beta_current_iteration=beta_current_iteration,
+                enthalpies_current_iteration=enthalpies_current_iteration,
             )
+
+            soil_enthalpy_J_per_m2[:, i] = soil_enthalpy_J_per_m2_cell_updated
 
             soil_boundary_enthalpy_flux_J_per_m2[i] += (
                 soil_enthalpy_J_per_m2[:, i].sum()
@@ -1211,18 +1251,6 @@ class LandSurface(Module):
         Returns:
             Bundle of inputs for `land_surface_model`.
         """
-        pr_kg_per_m2_per_s_for_model: TwoDArrayFloat32 = pr_kg_per_m2_per_s
-
-        tas_2m_K_for_model: TwoDArrayFloat32 = tas_2m_K
-        dewpoint_tas_2m_K_for_model: TwoDArrayFloat32 = self.HRU.dewpoint_tas_2m_K
-        ps_pascal_for_model: TwoDArrayFloat32 = self.HRU.ps_pascal
-        rlds_W_per_m2_for_model: TwoDArrayFloat32 = self.HRU.rlds_W_per_m2
-
-        rsds_W_per_m2_for_model: TwoDArrayFloat32 = self.HRU.rsds_W_per_m2
-
-        wind_u10m_m_per_s_for_model: TwoDArrayFloat32 = self.HRU.wind_u10m_m_per_s
-        wind_v10m_m_per_s_for_model = self.HRU.wind_v10m_m_per_s
-
         CO2_ppm: np.float32 = np.float32(self.model.forcing.load("CO2_ppm"))
         groundwater_toplayer_conductivity_m_per_day: ArrayFloat32 = (
             self.hydrology.to_HRU(
@@ -1259,14 +1287,14 @@ class LandSurface(Module):
             snow_temperature_C=self.HRU.var.snow_temperature_C,
             interception_storage_m=self.HRU.var.interception_storage_m,
             interception_capacity_m=interception_capacity_m,
-            pr_kg_per_m2_per_s=pr_kg_per_m2_per_s_for_model,
-            tas_2m_K=tas_2m_K_for_model,
-            dewpoint_tas_2m_K=dewpoint_tas_2m_K_for_model,
-            ps_pascal=ps_pascal_for_model,
-            rlds_W_per_m2=rlds_W_per_m2_for_model,
-            rsds_W_per_m2=rsds_W_per_m2_for_model,
-            wind_u10m_m_per_s=wind_u10m_m_per_s_for_model,
-            wind_v10m_m_per_s=wind_v10m_m_per_s_for_model,
+            pr_kg_per_m2_per_s=pr_kg_per_m2_per_s,
+            tas_2m_K=tas_2m_K,
+            dewpoint_tas_2m_K=self.HRU.dewpoint_tas_2m_K,
+            ps_pascal=self.HRU.ps_pascal,
+            rlds_W_per_m2=self.HRU.rlds_W_per_m2,
+            rsds_W_per_m2=self.HRU.rsds_W_per_m2,
+            wind_u10m_m_per_s=self.HRU.wind_u10m_m_per_s,
+            wind_v10m_m_per_s=self.HRU.wind_v10m_m_per_s,
             CO2_ppm=CO2_ppm,
             crop_factor=crop_factor,
             crop_map=self.HRU.var.crop_map,
@@ -1743,6 +1771,7 @@ class LandSurface(Module):
         Raises:
             AssertionError: If any of the debug assertions fail.
         """
+        timer = TimingModule("Land surface model")
         if __debug__:
             snow_water_equivalent_prev: ArrayFloat64 = (
                 self.HRU.var.snow_water_equivalent_m.copy()
@@ -1776,6 +1805,8 @@ class LandSurface(Module):
                 self.HRU.var.green_ampt_active_layer_idx.copy()
             )
             water_content_m_prev: TwoDArrayFloat32 = self.HRU.var.water_content_m.copy()
+
+        timer.finish_split("Preprocessing")
 
         crop_stage_lenghts = np.column_stack(
             [
@@ -1861,6 +1892,8 @@ class LandSurface(Module):
             crop_map=self.HRU.var.crop_map,
         )
 
+        timer.finish_split("Input preparation")
+
         pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s
         pr_total_m3 = (
             (
@@ -1880,6 +1913,8 @@ class LandSurface(Module):
             total_water_demand_loss_m3,
             actual_irrigation_consumption_m,
         ) = self.hydrology.water_demand.step(root_depth_m)
+
+        timer.finish_split("get_water_demand")
 
         # Obtain capillary rise for the HRUs
         capillar_rise_m = self.hydrology.to_HRU(data=self.grid.var.capillar, fn=None)
@@ -1907,6 +1942,8 @@ class LandSurface(Module):
             * averaging_weight_alpha
         )
 
+        timer.finish_split("Deep soil temperature update")
+
         land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(
             root_depth_m=root_depth_m,
             interception_capacity_m=interception_capacity_m,
@@ -1919,7 +1956,7 @@ class LandSurface(Module):
             deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
         )
-
+        timer.finish_split("Prepare inputs for land surface model")
         (
             rain_m,
             snow_m,
@@ -1947,6 +1984,18 @@ class LandSurface(Module):
             groundwater_recharge_enthalpy_loss_J_per_m2,
             transpiration_enthalpy_loss_J_per_m2,
         ) = land_surface_model(**land_surface_inputs._asdict())
+
+        timer.finish_split("Land surface model")
+
+        # with open("output.ll", "w") as f:
+        #     for signature, llvm_code in land_surface_model.inspect_llvm().items():
+        #         f.write(f"; --- Signature: {signature} ---\n")
+        #         f.write(llvm_code)
+
+        # with open("output.asm", "w") as f:
+        #     for signature, asm_code in land_surface_model.inspect_asm().items():
+        #         f.write(f"; --- Signature: {signature} ---\n")
+        #         f.write(asm_code)
 
         # Keep temperature as a diagnostic output only; the kernel is enthalpy-only.
         soil_temperature_C: TwoDArrayFloat32 = np.full_like(
@@ -2122,6 +2171,11 @@ class LandSurface(Module):
         runoff_m = runoff_m.transpose()
         interflow_m = interflow_m.transpose()
         self.report(locals())
+
+        timer.finish_split("Finalization")
+
+        if self.model.timing:
+            self.model.logger.debug(timer)
 
         return (
             reference_evapotranspiration_water_m,
