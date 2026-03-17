@@ -438,19 +438,9 @@ class ForcingLoader(ABC):
         # data has shape (n_active_cells, n_timesteps)
         # the corner values must be gathered in the same order as the weights
         corner_values = data[self.indices, :]  # (N_target, 4, n_timesteps)
-        from time import time
-
-        t0 = time()
-
-        # weights has shape (N_target, 4)
-        # corner_values has shape (N_target, 4, n_timesteps)
-        # We sum over the 4 corners (axis 1)
         interpolated = np.sum(
             corner_values * self.weights[:, :, np.newaxis], axis=1
         )  # Result is (n_timesteps, N_target)
-
-        t1 = time()
-        print(f"Bilinear interpolation took {t1 - t0:.6f} seconds.")
 
         return interpolated
 
