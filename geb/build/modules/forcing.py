@@ -1150,14 +1150,13 @@ class Forcing(BuildModelBase):
         )
 
         climate_grid = self.other["climate/pr_kg_per_m2_per_s_mask"]
-        geopotential: xr.DataArray = (
+
+        geopotential = (
             self.data_catalog.fetch("ecmwf_geopotential")
             .read()
-            .sel(
-                x=slice(climate_grid.x[0], climate_grid.x[-1]),
-                y=slice(climate_grid.y[0], climate_grid.y[-1]),
-            )
+            .sel(x=climate_grid.x, y=climate_grid.y, method="nearest", tolerance=0.001)
         )
+
         assert geopotential.x.size == climate_grid.x.size
         assert geopotential.y.size == climate_grid.y.size
 
