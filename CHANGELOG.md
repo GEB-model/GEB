@@ -10,6 +10,12 @@
 - Make it possible to specify the number of cores using `--cores`. Default is all cores (no change).
 - Make an option to auto-fix the build order if it is incorrect.
 
+To support this version:
+- Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.
+
 # v1.0.0b17
 - Synchronize start and end dates in reasonable default config and example.
 - Add .zenodo.json
