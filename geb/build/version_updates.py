@@ -6,6 +6,7 @@ VERSION_UPDATES: dict[str, list[str]] = {
         "[manual] Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.",
         "[manual] Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.",
         "[manual] Move 'setup_coastlines' to above 'setup_elevation'.",
+        "[manual] Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.",
     ],
     "1.0.0b16": [
         "[manual] Order in build.yml from top must be `setup_region`, `set_time_range`, `set_ssp`, `setup_hydrography`, `setup_elevation`",
