@@ -415,7 +415,7 @@ class LandSurface(BuildModelBase):
 
         land_use_classification_source_region_subgrid: xr.DataArray = resample_chunked(
             land_use_classification_source,
-            region_mask,
+            region_mask.chunk({"x": 1000, "y": 1000}),
             method="nearest",
         )
 
