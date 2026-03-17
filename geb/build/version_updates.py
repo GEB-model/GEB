@@ -7,8 +7,6 @@ VERSION_UPDATES: dict[str, list[str]] = {
         "[manual] Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.",
         "[manual] Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.",
     ],
-    "1.0.0b15": [],
-    "1.0.0b13": [],
     "1.0.0b12": [
         "[manual] Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.",
         "[manual] Re-name `setup_mannings` to `setup_geomorphology` and run `setup_geomorphology`: `geb update -b build.yml::setup_geomorphology`.",
