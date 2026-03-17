@@ -14,7 +14,6 @@ Notes:
 
 from __future__ import annotations
 
-import bz2
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -87,15 +86,21 @@ class OpenBuildingMap(Adapter):
             A geopandas geodataframe containing all building within the geom.
         """
         # load buildings (should already be masked by region in this step)
+        from time import time
+
+        t0 = time()
         buildings = gpd.read_file(
             gpkg_filename,
             engine="pyogrio",
             mask=geom,
             columns=["id", "occupancy", "floorspace", "height", "geometry"],
             layer="building",
+            use_arrow=True,
         )
         # mask buildings to region geom
+        t1 = time()
         buildings = buildings[buildings.intersects(geom)]
+        t2 = time()
         if len(buildings) == 0:
             print("No buildings found in region geom")
             return
@@ -116,16 +121,20 @@ class OpenBuildingMap(Adapter):
             tile_filename: Filename of the tile ZIP.
 
         Returns:
-            Path to the dowloaded geopackage files.
+            Path to the downloaded geopackage files.
 
         Raises:
             RuntimeError: If download or extraction fails after all retries.
         """
-        # Tile is available, so download with retry
-        zip_path: Path = temp_dir / tile_filename
+        # Tile is available, so download with bz2 decompression to gpkg
+        gpkg_filename = str(temp_dir / tile_filename).replace(".bz2", "")
+        gpkg_filename = gpkg_filename.replace("building.", "building_")
+        target_path = Path(gpkg_filename)
+
         success: bool = fetch_and_save(
             tile_url,
-            zip_path,
+            target_path,
+            decompress="bz2",
             delay_seconds=1,
             verbose=False,
             show_progress=True,
@@ -133,14 +142,9 @@ class OpenBuildingMap(Adapter):
             max_retries=17,  # will be total of ~day
         )
         if not success:
-            raise RuntimeError(f"Failed to download {tile_url}")
+            raise RuntimeError(f"Failed to download and decompress {tile_url}")
 
-        # Extract building.gpkg
-        gpkg_filename = str(zip_path).replace(".bz2", "")
-        gpkg_filename = gpkg_filename.replace("building.", "building_")
-        with bz2.open(zip_path, "rb") as f_in, open(gpkg_filename, "wb") as f_out:
-            f_out.write(f_in.read())
-        return Path(gpkg_filename)
+        return target_path
 
     def fetch(
         self,

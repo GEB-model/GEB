@@ -330,21 +330,21 @@ class Agents(BuildModelBase):
             self.ssp,
         )
 
-        self.set_other(da, name=f"water_demand/industry_water_demand")
+        self.set_other(da, name="water_demand/industry_water_demand")
         da = parse_demand(
             "industry_water_demand",
             "indCon",
             self.ssp,
         )
-        self.set_other(da, name=f"water_demand/industry_water_consumption")
+        self.set_other(da, name="water_demand/industry_water_consumption")
         da = parse_demand(
             "livestock_water_demand",
             "livestockConsumption",
             "ssp2",
         )
-        self.set_other(da, name=f"water_demand/livestock_water_consumption")
+        self.set_other(da, name="water_demand/livestock_water_consumption")
 
-    @build_method(required=True)
+    @build_method(required=True, depends_on=["setup_regions_and_land_use"])
     def setup_income_distribution_parameters(self) -> None:
         """Sets up the income distributions for GEB.
 
@@ -1804,7 +1804,14 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method(depends_on=["setup_assets", "setup_buildings"], required=True)
+    @build_method(
+        depends_on=[
+            "setup_assets",
+            "setup_buildings",
+            "setup_income_distribution_parameters",
+        ],
+        required=True,
+    )
     def setup_household_characteristics(
         self,
         maximum_age: int = 85,

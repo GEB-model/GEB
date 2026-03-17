@@ -8,7 +8,6 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import zarr.storage
@@ -1134,6 +1133,14 @@ class Reporter:
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
+        elif type_ == "scalar":
+            pass  # no processing needed for scalar values
+
+        else:
+            raise ValueError(
+                f"Type {type_} not recognized. Check your configuration for {module_name}.{name}."
+            )
+
         if module_name not in self.variables:
             self.variables[module_name] = {}
 
@@ -1217,14 +1224,6 @@ class Reporter:
                     folder.mkdir(parents=True, exist_ok=True)
 
                     df.to_csv(folder / (name + ".csv"))
-
-                    fig, ax = plt.subplots(figsize=(30, 5))
-                    fig.tight_layout()
-
-                    df.plot(y=name, title=f"{module_name}.{name}", ax=ax)
-                    plt.grid()
-                    plt.savefig(folder / (name + ".svg"), format="svg")
-                    plt.close()
 
     def report(
         self, module: Module, local_variables: dict[str, Any], module_name: str

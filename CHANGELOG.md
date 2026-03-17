@@ -1,13 +1,20 @@
-# dev
+# v1.0.0b18
 - Add loggers to groundwater model and SFINCS models.
 - Close all open figures in SFINCS to reduce memory usage.
 - Several fixes in sfincs.py to avoid futurewarnings for pandas 3.0.
-- Remove self.buildings_centroid as attribute (appears not to be used)
-- Load in buildings as pandas df, only load geometry data for flood damage calculations
+- Compress forcing data to 1D. This makes the input folder significantly smaller (~50% depending on the area).
+- Reduce area that elevation and land use maps are written for reducing size on disk.
+- Remove self.buildings_centroid as attribute (appears not to be used).
+- Load in buildings as pandas df, only load geometry data for flood damage calculations.
+- Make filling of discharge gaps a lot more efficient (quite some reduction in run speed).
+- Make it possible to specify the number of cores using `--cores`. Default is all cores (no change).
+- Make an option to auto-fix the build order if it is incorrect.
 
 To support this version:
-- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`
-
+- Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.
 
 # v1.0.0b17
 - Synchronize start and end dates in reasonable default config and example.

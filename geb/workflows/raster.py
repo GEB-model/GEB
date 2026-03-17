@@ -668,8 +668,14 @@ def clip_with_grid(
 
     Returns:
         A tuple containing the clipped dataset and a dictionary with slices for x and y dimensions.
+
+    Raises:
+        ValueError: If the dataset and mask do not have the same x and y coordinates.
     """
-    assert ds.shape == mask.shape
+    if ds["x"].size != mask["x"].size:
+        raise ValueError("Dataset and mask must have the same x coordinates")
+    if ds["y"].size != mask["y"].size:
+        raise ValueError("Dataset and mask must have the same y coordinates")
     cells_along_y = mask.sum(dim="x").values.ravel()
     miny = (cells_along_y > 0).argmax().item()
     maxy = cells_along_y.size - (cells_along_y[::-1] > 0).argmax().item()

@@ -15,6 +15,174 @@ __all__: list[str] = ["build_method"]
 from typing import Protocol
 
 
+def validate_build_methods(
+    tree: nx.DiGraph,
+    methods: dict[str, Any],
+    validate_order: bool = True,
+    fix_order_if_broken: bool = False,
+    logger: logging.Logger | None = None,
+) -> dict[str, Any]:
+    """Validate the methods in the dependency tree.
+
+    Currently check the order of methods and whether they have the correct parameters.
+
+    Args:
+        tree: The dependency tree.
+        methods: A dictionary of methods to validate.
+        validate_order: If True, checks if methods depend on other methods that may come after them in the build file.
+        fix_order_if_broken: If True, will attempt to fix the order of methods if validate_order fails. Only used if validate_order is True.
+        logger: Logger to use for logging validation messages.
+
+    Returns:
+        The input methods if validation passes.
+
+    Raises:
+        ValueError: If a method depends on another method that is not a build function
+        ValueError: If a method depends on another method that may come after it in the build file or not be present at all.
+        ValueError: If a method has parameters that do not match the expected parameters.
+    """
+    for method in methods:
+        if not tree.has_node(method):
+            raise ValueError(
+                f"Method {method} is not a build function.  If you are sure this should be build method, please decorate it with @build_method.'"
+            )
+
+        node = tree.nodes[method]
+        if not node.get("attr", {}).get("_function_exists", False):
+            raise ValueError(f"Method {method} is not a build function.")
+
+    if validate_order:
+        # Check if all dependencies are present in the requested methods.
+        # This must be done regardless of fix_order_if_broken.
+        for method in methods:
+            # 1 is the method itself, 2 is the method + direct dependencies
+            direct_dependencies = list(
+                nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
+            )[:-1]
+            for direct_dependency in direct_dependencies:
+                if direct_dependency == method:
+                    continue
+                if direct_dependency not in methods:
+                    if direct_dependency not in tree.nodes:
+                        raise ValueError(
+                            f"Method {method} depends on {direct_dependency}, "
+                            "which is not a build function."
+                        )
+                    else:
+                        raise ValueError(
+                            f"Method {method} depends on {direct_dependency}, "
+                            "which is missing from the requested methods."
+                        )
+
+        if fix_order_if_broken:
+            # Check if the current order is already valid
+            current_order_valid = True
+            processed_in_check = set()
+            for method in methods:
+                # 1 is the method itself, 2 is the method + direct dependencies
+                direct_deps = list(
+                    nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
+                )[:-1]
+                for dep in direct_deps:
+                    if (
+                        dep != method
+                        and dep in methods
+                        and dep not in processed_in_check
+                    ):
+                        current_order_valid = False
+                        break
+                if not current_order_valid:
+                    break
+                processed_in_check.add(method)
+
+            if not current_order_valid:
+                try:
+                    # Find the minimal set of reorderings.
+                    # We use a simple approach: find the first method that violates dependencies,
+                    # and move its missing dependencies just before it.
+                    # However, for a robust and deterministic "minimal" change,
+                    # we can use the fact that the user likely wants to keep their existing order
+                    # as much as possible.
+                    # We'll use a stable topological sort that respects the original order
+                    # where possible.
+                    subgraph = tree.subgraph(methods.keys())
+                    if not nx.is_directed_acyclic_graph(subgraph):
+                        raise ValueError(
+                            "Cannot fix order: cycle detected in requested methods."
+                        )
+
+                    # To minimize changes, we can iterate and "pull up" dependencies.
+                    new_order = list(methods.keys())
+                    changed = True
+                    while changed:
+                        changed = False
+                        for i in range(len(new_order)):
+                            method = new_order[i]
+                            deps = set(subgraph.predecessors(method))
+                            if not deps:
+                                continue
+
+                            # Find the last position of any dependency in the current order
+                            max_dep_idx = -1
+                            for dep in deps:
+                                dep_idx = new_order.index(dep)
+                                if dep_idx > max_dep_idx:
+                                    max_dep_idx = dep_idx
+
+                            # If the last dependency is after the current method, move the method after it
+                            if max_dep_idx > i:
+                                method_to_move = new_order.pop(i)
+                                new_order.insert(max_dep_idx, method_to_move)
+                                changed = True
+                                break
+
+                    methods = {node: methods[node] for node in new_order}
+
+                    if logger is not None:
+                        logger.warning(
+                            "The provided method order was invalid and has been auto-fixed."
+                        )
+                        logger.info(f"New method order: {list(methods.keys())}")
+                except nx.NetworkXUnfeasible:
+                    raise ValueError("Cannot fix order: dependencies are circular.")
+        else:
+            processed_methods = set()
+            for method in methods:
+                # 1 is the method itself, 2 is the method + direct dependencies
+                direct_dependencies = list(
+                    nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
+                )[:-1]
+                for direct_dependency in direct_dependencies:
+                    if direct_dependency == method:
+                        continue
+                    if direct_dependency not in processed_methods:
+                        raise ValueError(
+                            f"Method {method} depends on {direct_dependency}, "
+                            "which may come after this method in the build file or not be present at all."
+                        )
+                processed_methods.add(method)
+
+    for method, args in methods.items():
+        args_set = set(args) if args is not None else set()
+
+        required_parameters = tree.nodes[method]["attr"]["_required_parameters"]
+        if not set(required_parameters).issubset(args_set):
+            raise ValueError(
+                f"Method {method} has parameters {list(args.keys())}, "
+                f"but expected parameters are {required_parameters}."
+            )
+
+        optional_parameters = tree.nodes[method]["attr"]["_optional_parameters"]
+        if not set(args_set).issubset(set(required_parameters + optional_parameters)):
+            raise ValueError(
+                f"Method {method} has parameters {list(args.keys())}, "
+                f"but required parameters are {required_parameters} and "
+                f"optional parameters are {optional_parameters}."
+            )
+
+    return methods
+
+
 class NamedCallable(Protocol):
     __name__: str
 
@@ -182,8 +350,11 @@ class _build_method:
         self._resolve_logger().debug("Builder dependency tree validation passed.")
 
     def validate_methods(
-        self, methods: dict[str, Any], validate_order: bool = True
-    ) -> None:
+        self,
+        methods: dict[str, Any],
+        validate_order: bool = True,
+        fix_order_if_broken: bool = False,
+    ) -> dict[str, Any]:
         """Validate the methods in the dependency tree.
 
         Currently check the order of methods and whether they have the correct parameters.
@@ -191,67 +362,20 @@ class _build_method:
         Args:
             methods: A dictionary of methods to validate.
             validate_order: If True, checks if methods depend on other methods that may come after them in the build file.
+            fix_order_if_broken: If True, will attempt to fix the order of methods if validate_order fails. Only used if validate_order is True.
 
-        Raises:
-            ValueError: If a method depends on another method that is not a build function
-            ValueError: If a method depends on another method that may come after it in the build file or not be present at all.
-            ValueError: If a method has parameters that do not match the expected parameters.
+        Returns:
+            The input methods if validation passes.
         """
-        for method in methods:
-            if not self.tree.has_node(method):
-                raise ValueError(
-                    f"Method {method} is not a build function.  If you are sure this should be build method, please decorate it with @build_method.'"
-                )
+        active_logger: logging.Logger = self._resolve_logger()
 
-            node = self.tree.nodes[method]
-            if not node.get("attr", {}).get("_function_exists", False):
-                raise ValueError(f"Method {method} is not a build function.")
-
-        if validate_order:
-            processed_methods = set()
-            for method in methods:
-                direct_dependencies = self.get_dependencies(
-                    method, depth_limit=2
-                )  # 1 is the method itself
-                for direct_dependency in direct_dependencies:
-                    if direct_dependency == method:
-                        continue
-                    if direct_dependency not in processed_methods:
-                        if direct_dependency not in self.methods:
-                            raise ValueError(
-                                f"Method {method} depends on {direct_dependency}, "
-                                "which is not a build function."
-                            )
-                        else:
-                            raise ValueError(
-                                f"Method {method} depends on {direct_dependency}, "
-                                "which may come after this method in the build file or not be present at all."
-                            )
-                processed_methods.add(method)
-
-        for method, args in methods.items():
-            args_set = set(args) if args is not None else set()
-
-            required_parameters = self.tree.nodes[method]["attr"][
-                "_required_parameters"
-            ]
-            if not set(required_parameters).issubset(args_set):
-                raise ValueError(
-                    f"Method {method} has parameters {list(args.keys())}, "
-                    f"but expected parameters are {required_parameters}."
-                )
-
-            optional_parameters = self.tree.nodes[method]["attr"][
-                "_optional_parameters"
-            ]
-            if not set(args_set).issubset(
-                set(required_parameters + optional_parameters)
-            ):
-                raise ValueError(
-                    f"Method {method} has parameters {list(args.keys())}, "
-                    f"but required parameters are {required_parameters} and "
-                    f"optional parameters are {optional_parameters}."
-                )
+        return validate_build_methods(
+            self.tree,
+            methods,
+            validate_order=validate_order,
+            fix_order_if_broken=fix_order_if_broken,
+            logger=active_logger,
+        )
 
     def export_tree(self) -> None:
         pos = nx.spring_layout(self.tree)

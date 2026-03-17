@@ -34,7 +34,7 @@ from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
-from .landsurface import LandSurface
+from .landsurface.landsurface_model import LandSurface
 from .routing import Routing
 from .runoff_concentration import RunoffConcentrator
 from .water_demand import WaterDemand

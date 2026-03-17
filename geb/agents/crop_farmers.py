@@ -1016,8 +1016,6 @@ class CropFarmers(AgentBaseClass):
                 GEV_grid.rio.transform().to_gdal(),
             )
 
-        assert not np.all(np.isnan(self.var.GEV_parameters))
-
         self.var.GEV_pr_parameters = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -1037,8 +1035,6 @@ class CropFarmers(AgentBaseClass):
                 self.var.GEV_pr_parameters[:, i] = sample_from_map(
                     GEV_pr_grid, self.var.locations.data, self.grid.gt
                 )
-
-            assert not np.all(np.isnan(self.var.GEV_pr_parameters))
 
         self.var.risk_perc_min = DynamicArray(
             n=self.var.n,
@@ -1278,7 +1274,7 @@ class CropFarmers(AgentBaseClass):
 
         """
         # take mean pr for day and convert to mm/day
-        pr_mm_per_day = pr_kg_per_m2_per_s.sum(axis=0) * np.float32(3600)  # mm / day
+        pr_mm_per_day = pr_kg_per_m2_per_s.sum(axis=1) * np.float32(3600)  # mm / day
 
         pr_mm_per_day_per_farmer = np.bincount(
             self.HRU.var.land_owners[self.HRU.var.land_owners != -1],
@@ -1313,7 +1309,7 @@ class CropFarmers(AgentBaseClass):
                 the new day's deficit (higher values weight the current day more).
                 Defaults to 0.2.
         """
-        pr: npt.NDArray[np.float32] = pr_kg_per_m2_per_s.sum(axis=0) * np.float32(
+        pr: npt.NDArray[np.float32] = pr_kg_per_m2_per_s.sum(axis=1) * np.float32(
             3600 / 1000
         )  # m / day
         water_deficit_day_m3 = (
@@ -2072,7 +2068,7 @@ class CropFarmers(AgentBaseClass):
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
             number_of_harvesting_fields = np.count_nonzero(harvested_crops)
-            print(
+            self.model.logger.debug(
                 f"Harvesting {number_of_harvesting_fields} fields with crops: "
                 f"{np.unique(harvested_crops[harvested_crops >= 0])}"
             )
@@ -2787,7 +2783,7 @@ class CropFarmers(AgentBaseClass):
 
         number_of_planted_fields = np.count_nonzero(plant_map >= 0)
         if number_of_planted_fields > 0:
-            print(
+            self.model.logger.debug(
                 f"Planting {number_of_planted_fields} fields with crops: "
                 f"{np.unique(plant_map[plant_map >= 0])}"
             )
