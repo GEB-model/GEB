@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr
 
-from ...workflows.damage_scanner import VectorScannerMultiCurves
+from ...workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
+from ..workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
     from geb.agents import Agents
@@ -410,3 +412,300 @@ class FloodRiskModule:
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
         return damages_do_not_adapt, damages_adapt
+
+    def flood(self, flood_depth: xr.DataArray) -> float:
+        """This function computes the damages for the assets and land use types in the model.
+
+        Args:
+            flood_depth: The flood map containing water levels for the flood event [m].
+
+        Returns:
+            The total flood damages for the event for all assets and land use types.
+
+        """
+        flood_depth: xr.DataArray = flood_depth.compute()
+
+        # subset building to those exposed to flooding
+        buildings_centroids = gpd.GeoDataFrame(
+            self.households.buildings,
+            geometry=gpd.points_from_xy(
+                self.households.buildings["x"], self.households.buildings["y"]
+            ),
+            crs="EPSG:4326",
+        )
+
+        # get the building ids of the flooded buildings
+        # reproject centroids to the flood raster CRS so we can sample depths directly
+        buildings_centroids = buildings_centroids.to_crs(flood_depth.rio.crs)
+
+        # extract centroid coordinates in raster CRS
+        x_coords = buildings_centroids.geometry.x.values
+        y_coords = buildings_centroids.geometry.y.values
+
+        # sample raster at building centroids using nearest-neighbour interpolation
+        x_dim = flood_depth.rio.x_dim
+        y_dim = flood_depth.rio.y_dim
+        sampled_depths = flood_depth.interp(
+            {x_dim: ("points", x_coords), y_dim: ("points", y_coords)},
+            method="nearest",
+        )
+
+        # attach sampled depths to building points; buildings with NaN depth are not flooded
+        building_points_with_depth = buildings_centroids.copy()
+        building_points_with_depth["depth"] = sampled_depths.values
+        flooded_building_ids = building_points_with_depth[
+            ~building_points_with_depth["depth"].isna()
+        ]["id"].unique()
+
+        building_geometries = read_geom(
+            self.households.model.files["geom"]["assets/open_building_map"],
+            filters=[("id", "in", flooded_building_ids)],
+        )
+
+        # merge geometry into buildings dataframe
+        buildings = self.households.buildings.merge(
+            building_geometries[["id", "geometry"]],
+            on="id",
+            how="left",
+        )
+
+        # convert to GeoDataFrame
+        buildings = gpd.GeoDataFrame(
+            buildings, geometry="geometry", crs=building_geometries.crs
+        )
+
+        # reproject
+        buildings = buildings.to_crs(flood_depth.rio.crs)
+
+        household_points: gpd.GeoDataFrame = (
+            self.households.var.household_points.copy().to_crs(flood_depth.rio.crs)
+        )
+
+        if self.households.model.config["agent_settings"]["households"][
+            "warning_response"
+        ]:
+            # make sure household points and actions taken have the same length
+            assert len(household_points) == self.households.var.actions_taken.shape[0]
+
+            # add columns for protective actions
+            household_points["sandbags"] = False
+            household_points["elevated_possessions"] = False
+
+            # mark households that took protective actions
+            household_points.loc[
+                np.asarray(self.households.var.actions_taken)[:, 0] == 1,
+                "elevated_possessions",
+            ] = True
+            household_points.loc[
+                np.asarray(self.households.var.actions_taken)[:, 1] == 1, "sandbags"
+            ] = True
+
+            # spatial join to get household attributes to buildings
+            buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
+                buildings, household_points, how="left", exclusive=True
+            )
+
+            # Assign object types for buildings based on protective measures taken
+            buildings["object_type"] = "building_unprotected"  # reset
+            buildings.loc[buildings["elevated_possessions"], "object_type"] = (
+                "building_elevated_possessions"
+            )
+            buildings.loc[buildings["sandbags"], "object_type"] = (
+                "building_with_sandbags"
+            )
+            buildings.loc[
+                buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
+            ] = "building_all_forecast_based"
+            # TODO: need to move the update of the actions takens by households to outside the flood function
+
+            # Save the buildings with actions taken
+            buildings.to_parquet(
+                self.households.model.output_folder
+                / "action_maps"
+                / "buildings_with_protective_measures.geoparquet"
+            )
+
+            # Assign object types for buildings centroid based on protective measures taken
+            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+            buildings_centroid["object_type"] = np.select(
+                [
+                    (
+                        buildings_centroid["elevated_possessions"]
+                        & buildings_centroid["sandbags"]
+                    ),
+                    buildings_centroid["elevated_possessions"],
+                    buildings_centroid["sandbags"],
+                ],
+                [
+                    "building_all_forecast_based",
+                    "building_elevated_possessions",
+                    "building_with_sandbags",
+                ],
+                default="building_unprotected",
+            )
+            buildings_centroid["maximum_damage"] = (
+                self.households.var.max_dam_buildings_content
+            )
+
+        if self.households.config["adapt"]:
+            household_points["building_id"] = (
+                self.households.var.building_id_of_household
+            )  # first assign building id to household points gdf
+            household_points = household_points.merge(
+                buildings[["id", "flood_proofed"]],
+                left_on="building_id",
+                right_on="id",
+                how="left",
+            )  # now merge to get flood proofed status
+
+            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+
+            buildings_centroid["maximum_damage"] = (
+                self.households.var.max_dam_buildings_content
+            )
+
+            buildings["object_type"] = np.where(
+                buildings["flood_proofed"],
+                "building_flood_proofed",
+                "building_unprotected",
+            )
+
+            buildings_centroid["object_type"] = np.where(
+                buildings_centroid["flood_proofed"],
+                "building_protected",
+                "building_unprotected",
+            )
+
+        else:
+            household_points["protect_building"] = False
+
+            buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
+                buildings, household_points, how="left", exclusive=True
+            )
+
+            buildings["object_type"] = "building_unprotected"
+
+            # Right now there is no condition to make the households protect their buildings outside of the warning response
+            buildings.loc[buildings["protect_building"], "object_type"] = (
+                "building_protected"
+            )
+
+            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+            buildings_centroid["object_type"] = buildings_centroid[
+                "protect_building"
+            ].apply(lambda x: "building_protected" if x else "building_unprotected")
+            buildings_centroid["maximum_damage"] = (
+                self.households.var.max_dam_buildings_content
+            )
+
+        # Create the folder to save damage maps if it doesn't exist
+        damage_folder: Path = self.households.model.output_folder / "damage_maps"
+        damage_folder.mkdir(parents=True, exist_ok=True)
+
+        damages_buildings_content = VectorScanner(
+            features=buildings_centroid,
+            hazard=flood_depth,
+            vulnerability_curves=self.households.buildings_content_curve,
+        )
+
+        total_damages_content = damages_buildings_content.sum()
+
+        # save it to a gpkg file
+        gdf_content = buildings_centroid.copy()
+        gdf_content["damage"] = damages_buildings_content
+        category_name: str = "buildings_content"
+        filename: str = f"damage_map_{category_name}.gpkg"
+        gdf_content.to_file(damage_folder / filename, driver="GPKG")
+
+        print(f"damages to building content are: {total_damages_content}")
+
+        # Compute damages for buildings structure
+        damages_buildings_structure: pd.Series = VectorScanner(
+            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
+            hazard=flood_depth,
+            vulnerability_curves=self.households.buildings_structure_curve,
+        )
+
+        total_damage_structure = damages_buildings_structure.sum()
+
+        print(f"damages to building structure are: {total_damage_structure}")
+
+        # save it to a gpkg file
+        gdf_structure = buildings.copy()
+        gdf_structure["damage"] = damages_buildings_structure
+        category_name: str = "buildings_structure"
+        filename: str = f"damage_map_{category_name}.gpkg"
+        gdf_structure.to_file(damage_folder / filename, driver="GPKG")
+
+        print(
+            f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
+        )
+
+        agriculture = from_landuse_raster_to_polygon(
+            self.households.HRU.decompress(self.households.HRU.var.land_owners != -1),
+            self.households.HRU.transform,
+            self.households.model.crs,
+        )
+        agriculture["object_type"] = "agriculture"
+        agriculture["maximum_damage"] = self.households.var.max_dam_agriculture_m2
+
+        agriculture = agriculture.to_crs(flood_depth.rio.crs)
+
+        damages_agriculture = VectorScanner(
+            features=agriculture,
+            hazard=flood_depth,
+            vulnerability_curves=self.households.var.agriculture_curve,
+        )
+        total_damages_agriculture = damages_agriculture.sum()
+        print(f"damages to agriculture are: {total_damages_agriculture}")
+
+        # Load landuse and make turn into polygons
+        forest = from_landuse_raster_to_polygon(
+            self.households.HRU.decompress(
+                self.households.HRU.var.land_use_type == FOREST
+            ),
+            self.households.HRU.transform,
+            self.households.model.crs,
+        )
+        forest["object_type"] = "forest"
+        forest["maximum_damage"] = self.households.var.max_dam_forest_m2
+
+        forest = forest.to_crs(flood_depth.rio.crs)
+
+        damages_forest = VectorScanner(
+            features=forest,
+            hazard=flood_depth,
+            vulnerability_curves=self.households.var.forest_curve,
+        )
+        total_damages_forest = damages_forest.sum()
+        print(f"damages to forest are: {total_damages_forest}")
+
+        roads = self.households.roads.to_crs(flood_depth.rio.crs)
+        damages_roads = VectorScanner(
+            features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
+            hazard=flood_depth,
+            vulnerability_curves=self.households.var.road_curves,
+        )
+        total_damages_roads = damages_roads.sum()
+        print(f"damages to roads are: {total_damages_roads} ")
+
+        rail = self.households.rail.to_crs(flood_depth.rio.crs)
+        damages_rail = VectorScanner(
+            features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
+            hazard=flood_depth,
+            vulnerability_curves=self.households.var.rail_curve,
+        )
+        total_damages_rail = damages_rail.sum()
+        print(f"damages to rail are: {total_damages_rail}")
+
+        total_flood_damages = (
+            total_damage_structure
+            + total_damages_content
+            + total_damages_roads
+            + total_damages_rail
+            + total_damages_forest
+            + total_damages_agriculture
+        )
+        print(f"the total flood damages are: {total_flood_damages}")
+
+        return total_flood_damages
