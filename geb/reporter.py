@@ -8,7 +8,6 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import zarr.storage
@@ -1225,14 +1224,6 @@ class Reporter:
                     folder.mkdir(parents=True, exist_ok=True)
 
                     df.to_csv(folder / (name + ".csv"))
-
-                    fig, ax = plt.subplots(figsize=(30, 5))
-                    fig.tight_layout()
-
-                    df.plot(y=name, title=f"{module_name}.{name}", ax=ax)
-                    plt.grid()
-                    plt.savefig(folder / (name + ".svg"), format="svg")
-                    plt.close()
 
     def report(
         self, module: Module, local_variables: dict[str, Any], module_name: str
