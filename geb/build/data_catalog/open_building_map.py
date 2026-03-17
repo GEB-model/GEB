@@ -101,10 +101,6 @@ class OpenBuildingMap(Adapter):
         t1 = time()
         buildings = buildings[buildings.intersects(geom)]
         t2 = time()
-        print(
-            f"Time to read: {t1 - t0:.2f} seconds, time to mask: {t2 - t1:.2f} seconds"
-        )
-        print("extra check")
         if len(buildings) == 0:
             print("No buildings found in region geom")
             return

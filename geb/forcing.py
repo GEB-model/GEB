@@ -333,7 +333,7 @@ class ForcingLoader(ABC):
 
         Returns:
             The interpolated and validated compressed data with shape
-            (time, n_active_cells).
+            (n_active_cells, time).
 
         Raises:
             ValueError: If the data is invalid according to the validation criteria.
@@ -440,7 +440,7 @@ class ForcingLoader(ABC):
         corner_values = data[self.indices, :]  # (N_target, 4, n_timesteps)
         interpolated = np.sum(
             corner_values * self.weights[:, :, np.newaxis], axis=1
-        )  # Result is (n_timesteps, N_target)
+        )  # Result is (N_target, n_timesteps)
 
         return interpolated
 
@@ -687,8 +687,6 @@ class Pressure(ForcingLoader):
             interpolated_pressure_sea_level
             * self.grid_pressure_correction_factor[:, np.newaxis]
         )
-
-        return interpolated_pressure
 
         return interpolated_pressure
 

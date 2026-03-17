@@ -147,3 +147,13 @@ def test_validate_methods_required_parameters_check(logger: MockLogger) -> None:
 
     with pytest.raises(ValueError, match=r"expected parameters are \['param1'\]"):
         validate_build_methods(tree, methods, fix_order_if_broken=True, logger=logger)
+
+
+def test_validate_methods_missing_dependency(logger: MockLogger) -> None:
+    """Test that missing dependencies are detected even when fixing order."""
+    # b depends on a, but a is missing from methods dict
+    tree = create_tree({"a": ([], []), "b": ([], [])}, edges=[("a", "b")])
+    methods = {"b": {}}
+
+    with pytest.raises(ValueError, match="is missing from the requested methods"):
+        validate_build_methods(tree, methods, fix_order_if_broken=True, logger=logger)

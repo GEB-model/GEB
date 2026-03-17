@@ -52,6 +52,28 @@ def validate_build_methods(
             raise ValueError(f"Method {method} is not a build function.")
 
     if validate_order:
+        # Check if all dependencies are present in the requested methods.
+        # This must be done regardless of fix_order_if_broken.
+        for method in methods:
+            # 1 is the method itself, 2 is the method + direct dependencies
+            direct_dependencies = list(
+                nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
+            )[:-1]
+            for direct_dependency in direct_dependencies:
+                if direct_dependency == method:
+                    continue
+                if direct_dependency not in methods:
+                    if direct_dependency not in tree.nodes:
+                        raise ValueError(
+                            f"Method {method} depends on {direct_dependency}, "
+                            "which is not a build function."
+                        )
+                    else:
+                        raise ValueError(
+                            f"Method {method} depends on {direct_dependency}, "
+                            "which is missing from the requested methods."
+                        )
+
         if fix_order_if_broken:
             # Check if the current order is already valid
             current_order_valid = True
@@ -134,16 +156,10 @@ def validate_build_methods(
                     if direct_dependency == method:
                         continue
                     if direct_dependency not in processed_methods:
-                        if direct_dependency not in tree.nodes:
-                            raise ValueError(
-                                f"Method {method} depends on {direct_dependency}, "
-                                "which is not a build function."
-                            )
-                        else:
-                            raise ValueError(
-                                f"Method {method} depends on {direct_dependency}, "
-                                "which may come after this method in the build file or not be present at all."
-                            )
+                        raise ValueError(
+                            f"Method {method} depends on {direct_dependency}, "
+                            "which may come after this method in the build file or not be present at all."
+                        )
                 processed_methods.add(method)
 
     for method, args in methods.items():
