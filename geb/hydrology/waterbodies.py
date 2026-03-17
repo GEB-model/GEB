@@ -300,6 +300,7 @@ class WaterBodyVariables(Bucket):
     capacity: ArrayFloat64
     waterbody_type: ArrayInt32
     outflow_height: ArrayFloat32
+    waterbody_outflow_linear_mapping: ArrayInt32
 
 
 class WaterBodies(Module):
@@ -371,9 +372,9 @@ class WaterBodies(Module):
         self.grid.var.waterbody_outflow_points = self.get_outflows(
             self.grid.var.waterbody_ids
         )
-        self.waterbody_outflow_linear_mapping = np.where(
+        self.var.waterbody_outflow_linear_mapping = np.where(
             self.grid.var.waterbody_outflow_points != -1
-        )[0]
+        )[0].astype(np.int32)
 
         assert (
             self.map_to_grid_outflow(np.arange(self.n), fill_value=-1)
@@ -818,7 +819,7 @@ class WaterBodies(Module):
         Returns:
             The number of lakes and reservoirs in the model.
         """
-        return self.waterbody_outflow_linear_mapping.size
+        return self.var.waterbody_outflow_linear_mapping.size
 
     def map_to_grid_outflow(
         self,
@@ -842,7 +843,7 @@ class WaterBodies(Module):
                 fill_value,
                 dtype=values_at_outflow_points.dtype,
             )
-        out[self.waterbody_outflow_linear_mapping] = values_at_outflow_points
+        out[self.var.waterbody_outflow_linear_mapping] = values_at_outflow_points
         return out
 
     def step(self) -> None:
