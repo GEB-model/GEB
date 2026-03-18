@@ -543,8 +543,11 @@ class Households(AgentBaseClass):
         event_idx = np.searchsorted(probabilities[::-1], p_random)
         event_idx = len(probabilities) - 1 - event_idx
         event = sorted_return_periods[event_idx]
-        print(
-            f"Return period flood event: {event} years (p={probabilities[event_idx]:.4f}, random draw={p_random:.4f})"
+        self.model.logger.info(
+            "Return period flood event: %s years (p=%.4f, random draw=%.4f)",
+            event,
+            probabilities[event_idx],
+            p_random,
         )
 
         # get the flood map for this event
