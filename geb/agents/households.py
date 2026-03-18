@@ -479,22 +479,18 @@ class Households(AgentBaseClass):
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
 
-        # load household points (only in use for damagescanner, could be removed)
-        household_points = gpd.GeoDataFrame(
-            geometry=gpd.points_from_xy(
-                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
-            ),
-            crs="EPSG:4326",
-        )
-        self.var.household_points = household_points
-
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
 
     def assign_households_to_postal_codes(self) -> None:
         """This function associates the household points with their postal codes to get the correct geometry for the warning function."""
-        households = self.var.household_points.copy()
+        households = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",
+        )
 
         # Associate households with their postal codes to use it later in the warning function
         postal_codes: gpd.GeoDataFrame = read_geom(
@@ -519,7 +515,7 @@ class Households(AgentBaseClass):
             self.model.output_folder / "household_points_w_postal_codes.geoparquet"
         )
 
-        self.var.household_points = households_with_postal_codes
+        self.var.households_with_postal_codes = households_with_postal_codes
 
         print(
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
@@ -615,9 +611,9 @@ class Households(AgentBaseClass):
         # Append and save floor risk perception data spatially
         df = pd.DataFrame(
             {
-                "time": [self.model.current_time] * len(self.var.household_points),
-                "x": self.var.household_points.geometry.x,
-                "y": self.var.household_points.geometry.y,
+                "time": [self.model.current_time] * self.var.locations.data.shape[0],
+                "x": self.var.locations.data[:, 0],
+                "y": self.var.locations.data[:, 1],
                 "risk_perception": self.var.risk_perception.data,
                 "years_since_last_flood": self.var.years_since_last_flood.data,
             }
@@ -896,7 +892,12 @@ class Households(AgentBaseClass):
         self.create_flood_probability_maps(strategy=strategy_id, date_time=date_time)
 
         # Load households and postal codes
-        households = self.var.household_points.copy()
+        households = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",
+        )
         postal_codes = self.postal_codes.copy()
         # Maybe load this as a global var (?) instead of loading it each time
 
@@ -1207,7 +1208,12 @@ class Households(AgentBaseClass):
             prob_threshold: The probability threshold above which a warning is issued.
         """
         # Get the household points, needed to issue warnings
-        households = self.var.household_points.copy()
+        households = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",
+        )
 
         # Load substations and critical facilities
         substations = read_geom(self.model.files["geom"]["assets/energy_substations"])
@@ -1586,7 +1592,7 @@ class Households(AgentBaseClass):
 
         # Combine the filters and apply it to household_points
         eligible_ids = np.asarray(warned_ids & not_evacuated_ids & responsive_ids)
-        eligible_households = self.var.household_points.loc[eligible_ids]
+        eligible_households = self.var.households_with_postal_codes.loc[eligible_ids]
 
         # Get the list of possible actions for eligible households
         # (this is a list of all possible actions, not the recommended actions given by the warning strategies)
@@ -1617,7 +1623,7 @@ class Households(AgentBaseClass):
                 {
                     "lead_time": lead_time,
                     "date_time": date_time.isoformat(),
-                    "postal_code": self.var.household_points.loc[
+                    "postal_code": self.var.households_with_postal_codes.loc[
                         household_id, "postcode"
                     ],
                     "household_id": household_id,
@@ -2122,7 +2128,9 @@ class Households(AgentBaseClass):
         Args:
             date_time: The forecast date time for which to update the households geodataframe.
         """
-        household_points: gpd.GeoDataFrame = self.var.household_points.copy()
+        household_points: gpd.GeoDataFrame = (
+            self.var.households_with_postal_codes.copy()
+        )
 
         action_maps_folder: Path = self.model.output_folder / "action_maps"
         action_maps_folder.mkdir(parents=True, exist_ok=True)
@@ -2246,9 +2254,14 @@ class Households(AgentBaseClass):
         # reproject
         buildings = buildings.to_crs(flood_depth.rio.crs)
 
-        household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
-            flood_depth.rio.crs
-        )
+        household_points: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            self.var.households_with_postal_codes.copy(),
+            geometry=gpd.points_from_xy(
+                self.var.households_with_postal_codes["x"],
+                self.var.households_with_postal_codes["y"],
+            ),
+            crs="EPSG:4326",
+        ).to_crs(flood_depth.rio.crs)
 
         if self.model.config["agent_settings"]["households"]["warning_response"]:
             # make sure household points and actions taken have the same length
@@ -2581,7 +2594,7 @@ class Households(AgentBaseClass):
                     gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
                         df_all,
                         geometry=gpd.points_from_xy(df_all.x, df_all.y),
-                        crs=self.var.household_points.crs,
+                        crs=self.buildings.crs,
                     )
 
                     out_path: Path = (
