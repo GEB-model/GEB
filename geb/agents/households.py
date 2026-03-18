@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
-from numba import njit
 import osmnx as ox
 import pandas as pd
 import xarray as xr
+from numba import njit
 from pyproj import CRS
 from rasterio.features import rasterize, shapes
 from rasterio.transform import Affine
@@ -37,7 +37,27 @@ if TYPE_CHECKING:
 
 
 @njit
-def _get_flooded_indices(hx, hy, x_vals, y_vals, flood_values, threshold=0.05):
+def _get_flooded_indices(
+    hx: ArrayFloat32,
+    hy: ArrayFloat32,
+    x_vals: ArrayFloat32,
+    y_vals: ArrayFloat32,
+    flood_values: TwoDArrayFloat32,
+    threshold: float = 0.05,
+) -> np.ndarray:
+    """JIT-compiled function to determine which households are flooded based on their coordinates and the flood map values.
+
+    Args:
+        hx: Array of household x-coordinates in the flood map CRS.
+        hy: Array of household y-coordinates in the flood map CRS.
+        x_vals: Array of x-coordinates in the flood map CRS.
+        y_vals: Array of y-coordinates in the flood map CRS.
+        flood_values: 2D array of flood values.
+        threshold: Threshold for determining if a household is flooded.
+
+    Returns:
+        Array of indices of flooded households.
+    """
     n = hx.shape[0]
     flooded = []
     for i in range(n):
@@ -538,7 +558,12 @@ class Households(AgentBaseClass):
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
 
-    def return_period_flood(self):
+    def return_period_flood(self) -> np.ndarray:
+        """Simulate a flood event based on return periods and determine which households are flooded.
+
+        Returns:
+            Array of indices of flooded households.
+        """
         # draw a single random number
         p_random = np.random.random()
         probabilities = 1 / self.return_periods
@@ -555,7 +580,7 @@ class Households(AgentBaseClass):
         )
 
         # get the flood map for this event
-        flood_map: "xr.DataArray" = self.flood_maps[event]
+        flood_map: xr.DataArray = self.flood_maps[event]
         x_vals = flood_map["x"].values
         y_vals = flood_map["y"].values
         flood_values = flood_map.values
