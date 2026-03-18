@@ -185,7 +185,7 @@ class Households(AgentBaseClass):
         # This is a simplification - in the future this should use proper subnational datasets
         available_countries = list(distribution_parameters.columns)
         country = available_countries[0]
-        self.model.logger.info(
+        self.model.logger.warning(
             "Using income distribution for country: %s (first available from GDL regions)",
             country,
         )
