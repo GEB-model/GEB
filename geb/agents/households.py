@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
-@njit
+@njit(cache=True)
 def _get_flooded_indices(
     hx: ArrayFloat32,
     hy: ArrayFloat32,
