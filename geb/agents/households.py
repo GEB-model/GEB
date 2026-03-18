@@ -42,7 +42,7 @@ def _get_flooded_indices(
     hy: ArrayFloat32,
     x_vals: ArrayFloat32,
     y_vals: ArrayFloat32,
-    flood_values: TwoDArrayFloat32,
+    flood_values: ArrayFloat32,
     threshold: float = 0.05,
 ) -> np.ndarray:
     """JIT-compiled function to determine which households are flooded based on their coordinates and the flood map values.
