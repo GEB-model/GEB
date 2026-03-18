@@ -21,6 +21,7 @@ from shapely.geometry import shape
 
 from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
 from geb.workflows.io import read_geom, read_params
+from geb.workflows.raster import sample_from_map
 
 from ..hydrology.landcovers import (
     FOREST,
@@ -610,9 +611,6 @@ class Households(AgentBaseClass):
 
         # get the flood map for this event
         flood_map: xr.DataArray = self.flood_maps[event]
-        x_vals = flood_map["x"].values
-        y_vals = flood_map["y"].values
-        flood_values = flood_map.values
 
         # cache household coordinates in flood_map CRS (Nx2 numpy array)
         if not hasattr(self, "_household_xy"):
@@ -624,10 +622,40 @@ class Households(AgentBaseClass):
             )
             self._household_xy = np.array(transformer.transform(x, y)).T
 
-        hx, hy = self._household_xy[:, 0], self._household_xy[:, 1]
+        # get flood map bounds
+        x_vals = flood_map.coords["x"].values
+        y_vals = flood_map.coords["y"].values
 
-        # compute flooded households using JIT-compiled function
-        flooded_indices = _get_flooded_indices(hx, hy, x_vals, y_vals, flood_values)
+        # set household coordinates outside the flood map bounds to nan
+        coords_clipped = self._household_xy.copy()
+        coords_clipped[:, 0] = np.where(
+            (coords_clipped[:, 0] < x_vals.min())
+            | (coords_clipped[:, 0] > x_vals.max()),
+            np.nan,
+            coords_clipped[:, 0],
+        )
+        coords_clipped[:, 1] = np.where(
+            (coords_clipped[:, 1] < y_vals.min())
+            | (coords_clipped[:, 1] > y_vals.max()),
+            np.nan,
+            coords_clipped[:, 1],
+        )
+
+        # get indices of coords that are not nan (i.e., households within flood map bounds)
+        valid_indices = ~np.isnan(coords_clipped).any(axis=1)
+        coords_clipped_valid = coords_clipped[valid_indices]
+
+        # sample flood map using clipped coordinates
+        sampled_values = sample_from_map(
+            array=flood_map.values,
+            coords=coords_clipped_valid,
+            gt=flood_map.rio.transform(recalc=True).to_gdal(),
+        )
+        all_locations = np.full(self.var.locations.data.shape[0], np.nan)
+        all_locations[valid_indices] = sampled_values
+        # np.where will return indices of flooded households relative to the original household array
+        flooded_indices = np.where(all_locations > 0)[0]
+
         return flooded_indices
 
     def update_risk_perceptions(self) -> None:
