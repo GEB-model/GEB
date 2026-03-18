@@ -6,6 +6,7 @@ on multiple basin clusters created by the 'geb init_multiple' command.
 
 import os
 import yaml
+from functools import lru_cache
 from pathlib import Path
 
 # Get configuration with defaults
@@ -20,73 +21,68 @@ LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", str(Path(_geb_root).parent / "mo
 EVALUATION_METHODS = config.get("EVALUATION_METHODS", "hydrology.plot_discharge,hydrology.evaluate_discharge")
 
 # Cache for basin areas to avoid repeated file reads
-_basin_area_cache = {}
-
+@lru_cache(maxsize=None)
 def get_basin_area_km2(cluster_name):
     """Read basin area from cluster's model.yml file with caching."""
-    if cluster_name in _basin_area_cache:
-        return _basin_area_cache[cluster_name]
-        
     model_yml_path = Path(LARGE_SCALE_DIR) / cluster_name / "base" / "model.yml"
-    
-    if not model_yml_path.exists():
-        _basin_area_cache[cluster_name] = 30000.0
-        return 30000.0  # Default area for unknown basins
-    
-    try:
-        with open(model_yml_path, 'r') as f:
-            config_data = yaml.safe_load(f)
-        
-        # Extract basin area if available
-        if 'basin' in config_data and 'total_area_km2' in config_data['basin']:
-            area = float(config_data['basin']['total_area_km2'])
-            _basin_area_cache[cluster_name] = area
-            return area
-        else:
-            _basin_area_cache[cluster_name] = 30000.0
-            return 30000.0  # Default area
-    except Exception as e:
-        _basin_area_cache[cluster_name] = 30000.0
-        return 30000.0  # Default area
+    area = 30000.0  # default for missing or unreadable files
 
+    if model_yml_path.exists():
+        try:
+            with open(model_yml_path) as f:
+                config_data = yaml.safe_load(f)
+            area = float(config_data.get("basin", {}).get("total_area_km2", 30000.0))
+        except Exception:
+            pass
+
+    return area
+
+@lru_cache(maxsize=None)
 def get_resources(cluster_name):
-    """Get memory allocation and SLURM partition based on basin size.
+    """Get SLURM resources based on basin size.
 
-    Memory strategy: request conservatively low mem_mb so SLURM does not filter
-    out the 257 GB small defq nodes (node003-015). Combined with --exclusive,
-    each job gets an entire node. Jobs that actually exceed a node's physical RAM
-    will be OOM-killed, which tells us the real minimum node size needed.
+    SLURM on this cluster does NOT use --mem for placement decisions (observed
+    repeatedly: all jobs pile onto one node regardless of --mem). CPU counts ARE
+    always enforced as a hard scheduling constraint. We exploit this to control
+    concurrency by requesting enough CPUs per job to limit jobs per node:
 
-    Partition nodes and usable memory (from sinfo):
-      defq  node001/002:  ~1008 GB
-      defq  node003-015:   ~251 GB
-      ivm-fat node243:     ~755 GB  ← 1 job at a time via --exclusive
+      defq   node001/002:  64 CPUs,  ~1031 GB  -> 32 CPUs/job -> 2 jobs/node -> 4 total
+      ivm-fat node243:    128 CPUs,   ~773 GB  -> 64 CPUs/job -> 2 jobs/node -> 2 total
+      Grand total: 6 concurrent jobs
 
-    Empirical peak RSS observed in March 2026 runs (update as data accumulates):
-      -  87k km² basin:  254 GB
-      - 130k km² basin:  533 GB
-      - 281k km² basin:  298 GB
-      - 672k km² basin:  398 GB
+    Memory safety (post ~50% reduction, Mar 2026; worst-case ~267 GB/job):
+      defq:    2 x 267 GB = 534 GB  < 1031 GB  OK
+      ivm-fat: 2 x 267 GB = 534 GB  <  773 GB  OK
+
+    node003-015 (~257 GB) are always excluded as too small for any basin build.
 
     Args:
         cluster_name: Name of the cluster directory (e.g. "Europe_007").
 
     Returns:
-        Tuple of (memory_mb, partition_name).
+        Tuple of (memory_mb, partition_name, cpus_per_task, slurm_extra).
     """
     area_km2 = get_basin_area_km2(cluster_name)
+    exclude = "--exclude=node[003-015]"
 
     if area_km2 >= 700000:
-        # Very large basins only fit on the dedicated 755 GB ivm-fat node.
+        # Very large basin: pin to defq (1031 GB) in case ivm-fat (773 GB) is too small.
+        # 32 CPUs -> max 2 jobs per defq node.
+        partition = "defq"
+        cpus = 32
+        memory_mb = 800000
+    elif area_km2 >= 500000:
+        # Medium-large basin: route to ivm-fat; 64 CPUs -> max 2 jobs on node243.
         partition = "ivm-fat"
-        memory_mb = 700000
+        cpus = 64
+        memory_mb = 300000
     else:
-        # All other basins: allow SLURM to place on any defq node or on
-        # Allow SLURM to place on any free node in either partition.\n        # ivm-fat has only 1 node (node243), so --exclusive limits it to 1 job.
-        partition = "defq,ivm-fat"
-        memory_mb = 200000  # 200 GB — scheduling hint only, not a hard cap
+        # Small basin: route to defq; 32 CPUs -> max 2 jobs per defq node.
+        partition = "defq"
+        cpus = 32
+        memory_mb = 300000
 
-    return memory_mb, partition
+    return memory_mb, partition, cpus, exclude
 
 
 # Dynamically discover cluster directories (run only once)
@@ -103,14 +99,12 @@ def get_cluster_names():
     ]
     return sorted(cluster_dirs)
 
-# Cache the cluster names to avoid repeated discovery
-if 'CLUSTER_NAMES' not in globals():
-    CLUSTER_NAMES = get_cluster_names()
-    if not CLUSTER_NAMES:
-        raise ValueError(
-            f"No cluster directories found in {LARGE_SCALE_DIR} "
-            f"matching pattern {CLUSTER_PREFIX}_*"
-        )
+CLUSTER_NAMES = get_cluster_names()
+if not CLUSTER_NAMES:
+    raise ValueError(
+        f"No cluster directories found in {LARGE_SCALE_DIR} "
+        f"matching pattern {CLUSTER_PREFIX}_*"
+    )
 
 # Rule to build a cluster
 rule build_cluster:
@@ -123,16 +117,12 @@ rule build_cluster:
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
-        cpus_per_task=2,
+        cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
-        # --exclusive: SLURM gives each job a whole node. Since memory is not
-        # enforced for scheduling, --exclusive prevents co-location. Partition
-        # "defq,ivm-fat" lets SLURM use any free node in either partition.
-        slurm_extra="--exclusive",
+        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
-        mkdir -p $(dirname {log})
         cd {params.cluster_dir}
         geb build --continue &> {log}
         touch {output}
@@ -151,13 +141,12 @@ rule spinup_cluster:
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
-        cpus_per_task=6,
+        cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
-        slurm_extra="--exclusive",
+        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
-        mkdir -p $(dirname {log})
         cd {params.cluster_dir}
         geb spinup &> {log}
         touch {output}
@@ -176,20 +165,14 @@ rule run_cluster:
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
-        cpus_per_task=8,
+        cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
-        slurm_extra="--exclusive",
+        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
-        mkdir -p $(dirname {log})
         cd {params.cluster_dir}
-        # Set scratch directory for temporary files to reduce memory usage
-        export TMPDIR=/scratch/$SLURM_JOB_ID
-        mkdir -p $TMPDIR
         geb run &> {log}
-        # Clean up scratch files
-        rm -rf $TMPDIR
         touch {output}
         """
 
@@ -206,13 +189,12 @@ rule evaluate_cluster:
         LARGE_SCALE_DIR + "/{cluster}/base/logs/evaluate.log"
     resources:
         mem_mb=16000,
-        runtime=11520,  # 8 days
+        runtime=240,  # 4 hours; evaluation is lightweight
         cpus_per_task=2,
-        slurm_partition="ivm",
+        slurm_partition="defq,ivm-fat",
         slurm_account="ivm",
     shell:
         """
-        mkdir -p $(dirname {log})
         cd {params.cluster_dir}
         geb evaluate --methods {params.methods} --include-spinup &> {log}
         touch {output}
@@ -222,10 +204,6 @@ rule evaluate_cluster:
 rule all:
     input:
         expand(LARGE_SCALE_DIR + "/{cluster}/base/evaluate.done", cluster=CLUSTER_NAMES)
-    shell:
-        f"""
-        echo "All {len(CLUSTER_NAMES)} clusters completed!"
-        """
 
 # Convenience rules for running specific phases across all clusters
 rule build_all:

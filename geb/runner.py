@@ -1,6 +1,7 @@
 """Runner module for GEB functions."""
 
 import cProfile
+import csv
 import importlib
 import logging
 import os
@@ -924,6 +925,59 @@ def set_fn(
         )
 
 
+def _write_build_stats(working_directory: Path, logger: logging.Logger) -> None:
+    """Append per-method build timing and peak-RSS stats to {model_dir}/build_stats.csv.
+
+    Derives model_dir and cluster from the working directory structure
+    (<model_dir>/<cluster>/base). Rows are always appended; the file and header
+    are created automatically on first write.
+
+    Args:
+        working_directory: Working directory of the build run (e.g. large_scale6/Europe_001/base).
+        logger: Logger instance for progress messages.
+    """
+    if not build_method.time_taken:
+        return
+
+    # <model_dir>/<cluster>/base  →  model_dir two levels up, cluster one level up
+    wd = Path(working_directory).resolve()
+    model_dir_path = wd.parents[1]
+    csv_path = model_dir_path / "build_stats.csv"
+    record_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with open(csv_path, "a", newline="") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=[
+                "record_time",
+                "model_dir",
+                "cluster",
+                "method",
+                "duration_s",
+                "peak_rss_mb",
+            ],
+        )
+        if not csv_path.stat().st_size:  # empty file → write header
+            writer.writeheader()
+        for method, duration in build_method.time_taken.items():
+            writer.writerow(
+                {
+                    "record_time": record_time,
+                    "model_dir": model_dir_path.name,
+                    "cluster": wd.parts[-2],
+                    "method": method,
+                    "duration_s": round(duration, 2),
+                    "peak_rss_mb": round(
+                        build_method.peak_memory_mb_per_method.get(method, 0.0), 0
+                    ),
+                }
+            )
+
+    logger.info(
+        f"Build stats ({len(build_method.time_taken)} methods) appended to {csv_path}"
+    )
+
+
 def build_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
@@ -975,11 +1029,14 @@ def build_fn(
             for method, args in parsed_build_config.items()
             if not method.startswith("_")
         }
-        model.build(
-            methods=methods,
-            region=parse_config(config, schema=Config)["general"]["region"],
-            continue_=continue_,
-        )
+        try:
+            model.build(
+                methods=methods,
+                region=parse_config(config, schema=Config)["general"]["region"],
+                continue_=continue_,
+            )
+        finally:
+            _write_build_stats(working_directory=working_directory, logger=logger)
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(

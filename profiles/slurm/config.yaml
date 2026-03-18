@@ -10,12 +10,11 @@ executor: slurm
 
 # Job management
 # Snakemake submits up to `jobs` jobs to SLURM simultaneously.
-# All jobs use --exclusive (1 per node) + partition "defq,ivm-fat" so SLURM
-# can place on any free node across both partitions. No Snakemake-side token
-# pools needed: SLURM handles placement via --exclusive.
-jobs: 7
+# Jobs are excluded from small defq nodes (node003-015, ~257 GB) and distributed
+# freely across node001/002 (~1031 GB) and node243 (~773 GB) via --mem hints.
+jobs: 8
 max-jobs-per-second: 2
-max-status-checks-per-second: 0.5
+max-status-checks-per-second: 1
 
 # Resource defaults (overridden by rule-specific resources)
 default-resources:
