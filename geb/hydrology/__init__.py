@@ -34,7 +34,7 @@ from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
-from .landsurface import LandSurface
+from .landsurface.landsurface_model import LandSurface
 from .routing import Routing
 from .runoff_concentration import RunoffConcentrator
 from .water_demand import WaterDemand
@@ -89,12 +89,14 @@ class Hydrology(Data, Module):
                     self.HRU.var.snow_water_equivalent_m.astype(np.float64)
                     + self.HRU.var.liquid_water_in_snow_m.astype(np.float64)
                     + self.HRU.var.interception_storage_m.astype(np.float64)
-                    + np.nansum(self.HRU.var.w.astype(np.float64), axis=0)
+                    + np.nansum(self.HRU.var.water_content_m.astype(np.float64), axis=0)
                     + self.HRU.var.topwater_m.astype(np.float64)
                 )
                 * self.HRU.var.cell_area
             ).sum()
-            + (self.HRU.var.topwater.astype(np.float64) * self.HRU.var.cell_area).sum()
+            + (
+                self.HRU.var.topwater_m.astype(np.float64) * self.HRU.var.cell_area
+            ).sum()
             + self.routing.router.get_total_storage(
                 self.grid.var.discharge_in_rivers_m3_s_substep
             )
@@ -106,6 +108,10 @@ class Hydrology(Data, Module):
             + self.grid.var.retention_basin_storage_m3.astype(
                 np.float64
             ).sum()  # retention basins are considered part of the hydrological system, as they can store water and affect the water balance
+            + (
+                self.grid.var.overland_flow_buffer.astype(np.float64)
+                * self.grid.var.cell_area
+            ).sum()
         )
 
     def step(self) -> None:
@@ -302,7 +308,7 @@ class Hydrology(Data, Module):
         timer.finish_split("Hill slope erosion")
 
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.report(locals())
 

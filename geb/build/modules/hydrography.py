@@ -924,12 +924,6 @@ class Hydrography(BuildModelBase):
             )
             return
 
-        global_ocean_mdt_fn = self.old_data_catalog.get_source(
-            "global_ocean_mean_dynamic_topography"
-        ).path
-
-        global_ocean_mdt = xr.open_dataset(global_ocean_mdt_fn)
-
         # get the model bounds and buffer by ~10km
         model_bounds = self.bounds
         model_bounds = (
@@ -938,28 +932,11 @@ class Hydrography(BuildModelBase):
             model_bounds[2] + 0.083,  # max_lon
             model_bounds[3] + 0.083,  # max_lat
         )
-        min_lon, min_lat, max_lon, max_lat = model_bounds
 
-        # reproject global_ocean_mdt to 0.008333 grid (~1km)
-        global_ocean_mdt = global_ocean_mdt["mdt"]
-        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
+        global_ocean_mdt = self.data_catalog.fetch(
+            "global_ocean_mean_dynamic_topography"
+        ).read(model_bounds)
 
-        # clip to model bounds
-        global_ocean_mdt = global_ocean_mdt.rio.clip_box(
-            minx=min_lon,
-            miny=min_lat,
-            maxx=max_lon,
-            maxy=max_lat,
-        )
-
-        # write crs
-        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
-        # drop unused columns
-        global_ocean_mdt = global_ocean_mdt.squeeze(drop=True)
-        # set datatype to float32 and set fillvalue to np.nan
-        global_ocean_mdt = global_ocean_mdt.astype(np.float32)
-        global_ocean_mdt.encoding["_FillValue"] = np.nan
-        global_ocean_mdt.attrs["_FillValue"] = np.nan
         # write to model
         self.set_other(
             global_ocean_mdt,
@@ -1008,31 +985,33 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_coastlines(self) -> None:
         """Sets up the coastlines for the model."""
-        if not self.geom["routing/subbasins"]["is_coastal"].any():
-            self.logger.info("No coastal basins found, skipping setup_coastlines")
-            return
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            # load the coastline from the data catalog
+            coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
 
-        # load the coastline from the data catalog
-        coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
+            # clip the coastline to overlapping with mask
+            coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
+            # merge all coastlines into a single linestring
+            coastlines = gpd.GeoDataFrame(
+                geometry=[coastlines.union_all()], crs=coastlines.crs
+            )
 
-        # clip the coastline to overlapping with mask
-        coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
-        # merge all coastlines into a single linestring
-        coastlines = gpd.GeoDataFrame(
-            geometry=[coastlines.union_all()], crs=coastlines.crs
-        )
+            # write to model files
+            self.set_geom(coastlines, name="coastal/coastlines")
 
-        # write to model files
-        self.set_geom(coastlines, name="coastal/coastlines")
-
-        # create rectangular box around coastlines
-        if not coastlines.empty:
-            bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
-            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
-            bbox_gdf.geometry = bbox_gdf.geometry.buffer(
-                0.04, join_style=2
-            )  # buffer by 0.04 degree
-            self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+            # create rectangular box around coastlines
+            if not coastlines.empty:
+                bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
+                bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
+                bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                    0.04, join_style=2
+                )  # buffer by 0.04 degree
+                self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+        else:
+            self.logger.info("No coastal basins found, setting empty coastlines")
+            empty_gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+            self.set_geom(empty_gdf, name="coastal/coastlines")
+            self.set_geom(empty_gdf, name="coastal/coastline_bbox")
 
     @build_method(required=True)
     def setup_osm_land_polygons(
@@ -1060,33 +1039,43 @@ class Hydrography(BuildModelBase):
     @build_method(depends_on=["setup_coastlines"], required=True)
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
-        if not self.geom["routing/subbasins"]["is_coastal"].any():
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            # load elevation data
+            elevation = self.other["DEM/fabdem"]
+            # load the lecz mask
+            low_elevation_coastal_zone_mask = (
+                self.create_low_elevation_coastal_zone_mask()
+            )
+
+            # add small buffer to ensure connection of 'islands' with coastlines
+            low_elevation_coastal_zone_mask.geometry = (
+                low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+            )
+
+            # sample the minimum elevation present in the lecz mask
+            mask = elevation.rio.clip(
+                low_elevation_coastal_zone_mask.geometry,
+                low_elevation_coastal_zone_mask.crs,
+                all_touched=True,
+                drop=False,
+            )
+
+            initial_water_levels = float(np.nanmin(mask.values))
+
+            low_elevation_coastal_zone_mask["initial_water_level"] = (
+                initial_water_levels
+            )
+        else:
             self.logger.info(
                 "No coastal basins found, skipping setup_coastal_sfincs_model_regions"
             )
-            return
+            low_elevation_coastal_zone_mask = gpd.GeoDataFrame(
+                geometry=[], crs=self.geom["mask"].crs
+            )
+            low_elevation_coastal_zone_mask["initial_water_level"] = pd.Series(
+                dtype=np.float32
+            )
 
-        # load elevation data
-        elevation = self.other["DEM/fabdem"]
-        # load the lecz mask
-        low_elevation_coastal_zone_mask = self.create_low_elevation_coastal_zone_mask()
-
-        # add small buffer to ensure connection of 'islands' with coastlines
-        low_elevation_coastal_zone_mask.geometry = (
-            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
-        )
-
-        # sample the minimum elevation present in the lecz mask
-        mask = elevation.rio.clip(
-            low_elevation_coastal_zone_mask.geometry,
-            low_elevation_coastal_zone_mask.crs,
-            all_touched=True,
-            drop=False,
-        )
-
-        initial_water_levels = float(np.nanmin(mask.values))
-
-        low_elevation_coastal_zone_mask["initial_water_level"] = initial_water_levels
         self.set_geom(
             low_elevation_coastal_zone_mask,
             name="coastal/low_elevation_coastal_zone_mask",
@@ -1362,7 +1351,7 @@ class Hydrography(BuildModelBase):
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[unresolved-attribute]
             1979, "01"
         )
         ref = xr.open_dataset(ref_file)
@@ -1382,7 +1371,7 @@ class Hydrography(BuildModelBase):
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+                f = self.old_data_catalog.get_source("GTSM_surge").path.format(
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1440,7 +1429,7 @@ class Hydrography(BuildModelBase):
         )
 
         # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[possibly-missing-attribute]
+        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}

@@ -1,0 +1,35 @@
+{
+  "title": "GEB (Geographical Environmental and Behavioural model)",
+  "description": "GEB simulates the environment (e.g., hydrology, floods), individual people, households, and organizations as well as their interactions at both small and large scale. The model employs a 'deep' coupling of an agent-based model, a hydrological model, a vegetation model, and a hydrodynamic model.",
+  "access_right": "open",
+  "upload_type": "software",
+  "license": "GPL-3.0-only",
+  "keywords": [
+    "agent-based modeling",
+    "hydrology",
+    "flood-risk",
+    "environmental-modeling",
+    "hydrodynamics",
+    "human-environment-interactions",
+    "coupled-modeling"
+  ],
+  "creators": [
+    { "name": "de Bruijn, Jens", "orcid": "0000-0003-3961-6382" },
+    { "name": "Kalthof, Maurice", "orcid": "0000-0003-4020-8597" },
+    { "name": "Bril, Veerle", "orcid": "0009-0009-5623-6200" },
+    { "name": "Tierolf, Lars", "orcid": "0000-0002-7983-4344" },
+    { "name": "Sadana, Tarun", "orcid": "0009-0001-2016-1552" },
+    { "name": "Stefaniak, Elisa", "orcid": "0000-0003-2998-5619" },
+    { "name": "Busker, Tim", "orcid": "0000-0001-7860-9762" },
+    { "name": "Oliveira, Rafaella", "orcid": "0000-0003-0309-7242" },
+    { "name": "Ferman Carral, Carolina", "orcid": "0009-0006-8295-1054" },
+    { "name": "Pontman, Roy", "orcid": "0009-0007-5057-0385" },
+    { "name": "van Amelsvoort, Lisanne", "orcid": "0009-0004-2438-5133" },
+    { "name": "Kiesel, Joshua", "orcid": "0009-0005-6832-5738" }
+  ],
+    "grants": [
+    { "id": "10.13039/501100000780::884442" },
+    { "id": "10.13039/501100000780::101060464" }
+    ],
+  "notes": "Additional funding was provided from 'fairSTREAM' under IIASA's Strategic Initiatives Program; and 'JCAR ATRACE', www.jcar-atrace.eu."
+}

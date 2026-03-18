@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
@@ -832,72 +831,6 @@ class KinematicWave(Router):
         )
 
 
-def fill_discharge_gaps(
-    discharge_m3_s: ArrayFloat32,
-    rivers: gpd.GeoDataFrame | pd.DataFrame,
-    waterbody_ids: ArrayInt32,
-    outflow_per_waterbody_m3_s: ArrayFloat32,
-) -> ArrayFloat32:
-    """Fill gaps with NaN values in discharge data with valid discharge data.
-
-    First, discharge values are filled:
-
-    1) with discharges from waterbodies if available
-    2) by propagating discharge values from up to downstream
-    3) by propagating discharge values from downstream to upstream
-
-    Todo:
-        In some cases when a river is entirely in a waterbody, the discharge
-        cannot be filled. In these cases, we currently leave the discharge as NaN.
-
-    Args:
-        discharge_m3_s: 1D array of discharge values with possible NaNs.
-        rivers: GeoDataFrame containing river network geometries.
-        waterbody_ids: 1D array with waterbody IDs for each cell. This must be the same
-            size as discharge_m3_s. -1 indicates no waterbody, and non-negative values indicate
-            waterbody cells.
-        outflow_per_waterbody_m3_s: 1D array with outflow values for each waterbody. This
-            must be the same size as the number of unique waterbody IDs.
-
-    Returns:
-        1D array of discharge values with NaNs in rivers filled.
-    """
-    filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
-    for river_id, river in rivers.iterrows():
-        if river["is_further_downstream_outflow"]:
-            continue  # skip rivers that are further downstream
-        # iterate from upstream to downstream
-        valid_discharge: np.float32 = np.float32(np.nan)
-        for idx in river["hydrography_linear"]:
-            if not np.isnan(discharge_m3_s[idx]):
-                valid_discharge = discharge_m3_s[idx]
-
-            elif np.isnan(filled_discharge_m3_s[idx]):
-                if waterbody_ids[idx] != -1:
-                    waterbody_id = waterbody_ids[idx]
-                    valid_discharge = outflow_per_waterbody_m3_s[waterbody_id]
-
-                filled_discharge_m3_s[idx] = valid_discharge
-
-        if np.isnan(valid_discharge):
-            warnings.warn(
-                f"WARNING: No valid discharge found for river: {river_id}, please let Jens know."
-            )
-            continue  # skip if no valid discharge found
-
-        down_stream_discharge: np.float32 = filled_discharge_m3_s[
-            river["hydrography_linear"][-1]
-        ]
-        for idx in reversed(river["hydrography_linear"][:-1]):
-            current_discharge: np.float32 = filled_discharge_m3_s[idx]
-            if np.isnan(current_discharge):
-                filled_discharge_m3_s[idx] = down_stream_discharge
-            else:
-                down_stream_discharge = current_discharge
-
-    return filled_discharge_m3_s
-
-
 class Accuflux(Router):
     """Accuflux routing algorithm.
 
@@ -1265,6 +1198,45 @@ class Accuflux(Router):
         return self.get_available_storage(Q, maximum_abstraction_ratio=1.0)
 
 
+@njit(cache=True)
+def fill_discharge_in_waterbodies(
+    discharge_m3_s: ArrayFloat32,
+    upstream_matrix_from_up_to_downstream: TwoDArrayInt32,
+    idxs_up_to_downstream: ArrayInt32,
+) -> ArrayFloat32:
+    """Fill the discharge in waterbodies based on the discharge in upstream cells.
+
+    Args:
+        discharge_m3_s: A 1D array with the discharge in m3/s for
+            each cell in the river network. Discharge in waterbodies is NaN.
+        upstream_matrix_from_up_to_downstream: Upstream matrix from the river network, which is
+            a 2D array. For each cell (first dimension) in the river network, it contains the indices of the upstream cells (second dimension).
+            -1 indicates no upstream cell.
+        idxs_up_to_downstream: Indices of the cells in the river network, associated with the upstream_matrix_from_up_to_downstream.
+
+    Returns:
+        A 1D array with the discharge in m3/s for each cell in the river network, where the discharge in waterbodies is filled based on the discharge in upstream cells.
+    """
+    for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
+        node: np.int32 = idxs_up_to_downstream[i]
+        if np.isnan(discharge_m3_s[node]):
+            upstream_nodes: ArrayInt32 = upstream_matrix_from_up_to_downstream[i]
+
+            discharge_m3_s_node: np.float32 = np.float32(0.0)
+
+            for upstream_node in upstream_nodes:
+                if upstream_node == -1:
+                    break
+
+                upstream_discharge_m3_s: np.float32 = discharge_m3_s[upstream_node]
+                if not np.isnan(upstream_discharge_m3_s):
+                    discharge_m3_s_node += discharge_m3_s[upstream_node]
+
+            discharge_m3_s[node] = discharge_m3_s_node
+
+    return discharge_m3_s
+
+
 class RoutingVariables(Bucket):
     """Routing variables."""
 
@@ -1283,6 +1255,7 @@ class Routing(Module):
 
     var: RoutingVariables
     inflow: dict[tuple[int, int], ArrayFloat32]
+    active_rivers: gpd.GeoDataFrame
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the Routing module.
@@ -1321,6 +1294,7 @@ class Routing(Module):
         self.rivers: gpd.GeoDataFrame = self.load_rivers(
             grid_linear_mapping=self.grid.linear_mapping
         )
+        self.active_rivers = self.get_active_rivers()
 
         self.river_ids = self.grid.load(
             self.model.files["grid"]["routing/river_ids"],
@@ -1422,7 +1396,7 @@ class Routing(Module):
                 river_length=self.grid.var.river_length,
                 river_alpha=self.grid.var.river_alpha,
                 river_beta=self.var.river_beta,
-                waterbody_id=self.grid.var.waterBodyID,
+                waterbody_id=self.grid.var.waterbody_ids,
                 is_waterbody_outflow=is_waterbody_outflow,
                 retention_storage_m3=self.grid.var.retention_basin_storage_m3,
                 retention_max_storage_m3=self.retention_max_storage_m3,
@@ -1435,7 +1409,7 @@ class Routing(Module):
             self.router = Accuflux(
                 dt=3600,
                 river_network=self.river_network,
-                waterbody_id=self.grid.var.waterBodyID,
+                waterbody_id=self.grid.var.waterbody_ids,
                 is_waterbody_outflow=is_waterbody_outflow,
             )
         else:
@@ -1643,7 +1617,7 @@ class Routing(Module):
 
         channel_abstraction_m3_per_hour: np.ndarray = channel_abstraction_m3 / 24
         assert (
-            channel_abstraction_m3_per_hour[self.grid.var.waterBodyID != -1] == 0.0
+            channel_abstraction_m3_per_hour[self.grid.var.waterbody_ids != -1] == 0.0
         ).all(), (
             "Channel abstraction must be zero for water bodies, "
             "but found non-zero value."
@@ -1653,10 +1627,10 @@ class Routing(Module):
 
         # add return flow to the water bodies
         return_flow_m3_to_waterbodies_per_hour: np.ndarray = np.bincount(
-            self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-            weights=return_flow_m3_per_hour[self.grid.var.waterBodyID != -1],
+            self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+            weights=return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1],
         )
-        return_flow_m3_per_hour[self.grid.var.waterBodyID != -1] = 0.0
+        return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1] = 0.0
 
         self.grid.var.discharge_m3_s_per_substep: TwoDArrayFloat32 = np.full_like(
             self.grid.var.discharge_m3_s_per_substep,
@@ -1695,13 +1669,13 @@ class Routing(Module):
             # then split the runoff into runoff directly to water bodies
             # and runoff to the channel network
             self.hydrology.waterbodies.var.storage += np.bincount(
-                self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-                weights=total_runoff_m3[self.grid.var.waterBodyID != -1],
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                weights=total_runoff_m3[self.grid.var.waterbody_ids != -1],
             )
 
             # after adding the runoff to the water bodies, we set the runoff to zero
             # in those grid cells
-            total_runoff_m3[self.grid.var.waterBodyID != -1] = 0.0
+            total_runoff_m3[self.grid.var.waterbody_ids != -1] = 0.0
 
             self.hydrology.waterbodies.var.storage += (
                 return_flow_m3_to_waterbodies_per_hour
@@ -1710,13 +1684,13 @@ class Routing(Module):
             # TODO: This calculation can be optimized by pre-calculating some parts
             potential_evaporation_per_waterbody_m3 = (
                 np.bincount(
-                    self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
+                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
                     weights=reference_evapotranspiration_water_m[
-                        hour, self.grid.var.waterBodyID != -1
+                        hour, self.grid.var.waterbody_ids != -1
                     ],
                 )
                 / np.bincount(
-                    self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1]
+                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1]
                 )
                 * self.hydrology.waterbodies.var.lake_area
             )
@@ -1753,12 +1727,12 @@ class Routing(Module):
                 - channel_abstraction_m3_per_hour
             )
             assert (
-                side_flow_channel_m3_per_hour[self.grid.var.waterBodyID != -1] == 0
+                side_flow_channel_m3_per_hour[self.grid.var.waterbody_ids != -1] == 0
             ).all()
 
             for (y, x), inflow in self.inflow.items():
                 cell_index: int = self.grid.linear_mapping[y, x]
-                if self.grid.var.waterBodyID[cell_index] != -1:
+                if self.grid.var.waterbody_ids[cell_index] != -1:
                     raise ValueError("Inflow cannot be added to waterbody cells.")
 
                 inflow_m3 = inflow[self.inflow_idx] * np.float32(3600)
@@ -1784,7 +1758,7 @@ class Routing(Module):
 
             assert (
                 self.grid.var.discharge_in_rivers_m3_s_substep[
-                    self.grid.var.waterBodyID == -1
+                    self.grid.var.waterbody_ids == -1
                 ]
                 >= 0.0
             ).all()
@@ -1797,7 +1771,7 @@ class Routing(Module):
             # the ratio of each grid cell that is currently covered by a river
             channel_ratio: ArrayFloat32 = get_channel_ratio(
                 river_length=self.grid.var.river_length,
-                river_width=np.where(self.grid.var.waterBodyID == -1, river_width, 0),
+                river_width=np.where(self.grid.var.waterbody_ids == -1, river_width, 0),
                 cell_area=self.grid.var.cell_area,
             )
 
@@ -1852,37 +1826,39 @@ class Routing(Module):
             # ensure that discharge is nan for water bodies
             assert np.isnan(
                 self.grid.var.discharge_in_rivers_m3_s_substep[
-                    self.grid.var.waterBodyID != -1
+                    self.grid.var.waterbody_ids != -1
                 ]
             ).all()
 
-            discharge_m3_s_substep: ArrayFloat32 = (
+            discharge_m3_s_substep = (
                 self.grid.var.discharge_in_rivers_m3_s_substep.copy()
             )
 
-            discharge_m3_s_substep_filled: ArrayFloat32 = fill_discharge_gaps(
-                self.grid.var.discharge_in_rivers_m3_s_substep,
-                rivers=self.rivers,
-                waterbody_ids=self.grid.var.waterBodyID,
-                outflow_per_waterbody_m3_s=outflow_per_waterbody_m3
-                * np.float32(1 / 3600),
+            # set waterbody outflow points to the outflow of the waterbody
+            discharge_m3_s_substep = self.hydrology.waterbodies.map_to_grid_outflow(
+                outflow_per_waterbody_m3 / 3600, out=discharge_m3_s_substep
+            )
+            discharge_m3_s_substep = fill_discharge_in_waterbodies(
+                discharge_m3_s=discharge_m3_s_substep,
+                upstream_matrix_from_up_to_downstream=self.router.upstream_matrix_from_up_to_downstream,
+                idxs_up_to_downstream=self.router.idxs_up_to_downstream,
             )
 
-            self.grid.var.discharge_m3_s_per_substep[hour, :] = (
-                discharge_m3_s_substep_filled
-            )
+            # after filling the gaps, we should not have any nans in the river cells
+            assert not np.isnan(discharge_m3_s_substep[self.river_ids != -1]).any()
 
-            self.var.sum_of_all_discharge_steps += discharge_m3_s_substep_filled
+            self.grid.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
+
+            self.var.sum_of_all_discharge_steps += discharge_m3_s_substep
             self.var.discharge_step_count += 1
 
-            assert (
-                self.router.get_available_storage(
-                    self.grid.var.discharge_in_rivers_m3_s_substep
-                )
-                >= 0.0
-            ).all()
-
             if __debug__:
+                assert (
+                    self.router.get_available_storage(
+                        self.grid.var.discharge_in_rivers_m3_s_substep
+                    )
+                    >= 0.0
+                ).all()
                 # Discharge at outlets and lakes and reservoirs
                 outflow_at_pits_m3 += outflow_at_pits_m3_routing_step
                 waterbody_evaporation_m3 += (
@@ -1971,7 +1947,7 @@ class Routing(Module):
             np.float64
         ).sum()
         if over_abstraction_m3.sum() > 100:
-            print(
+            self.model.logger.warning(
                 f"Total over-abstraction in routing step is {total_over_abstraction_m3:.2f} m³"
             )
 
@@ -2001,8 +1977,7 @@ class Routing(Module):
         ]
         return outflow_rivers
 
-    @property
-    def active_rivers(self) -> gpd.GeoDataFrame:
+    def get_active_rivers(self) -> gpd.GeoDataFrame:
         """Get the active rivers (rivers that are not water bodies).
 
         Returns:
@@ -2013,4 +1988,4 @@ class Routing(Module):
             (~rivers["is_downstream_outflow"])
             & (~rivers["is_further_downstream_outflow"])
         ]
-        return active_rivers
+        return active_rivers.copy()

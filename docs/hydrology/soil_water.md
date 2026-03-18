@@ -1,4 +1,4 @@
-# Soil
+# Soil Water
 
 The soil module has 6 soil layers, following the convention of the SoilGrids database[@poggio2021soilgrids].
 
@@ -191,4 +191,4 @@ If water is rising from the groundwater, percolation is suppressed.
 
 ## Code
 
-::: geb.hydrology.soil
+::: geb.hydrology.landsurface.water
