@@ -3542,13 +3542,35 @@ class GEBModel(
 
         build_run_started_at: datetime = datetime.now()
 
+        # Determine whether this is a cluster build so we can flush memory stats
+        # after every method (including on crash) rather than only at the end.
+        root_abs: Path = Path(self.root).resolve()
+        stats_path: Path | None = None
+        cluster_name_for_stats: str = ""
+        if record_progress and root_abs.parent.name == "base":
+            stats_path = root_abs.parent.parent.parent / "build_memory_stats.xlsx"
+            cluster_name_for_stats = root_abs.parent.parent.name
+
         for method in methods:
             if method in completed_methods:
                 self.logger.info(f"Skipping already completed method: {method}")
                 continue
 
             kwargs = {} if methods[method] is None else methods[method]
-            self.run_method(method, **kwargs)
+            try:
+                self.run_method(method, **kwargs)
+            finally:
+                # Flush memory stats after every method regardless of success or
+                # failure so partial results survive job crashes.
+                if stats_path is not None:
+                    try:
+                        build_method.write_memory_stats(
+                            stats_path=stats_path,
+                            cluster_name=cluster_name_for_stats,
+                            run_timestamp=build_run_started_at,
+                        )
+                    except Exception as exc:
+                        self.logger.warning(f"Could not write memory stats: {exc}")
             self.write_file_library()
 
             if record_progress:
@@ -3560,23 +3582,6 @@ class GEBModel(
         self.logger.info("Finished!")
 
         build_method.log_time_taken()
-
-        # Write peak-memory stats only for cluster builds (…/<collection>/<cluster>/base/input).
-        root_abs: Path = Path(self.root).resolve()
-        if (
-            record_progress
-            and build_method.peak_memory_mb_per_method
-            and root_abs.parent.name == "base"
-        ):
-            try:
-                build_method.write_memory_stats(
-                    stats_path=root_abs.parent.parent.parent
-                    / "build_memory_stats.xlsx",
-                    cluster_name=root_abs.parent.parent.name,
-                    run_timestamp=build_run_started_at,
-                )
-            except Exception as exc:
-                self.logger.warning(f"Could not write memory stats: {exc}")
 
     def build(
         self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool

@@ -209,6 +209,9 @@ class _build_method:
         # Peak RSS memory (MB) measured during each build method via a background
         # sampling thread. Populated automatically by the wrapper.
         self.peak_memory_mb_per_method: dict[str, float] = {}
+        # Tracks which methods have already been flushed to the stats file so
+        # incremental writes don't produce duplicate rows.
+        self._methods_written_to_stats: set[str] = set()
 
     def _resolve_logger(
         self, call_args: tuple[Any, ...] | None = None
@@ -283,19 +286,18 @@ class _build_method:
                 threading.Thread(target=_sample_memory, daemon=True).start()
 
                 start_time: float = time()
-                value: Any = func(*args, **kwargs)
-                end_time: float = time()
-
-                _stop_event.set()
-
-                elapsed_time: float = end_time - start_time
-
-                self.time_taken[func.__name__] = elapsed_time
-                self.peak_memory_mb_per_method[func.__name__] = _peak_mb
-                active_logger.info(
-                    f"Completed {func.__name__} in {elapsed_time:.2f} seconds"
-                    f" (peak RSS {_peak_mb:.0f} MB)"
-                )
+                try:
+                    value: Any = func(*args, **kwargs)
+                finally:
+                    end_time: float = time()
+                    _stop_event.set()
+                    elapsed_time: float = end_time - start_time
+                    self.time_taken[func.__name__] = elapsed_time
+                    self.peak_memory_mb_per_method[func.__name__] = _peak_mb
+                    active_logger.info(
+                        f"Completed {func.__name__} in {elapsed_time:.2f} seconds"
+                        f" (peak RSS {_peak_mb:.0f} MB)"
+                    )
                 return value
 
             self.add_tree_node(func)
@@ -523,7 +525,14 @@ class _build_method:
         """
         import openpyxl  # noqa: PLC0415 – optional, only needed here
 
-        if not self.peak_memory_mb_per_method:
+        # Only write methods not yet flushed to avoid duplicate rows on
+        # incremental calls (one call per completed/crashed method).
+        new_methods: dict[str, float] = {
+            m: v
+            for m, v in self.peak_memory_mb_per_method.items()
+            if m not in self._methods_written_to_stats
+        }
+        if not new_methods:
             return
 
         stats_path = Path(stats_path)
@@ -534,10 +543,12 @@ class _build_method:
         else:
             wb = openpyxl.Workbook()
             wb.active.title = "memory_stats"
-            wb.active.append(["cluster", "run_started_at", "method", "peak_memory_mb", "elapsed_s"])
+            wb.active.append(
+                ["cluster", "run_started_at", "method", "peak_memory_mb", "elapsed_s"]
+            )
         ws = wb.active
 
-        for method, peak_mb in self.peak_memory_mb_per_method.items():
+        for method, peak_mb in new_methods.items():
             elapsed_s: float = self.time_taken.get(method, float("nan"))
             ws.append(
                 [
@@ -550,6 +561,7 @@ class _build_method:
             )
 
         wb.save(stats_path)
+        self._methods_written_to_stats.update(new_methods)
 
     def log_time_taken(self) -> None:
         """Log the time taken for each method in the dependency tree."""
