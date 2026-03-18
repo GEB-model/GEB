@@ -615,8 +615,10 @@ class Households(AgentBaseClass):
         )
         all_locations = np.full(self.var.locations.data.shape[0], np.nan)
         all_locations[valid_indices] = sampled_values
+        # Use the same minimum flood depth threshold (0.05 m) as elsewhere in the model
+        minimum_flood_depth_m = 0.05
         # np.where will return indices of flooded households relative to the original household array
-        flooded_indices = np.where(all_locations > 0)[0]
+        flooded_indices = np.where(all_locations > minimum_flood_depth_m)[0]
 
         return flooded_indices
 
