@@ -615,7 +615,11 @@ class Households(AgentBaseClass):
         """
         # draw a single random number
         p_random = np.random.random()
-        probabilities = 1 / self.return_periods
+        # Work with a locally sorted copy of return periods to ensure correct event selection
+        return_periods_arr = np.asarray(self.return_periods, dtype=float)
+        sort_idx = np.argsort(return_periods_arr)  # ascending order
+        sorted_return_periods = return_periods_arr[sort_idx]
+        probabilities = 1.0 / sorted_return_periods
 
         if p_random >= probabilities.max():
             return np.array([], dtype=int)
@@ -623,7 +627,7 @@ class Households(AgentBaseClass):
         # find the event corresponding to the random draw
         event_idx = np.searchsorted(probabilities[::-1], p_random)
         event_idx = len(probabilities) - 1 - event_idx
-        event = self.return_periods[event_idx]
+        event = sorted_return_periods[event_idx]
         print(
             f"Return period flood event: {event} years (p={probabilities[event_idx]:.4f}, random draw={p_random:.4f})"
         )
