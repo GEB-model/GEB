@@ -50,8 +50,8 @@ def _get_flooded_indices(
     Args:
         hx: Array of household x-coordinates in the flood map CRS.
         hy: Array of household y-coordinates in the flood map CRS.
-        x_vals: Array of x-coordinates in the flood map CRS.
-        y_vals: Array of y-coordinates in the flood map CRS.
+        x_vals: Array of x-coordinates in the flood map CRS (monotonic, ascending or descending).
+        y_vals: Array of y-coordinates in the flood map CRS (monotonic, ascending or descending).
         flood_values: 2D array of flood values.
         threshold: Threshold for determining if a household is flooded.
 
@@ -60,15 +60,40 @@ def _get_flooded_indices(
     """
     n = hx.shape[0]
     flooded = []
+
+    # Determine axis orientations once; np.searchsorted requires ascending arrays.
+    x_len = x_vals.shape[0]
+    y_len = y_vals.shape[0]
+    x_ascending = x_vals[0] <= x_vals[x_len - 1]
+    y_ascending = y_vals[0] <= y_vals[y_len - 1]
+
+    if not x_ascending:
+        x_vals_rev = x_vals[::-1]
+    if not y_ascending:
+        y_vals_rev = y_vals[::-1]
+
     for i in range(n):
-        # nearest index along x
-        ix = np.searchsorted(x_vals, hx[i]) - 1
-        ix = min(max(ix, 0), x_vals.shape[0] - 1)
-        # nearest index along y
-        iy = np.searchsorted(y_vals, hy[i]) - 1
-        iy = min(max(iy, 0), y_vals.shape[0] - 1)
+        # nearest index along x, handling both ascending and descending coordinate arrays
+        if x_ascending:
+            ix = np.searchsorted(x_vals, hx[i]) - 1
+        else:
+            ix_rev = np.searchsorted(x_vals_rev, hx[i]) - 1
+            ix_rev = min(max(ix_rev, 0), x_len - 1)
+            ix = x_len - 1 - ix_rev
+        ix = min(max(ix, 0), x_len - 1)
+
+        # nearest index along y, handling both ascending and descending coordinate arrays
+        if y_ascending:
+            iy = np.searchsorted(y_vals, hy[i]) - 1
+        else:
+            iy_rev = np.searchsorted(y_vals_rev, hy[i]) - 1
+            iy_rev = min(max(iy_rev, 0), y_len - 1)
+            iy = y_len - 1 - iy_rev
+        iy = min(max(iy, 0), y_len - 1)
+
         if flood_values[iy, ix] > threshold:
             flooded.append(i)
+
     return np.array(flooded, dtype=np.int64)
 
 
