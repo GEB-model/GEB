@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
+from numba import njit
 import osmnx as ox
 import pandas as pd
 import xarray as xr
@@ -33,6 +34,22 @@ from .general import AgentBaseClass
 if TYPE_CHECKING:
     from geb.agents import Agents
     from geb.model import GEBModel
+
+
+@njit
+def _get_flooded_indices(hx, hy, x_vals, y_vals, flood_values, threshold=0.05):
+    n = hx.shape[0]
+    flooded = []
+    for i in range(n):
+        # nearest index along x
+        ix = np.searchsorted(x_vals, hx[i]) - 1
+        ix = min(max(ix, 0), x_vals.shape[0] - 1)
+        # nearest index along y
+        iy = np.searchsorted(y_vals, hy[i]) - 1
+        iy = min(max(iy, 0), y_vals.shape[0] - 1)
+        if flood_values[iy, ix] > threshold:
+            flooded.append(i)
+    return np.array(flooded, dtype=np.int64)
 
 
 def from_landuse_raster_to_polygon(
@@ -522,51 +539,42 @@ class Households(AgentBaseClass):
         )
 
     def return_period_flood(self):
-        # get inverse return periods
-        probabilities = 1 / self.return_periods
-        # draw random number for each household to determine if they experienced a flood based on the return periods
+        # draw a single random number
         p_random = np.random.random()
-        if (
-            p_random < probabilities.max()
-        ):  # if the random number is smaller than the highest probability, then a flood occurred
-            # check for each return period if the random number is smaller than the probability, if yes, then the household experienced a flood
-            event = self.return_periods[np.where(probabilities > p_random)[0][-1]]
-            flood_map: xr.DataArray = self.flood_maps[event]
-            # get depths at household locations (temp geometry to sample flood map at household locations in the correct CRS)
-            household_locations = gpd.GeoDataFrame(
-                geometry=gpd.points_from_xy(
-                    self.var.locations.data[:, 0], self.var.locations.data[:, 1]
-                ),
-                crs="EPSG:4326",
-            ).to_crs(flood_map.rio.crs)
+        probabilities = 1 / self.return_periods
 
-            # check whether households experienced a flood (inundation not nan)
-            # convert coordinates to indices in the flood_map grid
-            x_idx = (
-                np.searchsorted(
-                    flood_map["x"].values, household_locations.geometry.x.values
-                )
-                - 1
-            )
-            y_idx = (
-                np.searchsorted(
-                    flood_map["y"].values, household_locations.geometry.y.values
-                )
-                - 1
-            )
-
-            # clip to valid indices
-            x_idx = np.clip(x_idx, 0, flood_map.sizes["x"] - 1)
-            y_idx = np.clip(y_idx, 0, flood_map.sizes["y"] - 1)
-
-            # sample values at nearest grid cell
-            depths = flood_map.values[y_idx, x_idx]
-
-            # mark flooded households
-            flooded_households = np.where(depths > 0.05)[0]
-            return flooded_households
-        else:
+        if p_random >= probabilities.max():
             return np.array([], dtype=int)
+
+        # find the event corresponding to the random draw
+        event_idx = np.searchsorted(probabilities[::-1], p_random)
+        event_idx = len(probabilities) - 1 - event_idx
+        event = self.return_periods[event_idx]
+        print(
+            f"Return period flood event: {event} years (p={probabilities[event_idx]:.4f}, random draw={p_random:.4f})"
+        )
+
+        # get the flood map for this event
+        flood_map: "xr.DataArray" = self.flood_maps[event]
+        x_vals = flood_map["x"].values
+        y_vals = flood_map["y"].values
+        flood_values = flood_map.values
+
+        # cache household coordinates in flood_map CRS (Nx2 numpy array)
+        if not hasattr(self, "_household_xy"):
+            import pyproj
+
+            x, y = self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            transformer = pyproj.Transformer.from_crs(
+                "EPSG:4326", flood_map.rio.crs, always_xy=True
+            )
+            self._household_xy = np.array(transformer.transform(x, y)).T
+
+        hx, hy = self._household_xy[:, 0], self._household_xy[:, 1]
+
+        # compute flooded households using JIT-compiled function
+        flooded_indices = _get_flooded_indices(hx, hy, x_vals, y_vals, flood_values)
+        return flooded_indices
 
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
