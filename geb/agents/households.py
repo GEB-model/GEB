@@ -518,6 +518,53 @@ class Households(AgentBaseClass):
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
 
+    def return_period_flood(self):
+        # get inverse return periods
+        probabilities = 1 / self.return_periods
+        # draw random number for each household to determine if they experienced a flood based on the return periods
+        p_random = np.random.random()
+        if (
+            p_random < probabilities.max()
+        ):  # if the random number is smaller than the highest probability, then a flood occurred
+            # check for each return period if the random number is smaller than the probability, if yes, then the household experienced a flood
+            event = self.return_periods[np.where(probabilities > p_random)[0][-1]]
+            flood_map: xr.DataArray = self.flood_maps[event]
+            # get depths at household locations (temp geometry to sample flood map at household locations in the correct CRS)
+            household_locations = gpd.GeoDataFrame(
+                geometry=gpd.points_from_xy(
+                    self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+                ),
+                crs="EPSG:4326",
+            ).to_crs(flood_map.rio.crs)
+
+            # check whether households experienced a flood (inundation not nan)
+            # convert coordinates to indices in the flood_map grid
+            x_idx = (
+                np.searchsorted(
+                    flood_map["x"].values, household_locations.geometry.x.values
+                )
+                - 1
+            )
+            y_idx = (
+                np.searchsorted(
+                    flood_map["y"].values, household_locations.geometry.y.values
+                )
+                - 1
+            )
+
+            # clip to valid indices
+            x_idx = np.clip(x_idx, 0, flood_map.sizes["x"] - 1)
+            y_idx = np.clip(y_idx, 0, flood_map.sizes["y"] - 1)
+
+            # sample values at nearest grid cell
+            depths = flood_map.values[y_idx, x_idx]
+
+            # mark flooded households
+            flooded_households = np.where(depths > 0.05)[0]
+            return flooded_households
+        else:
+            return np.array([], dtype=int)
+
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
         # update timer
@@ -585,11 +632,8 @@ class Households(AgentBaseClass):
                     )
 
         else:
-            if (
-                np.random.random() < 0.1
-            ):  # generate random flood (not based on actual modeled flood data)
-                print("Flood event!")
-                self.var.years_since_last_flood[:] = 0
+            flooded_households = self.return_period_flood()
+            self.var.years_since_last_flood[flooded_households] = 0
 
         self.var.risk_perception.data = (
             self.var.risk_perc_max
