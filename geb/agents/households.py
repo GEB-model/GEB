@@ -560,21 +560,20 @@ class Households(AgentBaseClass):
             )
             self._household_xy = np.array(transformer.transform(x, y)).T
 
-        # get flood map bounds
-        x_vals = flood_map.coords["x"].values
-        y_vals = flood_map.coords["y"].values
+        # get flood map bounds based on the transform used for sampling
+        left, bottom, right, top = flood_map.rio.bounds(recalc=True)
 
-        # set household coordinates outside the flood map bounds to nan
+        # set household coordinates outside the flood map edge bounds to nan
+        # using edge bounds (not pixel centers) keeps the validity check consistent
+        # with the affine transform passed to sample_from_map
         coords_clipped = self._household_xy.copy()
         coords_clipped[:, 0] = np.where(
-            (coords_clipped[:, 0] < x_vals.min())
-            | (coords_clipped[:, 0] > x_vals.max()),
+            (coords_clipped[:, 0] < left) | (coords_clipped[:, 0] > right),
             np.nan,
             coords_clipped[:, 0],
         )
         coords_clipped[:, 1] = np.where(
-            (coords_clipped[:, 1] < y_vals.min())
-            | (coords_clipped[:, 1] > y_vals.max()),
+            (coords_clipped[:, 1] < bottom) | (coords_clipped[:, 1] > top),
             np.nan,
             coords_clipped[:, 1],
         )
