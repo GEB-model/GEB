@@ -408,6 +408,7 @@ def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
     for arg in ctx.args:
         if "=" in arg:
             key, value = arg.split("=", 1)
+            print("Setting config key '%s' to value '%s'.", key, value)
 
             # Try to convert value to appropriate type
             def is_float(element: str) -> bool:

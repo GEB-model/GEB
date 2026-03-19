@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
+import re
 from typing import Any, TextIO, TypeVar, cast
 
 import geopandas as gpd
@@ -113,6 +114,7 @@ def parse_config(
     """
     if current_directory is None:
         current_directory = Path.cwd()
+        print(f"Current directory: {current_directory}")
 
     if isinstance(config_path, dict):
         config = config_path
@@ -866,10 +868,15 @@ def set_fn(
         logger.info("Updated configuration file: %s", config)
 
     with WorkingDirectory(working_directory):
+        # Forward kwargs from set_fn into set_operation so requested
+        # key/value updates are actually applied.
+        def operation_forward(logger: logging.Logger) -> None:
+            return set_operation(logger=logger, **kwargs)
+
         _run_with_optional_profiling(
             PROFILE_SPEED_DEFAULT,
             PROFILE_RAM_DEFAULT,
-            set_operation,
+            operation_forward,
             name="set",
             logger=create_logger(name="set"),
         )

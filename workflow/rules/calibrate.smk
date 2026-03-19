@@ -121,6 +121,10 @@ toolbox.register("select", tools.selNSGA2)
 
 random.seed(42)
 
+def get_calibration_config(model_config: dict) -> dict:
+    """Helper to get the calibration section for the current target."""
+    return model_config.get("calibration", {}).get(CALIBRATION_TARGET, {})
+
 def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") -> str | None:
     """Helper function to run a GEB command, log output, and return captured stdout."""
     env = os.environ.copy()
@@ -169,7 +173,7 @@ rule build_base:
     message: "Building base GEB model..."
     run: 
         if not Path("input/build_complete.txt").exists():
-            run_command("geb build", log[0], "Failed to build base model")
+            run_command("geb build --continue", log[0], "Failed to build base model")
         else:
             with open(log[0], "a") as log_file:
                 log_file.write(f"base_build.done already exists, skipping 'geb build'\n")
@@ -488,7 +492,6 @@ rule set_individual_parameters:
         datetime_args = "general.spinup_time={0} general.start_time={1} general.end_time={2}".format(
             CALIBRATION_CONFIG["spinup_time"], CALIBRATION_CONFIG["start_time"], CALIBRATION_CONFIG["end_time"]
         )
-        
         cmd = "geb set -c model.yml --working-directory {0} {1} {2} report=null report._config.chunk_target_size_bytes+=100000000 report._config.compression_level+=9 report._discharge_stations+=true report._calibration+=true".format(run_dir, param_args, datetime_args)
         run_command(cmd, log[0], f"Failed to set parameters for {wildcards.gen}_{wildcards.ind}")
 

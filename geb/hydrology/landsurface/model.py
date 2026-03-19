@@ -1456,8 +1456,15 @@ class LandSurface(Module):
             0.0, dtype=np.float32
         )
 
+        self.model.logger.info(self.model.config)
+        variable_runoff_shapebeta_value: np.float32 = np.float32(
+            self.model.config["parameters"]["variable_runoff_shape_beta"]
+        )  # for calibration
+        self.model.logger.info(
+            f"Setting variable runoff shape beta to {variable_runoff_shapebeta_value}"
+        )
         self.HRU.var.variable_runoff_shape_beta = self.HRU.full_compressed(
-            1.5, dtype=np.float32
+            variable_runoff_shapebeta_value, dtype=np.float32
         )
 
         slope_m_per_m: ArrayFloat32 = self.hydrology.grid.load(
@@ -1661,6 +1668,9 @@ class LandSurface(Module):
         self.HRU.var.saturated_hydraulic_conductivity_m_per_s *= self.model.config[
             "parameters"
         ]["saturated_hydraulic_conductivity_multiplier"]  # calibration parameter
+        self.model.logger.info(
+            f"Setting saturated hydraulic conductivity multiplier to {self.model.config['parameters']['saturated_hydraulic_conductivity_multiplier']}"
+        )
 
         self.HRU.var.wetting_front_depth_m = np.full_like(self.HRU.var.topwater_m, 0.0)
         self.HRU.var.wetting_front_moisture_deficit = np.full_like(
