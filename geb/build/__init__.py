@@ -3022,6 +3022,10 @@ class GEBModel(
         """Path to the progress file that contains the build progress."""
         return Path(self.root, "progress.txt")
 
+    def write_build_complete(self) -> None:
+        """Writes a file that indicates that the build is complete."""
+        self.build_complete_path.write_text("Build complete.")
+
     @property
     def build_complete_path(self) -> Path:
         """Path to the file that indicates that the build is complete."""
@@ -3607,7 +3611,7 @@ class GEBModel(
             continue_=continue_,
         )
 
-        self.build_complete_path.write_text("Build complete")
+        self.write_build_complete()
 
     def update(
         self,
