@@ -85,6 +85,7 @@ class GEBModel(Module):
                 "Mode must be either 'r' (read) or 'w' (write)"
             )  # validate mode
 
+        self.verify_build_complete()
         self.check_data_version()
 
         Module.__init__(self, self, create_var=False)  # initialize the Module class
@@ -103,6 +104,23 @@ class GEBModel(Module):
         self.evaluator = Evaluate(self)  # initialize the evaluator
 
         self.plantFATE = []  # Empty list to hold plantFATE models. If forests are not used, this will be empty
+
+    def verify_build_complete(self) -> None:
+        """Verify that the build completed.
+
+        Raises:
+            RuntimeError: If the file 'build_complete.txt' is not found in the input folder, indicating that the build is not complete.
+        """
+        build_complete_path = self.input_folder / "build_complete.txt"
+        if not build_complete_path.exists():
+            raise RuntimeError(
+                (
+                    f"Build not complete. The file 'build_complete.txt' was not found in the input folder "
+                    f"({self.input_folder.resolve()}). If you created the model with an older version, make "
+                    f"a new file named 'build_complete.txt' in {self.input_folder.resolve()} to indicate that "
+                    "the build is complete, or run a new build with the current version of GEB."
+                )
+            )
 
     def check_data_version(self) -> None:
         """Check if the model version of the data matches the current model version.
