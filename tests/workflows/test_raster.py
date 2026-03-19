@@ -101,6 +101,16 @@ def test_sample_from_map() -> None:
     sampled_both_neg = sample_from_map(array, coords_both_neg, gt_both_neg)
     assert sampled_both_neg[0] == array[0, 0]
 
+    # 5) Test strict out-of-bounds with flooring (negative coordinates)
+    # gt: (0.0, 1.0, 0.0, 3.0, 0.0, -1.0)
+    # A coordinate slightly "left" of x=0 (e.g. -0.1)
+    # (x_idx = -0.1 / 1.0 = -0.1).
+    # Old logic: int(-0.1) = 0 (in-bounds!).
+    # New logic: int(floor(-0.1)) = -1 (out-of-bounds).
+    coords_edge = np.array([[-0.1, 2.5], [0.5, 3.1]], dtype=np.float64)
+    sampled_edge = sample_from_map(array, coords_edge, gt, out_of_bounds_value=-888.0)
+    assert np.all(sampled_edge == -888.0)
+
     # Test rotated
     gt_rotated = (0.0, 1.0, 0.5, 3.0, -0.5, -1.0)
     with pytest.raises(ValueError, match="Cannot sample from rotated maps"):

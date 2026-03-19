@@ -190,19 +190,17 @@ def sample_from_map(
 
     if out_of_bounds_value is None:
         for i in prange(size):  # ty: ignore[not-iterable]
-            y_idx = int((coords[i, 1] - y_offset) / y_step)
-            x_idx = int((coords[i, 0] - x_offset) / x_step)
+            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
             if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
                 values[i] = array[..., y_idx, x_idx]
             else:
-                raise IndexError(
-                    f"Coordinate {coords[i]} is out of bounds for array with shape {array.shape} and geotransformation {gt}"
-                )
+                raise IndexError("Coordinate is out of bounds for array")
 
     else:
         for i in prange(size):  # ty: ignore[not-iterable]
-            y_idx = int((coords[i, 1] - y_offset) / y_step)
-            x_idx = int((coords[i, 0] - x_offset) / x_step)
+            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
             if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
                 values[i] = array[..., y_idx, x_idx]
             else:
