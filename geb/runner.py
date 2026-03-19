@@ -1032,6 +1032,12 @@ def alter_fn(
     from_model: Path = Path(from_model)
     build_config_input: Path | dict[str, Any] = build_config
 
+    if isinstance(build_config_input, Path) and not build_config_input.exists():
+        print(
+            f"Build config file {build_config_input} does not exist. Creating an empty build config file."
+        )
+        build_config_input.touch()  # Create empty build config file if it does not exist
+
     def alter_operation(logger: logging.Logger, **kwargs: Any) -> None:
         original_config: Path = from_model / config
         if not original_config.exists():
@@ -1097,6 +1103,8 @@ def alter_fn(
         model.update(
             methods=methods,
         )
+
+        model.write_build_complete()
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
