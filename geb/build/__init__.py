@@ -28,14 +28,16 @@ import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
+from packaging.version import Version
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
 from shapely.ops import unary_union
 
-from geb import GEB_PACKAGE_DIR
+from geb import GEB_PACKAGE_DIR, __version__
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
+from geb.build.version_updates import VERSION_UPDATES
 from geb.workflows.io import (
     read_params,
     write_array,
@@ -305,6 +307,7 @@ def get_sink_subbasin_id_for_geom(
 def get_all_downstream_subbasins_in_geom(
     data_catalog: NewDataCatalog,
     geom: gpd.GeoDataFrame,
+    ocean_outlets_only: bool,
     logger: logging.Logger,
 ) -> list[int]:
     """Find all downstream subbasins (with NextDownID = 0) that intersect with the given geometry.
@@ -312,6 +315,7 @@ def get_all_downstream_subbasins_in_geom(
     Args:
         data_catalog: Data catalog containing the MERIT basins.
         geom: GeoDataFrame containing the geometry to find the downstream subbasins for.
+        ocean_outlets_only: If True, only include subbasins that flow to the ocean.
         logger: Logger for progress tracking.
 
     Returns:
@@ -349,9 +353,26 @@ def get_all_downstream_subbasins_in_geom(
     downstream_subbasins = river_network.loc[intersecting_subbasins]
     downstream_subbasins = downstream_subbasins[downstream_subbasins["NextDownID"] == 0]
 
-    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
-
-    return downstream_subbasins.index.tolist()
+    if ocean_outlets_only:
+        logger.info("Filtering for ocean outlets only (NextDownID = 0)...")
+        coastlines = data_catalog.fetch("open_street_map_coastlines").read()
+        coastlines = coastlines.cx[
+            subbasins.total_bounds[0] : subbasins.total_bounds[2],
+            subbasins.total_bounds[1] : subbasins.total_bounds[3],
+        ]
+        candidates = subbasins.loc[downstream_subbasins.index]
+        # Buffer distance expressed in degrees (assumes geographic CRS); used to
+        # capture subbasins that are close to, but not exactly on, the coastline.
+        buffer_distance_deg = 0.1
+        buffered = candidates.geometry.buffer(buffer_distance_deg)
+        mask = buffered.intersects(coastlines.union_all())
+        # Get verified IDs
+        downstream_subbasins = candidates.index[mask].tolist()
+        logger.info(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
+        return downstream_subbasins
+    else:
+        logger.info(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
+        return downstream_subbasins.index.tolist()
 
 
 def get_subbasin_upstream_areas(
@@ -1272,16 +1293,18 @@ def create_multi_basin_configs(
 
     print(f"Created build.yml in {working_directory}")
 
-    # Create model.yml in init_multiple_dir directory that inherits from reasonable default
+    # Create model.yml in init_multiple_dir directory and copy the geul example
     print("Creating model.yml in init_multiple_dir directory...")
     model_config_path = working_directory / "model.yml"
 
-    # Define the model configuration content with inheritance from reasonable default
-    model_config_content = """inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
-"""
+    # Read build config from geul example and automatically copy it
+    geul_config_path = GEB_PACKAGE_DIR / "examples" / "geul" / "model.yml"
 
-    with open(model_config_path, "w") as f:
-        f.write(model_config_content)
+    print(f"Reading model configuration from: {geul_config_path}")
+
+    # Copy geul model.yml content directly to init_multiple_dir model.yml
+    with open(geul_config_path, "r") as src, open(model_config_path, "w") as dst:
+        dst.write(src.read())
 
     print(f"Created model.yml in {working_directory}")
 
@@ -1974,6 +1997,7 @@ class GEBModel(
             data_provider: Data provider to use for the data catalog. Default is "default".
         """
         self._logger = logger
+        build_method.logger = logger
         self._old_data_catalog = DataCatalog(
             data_libs=[data_catalog], logger=self._logger, fallback_lib=None
         )
@@ -2006,6 +2030,68 @@ class GEBModel(
         self.other = DelayedReader(reader=read_zarr)
         self.files = {}
 
+        self.maybe_update_version()
+
+    def set_current_version(self) -> None:
+        """Set the current version in the version file."""
+        self.logger.info(
+            f"Setting version in version file to current version: {__version__}"
+        )
+        self.version_path.write_text(__version__)
+
+    def version_is_current(self) -> bool:
+        """Check if the version in the version file is the same as the current version.
+
+        Returns:
+            True if the version is current, False otherwise.
+        """
+        if not self.version_path.exists():
+            return False
+        version_info = self.version_path.read_text()
+        return version_info == __version__
+
+    def maybe_update_version(self) -> None:
+        """Check if the version in the version file is the same as the current version.
+
+        If the version is not current, print a warning with the updates that need to be made to update to the current version.
+
+        Raises:
+            RuntimeError: If the version is not current and updates need to be made.
+        """
+        # No version file exists, so we create one with the current version
+        if not self.version_path.exists():
+            self.set_current_version()
+            return
+        version_info = self.version_path.read_text()
+        if self.version_is_current():
+            self.logger.info("Version is already current.")
+        else:
+            self.logger.warning(
+                f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
+            )
+            # Find and print all updates between the stored version and the current version
+            current_v = Version(__version__)
+            stored_v = Version(version_info)
+
+            versions = sorted(VERSION_UPDATES.keys(), key=Version)
+            updates_to_print = []
+            for v_str in versions:
+                v = Version(v_str)
+                if v > stored_v and v <= current_v:
+                    updates_to_print.extend(VERSION_UPDATES[v_str])
+
+            if updates_to_print:
+                updates_msg = "\n- ".join(updates_to_print)
+                self.set_current_version()
+                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
+                self.logger.error(error)
+                raise RuntimeError(error)
+            else:
+                self.logger.info(
+                    "No specific updates found for this version. Updated version file."
+                )
+                self.set_current_version()
+
     @property
     def logger(self) -> logging.Logger:
         """Get the logger."""
@@ -2014,6 +2100,10 @@ class GEBModel(
     @logger.setter
     def logger(self, value: logging.Logger) -> None:
         self._logger = value
+        build_method.logger = value
+        # Ensure that child classes use the updated logger
+        if hasattr(self, "_old_data_catalog"):
+            self._old_data_catalog.logger = value
 
     @property
     def old_data_catalog(self) -> DataCatalog:
@@ -2932,6 +3022,16 @@ class GEBModel(
         """Path to the progress file that contains the build progress."""
         return Path(self.root, "progress.txt")
 
+    @property
+    def build_complete_path(self) -> Path:
+        """Path to the file that indicates that the build is complete."""
+        return Path(self.root, "build_complete.txt")
+
+    @property
+    def version_path(self) -> Path:
+        """Path to the version file that contains the build version."""
+        return Path(self.root, "version.txt")
+
     def write_file_library(self) -> None:
         """Writes the file library to disk.
 
@@ -3268,8 +3368,8 @@ class GEBModel(
         Returns:
             The subgrid factor as an integer.
         """
-        subgrid_factor: int = self.subgrid.dims["x"] // self.grid.dims["x"]
-        assert subgrid_factor == self.subgrid.dims["y"] // self.grid.dims["y"]
+        subgrid_factor: int = self.subgrid.sizes["x"] // self.grid.sizes["x"]
+        assert subgrid_factor == self.subgrid.sizes["y"] // self.grid.sizes["y"]
         return subgrid_factor
 
     @property
@@ -3326,6 +3426,7 @@ class GEBModel(
             root: The root directory path.
         """
         self._root = Path(root).absolute()
+        self._root.mkdir(parents=True, exist_ok=True)
 
     @property
     def report_dir(self) -> Path:
@@ -3417,7 +3518,9 @@ class GEBModel(
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        build_method.validate_methods(methods, validate_order=validate_order)
+        methods = build_method.validate_methods(
+            methods, validate_order=validate_order, fix_order_if_broken=True
+        )
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (
@@ -3457,7 +3560,7 @@ class GEBModel(
         build_method.log_time_taken()
 
     def build(
-        self, region: dict, methods: dict[str, dict[str, Any] | None], continue_: bool
+        self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
     ) -> None:
         """Build the model with the specified region and methods.
 
@@ -3468,8 +3571,9 @@ class GEBModel(
 
         Raises:
             ValueError: If "setup_region" is not in methods when building a new model.
+            ValueError: If continue is requested but the code version does not match the build version.
         """
-        methods: dict[str, dict[str, Any] | None] = methods or {}
+        methods: dict[str, dict[str, Any]] = methods or {}
         if "setup_region" not in methods:
             raise ValueError(
                 '"setup_region" must be present in methods when building a new model.'
@@ -3480,11 +3584,21 @@ class GEBModel(
 
         # if not continuing, remove existing files path
         if continue_:
+            if not self.version_is_current():
+                raise ValueError(
+                    "Cannot continue build: version mismatch. The version of the existing build is different from the current version of the code. This likely means that the code was updated since the last build. To continue, either restore the old version of the code or start a new build."
+                )
+
             self.read()
         else:
             # for new build, remove existing files path and progress file
             self.files_path.unlink(missing_ok=True)
             self.progress_path.unlink(missing_ok=True)
+
+            # Fresh build so remove the version file and set
+            # to current version.
+            self.version_path.unlink(missing_ok=True)
+            self.set_current_version()
 
         self.run_methods(
             methods,
@@ -3492,6 +3606,8 @@ class GEBModel(
             record_progress=True,
             continue_=continue_,
         )
+
+        self.build_complete_path.write_text("Build complete")
 
     def update(
         self,

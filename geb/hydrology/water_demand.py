@@ -147,7 +147,7 @@ class WaterDemand(Module):
         available_channel_storage_m3 = np.maximum(available_channel_storage_m3 - 100, 0)
 
         assert (
-            available_channel_storage_m3[self.grid.var.waterBodyID != -1] == 0.0
+            available_channel_storage_m3[self.grid.var.waterbody_ids != -1] == 0.0
         ).all()
 
         available_groundwater_m3: np.ndarray = (
@@ -460,7 +460,7 @@ class WaterDemand(Module):
                 tolerance=10000,
             )
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.report(locals())
 

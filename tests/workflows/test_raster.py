@@ -26,7 +26,95 @@ from geb.workflows.raster import (
     reclassify,
     repeat_grid,
     resample_chunked,
+    sample_from_map,
 )
+
+
+def test_sample_from_map() -> None:
+    """Test the sample_from_map function."""
+    # Create a 2D array: y, x
+    array = np.arange(12, dtype=np.float32).reshape(3, 4)
+    # [[ 0.,  1.,  2.,  3.],
+    #  [ 4.,  5.,  6.,  7.],
+    #  [ 8.,  9., 10., 11.]]
+
+    # Geotransformation: (x_min, x_step, 0, y_max, 0, y_step)
+    # Using 1.0 unit steps for simplicity
+    gt = (0.0, 1.0, 0.0, 3.0, 0.0, -1.0)
+
+    # Coordinates: (x, y)
+    # (0.5, 2.5) -> y_idx = (2.5 - 3.0) / -1.0 = 0.5 -> int(0.5) = 0, x_idx = (0.5 - 0.0) / 1.0 = 0.5 -> int(0.5) = 0 -> Value 0
+    # (1.5, 1.5) -> y_idx = (1.5 - 3.0) / -1.0 = 1.5 -> int(1.5) = 1, x_idx = (1.5 - 0.0) / 1.0 = 1.5 -> int(1.5) = 1 -> Value 5
+    # (3.5, 0.5) -> y_idx = (0.5 - 3.0) / -1.0 = 2.5 -> int(2.5) = 2, x_idx = (3.5 - 0.0) / 1.0 = 3.5 -> int(3.5) = 3 -> Value 11
+    coords = np.array(
+        [[0.5, 2.5], [1.5, 1.5], [3.5, 0.5]],
+        dtype=np.float64,
+    )
+
+    # 1) Test correct values selection
+    sampled_values = sample_from_map(array, coords, gt)
+    expected_values = np.array([0.0, 5.0, 11.0], dtype=np.float32)
+    assert np.allclose(sampled_values, expected_values)
+
+    # 2) Test out of bounds values
+    # Coordinate (-1.0, 4.0) is out of bounds
+    coords_oob = np.array(
+        [[0.5, 2.5], [-1.0, 4.0]],
+        dtype=np.float64,
+    )
+
+    # Test with out_of_bounds_value provided
+    sampled_oob = sample_from_map(array, coords_oob, gt, out_of_bounds_value=-999.0)
+    expected_oob = np.array([0.0, -999.0], dtype=np.float32)
+    assert np.allclose(sampled_oob, expected_oob)
+
+    # Test that IndexError is raised if out_of_bounds_value is None
+    with pytest.raises(IndexError, match="is out of bounds"):
+        sample_from_map(array, coords_oob, gt, out_of_bounds_value=None)
+
+    # 3) Test multi-dimensional array (3D)
+    # Shape (2, 3, 4)
+    array_3d = np.stack([array, array + 100], axis=0)
+    sampled_3d = sample_from_map(array_3d, coords, gt)
+    # Expected shape (3, 2) -> (num_coords, num_extra_dims)
+    expected_3d = np.array(
+        [[0.0, 100.0], [5.0, 105.0], [11.0, 111.0]], dtype=np.float32
+    )
+    assert np.allclose(sampled_3d, expected_3d)
+
+    # 4) Test negative steps (flipped x or y)
+    # y_step is already negative (-1.0) in the original test.
+    # Let's test positive y_step and negative x_step
+    # Array: 3x4
+    # gt: (x_max, x_step_neg, 0, y_min, 0, y_step_pos)
+    gt_flipped = (4.0, -1.0, 0.0, 0.0, 0.0, 1.0)
+    # (3.5, 0.5) -> x_idx = (3.5 - 4.0) / -1.0 = 0.5 -> 0, y_idx = (0.5 - 0.0) / 1.0 = 0.5 -> 0
+    # This should sample from array[0, 0]
+    coords_flipped = np.array([[3.5, 0.5]], dtype=np.float64)
+    sampled_flipped = sample_from_map(array, coords_flipped, gt_flipped)
+    assert sampled_flipped[0] == array[0, 0]
+
+    # Test both negative
+    gt_both_neg = (4.0, -1.0, 0.0, 3.0, 0.0, -1.0)
+    # (3.5, 2.5) -> x_idx = (3.5 - 4.0) / -1.0 = 0.5 -> 0, y_idx = (2.5 - 3.0) / -1.0 = 0.5 -> 0
+    coords_both_neg = np.array([[3.5, 2.5]], dtype=np.float64)
+    sampled_both_neg = sample_from_map(array, coords_both_neg, gt_both_neg)
+    assert sampled_both_neg[0] == array[0, 0]
+
+    # 5) Test strict out-of-bounds with flooring (negative coordinates)
+    # gt: (0.0, 1.0, 0.0, 3.0, 0.0, -1.0)
+    # A coordinate slightly "left" of x=0 (e.g. -0.1)
+    # (x_idx = -0.1 / 1.0 = -0.1).
+    # Old logic: int(-0.1) = 0 (in-bounds!).
+    # New logic: int(floor(-0.1)) = -1 (out-of-bounds).
+    coords_edge = np.array([[-0.1, 2.5], [0.5, 3.1]], dtype=np.float64)
+    sampled_edge = sample_from_map(array, coords_edge, gt, out_of_bounds_value=-888.0)
+    assert np.all(sampled_edge == -888.0)
+
+    # Test rotated
+    gt_rotated = (0.0, 1.0, 0.5, 3.0, -0.5, -1.0)
+    with pytest.raises(ValueError, match="Cannot sample from rotated maps"):
+        sample_from_map(array, coords, gt_rotated)
 
 
 def test_pixels_to_coords() -> None:

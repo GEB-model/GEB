@@ -161,6 +161,7 @@ def sample_from_map(
     array: np.ndarray,
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
+    out_of_bounds_value: float | int | bool | None = None,
 ) -> np.ndarray:
     """Sample coordinates from a map. Can handle multiple dimensions.
 
@@ -168,23 +169,42 @@ def sample_from_map(
         array: The map to sample from (2+n dimensions).
         coords: The coordinates used to sample (shape: m, 2).
         gt: The geotransformation. Must be unrotated.
+        out_of_bounds_value: The value to return for coordinates that are out of bounds. If None, an error will be raised.
 
     Returns:
         The values at each coordinate.
+
+    Raises:
+        IndexError: If a coordinate is out of bounds and out_of_bounds_value is None.
+        ValueError: If the geotransformation indicates a rotated map.
     """
-    assert gt[2] + gt[4] == 0
+    if not (gt[2] == 0 and gt[4] == 0):
+        raise ValueError("Cannot sample from rotated maps")
+
     size = coords.shape[0]
     x_offset = gt[0]
     y_offset = gt[3]
     x_step = gt[1]
     y_step = gt[5]
     values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
-    for i in prange(size):  # ty: ignore[not-iterable]
-        values[i] = array[
-            ...,
-            int((coords[i, 1] - y_offset) / y_step),
-            int((coords[i, 0] - x_offset) / x_step),
-        ]
+
+    if out_of_bounds_value is None:
+        for i in prange(size):  # ty: ignore[not-iterable]
+            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
+            if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
+                values[i] = array[..., y_idx, x_idx]
+            else:
+                raise IndexError("Coordinate is out of bounds for array")
+
+    else:
+        for i in prange(size):  # ty: ignore[not-iterable]
+            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
+            if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
+                values[i] = array[..., y_idx, x_idx]
+            else:
+                values[i] = out_of_bounds_value
     return values
 
 
@@ -668,8 +688,14 @@ def clip_with_grid(
 
     Returns:
         A tuple containing the clipped dataset and a dictionary with slices for x and y dimensions.
+
+    Raises:
+        ValueError: If the dataset and mask do not have the same x and y coordinates.
     """
-    assert ds.shape == mask.shape
+    if ds["x"].size != mask["x"].size:
+        raise ValueError("Dataset and mask must have the same x coordinates")
+    if ds["y"].size != mask["y"].size:
+        raise ValueError("Dataset and mask must have the same y coordinates")
     cells_along_y = mask.sum(dim="x").values.ravel()
     miny = (cells_along_y > 0).argmax().item()
     maxy = cells_along_y.size - (cells_along_y[::-1] > 0).argmax().item()
@@ -1040,7 +1066,9 @@ def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
 
 
 def resample_like(
-    source: xr.DataArray, target: xr.DataArray, method: str = "bilinear"
+    source: xr.DataArray,
+    target: xr.DataArray,
+    method: Literal["bilinear", "nearest", "conservative"] = "bilinear",
 ) -> xr.DataArray:
     """Resample the source DataArray to match the target DataArray's grid.
 
@@ -1077,7 +1105,7 @@ def resample_like(
         dst = regridder.conservative(
             target,  # ty: ignore[invalid-argument-type]
             latitude_coord="y",
-            output_chunks={**source.chunksizes, **target.chunksizes},
+            output_chunks={**source.chunksizes, **target.chunksizes},  # ty:ignore[invalid-argument-type]
         )
     elif method == "nearest":
         dst = regridder.nearest(target)  # ty: ignore[invalid-argument-type]
@@ -1210,7 +1238,7 @@ def resample_chunked(
         name=source.name,
         attrs=source.attrs.copy(),
     )
-    da.rio.set_crs(source.rio.crs)
+    da: xr.DataArray = da.rio.write_crs(source.rio.crs)
     return da
 
 
@@ -1489,6 +1517,7 @@ def create_temp_zarr(
             time_chunksize=time_chunksize,
             time_chunks_per_shard=time_chunks_per_shard,
             progress=True,
+            compression_level=1,
         )
         yield temp_da
 

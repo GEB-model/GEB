@@ -30,7 +30,11 @@ from geb.cli import (
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
 from geb.runner import parse_config
-from geb.workflows.io import WorkingDirectory, read_zarr, write_params
+from geb.workflows.io import (
+    WorkingDirectory,
+    read_zarr,
+    write_zarr,
+)
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
@@ -113,24 +117,6 @@ def test_init_coastal(clean_working_directory: bool) -> None:
             **args,
             overwrite=True,
         )
-
-        build_config = parse_config("build.yml")
-        build_config = {
-            key: value
-            for key, value in build_config.items()
-            if key
-            in (
-                "setup_region",
-                "setup_hydrography",
-                "setup_elevation",
-                "setup_global_ocean_mean_dynamic_topography",
-                "setup_coastlines",
-                "setup_osm_land_polygons",
-                "setup_coastal_sfincs_model_regions",
-                "setup_gtsm_station_data",
-            )
-        }
-        write_params(build_config, Path("build.yml"))
 
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
@@ -289,20 +275,18 @@ def test_spinup() -> None:
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
         geb: GEBModel = run_model_with_method(
-            method="spinup", **args, close_after_run=False
+            method="spinup", **args, close_after_run=False, timing=False
         )
 
         routing_report_folder: Path = (
             working_directory / "output" / "report" / "spinup" / "hydrology.routing"
         )
 
-        hourly_discharge_data = xr.open_dataarray(
-            routing_report_folder / "discharge_hourly.zarr", consolidated=False
+        hourly_discharge_data = read_zarr(
+            routing_report_folder / "discharge_hourly.zarr"
         )
 
-        daily_discharge_data = xr.open_dataarray(
-            routing_report_folder / "discharge_daily.zarr", consolidated=False
-        )
+        daily_discharge_data = read_zarr(routing_report_folder / "discharge_daily.zarr")
 
         outflow_rivers = geb.hydrology.routing.outflow_rivers
         for ID, river in outflow_rivers.iterrows():
@@ -443,8 +427,8 @@ def test_evaluate_evaluate_discharge() -> None:
     """Test model evaluation functionality.
 
     Verifies that model outputs can be evaluated and analyzed
-    for correctness and consistency. Does not check the evaluation
-    results itself. Just if it can be run.
+    for correctness and consistency. Checks that the evaluation
+    returns a dictionary containing expected metrics.
     """
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
@@ -453,7 +437,13 @@ def test_evaluate_evaluate_discharge() -> None:
             "include_yearly_plots": False,
         }
         args["method_args"] = method_args
-        run_model_with_method(method="evaluate", **args)
+        result = run_model_with_method(method="evaluate", **args)
+
+        # Verify that the result is a dictionary and contains expected keys
+        assert isinstance(result, dict)
+        assert "KGE" in result
+        assert "NSE" in result
+        assert "R" in result
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -910,14 +900,15 @@ def test_multiverse() -> None:
             )
             forecasts_folder.mkdir(parents=True, exist_ok=True)
 
-            forecast_da.to_zarr(
+            write_zarr(
+                forecast_da,
                 forecasts_folder
                 / (
                     forecast_variable
                     + "_"
                     + forecast_issue_date.strftime("%Y%m%dT%H%M%S.zarr")
                 ),
-                mode="w",
+                crs=forecast_da.rio.crs,
             )
 
         mean_discharge_after_forecast: dict[str | int, float] = geb.multiverse(
@@ -957,12 +948,12 @@ def test_multiverse() -> None:
 
         # the first flood event in the multiverse is of equal length as in the main simulation
         # so the flood maps should be identical
-        flood_map_first_event: xr.DataArray = xr.open_dataarray(
+        flood_map_first_event: xr.DataArray = read_zarr(
             flood_map_folder
             / f"{events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
-        flood_map_first_event_multiverse: xr.DataArray = xr.open_dataarray(
+        flood_map_first_event_multiverse: xr.DataArray = read_zarr(
             forecast_folder
             / f"{events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
@@ -975,13 +966,13 @@ def test_multiverse() -> None:
 
         # the second flood event in the multiverse is shorter than in the main simulation
         # because the forecast ends before the flood event ends
-        flood_map_second_event: xr.DataArray = xr.open_dataarray(
+        flood_map_second_event: xr.DataArray = read_zarr(
             flood_map_folder
             / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[1]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
         # the name of the file is midnight before (or on) the end time of the forecast
-        flood_map_second_event_multiverse: xr.DataArray = xr.open_dataarray(
+        flood_map_second_event_multiverse: xr.DataArray = read_zarr(
             forecast_folder
             / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {forecast_end_date.replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y%m%dT%H%M%S')}.zarr"
         )

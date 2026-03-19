@@ -68,11 +68,13 @@ def load_soilgrids(
         ds_variable: xr.DataArray = ds_variable.where(
             ~mask, ds_variable.attrs["_FillValue"]
         )
-        ds_variable = ds_variable.rio.set_crs(4326)
+        ds_variable = ds_variable.rio.write_crs(4326)
         ds_variable.name = variable_name
         ds.append(ds_variable)
 
-    ds: xr.Dataset = xr.merge(ds, join="exact").transpose("soil_layer", "y", "x")
+    ds: xr.Dataset = xr.merge(ds, join="exact", compat="identical").transpose(
+        "soil_layer", "y", "x"
+    )
     ds = ds.compute()
 
     # soilgrids uses conversion factors as specified here:

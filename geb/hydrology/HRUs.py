@@ -11,8 +11,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import xarray as xr
+import zarr
 from affine import Affine
 from numba import njit
+from numpy.typing import DTypeLike
 from scipy.spatial import KDTree
 
 from geb.geb_types import (
@@ -22,6 +24,7 @@ from geb.geb_types import (
     ArrayFloat32,
     ArrayFloat64,
     ArrayInt32,
+    ArrayInt64,
     ArrayWithScalar,
     T_ArrayNumber,
     T_OneorTwoDArray,
@@ -241,7 +244,7 @@ class GridVariables(Bucket):
     average_river_width: ArrayFloat32
     river_alpha: ArrayFloat32
     cell_area: ArrayFloat32
-    waterBodyID: ArrayInt32
+    waterbody_ids: ArrayInt32
     discharge_m3_s: ArrayFloat32
     discharge_in_rivers_m3_s_substep: ArrayFloat32
     waterbody_outflow_points: ArrayInt32
@@ -251,7 +254,8 @@ class GridVariables(Bucket):
     discharge_m3_s_substep: ArrayFloat32
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
-    buffer: TwoDArrayFloat64
+    overland_flow_buffer: TwoDArrayFloat32
+    overland_flow_buffer_weights: ArrayFloat32
 
 
 class Grid(BaseVariables):
@@ -264,6 +268,7 @@ class Grid(BaseVariables):
 
     var: GridVariables
     transform: Affine
+    cell_area_uncompressed: TwoDArrayFloat32
 
     def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize Grid class.
@@ -282,7 +287,6 @@ class Grid(BaseVariables):
         mask, self.transform, self.crs = read_grid(
             self.model.files["grid"]["mask"],
             return_transform_and_crs=True,
-            layer=1,
         )
         self.mask = mask.astype(bool)
         self.gt = self.transform.to_gdal()
@@ -306,7 +310,9 @@ class Grid(BaseVariables):
         assert math.isclose(self.transform.a, -self.transform.e)
         self.cell_size = self.transform.a
 
-        self.cell_area_uncompressed = read_grid(self.model.files["grid"]["cell_area"])
+        self.cell_area_uncompressed = cast(
+            TwoDArrayFloat32, read_grid(self.model.files["grid"]["cell_area"])
+        )
 
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
@@ -350,17 +356,45 @@ class Grid(BaseVariables):
         """
         return np.full(self.mask.shape, *args, **kwargs)
 
-    def full_compressed(self, *args: Any, **kwargs: Any) -> ArrayFloat32:
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.float64], **kwargs: Any
+    ) -> ArrayFloat64: ...
+
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.int32], **kwargs: Any
+    ) -> ArrayInt32: ...
+
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.int64] = ..., **kwargs: Any
+    ) -> ArrayInt64: ...
+
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.bool_], **kwargs: Any
+    ) -> ArrayBool: ...
+
+    @overload
+    def full_compressed(
+        self, fill_value: Any, dtype: type[np.float32] = ..., **kwargs: Any
+    ) -> ArrayFloat32: ...
+
+    def full_compressed(
+        self, fill_value: Any, dtype: DTypeLike = np.float32, **kwargs: Any
+    ) -> Array:
         """Return a full array with size of compressed array. Takes any other argument normally used in np.full.
 
         Args:
-            *args: Variable length argument list.
+            fill_value: Value to fill the array with.
+            dtype: Data type of the array. Defaults to np.float32.
             **kwargs: Arbitrary keyword arguments.
 
         Returns:
             array: Full array of compressed size.
         """
-        return np.full(self.compressed_size, *args, **kwargs)
+        return np.full(self.compressed_size, fill_value, dtype=dtype, **kwargs)
 
     @overload
     def compress(self, array: TwoDArrayWithScalar) -> ArrayWithScalar: ...
@@ -439,14 +473,14 @@ class Grid(BaseVariables):
     ) -> ThreeDArray: ...
 
     def load(
-        self, filepath: Path, compress: bool = True, layer: int | None = 1
+        self, filepath: Path, compress: bool = True, layer: int | None = None
     ) -> Array | TwoDArray | ThreeDArray:
         """Load array from disk.
 
         Args:
             filepath: Filepath of map.
             compress: Whether to compress array.
-            layer: Layer to load from file. Defaults to 1. If None, all layers are loaded.
+            layer: Layer to load from file. If None, all layers are loaded. Defaults to None.
 
         Returns:
             array: Loaded array.
@@ -460,42 +494,42 @@ class Grid(BaseVariables):
     @property
     def pr_kg_per_m2_per_s(self) -> TwoDArrayFloat32:
         """Get precipitation rate for grid in kg/m²/s."""
-        return self.compress(self.model.forcing.load("pr_kg_per_m2_per_s"))
+        return self.model.forcing.load("pr_kg_per_m2_per_s")
 
     @property
     def ps_pascal(self) -> TwoDArrayFloat32:
         """Get surface pressure for grid in Pa."""
-        return self.compress(self.model.forcing.load("ps_pascal"))
+        return self.model.forcing.load("ps_pascal")
 
     @property
     def rlds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward longwave radiation for grid in W/m²."""
-        return self.compress(self.model.forcing.load("rlds_W_per_m2"))
+        return self.model.forcing.load("rlds_W_per_m2")
 
     @property
     def rsds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward shortwave radiation for grid in W/m²."""
-        return self.compress(self.model.forcing.load("rsds_W_per_m2"))
+        return self.model.forcing.load("rsds_W_per_m2")
 
     @property
     def tas_2m_K(self) -> TwoDArrayFloat32:
         """Get air temperature at 2m for grid in K."""
-        return self.compress(self.model.forcing.load("tas_2m_K"))
+        return self.model.forcing.load("tas_2m_K")
 
     @property
     def dewpoint_tas_2m_K(self) -> TwoDArrayFloat32:
         """Get dewpoint temperature at 2m for grid in K."""
-        return self.compress(self.model.forcing.load("dewpoint_tas_2m_K"))
+        return self.model.forcing.load("dewpoint_tas_2m_K")
 
     @property
     def wind_u10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get u-component of wind at 10m for grid in m/s."""
-        return self.compress(self.model.forcing.load("wind_u10m_m_per_s"))
+        return self.model.forcing.load("wind_u10m_m_per_s")
 
     @property
     def wind_v10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get v-component of wind at 10m for grid in m/s."""
-        return self.compress(self.model.forcing.load("wind_v10m_m_per_s"))
+        return self.model.forcing.load("wind_v10m_m_per_s")
 
     @property
     def spei_uncompressed(self) -> TwoDArrayFloat32:
@@ -531,10 +565,11 @@ class Grid(BaseVariables):
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        spei: ThreeDArrayFloat32 = self.model.forcing.load(name="SPEI", dt=spei_time)
-        assert spei.ndim == 3 and spei.shape[0] == 1
-        spei: TwoDArrayFloat32 = spei[0]
-        return spei
+        spei_compressed: TwoDArrayFloat32 = self.model.forcing.load(
+            name="SPEI", dt=spei_time
+        )
+        assert spei_compressed.ndim == 2 and spei_compressed.shape[1] == 1
+        return self.decompress(spei_compressed[:, 0])
 
     @property
     def gev_c(self) -> xr.DataArray:
@@ -573,8 +608,8 @@ class HRUVariables(Bucket):
     variable_runoff_shape_beta: ArrayFloat32
     interception_storage_m: ArrayFloat32
     snow_temperature_C: ArrayFloat32
-    liquid_water_in_snow_m: ArrayFloat32
-    snow_water_equivalent_m: ArrayFloat32
+    liquid_water_in_snow_m: ArrayFloat64
+    snow_water_equivalent_m: ArrayFloat64
     topwater_m: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
@@ -586,8 +621,10 @@ class HRUVariables(Bucket):
     nearest_river_grid_cell: ArrayInt32
     linear_mapping: TwoDArrayInt32
     crop_age_days_map: ArrayInt32
-    potential_transpiration_crop_life: ArrayFloat32
-    transpiration_crop_life: ArrayFloat32
+    potential_evapotranspiration_crop_life: ArrayFloat32
+    actual_evapotranspiration_crop_life: ArrayFloat32
+    actual_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
+    potential_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
     crop_map: ArrayInt32
     topwater: ArrayFloat32
     soil_layer_height_m: TwoDArrayFloat32
@@ -611,8 +648,6 @@ class HRUVariables(Bucket):
     leaf_area_index_grassland_like: TwoDArrayFloat32
     interception_capacity_forest_m: TwoDArrayFloat32
     interception_capacity_grassland_like_m: TwoDArrayFloat32
-    transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
-    potential_transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
     cell_length: ArrayFloat32
     water_depth_in_field: ArrayFloat32
     slope_m_per_m: ArrayFloat32
@@ -660,8 +695,16 @@ class HRUs(BaseVariables):
         self.data: Data = data
         self.model: GEBModel = model
 
-        subgrid_mask = read_grid(self.model.files["subgrid"]["mask"])
-        submask_height, submask_width = subgrid_mask.shape
+        subgrid: zarr.Group = zarr.open_group(
+            self.model.files["subgrid"]["mask"], mode="r"
+        )
+        assert isinstance(subgrid, zarr.Group)
+        y = subgrid["y"]
+        x = subgrid["x"]
+        assert isinstance(y, zarr.Array) and isinstance(x, zarr.Array)
+
+        submask_height: int = y.size
+        submask_width: int = x.size
 
         self.scaling = submask_height // self.data.grid.shape[0]
         assert submask_width // self.data.grid.shape[1] == self.scaling
@@ -703,15 +746,7 @@ class HRUs(BaseVariables):
         """
         self.var: HRUVariables = cast(
             HRUVariables,
-            self.model.store.create_bucket(
-                "hydrology.HRU.var",
-                validator=lambda x: (
-                    isinstance(x, np.ndarray)
-                    and (
-                        not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32
-                    )
-                ),
-            ),
+            self.model.store.create_bucket("hydrology.HRU.var"),
         )
 
         (
@@ -769,6 +804,7 @@ class HRUs(BaseVariables):
         land_use_classes: TwoDArrayInt32,
         mask: TwoDArrayBool,
         scaling: int,
+        initial_size: int,
     ) -> tuple[
         ArrayInt32,
         ArrayFloat32,
@@ -784,6 +820,7 @@ class HRUs(BaseVariables):
             land_use_classes: CWatM land use class map [0-5].
             mask: Mask of the normal grid cells.
             scaling: Scaling between mask and maximum resolution of HRUs.
+            initial_size: Initial size for HRU arrays.
 
         Returns:
             land_use_array: Land use of each HRU.
@@ -799,12 +836,36 @@ class HRUs(BaseVariables):
 
         n_nonmasked_cells = mask.size - mask.sum()
         grid_to_HRU = np.full(n_nonmasked_cells, -1, dtype=np.int32)
-        # var_to_HRU_uncompressed = np.full(mask.size, -1, dtype=np.int32)
-        HRU_to_grid = np.full(farms.size, -1, dtype=np.int32)
-        land_use_array = np.full(farms.size, -1, dtype=np.int32)
-        land_use_size = np.full(farms.size, -1, dtype=np.int32)
-        land_use_owner = np.full(farms.size, -1, dtype=np.int32)
         linear_mapping = np.full(farms.shape, -1, dtype=np.int32)
+
+        HRU_to_grid = np.full(initial_size, -1, dtype=np.int32)
+        land_use_array = np.full(initial_size, -1, dtype=np.int32)
+        land_use_size = np.full(initial_size, -1, dtype=np.int32)
+        land_use_owner = np.full(initial_size, -1, dtype=np.int32)
+
+        def resize_arrays(
+            hru_to_grid: ArrayInt32,
+            land_use_array: ArrayInt32,
+            land_use_size: ArrayInt32,
+            land_use_owner: ArrayInt32,
+            new_size: int,
+        ) -> tuple[ArrayInt32, ArrayInt32, ArrayInt32, ArrayInt32]:
+            new_hru_to_grid = np.full(new_size, -1, dtype=np.int32)
+            new_land_use_array = np.full(new_size, -1, dtype=np.int32)
+            new_land_use_size = np.full(new_size, -1, dtype=np.int32)
+            new_land_use_owner = np.full(new_size, -1, dtype=np.int32)
+
+            new_hru_to_grid[: hru_to_grid.size] = hru_to_grid
+            new_land_use_array[: land_use_array.size] = land_use_array
+            new_land_use_size[: land_use_size.size] = land_use_size
+            new_land_use_owner[: land_use_owner.size] = land_use_owner
+
+            return (
+                new_hru_to_grid,
+                new_land_use_array,
+                new_land_use_size,
+                new_land_use_owner,
+            )
 
         HRU = 0
         var_cell_count_compressed = 0
@@ -838,6 +899,19 @@ class HRUs(BaseVariables):
                         if farm == -1:  # if area is not a farm
                             continue
                         if farm != prev_farm:
+                            if HRU >= HRU_to_grid.size:
+                                res_res = resize_arrays(
+                                    HRU_to_grid,
+                                    land_use_array,
+                                    land_use_size,
+                                    land_use_owner,
+                                    int(HRU_to_grid.size * 1.5) + 1,
+                                )
+                                HRU_to_grid = res_res[0]
+                                land_use_array = res_res[1]
+                                land_use_size = res_res[2]
+                                land_use_owner = res_res[3]
+
                             assert land_use_array[HRU] == -1
                             assert land_use == 1  # must be one because farm
                             land_use_array[HRU] = land_use
@@ -869,6 +943,19 @@ class HRUs(BaseVariables):
                         if farm != -1:
                             continue
                         if land_use != prev_land_use:
+                            if HRU >= HRU_to_grid.size:
+                                res_res = resize_arrays(
+                                    HRU_to_grid,
+                                    land_use_array,
+                                    land_use_size,
+                                    land_use_owner,
+                                    int(HRU_to_grid.size * 1.5) + 1,
+                                )
+                                HRU_to_grid = res_res[0]
+                                land_use_array = res_res[1]
+                                land_use_size = res_res[2]
+                                land_use_owner = res_res[3]
+
                             assert land_use_array[HRU] == -1
                             land_use_array[HRU] = land_use
                             assert land_use_size[HRU] == -1
@@ -929,9 +1016,18 @@ class HRUs(BaseVariables):
         land_use_classes = read_grid(
             self.model.files["subgrid"]["landsurface/land_use_classes"]
         )
-        return self.create_HRUs_numba(
-            self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
+        initial_size = (
+            np.unique(self.data.farms).size + (self.data.grid.mask == 0).sum()
         )
+
+        res = self.create_HRUs_numba(
+            self.data.farms,
+            land_use_classes,
+            self.data.grid.mask,
+            self.scaling,
+            initial_size,
+        )
+        return res
 
     def zeros(self, size: int, dtype: type, *args: Any, **kwargs: Any) -> Array:
         """Return an array of zeros with given size. Takes any other argument normally used in np.zeros.
@@ -1167,49 +1263,49 @@ class HRUs(BaseVariables):
     def pr_kg_per_m2_per_s(self) -> TwoDArrayFloat32:
         """Get precipitation rate for HRUs in kg/m²/s."""
         pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.data.grid.pr_kg_per_m2_per_s
-        return self.data.to_HRU(data=pr_kg_per_m2_per_s, fn=None)
+        return self.data.to_HRU(data=pr_kg_per_m2_per_s, fn=None, how="first")
 
     @property
     def ps_pascal(self) -> TwoDArrayFloat32:
         """Get surface pressure for HRUs in Pa."""
         ps_pascal: TwoDArrayFloat32 = self.data.grid.ps_pascal
-        return self.data.to_HRU(data=ps_pascal, fn=None)
+        return self.data.to_HRU(data=ps_pascal, fn=None, how="first")
 
     @property
     def rlds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward longwave radiation for HRUs in W/m²."""
         rlds_W_per_m2: TwoDArrayFloat32 = self.data.grid.rlds_W_per_m2
-        return self.data.to_HRU(data=rlds_W_per_m2, fn=None)
+        return self.data.to_HRU(data=rlds_W_per_m2, fn=None, how="first")
 
     @property
     def rsds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward shortwave radiation for HRUs in W/m²."""
         rsds_W_per_m2: TwoDArrayFloat32 = self.data.grid.rsds_W_per_m2
-        return self.data.to_HRU(data=rsds_W_per_m2, fn=None)
+        return self.data.to_HRU(data=rsds_W_per_m2, fn=None, how="first")
 
     @property
     def tas_2m_K(self) -> TwoDArrayFloat32:
         """Get air temperature at 2m for HRUs in K."""
         tas_2m_K: TwoDArrayFloat32 = self.data.grid.tas_2m_K
-        return self.data.to_HRU(data=tas_2m_K, fn=None)
+        return self.data.to_HRU(data=tas_2m_K, fn=None, how="first")
 
     @property
     def dewpoint_tas_2m_K(self) -> TwoDArrayFloat32:
         """Get dewpoint temperature at 2m for HRUs in K."""
         dewpoint_tas_2m_K: TwoDArrayFloat32 = self.data.grid.dewpoint_tas_2m_K
-        return self.data.to_HRU(data=dewpoint_tas_2m_K, fn=None)
+        return self.data.to_HRU(data=dewpoint_tas_2m_K, fn=None, how="first")
 
     @property
     def wind_u10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get u-component of wind at 10m for HRUs in m/s."""
         wind_u10m_m_per_s: TwoDArrayFloat32 = self.data.grid.wind_u10m_m_per_s
-        return self.data.to_HRU(data=wind_u10m_m_per_s, fn=None)
+        return self.data.to_HRU(data=wind_u10m_m_per_s, fn=None, how="first")
 
     @property
     def wind_v10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get v-component of wind at 10m for HRUs in m/s."""
         wind_v10m_m_per_s: TwoDArrayFloat32 = self.data.grid.wind_v10m_m_per_s
-        return self.data.to_HRU(data=wind_v10m_m_per_s, fn=None)
+        return self.data.to_HRU(data=wind_v10m_m_per_s, fn=None, how="first")
 
 
 class Data:
@@ -1243,7 +1339,11 @@ class Data:
         )
 
     def to_HRU(
-        self, *, data: T_OneorTwoDArray, fn: str | None = None
+        self,
+        *,
+        data: T_OneorTwoDArray,
+        fn: str | None = None,
+        how: Literal["first", "last"] = "last",
     ) -> T_OneorTwoDArray:
         """Function to convert from grid to HRU (Hydrologic Response Units).
 
@@ -1252,6 +1352,7 @@ class Data:
         Args:
             data (array-like): The grid data to be converted. If this parameter is set, `varname` must not be provided. Data should be an array where each element corresponds to grid cell values.
             fn (str or None): The name of the function to apply to the data before assigning it to HRUs. If `None`, the data is used as is. This is usually the case for variables that are independent of area, like temperature or precipitation fluxes. If 'weightedsplit', the data will be adjusted according to the ratios of land use within each HRU. This is important when dealing with variables that are area-dependent like precipitation or runoff volumes.
+            how (str): Whether the first or the last dimension found in the uncompressed array should be used intepreted as the dimension to be converted to HRU. This is relevant when the input data has more than 2 dimensions. For example, if the input data has shape (time, grid_cells), setting `how` to "first" will convert the grid_cells dimension to HRU, resulting in an output shape of (time, HRUs). Setting `how` to "last" will convert the time dimension to HRU, resulting in an output shape of (HRUs, time).
 
         Returns:
             output_data (array-like): Data converted to HRUs format. The structure and the type of the output depend on the input and the transformation function.
@@ -1273,12 +1374,8 @@ class Data:
             ```
         """
         assert not isinstance(data, list)
-        # make data same size as grid, but with last dimension being size of HRU
-        output_data = np.zeros(
-            (*data.shape[:-1], self.HRU.var.land_use_ratio.size), dtype=data.dtype
-        )
-
         if data.ndim == 1:
+            output_data = np.empty_like(self.HRU.var.land_use_ratio, dtype=data.dtype)
             to_HRU(
                 data,
                 self.HRU.var.grid_to_HRU,
@@ -1286,13 +1383,28 @@ class Data:
                 output_data=output_data,
                 fn=fn,
             )
-        elif data.ndim == 2:
-            for i in range(data.shape[0]):
+        elif data.ndim == 2 and how == "first":
+            output_data = np.empty(
+                (self.HRU.var.land_use_ratio.size, *data.shape[1:]), dtype=data.dtype
+            )
+            for i in range(data.shape[1]):
                 to_HRU(
-                    data[i],
+                    data[:, i],
                     self.HRU.var.grid_to_HRU,
                     self.HRU.var.land_use_ratio,
-                    output_data=output_data[i],
+                    output_data=output_data[:, i],
+                    fn=fn,
+                )
+        elif data.ndim == 2 and how == "last":
+            output_data = np.empty(
+                (*data.shape[:-1], self.HRU.var.land_use_ratio.size), dtype=data.dtype
+            )
+            for i in range(data.shape[0]):
+                to_HRU(
+                    data[i, :],
+                    self.HRU.var.grid_to_HRU,
+                    self.HRU.var.land_use_ratio,
+                    output_data=output_data[i, :],
                     fn=fn,
                 )
         else:

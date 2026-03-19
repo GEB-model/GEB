@@ -34,7 +34,7 @@ from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
-from .landsurface import LandSurface
+from .landsurface.landsurface_model import LandSurface
 from .routing import Routing
 from .runoff_concentration import RunoffConcentrator
 from .water_demand import WaterDemand
@@ -104,7 +104,10 @@ class Hydrology(Data, Module):
             .sum()
             + self.waterbodies.var.storage.astype(np.float64).sum()
             + self.groundwater.groundwater_content_m3.astype(np.float64).sum()
-            + self.runoff_concentrator.overland_runoff_storage_end_m3.astype(np.float64)
+            + (
+                self.grid.var.overland_flow_buffer.astype(np.float64)
+                * self.grid.var.cell_area
+            ).sum()
         )
 
     def step(self) -> None:
@@ -301,7 +304,7 @@ class Hydrology(Data, Module):
         timer.finish_split("Hill slope erosion")
 
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.report(locals())
 

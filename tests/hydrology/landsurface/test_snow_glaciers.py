@@ -34,13 +34,21 @@ def test_discriminate_precipitation() -> None:
 
     assert math.isclose(snowfall, 0.005, abs_tol=1e-6)
     assert math.isclose(rainfall, 0.0, abs_tol=1e-6)
+    assert isinstance(snowfall, (np.float32, float))
+    assert not isinstance(snowfall, np.float64)
+    assert isinstance(rainfall, (np.float32, float))
+    assert not isinstance(rainfall, np.float64)
 
-    # Test rain
+    # Test rain_r
     temp_rain = np.float32(2.0)
     snowfall_r, rainfall_r = discriminate_precipitation(precip, temp_rain, threshold)
 
     assert math.isclose(snowfall_r, 0.0, abs_tol=1e-6)
     assert math.isclose(rainfall_r, 0.005, abs_tol=1e-6)
+    assert isinstance(snowfall_r, (np.float32, float))
+    assert not isinstance(snowfall_r, np.float64)
+    assert isinstance(rainfall_r, (np.float32, float))
+    assert not isinstance(rainfall_r, np.float64)
 
 
 def test_update_snow_temperature() -> None:
@@ -51,6 +59,10 @@ def test_update_snow_temperature() -> None:
     air_temp = np.float32(-2.0)
 
     new_temp = update_snow_temperature(snow_pack, snow_temp, snowfall, air_temp)
+
+    # Verify return type
+    assert isinstance(new_temp, (np.float32, float))
+    assert not isinstance(new_temp, np.float64)
 
     # Expected mixing then conductive relaxation with tau formulation
     mixed = (snow_temp * snow_pack + air_temp * snowfall) / (snow_pack + snowfall)
@@ -108,6 +120,80 @@ def test_update_snow_temperature_depth_sensitivity() -> None:
     assert new_temp_deep < air_temp
 
 
+def test_snow_model_type_consistency() -> None:
+    """Test that the snow model correctly handles float64 for storages and float32 for fluxes.
+
+    This test verifies the refactoring to use float64 for snow water equivalent (swe)
+    and liquid water (lw) while keeping other variables in float32 for speed.
+    """
+    pr = np.float32(0.001)
+    air_temp = np.float32(-2.0)
+    swe = np.float64(0.05)  # Expected float64
+    lw = np.float64(0.0)  # Expected float64
+    snow_temp = np.float32(-1.0)
+    sw_rad = np.float32(0.0)
+    dlw_rad = np.float32(250.0)
+    vp = np.float32(400.0)
+    press = np.float32(101325.0)
+    wind = np.float32(2.0)
+
+    results = snow_model(
+        pr,
+        air_temp,
+        swe,
+        lw,
+        snow_temp,
+        sw_rad,
+        dlw_rad,
+        vp,
+        press,
+        wind,
+    )
+
+    (
+        rainfall_m_hr,
+        snowfall_m_hr,
+        new_swe,
+        new_lw,
+        new_temp,
+        melt,
+        melt_runoff,
+        direct_rainfall,
+        sublimation,
+        refreezing,
+        surf_temp,
+        net_sw,
+        up_lw,
+        sensible,
+        latent,
+    ) = results
+
+    # Verify storage variables are float64
+    # When Numba returns scalars, they might be boxed as Python floats if not explicitly handled,
+    # but since the function is njit with float64 inputs/outputs, they should be float64.
+    assert isinstance(new_swe, (np.float64, float))
+    assert isinstance(new_lw, (np.float64, float))
+
+    # Verify fluxes and temperatures are float32
+    # Note: Numba might return them as Python floats if they are scalars.
+    # We check their precision or if they are indeed np.float32.
+    # To be safe, we can check if they are NOT float64 if they were intended as float32.
+    assert isinstance(rainfall_m_hr, (np.float32, float))
+    assert not isinstance(rainfall_m_hr, np.float64)
+    assert isinstance(snowfall_m_hr, (np.float32, float))
+    assert isinstance(new_temp, (np.float32, float))
+    assert isinstance(melt, (np.float32, float))
+    assert isinstance(melt_runoff, (np.float32, float))
+    assert isinstance(direct_rainfall, (np.float32, float))
+    assert isinstance(sublimation, (np.float32, float))
+    assert isinstance(refreezing, (np.float32, float))
+    assert isinstance(surf_temp, (np.float32, float))
+    assert isinstance(net_sw, (np.float32, float))
+    assert isinstance(up_lw, (np.float32, float))
+    assert isinstance(sensible, (np.float32, float))
+    assert isinstance(latent, (np.float32, float))
+
+
 def test_calculate_albedo() -> None:
     """Test albedo calculation."""
     swe_deep = np.float32(1.0)  # 1m SWE
@@ -120,6 +206,9 @@ def test_calculate_albedo() -> None:
 
     # Deep snow should approach max albedo
     albedo_deep = calculate_albedo(swe_deep, albedo_min, albedo_max, decay)
+    assert isinstance(albedo_deep, (np.float32, float))
+    assert not isinstance(albedo_deep, np.float64)
+
     expected_deep = albedo_min + (albedo_max - albedo_min) * np.exp(-decay * 1000)
     assert math.isclose(albedo_deep, expected_deep)
 
@@ -153,6 +242,12 @@ def test_calculate_turbulent_fluxes() -> None:
         wind_speed,
         bulk_coeff,
     )
+
+    # Verify return types
+    assert isinstance(sensible, (np.float32, float))
+    assert isinstance(latent, (np.float32, float))
+    assert isinstance(sublimation_rate, (np.float32, float))
+    assert not isinstance(sublimation_rate, np.float64)
 
     # Manual calculation for verification
     air_temp_K = 5.0 + 273.15
@@ -226,6 +321,11 @@ def test_calculate_melt() -> None:
         wind_speed,
     )
 
+    # Verify return types
+    assert isinstance(melt_rate, (np.float32, float))
+    assert isinstance(sublimation_rate, (np.float32, float))
+    assert not isinstance(melt_rate, np.float64)
+
     # Get fluxes for verification
     snow_surface_temp_C = np.float32(0.0)
     sensible, latent, sublimation_rate = calculate_turbulent_fluxes(
@@ -297,6 +397,12 @@ def test_handle_refreezing() -> None:
         snow_temp, liquid_water, snow_pack, np.float32(0.2)
     )
 
+    # Verify return types
+    assert isinstance(refreeze, (np.float32, float))
+    assert isinstance(updated_swe, (np.float64, float))
+    assert isinstance(updated_lw, (np.float64, float))
+    assert not isinstance(refreeze, np.float64)
+
     # Manual calculation
     cold_content = -(-5.0) * 0.1 * 1000.0 * 2108.0  # J/m²
     potential_refreeze = cold_content / (334000.0 * 1000.0)  # m
@@ -335,6 +441,11 @@ def test_calculate_runoff() -> None:
     runoff, updated_liquid = calculate_runoff(
         liquid_water, snow_pack, whc, np.float32(0.2)
     )
+
+    # Verify return types
+    assert isinstance(runoff, (np.float32, float))
+    assert isinstance(updated_liquid, (np.float64, float))
+    assert not isinstance(runoff, np.float64)
 
     max_water = 0.1 * 0.1  # 0.01 m
     expected_runoff = 0.02 - 0.01  # 0.01 m

@@ -69,7 +69,7 @@ def buildings() -> gpd.GeoDataFrame:
         Polygon([(8, 8), (8, 9), (9, 9), (9, 8)]),
         Polygon([(4.5, 4.5), (4.5, 5.5), (5.5, 5.5), (5.5, 4.5)]),
     ]
-    data["geometry"] = polygons
+    data["geometry"] = polygons  # ty:ignore[invalid-assignment]
 
     gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
         data, crs="EPSG:32631", geometry="geometry"
