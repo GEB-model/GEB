@@ -581,25 +581,33 @@ class Households(AgentBaseClass):
         if not hasattr(self, "_household_xy"):
             import pyproj
 
-            x, y = self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            x, y = np.array(self.buildings.x), np.array(self.buildings.y)
             transformer = pyproj.Transformer.from_crs(
                 "EPSG:4326", flood_map.rio.crs, always_xy=True
             )
-            self._household_xy = np.array(transformer.transform(x, y)).T
+            self._building_xy = np.array(transformer.transform(x, y)).T
 
         # sample flood map using clipped coordinates
         sampled_values = sample_from_map(
             array=flood_map.values,
-            coords=self._household_xy,
+            coords=self._building_xy,
             gt=flood_map.rio.transform(recalc=True).to_gdal(),
             out_of_bounds_value=np.nan,
         )
         # Use the same minimum flood depth threshold (0.05 m) as elsewhere in the model
         minimum_flood_depth_m = 0.05
         # np.where will return indices of flooded households relative to the original household array
-        flooded_indices = np.where(sampled_values > minimum_flood_depth_m)[0]
+        flooded_building_indices = np.where(sampled_values > minimum_flood_depth_m)[0]
 
-        return flooded_indices
+        # get building IDs of flooded buildings
+        flooded_building_ids = self.buildings.loc[flooded_building_indices, "id"].values.astype(int)
+
+        # get indices of households located in flooded buildings
+        flooded_household_indices = np.where(
+            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
+        )[0]
+
+        return flooded_household_indices
 
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
@@ -668,8 +676,8 @@ class Households(AgentBaseClass):
                     )
 
         else:
-            flooded_households = self.return_period_flood()
-            self.var.years_since_last_flood[flooded_households] = 0
+            flooded_household_indices = self.return_period_flood()
+            self.var.years_since_last_flood.data[flooded_household_indices] = 0
 
         self.var.risk_perception.data = (
             self.var.risk_perc_max
