@@ -1,3 +1,6 @@
+# dev
+- Add option for filling and raise out of bounds error for sample_from_map.
+
 # v1.0.0b18
 - Add loggers to groundwater model and SFINCS models.
 - Close all open figures in SFINCS to reduce memory usage.
