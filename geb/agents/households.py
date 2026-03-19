@@ -576,7 +576,9 @@ class Households(AgentBaseClass):
         flooded_building_indices = np.where(sampled_values > minimum_flood_depth_m)[0]
 
         # get building IDs of flooded buildings
-        flooded_building_ids = self.buildings.loc[flooded_building_indices, "id"].values.astype(int)
+        flooded_building_ids = self.buildings.loc[
+            flooded_building_indices, "id"
+        ].values.astype(int)
 
         # get indices of households located in flooded buildings
         flooded_household_indices = np.where(
