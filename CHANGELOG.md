@@ -1,3 +1,6 @@
+# dev
+- Activate dynamic river widths during spinup. During the first years of spinup there may be some small balance errors, but they will resolve over time and in the run (when river width alpha and beta are stable).
+
 # v1.0.0b18
 - Add loggers to groundwater model and SFINCS models.
 - Close all open figures in SFINCS to reduce memory usage.
