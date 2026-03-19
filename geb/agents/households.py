@@ -587,40 +587,17 @@ class Households(AgentBaseClass):
             )
             self._household_xy = np.array(transformer.transform(x, y)).T
 
-        # get flood map bounds based on the transform used for sampling
-        left, bottom, right, top = flood_map.rio.bounds(recalc=True)
-
-        # set household coordinates outside the flood map edge bounds to nan
-        # using edge bounds (not pixel centers) keeps the validity check consistent
-        # with the affine transform passed to sample_from_map
-        coords_clipped = self._household_xy.copy()
-        coords_clipped[:, 0] = np.where(
-            (coords_clipped[:, 0] < left) | (coords_clipped[:, 0] > right),
-            np.nan,
-            coords_clipped[:, 0],
-        )
-        coords_clipped[:, 1] = np.where(
-            (coords_clipped[:, 1] < bottom) | (coords_clipped[:, 1] > top),
-            np.nan,
-            coords_clipped[:, 1],
-        )
-
-        # get indices of coords that are not nan (i.e., households within flood map bounds)
-        valid_indices = ~np.isnan(coords_clipped).any(axis=1)
-        coords_clipped_valid = coords_clipped[valid_indices]
-
         # sample flood map using clipped coordinates
         sampled_values = sample_from_map(
             array=flood_map.values,
-            coords=coords_clipped_valid,
+            coords=self._household_xy,
             gt=flood_map.rio.transform(recalc=True).to_gdal(),
+            out_of_bounds_value=np.nan,
         )
-        all_locations = np.full(self.var.locations.data.shape[0], np.nan)
-        all_locations[valid_indices] = sampled_values
         # Use the same minimum flood depth threshold (0.05 m) as elsewhere in the model
         minimum_flood_depth_m = 0.05
         # np.where will return indices of flooded households relative to the original household array
-        flooded_indices = np.where(all_locations > minimum_flood_depth_m)[0]
+        flooded_indices = np.where(sampled_values > minimum_flood_depth_m)[0]
 
         return flooded_indices
 
