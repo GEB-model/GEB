@@ -642,9 +642,14 @@ class Hydrography(BuildModelBase):
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
+
         streams_length_low_res.attrs["_FillValue"] = np.nan
         streams_length_low_res = snap_to_grid(streams_length_low_res, self.grid["mask"])
-
+        streams_length_low_res = np.maximum(
+            streams_length_low_res,
+            np.sqrt(self.grid["cell_area"])
+            * 0.5,  # stream length should be at least half of the cell length
+        )
         self.set_grid(streams_length_low_res, name="drainage/streams_length_m")
 
         elevation_coarsened = original_d8_elevation.coarsen(
@@ -1036,7 +1041,7 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(depends_on=["setup_coastlines"], required=True)
+    @build_method(depends_on=["setup_coastlines", "setup_elevation"], required=True)
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         if self.geom["routing/subbasins"]["is_coastal"].any():
