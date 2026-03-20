@@ -101,7 +101,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
             import tarfile
 
             with tarfile.open(tbb_path / tbb_compressed_file, "r:gz") as tar:
-                tar.extractall(path=tbb_path)
+                tar.extractall(path=tbb_path, filter="data")
         elif tbb_compressed_file.endswith(".zip"):
             import zipfile
 
