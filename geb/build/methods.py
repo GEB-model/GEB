@@ -111,6 +111,8 @@ def validate_build_methods(
                             "Cannot fix order: cycle detected in requested methods."
                         )
 
+                    changed_methods = set()
+
                     # To minimize changes, we can iterate and "pull up" dependencies.
                     new_order = list(methods.keys())
                     changed = True
@@ -134,13 +136,14 @@ def validate_build_methods(
                                 method_to_move = new_order.pop(i)
                                 new_order.insert(max_dep_idx, method_to_move)
                                 changed = True
+                                changed_methods.add(method_to_move)
                                 break
 
                     methods = {node: methods[node] for node in new_order}
 
                     if logger is not None:
                         logger.warning(
-                            "The provided method order was invalid and has been auto-fixed."
+                            f"The provided method order was invalid and has been auto-fixed. Moved methods: {changed_methods}"
                         )
                         logger.info(f"New build method order: {list(methods.keys())}")
                 except nx.NetworkXUnfeasible:
