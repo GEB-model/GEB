@@ -1459,7 +1459,18 @@ def rasterize_geometry(
     block: xr.DataArray,
     geometry: BaseGeometry,
     all_touched: bool,
-):
+) -> xr.DataArray:
+    """Rasterize a geometry onto a block of a DataArray.
+
+    Args:
+        block: The block of the DataArray to rasterize onto. Must have x and y coordinates.
+        geometry: The geometry to rasterize. Must be in the same CRS as the DataArray.
+        all_touched: If True, all pixels touched by the geometry will be included in the mask.
+            If False, only pixels whose center is within the geometry will be included.
+
+    Returns:
+        A boolean DataArray with the same shape and coordinates as the block, where True values indicate the presence of the geometry.
+    """
     mask = rasterize(
         [(geometry, 1)],
         out_shape=block.shape,
