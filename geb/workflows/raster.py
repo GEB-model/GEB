@@ -1520,20 +1520,16 @@ def clip_with_geometry(
             "Geometry must be in the same CRS as the DataArray to use clip_with_geometry"
         )
 
+    if da.rio.nodata is None:
+        raise ValueError(
+            "DataArray must have nodata value defined to use clip_with_geometry"
+        )
+
     if da.chunks:
         if drop is True:
             xmin, ymin, xmax, ymax = gdf.geometry.total_bounds
             da = da.rio.clip_box(xmin, ymin, xmax, ymax, crs=gdf.crs)
 
-        # tiles = create_dask_tiles(da)
-        # rasterized = map_blocks(
-        #     rasterize_geometry,
-        #     gdf.geometry.union_all(),
-        #     tiles,
-        #     chunks=(da.chunks[0], da.chunks[1]),
-        #     dtype=bool,
-        #     all_touched=all_touched,
-        # )
         rasterized = da.map_blocks(
             rasterize_geometry,
             args=[gdf.geometry.union_all(), all_touched],
