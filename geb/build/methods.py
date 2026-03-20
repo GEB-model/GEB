@@ -3,6 +3,7 @@
 import functools
 import inspect
 import logging
+import tracemalloc
 from pathlib import Path
 from time import time
 from typing import Any, Iterable
@@ -198,6 +199,7 @@ class _build_method:
         self.tree = nx.DiGraph()
         self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
+        self.peak_memory_usage: dict[str, int] = {}
 
     def _resolve_logger(
         self, call_args: tuple[Any, ...] | None = None
@@ -257,15 +259,19 @@ class _build_method:
                 for key, value in kwargs.items():
                     active_logger.debug(f"{func.__name__}.{key}: {value}")
 
+                tracemalloc.start()
                 start_time: float = time()
                 value: Any = func(*args, **kwargs)
                 end_time: float = time()
+                _, peak = tracemalloc.get_traced_memory()
+                tracemalloc.stop()
 
                 elapsed_time: float = end_time - start_time
 
                 self.time_taken[func.__name__] = elapsed_time
+                self.peak_memory_usage[func.__name__] = peak
                 active_logger.info(
-                    f"Completed {func.__name__} in {elapsed_time:.2f} seconds"
+                    f"Completed {func.__name__} in {elapsed_time:.2f} seconds with peak memory usage of {peak / 1024 / 1024:.2f} MB."
                 )
                 return value
 
@@ -475,7 +481,7 @@ class _build_method:
                 f"The following required methods are missing: {', '.join(missing_methods)}"
             )
 
-    def log_time_taken(self) -> None:
+    def log_statistics(self) -> None:
         """Log the time taken for each method in the dependency tree."""
         active_logger: logging.Logger = self._resolve_logger()
         total_time: float = sum(self.time_taken.values())
@@ -487,7 +493,7 @@ class _build_method:
         for method, time_taken in sorted_by_time:
             percentage: float = (time_taken / total_time) * 100
             active_logger.info(
-                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%)."
+                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%) and had peak memory usage of {self.peak_memory_usage[method] / 1024 / 1024:.2f} MB."
             )
 
         active_logger.info(f"Total time taken: {total_time:.2f} seconds.")
