@@ -72,40 +72,60 @@ def read_table(fp: Path, **kwargs: Any) -> pd.DataFrame:
 def write_table(df: pd.DataFrame, fp: Path) -> None:
     """Save a pandas DataFrame to a parquet file.
 
-    brotli is a bit slower but gives better compression,
-    gzip is faster to read. Higher compression levels
-    generally don't make it slower to read, therefore
-    we use the highest compression level for gzip
-
     Args:
         df: The pandas DataFrame to save.
         fp: The path to the output parquet file.
     """
-    df.to_parquet(fp, engine="pyarrow", compression="gzip", compression_level=9)
+    df.to_parquet(
+        fp,
+        engine="pyarrow",
+        compression="zstd",
+        compression_level=9,
+        row_group_size=max(min(10_000, len(df)), 1),
+    )
 
 
-def read_array(fp: Path) -> np.ndarray:
+@overload
+def read_array(fp: Path, return_attributes: bool = False) -> np.ndarray: ...
+
+
+@overload
+def read_array(
+    fp: Path, return_attributes: bool = True
+) -> tuple[np.ndarray, dict[str, Any]]: ...
+
+
+def read_array(
+    fp: Path, return_attributes: bool = False
+) -> np.ndarray | tuple[np.ndarray, dict[str, Any]]:
     """Load a numpy array from a .zarr file.
 
     Args:
-        fp: The path to the .npz or .zarr file.
+        fp: The path to the .zarr file.
+        return_attributes: Whether to return the attributes along with the array.
 
     Returns:
-        The numpy array.
+        The numpy array, or a tuple of the array and its attributes if return_attributes is True.
     """
-    zarr_object = zarr.load(fp)
-    assert isinstance(zarr_object, np.ndarray)
-    return zarr_object
+    zarr_object = zarr.open_array(fp, mode="r")
+    array = zarr_object[:]
+    assert isinstance(array, np.ndarray)
+    if return_attributes:
+        return array, dict(zarr_object.attrs)
+    return array
 
 
-def write_array(arr: np.ndarray, fp: Path) -> None:
+def write_array(
+    arr: np.ndarray, fp: Path, attributes: dict[str, Any] | None = None
+) -> None:
     """Save a numpy array to a .zarr file.
 
     Args:
         arr: The numpy array to save.
         fp: The path to the output .zarr file.
+        attributes: Optional dictionary of attributes to store with the array.
     """
-    zarr.save_array(fp, arr, overwrite=True)  # ty:ignore[invalid-argument-type]
+    zarr.save_array(fp, arr, overwrite=True, attributes=attributes)  # ty:ignore[invalid-argument-type]
 
 
 @overload
@@ -219,7 +239,7 @@ def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
         engine="pyarrow",
         compression="zstd",
         compression_level=9,
-        row_group_size=10_000,
+        row_group_size=max(min(10_000, len(gdf)), 1),
         schema_version="1.1.0",
     )
 
@@ -621,7 +641,7 @@ def write_zarr(
         da: xr.DataArray = da.chunk(shards if shards is not None else chunks)
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
-        chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)
+        chunks = tuple(chunks[dim] for dim in da.dims)
 
         array_encoding: dict[str, Any] = {
             "compressors": (compressor,),
@@ -1211,19 +1231,18 @@ class AsyncGriddedForcingReader:
             """Cancel this instance's pending tasks and close async group."""
             if self.preloaded_data_future and not self.preloaded_data_future.done():
                 self.preloaded_data_future.cancel()
-                try:
-                    await self.preloaded_data_future
-                except asyncio.CancelledError:
-                    pass
             # Stop the loop
             asyncio.get_event_loop().stop()
 
         if self.loop and self.loop.is_running():
             try:
-                asyncio.run_coroutine_threadsafe(cleanup(), self.loop).result(timeout=5)
+                # Because we are not writing, we can just cancel the pending preload
+                # task and stop the loop without waiting for it to finish.
+                # This allows for a much faster shutdown, especially if the loop is currently waiting on a slow disk read.
+                asyncio.run_coroutine_threadsafe(cleanup(), self.loop)
             except Exception:
                 pass
-            self.thread.join(timeout=1)
+            # Don't join the thread - it's a daemon and will die when the process dies
 
 
 class WorkingDirectory:

@@ -12,6 +12,7 @@ from geb.build.methods import build_method
 from geb.workflows.io import get_window, parse_and_set_zarr_CRS
 from geb.workflows.raster import (
     calculate_cell_area_m2,
+    clip_with_geometry,
     convert_nodata,
     interpolate_na_2d,
     interpolate_na_along_dim,
@@ -34,7 +35,7 @@ class LandSurface(BuildModelBase):
         """Initialize the LandSurface class."""
         pass
 
-    @build_method(depends_on=["setup_regions_and_land_use"], required=True)
+    @build_method(required=True)
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
 
@@ -74,27 +75,13 @@ class LandSurface(BuildModelBase):
         )
         self.set_subgrid(sub_cell_area, name="cell_area")
 
-        region_subgrid_cell_area = self.full_like(
-            self.region_subgrid["mask"],
-            fill_value=np.nan,
-            nodata=np.nan,
-            dtype=np.float32,
-        )
-
-        height, width = region_subgrid_cell_area.shape
-        region_subgrid_cell_area.data = calculate_cell_area_m2(
-            region_subgrid_cell_area.rio.transform(recalc=True),
-            height,
-            width,
-        )
-
-        # set the cell area for the region subgrid
-        self.set_region_subgrid(
-            region_subgrid_cell_area,
-            name="cell_area",
-        )
-
-    @build_method(depends_on=["setup_hydrography", "setup_coastlines"], required=True)
+    @build_method(
+        depends_on=[
+            "setup_hydrography",
+            "setup_coastlines",
+        ],
+        required=True,
+    )
     def setup_elevation(
         self,
         DEMs: list[dict[str, str | float]] = [
@@ -206,7 +193,7 @@ class LandSurface(BuildModelBase):
         assert target.rio.crs is not None, "target grid must have a crs"
 
         self.set_subgrid(
-            resample_like(fabdem, target, method="bilinear"),
+            resample_chunked(fabdem, target, method="bilinear"),
             name="landsurface/elevation",
         )
 
@@ -268,9 +255,9 @@ class LandSurface(BuildModelBase):
             if "band" in DEM_raster.dims:
                 DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
 
-            DEM_raster = DEM_raster.rio.clip(
-                [potential_flood_area_with_buffer],
-                crs=4326,  # crs of the potential_flood_area_with_buffer
+            DEM_raster = clip_with_geometry(
+                DEM_raster,
+                gpd.GeoDataFrame(geometry=[potential_flood_area_with_buffer], crs=4326),
                 all_touched=True,
                 drop=True,
             )
@@ -404,18 +391,21 @@ class LandSurface(BuildModelBase):
             land_cover
         ).read(self.geom["regions"].union_all().union(potential_flood_area_with_buffer))
 
+        land_use_classification_source_within_potential_flood_area = clip_with_geometry(
+            land_use_classification_source,
+            gpd.GeoDataFrame(geometry=[potential_flood_area_with_buffer], crs=4326),
+            all_touched=True,
+            drop=True,
+        )
+
         self.set_other(
-            land_use_classification_source.rio.clip(
-                [potential_flood_area_with_buffer],
-                drop=True,
-                all_touched=True,
-            ),
+            land_use_classification_source_within_potential_flood_area,
             name="landcover/classification",
         )
 
         land_use_classification_source_region_subgrid: xr.DataArray = resample_chunked(
             land_use_classification_source,
-            region_mask.chunk({"x": 1000, "y": 1000}),
+            region_mask,
             method="nearest",
         )
 
