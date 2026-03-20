@@ -83,8 +83,9 @@ def create_farm_distributions(
             and not np.isnan(n_holdings)
             and n_holdings > 0
         ):
-            raise ValueError(
-                f"Cannot calculate average size for bin '{size_class}' in {ISO3}: number of holdings is available but agricultural area is missing."
+            logger.warning(
+                f"Total agricultural area for bin '{size_class}' in {ISO3} is missing, but number of holdings is {n_holdings}. "
+                "Setting average farm size to the midpoint of the size class."
             )
             if np.isinf(max_size_m2):
                 average_farm_size_m2 = (
