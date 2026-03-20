@@ -2756,9 +2756,9 @@ class ESAWorldCover(Adapter):
             da = rioxarray.open_rasterio(
                 url,
                 chunks={
-                    "x": 3000,
-                    "y": 3000,
-                },  # The orginal data is 36000 x 36000, so 3000 is exactly divisible and results in uniform chunk sizes
+                    "x": 6000,
+                    "y": 6000,
+                },  # The orginal data is 36000 x 36000, so 6000 is exactly divisible and results in uniform chunk sizes
             )
             assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
             assert all(

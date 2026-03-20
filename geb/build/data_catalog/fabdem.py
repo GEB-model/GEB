@@ -19,6 +19,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import geopandas as gpd
 import numpy as np
 import rioxarray as rxr
 import xarray as xr
@@ -28,7 +29,7 @@ from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
 
 from geb.workflows.io import fetch_and_save, read_zarr, write_zarr
-from geb.workflows.raster import convert_nodata
+from geb.workflows.raster import clip_with_geometry, convert_nodata
 
 from .base import Adapter
 
@@ -621,7 +622,12 @@ class Fabdem(Adapter):
 
                 da: xr.DataArray = self._merge_fabdem_tiles(results)
                 # Clip to the mask and set data outside the mask to NaN
-                da = da.rio.clip([mask], all_touched=True, drop=True)
+                da = clip_with_geometry(
+                    da,
+                    gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
+                    all_touched=True,
+                    drop=True,
+                )
                 da = convert_nodata(da, np.nan)
 
                 write_zarr(da, self.path, crs=da.rio.crs)
