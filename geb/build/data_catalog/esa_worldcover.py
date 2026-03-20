@@ -2751,8 +2751,6 @@ class ESAWorldCover(Adapter):
         arrays: list[xr.DataArray] = []
 
         for url in tile_urls:
-            # Type ignore since rioxarray.open_rasterio returns a union type,
-            # but for .tif files it typically returns a DataArray.
             da = rioxarray.open_rasterio(
                 url,
                 chunks={
@@ -2773,8 +2771,6 @@ class ESAWorldCover(Adapter):
             arrays.append(da)
 
         if len(arrays) > 1:
-            # Merge using coordinate-based combining. Type ignore as combine_by_coords
-            # can return Dataset or DataArray.
             # Because chunks are exactly dividing the original data, the chunks here will
             # be "easy" to make
             merged: Any = xr.combine_by_coords(
