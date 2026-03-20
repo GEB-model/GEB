@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import geopandas as gpd
 import numpy as np
@@ -14,9 +14,12 @@ import pandas as pd
 import xarray as xr
 from rasterio.features import rasterize
 
-from geb.geb_types import ArrayFloat32
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
 
+from ..hydrology.landcovers import (
+    FOREST,
+)
 from ..store import Bucket, DynamicArray
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
@@ -73,6 +76,8 @@ class HouseholdVariables(Bucket):
     max_dam_forest_m2: float
     max_dam_agriculture_m2: float
     region_id: DynamicArray
+    water_demand_per_household_year: int
+    water_demand_per_household_m3_gridded: ArrayFloat32
 
 
 class Households(AgentBaseClass):
@@ -471,7 +476,7 @@ class Households(AgentBaseClass):
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
 
-        print(
+        self.model.logger.info(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
 
@@ -1708,6 +1713,10 @@ class Households(AgentBaseClass):
         if self.model.config["agent_settings"]["households"]["warning_response"]:
             self.assign_households_to_postal_codes()
 
+        self.var.water_demand_per_household_year = (
+            -100_000
+        )  # probably we will not simulate before the year -100k ;-)
+
     def assign_damages_to_agents(
         self, agent_df: pd.DataFrame, buildings_with_damages: pd.DataFrame
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -2092,8 +2101,10 @@ class Households(AgentBaseClass):
 
     def water_demand(
         self,
+        household_demand_to_grid_fn: Callable[
+            [ArrayFloat32, TwoDArrayFloat32], ArrayFloat32
+        ],
     ) -> tuple[
-        ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
     ]:
@@ -2106,6 +2117,12 @@ class Households(AgentBaseClass):
 
         In the 'custom_value' option, all households are assigned the same
         water demand value specified in the configuration.
+
+        Args:
+            household_demand_to_grid_fn: A function that takes the water demand per
+                household and their locations, and returns the water demand gridded to the model grid.
+                This is used to convert the household-level water demand to a grid-level water demand
+                that can be used in the hydrological model.
 
         Returns:
             Tuple containing:
@@ -2121,41 +2138,61 @@ class Households(AgentBaseClass):
             "if not 1, code must be updated to account for water efficiency in water demand"
         )
         if self.config["water_demand"]["method"] == "default":
-            # the water demand multiplier is a function of the year and region
-            water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
-                self.model.current_time.year
-            ]
-            assert (
-                water_demand_multiplier_per_region.index
-                == np.arange(len(water_demand_multiplier_per_region))
-            ).all()
-            water_demand_multiplier_per_household = (
-                water_demand_multiplier_per_region.values[self.var.region_id]
-            )
+            current_year = self.model.current_time.year
 
-            # water demand is the per capita water demand in the household,
-            # multiplied by the size of the household and the water demand multiplier
-            # per region and year, relative to the baseline.
-            self.var.water_demand_per_household_m3 = (
-                self.var.municipal_water_demand_per_capita_m3_baseline
-                * self.var.sizes
-                * water_demand_multiplier_per_household
-            ) * self.config["adjust_demand_factor"]
+            # the household water demand calculation is quite expensive,
+            # so we only update it when the year changes
+            if current_year != self.var.water_demand_per_household_year:
+                # the water demand multiplier is a function of the year and region
+                water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
+                    current_year
+                ]
+                assert (
+                    water_demand_multiplier_per_region.index
+                    == np.arange(len(water_demand_multiplier_per_region))
+                ).all()
+                water_demand_multiplier_per_household = (
+                    water_demand_multiplier_per_region.values[self.var.region_id]
+                )
+
+                # water demand is the per capita water demand in the household,
+                # multiplied by the size of the household and the water demand multiplier
+                # per region and year, relative to the baseline.
+                water_demand_per_household_m3 = (
+                    self.var.municipal_water_demand_per_capita_m3_baseline
+                    * self.var.sizes
+                    * water_demand_multiplier_per_household
+                ) * self.config["adjust_demand_factor"]
+                self.var.water_demand_per_household_year = current_year
+                self.var.water_demand_per_household_m3_gridded = (
+                    household_demand_to_grid_fn(
+                        water_demand_per_household_m3.data, self.var.locations.data
+                    )
+                )
+                self.model.logger.debug(
+                    f"Calculated water demand per household for year {current_year}."
+                )
+
         elif self.config["water_demand"]["method"] == "custom_value":
             # Function to set a custom_value for household water demand. All households have the same demand.
             custom_value = self.config["water_demand"]["custom_value"]["value"]
-            self.var.water_demand_per_household_m3 = np.full(
+            water_demand_per_household_m3 = np.full(
                 self.var.region_id.shape, custom_value, dtype=float
             )
+            self.var.water_demand_per_household_m3_gridded = (
+                household_demand_to_grid_fn(
+                    water_demand_per_household_m3, self.var.locations.data
+                )
+            )
+
         else:
             raise ValueError(
                 "Invalid water demand method. Configuration must be 'default' or 'custom_value'."
             )
 
         return (
-            self.var.water_demand_per_household_m3,
+            self.var.water_demand_per_household_m3_gridded,
             self.var.water_efficiency_per_household,
-            self.var.locations.data,
         )
 
     def step(self) -> None:
