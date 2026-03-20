@@ -2638,7 +2638,10 @@ class GEBModel(
         # the original resolution is 3 arcseconds, thus we divide by 3
         scale_factor: int = target_resolution_arcsec // 3
 
-        self.logger.info("Coarsening hydrography")
+        self.logger.info(
+            "Coarsening drainage network to resolution %d arcseconds",
+            target_resolution_arcsec,
+        )
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
         flow_raster_upscaled, idxs_out = flow_raster.upscale(
             scale_factor=scale_factor,
@@ -3561,7 +3564,7 @@ class GEBModel(
 
         self.logger.info("Finished!")
 
-        build_method.log_time_taken()
+        build_method.log_statistics()
 
     def build(
         self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
