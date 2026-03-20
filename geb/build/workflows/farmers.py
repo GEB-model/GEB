@@ -185,7 +185,7 @@ def create_farm_distributions(
             int(max_size_m2 / average_subgrid_area_region) - 1
         )  # otherwise they overlap with next size class
 
-        if not size_class_data.whole_cells > size_class_data.n_holdings:
+        if not size_class_data.whole_cells >= size_class_data.n_holdings:
             raise ValueError(
                 f"Number of holdings for size class '{size_class}' in {ISO3} is {size_class_data.n_holdings}, "
                 f"which is greater than the number of whole cells {size_class_data.whole_cells}. "
@@ -246,7 +246,7 @@ def create_farm_distributions(
     region_agents = pd.DataFrame(
         {
             "farm_size_cells": region_farm_sizes,
-            "region_id": np.full_like(region_farm_sizes, UID, dtype=np.int8),
+            "region_id": np.full_like(region_farm_sizes, UID, dtype=np.int32),
         }
     )
     return region_agents

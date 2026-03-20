@@ -1060,7 +1060,9 @@ class Agents(BuildModelBase):
         self.set_subgrid(farms, name="agents/farmers/farms")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    @build_method(depends_on=["setup_regions_and_land_use"], required=True)
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "setup_cell_area"], required=True
+    )
     def setup_create_farms(
         self,
         region_id_column: str = "region_id",
