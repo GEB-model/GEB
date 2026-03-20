@@ -22,6 +22,7 @@ To support this version:
 - Make filling of discharge gaps a lot more efficient (quite some reduction in run speed).
 - Make it possible to specify the number of cores using `--cores`. Default is all cores (no change).
 - Make an option to auto-fix the build order if it is incorrect.
+- Simulate return period based flood events for updating risk perceptions (instead of fixed threshold).
 
 To support this version:
 - Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.
