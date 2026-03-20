@@ -1,6 +1,6 @@
 """Tests for storage objects in GEB."""
 
-import os
+import shutil
 
 import numpy as np
 import numpy.typing as npt
@@ -450,13 +450,13 @@ def test_save_and_restore(array: DynamicArray) -> None:
         array: The DynamicArray to be saved and restored.
     """
     array.save(tmp_folder / "test")
-    array2 = DynamicArray.load(tmp_folder / "test.storearray.npz")
+    array2 = DynamicArray.load(tmp_folder / "test.dynamicarray.zarr")
     assert np.array_equal(array, array2)
     # test for equality of class attributes
     assert array.max_n == array2.max_n
     assert array.n == array2.n
     assert (array.extra_dims_names == array2.extra_dims_names).all()
-    os.remove(tmp_folder / "test.storearray.npz")
+    shutil.rmtree(tmp_folder / "test.dynamicarray.zarr")
 
 
 def test_dynamic_array_where() -> None:
