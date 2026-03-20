@@ -288,25 +288,12 @@ class LandSurface(BuildModelBase):
     ) -> None:
         """Sets up the (administrative) regions and land use data for GEB.
 
-        The regions can be used for multiple purposes, for example for creating the
-        agents in the model, assigning unique crop prices and other economic variables
-        per region and for aggregating the results.
-
         Args:
             region_database: The name of the region database to use. Default is 'GADM_level1'.
             unique_region_id: The name of a column in the region database that contains a unique region ID. Default is 'UID',
                 which is the unique identifier for the GADM database.
             ISO3_column: The name of a column in the region database that contains the ISO3 code for the region. Default is 'ISO3'.
             land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021'.
-
-        Notes:
-            This method sets up the regions and land use data for GEB. It first retrieves the region data from
-            the specified region database and sets it as a geometry in the model. It then pads the subgrid to cover the entire
-            region and retrieves the land use data from the ESA WorldCover dataset. The land use data is reprojected to the
-            padded subgrid and the region ID is rasterized onto the subgrid. The cell area for each region is calculated and
-            set as a grid in the model. The MERIT dataset is used to identify rivers, which are set as a grid in the model. The
-            land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
-            identified and set as a grid in the model.
         """
         regions: gpd.GeoDataFrame = (
             self.data_catalog.fetch(region_database)
@@ -346,16 +333,6 @@ class LandSurface(BuildModelBase):
         mask_bounds: tuple[float, float, float, float] = self.grid["mask"].rio.bounds(
             recalc=True
         )
-
-        # The bounds should be set to a bit larger than the regions to avoid edge effects
-        # and also larger than the mask, to ensure that the entire grid is covered.
-        pad_minx = mask_bounds[0] - abs(resolution_x) / 2.0
-        pad_miny = mask_bounds[1] - abs(resolution_y) / 2.0
-        pad_maxx = mask_bounds[2] + abs(resolution_x) / 2.0
-        pad_maxy = mask_bounds[3] + abs(resolution_y) / 2.0
-
-        # Get the combined bounds of regions and subbasins to ensure coverage of both
-        buffer = 0.1
 
         # regions_bounds = self.geom["regions"].total_bounds
         subbasins_bounds = self.geom["routing/subbasins"].total_bounds
