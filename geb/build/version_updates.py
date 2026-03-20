@@ -2,7 +2,7 @@
 
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b19": [
-        "[manual] Add a new file called 'build_complete.txt' in your input folder. In future versions this file will be made automatically."
+        "[manual] Add a new file called 'build_complete.txt' in your input folder. In future versions this file will be made automatically.",
         "[manual] Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.",
     ],
     "1.0.0b18": [

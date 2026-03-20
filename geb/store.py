@@ -1023,10 +1023,10 @@ class DynamicArray:
 
     def save(self, path: Path) -> None:
         """
-        Save the DynamicArray to disk in a compressed NumPy archive.
+        Save the DynamicArray to disk in a compressed format.
 
         Args:
-            path: Path-like object (without suffix) where the .dynamicarray.npz file will be written.
+            path: Path-like object (without suffix) where the .dynamicarray.zarr file will be written.
         """
         write_array(
             self._data,
