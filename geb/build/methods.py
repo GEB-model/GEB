@@ -142,7 +142,7 @@ def validate_build_methods(
                         logger.warning(
                             "The provided method order was invalid and has been auto-fixed."
                         )
-                        logger.info(f"New method order: {list(methods.keys())}")
+                        logger.info(f"New build method order: {list(methods.keys())}")
                 except nx.NetworkXUnfeasible:
                     raise ValueError("Cannot fix order: dependencies are circular.")
         else:
