@@ -1458,7 +1458,7 @@ class Crops(BuildModelBase):
         )
 
         n_cells = grid_id_da.max().item()
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
 
         farmer_cells = sample_from_map(
             grid_id_da.values,
@@ -1588,7 +1588,7 @@ class Crops(BuildModelBase):
         Raises:
             ValueError: If no rotations are found for a crop in a unit or no valid neighbor data is found.
         """
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
 
         MIRCA_unit_grid = self.data_catalog.fetch("mirca2000_unit_grid").read()
         assert isinstance(MIRCA_unit_grid, xr.DataArray)

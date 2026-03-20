@@ -14,7 +14,6 @@ The I/O functions for these data structures are implemented in [geb.workflows.io
 | Parameters | `dict` | [read_params][geb.workflows.io.read_params] | [write_params][geb.workflows.io.write_params] |
 | Grids | `grid` | [read_zarr][geb.workflows.io.read_zarr] | [write_zarr][geb.workflows.io.write_zarr] |
 | Subgrids | `subgrid` | [read_zarr][geb.workflows.io.read_zarr] | [write_zarr][geb.workflows.io.write_zarr] |
-| Region subgrids | `region_subgrid` | [read_zarr][geb.workflows.io.read_zarr] | [write_zarr][geb.workflows.io.write_zarr] |
 | Other grids | `other` | [read_zarr][geb.workflows.io.read_zarr] | [write_zarr][geb.workflows.io.write_zarr] |
 
 ## Loading grid data

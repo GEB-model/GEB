@@ -16,7 +16,6 @@ from geb.workflows.raster import (
     convert_nodata,
     interpolate_na_2d,
     interpolate_na_along_dim,
-    pad_xy,
     rasterize_like,
     reclassify,
     repeat_grid,
@@ -344,37 +343,21 @@ class LandSurface(BuildModelBase):
         self.set_geom(regions, name="regions")
 
         resolution_x, resolution_y = self.subgrid["mask"].rio.resolution()
-
-        regions_bounds: tuple[float, float, float, float] = self.geom[
-            "regions"
-        ].total_bounds
         mask_bounds: tuple[float, float, float, float] = self.grid["mask"].rio.bounds(
             recalc=True
         )
 
         # The bounds should be set to a bit larger than the regions to avoid edge effects
         # and also larger than the mask, to ensure that the entire grid is covered.
-        pad_minx = min(regions_bounds[0], mask_bounds[0]) - abs(resolution_x) / 2.0
-        pad_miny = min(regions_bounds[1], mask_bounds[1]) - abs(resolution_y) / 2.0
-        pad_maxx = max(regions_bounds[2], mask_bounds[2]) + abs(resolution_x) / 2.0
-        pad_maxy = max(regions_bounds[3], mask_bounds[3]) + abs(resolution_y) / 2.0
-
-        region_mask, region_subgrid_slice = pad_xy(
-            self.subgrid["mask"],
-            pad_minx,
-            pad_miny,
-            pad_maxx,
-            pad_maxy,
-            return_slice=True,
-            constant_values=1,
-        )
-        region_mask.attrs["_FillValue"] = None
-        region_mask = self.set_region_subgrid(region_mask, name="mask")
+        pad_minx = mask_bounds[0] - abs(resolution_x) / 2.0
+        pad_miny = mask_bounds[1] - abs(resolution_y) / 2.0
+        pad_maxx = mask_bounds[2] + abs(resolution_x) / 2.0
+        pad_maxy = mask_bounds[3] + abs(resolution_y) / 2.0
 
         # Get the combined bounds of regions and subbasins to ensure coverage of both
         buffer = 0.1
 
-        regions_bounds = self.geom["regions"].total_bounds
+        # regions_bounds = self.geom["regions"].total_bounds
         subbasins_bounds = self.geom["routing/subbasins"].total_bounds
 
         potential_flood_area_with_buffer = (
@@ -389,7 +372,7 @@ class LandSurface(BuildModelBase):
 
         land_use_classification_source: xr.DataArray = self.data_catalog.fetch(
             land_cover
-        ).read(self.geom["regions"].union_all().union(potential_flood_area_with_buffer))
+        ).read(potential_flood_area_with_buffer)
 
         land_use_classification_source_within_potential_flood_area = clip_with_geometry(
             land_use_classification_source,
@@ -403,25 +386,21 @@ class LandSurface(BuildModelBase):
             name="landcover/classification",
         )
 
-        land_use_classification_source_region_subgrid: xr.DataArray = resample_chunked(
+        land_use_classification_source_subgrid: xr.DataArray = resample_chunked(
             land_use_classification_source,
-            region_mask,
+            self.subgrid["mask"],
             method="nearest",
         )
 
         subgrid_region_ids: xr.DataArray = rasterize_like(
             gdf=self.geom["regions"],
             column="region_id",
-            raster=region_mask,
+            raster=self.subgrid["mask"],
             dtype=np.int32,
             nodata=-1,
             all_touched=True,
         )
-        self.set_region_subgrid(subgrid_region_ids, name="region_ids")
-
-        land_use_classification_source_subgrid = (
-            land_use_classification_source_region_subgrid.isel(region_subgrid_slice)
-        ).astype(np.int16)
+        self.set_subgrid(subgrid_region_ids, name="region_ids")
         land_use_classification_source_subgrid = xr.where(
             ~self.subgrid["mask"], land_use_classification_source_subgrid, -1
         )
@@ -450,16 +429,14 @@ class LandSurface(BuildModelBase):
         land_use_classes_subgrid.attrs["_FillValue"] = -1
         self.set_subgrid(land_use_classes_subgrid, name="landsurface/land_use_classes")
 
-        cultivated_land_full_region = xr.where(
-            land_use_classification_source_region_subgrid == 40,
+        cultivated_land_subgrid = xr.where(
+            land_use_classification_source_subgrid == 40,
             True,
             False,
         )
 
-        cultivated_land_full_region.attrs["_FillValue"] = None
-        self.set_region_subgrid(
-            cultivated_land_full_region, name="landsurface/full_region_cultivated_land"
-        )
+        cultivated_land_subgrid.attrs["_FillValue"] = None
+        self.set_subgrid(cultivated_land_subgrid, name="landsurface/cultivated_land")
 
     @build_method(depends_on=[], required=False)
     def setup_land_use_parameters(
