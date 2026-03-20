@@ -1845,7 +1845,7 @@ class Routing(Module):
         return outflow_rivers
 
     def get_active_rivers(self) -> gpd.GeoDataFrame:
-        """Get the active rivers (rivers that are not water bodies).
+        """Get the rivers that are simulated (i.e., not downstream of the model region).
 
         Returns:
             A GeoDataFrame containing the active rivers.
