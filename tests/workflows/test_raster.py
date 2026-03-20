@@ -10,6 +10,7 @@ from scipy.interpolate import RegularGridInterpolator
 from shapely.geometry import Polygon
 
 from geb.workflows.raster import (
+    clip_with_geometry,
     clip_with_grid,
     compress,
     convert_nodata,
@@ -860,3 +861,87 @@ def test_clip_with_grid(y_step: int, grid_size: int) -> None:
 
     # Check that sum is preserved (since mask is rectangular and matches bounds)
     assert np.isclose(clipped_ds.sum(), da.where(mask).sum())
+
+
+@pytest.mark.parametrize("dask", [True, False])
+def test_clip_with_geometry(dask: bool) -> None:
+    """Test the clip_with_geometry function."""
+    # Create a dummy DataArray
+    data = np.random.rand(10, 10).astype(np.float32)
+    # y coordinates should be decreasing for standard geo alignment (top to bottom)
+    y = np.linspace(60, 50, 10)
+    x = np.linspace(10, 20, 10)
+    da = xr.DataArray(
+        data,
+        coords={"y": y, "x": x},
+        dims=("y", "x"),
+    )
+    da.rio.write_crs("EPSG:4326", inplace=True)
+    da.rio.set_spatial_dims("x", "y", inplace=True)
+    # Important: rio.clip needs a transform to properly identify pixels
+    # We'll use the one from_bounds (left, bottom, right, top, width, height)
+    da.rio.write_transform(from_bounds(10, 50, 20, 60, 10, 10), inplace=True)
+
+    if dask:
+        da_test = da.chunk({"y": 6, "x": 6})
+    else:
+        da_test = da
+
+    # 1) Test clipping with a polygon that contains everything
+    full_poly = Polygon([(5, 45), (25, 45), (25, 65), (5, 65)])
+    gdf_full = gpd.GeoDataFrame(geometry=[full_poly], crs="EPSG:4326")
+    clipped_full = clip_with_geometry(da_test, gdf_full).compute()
+    expected_full = clip_with_geometry(da, gdf_full)
+    assert clipped_full.shape == da.shape
+    assert np.allclose(clipped_full.values, expected_full.values, equal_nan=True)
+
+    # 2) Test clipping with a polygon that contains only part of the data
+    part_poly = Polygon([(12, 52), (18, 52), (18, 58), (12, 58)])
+    gdf_part = gpd.GeoDataFrame(geometry=[part_poly], crs="EPSG:4326")
+    clipped_part = clip_with_geometry(da_test, gdf_part, drop=True).compute()
+    expected_part = clip_with_geometry(da, gdf_part, drop=True)
+    assert clipped_part.shape[0] < da.shape[0]
+
+    assert (clipped_part.x == expected_part.x).all()
+    assert (clipped_part.y == expected_part.y).all()
+    assert np.allclose(clipped_part.values, expected_part.values, equal_nan=True)
+
+    # 3) Test all_touched=True vs False
+    small_poly = Polygon([(10.2, 59.2), (10.6, 59.2), (10.6, 59.6), (10.2, 59.6)])
+    gdf_small = gpd.GeoDataFrame(geometry=[small_poly], crs="EPSG:4326")
+
+    clipped_untouched = clip_with_geometry(
+        da_test, gdf_small, all_touched=False
+    ).compute()
+    expected_untouched = clip_with_geometry(da, gdf_small, all_touched=False)
+    assert np.allclose(
+        clipped_untouched.values, expected_untouched.values, equal_nan=True
+    )
+
+    clipped_touched = clip_with_geometry(da_test, gdf_small, all_touched=True).compute()
+    expected_touched = clip_with_geometry(da, gdf_small, all_touched=True)
+    assert np.allclose(clipped_touched.values, expected_touched.values, equal_nan=True)
+
+    # 4) Test MultiPolygon (Non-contiguous area)
+    poly1 = Polygon([(11, 51), (13, 51), (13, 53), (11, 53)])
+    poly2 = Polygon([(17, 57), (19, 57), (19, 59), (17, 59)])
+    gdf_multi = gpd.GeoDataFrame(geometry=[poly1, poly2], crs="EPSG:4326")
+
+    clipped_multi = clip_with_geometry(da_test, gdf_multi).compute()
+    expected_multi = clip_with_geometry(da, gdf_multi)
+    assert np.allclose(clipped_multi.values, expected_multi.values, equal_nan=True)
+
+    # 5) Test error handling: missing coords
+    da_no_coords = xr.DataArray(data)
+    with pytest.raises(ValueError, match="DataArray must have x and y coordinates"):
+        clip_with_geometry(da_no_coords, gdf_full)
+
+    # 6) Test error handling: missing CRS
+    da_no_crs = xr.DataArray(data, coords={"y": y, "x": x}, dims=("y", "x"))
+    with pytest.raises(ValueError, match="DataArray must have a CRS defined"):
+        clip_with_geometry(da_no_crs, gdf_full)
+
+    # 7) Test error handling: CRS mismatch
+    gdf_wrong_crs = gpd.GeoDataFrame(geometry=[full_poly], crs="EPSG:3857")
+    with pytest.raises(ValueError, match="Geometry must be in the same CRS"):
+        clip_with_geometry(da_test, gdf_wrong_crs)

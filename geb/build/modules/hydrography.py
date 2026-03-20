@@ -540,7 +540,7 @@ class Hydrography(BuildModelBase):
 
         return rivers
 
-    @build_method(required=True)
+    @build_method(required=True, depends_on=["setup_cell_area"])
     def setup_hydrography(
         self,
         custom_rivers: str | None = None,
