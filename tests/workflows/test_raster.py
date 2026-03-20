@@ -875,6 +875,7 @@ def test_clip_with_geometry(dask: bool) -> None:
         data,
         coords={"y": y, "x": x},
         dims=("y", "x"),
+        attrs={"_FillValue": np.nan},
     )
     da.rio.write_crs("EPSG:4326", inplace=True)
     da.rio.set_spatial_dims("x", "y", inplace=True)
