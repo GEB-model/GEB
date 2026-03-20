@@ -101,7 +101,7 @@ def read_array(
     """Load a numpy array from a .zarr file.
 
     Args:
-        fp: The path to the .npz or .zarr file.
+        fp: The path to the .zarr file.
         return_attributes: Whether to return the attributes along with the array.
 
     Returns:

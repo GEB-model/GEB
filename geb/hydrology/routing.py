@@ -1255,8 +1255,6 @@ class Routing(Module):
                 self.inflow[(y, x)] = inflow.to_numpy(dtype=np.float32)
 
             assert self.model.current_time == inflow_per_location.index[0]
-            # initialize inflow index
-            self.inflow_idx = 0
 
         if self.model.in_spinup:
             self.spinup()

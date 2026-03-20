@@ -266,7 +266,7 @@ def write_to_array(
             array += sub_arrays[t]
 
     else:
-        for i in prange(size):  # ty:ignore[not-iterable]
+        for i in range(size):
             y_idx = int((coords[i, 1] - y_offset) / y_step)
             x_idx = int((coords[i, 0] - x_offset) / x_step)
             array[y_idx, x_idx] += values[i]
@@ -1528,7 +1528,9 @@ def clip_with_geometry(
             args=[gdf.geometry.union_all(), all_touched],
             template=da.astype(bool),  # Tells dask the expected output shape/type
         )
-        da: xr.DataArray = da.where(rasterized, other=da.rio.nodata)
+        da_: xr.DataArray = da.where(rasterized, other=da.rio.nodata)
+        assert da_.dtype == da.dtype
+        da = da_
     else:
         da = da.rio.clip(gdf.geometry, all_touched=all_touched, drop=drop)
     return da
