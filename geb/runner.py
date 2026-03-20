@@ -919,7 +919,7 @@ def set_fn(
         # key/value updates are actually applied.
         def operation_forward(logger: logging.Logger) -> None:
             return set_operation(logger=logger, **kwargs)
-        
+
         _run_with_optional_profiling(
             profile_speed,
             profile_ram,
