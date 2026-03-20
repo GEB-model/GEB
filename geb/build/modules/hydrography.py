@@ -1008,9 +1008,16 @@ class Hydrography(BuildModelBase):
             if not coastlines.empty:
                 bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
                 bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
-                bbox_gdf.geometry = bbox_gdf.geometry.buffer(
-                    0.04, join_style=2
-                )  # buffer by 0.04 degree
+                import warnings
+
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=UserWarning,
+                    )
+                    bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                        0.04, join_style=2
+                    )  # buffer by 0.04 degree
                 self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
         else:
             self.logger.info("No coastal basins found, setting empty coastlines")
