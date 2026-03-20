@@ -540,7 +540,7 @@ class Hydrography(BuildModelBase):
 
         return rivers
 
-    @build_method(required=True)
+    @build_method(required=True, depends_on=["setup_cell_area"])
     def setup_hydrography(
         self,
         custom_rivers: str | None = None,
@@ -642,9 +642,14 @@ class Hydrography(BuildModelBase):
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
+
         streams_length_low_res.attrs["_FillValue"] = np.nan
         streams_length_low_res = snap_to_grid(streams_length_low_res, self.grid["mask"])
-
+        streams_length_low_res = np.maximum(
+            streams_length_low_res,
+            np.sqrt(self.grid["cell_area"])
+            * 0.5,  # stream length should be at least half of the cell length
+        )
         self.set_grid(streams_length_low_res, name="drainage/streams_length_m")
 
         elevation_coarsened = original_d8_elevation.coarsen(
@@ -1003,9 +1008,16 @@ class Hydrography(BuildModelBase):
             if not coastlines.empty:
                 bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
                 bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
-                bbox_gdf.geometry = bbox_gdf.geometry.buffer(
-                    0.04, join_style=2
-                )  # buffer by 0.04 degree
+                import warnings
+
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=UserWarning,
+                    )
+                    bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                        0.04, join_style=2
+                    )  # buffer by 0.04 degree
                 self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
         else:
             self.logger.info("No coastal basins found, setting empty coastlines")
@@ -1036,7 +1048,7 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(depends_on=["setup_coastlines"], required=True)
+    @build_method(depends_on=["setup_coastlines", "setup_elevation"], required=True)
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         if self.geom["routing/subbasins"]["is_coastal"].any():

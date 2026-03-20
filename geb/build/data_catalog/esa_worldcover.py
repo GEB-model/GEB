@@ -2751,14 +2751,12 @@ class ESAWorldCover(Adapter):
         arrays: list[xr.DataArray] = []
 
         for url in tile_urls:
-            # Type ignore since rioxarray.open_rasterio returns a union type,
-            # but for .tif files it typically returns a DataArray.
             da = rioxarray.open_rasterio(
                 url,
                 chunks={
                     "x": 6000,
                     "y": 6000,
-                },  # The orginal data is 36000 x 36000, so 6000 is exactly divisible and results in 36 total chunks (6 x 6)
+                },  # The orginal data is 36000 x 36000, so 6000 is exactly divisible and results in uniform chunk sizes
             )
             assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
             assert all(
@@ -2773,8 +2771,6 @@ class ESAWorldCover(Adapter):
             arrays.append(da)
 
         if len(arrays) > 1:
-            # Merge using coordinate-based combining. Type ignore as combine_by_coords
-            # can return Dataset or DataArray.
             # Because chunks are exactly dividing the original data, the chunks here will
             # be "easy" to make
             merged: Any = xr.combine_by_coords(

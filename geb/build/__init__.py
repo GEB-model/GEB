@@ -2638,7 +2638,10 @@ class GEBModel(
         # the original resolution is 3 arcseconds, thus we divide by 3
         scale_factor: int = target_resolution_arcsec // 3
 
-        self.logger.info("Coarsening hydrography")
+        self.logger.info(
+            "Coarsening drainage network to resolution %d arcseconds",
+            target_resolution_arcsec,
+        )
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
         flow_raster_upscaled, idxs_out = flow_raster.upscale(
             scale_factor=scale_factor,
@@ -3021,6 +3024,10 @@ class GEBModel(
     def progress_path(self) -> Path:
         """Path to the progress file that contains the build progress."""
         return Path(self.root, "progress.txt")
+
+    def write_build_complete(self) -> None:
+        """Writes a file that indicates that the build is complete."""
+        self.build_complete_path.write_text("Build complete.")
 
     @property
     def build_complete_path(self) -> Path:
@@ -3518,7 +3525,9 @@ class GEBModel(
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        build_method.validate_methods(methods, validate_order=validate_order)
+        methods = build_method.validate_methods(
+            methods, validate_order=validate_order, fix_order_if_broken=True
+        )
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (
@@ -3555,7 +3564,7 @@ class GEBModel(
 
         self.logger.info("Finished!")
 
-        build_method.log_time_taken()
+        build_method.log_statistics()
 
     def build(
         self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
@@ -3605,7 +3614,7 @@ class GEBModel(
             continue_=continue_,
         )
 
-        self.build_complete_path.write_text("Build complete")
+        self.write_build_complete()
 
     def update(
         self,

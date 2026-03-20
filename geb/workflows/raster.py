@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, cast, overload
 
 import geopandas as gpd
+import numba
 import numpy as np
 import numpy.typing as npt
 import xarray
@@ -27,6 +28,7 @@ from pyresample.resampler import resample_blocks
 from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
+from shapely.geometry.base import BaseGeometry
 from xarray.core.coordinates import DataArrayCoordinates
 
 from geb.geb_types import (
@@ -161,6 +163,7 @@ def sample_from_map(
     array: np.ndarray,
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
+    out_of_bounds_value: float | int | bool | None = None,
 ) -> np.ndarray:
     """Sample coordinates from a map. Can handle multiple dimensions.
 
@@ -168,46 +171,68 @@ def sample_from_map(
         array: The map to sample from (2+n dimensions).
         coords: The coordinates used to sample (shape: m, 2).
         gt: The geotransformation. Must be unrotated.
+        out_of_bounds_value: The value to return for coordinates that are out of bounds. If None, an error will be raised.
 
     Returns:
         The values at each coordinate.
+
+    Raises:
+        IndexError: If a coordinate is out of bounds and out_of_bounds_value is None.
+        ValueError: If the geotransformation indicates a rotated map.
     """
-    assert gt[2] + gt[4] == 0
+    if not (gt[2] == 0 and gt[4] == 0):
+        raise ValueError("Cannot sample from rotated maps")
+
     size = coords.shape[0]
     x_offset = gt[0]
     y_offset = gt[3]
     x_step = gt[1]
     y_step = gt[5]
     values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
-    for i in prange(size):  # ty: ignore[not-iterable]
-        values[i] = array[
-            ...,
-            int((coords[i, 1] - y_offset) / y_step),
-            int((coords[i, 0] - x_offset) / x_step),
-        ]
+
+    if out_of_bounds_value is None:
+        for i in prange(size):  # ty: ignore[not-iterable]
+            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
+            if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
+                values[i] = array[..., y_idx, x_idx]
+            else:
+                raise IndexError("Coordinate is out of bounds for array")
+
+    else:
+        for i in prange(size):  # ty: ignore[not-iterable]
+            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
+            if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
+                values[i] = array[..., y_idx, x_idx]
+            else:
+                values[i] = out_of_bounds_value
     return values
 
 
 @njit(
-    parallel=False,
+    parallel=True,
     cache=True,
-)  # Writing to an array cannot be parallelized as race conditions would occur.
+)
 def write_to_array(
     array: np.ndarray,
     values: np.ndarray,
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
+    parallel: bool = False,
 ) -> np.ndarray:
     """Write values using coordinates to a map.
 
-    If multiple coordinates map to a single cell,
-    the values are added. The operation is inplace.
+    If multiple coordinates map to a single cell, the values are added.
+    Parallel processing is achieved by each thread writing to its own sub-array
+    to avoid race conditions, followed by a final summation.
 
     Args:
         array: The 2-dimensional array to write to.
         values: The values to write (shape: n).
         coords: The coordinates of the values (shape: n, 2).
         gt: The geotransformation. Must be unrotated.
+        parallel: Whether to use parallel processing. Uses more memory but can be much faster for large arrays and many coordinates.
 
     Returns:
         The array with the values added (operation is inplace).
@@ -219,11 +244,33 @@ def write_to_array(
     y_offset = gt[3]
     x_step = gt[1]
     y_step = gt[5]
-    for i in range(size):
-        array[
-            int((coords[i, 1] - y_offset) / y_step),
-            int((coords[i, 0] - x_offset) / x_step),
-        ] += values[i]
+
+    if parallel:
+        # Get the number of threads Numba will use
+        num_threads = numba.get_num_threads()
+        # Create an array of sub-arrays, one for each thread
+        # Shape: (num_threads, rows, cols)
+        sub_arrays = np.zeros(
+            (num_threads, array.shape[0], array.shape[1]), dtype=array.dtype
+        )
+
+        # Parallel loop where each thread writes to its own sub-array
+        for i in prange(size):  # ty:ignore[not-iterable]
+            thread_id = numba.get_thread_id()
+            y_idx = int((coords[i, 1] - y_offset) / y_step)
+            x_idx = int((coords[i, 0] - x_offset) / x_step)
+            sub_arrays[thread_id, y_idx, x_idx] += values[i]
+
+        # Sum all sub-arrays into the final array
+        for t in range(num_threads):
+            array += sub_arrays[t]
+
+    else:
+        for i in range(size):
+            y_idx = int((coords[i, 1] - y_offset) / y_step)
+            x_idx = int((coords[i, 0] - x_offset) / x_step)
+            array[y_idx, x_idx] += values[i]
+
     return array
 
 
@@ -668,8 +715,14 @@ def clip_with_grid(
 
     Returns:
         A tuple containing the clipped dataset and a dictionary with slices for x and y dimensions.
+
+    Raises:
+        ValueError: If the dataset and mask do not have the same x and y coordinates.
     """
-    assert ds.shape == mask.shape
+    if ds["x"].size != mask["x"].size:
+        raise ValueError("Dataset and mask must have the same x coordinates")
+    if ds["y"].size != mask["y"].size:
+        raise ValueError("Dataset and mask must have the same y coordinates")
     cells_along_y = mask.sum(dim="x").values.ravel()
     miny = (cells_along_y > 0).argmax().item()
     maxy = cells_along_y.size - (cells_along_y[::-1] > 0).argmax().item()
@@ -1377,6 +1430,117 @@ def clip_region(
             )
         )
     return clipped_mask, *clipped_arrays
+
+
+# def create_dask_tiles(
+#     da: xr.DataArray,
+# ):
+#     transform = da.rio.transform(recalc=True)
+
+#     tiles = []
+#     y_offset = 0
+#     for y_chunk in da.chunksizes["y"]:
+#         tiles.append([])
+#         x_offset = 0
+#         for x_chunk in da.chunksizes["x"]:
+#             tiles[-1].append(
+#                 {
+#                     "transform": transform * Affine.translation(x_offset, y_offset),
+#                     "shape": (y_chunk, x_chunk),
+#                 }
+#             )
+#             x_offset += x_chunk
+#         y_offset += y_chunk
+
+#     return from_array(tiles, chunks=(1, 1))
+
+
+def rasterize_geometry(
+    block: xr.DataArray,
+    geometry: BaseGeometry,
+    all_touched: bool,
+) -> xr.DataArray:
+    """Rasterize a geometry onto a block of a DataArray.
+
+    Args:
+        block: The block of the DataArray to rasterize onto. Must have x and y coordinates.
+        geometry: The geometry to rasterize. Must be in the same CRS as the DataArray.
+        all_touched: If True, all pixels touched by the geometry will be included in the mask.
+            If False, only pixels whose center is within the geometry will be included.
+
+    Returns:
+        A boolean DataArray with the same shape and coordinates as the block, where True values indicate the presence of the geometry.
+    """
+    mask = rasterize(
+        [(geometry, 1)],
+        out_shape=block.shape,
+        transform=block.rio.transform(recalc=True),
+        nodata=False,
+        all_touched=all_touched,
+        dtype=np.int8,
+    ).astype(bool)
+
+    return xr.DataArray(mask, coords=block.coords, dims=block.dims, name="mask")
+
+
+def clip_with_geometry(
+    da: xr.DataArray,
+    gdf: gpd.GeoDataFrame,
+    all_touched: bool = False,
+    drop: bool = False,
+) -> xr.DataArray:
+    """Clip a DataArray to the extent of a geometry.
+
+    Args:
+        da: The DataArray to clip. Must have x and y coordinates.
+        gdf: The GeoDataFrame containing the geometry to clip with. Must be in the same CRS as the DataArray.
+        all_touched: If True, all pixels touched by the geometry will be included in the mask.
+            If False, only pixels whose center is within the geometry will be included.
+        drop: If True, drop any empty slices from the clipped DataArray.
+
+    Returns:
+        A new DataArray clipped to the geometry.
+
+    Raises:
+        ValueError: If the DataArray does not have x and y coordinates.
+        ValueError: If the geometry is not in the same CRS as the DataArray.
+    """
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        raise ValueError("gdf must be a GeoDataFrame")
+
+    if "x" not in da.coords or "y" not in da.coords:
+        raise ValueError(
+            "DataArray must have x and y coordinates to use clip_with_geometry"
+        )
+    if da.rio.crs is None:
+        raise ValueError("DataArray must have a CRS defined to use clip_with_geometry")
+
+    if not da.rio.crs.equals(gdf.crs):
+        raise ValueError(
+            "Geometry must be in the same CRS as the DataArray to use clip_with_geometry"
+        )
+
+    if da.rio.nodata is None:
+        raise ValueError(
+            "DataArray must have nodata value defined to use clip_with_geometry"
+        )
+
+    if da.chunks:
+        if drop is True:
+            xmin, ymin, xmax, ymax = gdf.geometry.total_bounds
+            da = da.rio.clip_box(xmin, ymin, xmax, ymax, crs=gdf.crs)
+
+        rasterized = da.map_blocks(
+            rasterize_geometry,
+            args=[gdf.geometry.union_all(), all_touched],
+            template=da.astype(bool),  # Tells dask the expected output shape/type
+        )
+        da_: xr.DataArray = da.where(rasterized, other=da.rio.nodata)
+        assert da_.dtype == da.dtype
+        da = da_
+    else:
+        da = da.rio.clip(gdf.geometry, all_touched=all_touched, drop=drop)
+    return da
 
 
 def get_linear_indices(da: xr.DataArray) -> xr.DataArray:

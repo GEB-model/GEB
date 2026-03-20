@@ -5,18 +5,26 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import geopandas as gpd
 import numpy as np
 import osmnx as ox
 import pandas as pd
 import xarray as xr
-from rasterio.features import rasterize
+from pyproj import CRS
+from rasterio.features import rasterize, shapes
+from rasterio.transform import Affine
+from scipy import interpolate
+from shapely.geometry import shape
 
-from geb.geb_types import ArrayFloat32
-from geb.workflows.io import read_geom
+from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayFloat32, TwoDArrayInt
+from geb.workflows.io import read_geom, read_params
+from geb.workflows.raster import sample_from_map
 
+from ..hydrology.landcovers import (
+    FOREST,
+)
 from ..store import Bucket, DynamicArray
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
@@ -73,6 +81,8 @@ class HouseholdVariables(Bucket):
     max_dam_forest_m2: float
     max_dam_agriculture_m2: float
     region_id: DynamicArray
+    water_demand_per_household_year: int
+    water_demand_per_household_m3_gridded: ArrayFloat32
 
 
 class Households(AgentBaseClass):
@@ -177,7 +187,7 @@ class Households(AgentBaseClass):
         # This is a simplification - in the future this should use proper subnational datasets
         available_countries = list(distribution_parameters.columns)
         country = available_countries[0]
-        self.model.logger.info(
+        self.model.logger.warning(
             "Using income distribution for country: %s (first available from GDL regions)",
             country,
         )
@@ -471,22 +481,18 @@ class Households(AgentBaseClass):
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
 
-        # load household points (only in use for damagescanner, could be removed)
-        household_points = gpd.GeoDataFrame(
-            geometry=gpd.points_from_xy(
-                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
-            ),
-            crs="EPSG:4326",
-        )
-        self.var.household_points = household_points
-
-        print(
+        self.model.logger.info(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
 
     def assign_households_to_postal_codes(self) -> None:
         """This function associates the household points with their postal codes to get the correct geometry for the warning function."""
-        households = self.var.household_points.copy()
+        households = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",
+        )
 
         # Associate households with their postal codes to use it later in the warning function
         postal_codes: gpd.GeoDataFrame = read_geom(
@@ -511,11 +517,76 @@ class Households(AgentBaseClass):
             self.model.output_folder / "household_points_w_postal_codes.geoparquet"
         )
 
-        self.var.household_points = households_with_postal_codes
+        self.var.households_with_postal_codes = households_with_postal_codes
 
         print(
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
+
+    def return_period_flood(self) -> np.ndarray:
+        """Simulate a flood event based on return periods and determine which households are flooded.
+
+        Returns:
+            Array of indices of flooded households.
+        """
+        # draw a single random number
+        p_random = np.random.random()
+        # Work with a locally sorted copy of return periods to ensure correct event selection
+        return_periods_arr = np.asarray(self.return_periods, dtype=float)
+        sort_idx = np.argsort(return_periods_arr)  # ascending order
+        sorted_return_periods = return_periods_arr[sort_idx]
+        probabilities = 1.0 / sorted_return_periods
+
+        if p_random >= probabilities.max():
+            return np.array([], dtype=int)
+
+        # find the event corresponding to the random draw
+        event_idx = np.searchsorted(probabilities[::-1], p_random)
+        event_idx = len(probabilities) - 1 - event_idx
+        event = sorted_return_periods[event_idx]
+        self.model.logger.info(
+            "Return period flood event: %s years (p=%.4f, random draw=%.4f)",
+            event,
+            probabilities[event_idx],
+            p_random,
+        )
+
+        # get the flood map for this event
+        flood_map: xr.DataArray = self.flood_maps[event]
+
+        # cache household coordinates in flood_map CRS (Nx2 numpy array)
+        if not hasattr(self, "_household_xy"):
+            import pyproj
+
+            x, y = np.array(self.buildings.x), np.array(self.buildings.y)
+            transformer = pyproj.Transformer.from_crs(
+                "EPSG:4326", flood_map.rio.crs, always_xy=True
+            )
+            self._building_xy = np.array(transformer.transform(x, y)).T
+
+        # sample flood map using clipped coordinates
+        sampled_values = sample_from_map(
+            array=flood_map.values,
+            coords=self._building_xy,
+            gt=flood_map.rio.transform(recalc=True).to_gdal(),
+            out_of_bounds_value=np.nan,
+        )
+        # Use the same minimum flood depth threshold (0.05 m) as elsewhere in the model
+        minimum_flood_depth_m = 0.05
+        # np.where will return indices of flooded households relative to the original household array
+        flooded_building_indices = np.where(sampled_values > minimum_flood_depth_m)[0]
+
+        # get building IDs of flooded buildings
+        flooded_building_ids = self.buildings.loc[
+            flooded_building_indices, "id"
+        ].values.astype(int)
+
+        # get indices of households located in flooded buildings
+        flooded_household_indices = np.where(
+            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
+        )[0]
+
+        return flooded_household_indices
 
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
@@ -584,11 +655,8 @@ class Households(AgentBaseClass):
                     )
 
         else:
-            if (
-                np.random.random() < 0.1
-            ):  # generate random flood (not based on actual modeled flood data)
-                print("Flood event!")
-                self.var.years_since_last_flood[:] = 0
+            flooded_household_indices = self.return_period_flood()
+            self.var.years_since_last_flood.data[flooded_household_indices] = 0
 
         self.var.risk_perception.data = (
             self.var.risk_perc_max
@@ -607,9 +675,9 @@ class Households(AgentBaseClass):
         # Append and save floor risk perception data spatially
         df = pd.DataFrame(
             {
-                "time": [self.model.current_time] * len(self.var.household_points),
-                "x": self.var.household_points.geometry.x,
-                "y": self.var.household_points.geometry.y,
+                "time": [self.model.current_time] * self.var.locations.data.shape[0],
+                "x": self.var.locations.data[:, 0],
+                "y": self.var.locations.data[:, 1],
                 "risk_perception": self.var.risk_perception.data,
                 "years_since_last_flood": self.var.years_since_last_flood.data,
             }
@@ -888,7 +956,12 @@ class Households(AgentBaseClass):
         self.create_flood_probability_maps(strategy=strategy_id, date_time=date_time)
 
         # Load households and postal codes
-        households = self.var.household_points.copy()
+        households = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",
+        )
         postal_codes = self.postal_codes.copy()
         # Maybe load this as a global var (?) instead of loading it each time
 
@@ -1199,7 +1272,12 @@ class Households(AgentBaseClass):
             prob_threshold: The probability threshold above which a warning is issued.
         """
         # Get the household points, needed to issue warnings
-        households = self.var.household_points.copy()
+        households = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",
+        )
 
         # Load substations and critical facilities
         substations = read_geom(self.model.files["geom"]["assets/energy_substations"])
@@ -1578,7 +1656,7 @@ class Households(AgentBaseClass):
 
         # Combine the filters and apply it to household_points
         eligible_ids = np.asarray(warned_ids & not_evacuated_ids & responsive_ids)
-        eligible_households = self.var.household_points.loc[eligible_ids]
+        eligible_households = self.var.households_with_postal_codes.loc[eligible_ids]
 
         # Get the list of possible actions for eligible households
         # (this is a list of all possible actions, not the recommended actions given by the warning strategies)
@@ -1609,7 +1687,7 @@ class Households(AgentBaseClass):
                 {
                     "lead_time": lead_time,
                     "date_time": date_time.isoformat(),
-                    "postal_code": self.var.household_points.loc[
+                    "postal_code": self.var.households_with_postal_codes.loc[
                         household_id, "postcode"
                     ],
                     "household_id": household_id,
@@ -1702,6 +1780,10 @@ class Households(AgentBaseClass):
         if self.model.config["agent_settings"]["households"]["warning_response"]:
             self.assign_households_to_postal_codes()
 
+        self.var.water_demand_per_household_year = (
+            -100_000
+        )  # probably we will not simulate before the year -100k ;-)
+
     def assign_damages_to_agents(
         self, agent_df: pd.DataFrame, buildings_with_damages: pd.DataFrame
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -1731,7 +1813,9 @@ class Households(AgentBaseClass):
         Args:
             date_time: The forecast date time for which to update the households geodataframe.
         """
-        household_points: gpd.GeoDataFrame = self.var.household_points.copy()
+        household_points: gpd.GeoDataFrame = (
+            self.var.households_with_postal_codes.copy()
+        )
 
         action_maps_folder: Path = self.model.output_folder / "action_maps"
         action_maps_folder.mkdir(parents=True, exist_ok=True)
@@ -1795,8 +1879,10 @@ class Households(AgentBaseClass):
 
     def water_demand(
         self,
+        household_demand_to_grid_fn: Callable[
+            [ArrayFloat32, TwoDArrayFloat32], ArrayFloat32
+        ],
     ) -> tuple[
-        ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
     ]:
@@ -1809,6 +1895,12 @@ class Households(AgentBaseClass):
 
         In the 'custom_value' option, all households are assigned the same
         water demand value specified in the configuration.
+
+        Args:
+            household_demand_to_grid_fn: A function that takes the water demand per
+                household and their locations, and returns the water demand gridded to the model grid.
+                This is used to convert the household-level water demand to a grid-level water demand
+                that can be used in the hydrological model.
 
         Returns:
             Tuple containing:
@@ -1824,41 +1916,61 @@ class Households(AgentBaseClass):
             "if not 1, code must be updated to account for water efficiency in water demand"
         )
         if self.config["water_demand"]["method"] == "default":
-            # the water demand multiplier is a function of the year and region
-            water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
-                self.model.current_time.year
-            ]
-            assert (
-                water_demand_multiplier_per_region.index
-                == np.arange(len(water_demand_multiplier_per_region))
-            ).all()
-            water_demand_multiplier_per_household = (
-                water_demand_multiplier_per_region.values[self.var.region_id]
-            )
+            current_year = self.model.current_time.year
 
-            # water demand is the per capita water demand in the household,
-            # multiplied by the size of the household and the water demand multiplier
-            # per region and year, relative to the baseline.
-            self.var.water_demand_per_household_m3 = (
-                self.var.municipal_water_demand_per_capita_m3_baseline
-                * self.var.sizes
-                * water_demand_multiplier_per_household
-            ) * self.config["adjust_demand_factor"]
+            # the household water demand calculation is quite expensive,
+            # so we only update it when the year changes
+            if current_year != self.var.water_demand_per_household_year:
+                # the water demand multiplier is a function of the year and region
+                water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
+                    current_year
+                ]
+                assert (
+                    water_demand_multiplier_per_region.index
+                    == np.arange(len(water_demand_multiplier_per_region))
+                ).all()
+                water_demand_multiplier_per_household = (
+                    water_demand_multiplier_per_region.values[self.var.region_id]
+                )
+
+                # water demand is the per capita water demand in the household,
+                # multiplied by the size of the household and the water demand multiplier
+                # per region and year, relative to the baseline.
+                water_demand_per_household_m3 = (
+                    self.var.municipal_water_demand_per_capita_m3_baseline
+                    * self.var.sizes
+                    * water_demand_multiplier_per_household
+                ) * self.config["adjust_demand_factor"]
+                self.var.water_demand_per_household_year = current_year
+                self.var.water_demand_per_household_m3_gridded = (
+                    household_demand_to_grid_fn(
+                        water_demand_per_household_m3.data, self.var.locations.data
+                    )
+                )
+                self.model.logger.debug(
+                    f"Calculated water demand per household for year {current_year}."
+                )
+
         elif self.config["water_demand"]["method"] == "custom_value":
             # Function to set a custom_value for household water demand. All households have the same demand.
             custom_value = self.config["water_demand"]["custom_value"]["value"]
-            self.var.water_demand_per_household_m3 = np.full(
+            water_demand_per_household_m3 = np.full(
                 self.var.region_id.shape, custom_value, dtype=float
             )
+            self.var.water_demand_per_household_m3_gridded = (
+                household_demand_to_grid_fn(
+                    water_demand_per_household_m3, self.var.locations.data
+                )
+            )
+
         else:
             raise ValueError(
                 "Invalid water demand method. Configuration must be 'default' or 'custom_value'."
             )
 
         return (
-            self.var.water_demand_per_household_m3,
+            self.var.water_demand_per_household_m3_gridded,
             self.var.water_efficiency_per_household,
-            self.var.locations.data,
         )
 
     def step(self) -> None:
@@ -1906,7 +2018,7 @@ class Households(AgentBaseClass):
                     gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
                         df_all,
                         geometry=gpd.points_from_xy(df_all.x, df_all.y),
-                        crs=self.var.household_points.crs,
+                        crs=self.buildings.crs,
                     )
 
                     out_path: Path = (

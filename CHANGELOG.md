@@ -1,13 +1,34 @@
 # dev
+
+# v1.0.0b19
+- Add option for filling and raise out of bounds error for sample_from_map.
+- Activate dynamic river widths during spinup. During the first years of spinup there may be some small balance errors, but they will resolve over time and in the run (when river width alpha and beta are stable).
+- Only re-calculate household water demand every year (performance).
+- Set SPEI calibration period to 1960-1990.
+- Reduce memory usage during build with custom clip that works with dask.
+
+To support this version:
+- Add a new file called 'build_complete.txt' in your input folder. In future versions this file will be made automatically.
+- Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.
+
+# v1.0.0b18
 - Add loggers to groundwater model and SFINCS models.
 - Close all open figures in SFINCS to reduce memory usage.
 - Several fixes in sfincs.py to avoid futurewarnings for pandas 3.0.
-- Remove self.buildings_centroid as attribute (appears not to be used)
-- Load in buildings as pandas df, only load geometry data for flood damage calculations
+- Compress forcing data to 1D. This makes the input folder significantly smaller (~50% depending on the area).
+- Reduce area that elevation and land use maps are written for reducing size on disk.
+- Remove self.buildings_centroid as attribute (appears not to be used).
+- Load in buildings as pandas df, only load geometry data for flood damage calculations.
+- Make filling of discharge gaps a lot more efficient (quite some reduction in run speed).
+- Make it possible to specify the number of cores using `--cores`. Default is all cores (no change).
+- Make an option to auto-fix the build order if it is incorrect.
+- Simulate return period based flood events for updating risk perceptions (instead of fixed threshold).
 
 To support this version:
-- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`
-
+- Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.
 
 # v1.0.0b17
 - Synchronize start and end dates in reasonable default config and example.

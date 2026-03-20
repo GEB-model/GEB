@@ -18,6 +18,7 @@ from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
 from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
+    calculate_cell_area_m2,
     clip_with_grid,
     pixels_to_coords,
     sample_from_map,
@@ -330,21 +331,21 @@ class Agents(BuildModelBase):
             self.ssp,
         )
 
-        self.set_other(da, name=f"water_demand/industry_water_demand")
+        self.set_other(da, name="water_demand/industry_water_demand")
         da = parse_demand(
             "industry_water_demand",
             "indCon",
             self.ssp,
         )
-        self.set_other(da, name=f"water_demand/industry_water_consumption")
+        self.set_other(da, name="water_demand/industry_water_consumption")
         da = parse_demand(
             "livestock_water_demand",
             "livestockConsumption",
             "ssp2",
         )
-        self.set_other(da, name=f"water_demand/livestock_water_consumption")
+        self.set_other(da, name="water_demand/livestock_water_consumption")
 
-    @build_method(required=True)
+    @build_method(required=True, depends_on=["setup_regions_and_land_use"])
     def setup_income_distribution_parameters(self) -> None:
         """Sets up the income distributions for GEB.
 
@@ -1129,9 +1130,7 @@ class Agents(BuildModelBase):
         self.set_array(farmers.index.values, name="agents/farmers/id")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    @build_method(
-        depends_on=["setup_regions_and_land_use", "setup_cell_area"], required=True
-    )
+    @build_method(depends_on=["setup_regions_and_land_use"], required=True)
     def setup_create_farms(
         self,
         region_id_column: str = "region_id",
@@ -1185,7 +1184,20 @@ class Agents(BuildModelBase):
         ].compute()
         assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
         region_ids = self.region_subgrid["region_ids"].compute()
-        cell_area = self.region_subgrid["cell_area"].compute()
+
+        region_subgrid_cell_area = self.full_like(
+            self.region_subgrid["mask"],
+            fill_value=np.nan,
+            nodata=np.nan,
+            dtype=np.float32,
+        )
+
+        height, width = region_subgrid_cell_area.shape
+        region_subgrid_cell_area.data = calculate_cell_area_m2(
+            region_subgrid_cell_area.rio.transform(recalc=True),
+            height,
+            width,
+        )
 
         regions_shapes = self.geom["regions"]
         if data_source == "lowder":
@@ -1284,7 +1296,7 @@ class Agents(BuildModelBase):
             # in the later corrections, it is important that the total cultivated land is
             # quite precise, so we first convert to float64 before summing
             total_cultivated_land_area_lu: np.float64 = (
-                (((region_ids == UID) & (cultivated_land)) * cell_area)
+                (((region_ids == UID) & (cultivated_land)) * region_subgrid_cell_area)
                 .astype(np.float64)
                 .sum()
                 .compute()
@@ -1297,7 +1309,9 @@ class Agents(BuildModelBase):
             # in later corrections, it is important that the average subgrid area is quite precise,
             # so we first convert to float64 before calculating the mean
             average_subgrid_area_region: np.float64 = (
-                cell_area.where(((region_ids == UID) & (cultivated_land)))
+                region_subgrid_cell_area.where(
+                    ((region_ids == UID) & (cultivated_land))
+                )
                 .astype(np.float64)
                 .mean()
                 .compute()
@@ -1804,7 +1818,14 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method(depends_on=["setup_assets", "setup_buildings"], required=True)
+    @build_method(
+        depends_on=[
+            "setup_assets",
+            "setup_buildings",
+            "setup_income_distribution_parameters",
+        ],
+        required=True,
+    )
     def setup_household_characteristics(
         self,
         maximum_age: int = 85,

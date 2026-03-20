@@ -18,6 +18,7 @@ from geb.runner import (
     ALTER_FROM_MODEL_DEFAULT,
     BUILD_DEFAULT,
     CONFIG_DEFAULT,
+    CORES_DEFAULT,
     DATA_CATALOG_DEFAULT,
     DATA_PROVIDER_DEFAULT,
     DATA_ROOT_DEFAULT,
@@ -70,7 +71,6 @@ def click_config(func: Callable[..., Any]) -> Callable[..., Any]:
 
     @click.option(
         "--config",
-        "-c",
         type=click.Path(path_type=Path),
         default=Path(CONFIG_DEFAULT),
         help=f"Path of the model configuration file. Defaults to '{CONFIG_DEFAULT}'.",
@@ -122,6 +122,72 @@ def working_directory_option(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def universal_options(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator to add universal options to a click command.
+
+    Useful to add the same options to multiple commands.
+
+    Args:
+        func: Function to decorate.
+
+    Returns:
+        Decorated function.
+    """
+
+    @click_config
+    @working_directory_option
+    @click.option(
+        "--profile-speed",
+        is_flag=True,
+        default=PROFILE_SPEED_DEFAULT,
+        help="Run GEB with speed profiling. Stats are saved in the profiling directory.",
+    )
+    @click.option(
+        "--profile-ram",
+        is_flag=True,
+        default=PROFILE_RAM_DEFAULT,
+        help="Run GEB with RAM profiling (using memray). A .bin file is saved in the profiling directory."
+        if not IS_WINDOWS
+        else "RAM profiling is not supported on Windows.",
+    )
+    @click.option(
+        "--optimize",
+        is_flag=True,
+        default=OPTIMIZE_DEFAULT,
+        help="Run GEB in optimized mode, skipping asserts and water balance checks.",
+    )
+    @click.option(
+        "--timing",
+        is_flag=True,
+        default=TIMING_DEFAULT,
+        help="Run GEB with timing.",
+    )
+    @click.option(
+        "--cores",
+        "-n",
+        type=int,
+        default=CORES_DEFAULT,
+        help="Restrict the number of CPU cores used by the process (Linux only).",
+    )
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Wrapper function for universal options.
+
+        Returns:
+            The result of the wrapped function.
+
+        Raises:
+            click.ClickException: If RAM profiling is requested on Windows.
+        """
+        if kwargs.get("profile_ram") and IS_WINDOWS:
+            raise click.ClickException(
+                "RAM profiling with memray is not supported on Windows."
+            )
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def click_run_options() -> Any:
     """Decorator to add run options to a click command.
 
@@ -141,34 +207,7 @@ def click_run_options() -> Any:
             Decorated function.
         """
 
-        @click_config
-        @working_directory_option
-        @click.option(
-            "--profile-speed",
-            is_flag=True,
-            default=PROFILE_SPEED_DEFAULT,
-            help="Run GEB with speed profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
-        )
-        @click.option(
-            "--profile-ram",
-            is_flag=True,
-            default=PROFILE_RAM_DEFAULT,
-            help="Run GEB with RAM profiling (using memray). If this option is used a .bin file is saved in the working directory."
-            if not IS_WINDOWS
-            else "RAM profiling is not supported on Windows.",
-        )
-        @click.option(
-            "--optimize",
-            is_flag=True,
-            default=OPTIMIZE_DEFAULT,
-            help="Run GEB in optimized mode, skipping asserts and water balance checks.",
-        )
-        @click.option(
-            "--timing",
-            is_flag=True,
-            default=TIMING_DEFAULT,
-            help="Run GEB with timing.",
-        )
+        @universal_options
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for run options.
@@ -179,14 +218,7 @@ def click_run_options() -> Any:
 
             Returns:
                 The result of the wrapped function.
-
-            Raises:
-                click.ClickException: If RAM profiling is requested on Windows.
             """
-            if kwargs.get("profile_ram") and IS_WINDOWS:
-                raise click.ClickException(
-                    "RAM profiling with memray is not supported on Windows."
-                )
             return func(*args, **kwargs)
 
         return wrapper
@@ -265,7 +297,7 @@ def click_build_options(
 
             {build_config_help_extra}"""
 
-        @click_config
+        @universal_options
         @click.option(
             "--build-config",
             "-b",
@@ -273,7 +305,6 @@ def click_build_options(
             default=Path(build_config),
             help=build_config_help,
         )
-        @working_directory_option
         @click.option(
             "--data-catalog",
             "-d",
@@ -295,20 +326,6 @@ def click_build_options(
             default=Path(DATA_ROOT_DEFAULT),
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
-        @click.option(
-            "--profile-speed",
-            is_flag=True,
-            default=PROFILE_SPEED_DEFAULT,
-            help="Run with speed profiling. If this option is used, profiling stats are saved in the profiling directory.",
-        )
-        @click.option(
-            "--profile-ram",
-            is_flag=True,
-            default=PROFILE_RAM_DEFAULT,
-            help="Run with RAM profiling (using memray). If this option is used, a .bin file is saved in the profiling directory."
-            if not IS_WINDOWS
-            else "RAM profiling is not supported on Windows.",
-        )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for build options.
@@ -319,14 +336,7 @@ def click_build_options(
 
             Returns:
             The result of the wrapped function.
-
-            Raises:
-                click.ClickException: If RAM profiling is requested on Windows.
             """
-            if kwargs.get("profile_ram") and IS_WINDOWS:
-                raise click.ClickException(
-                    "RAM profiling with memray is not supported on Windows."
-                )
             return func(*args, **kwargs)
 
         return wrapper
@@ -338,7 +348,7 @@ def click_build_options(
 
 
 @cli.command()
-@click_config
+@universal_options
 @click.option(
     "--build-config",
     "-b",
@@ -377,7 +387,6 @@ def click_build_options(
     default=False,
     help="If set, overwrite existing config and build config files.",
 )
-@working_directory_option
 def init(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model."""
     # Initialize the model with the given config and build config
@@ -385,10 +394,11 @@ def init(*args: Any, **kwargs: Any) -> None:
 
 
 @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
-@click_config
-@working_directory_option
+@universal_options
 @click.pass_context
-def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
+def set(
+    ctx: click.Context, config: Path, working_directory: Path, **kwargs: Any
+) -> None:
     """Set model configuration values.
 
     Accepts parameter assignments in the form key=value, where keys can use
@@ -401,6 +411,7 @@ def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
         ctx: Click context containing extra arguments.
         config: Path to the model configuration file.
         working_directory: Working directory for the model.
+        **kwargs: Universal options.
 
     """
     # Parse extra arguments as key=value pairs
@@ -485,7 +496,7 @@ def build(*args: Any, **kwargs: Any) -> None:
     "--from-model",
     type=click.Path(path_type=Path),
     default=ALTER_FROM_MODEL_DEFAULT,
-    help="Folder for the existing model.",
+    help=f"Folder for the existing model. Defaults to {ALTER_FROM_MODEL_DEFAULT}.",
 )
 def alter(*args: Any, **kwargs: Any) -> None:
     """Create alternative version from base model with only changed files.
@@ -530,7 +541,7 @@ def update_version(*args: Any, **kwargs: Any) -> None:
     )
 )
 @click.argument("method", default="hydrology.evaluate_discharge")
-@click_run_options()
+@universal_options
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
 @click.option("--help", is_flag=True, help="Show this message and exit.")
@@ -547,6 +558,7 @@ def evaluate(
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
     timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
 ) -> None:
     """Evaluate model, for example by comparing observed and simulated discharge.
 
@@ -567,7 +579,8 @@ def evaluate(
         profile_speed: If True, run the model with speed profiling.
         profile_ram: If True, run the model with RAM profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
-        timing: If True, run the model with timing, printing the time taken for specific methods
+        timing: If True, run the model with timing, printing the time taken for specific methods.
+        cores: Number of cores to restrict the model to using taskset.
 
     Raises:
         click.ClickException: If RAM profiling is requested on Windows.
@@ -689,6 +702,7 @@ def evaluate(
         profile_ram=profile_ram,
         optimize=optimize,
         timing=timing,
+        cores=cores,
     )
 
     # If the result is a dictionary, print it as JSON to stdout
@@ -763,6 +777,7 @@ def data_catalog(method: str) -> None:
 @click.option(
     "--cores",
     "-c",
+    "workflow_cores",
     default="all",
     help="Number of cores to use. Default is 'all'.",
 )
@@ -791,7 +806,7 @@ def data_catalog(method: str) -> None:
 def workflow(
     workflow_name: str,
     track: str | None,
-    cores: str,
+    workflow_cores: str,
     profile: Path | None,
     dryrun: bool,
     config_override: tuple[str, ...],
@@ -814,7 +829,7 @@ def workflow(
     Args:
         workflow_name: Name of the workflow to run.
         track: Optional calibration track (e.g., 'hydrology').
-        cores: Number of cores to use.
+        workflow_cores: Number of cores to use.
         profile: Snakemake profile directory.
         dryrun: Whether to perform a dry run.
         config_override: Config values to override.
@@ -856,7 +871,7 @@ def workflow(
                 cmd.extend(["--profile", str(profile)])
         else:
             # No profile specified, use default settings
-            cmd.extend(["--cores", cores])
+            cmd.extend(["--cores", workflow_cores])
 
         # Add dry run flag
         if dryrun:

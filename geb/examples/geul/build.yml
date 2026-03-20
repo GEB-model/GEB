@@ -8,13 +8,7 @@ set_time_range:
 set_ssp:
   ssp: ssp3
 
-setup_hydrography:
-
-setup_elevation:
-
 setup_coastlines:
-
-setup_coastal_sfincs_model_regions:
 
 setup_assets:
   feature_types:
@@ -23,11 +17,17 @@ setup_assets:
 
 setup_gtsm_station_data:
 
+setup_cell_area:
+
+setup_hydrography:
+
+setup_elevation:
+
+setup_coastal_sfincs_model_regions:
+
 setup_regions_and_land_use:
   region_database: GADM_level1
   ISO3_column: GID_0
-
-setup_cell_area:
 
 setup_geomorphology:
   
@@ -369,8 +369,8 @@ setup_forcing:
 
 setup_SPEI:
   window_months: 12
-  calibration_period_start: 2011-01-01
-  calibration_period_end: 2021-12-31
+  calibration_period_start: 1960-01-01
+  calibration_period_end: 1990-12-31
 
 setup_pr_GEV:
 
