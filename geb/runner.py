@@ -915,10 +915,15 @@ def set_fn(
         logger.info("Updated configuration file: %s", config)
 
     with WorkingDirectory(working_directory):
+        # Forward kwargs from set_fn into set_operation so requested
+        # key/value updates are actually applied.
+        def operation_forward(logger: logging.Logger) -> None:
+            return set_operation(logger=logger, **kwargs)
+
         _run_with_optional_profiling(
             profile_speed,
             profile_ram,
-            set_operation,
+            operation_forward,
             name="set",
             logger=create_logger(name="set"),
         )
