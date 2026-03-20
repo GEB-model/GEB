@@ -720,6 +720,16 @@ def test_kinematic_wave_inverse_ops(
     river_length = np.full_like(mask[mask], 100.0, dtype=np.float32)
     waterbody_id = np.full_like(mask[mask], -1, dtype=np.int32)
     is_waterbody_outflow = np.zeros_like(mask[mask], dtype=bool)
+    retention_storage_m3 = np.zeros(mask.sum(), dtype=np.float32)
+    retention_max_storage_m3 = np.zeros(mask.sum(), dtype=np.float32)
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.zeros(mask.sum(), dtype=bool)
+    retention_activation_threshold_controlled_m3_s = np.zeros(
+        mask.sum(), dtype=np.float32
+    )
+    retention_activation_threshold_uncontrolled_m3_s = np.zeros(
+        mask.sum(), dtype=np.float32
+    )
 
     router: KinematicWave = KinematicWave(
         dt,
@@ -727,6 +737,12 @@ def test_kinematic_wave_inverse_ops(
         river_length,
         waterbody_id,
         is_waterbody_outflow,
+        retention_storage_m3,
+        retention_max_storage_m3,
+        retention_node_id,
+        controlled_retention,
+        retention_activation_threshold_controlled_m3_s,
+        retention_activation_threshold_uncontrolled_m3_s,
     )
 
     # Use Q_initial as dummy discharge values (m3/s)
