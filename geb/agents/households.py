@@ -753,7 +753,7 @@ class Households(AgentBaseClass):
                 np.random.random() < 0.1
             ):  # generate random flood (not based on actual modeled flood data)
                 print("Flood event!")
-                self.var.years_since_last_flood[:] = 0
+                self.var.years_since_last_flood.data[:] = 0
 
         self.var.risk_perception.data = (
             self.var.risk_perc_max
@@ -2043,6 +2043,10 @@ class Households(AgentBaseClass):
                 insured_value=self.var.property_value.data.astype(np.float32),
             )
         )
+        ## CARO REPORTING
+        self._last_premium = premium
+        self._last_premium_private = premium_private
+        self._last_premium_public = premium_public
 
         # CARO DEBUG: premium affordability
         inc = self.var.income.data.astype(np.float32)
@@ -2106,11 +2110,15 @@ class Households(AgentBaseClass):
         choose_flood = (EU_adapt > EU_do_not_adapt) | (self.var.adapted.data == 1)
         choose_shutters = (EU_adapt_shutters > EU_unprotected_w) | (self.var.adapted_shutters.data == 1)
         #choose_ins = EU_multirisk_insurance > EU_do_nothing
-        if self.var.insurance_scheme == "catnat":
-            choose_ins = np.ones(self.n, dtype=bool)
-        else:
-            choose_ins = EU_multirisk_insurance > EU_do_nothing
+        # if self.var.insurance_scheme == "catnat":
+        #     choose_ins = np.ones(self.n, dtype=bool)
+        # else:
+        #     choose_ins = EU_multirisk_insurance > EU_do_nothing
 
+        if self.var.insurance_scheme == "private":
+            choose_ins = EU_multirisk_insurance > EU_do_nothing
+        else:
+            choose_ins = np.ones(self.n,dtype=bool)
 
         # if self.var.insurance_scheme == "catnat":
         #     choose_ins[:] = True
@@ -2133,29 +2141,44 @@ class Households(AgentBaseClass):
             if not np.any(over):
                 break
 
-            if self.var.insurance_scheme == "catnat":
-                # Insurance is mandatory so only structural measures can be dropped when over budget
+            # if self.var.insurance_scheme == "catnat":
+            #     # Insurance is mandatory so only structural measures can be dropped when over budget
 
-                gains = np.stack([gain_flood, gain_shutters, np.full_like(gain_ins, -np.inf)], axis=1)
-                chosen = np.stack([choose_flood & (self.var.adapted.data == 0),
-                               choose_shutters & (self.var.adapted_shutters.data == 0), np.zeros_like(choose_ins)], axis=1)
+            #     gains = np.stack([gain_flood, gain_shutters, np.full_like(gain_ins, -np.inf)], axis=1)
+            #     chosen = np.stack([choose_flood & (self.var.adapted.data == 0),
+            #                    choose_shutters & (self.var.adapted_shutters.data == 0), np.zeros_like(choose_ins)], axis=1)
 
-            else:
+            # else:
+            #     # All three actions can be dropped when over budget
+            #     gains = np.stack([gain_flood, gain_shutters, gain_ins], axis=1)
+            #     chosen = np.stack([choose_flood & (self.var.adapted.data == 0),
+            #                    choose_shutters & (self.var.adapted_shutters.data == 0), choose_ins], axis=1)
+            if self.var.insurance_scheme == "private":
                 # All three actions can be dropped when over budget
                 gains = np.stack([gain_flood, gain_shutters, gain_ins], axis=1)
                 chosen = np.stack([choose_flood & (self.var.adapted.data == 0),
                                choose_shutters & (self.var.adapted_shutters.data == 0), choose_ins], axis=1)
-                
+            else: 
+                #Insurance is mandatory so only structural measures can be dropped when over budget
+                gains = np.stack([gain_flood, gain_shutters, np.full_like(gain_ins, -np.inf)], axis=1)
+                chosen = np.stack([choose_flood & (self.var.adapted.data == 0),
+                               choose_shutters & (self.var.adapted_shutters.data == 0), np.zeros_like(choose_ins)], axis=1)
+
             gains_masked = np.where(chosen, gains, np.inf)
             drop_idx = np.argmin(gains_masked, axis=1)
 
             drop_f = over & (drop_idx == 0) & choose_flood
             drop_s = over & (drop_idx == 1) & choose_shutters
             
-            if self.var.insurance_scheme == "catnat":
-                drop_i = np.zeros_like(drop_f)  # insurance cannot be dropped
-            else:
+            # if self.var.insurance_scheme == "catnat":
+            #     drop_i = np.zeros_like(drop_f)  # insurance cannot be dropped
+            # else:
+            #     drop_i = over & (drop_idx == 2) & choose_ins
+
+            if self.var.insurance_scheme == "private":
                 drop_i = over & (drop_idx == 2) & choose_ins
+            else:
+                drop_i = np.zeros_like(drop_f)  # insurance cannot be dropped
 
             choose_flood[drop_f] = False
             choose_shutters[drop_s] = False
@@ -3379,6 +3402,45 @@ class Households(AgentBaseClass):
                         self.update_building_attributes()
                     print("Thinking about adapting...")
                     self.decide_household_strategy()
+        out_dir = Path(self.model.output_folder) / "buildings_each_step"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = self.model.current_time.strftime("%Y%m%d")
+
+        # self.buildings.to_file(out_dir / f"buildings_{ts}.gpkg", driver="GPKG")
+
+        n = int(self.n)
+        
+        def _1d(x):
+            a = np.asarray(x, dtype=np.float32).reshape(-1)
+            if a.size == 1:
+                return np.full(n, float(a[0]), dtype=np.float32)
+            return a[:n]
+        
+        df = pd.DataFrame(
+            {
+                "time": self.model.current_time.isoformat(),
+                "household_id": np.arange(n, dtype=np.int32),
+
+                # risk perception
+                "risk_perception_flood": _1d(self.var.risk_perception.data[:n]),
+                "risk_perception_wind": _1d(self.var.risk_perception_windstorm.data[:n]),
+
+                # uptake / adaptation
+                "flood_adaptation": (np.asarray(self.var.adapted.data[:n]).reshape(-1) == 1),
+                "wind_adaptation": (np.asarray(self.var.adapted_shutters.data[:n]).reshape(-1) == 1),
+                "insurance_uptake": (np.asarray(self.var.adapted_insurance.data[:n]).reshape(-1) == 1),
+
+                # premiums
+                "premium": _1d(getattr(self.var, "premium", np.nan)),
+                "premium_private": _1d(getattr(self.var, "premium_private", np.nan)),
+                "premium_public": _1d(getattr(self.var, "premium_public", np.nan)),
+            }
+        )
+            
+                
+        df.to_parquet(out_dir / f"household_data_{ts}.parquet", index=False)
+            
+        print("Saved household data")
 
         self.report(locals())
 

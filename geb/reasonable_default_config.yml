@@ -70,7 +70,7 @@ agent_settings:
     dynamic_market: false
     price_frequency: yearly
   households:
-    adapt: false # If True households adapt their houses based on random floods, like DYNAMO-M
+    adapt: True # If True households adapt their houses based on random floods, like DYNAMO-M
     adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
     warning_response: false
     water_demand:

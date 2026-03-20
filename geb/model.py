@@ -387,10 +387,10 @@ class GEBModel(Module):
 
     def _initialize(
         self,
-        create_reporter: bool,
-        current_time: datetime.datetime,
-        n_timesteps: int,
-        timestep_length: datetime.timedelta | relativedelta,
+        create_reporter: bool, # CARO create_reporter: bool = False
+        current_time: datetime.datetime, #| None = None,
+        n_timesteps: int, # = 0,
+        timestep_length: datetime.timedelta | relativedelta, # = datetime.timedelta(days=1),
         in_spinup: bool = False,
         simulate_hydrology: bool = True,  # CARO
         clean_report_folder: bool = False,
@@ -427,17 +427,17 @@ class GEBModel(Module):
         self.hydrology: Hydrology = Hydrology(self)
 
         ## CARO
-        #if self.simulate_hydrology:
-        #   self.hydrology = Hydrology(self)
-        #else:
-        #   self.hydrology = None
+        # if self.simulate_hydrology:
+        #    self.hydrology = Hydrology(self)
+        # else:
+        #    self.hydrology = None
 
-        #self.agents = Agents(self, enabled_agents=enabled_agents)
+        # self.agents = Agents(self, enabled_agents=enabled_agents)
 
-        #if initialize_hazards:
-        #   self.hazard_driver = HazardDriver(self)
-        #else:
-        #   self.hazard_driver = None
+        # if initialize_hazards:
+        #    self.hazard_driver = HazardDriver(self)
+        # else:
+        #    self.hazard_driver = None
 
         ## CARO
 
