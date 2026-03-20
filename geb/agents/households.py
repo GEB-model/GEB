@@ -12,18 +12,12 @@ import numpy as np
 import osmnx as ox
 import pandas as pd
 import xarray as xr
-from pyproj import CRS
-from rasterio.features import rasterize, shapes
-from rasterio.transform import Affine
-from shapely.geometry import shape
+from rasterio.features import rasterize
 
-from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
 from geb.workflows.raster import sample_from_map
 
-from ..hydrology.landcovers import (
-    FOREST,
-)
 from ..store import Bucket, DynamicArray
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
