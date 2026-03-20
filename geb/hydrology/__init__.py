@@ -104,7 +104,7 @@ class Hydrology(Data, Module):
             .sum()
             + self.waterbodies.var.storage.astype(np.float64).sum()
             + self.groundwater.groundwater_content_m3.astype(np.float64).sum()
-            + self.runoff_concentrator.overland_runoff_storage_end_m3.astype(np.float64)
+            # + self.runoff_concentrator.overland_runoff_storage_end_m3.astype(np.float64)
             + self.grid.var.retention_basin_storage_m3.astype(
                 np.float64
             ).sum()  # retention basins are considered part of the hydrological system, as they can store water and affect the water balance
