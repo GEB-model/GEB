@@ -62,7 +62,9 @@ def test_rechunk_tool(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert output_path.exists()
 
-    ds_out = xr.open_dataarray(output_path, engine="zarr", chunks={})
+    ds_out = xr.open_dataarray(
+        output_path, engine="zarr", chunks={}, consolidated=False
+    )
     # Based on implementation: x=350, y=350, time=1
     # Since our dimensions are smaller than chunk size, it should take full dim size
     assert ds_out.chunks[0][0] == 1  # time  # ty:ignore[not-subscriptable]
