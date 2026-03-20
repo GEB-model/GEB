@@ -241,8 +241,8 @@ class GridVariables(Bucket):
     upstream_area_n_cells: ArrayInt32
     river_mannings: ArrayFloat32
     river_length: ArrayFloat32
-    average_river_width: ArrayFloat32
-    river_alpha: ArrayFloat32
+    river_storage_alpha: ArrayFloat32
+    river_storage_beta: ArrayFloat32
     cell_area: ArrayFloat32
     waterbody_ids: ArrayInt32
     discharge_m3_s: ArrayFloat32
