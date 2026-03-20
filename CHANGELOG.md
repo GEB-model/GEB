@@ -1,5 +1,9 @@
 # dev
 - Add option for filling and raise out of bounds error for sample_from_map.
+- Activate dynamic river widths during spinup. During the first years of spinup there may be some small balance errors, but they will resolve over time and in the run (when river width alpha and beta are stable).
+- Only re-calculate household water demand every year (performance).
+- Set SPEI calibration period to 1960-1990.
+- Reduce memory usage during build with custom clip that works with dask.
 
 # v1.0.0b18
 - Add loggers to groundwater model and SFINCS models.
