@@ -1046,7 +1046,7 @@ class fairSTREAMModel(GEBModel):
             crop_data_per_tehsil_fn: Excel file with crop holding counts per
                 tehsil and size class.
         """
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
         # Set all farmers within command areas to canal irrigation
