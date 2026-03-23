@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-from itertools import batched
 import os
 import tempfile
-import pandas as pd
 import zipfile
-from typing import Any
+from itertools import batched
 from pathlib import Path
-import numpy as np
+from typing import Any
+
 import cdsapi
+import geopandas as gpd
+import numpy as np
+import pandas as pd
 import xarray as xr
 from shapely.geometry import Point
-import geopandas as gpd
+
 from .base import Adapter
 
 
@@ -122,7 +124,7 @@ class GTSM(Adapter):
         return merged_data
 
 
-class GTSM_water_levels(Adapter):
+class GTSM_timeseries(Adapter):
     """Downloader for GTSM netcdf.
 
     Downloads and extracts the needed netcdf files from the remote GTSM for a given bounding box.
@@ -139,7 +141,15 @@ class GTSM_water_levels(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def fetch(self, variable, url: str | None = None) -> GTSM_water_levels:
+    def fetch(self, variable: str, url: str | None = None) -> GTSM_timeseries:
+        """Fetch GTSM data and save it to the cache directory.
+
+        Args:
+            variable: The variable to fetch from GTSM (e.g., "total_water_level" or "surge").
+            url: Not used for GTSM, included for compatibility with base class.
+        Returns:
+            The current instance of the GTSM_timeseries adapter.
+        """
         START_YEAR = 1979
         END_YEAR = 2018
 
@@ -167,11 +177,14 @@ class GTSM_water_levels(Adapter):
                 zip_ref.extractall(self.root)
             output_fp.unlink()
 
-    def construct_request(self, year_batch, VARIABLE) -> dict[str, Any]:
+    def construct_request(self, year_batch: list[str], variable: str) -> dict[str, Any]:
         """Construct the API call dictionary for GTSM data retrieval.
 
+        Args:
+             year_batch: A list of years to include in the request.
+             variable: The variable to retrieve from GTSM.
         Returns:
-            A dictionary containing the parameters for the GTSM API call.
+             A dictionary containing the parameters for the GTSM API call.
         """
         request = {
             "format": "zip",
@@ -192,7 +205,7 @@ class GTSM_water_levels(Adapter):
             "experiment": "reanalysis",
             "year": list(year_batch),
             "temporal_aggregation": "10_min",
-            "variable": VARIABLE,
+            "variable": variable,
             "version": ["v3"],
         }
         return request
@@ -213,16 +226,15 @@ class GTSM_water_levels(Adapter):
 
     def read(
         self, bounds: tuple[float, float, float, float], variable: str
-    ) -> xr.Dataset:
+    ) -> tuple[xr.Dataset, gpd.GeoDataFrame]:
         """Read GTSM data from the downloaded files.
 
         Args:
             bounds: A tuple of four floats representing the bounding box (min_x, min_y, max_x, max_y).
             variable: The variable to read from the GTSM data.
         Returns:
-            An xarray DataArray containing the GTSM data clipped to the specified bounds.
+            A tuple containing an xarray DataArray with the GTSM data clipped to the specified bounds and a GeoDataFrame with station information.
         """
-
         # get the model bounds and buffer by ~2km
         model_bounds = bounds
         model_bounds = (

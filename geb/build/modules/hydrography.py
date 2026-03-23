@@ -14,7 +14,7 @@ import rasterio.features
 import xarray as xr
 from pyflwdir import FlwdirRaster
 from scipy.ndimage import value_indices
-from shapely.geometry import LineString, Point, shape
+from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
@@ -1279,69 +1279,24 @@ class Hydrography(BuildModelBase):
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
 
     def setup_gtsm_water_levels(self) -> None:
+        """Sets up the GTSM hydrographs for station within the model bounds."""
+        gtsm_data_region, stations = self.data_catalog.fetch(
+            "gtsm_timeseries", variable="total_water_level"
+        ).read(bounds=self.bounds, variable="total_water_level")
+        self.set_table(gtsm_data_region, name="gtsm/water_levels")
+        self.set_geom(stations, name="gtsm/stations")
+        self.logger.info("GTSM station waterlevels and geometries set")
+
+    def setup_gtsm_surge_levels(self, temporal_range: npt.NDArray[np.int32]) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds.
 
         Args:
             temporal_range: The range of years to process.
         """
-        gtsm_data_region_pd = self.data_catalog.fetch(
-            "gtsm_water_levels", variable="total_water_level"
-        ).read(bounds=self.bounds, variable="total_water_level")
-        self.set_table(gtsm_data_region_pd, name="gtsm/water_levels")
-        self.set_geom(stations, name="gtsm/stations")
-        self.logger.info("GTSM station waterlevels and geometries set")
-
-    def setup_gtsm_surge_levels(self, temporal_range: npt.NDArray[np.int32]) -> None:
-        """Sets up the GTSM surge hydrographs for station within the model bounds.
-
-        Args:
-            temporal_range: The range of years to process.
-        """
-        self.logger.info("Setting up GTSM surge hydrographs")
-        # get the model bounds and buffer by ~2km
-        model_bounds = self.bounds
-        model_bounds = (
-            model_bounds[0] - 0.0166,  # min_lon
-            model_bounds[1] - 0.0166,  # min_lat
-            model_bounds[2] + 0.0166,  # max_lon
-            model_bounds[3] + 0.0166,  # max_lat
-        )
-        min_lon, min_lat, max_lon, max_lat = model_bounds
-
-        # First: get station indices from ONE representative file
-        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[unresolved-attribute]
-            1979, "01"
-        )
-        ref = xr.open_dataset(ref_file)
-
-        x_coords = ref.station_x_coordinate.load()
-        y_coords = ref.station_y_coordinate.load()
-
-        mask = (
-            (x_coords >= min_lon)
-            & (x_coords <= max_lon)
-            & (y_coords >= min_lat)
-            & (y_coords <= max_lat)
-        )
-        station_idx = np.nonzero(mask.values)[0]
-
-        # Then: loop through files in smaller batches
-        gtsm_data_region = []
-        for year in temporal_range:
-            for month in range(1, 13):
-                f = self.old_data_catalog.get_source("GTSM_surge").path.format(
-                    year, f"{month:02d}"
-                )
-                ds = xr.open_dataset(f, chunks={"time": -1})
-                subset = ds.isel(stations=station_idx).drop_vars(
-                    ["station_x_coordinate", "station_y_coordinate"]
-                )
-                gtsm_data_region.append(subset.surge.to_pandas())
-                print(f"Processed GTSM data for {year}-{month:02d}")
-                ds.close()
-        gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)
-        # set _FillValue to NaN
-        self.set_table(gtsm_data_region_pd, name="gtsm/surge")
+        gtsm_data_region, _ = self.data_catalog.fetch(
+            "gtsm_timeseries", variable="surge"
+        ).read(bounds=self.bounds, variable="surge")
+        self.set_table(gtsm_data_region, name="gtsm/surge")
         self.logger.info("GTSM station waterlevels and geometries set")
 
     def setup_gtsm_sea_level_rise(self) -> None:
