@@ -2830,45 +2830,6 @@ class GEBModel(
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
 
-    def setup_coastal_water_levels(
-        self,
-    ) -> None:
-        """Sets up coastal water level data from the GTSM dataset.
-
-        Filters the dataset to include only stations within the model bounds,
-        and ensures that the time dimension is consistent.
-        """
-        water_levels = self.old_data_catalog.get_dataset("GTSM")
-        assert isinstance(water_levels, xr.DataArray)
-        assert (
-            water_levels.time.diff("time").astype(np.int64)
-            == (water_levels.time[1] - water_levels.time[0]).astype(np.int64)
-        ).all()
-        # convert to geodataframe
-        stations = gpd.GeoDataFrame(
-            water_levels.stations,
-            geometry=gpd.points_from_xy(
-                water_levels.station_x_coordinate, water_levels.station_y_coordinate
-            ),
-        )
-        # filter all stations within the bounds, considering a buffer
-        station_ids = stations.cx[
-            self.bounds[0] - 0.1 : self.bounds[2] + 0.1,
-            self.bounds[1] - 0.1 : self.bounds[3] + 0.1,
-        ].index.values
-
-        water_levels = water_levels.sel(stations=station_ids)
-
-        assert len(water_levels.stations) > 0, (
-            "No stations found in the region. If no stations should be set, set include_coastal_area=False"
-        )
-
-        self.set_other(
-            water_levels,
-            name="waterlevels",
-            time_chunksize=24 * 6,  # 10 minute data
-        )
-
     @build_method(required=True)
     def setup_damage_parameters(
         self,
