@@ -227,14 +227,15 @@ class GTSM_timeseries(Adapter):
 
     def read(
         self, bounds: tuple[float, float, float, float], variable: str
-    ) -> tuple[xr.Dataset, gpd.GeoDataFrame]:
+    ) -> tuple[pd.DataFrame, gpd.GeoDataFrame]:
         """Read GTSM data from the downloaded files.
 
         Args:
             bounds: A tuple of four floats representing the bounding box (min_x, min_y, max_x, max_y).
             variable: The variable to read from the GTSM data.
+
         Returns:
-            A tuple containing an xarray DataArray with the GTSM data clipped to the specified bounds and a GeoDataFrame with station information.
+            A tuple containing a pandas DataFrame with the GTSM time series data clipped to the specified bounds and a GeoDataFrame with station information.
         """
         # get the model bounds and buffer by ~2km
         model_bounds = bounds
