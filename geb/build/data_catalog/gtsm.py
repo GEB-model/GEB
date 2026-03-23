@@ -176,6 +176,7 @@ class GTSM_timeseries(Adapter):
             with zipfile.ZipFile(output_fp, "r") as zip_ref:
                 zip_ref.extractall(self.root)
             output_fp.unlink()
+        return self
 
     def construct_request(self, year_batch: list[str], variable: str) -> dict[str, Any]:
         """Construct the API call dictionary for GTSM data retrieval.
