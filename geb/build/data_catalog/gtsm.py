@@ -6,7 +6,6 @@ import os
 import tempfile
 import zipfile
 from itertools import batched
-from pathlib import Path
 from typing import Any
 
 import cdsapi
