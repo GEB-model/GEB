@@ -1,10 +1,3 @@
-global_ocean_mean_dynamic_topography:
-  data_type: RasterDataset
-  driver: raster
-  path: hydrography/global_ocean_mean_dynamic_topography/mdt_hybrid_cnes_cls22_cmems2020_global.nc
-  meta:
-    source_license: https://marine.copernicus.eu/user-corner/service-commitments-and-licence
-    source_url: https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_MDT_008_063/description
 GTSM:
   data_type: Dataset
   path: GTSM/reanalysis_waterlevel_10min_{}_{}_v3.nc

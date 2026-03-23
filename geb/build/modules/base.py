@@ -48,18 +48,6 @@ class BuildModelBase(ABC):
 
     @property
     @abstractmethod
-    def region_subgrid(self) -> xr.Dataset:
-        """Abstract property for region_subgrid data."""
-        pass
-
-    @subgrid.setter
-    @abstractmethod
-    def region_subgrid(self, value: xr.Dataset) -> None:
-        """Abstract setter for region_subgrid data."""
-        pass
-
-    @property
-    @abstractmethod
     def geom(self) -> DelayedReader:
         """Abstract property for geometry data."""
         pass
@@ -196,11 +184,6 @@ class BuildModelBase(ABC):
     @abstractmethod
     def set_subgrid(self, data: xr.DataArray, name: str) -> xr.DataArray:
         """Abstract method to set subgrid data."""
-        pass
-
-    @abstractmethod
-    def set_region_subgrid(self, data: xr.DataArray, name: str) -> xr.DataArray:
-        """Abstract method to set region subgrid."""
         pass
 
     @abstractmethod
