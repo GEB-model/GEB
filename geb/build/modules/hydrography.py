@@ -1287,12 +1287,8 @@ class Hydrography(BuildModelBase):
         self.set_geom(stations, name="gtsm/stations")
         self.logger.info("GTSM station waterlevels and geometries set")
 
-    def setup_gtsm_surge_levels(self, temporal_range: npt.NDArray[np.int32]) -> None:
-        """Sets up the GTSM hydrographs for station within the model bounds.
-
-        Args:
-            temporal_range: The range of years to process.
-        """
+    def setup_gtsm_surge_levels(self) -> None:
+        """Sets up the GTSM hydrographs for station within the model bounds."""
         gtsm_data_region, _ = self.data_catalog.fetch(
             "gtsm_timeseries", variable="surge"
         ).read(bounds=self.bounds, variable="surge")
@@ -1410,7 +1406,6 @@ class Hydrography(BuildModelBase):
             return
 
         # Continue with GTSM setup
-        temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
         self.setup_gtsm_water_levels()
         self.setup_gtsm_surge_levels()
         self.setup_gtsm_sea_level_rise()
