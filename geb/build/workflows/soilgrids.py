@@ -7,11 +7,11 @@ import xarray as xr
 from geb.workflows.io import get_window
 from geb.workflows.raster import convert_nodata, interpolate_na_2d, resample_chunked
 
-from ..data_catalog import NewDataCatalog
+from ..data_catalog import DataCatalog
 
 
 def load_soilgrids(
-    data_catalog: NewDataCatalog, mask: xr.DataArray, region: gpd.GeoDataFrame
+    data_catalog: DataCatalog, mask: xr.DataArray, region: gpd.GeoDataFrame
 ) -> xr.Dataset:
     """Load soilgrids data from ISRIC SoilGrids.
 
