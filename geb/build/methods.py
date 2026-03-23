@@ -4,6 +4,7 @@ import functools
 import inspect
 import logging
 import tracemalloc
+from datetime import datetime
 from pathlib import Path
 from time import time
 from typing import Any, Iterable
@@ -14,6 +15,8 @@ import networkx as nx
 __all__: list[str] = ["build_method"]
 
 from typing import Protocol
+
+_BYTES_TO_MB: float = 1 / (1024 * 1024)
 
 
 def validate_build_methods(
@@ -200,6 +203,10 @@ class _build_method:
         self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
         self.peak_memory_usage: dict[str, int] = {}
+        # Track what has already been flushed to the stats spreadsheet so
+        # incremental calls to write_build_stats never produce duplicate rows.
+        self._methods_written_to_stats: set[str] = set()
+        self._disk_stats_written: bool = False
 
     def _resolve_logger(
         self, call_args: tuple[Any, ...] | None = None
@@ -493,7 +500,7 @@ class _build_method:
         for method, time_taken in sorted_by_time:
             percentage: float = (time_taken / total_time) * 100
             active_logger.info(
-                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%) and had peak memory usage of {self.peak_memory_usage[method] / 1024 / 1024:.2f} MB."
+                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%) and had peak memory usage of {self.peak_memory_usage[method] * _BYTES_TO_MB:.2f} MB."
             )
 
         sorted_by_memory = sorted(
@@ -505,12 +512,98 @@ class _build_method:
                 memory_usage / max(self.peak_memory_usage.values())
             ) * 100
             active_logger.info(
-                f"Method {method} had peak memory usage of {memory_usage / 1024 / 1024:.2f} MB ({percentage:.1f}%) and took {self.time_taken[method]:.2f} seconds."
+                f"Method {method} had peak memory usage of {memory_usage * _BYTES_TO_MB:.2f} MB ({percentage:.1f}%) and took {self.time_taken[method]:.2f} seconds."
             )
 
         active_logger.info(
-            f"Total time taken: {total_time:.2f} seconds. Max memory usage: {max(self.peak_memory_usage.values()) / 1024 / 1024:.2f} MB."
+            f"Total time taken: {total_time:.2f} seconds. Max memory usage: {max(self.peak_memory_usage.values()) * _BYTES_TO_MB:.2f} MB."
         )
+
+    def write_build_stats(
+        self,
+        stats_path: Path,
+        cluster_name: str,
+        run_timestamp: datetime,
+        cluster_dir: Path,
+    ) -> None:
+        """Append per-method memory/timing and per-folder disk-usage statistics to a shared Excel workbook.
+
+        Writes two sheets:
+
+        - ``memory_stats``: one row per build method with peak tracemalloc memory
+          (in MB) and wall-clock time.
+        - ``disk_stats``: one row per immediate subdirectory of ``cluster_dir``
+          with its total recursive on-disk size.
+
+        Rows are only appended for methods not yet recorded, so this can safely
+        be called incrementally (e.g. after each method or at the end of a build)
+        without producing duplicate rows.  The workbook is created on first use.
+
+        Args:
+            stats_path: Path to the Excel file (created if it does not exist).
+            cluster_name: Short name of the cluster (e.g. ``"Europe_004"``).
+            run_timestamp: Datetime at which the build run started.
+            cluster_dir: Path to the scenario directory whose immediate
+                subdirectories are measured for disk usage
+                (e.g. ``large_scale6/Europe_004/base``).
+        """
+        import openpyxl  # noqa: PLC0415 – optional dependency, only needed here
+
+        new_methods: dict[str, int] = {
+            m: v
+            for m, v in self.peak_memory_usage.items()
+            if m not in self._methods_written_to_stats
+        }
+        if not new_methods and self._disk_stats_written:
+            return
+
+        stats_path = Path(stats_path)
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp_str: str = run_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+        if stats_path.exists():
+            wb = openpyxl.load_workbook(stats_path)
+        else:
+            wb = openpyxl.Workbook()
+            wb.active.title = "memory_stats"
+            wb.active.append(
+                ["cluster", "run_started_at", "method", "peak_memory_mb", "elapsed_s"]
+            )
+            wb.create_sheet("disk_stats").append(
+                ["cluster", "run_started_at", "folder", "size_mb"]
+            )
+
+        ws_mem = wb["memory_stats"]
+        ws_disk = wb["disk_stats"]
+
+        for method, peak_bytes in new_methods.items():
+            ws_mem.append(
+                [
+                    cluster_name,
+                    timestamp_str,
+                    method,
+                    round(peak_bytes * _BYTES_TO_MB, 1),
+                    round(self.time_taken.get(method, float("nan")), 1),
+                ]
+            )
+
+        # Write disk usage once per build run (snapshot at time of call).
+        # Guarded by _disk_stats_written so incremental calls don't duplicate rows.
+        if not self._disk_stats_written:
+            cluster_dir = Path(cluster_dir)
+            for folder in sorted(d for d in cluster_dir.iterdir() if d.is_dir()):
+                folder_size_mb: float = round(
+                    sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
+                    * _BYTES_TO_MB,
+                    1,
+                )
+                ws_disk.append(
+                    [cluster_name, timestamp_str, folder.name, folder_size_mb]
+                )
+            self._disk_stats_written = True
+
+        wb.save(stats_path)
+        self._methods_written_to_stats.update(new_methods)
 
     @property
     def methods(self) -> list[str]:

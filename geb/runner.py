@@ -933,20 +933,37 @@ def set_fn(
 def _write_build_stats(working_directory: Path, logger: logging.Logger) -> None:
     """Append per-method build timing and peak-RSS stats to {model_dir}/build_stats.csv.
 
-    Derives model_dir and cluster from the working directory structure
-    (<model_dir>/<cluster>/base). Rows are always appended; the file and header
-    are created automatically on first write.
+    Handles three model layouts:
+
+    - Multi-basin:          ``<model_dir>/<cluster>/base``
+    - Single with scenario: ``<model_dir>/base``
+    - Flat single:          ``<model_dir>`` (model.yml sits directly in working_directory)
+
+    The multi-basin case is detected by the presence of ``model.yml`` in the
+    grandparent directory (e.g. ``large_scale6/model.yml``). For single models
+    the CSV is written to the immediate parent of the working directory.
 
     Args:
-        working_directory: Working directory of the build run (e.g. large_scale6/Europe_001/base).
+        working_directory: Working directory of the build run.
         logger: Logger instance for progress messages.
     """
     if not build_method.time_taken:
         return
 
-    # <model_dir>/<cluster>/base  →  model_dir two levels up, cluster one level up
     wd = Path(working_directory).resolve()
-    model_dir_path = wd.parents[1]
+
+    # Multi-basin: grandparent owns a model.yml (e.g. large_scale6/model.yml).
+    # Single/flat: no model.yml at grandparent level.
+    grandparent = wd.parents[1] if len(wd.parents) > 1 else wd.parent
+    if (grandparent / "model.yml").exists():
+        model_dir_path = grandparent
+        cluster_name = wd.parent.name  # e.g. "Europe_001"
+    else:
+        # Single model: wd is the scenario subdir → model_dir is the parent.
+        # Flat model: wd IS the model dir → model_dir is wd itself.
+        model_dir_path = wd.parent if not (wd / "model.yml").exists() else wd
+        cluster_name = model_dir_path.name
+
     csv_path = model_dir_path / "build_stats.csv"
     record_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -969,11 +986,12 @@ def _write_build_stats(working_directory: Path, logger: logging.Logger) -> None:
                 {
                     "record_time": record_time,
                     "model_dir": model_dir_path.name,
-                    "cluster": wd.parts[-2],
+                    "cluster": cluster_name,
                     "method": method,
                     "duration_s": round(duration, 2),
                     "peak_rss_mb": round(
-                        build_method.peak_memory_mb_per_method.get(method, 0.0), 0
+                        build_method.peak_memory_usage.get(method, 0) / (1024 * 1024),
+                        0,
                     ),
                 }
             )
