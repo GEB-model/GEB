@@ -122,3 +122,23 @@ We use `pytest` for automated testing of the GEB model.
 - It is RECOMMENDED to use `assert` statements in the model to ensure correct behaviour.
 - When there is an error, the model SHOULD fail. Do not catch exceptions and replace with dummy data.
 - All code MUST be formatted using `ruff format` and `ruff check`. Imports MUST be ordered using `isort` (included in `ruff`). It is RECOMMENDED to install the ruff plugin and set ruff as the default formatter in Visual Studio Code. Also turn on "format on paste" and "format on save". `ruff format` and `ruff check` are automatically executed when pushing to GitHub.
+
+### AI-assisted contributions
+
+AI coding tools are increasingly common in open source development. These tools are welcome in GEB, but the same standards apply to all contributions regardless of how they were produced.
+
+#### You are responsible for your changes
+
+If you submit a pull request, you are responsible for understanding and having fully reviewed the changes. You must be able to explain why each change is correct and how it fits into the project.
+
+#### Communication must be your own
+
+PR descriptions, issue comments, and review responses must be in your own words. The substance and reasoning must come from you.
+
+#### Review every line
+
+You must have personally reviewed and understood all changes before submitting. If you used AI to generate code, you are expected to have read it critically and tested it. The PR description should explain the approach and reasoning — do not leave it to reviewers to figure out what the code does and why.
+
+#### Keep PRs reviewable
+
+Generating code with AI is fast; reviewing it is not. A large diff shifts the burden from the contributor to the reviewer. PRs that cannot be reviewed in reasonable time with reasonable effort may be closed, regardless of their potential usefulness or correctness. Use AI tools not only to write code but to prepare better, more reviewable PRs — well-structured commits, clear descriptions, and minimal scope.
