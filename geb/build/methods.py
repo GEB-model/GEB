@@ -490,6 +490,7 @@ class _build_method:
             self.time_taken.items(), key=lambda item: item[1], reverse=False
         )
 
+        active_logger.info("Build method time statistics:")
         for method, time_taken in sorted_by_time:
             percentage: float = (time_taken / total_time) * 100
             active_logger.info(
@@ -500,6 +501,7 @@ class _build_method:
             self.peak_memory_usage.items(), key=lambda item: item[1], reverse=False
         )
 
+        active_logger.info("Build method memory usage statistics:")
         for method, memory_usage in sorted_by_memory:
             percentage: float = (
                 memory_usage / max(self.peak_memory_usage.values())
@@ -508,9 +510,11 @@ class _build_method:
                 f"Method {method} had peak memory usage of {memory_usage / 1024 / 1024:.2f} MB ({percentage:.1f}%) and took {self.time_taken[method]:.2f} seconds."
             )
 
-        active_logger.info(
-            f"Total time taken: {total_time:.2f} seconds. Max memory usage: {max(self.peak_memory_usage.values()) / 1024 / 1024:.2f} MB."
-        )
+        active_logger.info(f"Total time taken: {total_time:.2f} seconds.")
+        if self.peak_memory_usage:
+            active_logger.info(
+                f"Max memory usage: {max(self.peak_memory_usage.values()) / 1024 / 1024:.2f} MB."
+            )
 
     @property
     def methods(self) -> list[str]:
