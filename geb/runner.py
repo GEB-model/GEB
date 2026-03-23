@@ -916,10 +916,15 @@ def set_fn(
         logger.info("Updated configuration file: %s", config)
 
     with WorkingDirectory(working_directory):
+        # Forward kwargs from set_fn into set_operation so requested
+        # key/value updates are actually applied.
+        def operation_forward(logger: logging.Logger) -> None:
+            return set_operation(logger=logger, **kwargs)
+
         _run_with_optional_profiling(
             profile_speed,
             profile_ram,
-            set_operation,
+            operation_forward,
             name="set",
             logger=create_logger(name="set"),
         )
@@ -1089,6 +1094,12 @@ def alter_fn(
     from_model: Path = Path(from_model)
     build_config_input: Path | dict[str, Any] = build_config
 
+    if isinstance(build_config_input, Path) and not build_config_input.exists():
+        print(
+            f"Build config file {build_config_input} does not exist. Creating an empty build config file."
+        )
+        build_config_input.touch()  # Create empty build config file if it does not exist
+
     def alter_operation(logger: logging.Logger, **kwargs: Any) -> None:
         original_config: Path = from_model / config
         if not original_config.exists():
@@ -1154,6 +1165,8 @@ def alter_fn(
         model.update(
             methods=methods,
         )
+
+        model.write_build_complete()
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(

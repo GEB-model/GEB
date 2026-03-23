@@ -2019,7 +2019,6 @@ class GEBModel(
         # have exactly matching coordinates
         self.grid = xr.Dataset()
         self.subgrid = xr.Dataset()
-        self.region_subgrid = xr.Dataset()
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
@@ -2140,15 +2139,6 @@ class GEBModel(
     @subgrid.setter
     def subgrid(self, value: xr.Dataset) -> None:
         self._subgrid = value
-
-    @property
-    def region_subgrid(self) -> xr.Dataset:
-        """Get the region subgrid."""
-        return self._region_subgrid
-
-    @region_subgrid.setter
-    def region_subgrid(self, value: xr.Dataset) -> None:
-        self._region_subgrid = value
 
     @property
     def geom(self) -> DelayedReader:
@@ -2638,7 +2628,10 @@ class GEBModel(
         # the original resolution is 3 arcseconds, thus we divide by 3
         scale_factor: int = target_resolution_arcsec // 3
 
-        self.logger.info("Coarsening hydrography")
+        self.logger.info(
+            "Coarsening drainage network to resolution %d arcseconds",
+            target_resolution_arcsec,
+        )
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
         flow_raster_upscaled, idxs_out = flow_raster.upscale(
             scale_factor=scale_factor,
@@ -2827,45 +2820,6 @@ class GEBModel(
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
 
-    def setup_coastal_water_levels(
-        self,
-    ) -> None:
-        """Sets up coastal water level data from the GTSM dataset.
-
-        Filters the dataset to include only stations within the model bounds,
-        and ensures that the time dimension is consistent.
-        """
-        water_levels = self.old_data_catalog.get_dataset("GTSM")
-        assert isinstance(water_levels, xr.DataArray)
-        assert (
-            water_levels.time.diff("time").astype(np.int64)
-            == (water_levels.time[1] - water_levels.time[0]).astype(np.int64)
-        ).all()
-        # convert to geodataframe
-        stations = gpd.GeoDataFrame(
-            water_levels.stations,
-            geometry=gpd.points_from_xy(
-                water_levels.station_x_coordinate, water_levels.station_y_coordinate
-            ),
-        )
-        # filter all stations within the bounds, considering a buffer
-        station_ids = stations.cx[
-            self.bounds[0] - 0.1 : self.bounds[2] + 0.1,
-            self.bounds[1] - 0.1 : self.bounds[3] + 0.1,
-        ].index.values
-
-        water_levels = water_levels.sel(stations=station_ids)
-
-        assert len(water_levels.stations) > 0, (
-            "No stations found in the region. If no stations should be set, set include_coastal_area=False"
-        )
-
-        self.set_other(
-            water_levels,
-            name="waterlevels",
-            time_chunksize=24 * 6,  # 10 minute data
-        )
-
     @build_method(required=True)
     def setup_damage_parameters(
         self,
@@ -3022,6 +2976,10 @@ class GEBModel(
         """Path to the progress file that contains the build progress."""
         return Path(self.root, "progress.txt")
 
+    def write_build_complete(self) -> None:
+        """Writes a file that indicates that the build is complete."""
+        self.build_complete_path.write_text("Build complete.")
+
     @property
     def build_complete_path(self) -> Path:
         """Path to the file that indicates that the build is complete."""
@@ -3068,7 +3026,6 @@ class GEBModel(
                 "dict": {},
                 "grid": {},
                 "subgrid": {},
-                "region_subgrid": {},
                 "other": {},
             }
         else:
@@ -3130,20 +3087,6 @@ class GEBModel(
             data: xr.DataArray = read_zarr(Path(self.root) / fn)
             self.set_subgrid(data, name=name, write=False)
 
-    def read_region_subgrid(self) -> None:
-        """Reads all region subgrid data arrays from disk based on the file library."""
-        # first read and set the mask. This is required.
-        region_subgrid_files: dict[str, Path] = self.files["region_subgrid"]
-        if len(region_subgrid_files) == 0:
-            return
-        mask: xr.DataArray = read_zarr(Path(self.root) / region_subgrid_files["mask"])
-        self.set_region_subgrid(mask, name="mask", write=False)
-        for name, fn in self.files["region_subgrid"].items():
-            if name == "mask":  # mask already read
-                continue
-            data: xr.DataArray = read_zarr(Path(self.root) / fn)
-            self.set_region_subgrid(data, name=name, write=False)
-
     def read_other(self) -> None:
         """Reads all "other" data arrays from disk based on the file library."""
         for name, fn in self.files["other"].items():
@@ -3163,7 +3106,6 @@ class GEBModel(
 
             self.read_subgrid()
             self.read_grid()
-            self.read_region_subgrid()
 
             self.read_other()
 
@@ -3236,7 +3178,7 @@ class GEBModel(
         All layers of grid must have identical spatial coordinates.
 
         Args:
-            grid_name: name of the grid, e.g. "grid", "subgrid", "region_subgrid"
+            grid_name: name of the grid, e.g. "grid", "subgrid"
             grid: the gridded dataset itself
             data: the data to add to the grid
             write: if True, write the data to disk
@@ -3332,34 +3274,6 @@ class GEBModel(
             "subgrid", self.subgrid, data, write=write, name=name
         )
         return self.subgrid[name]
-
-    def set_region_subgrid(
-        self, data: xr.DataArray, name: str, write: bool = True
-    ) -> xr.DataArray:
-        """Set a new region subgrid layer.
-
-        When the first layer is added to the region subgrid, it must be the mask layer.
-        This layer is used to define the spatial extent of the region subgrid and set
-        the active cells.
-
-        Args:
-            data: The data to add to the region subgrid. Must have the same spatial coordinates
-                as the existing region subgrid.
-            name: The name of the layer to add to the region subgrid.
-            write: If True, write the data to disk. Defaults to True.
-
-        Returns:
-            The added region subgrid layer. The returned layer is read from disk if write=True, so
-            it is not the same object as the input data.
-        """
-        self.region_subgrid = self._set_grid(
-            "region_subgrid",
-            self.region_subgrid,
-            data,
-            write=write,
-            name=name,
-        )
-        return self.region_subgrid[name]
 
     @property
     def subgrid_factor(self) -> int:
@@ -3581,7 +3495,7 @@ class GEBModel(
 
         self.logger.info("Finished!")
 
-        build_method.log_time_taken()
+        build_method.log_statistics()
 
     def build(
         self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
@@ -3631,7 +3545,7 @@ class GEBModel(
             continue_=continue_,
         )
 
-        self.build_complete_path.write_text("Build complete")
+        self.write_build_complete()
 
     def update(
         self,

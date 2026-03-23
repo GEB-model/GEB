@@ -3,27 +3,17 @@
 import functools
 import inspect
 import logging
-import threading
-from datetime import datetime
+import tracemalloc
 from pathlib import Path
 from time import time
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import networkx as nx
 
 __all__: list[str] = ["build_method"]
 
-
-def _rss_mb() -> float:
-    """Return current process RSS in MB via /proc/self/status; 0.0 if unavailable."""
-    try:
-        for line in Path("/proc/self/status").read_text().splitlines():
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1]) / 1024  # kB → MB
-    except OSError:
-        pass
-    return 0.0
+from typing import Protocol
 
 
 def validate_build_methods(
@@ -122,6 +112,8 @@ def validate_build_methods(
                             "Cannot fix order: cycle detected in requested methods."
                         )
 
+                    changed_methods = set()
+
                     # To minimize changes, we can iterate and "pull up" dependencies.
                     new_order = list(methods.keys())
                     changed = True
@@ -145,15 +137,16 @@ def validate_build_methods(
                                 method_to_move = new_order.pop(i)
                                 new_order.insert(max_dep_idx, method_to_move)
                                 changed = True
+                                changed_methods.add(method_to_move)
                                 break
 
                     methods = {node: methods[node] for node in new_order}
 
                     if logger is not None:
                         logger.warning(
-                            "The provided method order was invalid and has been auto-fixed."
+                            f"The provided method order was invalid and has been auto-fixed. Moved methods: {changed_methods}"
                         )
-                        logger.info(f"New method order: {list(methods.keys())}")
+                        logger.info(f"New build method order: {list(methods.keys())}")
                 except nx.NetworkXUnfeasible:
                     raise ValueError("Cannot fix order: dependencies are circular.")
         else:
@@ -206,12 +199,7 @@ class _build_method:
         self.tree = nx.DiGraph()
         self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
-        # Peak RSS memory (MB) measured during each build method via a background
-        # sampling thread. Populated automatically by the wrapper.
-        self.peak_memory_mb_per_method: dict[str, float] = {}
-        # Tracks which methods have already been flushed to the stats file so
-        # incremental writes don't produce duplicate rows.
-        self._methods_written_to_stats: set[str] = set()
+        self.peak_memory_usage: dict[str, int] = {}
 
     def _resolve_logger(
         self, call_args: tuple[Any, ...] | None = None
@@ -271,33 +259,20 @@ class _build_method:
                 for key, value in kwargs.items():
                     active_logger.debug(f"{func.__name__}.{key}: {value}")
 
-                # Sample RSS every second in a background thread to capture the
-                # peak during this method without blocking execution.
-                _stop_event = threading.Event()
-                _peak_mb: float = 0.0
-
-                def _sample_memory() -> None:
-                    nonlocal _peak_mb
-                    while not _stop_event.wait(timeout=1.0):
-                        mb = _rss_mb()
-                        if mb > _peak_mb:
-                            _peak_mb = mb
-
-                threading.Thread(target=_sample_memory, daemon=True).start()
-
+                tracemalloc.start()
                 start_time: float = time()
-                try:
-                    value: Any = func(*args, **kwargs)
-                finally:
-                    end_time: float = time()
-                    _stop_event.set()
-                    elapsed_time: float = end_time - start_time
-                    self.time_taken[func.__name__] = elapsed_time
-                    self.peak_memory_mb_per_method[func.__name__] = _peak_mb
-                    active_logger.info(
-                        f"Completed {func.__name__} in {elapsed_time:.2f} seconds"
-                        f" (peak RSS {_peak_mb:.0f} MB)"
-                    )
+                value: Any = func(*args, **kwargs)
+                end_time: float = time()
+                _, peak = tracemalloc.get_traced_memory()
+                tracemalloc.stop()
+
+                elapsed_time: float = end_time - start_time
+
+                self.time_taken[func.__name__] = elapsed_time
+                self.peak_memory_usage[func.__name__] = peak
+                active_logger.info(
+                    f"Completed {func.__name__} in {elapsed_time:.2f} seconds with peak memory usage of {peak / 1024 / 1024:.2f} MB."
+                )
                 return value
 
             self.add_tree_node(func)
@@ -506,64 +481,7 @@ class _build_method:
                 f"The following required methods are missing: {', '.join(missing_methods)}"
             )
 
-    def write_memory_stats(
-        self,
-        stats_path: Path,
-        cluster_name: str,
-        run_timestamp: datetime,
-    ) -> None:
-        """Append per-method peak-memory statistics to a shared Excel workbook.
-
-        Each call appends one row per build method to the sheet, recording the
-        cluster name, build timestamp, method name, peak RSS during the method,
-        and the wall-clock time taken.  The workbook is created on first use.
-
-        Args:
-            stats_path: Path to the Excel file (created if it does not exist).
-            cluster_name: Short name of the cluster (e.g. "Europe_004").
-            run_timestamp: Datetime at which the build run started.
-        """
-        import openpyxl  # noqa: PLC0415 – optional, only needed here
-
-        # Only write methods not yet flushed to avoid duplicate rows on
-        # incremental calls (one call per completed/crashed method).
-        new_methods: dict[str, float] = {
-            m: v
-            for m, v in self.peak_memory_mb_per_method.items()
-            if m not in self._methods_written_to_stats
-        }
-        if not new_methods:
-            return
-
-        stats_path = Path(stats_path)
-        stats_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if stats_path.exists():
-            wb = openpyxl.load_workbook(stats_path)
-        else:
-            wb = openpyxl.Workbook()
-            wb.active.title = "memory_stats"
-            wb.active.append(
-                ["cluster", "run_started_at", "method", "peak_memory_mb", "elapsed_s"]
-            )
-        ws = wb.active
-
-        for method, peak_mb in new_methods.items():
-            elapsed_s: float = self.time_taken.get(method, float("nan"))
-            ws.append(
-                [
-                    cluster_name,
-                    run_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                    method,
-                    round(peak_mb, 1),
-                    round(elapsed_s, 1),
-                ]
-            )
-
-        wb.save(stats_path)
-        self._methods_written_to_stats.update(new_methods)
-
-    def log_time_taken(self) -> None:
+    def log_statistics(self) -> None:
         """Log the time taken for each method in the dependency tree."""
         active_logger: logging.Logger = self._resolve_logger()
         total_time: float = sum(self.time_taken.values())
@@ -575,10 +493,24 @@ class _build_method:
         for method, time_taken in sorted_by_time:
             percentage: float = (time_taken / total_time) * 100
             active_logger.info(
-                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%)."
+                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%) and had peak memory usage of {self.peak_memory_usage[method] / 1024 / 1024:.2f} MB."
             )
 
-        active_logger.info(f"Total time taken: {total_time:.2f} seconds.")
+        sorted_by_memory = sorted(
+            self.peak_memory_usage.items(), key=lambda item: item[1], reverse=False
+        )
+
+        for method, memory_usage in sorted_by_memory:
+            percentage: float = (
+                memory_usage / max(self.peak_memory_usage.values())
+            ) * 100
+            active_logger.info(
+                f"Method {method} had peak memory usage of {memory_usage / 1024 / 1024:.2f} MB ({percentage:.1f}%) and took {self.time_taken[method]:.2f} seconds."
+            )
+
+        active_logger.info(
+            f"Total time taken: {total_time:.2f} seconds. Max memory usage: {max(self.peak_memory_usage.values()) / 1024 / 1024:.2f} MB."
+        )
 
     @property
     def methods(self) -> list[str]:

@@ -504,7 +504,9 @@ class Floods(Module):
                 print("Multiverse no longer active, now compute flood damages...")
             # Check if damage simulation is enabled before calculating damages
             if self.model.config["hazards"]["damage"]["simulate"]:
-                self.model.agents.households.flood(flood_depth=flood_depth)
+                self.model.agents.households.flood_risk_module.flood(
+                    flood_depth=flood_depth
+                )
 
     def get_return_period_maps(self) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.

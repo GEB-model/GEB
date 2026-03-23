@@ -755,28 +755,23 @@ class Forcing(BuildModelBase):
             ]
 
         with warnings.catch_warnings():
-            # the last chunk may be smaller than the specified chunk size,
-            # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
-            # This warning can be safely ignored in this context.
-            warnings.filterwarnings(
-                "ignore",
-                category=RuntimeWarning,
-                message="invalid value encountered in cast",
-            )
             warnings.filterwarnings(
                 "ignore",
                 category=ZarrUserWarning,
                 message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
             )
-
-            da: xr.DataArray = self.set_other(
-                da,
-                name=name,
-                filters=filters,
-                time_chunks_per_shard=int(1e8 / get_chunk_size(da)),
-                time_chunksize=da.chunksizes["time"][0],
-                **kwargs,
-            )
+            # the last chunk may be smaller than the specified chunk size,
+            # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
+            # This can be safely ignored in this context.
+            with np.errstate(invalid="ignore"):
+                da: xr.DataArray = self.set_other(
+                    da,
+                    name=name,
+                    filters=filters,
+                    time_chunks_per_shard=int(1e8 / get_chunk_size(da)),
+                    time_chunksize=da.chunksizes["time"][0],
+                    **kwargs,
+                )
 
         if create_plots:
             plot_forcing(mask, self.geom["mask"], self.report_dir, da, name)

@@ -295,7 +295,6 @@ class WaterBodyVariables(Bucket):
     lake_area: ArrayFloat32
     lake_factor: ArrayFloat32
     waterbody_mapping: ArrayInt32
-    waterbody_ids_original: ArrayInt32
     waterbody_data: pd.DataFrame
     capacity: ArrayFloat64
     waterbody_type: ArrayInt32
@@ -360,18 +359,24 @@ class WaterBodies(Module):
         waterbody_id_unmapped: np.ndarray = self.grid.load(
             self.model.files["grid"]["waterbodies/waterbody_id"]
         )
+        waterbody_outflow_points_original_ids = self.get_outflows(waterbody_id_unmapped)
+        order_of_waterbodies_in_grid = waterbody_outflow_points_original_ids[
+            waterbody_outflow_points_original_ids != -1
+        ]
+
         self.grid.var.waterbody_ids, self.var.waterbody_mapping = (
-            self.map_waterbody_ids(waterbody_id_unmapped)
+            self.map_waterbody_ids(waterbody_id_unmapped, order_of_waterbodies_in_grid)
         )
+
+        self.grid.var.waterbody_outflow_points = self.var.waterbody_mapping[
+            waterbody_outflow_points_original_ids
+        ]
 
         # set discharge to NaN for all cells that are part of a water body
         self.grid.var.discharge_in_rivers_m3_s_substep[
             self.grid.var.waterbody_ids != -1
         ] = np.nan
 
-        self.grid.var.waterbody_outflow_points = self.get_outflows(
-            self.grid.var.waterbody_ids
-        )
         self.var.waterbody_outflow_linear_mapping = np.where(
             self.grid.var.waterbody_outflow_points != -1
         )[0].astype(np.int32)
@@ -381,26 +386,20 @@ class WaterBodies(Module):
             == self.grid.var.waterbody_outflow_points
         ).all()
 
-        self.var.waterbody_data = self.load_waterbody_data(
-            self.var.waterbody_mapping, waterbody_id_unmapped
-        )
-        # sort the water bodies in the same order as the compressed water body IDs (waterbody_ids)
-        self.var.waterbody_data = self.var.waterbody_data.sort_index()
+        self.var.waterbody_data = self.load_waterbody_data(order_of_waterbodies_in_grid)
 
         self.var.waterbody_type = self.var.waterbody_data["waterbody_type"].values
-        self.var.waterbody_ids_original = self.var.waterbody_data[
-            "original_waterbody_id"
-        ].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
         self.var.waterbody_type[self.var.waterbody_type == LAKE_CONTROL] = LAKE
-
-        # print("setting all water body types to LAKE")
-        # self.var.waterbody_type.fill(LAKE)
 
         assert (np.isin(self.var.waterbody_type, [LAKE, RESERVOIR])).all()
 
         self.var.lake_area = self.var.waterbody_data["average_area"].values
         self.var.capacity = self.var.waterbody_data["volume_total"].values
+
+        self.grid.var.capacity = self.map_to_grid_outflow(
+            self.var.capacity, fill_value=0
+        )
 
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
         # Lake parameter A (suggested  value equal to outflow width in [m])
@@ -444,7 +443,7 @@ class WaterBodies(Module):
         ).all()
 
     def map_waterbody_ids(
-        self, waterbody_id_unmapped: ArrayInt32
+        self, waterbody_id_unmapped: ArrayInt32, order_of_waterbodies: ArrayInt32
     ) -> tuple[ArrayInt32, ArrayInt32]:
         """Maps the water body IDs to a continuous range of IDs starting from 0.
 
@@ -452,62 +451,43 @@ class WaterBodies(Module):
 
         Args:
             waterbody_id_unmapped: The original water body IDs from the grid.
+            order_of_waterbodies: The order in which the water bodies should be processed.
 
         Returns:
             A tuple containing:
                 - waterbody_id_mapped: The mapped water body IDs.
                 - waterbody_mapping: The mapping from original IDs to mapped IDs.
         """
-        unique_waterbodies = np.unique(waterbody_id_unmapped)
-        unique_waterbodies = unique_waterbodies[unique_waterbodies != -1]
-        if unique_waterbodies.size == 0:
+        if order_of_waterbodies.size == 0:
             return np.full_like(waterbody_id_unmapped, -1), np.full(
                 1, -1, dtype=np.int32
             )
         else:
             waterbody_mapping = np.full(
-                unique_waterbodies.max() + 2, -1, dtype=np.int32
+                order_of_waterbodies.max() + 2, -1, dtype=np.int32
             )  # make sure that the last entry is also -1, so that -1 maps to -1
-            waterbody_mapping[unique_waterbodies] = np.arange(
-                0, unique_waterbodies.size, dtype=np.int32
+            waterbody_mapping[order_of_waterbodies] = np.arange(
+                0, order_of_waterbodies.size, dtype=np.int32
             )
             return waterbody_mapping[waterbody_id_unmapped], waterbody_mapping
 
     def load_waterbody_data(
         self,
-        waterbody_mapping: ArrayInt32,
-        waterbody_original_ids: ArrayInt32,
+        order_of_waterbodies_in_grid: ArrayInt32,
     ) -> gpd.GeoDataFrame:
-        """Loads water body data from a Parquet file and sets the index to the mapped water body IDs.
-
-        All water bodies that are not in the original IDs (and thus not in the study area) are dropped.
+        """Loads water body data from disk and sorts it based on the order of water bodies in the grid.
 
         Args:
-            waterbody_mapping: The mapping from original water body IDs to mapped IDs.
-            waterbody_original_ids: The original water body IDs from the grid.
+            order_of_waterbodies_in_grid: The order of water bodies in the grid. Original ids.
 
         Returns:
             A GeoDataFrame containing the water body data with the index set to the mapped water body IDs.
         """
-        waterbody_data = read_geom(
+        waterbody_data: gpd.GeoDataFrame = read_geom(
             self.model.files["geom"]["waterbodies/waterbody_data"],
-        )
-        # drop all data that is not in the original ids
-        waterbody_original_ids_compressed = np.unique(waterbody_original_ids)
-        waterbody_original_ids_compressed = waterbody_original_ids_compressed[
-            waterbody_original_ids_compressed != -1
-        ]
-        waterbody_data = waterbody_data[
-            waterbody_data["waterbody_id"].isin(waterbody_original_ids_compressed)
-        ]
-        # map the waterbody ids to the new ids, save old ids
-        waterbody_data["original_waterbody_id"] = waterbody_data["waterbody_id"]
-        waterbody_data["waterbody_id"] = waterbody_mapping[
-            waterbody_data["waterbody_id"]
-        ]
+        ).set_index("waterbody_id")  # ty:ignore[invalid-assignment]
 
-        waterbody_data = waterbody_data.set_index("waterbody_id")
-        return waterbody_data
+        return waterbody_data.loc[order_of_waterbodies_in_grid]
 
     def get_outflows(self, waterbody_id: ArrayInt32) -> ArrayInt32:
         """Identifies the outflow points for each water body.

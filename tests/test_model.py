@@ -28,6 +28,7 @@ from geb.cli import (
     update_fn,
 )
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
+from geb.hydrology.routing import get_river_width
 from geb.model import GEBModel
 from geb.runner import parse_config
 from geb.workflows.io import (
@@ -275,8 +276,25 @@ def test_spinup() -> None:
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
         geb: GEBModel = run_model_with_method(
-            method="spinup", **args, close_after_run=False, timing=False
+            method="spinup",
+            **args,
+            method_args={"initialize_only": True},
+            close_after_run=False,
+            timing=False,
         )
+
+        RIVER_WIDTH_OUTFLOW_RIVER = 30.0
+
+        routing = geb.hydrology.routing
+        outflow_rivers = geb.hydrology.routing.outflow_rivers
+        routing.observed_average_river_width[
+            routing.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
+        ] = RIVER_WIDTH_OUTFLOW_RIVER
+
+        geb.step_to_end()
+        geb.store.save()
+
+        geb.reporter.finalize()
 
         routing_report_folder: Path = (
             working_directory / "output" / "report" / "spinup" / "hydrology.routing"
@@ -288,7 +306,6 @@ def test_spinup() -> None:
 
         daily_discharge_data = read_zarr(routing_report_folder / "discharge_daily.zarr")
 
-        outflow_rivers = geb.hydrology.routing.outflow_rivers
         for ID, river in outflow_rivers.iterrows():
             outflow_data_csv: pd.DataFrame = pd.read_csv(
                 routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.csv",
@@ -313,6 +330,23 @@ def test_spinup() -> None:
             np.testing.assert_almost_equal(
                 daily_outflow_data_zarr.values, outflow_data_csv_daily.values, decimal=4
             )
+
+            # test whether river alpha and beta are correctly calculated
+            mean_discharge = np.array(outflow_data_csv.mean(), dtype=np.float32)
+
+            linear_index = geb.hydrology.grid.linear_mapping[
+                outflow_xy[1], outflow_xy[0]
+            ]
+            river_width_alpha = geb.hydrology.grid.var.river_width_alpha[[linear_index]]
+            river_width_beta = geb.hydrology.grid.var.river_width_beta[[linear_index]]
+
+            river_width = get_river_width(
+                river_width_alpha, river_width_beta, mean_discharge
+            )
+
+            # this check only makes sense after 365 days
+            if geb.n_timesteps > 365:
+                assert river_width == pytest.approx(RIVER_WIDTH_OUTFLOW_RIVER, abs=0.1)
 
         geb.close()
 

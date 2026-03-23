@@ -497,7 +497,7 @@ def build(*args: Any, **kwargs: Any) -> None:
     "--from-model",
     type=click.Path(path_type=Path),
     default=ALTER_FROM_MODEL_DEFAULT,
-    help="Folder for the existing model.",
+    help=f"Folder for the existing model. Defaults to {ALTER_FROM_MODEL_DEFAULT}.",
 )
 def alter(*args: Any, **kwargs: Any) -> None:
     """Create alternative version from base model with only changed files.

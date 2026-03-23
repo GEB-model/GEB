@@ -26,7 +26,7 @@ from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
-from .gtsm import GTSM
+from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
@@ -860,6 +860,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC0",
             "url": "https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_MDT_008_063/description",
             "paper_doi": "https://doi.org/10.48670/moi-00150",
+        },
+    },
+    "gtsm_timeseries": {
+        "adapter": GTSM_timeseries(
+            folder="gtsm",
+            local_version=1,
+            filename="placeholder.zip",
+            cache="global",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
+        "source": {
+            "name": "Global Tide and Storm Surge Model (GTSM)",
+            "author": "Muis et al. (2022)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.24381/cds.a6d42d60",
+            "paper_doi": "10.5281/zenodo.8314503",
         },
     },
     "gtsm": {

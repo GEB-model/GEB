@@ -1,3 +1,18 @@
+# dev
+- Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
+- Refactored setup farms from lowder and created a test. Non-lowder datasets are not supported anymore. This will be added back later in the simplified setup when it is required for a specific purpose.
+
+# v1.0.0b19
+- Add option for filling and raise out of bounds error for sample_from_map.
+- Activate dynamic river widths during spinup. During the first years of spinup there may be some small balance errors, but they will resolve over time and in the run (when river width alpha and beta are stable).
+- Only re-calculate household water demand every year (performance).
+- Set SPEI calibration period to 1960-1990.
+- Reduce memory usage during build with custom clip that works with dask.
+
+To support this version:
+- Add a new file called 'build_complete.txt' in your input folder. In future versions this file will be made automatically.
+- Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.
+
 # v1.0.0b18
 - Add loggers to groundwater model and SFINCS models.
 - Close all open figures in SFINCS to reduce memory usage.
@@ -9,6 +24,7 @@
 - Make filling of discharge gaps a lot more efficient (quite some reduction in run speed).
 - Make it possible to specify the number of cores using `--cores`. Default is all cores (no change).
 - Make an option to auto-fix the build order if it is incorrect.
+- Simulate return period based flood events for updating risk perceptions (instead of fixed threshold).
 
 To support this version:
 - Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.

@@ -95,7 +95,7 @@ def get_progress_message(wildcards, action):
     path = Path(RUNS_DIR)
     n_params = len(list(path.glob(f"{gen}_*/parameters.yml")))
     n_init = len(list(path.glob(f"{gen}_*/init.done")))
-    n_altered = len(list(path.glob(f"{gen}_*/altered.done")))
+    n_altered = len(list(path.glob(f"{gen}_*/input/build_complete.txt")))
     n_params_set = len(list(path.glob(f"{gen}_*/params_set.done")))
     n_spinup = len(list(path.glob(f"{gen}_*/spinup.done")))
     n_run = len(list(path.glob(f"{gen}_*/run.done")))
@@ -164,18 +164,14 @@ rule init_base:
 
 rule build_base:
     input: "base_init.done"
-    output: touch("base_build.done")
+    output: "input/build_complete.txt"
     log: "logs/snakemake_base_build.log"
     message: "Building base GEB model..."
     run: 
-        if not Path("input/build_complete.txt").exists():
-            run_command("geb build --continue", log[0], "Failed to build base model")
-        else:
-            with open(log[0], "a") as log_file:
-                log_file.write(f"base_build.done already exists, skipping 'geb build'\n")
+        run_command("geb build --continue", log[0], "Failed to build base model")
 
 rule generate_initial_parameters:
-    input: "base_build.done"
+    input: "input/build_complete.txt"
     output: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TRACK)
     message: "Generating initial DEAP population for {CALIBRATION_TRACK}..."
     run:
@@ -225,7 +221,7 @@ rule generate_individual_parameters:
 rule init_individual:
     input:
         params=RUNS_DIR + "/{gen}_{ind}/parameters.yml",
-        base_build="base_build.done"
+        base_build="input/build_complete.txt"
     output: touch(RUNS_DIR + "/{gen}_{ind}/init.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_init.log"
     run:
@@ -238,7 +234,7 @@ rule init_individual:
 
 rule alter_individual:
     input: RUNS_DIR + "/{gen}_{ind}/init.done"
-    output: touch(RUNS_DIR + "/{gen}_{ind}/altered.done")
+    output: RUNS_DIR + "/{gen}_{ind}/input/build_complete.txt"
     log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_alter.log"
     run:
         print(get_progress_message(wildcards, "Altering model configuration"))
@@ -248,7 +244,7 @@ rule alter_individual:
 
 rule set_individual_parameters:
     input:
-        altered_done=RUNS_DIR + "/{gen}_{ind}/altered.done",
+        altered_done=RUNS_DIR + "/{gen}_{ind}/input/build_complete.txt",
         parameters=RUNS_DIR + "/{gen}_{ind}/parameters.yml",
     output: touch(RUNS_DIR + "/{gen}_{ind}/params_set.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_set_params.log"
