@@ -65,16 +65,25 @@ def get_resources(cluster_name):
     area_km2 = get_basin_area_km2(cluster_name)
     exclude = "--exclude=node[003-015]"
 
-    # WORKAROUND: setup_elevation peaks at 500-950 GB for large European basins
-    # (scipy interp allocates ~10-15x the FABDEM input size in float64 intermediates).
-    # Since SLURM on this cluster does not use --mem for placement, we control
-    # concurrency via CPUs instead: requesting 64 CPUs fills an entire defq node
-    # (64 CPUs each), ensuring at most 1 job per node and ~1031 GB available per job.
-    # This reduces parallelism to 2 concurrent jobs (one per defq node) but prevents
-    # OOM kills. Remove this workaround once setup_elevation memory use is reduced.
-    partition = "defq"
-    cpus = 64
-    memory_mb = 950000
+    # Resource strategy (updated Mar 2026):
+    # Actual peak RSS from SACCT across all phases:
+    #   build_cluster:  max ~190 GB  (job 1239390)
+    #   spinup_cluster: max ~287 GB  (job 1234070)
+    #   run_cluster:    max ~263 GB  (job 1234403)
+    # → 300 GB covers all three phases with a ~1.05-1.6× safety margin.
+    #
+    # SLURM on this cluster does not use --mem for placement, so CPUs are the
+    # effective concurrency knob. Using partition "defq,ivm-fat" allows SLURM to
+    # schedule on whichever node is free first:
+    #   defq  node001/002: 64 CPUs, 1031 GB → 2 jobs × 32 CPUs = 64 CPUs filled
+    #                                          2 jobs × 300 GB  = 600 GB  < 1031 GB ✓
+    #                                          → 4 concurrent jobs (2 nodes)
+    #   ivm-fat node243:  128 CPUs,  773 GB → RAM limits to 2 jobs (2×300=600 GB)
+    #                                          → 2 concurrent jobs
+    #   Grand total: up to 6 concurrent jobs
+    partition = "defq,ivm-fat"
+    cpus = 32
+    memory_mb = 300000
 
     return memory_mb, partition, cpus, exclude
 
