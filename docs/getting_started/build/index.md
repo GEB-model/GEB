@@ -160,7 +160,7 @@ You can find more information about these and other options by running:
 geb update --help
 ```
 
-## GEB clean
+### GEB clean
 
 Removes all generated files (input, output, cache, logs) from a model directory, keeping only `model.yml`, `build.yml`, and `update.yml`. Run from inside the model directory:
 
