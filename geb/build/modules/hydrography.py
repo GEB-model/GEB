@@ -1293,7 +1293,7 @@ class Hydrography(BuildModelBase):
             "gtsm_timeseries", variable="surge"
         ).read(bounds=self.bounds, variable="surge")
         self.set_table(gtsm_data_region, name="gtsm/surge")
-        self.logger.info("GTSM station waterlevels and geometries set")
+        self.logger.info("GTSM station surge levels set")
 
     def setup_gtsm_sea_level_rise(self) -> None:
         """Sets up the GTSM sea level rise data for the model.
