@@ -866,7 +866,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": GTSM_timeseries(
             folder="gtsm",
             local_version=1,
-            filename="test.nc",
+            filename="placeholder.zip",
             cache="global",
         ),
         "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
