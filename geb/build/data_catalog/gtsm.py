@@ -167,7 +167,7 @@ class GTSM_timeseries(Adapter):
         if not years_to_download:
             return self
         for year_batch in batched(years_to_download, 5):
-            output_fp = Path(f"{variable}_{year_batch[0]}_{year_batch[-1]}.zip")
+            output_fp = self.root / f"{variable}_{year_batch[0]}_{year_batch[-1]}.zip"
             if output_fp.exists():
                 print(f"Skipping {output_fp}")
                 continue
