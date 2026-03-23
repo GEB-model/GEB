@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from itertools import batched
 import os
 import tempfile
+import pandas as pd
 import zipfile
 from typing import Any
-
+from pathlib import Path
+import numpy as np
 import cdsapi
 import xarray as xr
-
+from shapely.geometry import Point
+import geopandas as gpd
 from .base import Adapter
 
 
@@ -116,3 +120,171 @@ class GTSM(Adapter):
         merged_data = merged_data.isel(stations=mask)
 
         return merged_data
+
+
+class GTSM_water_levels(Adapter):
+    """Downloader for GTSM netcdf.
+
+    Downloads and extracts the needed netcdf files from the remote GTSM for a given bounding box.
+    Attributes:
+        cache_dir (Path): Directory to cache downloaded tiles.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize the adapter for GTSM.
+
+        Args:
+            *args: Additional positional arguments passed to the base Adapter class.
+            **kwargs: Additional keyword arguments passed to the base Adapter class.
+        """
+        super().__init__(*args, **kwargs)
+
+    def fetch(self, variable, url: str | None = None) -> GTSM_water_levels:
+        START_YEAR = 1979
+        END_YEAR = 2018
+
+        years = [str(year) for year in range(START_YEAR, END_YEAR + 1)]
+        years_to_download = []
+        if variable == "total_water_level":
+            name_to_check = "waterlevel"
+        else:
+            name_to_check = variable
+        # first do a filecheck to see if the files already exist
+        for year in years:
+            filepath = self.root / f"reanalysis_{name_to_check}_10min_{year}_01_v3.nc"
+            if not filepath.exists():
+                years_to_download.append(year)
+        if not years_to_download:
+            return self
+        for year_batch in batched(years_to_download, 5):
+            output_fp = Path(f"{variable}_{year_batch[0]}_{year_batch[-1]}.zip")
+            if output_fp.exists():
+                print(f"Skipping {output_fp}")
+                continue
+            request = self.construct_request(year_batch, variable)
+            self.download_data(request, str(output_fp))
+            with zipfile.ZipFile(output_fp, "r") as zip_ref:
+                zip_ref.extractall(self.root)
+            output_fp.unlink()
+
+    def construct_request(self, year_batch, VARIABLE) -> dict[str, Any]:
+        """Construct the API call dictionary for GTSM data retrieval.
+
+        Returns:
+            A dictionary containing the parameters for the GTSM API call.
+        """
+        request = {
+            "format": "zip",
+            "month": [
+                "01",
+                "02",
+                "03",
+                "04",
+                "05",
+                "06",
+                "07",
+                "08",
+                "09",
+                "10",
+                "11",
+                "12",
+            ],
+            "experiment": "reanalysis",
+            "year": list(year_batch),
+            "temporal_aggregation": "10_min",
+            "variable": VARIABLE,
+            "version": ["v3"],
+        }
+        return request
+
+    def download_data(self, request: dict[str, Any], output_path: str) -> None:
+        """Download GTSM data using the CDS API.
+
+        Args:
+            request: A dictionary containing the parameters for the GTSM API call.
+            output_path: The file path where the downloaded data will be saved.
+        """
+        c = cdsapi.Client()
+        c.retrieve(
+            "sis-water-level-change-timeseries-cmip6",
+            request,
+            output_path,
+        )
+
+    def read(
+        self, bounds: tuple[float, float, float, float], variable: str
+    ) -> xr.Dataset:
+        """Read GTSM data from the downloaded files.
+
+        Args:
+            bounds: A tuple of four floats representing the bounding box (min_x, min_y, max_x, max_y).
+            variable: The variable to read from the GTSM data.
+        Returns:
+            An xarray DataArray containing the GTSM data clipped to the specified bounds.
+        """
+
+        # get the model bounds and buffer by ~2km
+        model_bounds = bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
+        # First: get station indices from ONE representative file
+        if variable == "total_water_level":
+            name_to_check = "waterlevel"
+        else:
+            name_to_check = variable
+
+        ref_file = self.root / f"reanalysis_{name_to_check}_10min_1979_01_v3.nc"
+        # ty:ignore[possibly-missing-attribute]
+        ref = xr.open_dataset(ref_file)
+
+        x_coords = ref.station_x_coordinate.load()
+        y_coords = ref.station_y_coordinate.load()
+
+        mask = (
+            (x_coords >= min_lon)
+            & (x_coords <= max_lon)
+            & (y_coords >= min_lat)
+            & (y_coords <= max_lat)
+        )
+        station_idx = np.nonzero(mask.values)[0]
+
+        station_df = pd.DataFrame(
+            {
+                "station_id": ref.stations.values[mask].astype(str),
+                "longitude": x_coords[mask].values,
+                "latitude": y_coords[mask].values,
+            }
+        )
+        stations = gpd.GeoDataFrame(
+            station_df,
+            geometry=[
+                Point(xy) for xy in zip(station_df.longitude, station_df.latitude)
+            ],
+            crs="EPSG:4326",
+        )
+
+        ref.close()
+
+        # Then: loop through files in smaller batches
+        gtsm_data_region = []
+        for year in np.arange(1979, 2019):
+            for month in range(1, 13):
+                f = (
+                    self.root
+                    / f"reanalysis_{name_to_check}_10min_{year}_{month:02d}_v3.nc"
+                )
+                ds = xr.open_dataset(f, chunks={"time": -1})
+                subset = ds.isel(stations=station_idx).drop_vars(
+                    ["station_x_coordinate", "station_y_coordinate"]
+                )
+                gtsm_data_region.append(subset[name_to_check].to_pandas())
+                print(f"Processed GTSM data for {year}-{month:02d}")
+                ds.close()
+        gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)
+        return gtsm_data_region_pd, stations
