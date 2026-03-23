@@ -26,7 +26,7 @@ from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
-from .gtsm import GTSM, GTSM_water_levels
+from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
@@ -862,8 +862,8 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "https://doi.org/10.48670/moi-00150",
         },
     },
-    "gtsm_water_levels": {
-        "adapter": GTSM_water_levels(
+    "gtsm_timeseries": {
+        "adapter": GTSM_timeseries(
             folder="gtsm",
             local_version=1,
             filename="test.nc",
