@@ -159,3 +159,13 @@ You can find more information about these and other options by running:
 ```bash
 geb update --help
 ```
+
+## GEB clean
+
+Removes all generated files (input, output, cache, logs) from a model directory, keeping only `model.yml`, `build.yml`, and `update.yml`. Run from inside the model directory:
+
+```bash
+geb clean
+```
+
+Works for both single-model and multi-basin (`geb init-multiple`) file structures. You will be prompted to confirm before anything is deleted. To skip the prompt (e.g. in scripts), use `--yes` / `-y`. To clean a non-default scenario, use `--scenario` / `-s`. See `geb clean --help` for all options.

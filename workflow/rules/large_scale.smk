@@ -65,22 +65,16 @@ def get_resources(cluster_name):
     area_km2 = get_basin_area_km2(cluster_name)
     exclude = "--exclude=node[003-015]"
 
-    if area_km2 >= 700000:
-        # Very large basin: pin to defq (1031 GB) in case ivm-fat (773 GB) is too small.
-        # 32 CPUs -> max 2 jobs per defq node.
-        partition = "defq"
-        cpus = 32
-        memory_mb = 800000
-    elif area_km2 >= 500000:
-        # Medium-large basin: route to ivm-fat; 64 CPUs -> max 2 jobs on node243.
-        partition = "ivm-fat"
-        cpus = 64
-        memory_mb = 300000
-    else:
-        # Small basin: route to defq; 32 CPUs -> max 2 jobs per defq node.
-        partition = "defq"
-        cpus = 32
-        memory_mb = 300000
+    # WORKAROUND: setup_elevation peaks at 500-950 GB for large European basins
+    # (scipy interp allocates ~10-15x the FABDEM input size in float64 intermediates).
+    # Since SLURM on this cluster does not use --mem for placement, we control
+    # concurrency via CPUs instead: requesting 64 CPUs fills an entire defq node
+    # (64 CPUs each), ensuring at most 1 job per node and ~1031 GB available per job.
+    # This reduces parallelism to 2 concurrent jobs (one per defq node) but prevents
+    # OOM kills. Remove this workaround once setup_elevation memory use is reduced.
+    partition = "defq"
+    cpus = 64
+    memory_mb = 950000
 
     return memory_mb, partition, cpus, exclude
 
@@ -123,6 +117,10 @@ rule build_cluster:
         slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
+        # Route temp files to the per-job scratch directory so that large
+        # intermediate zarr files written by write_zarr do not fill /tmp,
+        # which caused Python exit-code-1 crashes on some nodes (e.g. Europe_016).
+        if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
         cd {params.cluster_dir}
         geb build --continue &> {log}
         touch {output}
@@ -147,6 +145,7 @@ rule spinup_cluster:
         slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
+        if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
         cd {params.cluster_dir}
         geb spinup &> {log}
         touch {output}
@@ -171,6 +170,7 @@ rule run_cluster:
         slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
+        if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
         cd {params.cluster_dir}
         geb run &> {log}
         touch {output}
