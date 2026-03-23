@@ -1283,7 +1283,7 @@ class Hydrography(BuildModelBase):
         gtsm_data_region, stations = self.data_catalog.fetch(
             "gtsm_timeseries", variable="total_water_level"
         ).read(bounds=self.bounds, variable="total_water_level")
-        self.set_table(gtsm_data_region, name="gtsm/water_levels")
+        self.set_table(gtsm_data_region, name="gtsm/waterlevels")
         self.set_geom(stations, name="gtsm/stations")
         self.logger.info("GTSM station waterlevels and geometries set")
 
