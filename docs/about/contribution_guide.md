@@ -141,4 +141,4 @@ You must have personally reviewed and understood all changes before submitting. 
 
 #### Keep PRs reviewable
 
-Generating code with AI is fast; reviewing it is not. A large diff shifts the burden from the contributor to the reviewer. PRs that cannot be reviewed in reasonable time with reasonable effort may be closed, regardless of their potential usefulness or correctness. Use AI tools not only to write code but to prepare better, more reviewable PRs — well-structured commits, clear descriptions, and minimal scope.
+Generating code with AI is fast; reviewing it is not. A large diff shifts the burden from the contributor to the reviewer. Use AI tools not only to write code but to prepare better, more reviewable PRs — well-structured commits, clear descriptions, and minimal scope.
