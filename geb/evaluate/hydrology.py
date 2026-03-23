@@ -1319,6 +1319,9 @@ class Hydrology:
                 "R": float(evaluation_df["R"].mean()),
             }
         else:
+            self.model.logger.warning(
+                "No discharge stations found for evaluation. Returning None for all metrics."
+            )
             return {
                 "KGE": None,
                 "NSE": None,
