@@ -44,7 +44,15 @@ from geb.workflows.io import (
     write_params,
     write_table,
 )
-from geb.workflows.raster import clip_region, clip_with_grid, full_like, repeat_grid
+from geb.workflows.raster import (
+    clip_region,
+    clip_with_grid,
+    create_temp_zarr,
+    full_like,
+    interpolate_na_along_dim as interpolate_na_along_dim,
+    repeat_grid,
+    snap_to_grid as snap_to_grid,
+)
 
 from ..workflows.io import (
     read_zarr,
@@ -73,8 +81,6 @@ GDAL_HTTP_ENV_OPTS = {
     "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
-
-XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
@@ -1424,7 +1430,7 @@ def calculate_cluster_basin_area(
 
     # Load geometries for subbasins - only load geometry and area columns for performance
     cluster_geometries = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,  # type: ignore[attr-defined]
+        data_catalog.fetch("merit_basins_catchments").path,
         filters=[("COMID", "in", subbasins_to_merge)],
         columns=["COMID", "geometry"],  # Only load required columns
     ).set_index("COMID")
@@ -1621,41 +1627,6 @@ def save_clusters_as_merged_geometries(
     # Save to geoparquet
     print(f"Saving to {output_path}...")
     merged_gdf.to_parquet(output_path)
-
-
-def get_touching_subbasins(
-    data_catalog: DataCatalog, subbasins: gpd.GeoDataFrame
-) -> gpd.GeoDataFrame:
-    """Find all subbasins that touch the given subbasins.
-
-    Args:
-        data_catalog: Data catalog containing the MERIT basins.
-        subbasins: GeoDataFrame containing the subbasins to find touching subbasins for.
-
-    Returns:
-        A GeoDataFrame containing all subbasins that touch the given subbasins.
-    """
-    bbox = subbasins.total_bounds
-    buffer: float = 0.1
-    buffered_bbox = (
-        bbox[0] - buffer,
-        bbox[1] - buffer,
-        bbox[2] + buffer,
-        bbox[3] + buffer,
-    )
-    potentially_touching_basins = gpd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_cat").path,
-        bbox=buffered_bbox,
-        filters=[
-            ("COMID", "not in", subbasins.index.tolist()),
-        ],
-    )
-    # get all touching subbasins
-    touching_subbasins = potentially_touching_basins[
-        potentially_touching_basins.geometry.touches(subbasins.union_all())
-    ]
-
-    return touching_subbasins.set_index("COMID")
 
 
 def get_coastline_nodes(
@@ -2091,9 +2062,6 @@ class GEBModel(
     def logger(self, value: logging.Logger) -> None:
         self._logger = value
         build_method.logger = value
-        # Ensure that child classes use the updated logger
-        if hasattr(self, "_old_data_catalog"):
-            self._old_data_catalog.logger = value
 
     @property
     def data_catalog(self) -> DataCatalog:
@@ -2700,8 +2668,7 @@ class GEBModel(
                 + np.arange(mask.shape[1] * subgrid_factor) * dst_transform.a,
             },
             attrs={"_FillValue": None},
-        )
-
+        ).chunk({"x": -1, "y": -1})
         self.set_subgrid(submask, name="mask")
 
     @build_method(required=True)
@@ -3096,8 +3063,6 @@ class GEBModel(
         da: xr.DataArray,
         name: str,
         write: bool = True,
-        x_chunksize: int = XY_CHUNKSIZE,
-        y_chunksize: int = XY_CHUNKSIZE,
         time_chunksize: int = 1,
         **kwargs: Any,
     ) -> xr.DataArray:
@@ -3111,10 +3076,6 @@ class GEBModel(
             da: The data array to set.
             name: The name of the data array.
             write: If True, write the data array to disk. Defaults to True.
-            x_chunksize: The chunk size in the x dimension for writing to zarr.
-                Defaults to XY_CHUNKSIZE.
-            y_chunksize: The chunk size in the y dimension for writing to zarr.
-                Defaults to XY_CHUNKSIZE.
             time_chunksize: The chunk size in the time dimension for writing to zarr.
                 Defaults to 1.
             **kwargs: Additional keyword arguments to pass to write_zarr.
@@ -3136,9 +3097,6 @@ class GEBModel(
             da: xr.DataArray = write_zarr(
                 da,
                 fp_with_root,
-                x_chunksize=x_chunksize,
-                y_chunksize=y_chunksize,
-                time_chunksize=time_chunksize,
                 crs=da.rio.crs,
                 **kwargs,
             )
@@ -3152,8 +3110,7 @@ class GEBModel(
         data: xr.DataArray,
         name: str,
         write: bool,
-        x_chunksize: int = XY_CHUNKSIZE,
-        y_chunksize: int = XY_CHUNKSIZE,
+        **kwargs: Any,
     ) -> xr.Dataset:
         """Add data to grid dataset.
 
@@ -3165,8 +3122,7 @@ class GEBModel(
             data: the data to add to the grid
             write: if True, write the data to disk
             name: the name of the layer that will be added to the grid.
-            x_chunksize: the chunk size in the x dimension for writing to zarr
-            y_chunksize: the chunk size in the y dimension for writing to zarr
+            **kwargs: additional keyword arguments to pass to write_zarr
 
         Returns:
             grid: the updated grid with the new layer addedå
@@ -3187,8 +3143,17 @@ class GEBModel(
             # when updating, it is possible that the mask already exists.
             if name != "mask":
                 # if the mask exists, mask the data, saving some valuable space on disk
+                if data.chunks is not None and (
+                    len(data.chunksizes["x"]) != 1 or len(data.chunksizes["y"]) != 1
+                ):
+                    # if the data is chunked, we need to chunk the mask in the same way before applying it
+                    mask: xr.DataArray = grid["mask"].chunk(
+                        {"x": data.chunksizes["x"], "y": data.chunksizes["y"]}
+                    )
+                else:
+                    mask: xr.DataArray = grid["mask"]
                 data_ = xr.where(
-                    ~grid["mask"],
+                    ~mask,
                     data,
                     data.attrs["_FillValue"] if data.dtype != bool else False,
                     keep_attrs=True,
@@ -3200,20 +3165,33 @@ class GEBModel(
         if write:
             fn = Path(grid_name) / (name + ".zarr")
             self.logger.info(f"Writing file {fn}")
-            data = write_zarr(
-                data,
-                path=self.root / fn,
-                x_chunksize=x_chunksize,
-                y_chunksize=y_chunksize,
-                crs=4326,
-            )
+            if data.chunks is not None and (
+                len(data.chunksizes["x"]) != 1 or len(data.chunksizes["y"]) != 1
+            ):
+                with create_temp_zarr(
+                    data,
+                    name=grid_name + "_" + "tmp",
+                ) as tmp_zarr_path:
+                    data = write_zarr(
+                        tmp_zarr_path.chunk({"x": -1, "y": -1}),
+                        path=self.root / fn,
+                        crs=4326,
+                        **kwargs,
+                    )
+            else:
+                data = write_zarr(
+                    data,
+                    path=self.root / fn,
+                    crs=4326,
+                    **kwargs,
+                )
             self.files[grid_name][name] = Path(grid_name) / (name + ".zarr")
 
         grid[name] = data
         return grid
 
     def set_grid(
-        self, data: xr.DataArray, name: str, write: bool = True
+        self, data: xr.DataArray, name: str, write: bool = True, **kwargs: Any
     ) -> xr.DataArray:
         """Set a new grid layer.
 
@@ -3225,6 +3203,7 @@ class GEBModel(
             data: The data to add to the grid. Must have the same spatial coordinates
             name: The name of the layer to add to the grid.
             write: If True, write the data to disk. Defaults to True.
+            **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
             The added grid layer. The returned layer is read from disk if write=True, so
@@ -3234,7 +3213,11 @@ class GEBModel(
         return self.grid[name]
 
     def set_subgrid(
-        self, data: xr.DataArray, name: str, write: bool = True
+        self,
+        data: xr.DataArray,
+        name: str,
+        write: bool = True,
+        **kwargs: Any,
     ) -> xr.DataArray:
         """Set a new subgrid layer.
 
@@ -3247,13 +3230,19 @@ class GEBModel(
                 as the existing subgrid.
             name: The name of the layer to add to the subgrid.
             write: If True, write the data to disk. Defaults to True.
+            **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
             The added subgrid layer. The returned layer is read from disk if write=True, so
             it is not the same object as the input data.
         """
         self.subgrid = self._set_grid(
-            "subgrid", self.subgrid, data, write=write, name=name
+            "subgrid",
+            self.subgrid,
+            data,
+            write=write,
+            name=name,
+            **kwargs,
         )
         return self.subgrid[name]
 

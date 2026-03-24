@@ -23,7 +23,6 @@ import geopandas as gpd
 import numpy as np
 import rioxarray as rxr
 import xarray as xr
-from rioxarray import merge
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
@@ -582,9 +581,20 @@ class Fabdem(Adapter):
         Returns:
             xarray DataArray with merged tiles.
         """
-        das: list[xr.DataArray] = [rxr.open_rasterio(path) for path in tile_paths]  # ty: ignore[invalid-assignment]
+        das: list[xr.DataArray] = [
+            rxr.open_rasterio(path, chunks={"x": 1800, "y": 1800})
+            for path in tile_paths
+        ]  # ty: ignore[invalid-assignment]
         das = [da.sel(band=1) for da in das]
-        da: xr.DataArray = merge.merge_arrays(das)
+        da = xr.combine_by_coords(
+            das,
+            fill_value=das[0].rio.nodata,
+            combine_attrs="drop_conflicts",
+            join="outer",
+            compat="broadcast_equals",
+            data_vars="all",
+        )
+        assert isinstance(da, xr.DataArray)
         return da
 
     def fetch(self, url: str, mask: BaseGeometry) -> Fabdem:
@@ -607,7 +617,9 @@ class Fabdem(Adapter):
                 temp_dir: Path = Path(temp_dir_str)
                 results: list[Path] = []
 
-                for lat_min, lon_min in tqdm(tiles, desc="Downloading FABDEM tiles"):
+                for lat_min, lon_min in tqdm(
+                    tiles, desc="Downloading FABDEM tiles", leave=False
+                ):
                     tile_filename = self._compose_tile_filename(lat_min, lon_min)
                     tile_url: str = f"{url}/{tile_filename}"
 
@@ -626,7 +638,7 @@ class Fabdem(Adapter):
                     da,
                     gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
                     all_touched=True,
-                    drop=True,
+                    drop=False,
                 )
                 da = convert_nodata(da, np.nan)
 

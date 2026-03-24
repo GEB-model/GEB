@@ -9,6 +9,7 @@ import rioxarray  # noqa: F401 – registers .rio accessor on xarray
 import xarray as xr
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
+from xarray.core.dataarray import DataArray
 
 from .base import Adapter
 
@@ -2754,20 +2755,16 @@ class ESAWorldCover(Adapter):
             da = rioxarray.open_rasterio(
                 url,
                 chunks={
-                    "x": 6000,
-                    "y": 6000,
-                },  # The orginal data is 36000 x 36000, so 6000 is exactly divisible and results in uniform chunk sizes
+                    "x": 3000,
+                    "y": 3000,
+                },
             )
-            assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
-            assert all(
-                [da.chunksizes["x"][0] == chunksize for chunksize in da.chunksizes["x"]]
-            ), f"Expected uniform chunk sizes along x, got {da.chunksizes['x']}"
-            assert all(
-                [da.chunksizes["y"][0] == chunksize for chunksize in da.chunksizes["y"]]
-            ), f"Expected uniform chunk sizes along y, got {da.chunksizes['y']}"
+            assert isinstance(da, DataArray)
+            da = da.sel(band=1)
 
+            da.name = "esa_worldcover"
             assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
-            da: xr.DataArray = da.sel(band=1)
+
             arrays.append(da)
 
         if len(arrays) > 1:
@@ -2778,11 +2775,14 @@ class ESAWorldCover(Adapter):
                 join="outer",
                 combine_attrs="drop_conflicts",
                 fill_value=arrays[0].rio.nodata,
-            )
+                data_vars="all",
+                compat="broadcast_equals",
+            )["esa_worldcover"]
             assert isinstance(merged, xr.DataArray), (
                 f"Expected DataArray, got {type(merged)}"
             )
             assert merged.dtype == arrays[0].dtype
+
         else:
             merged: xr.DataArray = arrays[0]
 
