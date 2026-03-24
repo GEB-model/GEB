@@ -515,6 +515,9 @@ class LandSurface(BuildModelBase):
         soil_layer_height_m.attrs["units"] = "m"
         soil_layer_height_m.attrs["description"] = "Height of each soil layer"
         soil_layer_height_m.attrs["_FillValue"] = np.nan
+        soil_layer_height_per_layer_m = soil_layer_height_per_layer_m.rio.write_crs(
+            soilgrids_variable.rio.crs
+        )
 
         self.set_subgrid(soil_layer_height_m, name="soil/soil_layer_height_m")
 
