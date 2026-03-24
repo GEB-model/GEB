@@ -132,7 +132,7 @@ It is also possible to update an already existing model by running the following
 geb update
 ```
 
-This assumes you have a "update.yml"-file in the working directory. The `update.yml`-file contains the name of functions that should be run to update the data. The functions are defined in the "geb" plugin of HydroMT. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
+This assumes you have a "update.yml"-file in the working directory. The `update.yml`-file contains the name of functions that should be run to update the data. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
 
 For example to update the forcing data of the model, your "update.yml"-file could look like this, essentially a subset of the build.yml-file:
 

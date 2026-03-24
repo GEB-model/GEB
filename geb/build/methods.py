@@ -4,7 +4,6 @@ import functools
 import inspect
 import logging
 import tracemalloc
-from datetime import datetime
 from pathlib import Path
 from time import time
 from typing import Any, Iterable
@@ -497,6 +496,7 @@ class _build_method:
             self.time_taken.items(), key=lambda item: item[1], reverse=False
         )
 
+        active_logger.info("Build method time statistics:")
         for method, time_taken in sorted_by_time:
             percentage: float = (time_taken / total_time) * 100
             active_logger.info(
@@ -507,6 +507,7 @@ class _build_method:
             self.peak_memory_usage.items(), key=lambda item: item[1], reverse=False
         )
 
+        active_logger.info("Build method memory usage statistics:")
         for method, memory_usage in sorted_by_memory:
             percentage: float = (
                 memory_usage / max(self.peak_memory_usage.values())
@@ -515,108 +516,11 @@ class _build_method:
                 f"Method {method} had peak memory usage of {memory_usage * _BYTES_TO_MB:.2f} MB ({percentage:.1f}%) and took {self.time_taken[method]:.2f} seconds."
             )
 
-        active_logger.info(
-            f"Total time taken: {total_time:.2f} seconds. Max memory usage: {max(self.peak_memory_usage.values()) * _BYTES_TO_MB:.2f} MB."
-        )
-
-    def write_build_stats(
-        self,
-        stats_path: Path,
-        cluster_name: str,
-        run_timestamp: datetime,
-        cluster_dir: Path,
-    ) -> None:
-        """Append per-method memory/timing and per-folder disk-usage stats to a shared Excel workbook.
-
-        Writes two sheets: ``memory_stats`` (one row per method) and ``disk_stats``
-        (one row per subdirectory of ``cluster_dir``). Safe to call incrementally;
-        already-recorded methods are skipped. The workbook is created on first use.
-
-        Args:
-            stats_path: Path to the Excel file.
-            cluster_name: Cluster identifier (e.g. ``"Europe_004"``).
-            run_timestamp: When the build run started.
-            cluster_dir: Scenario directory whose subdirectories are measured for disk usage.
-        """
-        import fcntl  # noqa: PLC0415, I001 – Linux only, only needed here
-        import openpyxl  # noqa: PLC0415 – optional dependency, only needed here
-
-        new_methods: dict[str, int] = {
-            m: v
-            for m, v in self.peak_memory_usage.items()
-            if m not in self._methods_written_to_stats
-        }
-        if not new_methods and self._disk_stats_written:
-            return
-
-        stats_path = Path(stats_path)
-        stats_path.parent.mkdir(parents=True, exist_ok=True)
-        ts: str = run_timestamp.strftime("%Y-%m-%d %H:%M:%S")
-
-        def _get_or_create_sheet(
-            wb: openpyxl.Workbook, name: str, header: list[str]
-        ) -> Any:
-            if name not in wb.sheetnames:
-                ws = wb.create_sheet(name)
-                ws.append(header)
-                return ws
-            return wb[name]
-
-        # Use an exclusive lock so concurrent cluster jobs don't corrupt the shared workbook.
-        # Note: fcntl.flock may be a no-op on NFS mounts with nolock.
-        lock_path = stats_path.with_suffix(".lock")
-        with open(lock_path, "w") as lock_fh:
-            fcntl.flock(lock_fh, fcntl.LOCK_EX)
-
-            wb = (
-                openpyxl.load_workbook(stats_path)
-                if stats_path.exists()
-                else openpyxl.Workbook()
+        active_logger.info(f"Total time taken: {total_time:.2f} seconds.")
+        if self.peak_memory_usage:
+            active_logger.info(
+                f"Max memory usage: {max(self.peak_memory_usage.values()) / 1024 / 1024:.2f} MB."
             )
-
-            # openpyxl creates a default "Sheet" on a new workbook; remove it.
-            if "Sheet" in wb.sheetnames and len(wb.sheetnames) == 1:
-                del wb["Sheet"]
-
-            ws_mem = _get_or_create_sheet(
-                wb,
-                "memory_stats",
-                ["cluster", "run_started_at", "method", "peak_memory_mb", "elapsed_s"],
-            )
-            ws_disk = _get_or_create_sheet(
-                wb, "disk_stats", ["cluster", "run_started_at", "folder", "size_mb"]
-            )
-
-            for method, peak_bytes in new_methods.items():
-                ws_mem.append(
-                    [
-                        cluster_name,
-                        ts,
-                        method,
-                        round(peak_bytes * _BYTES_TO_MB, 1),
-                        round(self.time_taken.get(method, float("nan")), 1),
-                    ]
-                )
-
-            # Disk usage is written once per build run to avoid duplicates.
-            write_disk: bool = not self._disk_stats_written
-            if write_disk:
-                for folder in sorted(Path(cluster_dir).iterdir()):
-                    if not folder.is_dir():
-                        continue
-                    size_mb: float = round(
-                        sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
-                        * _BYTES_TO_MB,
-                        1,
-                    )
-                    ws_disk.append([cluster_name, ts, folder.name, size_mb])
-
-            wb.save(stats_path)
-
-        # Update state only after a successful save so failed writes are retried.
-        self._methods_written_to_stats.update(new_methods)
-        if write_disk:
-            self._disk_stats_written = True
 
     @property
     def methods(self) -> list[str]:

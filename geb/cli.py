@@ -12,16 +12,13 @@ from typing import Any, Callable
 import click
 
 from geb import GEB_PACKAGE_DIR, __version__
-from geb.build.data_catalog import NewDataCatalog
+from geb.build.data_catalog import DataCatalog
 from geb.evaluate import Evaluate
 from geb.runner import (
     ALTER_FROM_MODEL_DEFAULT,
     BUILD_DEFAULT,
     CONFIG_DEFAULT,
     CORES_DEFAULT,
-    DATA_CATALOG_DEFAULT,
-    DATA_PROVIDER_DEFAULT,
-    DATA_ROOT_DEFAULT,
     OPTIMIZE_DEFAULT,
     PROFILE_RAM_DEFAULT,
     PROFILE_SPEED_DEFAULT,
@@ -305,27 +302,6 @@ def click_build_options(
             type=click.Path(path_type=Path),
             default=Path(build_config),
             help=build_config_help,
-        )
-        @click.option(
-            "--data-catalog",
-            "-d",
-            type=click.Path(path_type=Path),
-            default=Path(DATA_CATALOG_DEFAULT),
-            help=f"""Path to data catalog YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to {DATA_CATALOG_DEFAULT}""",
-        )
-        @click.option(
-            "--data-provider",
-            "-p",
-            type=str,
-            default=DATA_PROVIDER_DEFAULT,
-            help="Data variant to use from data catalog (see hydroMT documentation).",
-        )
-        @click.option(
-            "--data-root",
-            "-r",
-            type=click.Path(path_type=Path),
-            default=Path(DATA_ROOT_DEFAULT),
-            help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -749,7 +725,7 @@ def data_catalog(method: str) -> None:
     Raises:
         ValueError: If the method is not recognized.
     """
-    data_catalog = NewDataCatalog()
+    data_catalog = DataCatalog()
     if method == "size":
         print("Total size of data catalog:", data_catalog.size())
     elif method == "license":

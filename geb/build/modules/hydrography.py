@@ -16,7 +16,7 @@ from pyflwdir import FlwdirRaster
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
-from geb.build.data_catalog import NewDataCatalog
+from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
 from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
@@ -186,7 +186,7 @@ def get_immediate_downstream_subbasins(
 
 
 def get_rivers_geometry(
-    data_catalog: NewDataCatalog, subbasin_ids: list[int]
+    data_catalog: DataCatalog, subbasin_ids: list[int]
 ) -> gpd.GeoDataFrame:
     """Get the subbasins geometry and other attributes for the given subbasin IDs.
 
@@ -328,7 +328,7 @@ def create_river_raster_from_river_lines(
 
 
 def get_SWORD_translation_IDs_and_lengths(
-    data_catalog: NewDataCatalog, rivers: gpd.GeoDataFrame
+    data_catalog: DataCatalog, rivers: gpd.GeoDataFrame
 ) -> tuple[TwoDArrayInt64, TwoDArrayFloat64]:
     """Get the SWORD reach IDs and lengths for each river based on the MERIT basin ID.
 
@@ -369,7 +369,7 @@ def get_SWORD_translation_IDs_and_lengths(
 
 
 def get_SWORD_river_widths(
-    data_catalog: NewDataCatalog, SWORD_reach_IDs: TwoDArrayInt64
+    data_catalog: DataCatalog, SWORD_reach_IDs: TwoDArrayInt64
 ) -> TwoDArrayFloat64:
     """Get the river widths from the SWORD dataset based on the SWORD reach IDs.
 

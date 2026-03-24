@@ -10,7 +10,6 @@ import pstats
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 from collections.abc import Callable
 from datetime import datetime
@@ -34,7 +33,7 @@ from geb.build.__init__ import (
     save_clusters_as_merged_geometries,
     save_clusters_to_geoparquet,
 )
-from geb.build.data_catalog import NewDataCatalog
+from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
 from geb.config_schema import Config
 from geb.model import GEBModel
@@ -53,12 +52,6 @@ CORES_DEFAULT: int | None = None
 
 DATA_CATALOG_DEFAULT: Path = GEB_PACKAGE_DIR / "data_catalog.yml"
 DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
-DATA_ROOT_DEFAULT: Path = Path(
-    os.environ.get(
-        "GEB_DATA_ROOT",
-        GEB_PACKAGE_DIR.parent.parent / "data_catalog",
-    )
-)
 ALTER_FROM_MODEL_DEFAULT: Path = Path("../base")
 
 ResultType = TypeVar("ResultType")
@@ -647,52 +640,18 @@ def get_model_builder_class(custom_model: None | str) -> type:
         return attrgetter(custom_model)(geb_build.custom_models)
 
 
-def customize_data_catalog(data_catalog: Path, data_root: None | Path = None) -> Path:
-    """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
-
-    This enables reading the data catalog from a different location than the location of the yml-file
-    without the need to specify root in the meta of the data catalog.
-
-    Args:
-        data_catalog: List of paths to data catalog yml files.
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
-
-    Returns:
-        List of paths to data catalog yml files, possibly modified to include the data_root.
-    """
-    if data_root:
-        with open(data_catalog, "r") as stream:
-            data_catalog_yml = yaml.load(stream, Loader=yaml.FullLoader)
-
-            if "meta" not in data_catalog_yml:
-                data_catalog_yml["meta"] = {}
-            data_catalog_yml["meta"]["root"] = str(data_root)
-
-        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
-            yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
-        return Path(tmp.name)
-    else:
-        return data_catalog
-
-
 def get_builder(
     config: Path | dict[str, Any],
-    data_catalog: Path,
     logger: logging.Logger,
     custom_model: str | None,
-    data_provider: str | None,
-    data_root: Path | None,
 ) -> GEBModelBuild:
     """Get model builder.
 
     Args:
         config: Path to the model configuration file.
-        data_catalog: Path to the data catalog file.
         logger: Logger instance to pass to the model builder.
         custom_model: Name of the custom model to use. If None, the default GEBModelBuild is used.
             custom_models are available in the geb.build.custom_models module.
-        data_provider: Data variant to use from data catalog (see hydroMT documentation).
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
 
     Returns:
         Instance of the model builder.
@@ -700,13 +659,9 @@ def get_builder(
     config = parse_config(config, schema=Config)
     input_folder = Path(config["general"]["input_folder"])
 
-    data_catalog = customize_data_catalog(data_catalog, data_root=data_root)
-
     arguments = {
         "root": input_folder,
-        "data_catalog": data_catalog,
         "logger": logger,
-        "data_provider": data_provider,
     }
 
     builder_class = get_model_builder_class(custom_model)(**arguments)
@@ -1006,8 +961,6 @@ def build_fn(
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: Path = DATA_ROOT_DEFAULT,
     continue_: bool = False,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
@@ -1022,8 +975,6 @@ def build_fn(
         config: Path to the model configuration file.
         build_config: Path to the model build configuration file.
         working_directory: Working directory for the model.
-        data_provider: Data variant to use from data catalog (see hydroMT documentation).
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
         continue_: Continue previous build if it was interrupted or failed.
         profile_speed: If True, run the build with speed profiling.
         profile_ram: If True, run the build with RAM profiling.
@@ -1039,13 +990,10 @@ def build_fn(
         parsed_build_config = parse_config(build_config_input)
         model = get_builder(
             config,
-            data_catalog,
             logger=logger,
             custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider=data_provider,
-            data_root=data_root,
         )
         methods: dict[str, Any] = {
             method: args
@@ -1077,8 +1025,6 @@ def alter_fn(
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     from_model: Path = ALTER_FROM_MODEL_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: Path = DATA_ROOT_DEFAULT,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
@@ -1098,8 +1044,6 @@ def alter_fn(
         build_config: Path to the model build configuration file.
         working_directory: Working directory for the model.
         from_model: Folder for the existing model.
-        data_provider: Data variant to use from data catalog (see hydroMT documentation).
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
         profile_speed: If True, run the alter with speed profiling.
         profile_ram: If True, run the alter with RAM profiling.
         optimize: If True, run the alter in optimized mode.
@@ -1166,13 +1110,10 @@ def alter_fn(
         parsed_build_config = parse_config(build_config_input)
         model = get_builder(
             config,
-            data_catalog,
             logger=logger,
             custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider=data_provider,
-            data_root=data_root,
         )
         methods = {
             method: args
@@ -1200,8 +1141,6 @@ def update_version_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: Path = DATA_ROOT_DEFAULT,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
@@ -1227,14 +1166,10 @@ def update_version_fn(
             else None
         )
 
-        data_catalog_path = customize_data_catalog(data_catalog, data_root=data_root)
-
         builder_class = get_model_builder_class(custom_model)
         builder_class(
             logger=logger,
             root=input_folder,
-            data_catalog=str(data_catalog_path),
-            data_provider=data_provider,
         )
 
     with WorkingDirectory(working_directory):
@@ -1252,8 +1187,6 @@ def update_fn(
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: Path = DATA_ROOT_DEFAULT,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
@@ -1267,8 +1200,6 @@ def update_fn(
         config: Path to the model configuration file.
         build_config: Path to the model build configuration file or a specific method within the build file using :: syntax, e.g., 'build.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.
         working_directory: Working directory for the model.
-        data_provider: Data variant to use from data catalog (see hydroMT documentation).
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
         profile_speed: If True, run the update with speed profiling.
         profile_ram: If True, run the update with RAM profiling.
         optimize: If True, run the update in optimized mode.
@@ -1354,13 +1285,10 @@ def update_fn(
 
         model = get_builder(
             config,
-            data_catalog,
             logger=logger,
             custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider=data_provider,
-            data_root=data_root,
         )
 
         model.update(methods=methods)
@@ -1610,7 +1538,7 @@ def init_multiple_fn(
     working_directory: Path = Path(working_directory)
 
     # Initialize data catalog and logger
-    data_catalog_instance = NewDataCatalog()
+    data_catalog_instance = DataCatalog()
     with WorkingDirectory(working_directory):
         logger = create_logger("init_multiple")
 
