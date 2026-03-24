@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import tempfile
 from collections.abc import Generator, Hashable, Mapping
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -13,7 +12,6 @@ import geopandas as gpd
 import numba
 import numpy as np
 import numpy.typing as npt
-import rasterio
 import xarray
 import xarray as xr
 import xarray_regrid
@@ -1543,12 +1541,11 @@ def clip_with_geometry(
             xmin, ymin, xmax, ymax = gdf.geometry.total_bounds
             da = da.rio.clip_box(xmin, ymin, xmax, ymax, crs=gdf.crs)
 
-        with rasterio.Env(GDAL_CACHEMAX=1024):  # 1 GB cache for rasterization
-            rasterized = da.map_blocks(
-                rasterize_geometry,
-                args=[gdf.geometry.union_all(), all_touched],
-                template=da.astype(bool),  # Tells dask the expected output shape/type
-            )
+        rasterized = da.map_blocks(
+            rasterize_geometry,
+            args=[gdf.geometry.union_all(), all_touched],
+            template=da.astype(bool),  # Tells dask the expected output shape/type
+        )
         da_: xr.DataArray = da.where(rasterized, other=da.rio.nodata)
         assert da_.dtype == da.dtype
         da = da_
@@ -1654,16 +1651,15 @@ def create_temp_zarr(
     if da.rio.crs is None:
         raise ValueError("DataArray must have a CRS defined to use create_temp_zarr")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        temp_da = write_zarr(
-            da,
-            path=None,  # Write to a temporary directory, path is determined by the context manager
-            crs=da.rio.crs,
-            progress=True,
-            compression_level=1,
-            shards=shards,
-        )
-        yield temp_da
+    temp_da = write_zarr(
+        da,
+        path=None,
+        crs=da.rio.crs,
+        progress=True,
+        compression_level=1,
+        shards=shards,
+    )
+    yield temp_da
 
 
 def rechunk_zarr_file(

@@ -743,6 +743,7 @@ class Forcing(BuildModelBase):
             )
             * da.dtype.itemsize
         )  # aim for chunks of around 100 MB
+        time_chunksize = max(1, time_chunksize)  # ensure at least 1 time step per chunk
         da = da.chunk({"time": time_chunksize})
 
         with warnings.catch_warnings():

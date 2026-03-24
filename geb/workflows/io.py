@@ -645,7 +645,7 @@ def write_zarr(
     path: str | Path | None,
     crs: int | pyproj.CRS,
     shards: dict[str, int] | None = None,
-    filters: list = [],
+    filters: list | None = None,
     compression_level: int = 18,
     progress: bool = True,
 ) -> xr.DataArray:
@@ -659,7 +659,7 @@ def write_zarr(
             dimension. If provided, these will be used instead of chunk-sized
             shards. Default is None.
         filters: A list of filters to apply. Default is [].
-        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 22.
+        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 18.
         progress: Whether to show a progress bar. Default is True.
 
     Returns:
@@ -674,6 +674,9 @@ def write_zarr(
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
     assert "latitudes" not in da.dims, "latitudes should be y"
+
+    if filters is None:
+        filters: list = []
 
     if "y" in da.dims and "x" in da.dims:
         assert da.dims[-2] == "y", "y should be the second last dimension"

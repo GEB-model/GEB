@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import math
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import rioxarray  # noqa: F401 – registers .rio accessor on xarray
@@ -2753,51 +2751,39 @@ class ESAWorldCover(Adapter):
         xmin, ymin, xmax, ymax = geom.bounds
         arrays: list[xr.DataArray] = []
 
-        # Use a temporary directory to store local copies of tiles if reading from S3
-        temp_dir = Path(tempfile.mkdtemp())
-        temp_dir = Path("tmp")
+        for url in tile_urls:
+            da = rioxarray.open_rasterio(
+                url,
+                chunks={
+                    "x": 3000,
+                    "y": 3000,
+                },
+            )
+            assert isinstance(da, DataArray)
+            da = da.sel(band=1)
 
-        try:
-            for url in tile_urls:
-                da = rioxarray.open_rasterio(
-                    url,
-                    chunks={
-                        "x": 3000,
-                        "y": 3000,
-                    },
-                )
-                assert isinstance(da, DataArray)
-                da = da.sel(band=1)
+            da.name = "esa_worldcover"
+            assert isinstance(da, xr.DataArray), f"Expected DataArray, got {type(da)}"
 
-                da.name = "esa_worldcover"
-                assert isinstance(da, xr.DataArray), (
-                    f"Expected DataArray, got {type(da)}"
-                )
+            arrays.append(da)
 
-                arrays.append(da)
+        if len(arrays) > 1:
+            # Because chunks are exactly dividing the original data, the chunks here will
+            # be "easy" to make
+            merged: Any = xr.combine_by_coords(
+                arrays,
+                join="outer",
+                combine_attrs="drop_conflicts",
+                fill_value=arrays[0].rio.nodata,
+                data_vars="all",
+                compat="broadcast_equals",
+            )["esa_worldcover"]
+            assert isinstance(merged, xr.DataArray), (
+                f"Expected DataArray, got {type(merged)}"
+            )
+            assert merged.dtype == arrays[0].dtype
 
-            if len(arrays) > 1:
-                # Because chunks are exactly dividing the original data, the chunks here will
-                # be "easy" to make
-                merged: Any = xr.combine_by_coords(
-                    arrays,
-                    join="outer",
-                    combine_attrs="drop_conflicts",
-                    fill_value=arrays[0].rio.nodata,
-                    data_vars="all",
-                    compat="broadcast_equals",
-                )["esa_worldcover"]
-                assert isinstance(merged, xr.DataArray), (
-                    f"Expected DataArray, got {type(merged)}"
-                )
-                assert merged.dtype == arrays[0].dtype
-
-            else:
-                merged: xr.DataArray = arrays[0]
-
-        finally:
-            # We don't delete the temp_dir because the Dask graph still needs the files
-            # The caller or the system will have to clean this up, or we need to persist it
-            pass
+        else:
+            merged: xr.DataArray = arrays[0]
 
         return merged
