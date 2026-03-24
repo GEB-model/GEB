@@ -411,6 +411,9 @@ class LandSurface(BuildModelBase):
             False,
             keep_attrs=True,
         )
+        cultivated_land_subgrid = cultivated_land_subgrid.rio.write_crs(
+            land_use_classification_source_subgrid.rio.crs
+        )
 
         cultivated_land_subgrid.attrs["_FillValue"] = None
         self.set_subgrid(cultivated_land_subgrid, name="landsurface/cultivated_land")
