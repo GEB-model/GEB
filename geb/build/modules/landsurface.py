@@ -409,6 +409,7 @@ class LandSurface(BuildModelBase):
             land_use_classification_source_subgrid == 40,
             True,
             False,
+            keep_attrs=True,
         )
 
         cultivated_land_subgrid.attrs["_FillValue"] = None
@@ -484,7 +485,6 @@ class LandSurface(BuildModelBase):
                     load_soilgrids_v2(
                         self.data_catalog,
                         subgrid_mask,
-                        self.region,
                         variable_name=variable_name,
                         layer_name=layer_name,
                     )
@@ -501,13 +501,17 @@ class LandSurface(BuildModelBase):
                 name=soilgrids_output_names[variable_name],
             )
 
-        soil_layer_height_m: xr.DataArray = xr.full_like(
-            soilgrids_variable, fill_value=0.0, dtype=np.float32
+        soil_layer_height_per_layer_m: xr.DataArray = xr.DataArray(
+            np.array((0.05, 0.10, 0.15, 0.30, 0.40, 1.00), dtype=np.float32),
+            dims=("soil_layer",),
+            coords={"soil_layer": soilgrids_variable["soil_layer"]},
         )
-        for layer_index, layer_height_m in enumerate(
-            (0.05, 0.10, 0.15, 0.30, 0.40, 1.00)
-        ):
-            soil_layer_height_m[layer_index] = layer_height_m
+        soil_layer_height_m = soil_layer_height_per_layer_m.broadcast_like(
+            soilgrids_variable
+        )
+        soil_layer_height_m.attrs["units"] = "m"
+        soil_layer_height_m.attrs["description"] = "Height of each soil layer"
+        soil_layer_height_m.attrs["_FillValue"] = np.nan
 
         self.set_subgrid(soil_layer_height_m, name="soil/soil_layer_height_m")
 

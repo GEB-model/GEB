@@ -1,6 +1,5 @@
 """Load soilgrids data from ISRIC SoilGrids."""
 
-import geopandas as gpd
 import numpy as np
 import xarray as xr
 
@@ -11,7 +10,6 @@ from geb.workflows.raster import convert_nodata, interpolate_na_2d, resample_chu
 def load_soilgrids_v2(
     data_catalog: DataCatalog,
     mask: xr.DataArray,
-    region: gpd.GeoDataFrame,
     variable_name: str,
     layer_name: str,
 ) -> xr.DataArray:
@@ -20,12 +18,11 @@ def load_soilgrids_v2(
     Args:
         data_catalog: A data catalog with soilgrids data sources.
         mask: The grid to resample to.
-        region: The region of interest, matches with the subgrid.
         variable_name: SoilGrids variable name to load.
         layer_name: SoilGrids layer name to load, e.g. "0-5cm". Must be one of "0-5cm", "5-15cm", "15-30cm", "30-60cm", "60-100cm", or "100-200cm".
 
     Returns:
-        The requested SoilGrids variable with dimensions ``soil_layer``, ``y``, ``x``.
+        The requested SoilGrids variable with dimensions ``y`` and ``x``.
 
     Raises:
         ValueError: If ``variable_name`` is not supported.
@@ -37,7 +34,6 @@ def load_soilgrids_v2(
             f"Unsupported SoilGrids variable '{variable_name}'. Expected one of {allowed_variables}."
         )
 
-    variable_layers: list[xr.DataArray] = []
     soilgrids_source = data_catalog.fetch("soilgridsv2")
     da = soilgrids_source.read(variable=variable_name, depth=layer_name)
     da: xr.DataArray = convert_nodata(da, np.nan)
