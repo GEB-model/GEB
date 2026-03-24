@@ -526,27 +526,19 @@ class _build_method:
         run_timestamp: datetime,
         cluster_dir: Path,
     ) -> None:
-        """Append per-method memory/timing and per-folder disk-usage statistics to a shared Excel workbook.
+        """Append per-method memory/timing and per-folder disk-usage stats to a shared Excel workbook.
 
-        Writes two sheets:
-
-        - ``memory_stats``: one row per build method with peak tracemalloc memory
-          (in MB) and wall-clock time.
-        - ``disk_stats``: one row per immediate subdirectory of ``cluster_dir``
-          with its total recursive on-disk size.
-
-        Rows are only appended for methods not yet recorded, so this can safely
-        be called incrementally (e.g. after each method or at the end of a build)
-        without producing duplicate rows.  The workbook is created on first use.
+        Writes two sheets: ``memory_stats`` (one row per method) and ``disk_stats``
+        (one row per subdirectory of ``cluster_dir``). Safe to call incrementally;
+        already-recorded methods are skipped. The workbook is created on first use.
 
         Args:
-            stats_path: Path to the Excel file (created if it does not exist).
-            cluster_name: Short name of the cluster (e.g. ``"Europe_004"``).
-            run_timestamp: Datetime at which the build run started.
-            cluster_dir: Path to the scenario directory whose immediate
-                subdirectories are measured for disk usage
-                (e.g. ``large_scale6/Europe_004/base``).
+            stats_path: Path to the Excel file.
+            cluster_name: Cluster identifier (e.g. ``"Europe_004"``).
+            run_timestamp: When the build run started.
+            cluster_dir: Scenario directory whose subdirectories are measured for disk usage.
         """
+        import fcntl  # noqa: PLC0415, I001 – Linux only, only needed here
         import openpyxl  # noqa: PLC0415 – optional dependency, only needed here
 
         new_methods: dict[str, int] = {
@@ -559,51 +551,72 @@ class _build_method:
 
         stats_path = Path(stats_path)
         stats_path.parent.mkdir(parents=True, exist_ok=True)
-        timestamp_str: str = run_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        ts: str = run_timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
-        if stats_path.exists():
-            wb = openpyxl.load_workbook(stats_path)
-        else:
-            wb = openpyxl.Workbook()
-            wb.active.title = "memory_stats"
-            wb.active.append(
-                ["cluster", "run_started_at", "method", "peak_memory_mb", "elapsed_s"]
-            )
-            wb.create_sheet("disk_stats").append(
-                ["cluster", "run_started_at", "folder", "size_mb"]
-            )
+        def _get_or_create_sheet(
+            wb: openpyxl.Workbook, name: str, header: list[str]
+        ) -> Any:
+            if name not in wb.sheetnames:
+                ws = wb.create_sheet(name)
+                ws.append(header)
+                return ws
+            return wb[name]
 
-        ws_mem = wb["memory_stats"]
-        ws_disk = wb["disk_stats"]
+        # Use an exclusive lock so concurrent cluster jobs don't corrupt the shared workbook.
+        # Note: fcntl.flock may be a no-op on NFS mounts with nolock.
+        lock_path = stats_path.with_suffix(".lock")
+        with open(lock_path, "w") as lock_fh:
+            fcntl.flock(lock_fh, fcntl.LOCK_EX)
 
-        for method, peak_bytes in new_methods.items():
-            ws_mem.append(
-                [
-                    cluster_name,
-                    timestamp_str,
-                    method,
-                    round(peak_bytes * _BYTES_TO_MB, 1),
-                    round(self.time_taken.get(method, float("nan")), 1),
-                ]
+            wb = (
+                openpyxl.load_workbook(stats_path)
+                if stats_path.exists()
+                else openpyxl.Workbook()
             )
 
-        # Write disk usage once per build run (snapshot at time of call).
-        # Guarded by _disk_stats_written so incremental calls don't duplicate rows.
-        if not self._disk_stats_written:
-            cluster_dir = Path(cluster_dir)
-            for folder in sorted(d for d in cluster_dir.iterdir() if d.is_dir()):
-                folder_size_mb: float = round(
-                    sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
-                    * _BYTES_TO_MB,
-                    1,
+            # openpyxl creates a default "Sheet" on a new workbook; remove it.
+            if "Sheet" in wb.sheetnames and len(wb.sheetnames) == 1:
+                del wb["Sheet"]
+
+            ws_mem = _get_or_create_sheet(
+                wb,
+                "memory_stats",
+                ["cluster", "run_started_at", "method", "peak_memory_mb", "elapsed_s"],
+            )
+            ws_disk = _get_or_create_sheet(
+                wb, "disk_stats", ["cluster", "run_started_at", "folder", "size_mb"]
+            )
+
+            for method, peak_bytes in new_methods.items():
+                ws_mem.append(
+                    [
+                        cluster_name,
+                        ts,
+                        method,
+                        round(peak_bytes * _BYTES_TO_MB, 1),
+                        round(self.time_taken.get(method, float("nan")), 1),
+                    ]
                 )
-                ws_disk.append(
-                    [cluster_name, timestamp_str, folder.name, folder_size_mb]
-                )
-            self._disk_stats_written = True
 
-        wb.save(stats_path)
+            # Disk usage is written once per build run to avoid duplicates.
+            write_disk: bool = not self._disk_stats_written
+            if write_disk:
+                for folder in sorted(Path(cluster_dir).iterdir()):
+                    if not folder.is_dir():
+                        continue
+                    size_mb: float = round(
+                        sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
+                        * _BYTES_TO_MB,
+                        1,
+                    )
+                    ws_disk.append([cluster_name, ts, folder.name, size_mb])
+
+            wb.save(stats_path)
+
+        # Update state only after a successful save so failed writes are retried.
         self._methods_written_to_stats.update(new_methods)
+        if write_disk:
+            self._disk_stats_written = True
 
     @property
     def methods(self) -> list[str]:

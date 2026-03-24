@@ -3456,14 +3456,17 @@ class GEBModel(
 
         build_run_started_at: datetime = datetime.now()
 
-        # Determine whether this is a cluster build so we can flush memory stats
-        # after every method (including on crash) rather than only at the end.
+        # For cluster builds (large_scale6/<cluster>/<scenario>/<input_folder>),
+        # detect the top-level model dir by looking for model.yml three levels up.
         root_abs: Path = Path(self.root).resolve()
+        scenario_dir: Path = root_abs.parent
+        cluster_dir: Path = scenario_dir.parent
+        model_dir: Path = cluster_dir.parent
         stats_path: Path | None = None
         cluster_name_for_stats: str = ""
-        if record_progress and root_abs.parent.name == "base":
-            stats_path = root_abs.parent.parent.parent / "build_memory_stats.xlsx"
-            cluster_name_for_stats = root_abs.parent.parent.name
+        if record_progress and (model_dir / "model.yml").exists():
+            stats_path = model_dir / "build_memory_stats.xlsx"
+            cluster_name_for_stats = cluster_dir.name
 
         for method in methods:
             if method in completed_methods:
@@ -3478,10 +3481,11 @@ class GEBModel(
                 # failure so partial results survive job crashes.
                 if stats_path is not None:
                     try:
-                        build_method.write_memory_stats(
+                        build_method.write_build_stats(
                             stats_path=stats_path,
                             cluster_name=cluster_name_for_stats,
                             run_timestamp=build_run_started_at,
+                            cluster_dir=scenario_dir,  # measure subdirs of base/, not input/
                         )
                     except Exception as exc:
                         self.logger.warning(f"Could not write memory stats: {exc}")
