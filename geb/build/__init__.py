@@ -27,7 +27,6 @@ import xarray as xr
 import yaml
 import zarr
 from affine import Affine
-from hydromt.data_catalog import DataCatalog
 from packaging.version import Version
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
@@ -35,7 +34,7 @@ from shapely.geometry import Point, shape
 from shapely.ops import unary_union
 
 from geb import GEB_PACKAGE_DIR, __version__
-from geb.build.data_catalog import NewDataCatalog
+from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
 from geb.build.version_updates import VERSION_UPDATES
 from geb.workflows.io import (
@@ -180,7 +179,7 @@ def boolean_mask_to_graph(
     return G
 
 
-def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
+def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     """Create a directed graph for the river network.
 
     Args:
@@ -224,7 +223,7 @@ def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
 
 
 def get_subbasin_id_from_coordinate(
-    data_catalog: NewDataCatalog, lon: float, lat: float
+    data_catalog: DataCatalog, lon: float, lat: float
 ) -> int:
     """Find the subbasin ID for a given coordinate.
 
@@ -266,7 +265,7 @@ def get_subbasin_id_from_coordinate(
 
 
 def get_sink_subbasin_id_for_geom(
-    data_catalog: NewDataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
+    data_catalog: DataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
 ) -> list[int]:
     """Find all sink subbasins that intersect with the given geometry.
 
@@ -311,7 +310,7 @@ def get_sink_subbasin_id_for_geom(
 
 
 def get_all_downstream_subbasins_in_geom(
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     geom: gpd.GeoDataFrame,
     ocean_outlets_only: bool,
     logger: logging.Logger,
@@ -382,7 +381,7 @@ def get_all_downstream_subbasins_in_geom(
 
 
 def get_subbasin_upstream_areas(
-    data_catalog: NewDataCatalog, subbasin_ids: list[int]
+    data_catalog: DataCatalog, subbasin_ids: list[int]
 ) -> dict[int, float]:
     """Get upstream areas for a list of subbasins with optimized batch loading.
 
@@ -509,7 +508,7 @@ def calculate_bbox_efficiency(
 
 
 def cluster_subbasins_following_coastline(
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     subbasin_ids: list[int],
     target_area_km2: float,
     logger: logging.Logger,
@@ -952,7 +951,7 @@ def cluster_subbasins_following_coastline(
 
 def save_clusters_to_geoparquet(
     clusters: list[list[int]],
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     output_path: Path,
     cluster_prefix: str = "cluster",
 ) -> None:
@@ -1031,7 +1030,7 @@ def save_clusters_to_geoparquet(
 
 def create_cluster_visualization_map(
     clusters: list[list[int]],
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     river_graph: networkx.DiGraph,
     output_path: str | Path,
     cluster_prefix: str = "cluster",
@@ -1268,7 +1267,7 @@ def create_multi_basin_configs(
     clusters: list[list[int]],
     working_directory: Path,
     cluster_prefix: str = "cluster",
-    data_catalog: NewDataCatalog | None = None,
+    data_catalog: DataCatalog | None = None,
     river_graph: networkx.DiGraph | None = None,
 ) -> list[Path]:
     """Create separate config files and directories for each cluster of subbasins.
@@ -1448,7 +1447,7 @@ def calculate_cluster_basin_area(
 
 def save_clusters_as_merged_geometries(
     clusters: list[list[int]],
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     river_graph: networkx.DiGraph,
     output_path: Path,
     cluster_prefix: str = "cluster",
@@ -1989,24 +1988,17 @@ class GEBModel(
         self,
         logger: logging.Logger,
         root: Path,
-        data_catalog: str | None = None,
         epsg: int = 4326,
-        data_provider: str = "default",
     ) -> None:
         """Initialize the GEB build model.
 
         Args:
             logger: Logger to use for logging.
             root: Root directory for the model build. If None, the current working directory is used.
-            data_catalog: List of data catalogs to use. If None, the default data catalogs are used.
             epsg: EPSG code for the model grid. Default is 4326 (WGS84).
-            data_provider: Data provider to use for the data catalog. Default is "default".
         """
         self._logger = logger
         build_method.logger = logger
-        self._old_data_catalog = DataCatalog(
-            data_libs=[data_catalog], logger=self._logger, fallback_lib=None
-        )
 
         Hydrography.__init__(self)
         Forcing.__init__(self)
@@ -2018,8 +2010,7 @@ class GEBModel(
 
         self.root = root
         self.epsg = epsg
-        self.data_provider = data_provider
-        self._data_catalog = NewDataCatalog()
+        self._data_catalog = DataCatalog()
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
@@ -2111,21 +2102,12 @@ class GEBModel(
             self._old_data_catalog.logger = value
 
     @property
-    def old_data_catalog(self) -> DataCatalog:
-        """Get the data catalog."""
-        return self._old_data_catalog
-
-    @old_data_catalog.setter
-    def old_data_catalog(self, value: DataCatalog) -> None:
-        self._old_data_catalog: DataCatalog = value
-
-    @property
-    def data_catalog(self) -> NewDataCatalog:
+    def data_catalog(self) -> DataCatalog:
         """Get the new data catalog."""
         return self._data_catalog
 
     @data_catalog.setter
-    def data_catalog(self, value: NewDataCatalog) -> None:
+    def data_catalog(self, value: DataCatalog) -> None:
         self._data_catalog = value
 
     @property
@@ -2824,45 +2806,6 @@ class GEBModel(
             return "ssp585"
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
-
-    def setup_coastal_water_levels(
-        self,
-    ) -> None:
-        """Sets up coastal water level data from the GTSM dataset.
-
-        Filters the dataset to include only stations within the model bounds,
-        and ensures that the time dimension is consistent.
-        """
-        water_levels = self.old_data_catalog.get_dataset("GTSM")
-        assert isinstance(water_levels, xr.DataArray)
-        assert (
-            water_levels.time.diff("time").astype(np.int64)
-            == (water_levels.time[1] - water_levels.time[0]).astype(np.int64)
-        ).all()
-        # convert to geodataframe
-        stations = gpd.GeoDataFrame(
-            water_levels.stations,
-            geometry=gpd.points_from_xy(
-                water_levels.station_x_coordinate, water_levels.station_y_coordinate
-            ),
-        )
-        # filter all stations within the bounds, considering a buffer
-        station_ids = stations.cx[
-            self.bounds[0] - 0.1 : self.bounds[2] + 0.1,
-            self.bounds[1] - 0.1 : self.bounds[3] + 0.1,
-        ].index.values
-
-        water_levels = water_levels.sel(stations=station_ids)
-
-        assert len(water_levels.stations) > 0, (
-            "No stations found in the region. If no stations should be set, set include_coastal_area=False"
-        )
-
-        self.set_other(
-            water_levels,
-            name="waterlevels",
-            time_chunksize=24 * 6,  # 10 minute data
-        )
 
     @build_method(required=True)
     def setup_damage_parameters(

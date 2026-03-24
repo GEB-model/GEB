@@ -15,7 +15,7 @@ import geopandas as gpd
 from pyproj import Geod
 
 if TYPE_CHECKING:
-    from ..data_catalog import NewDataCatalog
+    from ..data_catalog import DataCatalog
 
 # Trade regions as used in GLOBIOM, but with minor modifications. See comments below for respective countries.
 TRADE_REGIONS: dict[str, str] = {
@@ -224,7 +224,7 @@ def get_geodesic_distance(
 
 
 def setup_donor_countries(
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     global_countries: gpd.GeoDataFrame,
     countries_with_data: Iterable[str],
     alternative_countries: list[str],

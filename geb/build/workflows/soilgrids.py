@@ -4,13 +4,12 @@ import geopandas as gpd
 import numpy as np
 import xarray as xr
 
+from geb.build.data_catalog import DataCatalog
 from geb.workflows.raster import convert_nodata, interpolate_na_2d, resample_chunked
-
-from ..data_catalog import NewDataCatalog
 
 
 def load_soilgrids_v2(
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     mask: xr.DataArray,
     region: gpd.GeoDataFrame,
     variable_name: str,

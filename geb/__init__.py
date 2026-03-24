@@ -32,7 +32,7 @@ load_dotenv()
 
 # Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
 if Path("/research/BETA-IVM-HPC/GEB").exists():
-    os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/data_catalog/"
+    os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/datacatalog/"
     os.environ["SFINCS_CONTAINER"] = os.getenv(
         "SFINCS_CONTAINER",
         "/ada-software/containers/sfincs-cpu-v2.3.0-mt-Faber-Release.sif",
