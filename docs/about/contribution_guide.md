@@ -10,7 +10,7 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 4. After you finished the feature or bugfix, make sure to push all your changes to GitHub, where you should be able to find the branch with your changes.
 5. Now you can [open a pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request). This is a request to merge your code with the main branch.
 6. Once you opened the request, there will first be an automated review from copilot after a few minutes. Have a look at these suggestions and implement them if you feel they are useful. Note that this is AI so not everything is useful, but it often allows you to catch some errors or make some clarifications.
-7. In addition, all sorts of other automated checks are performed related to formatting and tests. Ensure that all tests tests pass.
+7. In addition, all sorts of other automated checks are performed related to formatting and tests. Ensure that all tests pass.
 8. Then, [request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/requesting-a-pull-request-review) someone (a human this time) to review your code. They will review your code and approve the code or request you to make changes. If they request changes, make these changes and request a re-review.
 9. Once the code is approved, you or the reviewer can merge the branch with the main branch and delete the feature branch (so we keep things clean).
 10. Congrats your code is now in the main branch!
