@@ -10,7 +10,7 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 4. After you finished the feature or bugfix, make sure to push all your changes to GitHub, where you should be able to find the branch with your changes.
 5. Now you can [open a pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request). This is a request to merge your code with the main branch.
 6. Once you opened the request, there will first be an automated review from copilot after a few minutes. Have a look at these suggestions and implement them if you feel they are useful. Note that this is AI so not everything is useful, but it often allows you to catch some errors or make some clarifications.
-7. In addition, all sorts of other automated checks are performed related to formatting and tests. Ensure that all tests tests pass.
+7. In addition, all sorts of other automated checks are performed related to formatting and tests. Ensure that all tests pass.
 8. Then, [request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/requesting-a-pull-request-review) someone (a human this time) to review your code. They will review your code and approve the code or request you to make changes. If they request changes, make these changes and request a re-review.
 9. Once the code is approved, you or the reviewer can merge the branch with the main branch and delete the feature branch (so we keep things clean).
 10. Congrats your code is now in the main branch!
@@ -122,3 +122,23 @@ We use `pytest` for automated testing of the GEB model.
 - It is RECOMMENDED to use `assert` statements in the model to ensure correct behaviour.
 - When there is an error, the model SHOULD fail. Do not catch exceptions and replace with dummy data.
 - All code MUST be formatted using `ruff format` and `ruff check`. Imports MUST be ordered using `isort` (included in `ruff`). It is RECOMMENDED to install the ruff plugin and set ruff as the default formatter in Visual Studio Code. Also turn on "format on paste" and "format on save". `ruff format` and `ruff check` are automatically executed when pushing to GitHub.
+
+### AI-assisted contributions
+
+AI coding tools are increasingly common in open source development. These tools are welcome in GEB, but the same standards apply to all contributions regardless of how they were produced.
+
+#### You are responsible for your changes
+
+If you submit a pull request, you are responsible for understanding and having fully reviewed the changes. You must be able to explain why each change is correct and how it fits into the project.
+
+#### Communication must be your own
+
+PR descriptions, issue comments, and review responses must be in your own words. The substance and reasoning must come from you.
+
+#### Review every line
+
+You must have personally reviewed and understood all changes before submitting. If you used AI to generate code, you are expected to have read it critically and tested it. The PR description should explain the approach and reasoning — do not leave it to reviewers to figure out what the code does and why.
+
+#### Keep PRs reviewable
+
+Generating code with AI is fast; reviewing it is not. A large diff shifts the burden from the contributor to the reviewer. Use AI tools not only to write code but to prepare better, more reviewable PRs — well-structured commits, clear descriptions, and minimal scope.
