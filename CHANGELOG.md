@@ -1,6 +1,7 @@
 # dev
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
 - Refactored setup farms from lowder and created a test. Non-lowder datasets are not supported anymore. This will be added back later in the simplified setup when it is required for a specific purpose.
+- Remove old data catalog entirely, and all references to it. Rename NewDataCatalog to DataCatalog.
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.

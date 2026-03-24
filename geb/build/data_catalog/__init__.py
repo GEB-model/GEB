@@ -1096,7 +1096,7 @@ data_catalog: dict[str, dict[str, Any]] = {
 }
 
 
-class NewDataCatalog:
+class DataCatalog:
     """The GEB data catalog for accessing predefined datasets."""
 
     def __init__(self) -> None:

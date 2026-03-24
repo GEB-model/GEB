@@ -34,7 +34,6 @@ dependencies = [
     "flopy>=3.8.0",
     "folium>=0.19.6",
     "geopandas>=1.0.1",
-    "hydromt==0.10.1",  # pinned until old data catalog is removed completely
     "hydromt-sfincs>=1.2.0",
     "mcp",
     "networkx",
