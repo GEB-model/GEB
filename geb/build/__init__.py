@@ -3143,8 +3143,17 @@ class GEBModel(
             # when updating, it is possible that the mask already exists.
             if name != "mask":
                 # if the mask exists, mask the data, saving some valuable space on disk
+                if data.chunks is not None and (
+                    len(data.chunksizes["x"]) != 1 or len(data.chunksizes["y"]) != 1
+                ):
+                    # if the data is chunked, we need to chunk the mask in the same way before applying it
+                    mask: xr.DataArray = grid["mask"].chunk(
+                        {"x": data.chunksizes["x"], "y": data.chunksizes["y"]}
+                    )
+                else:
+                    mask: xr.DataArray = grid["mask"]
                 data_ = xr.where(
-                    ~grid["mask"],
+                    ~mask,
                     data,
                     data.attrs["_FillValue"] if data.dtype != bool else False,
                     keep_attrs=True,
