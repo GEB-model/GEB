@@ -45,7 +45,15 @@ from geb.workflows.io import (
     write_params,
     write_table,
 )
-from geb.workflows.raster import clip_region, clip_with_grid, full_like, repeat_grid
+from geb.workflows.raster import (
+    clip_region,
+    clip_with_grid,
+    create_temp_zarr,
+    full_like,
+    interpolate_na_along_dim as interpolate_na_along_dim,
+    repeat_grid,
+    snap_to_grid as snap_to_grid,
+)
 
 from ..workflows.io import (
     read_zarr,
@@ -74,8 +82,6 @@ GDAL_HTTP_ENV_OPTS = {
     "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
-
-XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
@@ -2718,8 +2724,7 @@ class GEBModel(
                 + np.arange(mask.shape[1] * subgrid_factor) * dst_transform.a,
             },
             attrs={"_FillValue": None},
-        )
-
+        ).chunk({"x": -1, "y": -1})
         self.set_subgrid(submask, name="mask")
 
     @build_method(required=True)
@@ -3153,8 +3158,6 @@ class GEBModel(
         da: xr.DataArray,
         name: str,
         write: bool = True,
-        x_chunksize: int = XY_CHUNKSIZE,
-        y_chunksize: int = XY_CHUNKSIZE,
         time_chunksize: int = 1,
         **kwargs: Any,
     ) -> xr.DataArray:
@@ -3168,10 +3171,6 @@ class GEBModel(
             da: The data array to set.
             name: The name of the data array.
             write: If True, write the data array to disk. Defaults to True.
-            x_chunksize: The chunk size in the x dimension for writing to zarr.
-                Defaults to XY_CHUNKSIZE.
-            y_chunksize: The chunk size in the y dimension for writing to zarr.
-                Defaults to XY_CHUNKSIZE.
             time_chunksize: The chunk size in the time dimension for writing to zarr.
                 Defaults to 1.
             **kwargs: Additional keyword arguments to pass to write_zarr.
@@ -3193,9 +3192,6 @@ class GEBModel(
             da: xr.DataArray = write_zarr(
                 da,
                 fp_with_root,
-                x_chunksize=x_chunksize,
-                y_chunksize=y_chunksize,
-                time_chunksize=time_chunksize,
                 crs=da.rio.crs,
                 **kwargs,
             )
@@ -3209,8 +3205,7 @@ class GEBModel(
         data: xr.DataArray,
         name: str,
         write: bool,
-        x_chunksize: int = XY_CHUNKSIZE,
-        y_chunksize: int = XY_CHUNKSIZE,
+        **kwargs: Any,
     ) -> xr.Dataset:
         """Add data to grid dataset.
 
@@ -3222,8 +3217,7 @@ class GEBModel(
             data: the data to add to the grid
             write: if True, write the data to disk
             name: the name of the layer that will be added to the grid.
-            x_chunksize: the chunk size in the x dimension for writing to zarr
-            y_chunksize: the chunk size in the y dimension for writing to zarr
+            **kwargs: additional keyword arguments to pass to write_zarr
 
         Returns:
             grid: the updated grid with the new layer addedå
@@ -3257,20 +3251,33 @@ class GEBModel(
         if write:
             fn = Path(grid_name) / (name + ".zarr")
             self.logger.info(f"Writing file {fn}")
-            data = write_zarr(
-                data,
-                path=self.root / fn,
-                x_chunksize=x_chunksize,
-                y_chunksize=y_chunksize,
-                crs=4326,
-            )
+            if data.chunks is not None and (
+                len(data.chunksizes["x"]) != 1 or len(data.chunksizes["y"]) != 1
+            ):
+                with create_temp_zarr(
+                    data,
+                    name=grid_name + "_" + "tmp",
+                ) as tmp_zarr_path:
+                    data = write_zarr(
+                        tmp_zarr_path.chunk({"x": -1, "y": -1}),
+                        path=self.root / fn,
+                        crs=4326,
+                        **kwargs,
+                    )
+            else:
+                data = write_zarr(
+                    data,
+                    path=self.root / fn,
+                    crs=4326,
+                    **kwargs,
+                )
             self.files[grid_name][name] = Path(grid_name) / (name + ".zarr")
 
         grid[name] = data
         return grid
 
     def set_grid(
-        self, data: xr.DataArray, name: str, write: bool = True
+        self, data: xr.DataArray, name: str, write: bool = True, **kwargs: Any
     ) -> xr.DataArray:
         """Set a new grid layer.
 
@@ -3282,6 +3289,7 @@ class GEBModel(
             data: The data to add to the grid. Must have the same spatial coordinates
             name: The name of the layer to add to the grid.
             write: If True, write the data to disk. Defaults to True.
+            **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
             The added grid layer. The returned layer is read from disk if write=True, so
@@ -3291,7 +3299,11 @@ class GEBModel(
         return self.grid[name]
 
     def set_subgrid(
-        self, data: xr.DataArray, name: str, write: bool = True
+        self,
+        data: xr.DataArray,
+        name: str,
+        write: bool = True,
+        **kwargs: Any,
     ) -> xr.DataArray:
         """Set a new subgrid layer.
 
@@ -3304,13 +3316,19 @@ class GEBModel(
                 as the existing subgrid.
             name: The name of the layer to add to the subgrid.
             write: If True, write the data to disk. Defaults to True.
+            **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
             The added subgrid layer. The returned layer is read from disk if write=True, so
             it is not the same object as the input data.
         """
         self.subgrid = self._set_grid(
-            "subgrid", self.subgrid, data, write=write, name=name
+            "subgrid",
+            self.subgrid,
+            data,
+            write=write,
+            name=name,
+            **kwargs,
         )
         return self.subgrid[name]
 

@@ -62,8 +62,7 @@ def _stack_forcing_variable(
     da, bounds = clip_with_grid(da, mask)
     mask = mask.isel(bounds)
 
-    if "_FillValue" in da.attrs:
-        da = interpolate_na_along_dim(da)
+    da = interpolate_na_along_dim(da)
 
     da = da.stack(idxs=("y", "x"))
     da = da.isel(idxs=mask.stack(idxs=("y", "x")).values)
@@ -595,22 +594,6 @@ def plot_timeline(
     )
 
 
-def get_chunk_size(da: xr.DataArray) -> int:
-    """Calculate the optimal chunk size for the given xarray DataArray based on the target size.
-
-    Args:
-        da: The xarray DataArray for which to calculate the chunk size.
-
-    Returns:
-        The calculated chunk size in bytes.
-    """
-    size = (
-        math.prod([chunks[0] for dim, chunks in da.chunksizes.items()])
-        * da.dtype.itemsize
-    )
-    return size
-
-
 class Forcing(BuildModelBase):
     """Contains methods to download and process climate forcing data for GEB."""
 
@@ -754,6 +737,14 @@ class Forcing(BuildModelBase):
                 ),
             ]
 
+        time_chunksize: int = 100_000_000 // (
+            math.prod(
+                [chunks[0] for dim, chunks in da.chunksizes.items() if dim != "time"]
+            )
+            * da.dtype.itemsize
+        )  # aim for chunks of around 100 MB
+        da = da.chunk({"time": time_chunksize})
+
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -768,8 +759,9 @@ class Forcing(BuildModelBase):
                     da,
                     name=name,
                     filters=filters,
-                    time_chunks_per_shard=int(1e8 / get_chunk_size(da)),
-                    time_chunksize=da.chunksizes["time"][0],
+                    shards={
+                        "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
+                    },
                     **kwargs,
                 )
 
@@ -1133,7 +1125,7 @@ class Forcing(BuildModelBase):
             bounds=self.grid["mask"].rio.bounds(recalc=True),
         )
 
-        pr_hourly: xr.DataArray = era5_loader(variable="tp").chunk({"time": 7 * 24})
+        pr_hourly: xr.DataArray = era5_loader(variable="tp")
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
         )  # convert from m/hr to kg/m2/s
@@ -1159,15 +1151,15 @@ class Forcing(BuildModelBase):
         assert (geopotential.x.values == climate_grid.x.values).all()
         assert (geopotential.y.values == climate_grid.y.values).all()
 
-        tas: xr.DataArray = era5_loader("t2m").chunk({"time": 7 * 24})
+        tas: xr.DataArray = era5_loader("t2m")
         self.set_tas_2m_K(tas, create_plots=create_plots)
 
-        dew_point_tas: xr.DataArray = era5_loader("d2m").chunk({"time": 7 * 24})
+        dew_point_tas: xr.DataArray = era5_loader("d2m")
         self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
 
         rsds: xr.DataArray = (
             era5_loader("ssrd") / 3600  # convert from J/m2/(per timestep) to W/m2
-        ).chunk({"time": 7 * 24})  # surface_solar_radiation_downwards
+        )  # surface_solar_radiation_downwards
         self.set_rsds_W_per_m2(rsds, create_plots=create_plots)
 
         # surface_thermal_radiation_downwards
@@ -1176,13 +1168,13 @@ class Forcing(BuildModelBase):
         )  # convert from J/m2/(per timestep) to W/m2
         self.set_rlds_W_per_m2(rlds, create_plots=create_plots)
 
-        pressure: xr.DataArray = era5_loader("sp").chunk({"time": 7 * 24})
+        pressure: xr.DataArray = era5_loader("sp")
         self.set_ps_pascal(pressure, create_plots=create_plots)
 
-        u_wind: xr.DataArray = era5_loader("u10").chunk({"time": 7 * 24})
+        u_wind: xr.DataArray = era5_loader("u10")
         self.set_wind_10m_m_per_s(u_wind, direction="u", create_plots=create_plots)
 
-        v_wind: xr.DataArray = era5_loader("v10").chunk({"time": 7 * 24})
+        v_wind: xr.DataArray = era5_loader("v10")
         self.set_wind_10m_m_per_s(v_wind, direction="v", create_plots=create_plots)
 
         elevation_forcing = (geopotential / 9.81).astype(np.float32)
@@ -1360,7 +1352,7 @@ class Forcing(BuildModelBase):
             ),  # chunk in spatial blocks for efficient SPEI calculation
             name="tmp_water_budget_file",
             time_chunksize=water_budget.time.size,
-            time_chunks_per_shard=None,
+            shards=None,
         ) as water_budget:
             # We set freq to None, so that the input frequency is used (no recalculating)
             # this means that we can calculate SPEI much more efficiently, as it is not
@@ -1401,7 +1393,6 @@ class Forcing(BuildModelBase):
                 SPEI,
                 name="tmp_spei_file",
                 time_chunksize=10,
-                time_chunks_per_shard=None,
             ) as SPEI:
                 self.set_SPEI(
                     SPEI,

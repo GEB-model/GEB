@@ -14,7 +14,6 @@ Notes:
 
 from __future__ import annotations
 
-import os
 import tempfile
 import zipfile
 from pathlib import Path
@@ -24,11 +23,10 @@ import geopandas as gpd
 import numpy as np
 import rioxarray as rxr
 import xarray as xr
-from rioxarray import merge
 from shapely.geometry.base import BaseGeometry
 
 from geb.workflows.io import fetch_and_save
-from geb.workflows.raster import convert_nodata
+from geb.workflows.raster import clip_with_geometry, convert_nodata
 
 from .base import Adapter
 
@@ -77,7 +75,7 @@ class DeltaDTM(Adapter):
         """
         # download the DeltaDTM tiles geopackage
         url_delta_dtm_tiles = "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/60a69899-2e67-4f9f-8761-3b57094acd12"
-        os.makedirs(self.root, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             filepath = temp_dir / "delta_dtm_tiles.gpkg"
@@ -150,9 +148,19 @@ class DeltaDTM(Adapter):
         Returns:
             Merged dataset of the specified tiles.
         """
-        das: list[xr.DataArray] = [rxr.open_rasterio(path) for path in tile_paths]  # ty: ignore[invalid-assignment]
+        das: list[xr.DataArray] = [
+            rxr.open_rasterio(path, chunks={}) for path in tile_paths
+        ]  # ty: ignore[invalid-assignment]
         das = [da.sel(band=1) for da in das]
-        da: xr.DataArray = merge.merge_arrays(das)
+        da = xr.combine_by_coords(
+            das,
+            fill_value=das[0].rio.nodata,
+            combine_attrs="drop_conflicts",
+            join="outer",
+            compat="broadcast_equals",
+            data_vars="all",
+        )
+        assert isinstance(da, xr.DataArray)
         return da
 
     def _unpack_tiles(
@@ -213,5 +221,10 @@ class DeltaDTM(Adapter):
             The downloaded DeltaDTM data.
         """
         da = self.unpack_and_merge_tiles(self.continents_to_download, self.tile_names)
-        da = da.rio.clip([mask], drop=True, all_touched=True)
+        da = clip_with_geometry(
+            da,
+            gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
+            all_touched=True,
+            drop=True,
+        )
         return da

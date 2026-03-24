@@ -6,14 +6,17 @@ from datetime import datetime
 from pathlib import Path
 from time import sleep, time
 
+import dask.array
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 import zarr.storage
 from zarr.codecs.numcodecs import FixedScaleOffset
 
+import geb.workflows.io as io_module
 from geb.workflows.io import (
     AsyncGriddedForcingReader,
     calculate_scaling,
@@ -201,6 +204,110 @@ def test_io() -> None:
     da.attrs["_FillValue"] = np.nan
 
     write_zarr(da, tmp_folder / "test.zarr", crs=4326)
+
+
+def test_write_zarr_uses_shards_as_chunk_multiples() -> None:
+    """Test that shard values are interpreted as multiples of the chunk size.
+
+    Verifies that the public shards argument expresses the number of chunks per
+    shard for each dimension and that the stored Zarr metadata reflects the
+    resulting absolute shard shape.
+    """
+    x = np.linspace(-4, 4, 9)
+    y = np.linspace(7, 0, 8)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 2, "y": 3},
+        progress=False,
+    )
+
+    zarr_array = zarr.open_array(
+        store=tmp_folder / "test.zarr",
+        zarr_format=3,
+        path="test",
+        mode="r",
+    )
+
+    assert zarr_array.chunks == (2, 3)
+    assert zarr_array.shards == (6, 6)
+
+
+def test_write_zarr_rounds_shards_up_to_chunk_multiple() -> None:
+    """Test that shard metadata stays aligned to full chunk multiples.
+
+    Verifies that when a requested shard would otherwise be clipped by the array
+    extent, the stored shard size is rounded up to the smallest full chunk
+    multiple that still covers the dimension.
+    """
+    x = np.linspace(-3.5, 3.5, 8)
+    y = np.linspace(4, 0, 5)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 4, "y": 4},
+        progress=False,
+    )
+
+    zarr_array = zarr.open_array(
+        store=tmp_folder / "test.zarr",
+        zarr_format=3,
+        path="test",
+        mode="r",
+    )
+
+    assert zarr_array.chunks == (2, 3)
+    assert zarr_array.shards == (6, 9)
+
+
+def test_write_zarr_stores_per_shard_when_shards_are_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that write_zarr switches the source write granularity to shards.
+
+    Verifies that enabling sharding causes the block-wise write loop to operate
+    on shard-sized source blocks rather than storage-chunk-sized source blocks.
+    """
+    captured_numblocks: dict[str, tuple[int, ...]] = {}
+
+    original_store_blocks = io_module._store_dask_array_blocks
+
+    def store_blocks_spy(
+        source_array: dask.array.Array, store_target: object, progress: bool
+    ) -> None:
+        captured_numblocks["value"] = source_array.numblocks
+        original_store_blocks(source_array, store_target, progress)
+
+    monkeypatch.setattr(io_module, "_store_dask_array_blocks", store_blocks_spy)
+
+    x = np.linspace(-4, 4, 9)
+    y = np.linspace(7, 0, 8)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 2, "y": 3},
+        progress=False,
+    )
+
+    assert captured_numblocks["value"] == (2, 2)
 
 
 def test_get_window() -> None:

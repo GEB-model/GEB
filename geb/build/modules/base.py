@@ -177,12 +177,18 @@ class BuildModelBase(ABC):
         pass
 
     @abstractmethod
-    def set_grid(self, data: xr.DataArray, name: str) -> xr.DataArray:
+    def set_grid(self, data: xr.DataArray, name: str, **kwargs: Any) -> xr.DataArray:
         """Abstract method to set grid data."""
         pass
 
     @abstractmethod
-    def set_subgrid(self, data: xr.DataArray, name: str) -> xr.DataArray:
+    def set_subgrid(
+        self,
+        data: xr.DataArray,
+        name: str,
+        write: bool = True,
+        **kwargs: Any,
+    ) -> xr.DataArray:
         """Abstract method to set subgrid data."""
         pass
 
