@@ -68,6 +68,12 @@ hydrology:
 agent_settings:
   government:
     plant_forest: false  # default false. Enable (true) for forest planting policy for reforestation scenarios
+    adaptation:
+      enabled: false # default false. Enable (true) for government adaptation policy. 
+      EAD_threshold: 1000000  # in euros (currrently arbitrary)
+      equity_indicator_threshold: 0.5  # between 0 and 1, where 1 means perfect equality (currrently arbitrary)
+      ecosystem_indicator_threshold: 0.5  # between 0 and 1, where 1 means healthy ecosystem (currrently arbitrary)
+      adaptation_fraction: 0.1  # default to 10% of households adapting
   market:
     dynamic_market: false
     price_frequency: yearly
