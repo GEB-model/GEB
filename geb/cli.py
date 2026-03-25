@@ -27,6 +27,7 @@ from geb.runner import (
     WORKING_DIRECTORY_DEFAULT,
     alter_fn,
     build_fn,
+    create_logger,
     init_fn,
     init_multiple_fn,
     run_model_with_method,
@@ -764,7 +765,7 @@ def data_catalog(method: str) -> None:
     Raises:
         ValueError: If the method is not recognized.
     """
-    data_catalog = DataCatalog()
+    data_catalog = DataCatalog(logger=create_logger("data_catalog"))
     if method == "size":
         print("Total size of data catalog:", data_catalog.size())
     elif method == "license":
