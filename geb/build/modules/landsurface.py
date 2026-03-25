@@ -539,6 +539,7 @@ class LandSurface(BuildModelBase):
         soil_layer_height_m = soil_layer_height_per_layer_m.broadcast_like(
             soilgrids_variable
         )
+        soil_layer_height_m = soil_layer_height_m.chunk({"soil_layer": 1})
         soil_layer_height_m.attrs["units"] = "m"
         soil_layer_height_m.attrs["description"] = "Height of each soil layer"
         soil_layer_height_m.attrs["_FillValue"] = np.nan
