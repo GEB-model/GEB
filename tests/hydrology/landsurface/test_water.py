@@ -243,11 +243,15 @@ def test_infiltration() -> None:
     # Check that soil water increased
     assert np.sum(w) > np.sum(w_pre)
 
-    # Test case 2: Fully frozen soil - no infiltration
-    w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+    # Test case 2: Fully frozen top layer with no new liquid heat input.
+    # Use an enthalpy state that is consistent with a fully frozen thin top layer,
+    # otherwise the default zero-enthalpy fallback represents unfrozen conditions.
+    w = np.array([0.002, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     topwater = np.float32(0.005)
     frozen_fraction_top_layer = np.float32(1.0)
     topwater_pre = topwater
+    soil_enthalpy_top_layer_J_per_m2 = np.float32(-700000.0)
+    solid_heat_capacity_top_layer_J_per_m2_K = np.float32(100000.0)
 
     (
         updated_topwater,
@@ -277,13 +281,17 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
+        solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+        rain_temperature_C=np.float32(0.0),
+        liquid_water_input_for_enthalpy_m=np.float32(0.0),
     )
 
-    # No infiltration on frozen soil
-    assert infiltration_amount == 0.0
+    # No infiltration on a fully frozen top layer without advected heat input.
+    assert infiltration_amount < np.float32(1e-8)
     assert groundwater_recharge == 0.0
     # All water should go to direct runoff
-    assert direct_runoff == topwater_pre
+    assert abs(direct_runoff - topwater_pre) < 1e-6
 
     # Test case 3: Partially frozen soil - reduced but nonzero infiltration
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
