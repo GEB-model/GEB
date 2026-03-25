@@ -36,6 +36,7 @@ import xarray as xr
 import yaml
 import zarr
 import zarr.storage
+from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
@@ -569,14 +570,6 @@ def _store_dask_array_blocks(
     """
     block_indices: Any = np.ndindex(*da.numblocks)
 
-    if progress:
-        block_indices = tqdm(  # wrap the block indices in a progress bar
-            block_indices,
-            total=int(np.prod(da.numblocks)),
-            desc="Writing progress",
-            leave=False,
-        )
-
     array_blocks = da.blocks
 
     # the last chunk may be smaller than the specified chunk size,
@@ -599,8 +592,11 @@ def _store_dask_array_blocks(
                 )
             )
 
-        # Execute all at once
-        dask.compute(*stores)
+        if progress:
+            with ProgressBar():
+                dask.compute(*stores)
+        else:
+            dask.compute(*stores)
 
 
 def _normalize_shards(

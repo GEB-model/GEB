@@ -1586,6 +1586,7 @@ class LandSurface(Module):
             for i in range(N_SOIL_LAYERS):
                 layer_data = read_grid(filepath, layer=i)
                 assert layer_data.ndim == 2
+                assert not np.isnan(layer_data).any()
                 self.HRU.convert_subgrid_to_HRU_numba(
                     layer_data,
                     self.HRU.var.linear_mapping,

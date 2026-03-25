@@ -455,6 +455,7 @@ class LandSurface(BuildModelBase):
                     subgrid_mask,
                     variable_name=variable_name,
                     layer_name=layer_name,
+                    region=self.region,
                 )
                 * conversion_factor
             )

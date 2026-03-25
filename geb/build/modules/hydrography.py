@@ -1290,8 +1290,8 @@ class Hydrography(BuildModelBase):
     def setup_gtsm_surge_levels(self) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds."""
         gtsm_data_region, _ = self.data_catalog.fetch(
-            "gtsm_timeseries", variable="surge"
-        ).read(bounds=self.bounds, variable="surge")
+            "gtsm_timeseries", variable="storm_surge_residual"
+        ).read(bounds=self.bounds, variable="storm_surge_residual")
         self.set_table(gtsm_data_region, name="gtsm/surge")
         self.logger.info("GTSM station surge levels set")
 
@@ -1406,8 +1406,8 @@ class Hydrography(BuildModelBase):
             return
 
         # Continue with GTSM setup
-        self.setup_gtsm_water_levels()
         self.setup_gtsm_surge_levels()
+        self.setup_gtsm_water_levels()
         self.setup_gtsm_sea_level_rise()
         self.setup_coast_rp()
 

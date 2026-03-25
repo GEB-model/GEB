@@ -3172,14 +3172,15 @@ class GEBModel(
                     data,
                     name=grid_name + "_" + "tmp",
                 ) as tmp_zarr_path:
-                    data = write_zarr(
+                    del data
+                    data: xr.DataArray = write_zarr(
                         tmp_zarr_path.chunk({"x": -1, "y": -1}),
                         path=self.root / fn,
                         crs=4326,
                         **kwargs,
                     )
             else:
-                data = write_zarr(
+                data: xr.DataArray = write_zarr(
                     data,
                     path=self.root / fn,
                     crs=4326,
