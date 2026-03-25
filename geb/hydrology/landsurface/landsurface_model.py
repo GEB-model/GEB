@@ -1578,6 +1578,9 @@ class LandSurface(Module):
 
             Returns:
                 Compressed array of shape (layers, HRUs).
+
+            Raises:
+                ValueError: If NaN values are found in the soil layer data.
             """
             output: TwoDArrayFloat32 = np.full(
                 (N_SOIL_LAYERS, self.HRU.compressed_size), np.nan, dtype=np.float32
@@ -1586,7 +1589,12 @@ class LandSurface(Module):
             for i in range(N_SOIL_LAYERS):
                 layer_data = read_grid(filepath, layer=i)
                 assert layer_data.ndim == 2
-                assert not np.isnan(layer_data[self.HRU.mask]).any()
+                if np.isnan(layer_data[~self.HRU.mask]).any():
+                    raise ValueError(
+                        f"Found NaN values in soil layer data. This likely means that something went wrong with the "
+                        f"chunked interpolation of nan values in the build (setup_soil). Advise is to open the submask and"
+                        f"soil data file: {filepath}."
+                    )
                 self.HRU.convert_subgrid_to_HRU_numba(
                     layer_data,
                     self.HRU.var.linear_mapping,
