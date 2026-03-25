@@ -1351,6 +1351,8 @@ def init_multiple_fn(
     """
     _restart_if_needed(optimize=optimize, cores=cores)
 
+    logger = create_logger("init_multiple")
+
     # set paths
     config: Path = Path(config)
     build_config: Path = Path(build_config)
@@ -1358,7 +1360,7 @@ def init_multiple_fn(
     working_directory: Path = Path(working_directory)
 
     # Initialize data catalog and logger
-    data_catalog_instance = DataCatalog()
+    data_catalog_instance = DataCatalog(logger=logger)
     with WorkingDirectory(working_directory):
         logger = create_logger("init_multiple")
 
