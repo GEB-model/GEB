@@ -579,6 +579,9 @@ def _store_dask_array_blocks(
 
     array_blocks = da.blocks
 
+    # the last chunk may be smaller than the specified chunk size,
+    # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
+    # This can be safely ignored in this context.
     with np.errstate(invalid="ignore"):
         stores = []
         for block_index in block_indices:

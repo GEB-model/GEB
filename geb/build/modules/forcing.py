@@ -755,16 +755,15 @@ class Forcing(BuildModelBase):
             # the last chunk may be smaller than the specified chunk size,
             # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
             # This can be safely ignored in this context.
-            with np.errstate(invalid="ignore"):
-                da: xr.DataArray = self.set_other(
-                    da,
-                    name=name,
-                    filters=filters,
-                    shards={
-                        "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
-                    },
-                    **kwargs,
-                )
+            da: xr.DataArray = self.set_other(
+                da,
+                name=name,
+                filters=filters,
+                shards={
+                    "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
+                },
+                **kwargs,
+            )
 
         if create_plots:
             plot_forcing(mask, self.geom["mask"], self.report_dir, da, name)
