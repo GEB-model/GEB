@@ -35,6 +35,7 @@ from geb.runner import parse_config
 from geb.workflows.io import (
     WorkingDirectory,
     read_zarr,
+    write_zarr,
 )
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
