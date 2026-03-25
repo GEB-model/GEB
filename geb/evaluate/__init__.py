@@ -44,7 +44,6 @@ class Evaluate:
     def run(
         self,
         method: str,
-        spinup_name: str = "spinup",
         run_name: str = "default",
         **kwargs: Any,
     ) -> Any:
@@ -53,7 +52,6 @@ class Evaluate:
         Args:
             method: Fully-qualified method name to run, for example
                 `hydrology.evaluate_discharge`.
-            spinup_name: Name of the spinup run. Defaults to "spinup".
             run_name: Name of the run to evaluate. Defaults to "default".
             **kwargs: Additional keyword arguments to pass to the evaluation method.
 
@@ -74,9 +72,8 @@ class Evaluate:
                 f"Method {method} is not implemented in Evaluate class."
             ) from exc
 
-        # Merge spinup_name and run_name into kwargs to pass them all as keyword arguments
+        # Merge run_name into kwargs to pass all evaluation options as keyword arguments.
         all_kwargs = {
-            "spinup_name": spinup_name,
             "run_name": run_name,
             **kwargs,
         }

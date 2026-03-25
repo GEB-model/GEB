@@ -29,8 +29,8 @@ from .constants import (
 )
 from .energy import (
     apply_evaporative_cooling,
-    apply_rain_heat_advection,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
+    get_frozen_fraction_from_enthalpy,
     get_heat_capacity_solid_fraction,
     get_temperature_and_frozen_fraction_from_enthalpy_scalar,
     get_temperature_from_enthalpy,
@@ -187,6 +187,10 @@ def land_surface_model(
     ArrayFloat32,
     ArrayFloat32,
     ArrayFloat32,
+    ArrayFloat32,
+    ArrayFloat32,
+    ArrayFloat32,
+    ArrayFloat32,
 ]:
     """The main land surface model of GEB.
 
@@ -269,6 +273,13 @@ def land_surface_model(
         - transpiration_m: Transpiration in meters.
         - potential_transpiration_m: Potential transpiration in meters.
         - potential_evapotranspiration_m: Potential evapotranspiration in meters.
+        - top_soil_infiltration_m: Infiltration into the top soil layer in meters.
+        - top_soil_rise_from_layer_2_m: Upward redistribution from the second soil
+            layer into the top soil layer in meters.
+        - top_soil_percolation_to_layer_2_m: Percolation from the top soil layer to
+            layer 2 in meters.
+        - top_soil_transpiration_m: Transpiration extracted specifically from the
+            top soil layer in meters.
     """
     CO2_induced_crop_factor_adustment = get_CO2_induced_crop_factor_adustment(CO2_ppm)
 
@@ -300,6 +311,10 @@ def land_surface_model(
     potential_evapotranspiration_m = np.zeros(num_cells, dtype=np.float32)
     transpiration_m = np.zeros(num_cells, dtype=np.float32)
     groundwater_recharge_m = np.zeros(num_cells, dtype=np.float32)
+    top_soil_infiltration_m = np.zeros(num_cells, dtype=np.float32)
+    top_soil_rise_from_layer_2_m = np.zeros(num_cells, dtype=np.float32)
+    top_soil_percolation_to_layer_2_m = np.zeros(num_cells, dtype=np.float32)
+    top_soil_transpiration_m = np.zeros(num_cells, dtype=np.float32)
 
     # Daily integrated enthalpy flux diagnostics [J/m2].
     # Positive values indicate energy entering the soil enthalpy reservoir.
@@ -548,7 +563,22 @@ def land_surface_model(
             else:
                 runoff_m[i, hour] += groundwater_rise
 
-            soil_is_frozen = frozen_fractions_cell[0] > np.float32(0.0)
+            # Only newly added liquid surface water should advect rain heat here.
+            # Pre-existing ponded water is already part of the top-soil control
+            # volume and must not be reheated every infiltration call.
+            liquid_water_input_for_enthalpy_m: np.float32 = (
+                natural_available_water_infiltration_m
+                + actual_irrigation_consumption_m[i]
+            )
+
+            top_layer_frozen_fraction: np.float32 = np.minimum(
+                np.maximum(frozen_fractions_cell[0], np.float32(0.0)),
+                np.float32(1.0),
+            )
+            soil_is_frozen = top_layer_frozen_fraction > np.float32(0.0)
+            soil_enthalpy_before_rain_advection_J_per_m2: np.float32 = (
+                soil_enthalpy_J_per_m2[0, i]
+            )
 
             (
                 topwater_m[i],
@@ -559,6 +589,7 @@ def land_surface_model(
                 wetting_front_suction_head_m[i],
                 wetting_front_moisture_deficit[i],
                 green_ampt_active_layer_idx[i],
+                soil_enthalpy_J_per_m2[0, i],
             ) = infiltration(
                 ws=water_content_saturated_m[:, i],
                 wres=water_content_residual_m[:, i],
@@ -569,7 +600,7 @@ def land_surface_model(
                     i
                 ],
                 land_use_type=land_use_type[i],
-                soil_is_frozen=soil_is_frozen,
+                frozen_fraction_top_layer=top_layer_frozen_fraction,
                 w=water_content_m[:, i],
                 topwater_m=topwater_m[i],
                 capillary_rise_from_groundwater_m=capillar_rise_m[i],
@@ -581,21 +612,16 @@ def land_surface_model(
                 bubbling_pressure_cm=bubbling_pressure_cm[:, i],
                 soil_layer_height_m=soil_layer_height[:, i],
                 lambda_pore_size_distribution=lambda_pore_size_distribution[:, i],
+                soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0, i],
+                solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                    0, i
+                ],
+                rain_temperature_C=tas_C,
+                liquid_water_input_for_enthalpy_m=liquid_water_input_for_enthalpy_m,
             )
             runoff_m[i, hour] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
-
-            # Apply advective heat transport from infiltrating rain.
-            # We accumulate the realized enthalpy increment (after - before)
-            # to keep diagnostics exactly consistent with the prognostic update.
-            soil_enthalpy_before_rain_advection_J_per_m2: np.float32 = (
-                soil_enthalpy_J_per_m2[0, i]
-            )
-            soil_enthalpy_J_per_m2[0, i] = apply_rain_heat_advection(
-                soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0, i],
-                infiltration_amount_m=infiltration_amount,
-                rain_temperature_C=tas_C,  # assume rain temperature is equal to air temperature
-            )
+            top_soil_infiltration_m[i] += infiltration_amount
             rain_advection_enthalpy_flux_J_per_m2[i] += (
                 soil_enthalpy_J_per_m2[0, i]
                 - soil_enthalpy_before_rain_advection_J_per_m2
@@ -851,6 +877,11 @@ def land_surface_model(
                         flux, remaining_storage_capacity_sink, available_water_source
                     )
 
+                    if layer == 0 and flux_direction == 1:
+                        top_soil_percolation_to_layer_2_m[i] += flux
+                    elif layer == 0 and flux_direction == 0:
+                        top_soil_rise_from_layer_2_m[i] += flux
+
                     # Update water content in source and sink layers
                     water_content_m[source, i] -= flux
                     water_content_m[sink, i] += flux
@@ -972,6 +1003,8 @@ def land_surface_model(
                     - water_content_m[layer, i],
                 )
                 if transpired_from_layer_m > np.float32(0.0):
+                    if layer == 0:
+                        top_soil_transpiration_m[i] += transpired_from_layer_m
                     layer_temperature_C, _ = (
                         get_temperature_and_frozen_fraction_from_enthalpy_scalar(
                             enthalpy_J_per_m2=soil_enthalpy_J_per_m2[layer, i],
@@ -1093,6 +1126,10 @@ def land_surface_model(
         interflow_enthalpy_loss_J_per_m2,
         groundwater_recharge_enthalpy_loss_J_per_m2,
         transpiration_enthalpy_loss_J_per_m2,
+        top_soil_infiltration_m,
+        top_soil_rise_from_layer_2_m,
+        top_soil_percolation_to_layer_2_m,
+        top_soil_transpiration_m,
     )
 
 
@@ -1420,8 +1457,9 @@ class LandSurface(Module):
             soil_enthalpy_J_per_m2_prev: Soil enthalpy before the daily step (J/m2).
             soil_boundary_enthalpy_flux_J_per_m2: Net enthalpy flux from the
                 implicit soil energy solver (J/m2, positive into soil).
-            rain_advection_enthalpy_flux_J_per_m2: Enthalpy carried by infiltrating
-                rain (J/m2, signed).
+            rain_advection_enthalpy_flux_J_per_m2: Enthalpy carried by newly added
+                liquid water reaching the top-soil control volume during the day
+                (J/m2, signed).
             evaporative_cooling_enthalpy_loss_J_per_m2: Latent cooling losses by
                 evaporation/sublimation from the top layer (J/m2, positive out).
             interflow_enthalpy_loss_J_per_m2: Enthalpy exported by interflow
@@ -1983,6 +2021,10 @@ class LandSurface(Module):
             interflow_enthalpy_loss_J_per_m2,
             groundwater_recharge_enthalpy_loss_J_per_m2,
             transpiration_enthalpy_loss_J_per_m2,
+            top_soil_infiltration_m,
+            top_soil_rise_from_layer_2_m,
+            top_soil_percolation_to_layer_2_m,
+            top_soil_transpiration_m,
         ) = land_surface_model(**land_surface_inputs._asdict())
 
         timer.finish_split("Land surface model")
@@ -2015,6 +2057,14 @@ class LandSurface(Module):
                 1:, :
             ],
             water_content_m=self.HRU.var.water_content_m[1:, :],
+        )
+        top_soil_frozen_fraction: ArrayFloat32 = get_frozen_fraction_from_enthalpy(
+            enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[0, :],
+            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
+                0, :
+            ],
+            water_content_m=self.HRU.var.water_content_m[0, :],
+            topwater_m=self.HRU.var.topwater_m,
         )
 
         if __debug__:
@@ -2140,8 +2190,11 @@ class LandSurface(Module):
             + bare_soil_evaporation_m
             + irrigation_loss_to_evaporation_m
         )
+        top_soil_evaporation_m: ArrayFloat32 = (
+            bare_soil_evaporation_m + open_water_evaporation_m
+        )
 
-        runoff_m_daily = runoff_m.sum(axis=0)
+        runoff_m_daily = runoff_m.sum(axis=1)
 
         growing_crop_mask = self.HRU.var.crop_map != -1
 

@@ -573,14 +573,12 @@ def update_version(*args: Any, **kwargs: Any) -> None:
 )
 @click.argument("method", default="hydrology.evaluate_discharge")
 @universal_options
-@click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
 @click.option("--help", is_flag=True, help="Show this message and exit.")
 @click.pass_context
 def evaluate(
     ctx: click.Context,
     method: str,
-    spinup_name: str,
     run_name: str,
     help: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
@@ -602,7 +600,6 @@ def evaluate(
     Args:
         ctx: Click context containing extra arguments.
         method: Single evaluation method to run, e.g. `hydrology.evaluate_discharge`.
-        spinup_name: Name of the evaluation run.
         run_name: Name of the run to evaluate.
         help: Show this message and exit.
         working_directory: Working directory for the model.
@@ -709,7 +706,6 @@ def evaluate(
         method="evaluate",
         method_args={
             "method": method_name,
-            "spinup_name": spinup_name,
             "run_name": run_name,
             **extra_args,
         },

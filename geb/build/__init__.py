@@ -1975,7 +1975,7 @@ class GEBModel(
 
         self.root = root
         self.epsg = epsg
-        self._data_catalog = DataCatalog()
+        self._data_catalog = DataCatalog(logger=logger)
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
@@ -2324,7 +2324,7 @@ class GEBModel(
             # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
-                f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
+                f"Approximate riverine basin size: {round(geom.to_crs('ESRI:54009').area.sum() / 1e6, 2)} km2"
             )
 
             riverine_mask = create_riverine_mask(ldd, ldd_network, geom)
