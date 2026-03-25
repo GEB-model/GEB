@@ -1,5 +1,6 @@
 """Data catalog for predefined datasets in GEB."""
 
+import logging
 from typing import Any
 
 from .aquastat import AQUASTAT
@@ -865,7 +866,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     "gtsm_timeseries": {
         "adapter": GTSM_timeseries(
             folder="gtsm",
-            local_version=1,
+            local_version=2,
             filename="placeholder.zip",
             cache="global",
         ),
@@ -1099,9 +1100,12 @@ data_catalog: dict[str, dict[str, Any]] = {
 class DataCatalog:
     """The GEB data catalog for accessing predefined datasets."""
 
-    def __init__(self) -> None:
+    def __init__(self, logger: logging.Logger) -> None:
         """Initialize the data catalog with predefined entries."""
         self.catalog = data_catalog
+        for name, entry in self.catalog.items():
+            adapter = entry["adapter"]
+            adapter.logger = logger
 
     def fetch(self, name: str, *args: Any, **kwargs: Any) -> Adapter:
         """Get a data catalog entry by name.
