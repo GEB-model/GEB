@@ -7,7 +7,7 @@ multi-level dictionary merge function works correctly.
 import pytest
 from click.testing import CliRunner
 
-from geb.cli import cli
+from geb.cli import AVAILABLE_EVALUATION_METHODS, cli
 
 from .testconfig import IN_GITHUB_ACTIONS
 
@@ -47,3 +47,15 @@ def test_cli_exec_help() -> None:
     result = runner.invoke(cli, ["exec", "--help"])
     assert result.exit_code == 0
     assert "Method to run" in result.output
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in Github Actions.")
+def test_cli_evaluate_help_lists_methods() -> None:
+    """Test that evaluate help includes the available evaluation methods."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["evaluate", "--help"])
+
+    assert result.exit_code == 0
+    assert "Available methods:" in result.output
+    for method_name in AVAILABLE_EVALUATION_METHODS:
+        assert method_name in result.output
