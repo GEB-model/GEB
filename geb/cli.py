@@ -7,7 +7,7 @@ import subprocess
 import sys
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import click
 
@@ -41,7 +41,60 @@ from geb.workflows.raster import rechunk_zarr_file
 IS_WINDOWS = sys.platform == "win32"
 
 
-@click.group()
+def get_available_evaluation_methods() -> list[str]:
+    """Return the public evaluation methods available through ``geb evaluate``.
+
+    Returns:
+        Sorted list of fully-qualified evaluation method names.
+    """
+    evaluator = Evaluate(cast(Any, None))
+    available_methods: list[str] = []
+
+    for sub_evaluator_name in evaluator.sub_evaluators:
+        sub_evaluator = getattr(evaluator, sub_evaluator_name)
+        for attribute_name in dir(sub_evaluator):
+            if attribute_name.startswith("_"):
+                continue
+
+            attribute = getattr(sub_evaluator, attribute_name)
+            if callable(attribute):
+                available_methods.append(f"{sub_evaluator_name}.{attribute_name}")
+
+    return sorted(available_methods)
+
+
+def format_available_evaluation_methods(methods: list[str]) -> str:
+    """Format evaluation methods for CLI help text.
+
+    Args:
+        methods: Fully-qualified evaluation method names.
+
+    Returns:
+        Multi-line bullet list for CLI help output.
+    """
+    if not methods:
+        return "  - No evaluation methods available."
+
+    return "\n".join(f"  - {method_name}" for method_name in methods)
+
+
+AVAILABLE_EVALUATION_METHODS: list[str] = get_available_evaluation_methods()
+AVAILABLE_EVALUATION_METHODS_HELP: str = format_available_evaluation_methods(
+    AVAILABLE_EVALUATION_METHODS
+)
+EVALUATE_HELP = (
+    "Evaluate model, for example by comparing observed and simulated discharge.\n\n"
+    "Accepts additional parameter assignments in the form `--key value` or "
+    "`--key=value` to pass to the evaluation method. Strings `true` and "
+    "`false` (case-insensitive) are converted to booleans.\n\n"
+    "\b\n"
+    "Available methods:\n"
+    f"{AVAILABLE_EVALUATION_METHODS_HELP}\n\n"
+    "Use `geb evaluate [METHOD] --help` for method-specific documentation."
+)
+
+
+@click.group(help="Command line interface for GEB.")
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
 def cli(context: click.core.Context) -> None:
@@ -143,7 +196,7 @@ def universal_options(func: Callable[..., Any]) -> Callable[..., Any]:
         "--profile-ram",
         is_flag=True,
         default=PROFILE_RAM_DEFAULT,
-        help="Run GEB with RAM profiling (using memray). A .bin file is saved in the profiling directory."
+        help="Run GEB with RAM profiling (using memray). A .bin file is saved in the profiling directory. Not supported on Windows."
         if not IS_WINDOWS
         else "RAM profiling is not supported on Windows.",
     )
@@ -164,7 +217,7 @@ def universal_options(func: Callable[..., Any]) -> Callable[..., Any]:
         "-n",
         type=int,
         default=CORES_DEFAULT,
-        help="Restrict the number of CPU cores used by the process (Linux only).",
+        help="Restrict the number of CPU cores used by the process. Not supported on Windows.",
     )
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -514,7 +567,8 @@ def update_version(*args: Any, **kwargs: Any) -> None:
 @cli.command(
     context_settings=dict(
         ignore_unknown_options=True, allow_extra_args=True, help_option_names=[]
-    )
+    ),
+    help=EVALUATE_HELP,
 )
 @click.argument("method", default="hydrology.evaluate_discharge")
 @universal_options
@@ -576,7 +630,7 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
-            evaluator = Evaluate(None)  # type: ignore
+            evaluator = Evaluate(cast(Any, None))
             attr = attrgetter(method)(evaluator)
             click.echo(f"\nHelp for method '{method}':\n")
             if attr.__doc__:
@@ -585,23 +639,9 @@ def evaluate(
                 click.echo("No documentation found for this method.")
         except Exception:
             click.echo(f"Error: Method '{method}' not found.")
-            available_methods = []
-            try:
-                evaluator = Evaluate(None)  # type: ignore
-                # List methods in sub-evaluators
-                for sub_name in evaluator.sub_evaluators:
-                    sub_eval = getattr(evaluator, sub_name)
-                    for attr_name in dir(sub_eval):
-                        if not attr_name.startswith("_") and callable(
-                            getattr(sub_eval, attr_name)
-                        ):
-                            available_methods.append(f"{sub_name}.{attr_name}")
-            except Exception:
-                pass
-
-            if available_methods:
+            if AVAILABLE_EVALUATION_METHODS:
                 click.echo("\nAvailable methods are:")
-                for m in sorted(available_methods):
+                for m in AVAILABLE_EVALUATION_METHODS:
                     click.echo(f"  - {m}")
         ctx.exit()
 
