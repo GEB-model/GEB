@@ -764,11 +764,9 @@ class Crops(BuildModelBase):
                 if ISO3 in TRADE_REGIONS
             }
 
-            all_ISO3_across_relevant_regions: set[str] = {
-                ISO3
-                for ISO3 in ISO3_codes_region
-                if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
-            }
+            all_ISO3_across_relevant_regions: set[str] = set(
+                relevant_trade_regions.keys()
+            )
 
             # Setup dataFrame for further data corrections
             donor_data: dict[str, pd.DataFrame] = {}
@@ -778,10 +776,7 @@ class Crops(BuildModelBase):
                     .set_index("crop")
                     .transpose()
                     .reindex(index=all_years_faostat, columns=all_crops_faostat)
-                )
-                # set all dtypes to float64
-                for col in region_faostat.columns:
-                    region_faostat[col] = region_faostat[col].astype(np.float64)
+                ).astype(np.float64)
 
                 region_faostat["ISO3"] = ISO3
                 donor_data[ISO3] = region_faostat
@@ -819,6 +814,7 @@ class Crops(BuildModelBase):
                 (slice(None), slice(self.start_date.year, self.end_date.year)), :
             ]
 
+            # here, also countries that are not in the trade regions (e.g. Kosovo) are included (in self.geom["regions"]) and found a donor for (in the setup_donor_countries function)
             data = donate_and_receive_crop_prices(
                 donor_data,
                 unique_regions,
@@ -1545,7 +1541,9 @@ class Crops(BuildModelBase):
                             break
                     if not found_valid_neighbor:
                         # No valid neighboring cells found, handle accordingly
-                        print(f"No valid data found for cell {i} and its neighbors.")
+                        self.logger.warning(
+                            f"No valid data found for cell {i} and its neighbors."
+                        )
                         continue  # Skip this cell
 
                 # Normalize fractions

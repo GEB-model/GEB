@@ -110,6 +110,6 @@ class Agents(Module):
             timer.finish_split(agent_type.name)
 
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.report(locals())

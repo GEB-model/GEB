@@ -10,6 +10,7 @@ from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
+from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
@@ -18,6 +19,9 @@ from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
+from .global_ocean_mean_dynamic_topography import (
+    GlobalOceanMeanDynamicTopography as GlobalOceanMeanDynamicTopography,
+)
 from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
@@ -58,9 +62,21 @@ data_catalog: dict[str, dict[str, Any]] = {
     "era5": {
         "adapter": DestinationEarth(),
         "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
+    },
+    "ecmwf_geopotential": {
+        "adapter": ECMWFGeopotential(
+            folder="ecmwf_geopotential",
+            filename="geo_1279l4_0.1x0.1.grib2_v4_unpack.nc",
+            local_version=1,
+            cache="global",
+        ),
+        "url": "https://confluence.ecmwf.int/download/attachments/140385202/geo_1279l4_0.1x0.1.grib2_v4_unpack.nc?version=1&modificationDate=1591983422003&api=v2",
         "source": {
-            "name": "ERA5",
+            "name": "ECMWF ERA5-Land geopotential",
             "author": "ECMWF",
+            "url": "https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#ERA5Land:datadocumentation-parameterlistingParameterlistings",
+            "license": "CC BY 4.0",
         },
     },
     "ecmwf_forecasts": {
@@ -390,7 +406,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             folder="faostat_prices",
             local_version=1,
             filename="faostat_prices.parquet",
-            cache="local",
+            cache="global",
         ),
         "url": "https://bulks-faostat.fao.org/production/Prices_E_All_Data.zip",
         "source": {
@@ -829,6 +845,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "10.1088/1748-9326/ac4d4f",
         },
     },
+    "global_ocean_mean_dynamic_topography": {
+        "adapter": GlobalOceanMeanDynamicTopography(
+            folder="global_ocean_mean_dynamic_topography",
+            local_version=1,
+            filename="global_ocean_mean_dynamic_topography.nc",
+            cache="global",
+        ),
+        "url": "https://cmr.earthdata.nasa.gov/search/concepts/C2216864025-ORNL_CLOUD.html",
+        "source": {
+            "name": "Global Ocean Mean Dynamic Topography",
+            "author": "Copernicus Marine Service",
+            "version": "1",
+            "license": "CC0",
+            "url": "https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_MDT_008_063/description",
+            "paper_doi": "https://doi.org/10.48670/moi-00150",
+        },
+    },
     "gtsm": {
         "adapter": GTSM(
             folder="gtsm",
@@ -950,17 +983,17 @@ data_catalog: dict[str, dict[str, Any]] = {
     "glopop-sg": {
         "adapter": GLOPOP_SG(
             folder="glopop_sg",
-            local_version=1,
+            local_version=3,  # this is the third version of the dataset on Zenodo
             filename="placeholder",
             cache="local",
         ),
-        "url": "https://zenodo.org/records/15680747/files/GLOPOP_SG%20(1).zip?download=1",
+        "url": "https://zenodo.org/records/17076088/files/GLOPOP-SG(update).zip?download=1",
         "source": {
             "name": "GLOPOP-SG",
             "author": "M.J. Ton et al. (2025)",
             "license": "CC BY 4.0",
-            "url": "https://doi.org/10.5281/zenodo.15680747",
-            "paper_doi": "10.5281/zenodo.15680747",
+            "url": "https://doi.org/10.5281/zenodo.17076088",
+            "paper_doi": "10.5281/zenodo.17076088",
         },
     },
     **{

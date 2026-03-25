@@ -61,6 +61,6 @@ class ISIMIPCO2(Adapter):
         combined_data = historical_data + "\n" + future_data
 
         df: pd.DataFrame = pd.read_csv(
-            StringIO(combined_data), delim_whitespace=True, names=["year", "co2_ppm"]
+            StringIO(combined_data), sep="\s+", names=["year", "co2_ppm"]
         ).set_index("year")
         return df

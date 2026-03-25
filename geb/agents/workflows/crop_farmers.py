@@ -12,7 +12,7 @@ from geb.geb_types import (
     TwoDArrayFloat32,
     TwoDArrayInt32,
 )
-from geb.hydrology.evapotranspiration import get_root_ratios
+from geb.hydrology.landsurface.evapotranspiration import get_root_ratios
 
 
 @njit(cache=True, inline="always")

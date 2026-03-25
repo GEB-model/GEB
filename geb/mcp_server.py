@@ -18,7 +18,8 @@ def run_model(
     config: str = CONFIG_DEFAULT,
     working_directory: str = WORKING_DIRECTORY_DEFAULT,
     optimize: bool = False,
-    profiling: bool = False,
+    profile_ram: bool = False,
+    profile_speed: bool = False,
 ) -> str:
     """Run the GEB model.
 
@@ -26,7 +27,8 @@ def run_model(
         config: Path to model configuration file.
         working_directory: Working directory.
         optimize: Run in optimized mode.
-        profiling: Run with profiling.
+        profile_ram: Run with RAM profiling.
+        profile_speed: Run with speed profiling.
 
     Returns:
         Status message.
@@ -39,7 +41,8 @@ def run_model(
             config=Path(config),
             working_directory=Path(working_directory),
             optimize=optimize,
-            profiling=profiling,
+            profile_ram=profile_ram,
+            profile_speed=profile_speed,
         )
         return "Model run completed successfully."
     except Exception as e:

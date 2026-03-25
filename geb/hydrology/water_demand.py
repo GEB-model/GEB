@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from geb.geb_types import ArrayFloat32
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_grid
@@ -140,6 +140,8 @@ class WaterDemand(Module):
         available_channel_storage_m3: np.ndarray = (
             self.hydrology.routing.router.get_available_storage(
                 Q=self.grid.var.discharge_in_rivers_m3_s_substep,
+                river_storage_alpha=self.grid.var.river_storage_alpha,
+                river_storage_beta=self.grid.var.river_storage_beta,
                 maximum_abstraction_ratio=0.1,
             )
         )
@@ -147,7 +149,7 @@ class WaterDemand(Module):
         available_channel_storage_m3 = np.maximum(available_channel_storage_m3 - 100, 0)
 
         assert (
-            available_channel_storage_m3[self.grid.var.waterBodyID != -1] == 0.0
+            available_channel_storage_m3[self.grid.var.waterbody_ids != -1] == 0.0
         ).all()
 
         available_groundwater_m3: np.ndarray = (
@@ -221,11 +223,45 @@ class WaterDemand(Module):
 
         total_water_demand_loss_m3 = 0.0
 
+        def household_demand_to_grid(
+            water_demand_per_household_m3: ArrayFloat32,
+            household_locations: TwoDArrayFloat32,
+        ) -> ArrayFloat32:
+            """Convert household water demand to grid-level water demand.
+
+            This function is passed to the household agent's water demand function, which calculates
+            the water demand per household and then uses this function to convert it to a grid-level
+            water demand that can be used in the hydrological model.
+
+            Args:
+                water_demand_per_household_m3: Water demand per household in m3 per day.
+                household_locations: Locations of households in the same order as the water demand array.
+
+            Returns:
+                Grid-level water demand in m3 per day.
+            """
+            assert (water_demand_per_household_m3 >= 0).all()
+
+            domestic_water_demand_m3_map = np.zeros(
+                self.model.hydrology.grid.shape, np.float32
+            )
+
+            domestic_water_demand_m3 = write_to_array(
+                domestic_water_demand_m3_map,
+                water_demand_per_household_m3,
+                household_locations,
+                self.model.hydrology.grid.gt,
+            )
+            domestic_water_demand_m3 = self.model.hydrology.grid.compress(
+                domestic_water_demand_m3
+            )
+            return domestic_water_demand_m3
+
         (
-            domestic_water_demand_per_household,
+            domestic_water_demand_m3,
             domestic_water_efficiency_per_household,
-            household_locations,
-        ) = self.model.agents.households.water_demand()
+        ) = self.model.agents.households.water_demand(household_demand_to_grid)
+
         timer.finish_split("Domestic")
         industry_water_demand, industry_water_efficiency = (
             self.model.agents.industry.water_demand()
@@ -263,7 +299,6 @@ class WaterDemand(Module):
             ]
         )
 
-        assert (domestic_water_demand_per_household >= 0).all()
         assert (industry_water_demand >= 0).all()
         assert (livestock_water_demand >= 0).all()
 
@@ -276,18 +311,6 @@ class WaterDemand(Module):
         available_channel_storage_m3_pre = available_channel_storage_m3.copy()
         available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         available_groundwater_m3_pre = available_groundwater_m3.copy()
-
-        domestic_water_demand_m3 = np.zeros(self.model.hydrology.grid.shape, np.float32)
-
-        domestic_water_demand_m3 = write_to_array(
-            domestic_water_demand_m3,
-            domestic_water_demand_per_household,
-            household_locations,
-            self.model.hydrology.grid.gt,
-        )
-        domestic_water_demand_m3 = self.model.hydrology.grid.compress(
-            domestic_water_demand_m3
-        )
 
         assert (domestic_water_efficiency_per_household == 1).all()
         domestic_water_efficiency = 1
@@ -460,7 +483,7 @@ class WaterDemand(Module):
                 tolerance=10000,
             )
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.report(locals())
 

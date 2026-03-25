@@ -18,6 +18,7 @@ from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
+from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -30,6 +31,7 @@ from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import (
     calculate_height_m,
     calculate_width_m,
+    full_like,
     rasterize_like,
     snap_to_grid,
 )
@@ -538,7 +540,7 @@ class Hydrography(BuildModelBase):
 
         return rivers
 
-    @build_method(required=True)
+    @build_method(required=True, depends_on=["setup_cell_area"])
     def setup_hydrography(
         self,
         custom_rivers: str | None = None,
@@ -640,9 +642,14 @@ class Hydrography(BuildModelBase):
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
+
         streams_length_low_res.attrs["_FillValue"] = np.nan
         streams_length_low_res = snap_to_grid(streams_length_low_res, self.grid["mask"])
-
+        streams_length_low_res = np.maximum(
+            streams_length_low_res,
+            np.sqrt(self.grid["cell_area"])
+            * 0.5,  # stream length should be at least half of the cell length
+        )
         self.set_grid(streams_length_low_res, name="drainage/streams_length_m")
 
         elevation_coarsened = original_d8_elevation.coarsen(
@@ -889,11 +896,16 @@ class Hydrography(BuildModelBase):
             self.data_catalog, SWORD_reach_IDs
         )
 
-        rivers["width"] = np.nansum(
-            SWORD_river_widths * SWORD_reach_lengths, axis=0
-        ) / np.nansum(SWORD_reach_lengths, axis=0)
+        rivers_with_data = (SWORD_reach_IDs != -1).any(axis=0)
+
+        rivers.loc[rivers_with_data, "width"] = (
+            np.nansum(SWORD_river_widths * SWORD_reach_lengths, axis=0)[
+                rivers_with_data
+            ]
+            / np.sum(SWORD_reach_lengths, axis=0)[rivers_with_data]
+        )
         # ensure that all rivers with a SWORD ID have a width
-        assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
+        assert (~np.isnan(rivers["width"][rivers_with_data])).all()
 
         self.set_geom(rivers, name="routing/rivers")
 
@@ -917,12 +929,6 @@ class Hydrography(BuildModelBase):
             )
             return
 
-        global_ocean_mdt_fn = self.old_data_catalog.get_source(
-            "global_ocean_mean_dynamic_topography"
-        ).path
-
-        global_ocean_mdt = xr.open_dataset(global_ocean_mdt_fn)
-
         # get the model bounds and buffer by ~10km
         model_bounds = self.bounds
         model_bounds = (
@@ -931,28 +937,11 @@ class Hydrography(BuildModelBase):
             model_bounds[2] + 0.083,  # max_lon
             model_bounds[3] + 0.083,  # max_lat
         )
-        min_lon, min_lat, max_lon, max_lat = model_bounds
 
-        # reproject global_ocean_mdt to 0.008333 grid (~1km)
-        global_ocean_mdt = global_ocean_mdt["mdt"]
-        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
+        global_ocean_mdt = self.data_catalog.fetch(
+            "global_ocean_mean_dynamic_topography"
+        ).read(model_bounds)
 
-        # clip to model bounds
-        global_ocean_mdt = global_ocean_mdt.rio.clip_box(
-            minx=min_lon,
-            miny=min_lat,
-            maxx=max_lon,
-            maxy=max_lat,
-        )
-
-        # write crs
-        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
-        # drop unused columns
-        global_ocean_mdt = global_ocean_mdt.squeeze(drop=True)
-        # set datatype to float32 and set fillvalue to np.nan
-        global_ocean_mdt = global_ocean_mdt.astype(np.float32)
-        global_ocean_mdt.encoding["_FillValue"] = np.nan
-        global_ocean_mdt.attrs["_FillValue"] = np.nan
         # write to model
         self.set_other(
             global_ocean_mdt,
@@ -1001,31 +990,40 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_coastlines(self) -> None:
         """Sets up the coastlines for the model."""
-        if not self.geom["routing/subbasins"]["is_coastal"].any():
-            self.logger.info("No coastal basins found, skipping setup_coastlines")
-            return
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            # load the coastline from the data catalog
+            coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
 
-        # load the coastline from the data catalog
-        coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
+            # clip the coastline to overlapping with mask
+            coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
+            # merge all coastlines into a single linestring
+            coastlines = gpd.GeoDataFrame(
+                geometry=[coastlines.union_all()], crs=coastlines.crs
+            )
 
-        # clip the coastline to overlapping with mask
-        coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
-        # merge all coastlines into a single linestring
-        coastlines = gpd.GeoDataFrame(
-            geometry=[coastlines.union_all()], crs=coastlines.crs
-        )
+            # write to model files
+            self.set_geom(coastlines, name="coastal/coastlines")
 
-        # write to model files
-        self.set_geom(coastlines, name="coastal/coastlines")
+            # create rectangular box around coastlines
+            if not coastlines.empty:
+                bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
+                bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
+                import warnings
 
-        # create rectangular box around coastlines
-        if not coastlines.empty:
-            bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
-            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
-            bbox_gdf.geometry = bbox_gdf.geometry.buffer(
-                0.04, join_style=2
-            )  # buffer by 0.04 degree
-            self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=UserWarning,
+                    )
+                    bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                        0.04, join_style=2
+                    )  # buffer by 0.04 degree
+                self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+        else:
+            self.logger.info("No coastal basins found, setting empty coastlines")
+            empty_gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+            self.set_geom(empty_gdf, name="coastal/coastlines")
+            self.set_geom(empty_gdf, name="coastal/coastline_bbox")
 
     @build_method(required=True)
     def setup_osm_land_polygons(
@@ -1050,36 +1048,46 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(depends_on=["setup_coastlines"], required=True)
+    @build_method(depends_on=["setup_coastlines", "setup_elevation"], required=True)
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
-        if not self.geom["routing/subbasins"]["is_coastal"].any():
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            # load elevation data
+            elevation = self.other["DEM/fabdem"]
+            # load the lecz mask
+            low_elevation_coastal_zone_mask = (
+                self.create_low_elevation_coastal_zone_mask()
+            )
+
+            # add small buffer to ensure connection of 'islands' with coastlines
+            low_elevation_coastal_zone_mask.geometry = (
+                low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+            )
+
+            # sample the minimum elevation present in the lecz mask
+            mask = elevation.rio.clip(
+                low_elevation_coastal_zone_mask.geometry,
+                low_elevation_coastal_zone_mask.crs,
+                all_touched=True,
+                drop=False,
+            )
+
+            initial_water_levels = float(np.nanmin(mask.values))
+
+            low_elevation_coastal_zone_mask["initial_water_level"] = (
+                initial_water_levels
+            )
+        else:
             self.logger.info(
                 "No coastal basins found, skipping setup_coastal_sfincs_model_regions"
             )
-            return
+            low_elevation_coastal_zone_mask = gpd.GeoDataFrame(
+                geometry=[], crs=self.geom["mask"].crs
+            )
+            low_elevation_coastal_zone_mask["initial_water_level"] = pd.Series(
+                dtype=np.float32
+            )
 
-        # load elevation data
-        elevation = self.other["DEM/fabdem"]
-        # load the lecz mask
-        low_elevation_coastal_zone_mask = self.create_low_elevation_coastal_zone_mask()
-
-        # add small buffer to ensure connection of 'islands' with coastlines
-        low_elevation_coastal_zone_mask.geometry = (
-            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
-        )
-
-        # sample the minimum elevation present in the lecz mask
-        mask = elevation.rio.clip(
-            low_elevation_coastal_zone_mask.geometry,
-            low_elevation_coastal_zone_mask.crs,
-            all_touched=True,
-            drop=False,
-        )
-
-        initial_water_levels = float(np.nanmin(mask.values))
-
-        low_elevation_coastal_zone_mask["initial_water_level"] = initial_water_levels
         self.set_geom(
             low_elevation_coastal_zone_mask,
             name="coastal/low_elevation_coastal_zone_mask",
@@ -1355,7 +1363,7 @@ class Hydrography(BuildModelBase):
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+        ref_file = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[unresolved-attribute]
             1979, "01"
         )
         ref = xr.open_dataset(ref_file)
@@ -1375,7 +1383,7 @@ class Hydrography(BuildModelBase):
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.old_data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
+                f = self.old_data_catalog.get_source("GTSM_surge").path.format(
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1433,7 +1441,7 @@ class Hydrography(BuildModelBase):
         )
 
         # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[possibly-missing-attribute]
+        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}
@@ -1617,3 +1625,72 @@ class Hydrography(BuildModelBase):
             )
 
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")
+
+    @build_method(required=False, depends_on=["setup_hydrography"])
+    def setup_retention_basins(self, retention_basins: Path) -> None:
+        """Setup retention basins.
+
+        Args:
+            retention_basins: A vector file that can be read by geopandas containing the retention basins,
+                with a point geometry representing the location of the retention basin.
+
+        Raises:
+            ValueError: If a retention basin cannot be snapped to the river network.
+
+        Sets:
+            routing/retention_basin_ids: A grid with the same dimensions as the model grid, where each pixel that is
+            part of a retention basin has the ID of the basin it is associated with, and pixels that are not part of a
+            retention basin have a value of -1.
+            routing/retention_basin_data: A table containing the ID of each retention basin and other data (e.g., is_controlled).
+        """
+        # create a grid with the same dimensions as the model grid to store the retention basin IDs
+        retention_basin_ids = full_like(
+            self.grid["mask"], fill_value=-1, nodata=-1, dtype=np.int32
+        ).compute()
+
+        # read the retention basins from the provided file
+        retention_basins = gpd.read_file(retention_basins).to_crs(
+            self.grid["mask"].rio.crs
+        )
+        rivers = self.geom["routing/rivers"]
+
+        retention_basin_data = []
+
+        upstream_area_grid = self.grid["routing/upstream_area_m2"].compute()
+        upstream_area_subgrid = self.other[
+            "drainage/original_d8_upstream_area_m2"
+        ].compute()
+
+        for _, retention_basin in retention_basins.iterrows():
+            centroid = retention_basin.geometry.centroid
+
+            # the centroid of the retention basin may not fall exactly on the river network,
+            # so we snap it to the nearest river pixel using the snap_point_to_river_network function
+            snapped_data = snap_point_to_river_network(
+                point=centroid,
+                rivers=rivers,
+                upstream_area_grid=upstream_area_grid,
+                upstream_area_subgrid=upstream_area_subgrid,
+            )
+            if snapped_data is None:
+                raise ValueError(
+                    f"Could not snap retention basin for basin ID {retention_basin['ID']} to river network. "
+                )
+            snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
+
+            # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
+            retention_basin_ids.values[
+                snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+            ] = retention_basin["ID"]
+
+            # store the retention basin data in a list to create a table later
+            retention_basin_data.append(
+                {
+                    "ID": retention_basin["ID"],
+                    "is_controlled": retention_basin["is_controlled"],
+                }
+            )
+
+        retention_basin_df = pd.DataFrame(retention_basin_data)
+        self.set_table(retention_basin_df, name="routing/retention_basin_data")
+        self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")

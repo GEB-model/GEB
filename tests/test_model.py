@@ -28,9 +28,14 @@ from geb.cli import (
     update_fn,
 )
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
+from geb.hydrology.routing import get_river_width
 from geb.model import GEBModel
 from geb.runner import parse_config
-from geb.workflows.io import WorkingDirectory, read_zarr, write_params
+from geb.workflows.io import (
+    WorkingDirectory,
+    read_zarr,
+    write_zarr,
+)
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
@@ -113,24 +118,6 @@ def test_init_coastal(clean_working_directory: bool) -> None:
             **args,
             overwrite=True,
         )
-
-        build_config = parse_config("build.yml")
-        build_config = {
-            key: value
-            for key, value in build_config.items()
-            if key
-            in (
-                "setup_region",
-                "setup_hydrography",
-                "setup_elevation",
-                "setup_global_ocean_mean_dynamic_topography",
-                "setup_coastlines",
-                "setup_osm_land_polygons",
-                "setup_coastal_sfincs_model_regions",
-                "setup_gtsm_station_data",
-            )
-        }
-        write_params(build_config, Path("build.yml"))
 
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
@@ -238,7 +225,12 @@ def test_update_with_dict() -> None:
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "method",
-    ["setup_hydrography", "setup_vegetation", "setup_water_demand"],
+    [
+        "setup_hydrography",
+        "setup_vegetation",
+        "setup_water_demand",
+        "setup_discharge_observations",
+    ],
 )
 def test_update_with_method(method: str) -> None:
     """Test updating model configuration using different methods.
@@ -284,22 +276,36 @@ def test_spinup() -> None:
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
         geb: GEBModel = run_model_with_method(
-            method="spinup", **args, close_after_run=False
+            method="spinup",
+            **args,
+            method_args={"initialize_only": True},
+            close_after_run=False,
+            timing=False,
         )
+
+        RIVER_WIDTH_OUTFLOW_RIVER = 30.0
+
+        routing = geb.hydrology.routing
+        outflow_rivers = geb.hydrology.routing.outflow_rivers
+        routing.observed_average_river_width[
+            routing.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
+        ] = RIVER_WIDTH_OUTFLOW_RIVER
+
+        geb.step_to_end()
+        geb.store.save()
+
+        geb.reporter.finalize()
 
         routing_report_folder: Path = (
             working_directory / "output" / "report" / "spinup" / "hydrology.routing"
         )
 
-        hourly_discharge_data = xr.open_dataarray(
+        hourly_discharge_data = read_zarr(
             routing_report_folder / "discharge_hourly.zarr"
         )
 
-        daily_discharge_data = xr.open_dataarray(
-            routing_report_folder / "discharge_daily.zarr"
-        )
+        daily_discharge_data = read_zarr(routing_report_folder / "discharge_daily.zarr")
 
-        outflow_rivers = geb.hydrology.routing.outflow_rivers
         for ID, river in outflow_rivers.iterrows():
             outflow_data_csv: pd.DataFrame = pd.read_csv(
                 routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.csv",
@@ -324,6 +330,23 @@ def test_spinup() -> None:
             np.testing.assert_almost_equal(
                 daily_outflow_data_zarr.values, outflow_data_csv_daily.values, decimal=4
             )
+
+            # test whether river alpha and beta are correctly calculated
+            mean_discharge = np.array(outflow_data_csv.mean(), dtype=np.float32)
+
+            linear_index = geb.hydrology.grid.linear_mapping[
+                outflow_xy[1], outflow_xy[0]
+            ]
+            river_width_alpha = geb.hydrology.grid.var.river_width_alpha[[linear_index]]
+            river_width_beta = geb.hydrology.grid.var.river_width_beta[[linear_index]]
+
+            river_width = get_river_width(
+                river_width_alpha, river_width_beta, mean_discharge
+            )
+
+            # this check only makes sense after 365 days
+            if geb.n_timesteps > 365:
+                assert river_width == pytest.approx(RIVER_WIDTH_OUTFLOW_RIVER, abs=0.1)
 
         geb.close()
 
@@ -434,7 +457,31 @@ def test_evaluate_water_circle() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate() -> None:
+def test_evaluate_evaluate_discharge() -> None:
+    """Test model evaluation functionality.
+
+    Verifies that model outputs can be evaluated and analyzed
+    for correctness and consistency. Checks that the evaluation
+    returns a dictionary containing expected metrics.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "method": "hydrology.evaluate_discharge",
+            "include_yearly_plots": False,
+        }
+        args["method_args"] = method_args
+        result = run_model_with_method(method="evaluate", **args)
+
+        # Verify that the result is a dictionary and contains expected keys
+        assert isinstance(result, dict)
+        assert "KGE" in result
+        assert "NSE" in result
+        assert "R" in result
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate_evaluate_water_balance() -> None:
     """Test model evaluation functionality.
 
     Verifies that model outputs can be evaluated and analyzed
@@ -444,8 +491,26 @@ def test_evaluate() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
-            "method": "hydrology.evaluate_discharge",
+            "method": "hydrology.water_balance",
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate_energy() -> None:
+    """Test energy evaluation functionality.
+
+    Verifies that model outputs can be evaluated and analyzed
+    for correctness and consistency. Does not check the evaluation
+    results itself. Just if it can be run.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "method": "energy.plot_soil_temperature",
             "include_yearly_plots": False,
+            "run_name": "spinup",
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
@@ -635,6 +700,81 @@ def test_setup_inflow() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_setup_retention_basins() -> None:
+    """Test setup of retention basins.
+
+    Verifies that the model can set up retention basins
+    from specified locations and retention basin data files.
+    """
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        config = parse_config(CONFIG_DEFAULT)
+        config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=10
+        )
+        args["config"] = config
+
+        model: GEBModel = run_model_with_method(
+            method=None,
+            close_after_run=False,
+            **args,
+        )
+        model.run(initialize_only=True)
+        data_folder: Path = Path("data")
+        data_folder.mkdir(parents=True, exist_ok=True)
+
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers.copy()
+
+        start_time = model.spinup_start
+        end_time = model.run_end + model.timestep_length
+
+        model.close()
+
+        retention_basins: gpd.GeoDataFrame = rivers[["geometry"]].copy().to_crs(3857)
+        retention_basins.geometry = retention_basins.geometry.centroid
+        retention_basins = retention_basins.to_crs(4326)
+        retention_basins["ID"] = np.arange(len(retention_basins))
+        retention_basins["is_controlled"] = retention_basins.index.astype(int) % 2 == 0
+        retention_basins.reset_index().to_file(
+            data_folder / "retention_basins.geojson", driver="GeoJSON"
+        )
+
+        try:
+            build_args = DEFAULT_BUILD_ARGS.copy()
+            del build_args["continue_"]
+
+            build_config: dict[str, dict[str, str | bool]] = {}
+            build_config["setup_retention_basins"] = {
+                "retention_basins": str(Path("data") / "retention_basins.geojson"),
+            }
+            build_args["build_config"] = build_config
+
+            # copy the original input file
+            shutil.copy(Path("input") / "files.yml", Path("input") / "files.yml.bak")
+
+            update_fn(**build_args)
+            geb_model = run_model_with_method(
+                method="run", **args, close_after_run=False
+            )
+            assert geb_model.hydrology.routing.retention_basin_data is not None
+            assert geb_model.hydrology.routing.retention_basin_ids is not None
+            geb_model.close()
+
+        finally:
+            # remove retention basin data files
+            if (data_folder / "retention_basins.geojson").exists():
+                os.remove(data_folder / "retention_basins.geojson")
+
+            # restore original input file
+            if (Path("input") / "files.yml.bak").exists():
+                shutil.copy(
+                    Path("input") / "files.yml.bak", Path("input") / "files.yml"
+                )
+                os.remove(Path("input") / "files.yml.bak")
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_run_yearly() -> None:
     """Test yearly model execution.
 
@@ -794,14 +934,15 @@ def test_multiverse() -> None:
             )
             forecasts_folder.mkdir(parents=True, exist_ok=True)
 
-            forecast_da.to_zarr(
+            write_zarr(
+                forecast_da,
                 forecasts_folder
                 / (
                     forecast_variable
                     + "_"
                     + forecast_issue_date.strftime("%Y%m%dT%H%M%S.zarr")
                 ),
-                mode="w",
+                crs=forecast_da.rio.crs,
             )
 
         mean_discharge_after_forecast: dict[str | int, float] = geb.multiverse(
@@ -841,12 +982,12 @@ def test_multiverse() -> None:
 
         # the first flood event in the multiverse is of equal length as in the main simulation
         # so the flood maps should be identical
-        flood_map_first_event: xr.DataArray = xr.open_dataarray(
+        flood_map_first_event: xr.DataArray = read_zarr(
             flood_map_folder
             / f"{events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
-        flood_map_first_event_multiverse: xr.DataArray = xr.open_dataarray(
+        flood_map_first_event_multiverse: xr.DataArray = read_zarr(
             forecast_folder
             / f"{events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
@@ -859,13 +1000,13 @@ def test_multiverse() -> None:
 
         # the second flood event in the multiverse is shorter than in the main simulation
         # because the forecast ends before the flood event ends
-        flood_map_second_event: xr.DataArray = xr.open_dataarray(
+        flood_map_second_event: xr.DataArray = read_zarr(
             flood_map_folder
             / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[1]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
         # the name of the file is midnight before (or on) the end time of the forecast
-        flood_map_second_event_multiverse: xr.DataArray = xr.open_dataarray(
+        flood_map_second_event_multiverse: xr.DataArray = read_zarr(
             forecast_folder
             / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {forecast_end_date.replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y%m%dT%H%M%S')}.zarr"
         )

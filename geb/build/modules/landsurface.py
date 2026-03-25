@@ -12,6 +12,7 @@ from geb.build.methods import build_method
 from geb.workflows.io import get_window, parse_and_set_zarr_CRS
 from geb.workflows.raster import (
     calculate_cell_area_m2,
+    clip_with_geometry,
     convert_nodata,
     interpolate_na_2d,
     interpolate_na_along_dim,
@@ -21,7 +22,6 @@ from geb.workflows.raster import (
     repeat_grid,
     resample_chunked,
     resample_like,
-    snap_to_grid,
 )
 
 from ..workflows.soilgrids import load_soilgrids
@@ -35,7 +35,7 @@ class LandSurface(BuildModelBase):
         """Initialize the LandSurface class."""
         pass
 
-    @build_method(depends_on=["setup_regions_and_land_use"], required=True)
+    @build_method(required=True)
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
 
@@ -75,27 +75,13 @@ class LandSurface(BuildModelBase):
         )
         self.set_subgrid(sub_cell_area, name="cell_area")
 
-        region_subgrid_cell_area = self.full_like(
-            self.region_subgrid["mask"],
-            fill_value=np.nan,
-            nodata=np.nan,
-            dtype=np.float32,
-        )
-
-        height, width = region_subgrid_cell_area.shape
-        region_subgrid_cell_area.data = calculate_cell_area_m2(
-            region_subgrid_cell_area.rio.transform(recalc=True),
-            height,
-            width,
-        )
-
-        # set the cell area for the region subgrid
-        self.set_region_subgrid(
-            region_subgrid_cell_area,
-            name="cell_area",
-        )
-
-    @build_method(depends_on=["setup_hydrography"], required=True)
+    @build_method(
+        depends_on=[
+            "setup_hydrography",
+            "setup_coastlines",
+        ],
+        required=True,
+    )
     def setup_elevation(
         self,
         DEMs: list[dict[str, str | float]] = [
@@ -157,6 +143,10 @@ class LandSurface(BuildModelBase):
         if not isinstance(DEMs, list) or not all(isinstance(DEM, dict) for DEM in DEMs):
             raise ValueError("DEMs must be provided as a list of dictionaries.")
 
+        potential_flood_area_with_buffer = (
+            self.geom["routing/subbasins"].union_all().buffer(0.1)
+        )
+
         if self.geom["routing/subbasins"]["is_coastal"].any():
             # deltaDTM must be present if coastal DEMs are used
             if not any(DEM.get("name", "") == "delta_dtm" for DEM in DEMs):
@@ -169,40 +159,41 @@ class LandSurface(BuildModelBase):
                     DEM["zmin"] = DEM["coastal_zmin"]
                 if "coastal_zmax" in DEM:
                     DEM["zmax"] = DEM["coastal_zmax"]
+
+            coastlines = self.geom["coastal/coastlines"]
+            potential_flood_area_with_buffer = potential_flood_area_with_buffer.union(
+                coastlines.buffer(0.2).union_all()
+            )
+
+            delta_dtm: xr.DataArray = self.data_catalog.fetch(
+                "delta_dtm",
+                mask=potential_flood_area_with_buffer,
+            ).read(mask=potential_flood_area_with_buffer)
+
+            # Create low elevation coastal zone mask based on DeltaDTM
+            low_elevation_coastal_zone = delta_dtm < 10
+            low_elevation_coastal_zone.values = (
+                low_elevation_coastal_zone.values.astype(np.float32)
+            )
+            self.set_other(
+                low_elevation_coastal_zone,
+                name="landsurface/low_elevation_coastal_zone",
+            )  # Maybe remove this
+
         else:
             # Remove coastal DEMs if no coastal subbasins are present
             DEMs = [DEM for DEM in DEMs if not DEM.get("coastal_only", False)]
 
-        # here we use the bounds of all subbasins, which may include downstream
-        # subbasins that are not part of the study area
-        bounds: tuple[float, float, float, float] = tuple(
-            self.geom["routing/subbasins"].total_bounds
-        )
-
-        buffer: float = 0.5
-        xmin: float = bounds[0] - buffer
-        ymin: float = bounds[1] - buffer
-        xmax: float = bounds[2] + buffer
-        ymax: float = bounds[3] + buffer
-
-        fabdem: xr.DataArray = (
-            self.data_catalog.fetch(
-                "fabdem",
-                xmin=xmin,
-                xmax=xmax,
-                ymin=ymin,
-                ymax=ymax,
-                prefix="hydrodynamics",
-            )
-            .read(prefix="hydrodynamics")
-            .compute()
-        )
+        fabdem: xr.DataArray = self.data_catalog.fetch(
+            "fabdem",
+            mask=potential_flood_area_with_buffer,
+        ).read()
 
         target: xr.DataArray = self.subgrid["mask"]
         assert target.rio.crs is not None, "target grid must have a crs"
 
         self.set_subgrid(
-            resample_like(fabdem, target, method="bilinear"),
+            resample_chunked(fabdem, target, method="bilinear"),
             name="landsurface/elevation",
         )
 
@@ -213,26 +204,15 @@ class LandSurface(BuildModelBase):
                 DEM_raster: xr.DataArray = fabdem
 
             elif DEM["name"] == "delta_dtm":
-                DEM_raster: xr.DataArray = self.data_catalog.fetch(
-                    "delta_dtm",
-                    xmin=xmin,
-                    xmax=xmax,
-                    ymin=ymin,
-                    ymax=ymax,
-                ).read()
-
-                # Create low elevation coastal zone mask based on DeltaDTM
-                low_elevation_coastal_zone = DEM_raster < 10
-                low_elevation_coastal_zone.values = (
-                    low_elevation_coastal_zone.values.astype(np.float32)
-                )
-                self.set_other(
-                    low_elevation_coastal_zone,
-                    name="landsurface/low_elevation_coastal_zone",
-                )  # Maybe remove this
+                DEM_raster: xr.DataArray = delta_dtm
 
             elif DEM["name"] == "gebco":
                 DEM_raster: xr.DataArray = self.data_catalog.fetch("gebco").read()
+                # set maximum values for DEM_raster if zmax is set for the DEM
+                if "zmax" in DEM:
+                    DEM_raster = DEM_raster.where(
+                        DEM_raster <= DEM["zmax"], DEM["zmax"]
+                    )
 
             else:
                 # custom DEMs must have a path
@@ -272,22 +252,14 @@ class LandSurface(BuildModelBase):
                             f"DEM at path '{DEM['path']}' does not have a nodata value defined."
                         )
 
-            if "bands" in DEM_raster.dims:
+            if "band" in DEM_raster.dims:
                 DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
 
-            DEM_raster: xr.DataArray = DEM_raster.isel(
-                get_window(
-                    DEM_raster.x,
-                    DEM_raster.y,
-                    tuple(
-                        self.geom["routing/subbasins"]
-                        .to_crs(DEM_raster.rio.crs)
-                        .total_bounds
-                    ),
-                    buffer=100,
-                    raise_on_out_of_bounds=False,
-                    raise_on_buffer_out_of_bounds=False,
-                ),
+            DEM_raster = clip_with_geometry(
+                DEM_raster,
+                gpd.GeoDataFrame(geometry=[potential_flood_area_with_buffer], crs=4326),
+                all_touched=True,
+                drop=True,
             )
 
             DEM_raster = convert_nodata(
@@ -307,7 +279,7 @@ class LandSurface(BuildModelBase):
 
         self.set_params(DEMs, name="hydrodynamics/DEM_config")
 
-    @build_method(depends_on=[], required=True)
+    @build_method(depends_on=["setup_coastal_sfincs_model_regions"], required=True)
     def setup_regions_and_land_use(
         self,
         region_database: str = "GADM_level1",
@@ -349,7 +321,9 @@ class LandSurface(BuildModelBase):
             .rename(columns={"GID_0": "ISO3"})
         )
 
-        global_countries["geometry"] = global_countries.centroid
+        global_countries["geometry"] = global_countries.to_crs(
+            "ESRI:54009"
+        ).centroid.to_crs(global_countries.crs)
         global_countries = global_countries.set_index("ISO3")
 
         self.set_geom(global_countries, name="global_countries")
@@ -385,7 +359,6 @@ class LandSurface(BuildModelBase):
         pad_maxx = max(regions_bounds[2], mask_bounds[2]) + abs(resolution_x) / 2.0
         pad_maxy = max(regions_bounds[3], mask_bounds[3]) + abs(resolution_y) / 2.0
 
-        # TODO: Is there a better way to do this?
         region_mask, region_subgrid_slice = pad_xy(
             self.subgrid["mask"],
             pad_minx,
@@ -398,132 +371,104 @@ class LandSurface(BuildModelBase):
         region_mask.attrs["_FillValue"] = None
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
-        bounds = self.geom["regions"].total_bounds
-        xmin: float = bounds[0] - 0.1
-        ymin: float = bounds[1] - 0.1
-        xmax: float = bounds[2] + 0.1
-        ymax: float = bounds[3] + 0.1
+        # Get the combined bounds of regions and subbasins to ensure coverage of both
+        buffer = 0.1
 
-        land_use: xr.DataArray = (
-            self.data_catalog.fetch(land_cover)
-            .read(xmin, ymin, xmax, ymax)
-            .chunk({"x": 1000, "y": 1000})
+        regions_bounds = self.geom["regions"].total_bounds
+        subbasins_bounds = self.geom["routing/subbasins"].total_bounds
+
+        potential_flood_area_with_buffer = (
+            self.geom["routing/subbasins"].union_all().buffer(0.1)
+        )
+        if self.geom["routing/subbasins"]["is_coastal"].any():
+            potential_flood_area_with_buffer = potential_flood_area_with_buffer.union(
+                self.geom["coastal/low_elevation_coastal_zone_mask"]
+                .union_all()
+                .buffer(0.2)
+            )
+
+        land_use_classification_source: xr.DataArray = self.data_catalog.fetch(
+            land_cover
+        ).read(self.geom["regions"].union_all().union(potential_flood_area_with_buffer))
+
+        land_use_classification_source_within_potential_flood_area = clip_with_geometry(
+            land_use_classification_source,
+            gpd.GeoDataFrame(geometry=[potential_flood_area_with_buffer], crs=4326),
+            all_touched=True,
+            drop=True,
         )
 
-        reprojected_land_use: xr.DataArray = resample_chunked(
-            land_use, region_mask.chunk({"x": 1000, "y": 1000}), method="nearest"
+        self.set_other(
+            land_use_classification_source_within_potential_flood_area,
+            name="landcover/classification",
         )
 
-        reprojected_land_use: xr.DataArray = self.set_region_subgrid(
-            reprojected_land_use,
-            name="landsurface/original_land_use",
+        land_use_classification_source_region_subgrid: xr.DataArray = resample_chunked(
+            land_use_classification_source,
+            region_mask,
+            method="nearest",
         )
 
-        region_ids: xr.DataArray = rasterize_like(
+        subgrid_region_ids: xr.DataArray = rasterize_like(
             gdf=self.geom["regions"],
             column="region_id",
             raster=region_mask,
             dtype=np.int32,
             nodata=-1,
             all_touched=True,
-        ).compute()
-        region_ids: xr.DataArray = self.set_region_subgrid(
-            region_ids, name="region_ids"
         )
+        self.set_region_subgrid(subgrid_region_ids, name="region_ids")
 
-        full_region_land_use_classes = reclassify(
-            reprojected_land_use,
-            {
-                reprojected_land_use.attrs[
-                    "_FillValue"
-                ]: 5,  # no data, set to permanent water bodies because ocean
-                10: 0,  # tree cover
-                20: 1,  # shrubland
-                30: 1,  # grassland
-                40: 1,  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
-                50: 4,  # built-up
-                60: 1,  # bare / sparse vegetation
-                70: 1,  # snow and ice
-                80: 5,  # permanent water bodies
-                90: 1,  # herbaceous wetland
-                95: 5,  # mangroves
-                100: 1,  # moss and lichen
+        land_use_classification_source_subgrid = (
+            land_use_classification_source_region_subgrid.isel(region_subgrid_slice)
+        ).astype(np.int16)
+        land_use_classification_source_subgrid = xr.where(
+            ~self.subgrid["mask"], land_use_classification_source_subgrid, -1
+        )
+        land_use_classes_subgrid = reclassify(
+            land_use_classification_source_subgrid,
+            remap_dict={
+                -1: np.int8(-1),  # outside of the model domain
+                0: np.int8(
+                    5
+                ),  # map nodata in source to permanent water bodies, as these are mostly ocean in the land cover dataset
+                10: np.int8(0),  # tree cover
+                20: np.int8(1),  # shrubland
+                30: np.int8(1),  # grassland
+                40: np.int8(
+                    1
+                ),  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
+                50: np.int8(4),  # built-up
+                60: np.int8(1),  # bare / sparse vegetation
+                70: np.int8(1),  # snow and ice
+                80: np.int8(5),  # permanent water bodies
+                90: np.int8(1),  # herbaceous wetland
+                95: np.int8(5),  # mangroves
+                100: np.int8(1),  # moss and lichen
             },
-        ).astype(np.int32)
-        full_region_land_use_classes.attrs["_FillValue"] = -1
-
-        full_region_land_use_classes = self.set_region_subgrid(
-            full_region_land_use_classes,
-            name="landsurface/full_region_land_use_classes",
         )
+        land_use_classes_subgrid.attrs["_FillValue"] = -1
+        self.set_subgrid(land_use_classes_subgrid, name="landsurface/land_use_classes")
 
         cultivated_land_full_region = xr.where(
-            (full_region_land_use_classes == 1) & (reprojected_land_use == 40),
+            land_use_classification_source_region_subgrid == 40,
             True,
             False,
         )
+
         cultivated_land_full_region.attrs["_FillValue"] = None
-        cultivated_land_full_region = self.set_region_subgrid(
+        self.set_region_subgrid(
             cultivated_land_full_region, name="landsurface/full_region_cultivated_land"
         )
 
-        land_use_classes = full_region_land_use_classes.isel(region_subgrid_slice)
-        land_use_classes = snap_to_grid(land_use_classes, self.subgrid)
-        self.set_subgrid(land_use_classes, name="landsurface/land_use_classes")
-
-        cultivated_land = cultivated_land_full_region.isel(region_subgrid_slice)
-        cultivated_land = snap_to_grid(cultivated_land, self.subgrid)
-        self.set_subgrid(cultivated_land, name="landsurface/cultivated_land")
-
-    @build_method(depends_on=[], required=True)
+    @build_method(depends_on=[], required=False)
     def setup_land_use_parameters(
         self,
         land_cover: str = "esa_worldcover_2021",
     ) -> None:
-        """Sets up the land use parameters for the model.
-
-        Args:
-            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021'.
-
-        Notes:
-            This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
-            interpolating the data to the model grid. It first retrieves the land use dataset from the `data_catalog`, and
-            then retrieves the maximum root depth and root fraction data for each land use type. It then
-            interpolates the data to the model grid using the specified interpolation method and sets the resulting grids as
-            attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}', where
-            {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
-            the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.).
-
-            Additionally, this method sets up the crop coefficient and interception capacity data for each land use type by
-            retrieving the corresponding data from the land use dataset and interpolating it to the model grid. The crop
-            coefficient data is set as attributes of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
-            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
-            data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
-            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
-
-            The resulting land use parameters are set as attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}',
-            where {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
-            the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.). The crop coefficient data is set as attributes
-            of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
-            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
-            data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
-            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
-        """
-        bounds = self.geom["routing/subbasins"].total_bounds
-        buffer = 0.1
-
-        xmin = bounds[0] - buffer
-        ymin = bounds[1] - buffer
-        xmax = bounds[2] + buffer
-        ymax = bounds[3] + buffer
-
-        landcover_classification: xr.DataArray = self.data_catalog.fetch(
-            land_cover
-        ).read(xmin, ymin, xmax, ymax)
-
-        landcover_classification = self.set_other(
-            landcover_classification,
-            name="landcover/classification",
+        """This method is removed."""
+        self.logger.warning(
+            "setup_land_use_parameters is removed, please remove it from your build configuration"
         )
 
     @build_method(depends_on=[], required=False)
@@ -581,18 +526,14 @@ class LandSurface(BuildModelBase):
             variable="BDTICM_M_250m_ll"
         )
         assert isinstance(depth_to_bedrock_cm, xr.DataArray)
-        depth_to_bedrock_cm = (
-            depth_to_bedrock_cm.isel(
-                get_window(
-                    depth_to_bedrock_cm.x,
-                    depth_to_bedrock_cm.y,
-                    self.bounds,
-                    buffer=10,
-                ),
-            )
-            .astype(np.float32)
-            .compute()
-        )
+        depth_to_bedrock_cm = depth_to_bedrock_cm.isel(
+            get_window(
+                depth_to_bedrock_cm.x,
+                depth_to_bedrock_cm.y,
+                self.bounds,
+                buffer=10,
+            ),
+        ).astype(np.float32)
         depth_to_bedrock_cm: xr.DataArray = convert_nodata(depth_to_bedrock_cm, np.nan)
         depth_to_bedrock_m: xr.DataArray = (
             depth_to_bedrock_cm / 100
