@@ -225,12 +225,15 @@ def read_geom(filepath: str | Path, **kwargs: Any) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath, **kwargs)
 
 
-def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
+def write_geom(
+    gdf: gpd.GeoDataFrame, filepath: Path, write_covering_bbox: bool = False
+) -> None:
     """Save a GeoDataFrame to a parquet file.
 
     Args:
         gdf: The GeoDataFrame to save.
         filepath: Path to the output parquet file.
+        write_covering_bbox: Whether to write the covering bounding box to the file.
     """
     gdf.to_parquet(
         filepath,
@@ -239,6 +242,7 @@ def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
         compression_level=9,
         row_group_size=max(min(10_000, len(gdf)), 1),
         schema_version="1.1.0",
+        write_covering_bbox=write_covering_bbox,
     )
 
 
@@ -575,17 +579,25 @@ def _store_dask_array_blocks(
 
     array_blocks = da.blocks
 
-    for block_index in block_indices:
-        region = _chunk_index_to_region(da.chunks, block_index)
-        block = array_blocks[block_index]
-        dask.array.store(
-            block,
-            store_target,
-            regions=region,
-            lock=False,
-            compute=True,
-            return_stored=False,
-        )
+    with np.errstate(invalid="ignore"):
+        stores = []
+        for block_index in block_indices:
+            region = _chunk_index_to_region(da.chunks, block_index)
+            block = array_blocks[block_index]
+
+            stores.append(
+                dask.array.store(
+                    block,
+                    store_target,
+                    regions=region,
+                    lock=False,
+                    compute=False,  # Use compute=False to return a Dask object instead of executing
+                    return_stored=False,
+                )
+            )
+
+        # Execute all at once
+        dask.compute(*stores)
 
 
 def _normalize_shards(
