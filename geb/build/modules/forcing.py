@@ -752,9 +752,6 @@ class Forcing(BuildModelBase):
                 category=ZarrUserWarning,
                 message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
             )
-            # the last chunk may be smaller than the specified chunk size,
-            # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
-            # This can be safely ignored in this context.
             da: xr.DataArray = self.set_other(
                 da,
                 name=name,
