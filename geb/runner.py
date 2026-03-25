@@ -929,17 +929,11 @@ def build_fn(
             for method, args in parsed_build_config.items()
             if not method.startswith("_")
         }
-        try:
-            model.build(
-                methods=methods,
-                region=parse_config(config, schema=Config)["general"]["region"],
-                continue_=continue_,
-            )
-        except Exception:
-            # Log the full traceback through the logger so it is captured in
-            # build.log even when stdout/stderr are redirected via &>.
-            logger.exception("Build failed with unhandled exception")
-            raise
+        model.build(
+            methods=methods,
+            region=parse_config(config, schema=Config)["general"]["region"],
+            continue_=continue_,
+        )
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(

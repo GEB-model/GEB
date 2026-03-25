@@ -3448,7 +3448,7 @@ class GEBModel(
             try:
                 self.run_method(method, **kwargs)
             finally:
-                # Flush memory stats after every method regardless of success or
+                # Write memory stats after every method regardless of success or
                 # failure so partial results survive job crashes.
                 if stats_path is not None:
                     try:

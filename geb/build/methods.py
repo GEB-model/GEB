@@ -16,8 +16,6 @@ __all__: list[str] = ["build_method"]
 
 from typing import Protocol
 
-_BYTES_TO_MB: float = 1 / (1024 * 1024)
-
 
 def validate_build_methods(
     tree: nx.DiGraph,
@@ -203,7 +201,7 @@ class _build_method:
         self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
         self.peak_memory_usage: dict[str, int] = {}
-        # Track what has already been flushed to the stats spreadsheet so
+        # Track what has already been written to the stats spreadsheet so
         # incremental calls to write_build_stats never produce duplicate rows.
         self._methods_written_to_stats: set[str] = set()
 
@@ -500,7 +498,7 @@ class _build_method:
         for method, time_taken in sorted_by_time:
             percentage: float = (time_taken / total_time) * 100
             active_logger.info(
-                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%) and had peak memory usage of {self.peak_memory_usage[method] * _BYTES_TO_MB:.2f} MB."
+                f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%) and had peak memory usage of {self.peak_memory_usage[method] / 1024 / 1024:.2f} MB."
             )
 
         sorted_by_memory = sorted(
@@ -513,7 +511,7 @@ class _build_method:
                 memory_usage / max(self.peak_memory_usage.values())
             ) * 100
             active_logger.info(
-                f"Method {method} had peak memory usage of {memory_usage * _BYTES_TO_MB:.2f} MB ({percentage:.1f}%) and took {self.time_taken[method]:.2f} seconds."
+                f"Method {method} had peak memory usage of {memory_usage / 1024 / 1024:.2f} MB ({percentage:.1f}%) and took {self.time_taken[method]:.2f} seconds."
             )
 
         active_logger.info(f"Total time taken: {total_time:.2f} seconds.")
@@ -582,7 +580,7 @@ class _build_method:
                     "method": method_name,
                     "duration_seconds": round(self.time_taken.get(method_name, 0.0), 6),
                     "peak_memory_megabytes": round(
-                        self.peak_memory_usage.get(method_name, 0) * _BYTES_TO_MB,
+                        self.peak_memory_usage.get(method_name, 0) / 1024 / 1024,
                         6,
                     ),
                     "input_directory_gigabytes": round(

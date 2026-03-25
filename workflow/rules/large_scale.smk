@@ -5,8 +5,6 @@ on multiple basin clusters created by the 'geb init_multiple' command.
 """
 
 import os
-import yaml
-from functools import lru_cache
 from pathlib import Path
 
 # Get configuration with defaults
@@ -20,41 +18,11 @@ CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "Europe")
 LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", str(Path(_geb_root).parent / "models" / "large_scale"))
 EVALUATION_METHODS = config.get("EVALUATION_METHODS", "hydrology.plot_discharge,hydrology.evaluate_discharge")
 
-# Cache for basin areas to avoid repeated file reads
-@lru_cache(maxsize=None)
-def get_basin_area_km2(cluster_name):
-    """Read basin area from cluster's model.yml file with caching."""
-    model_yml_path = Path(LARGE_SCALE_DIR) / cluster_name / "base" / "model.yml"
-    area = 30000.0  # default for missing or unreadable files
-
-    if model_yml_path.exists():
-        try:
-            with open(model_yml_path) as f:
-                config_data = yaml.safe_load(f)
-            area = float(config_data.get("basin", {}).get("total_area_km2", 30000.0))
-        except Exception:
-            pass
-
-    return area
-
-@lru_cache(maxsize=None)
 def get_resources(cluster_name):
-    """Get SLURM resources based on basin size.
+    """Get SLURM resources for a cluster job.
 
-    SLURM on this cluster does NOT use --mem for placement decisions (observed
-    repeatedly: all jobs pile onto one node regardless of --mem). CPU counts ARE
-    always enforced as a hard scheduling constraint. We exploit this to control
-    concurrency by requesting enough CPUs per job to limit jobs per node:
-
-      defq   node001/002:  64 CPUs,  ~1031 GB  -> 32 CPUs/job -> 2 jobs/node -> 4 total
-      ivm-fat node243:    128 CPUs,   ~773 GB  -> 64 CPUs/job -> 2 jobs/node -> 2 total
-      Grand total: 6 concurrent jobs
-
-    Memory safety (post ~50% reduction, Mar 2026; worst-case ~267 GB/job):
-      defq:    2 x 267 GB = 534 GB  < 1031 GB  OK
-      ivm-fat: 2 x 267 GB = 534 GB  <  773 GB  OK
-
-    node003-015 (~257 GB) are always excluded as too small for any basin build.
+    All clusters use the same resource allocation. CPU count is the effective
+    concurrency knob (SLURM on this cluster ignores --mem for placement).
 
     Args:
         cluster_name: Name of the cluster directory (e.g. "Europe_007").
@@ -62,7 +30,6 @@ def get_resources(cluster_name):
     Returns:
         Tuple of (memory_mb, partition_name, cpus_per_task, slurm_extra).
     """
-    area_km2 = get_basin_area_km2(cluster_name)
     exclude = "--exclude=node[003-015]"
 
     # Resource strategy (updated Mar 2026):
