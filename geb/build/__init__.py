@@ -77,6 +77,7 @@ defenv(**GDAL_HTTP_ENV_OPTS)
 
 XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 
+
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
 
@@ -3068,16 +3069,7 @@ class GEBModel(
         """
         fp: Path = Path(self.files_path)
         if not fp.exists():
-            return {
-                "geom": {},
-                "array": {},
-                "table": {},
-                "dict": {},
-                "grid": {},
-                "subgrid": {},
-                "region_subgrid": {},
-                "other": {},
-            }
+            return {category: {} for category in EXPECTED_FILE_LIBRARY_CATEGORIES}
         else:
             files = read_params(self.files_path)
 
@@ -3086,6 +3078,9 @@ class GEBModel(
             # this line can be removed in august 2026 (also in geb/model.py)
             if "geoms" in files:
                 files["geom"] = files.pop("geoms", {})
+
+            for category in EXPECTED_FILE_LIBRARY_CATEGORIES:
+                files.setdefault(category, {})
         return files
 
     def read_geom(self) -> None:

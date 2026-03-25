@@ -23,6 +23,7 @@ from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .modules.flood_risk import FloodRiskModule
+from .modules.wind_risk import WindRiskModule
 from .workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
@@ -121,14 +122,16 @@ class Households(AgentBaseClass):
             self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
             self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
             self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
-            self.load_wind_maps()
-            self.wind_risk_perceptions = []  # Store the windstorm risk perceptions in here
-            self.wind_risk_perceptions_statistics = []  # Store some statistics on windstorm risk perceptions here
             if self.model.config["agent_settings"]["households"]["warning_response"]:
                 self.load_critical_infrastructure()  # ideally this should be done in the setup_assets when building the model
                 self.load_wlranges_and_measures()
+            if self.model.config["agent_settings"]["households"]["wind_adaptation"]:
+                self.wind_risk_module = WindRiskModule(model=self.model, households=self)
+                self.wind_risk_perceptions = []  # Store the windstorm risk perceptions in here
+                self.wind_risk_perceptions_statistics = []  # Store some statistics on windstorm risk perceptions here
+        
 
-        self.load_windstorm_damage_curve()
+        
 
         if self.model.in_spinup:
             self.spinup()
@@ -179,56 +182,19 @@ class Households(AgentBaseClass):
             self.postal_codes = read_geom(self.model.files["geom"]["postal_codes"])
 
     # not in current main version
-    def load_flood_maps(self) -> None:
-        self.return_periods = np.array(
-            self.model.config["hazards"]["flood"]["return_periods"]
-        )
+    # def load_flood_maps(self) -> None:
+    #     self.return_periods = np.array(
+    #         self.model.config["hazards"]["flood"]["return_periods"]
+    #     )
 
-        flood_maps = {}
-        for return_period in self.return_periods:
-            file_path = (
-                self.model.output_folder / "flood_maps" / f"return_level_rp{return_period}.zarr"
-            )
-            flood_maps[return_period] = read_zarr(file_path)
-        self.flood_maps = flood_maps
+    #     flood_maps = {}
+    #     for return_period in self.return_periods:
+    #         file_path = (
+    #             self.model.output_folder / "flood_maps" / f"return_level_rp{return_period}.zarr"
+    #         )
+    #         flood_maps[return_period] = read_zarr(file_path)
+    #     self.flood_maps = flood_maps
     # Modification
-    def load_wind_maps(self):
-        """Load wind maps in this case for the 50 and 100 return periods.This maps are created separately and copied to the "wind_maps" folder.Creating the folder and copying the wind maps should be done manually."""
-        self.windstorm_return_periods = np.array(
-            self.model.config["hazards"]["windstorm"]["return_periods"]
-        )
-
-        debug_maps = bool(
-            self.model.config.get("hazards", {})
-            .get("windstorm", {})
-            .get("debug_maps", False)
-        )
-
-        windstorm_maps = {}
-        windstorm_path = self.model.output_folder / "wind_maps"
-        for return_period in self.windstorm_return_periods:
-            file_path = (
-                windstorm_path / f"return_level_rp{return_period}.tif"
-            )  # adjust to file name
-            windstorm_map = xr.open_dataarray(file_path, engine="rasterio")
-
-            if debug_maps:
-                try:
-                    crs = windstorm_map.rio.crs
-                except Exception:
-                    crs = None
-                print(
-                    "Loaded windstorm map: "
-                    f"rp={int(return_period)}, path={file_path}, "
-                    f"shape={tuple(windstorm_map.shape)}, crs={crs}"
-                )
-
-            windstorm_maps[return_period] = windstorm_map
-
-        self.windstorm_maps = windstorm_maps
-        # print("Wind maps loaded for return periods:", self.windstorm_return_periods)
-
-    # # Modification
     # def load_wind_maps(self):
     #     """Load wind maps in this case for the 50 and 100 return periods.This maps are created separately and copied to the "wind_maps" folder.Creating the folder and copying the wind maps should be done manually."""
     #     self.windstorm_return_periods = np.array(
@@ -264,6 +230,8 @@ class Households(AgentBaseClass):
 
     #     self.windstorm_maps = windstorm_maps
     #     # print("Wind maps loaded for return periods:", self.windstorm_return_periods)
+
+    
 
     def construct_income_distribution(self) -> None:
         """Construct a lognormal income distribution for the region."""
@@ -892,6 +860,69 @@ class Households(AgentBaseClass):
         )
         self.flood_risk_perceptions.append(df)
 
+    def return_period_windstorm(self) -> np.ndarray:
+        """Simulate a windstorm event based on return periods and determine which households are affected.
+
+        Returns:
+            Array of indices of affected households.
+        """
+        #draw a single random number
+        p_random = np.random.random()
+        # Work with a locally sorted copy of return periods to ensure correct event selection
+        return_periods_arr = np.asarray(self.windstorm_return_periods, dtype=float)
+        sort_idx = np.argsort(return_periods_arr)  # ascending order
+        sorted_return_periods = return_periods_arr[sort_idx]
+        probabilities = 1.0 / sorted_return_periods
+
+        if p_random >= probabilities.max():
+            return np.array([], dtype=int)
+        
+        # find the event corresponding to the random draw
+        event_idx = np.searchsorted(probabilities[::-1], p_random)
+        event_idx = len(probabilities) - 1 - event_idx
+        event = sorted_return_periods[event_idx]
+        self.model.logger.info(
+            "Return period windstorm event: %s years (p=%.4f, random draw=%.4f)",
+            event,
+            probabilities[event_idx],
+            p_random,
+        )
+
+        windstorm_map: xr.DataArray = self.windstorm_maps[event]
+
+        # cache household coordinates in windstorm_map CRS (Nx2 numpy array)
+        if not hasattr(self, "_household_xy_wind"):
+            import pyproj
+
+            x, y = np.array(self.buildings.x), np.array(self.buildings.y)
+            transformer = pyproj.Transformer.from_crs(
+                "EPSG:4326", windstorm_map.rio.crs, always_xy=True
+            )
+            self._building_xy_wind = np.array(transformer.transform(x, y)).T
+
+        # sample windstorm map using clipped coordinates
+        sampled_values = sample_from_map(
+            array=windstorm_map.values,
+            coords=self._building_xy_wind,
+            gt=windstorm_map.rio.transform(recalc=True).to_gdal(),
+            out_of_bounds_value=np.nan,
+        )
+
+        # Use a wind speed threshold to determine affected households (e.g., >30 m/s)
+        minimum_wind_speed_ms = 30.0
+        windstorm_building_indices = np.where(sampled_values > minimum_wind_speed_ms)[0]
+        #get building IDs of affected buildings
+        windstorm_building_ids = self.buildings.loc[
+            windstorm_building_indices, "id"
+        ].values.astype(int)
+
+        #get indices of households located in affected buildings
+        windstorm_household_indices = np.where(
+            np.isin(self.var.building_id_of_household.data, windstorm_building_ids)
+        )[0]
+
+        return windstorm_household_indices
+
     def update_windstorm_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
         self.var.years_since_last_windstorm.data += 1
@@ -947,11 +978,8 @@ class Households(AgentBaseClass):
                         f"Hit households: {n_hit_households}"
                     )
         else:
-            if (
-                np.random.random() < 0.1
-            ):  # generate random windstorm (not based on actual modeled windstorm data)
-                print("Random windstorm event!")
-                self.var.years_since_last_windstorm[:] = 0
+            windstorm_household_indices = self.return_period_windstorm()
+            self.var.years_since_last_windstorm.data[windstorm_household_indices] = 0
 
         self.var.risk_perception_windstorm.data = (
             self.var.risk_perc_w_max
@@ -2480,103 +2508,103 @@ class Households(AgentBaseClass):
 
         return damages_unprotected_w, damages_shutters_w
 
-    def calculate_building_flood_damages(
-        self, verbose: bool = True, export_building_damages: bool = False
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """This function calculates the flood damages for the households in the model.
+    # def calculate_building_flood_damages(
+    #     self, verbose: bool = True, export_building_damages: bool = False
+    # ) -> tuple[np.ndarray, np.ndarray]:
+    #     """This function calculates the flood damages for the households in the model.
 
-        It iterates over the return periods and calculates the damages for each household
-        based on the flood maps and the building footprints.
+    #     It iterates over the return periods and calculates the damages for each household
+    #     based on the flood maps and the building footprints.
 
-        Args:
-            verbose: Verbosity flag.
-            export_building_damages: Whether to export the building damages to parquet files.
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-        """
-        damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
-        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+    #     Args:
+    #         verbose: Verbosity flag.
+    #         export_building_damages: Whether to export the building damages to parquet files.
+    #     Returns:
+    #         Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
+    #     """
+    #     damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+    #     damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
 
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
-            self.flood_maps[self.return_periods[0]].rio.crs
-        )
+    #     buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
+    #         self.flood_maps[self.return_periods[0]].rio.crs
+    #     )
 
-        # create a pandas data array for assigning damage to the agents:
-        agent_df = pd.DataFrame(
-            {"building_id_of_household": self.var.building_id_of_household}
-        )
+    #     # create a pandas data array for assigning damage to the agents:
+    #     agent_df = pd.DataFrame(
+    #         {"building_id_of_household": self.var.building_id_of_household}
+    #     )
 
-        # subset building to those exposed to flooding
-        buildings = buildings[buildings["flooded"]]
+    #     # subset building to those exposed to flooding
+    #     buildings = buildings[buildings["flooded"]]
 
-        # only calculate damages for buildings with more than 0 occupant
-        buildings = buildings[buildings["n_occupants"] > 0]
+    #     # only calculate damages for buildings with more than 0 occupant
+    #     buildings = buildings[buildings["n_occupants"] > 0]
 
-        for i, return_period in enumerate(self.return_periods):
-            flood_map: xr.DataArray = self.flood_maps[return_period]
+    #     for i, return_period in enumerate(self.return_periods):
+    #         flood_map: xr.DataArray = self.flood_maps[return_period]
 
-            building_multicurve = buildings.copy()
-            multi_curves = {
-                "damages_structure": self.buildings_structure_curve[
-                    "building_unprotected"
-                ],
-                "damages_content": self.buildings_content_curve["building_unprotected"],
-                "damages_structure_flood_proofed": self.buildings_structure_curve[
-                    "building_flood_proofed"
-                ],
-                "damages_content_flood_proofed": self.buildings_content_curve[
-                    "building_flood_proofed"
-                ],
-            }
-            damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
-                features=building_multicurve.rename(
-                    columns={
-                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
-                    }
-                ),
-                hazard=flood_map,
-                multi_curves=multi_curves,
-            )
+    #         building_multicurve = buildings.copy()
+    #         multi_curves = {
+    #             "damages_structure": self.buildings_structure_curve[
+    #                 "building_unprotected"
+    #             ],
+    #             "damages_content": self.buildings_content_curve["building_unprotected"],
+    #             "damages_structure_flood_proofed": self.buildings_structure_curve[
+    #                 "building_flood_proofed"
+    #             ],
+    #             "damages_content_flood_proofed": self.buildings_content_curve[
+    #                 "building_flood_proofed"
+    #             ],
+    #         }
+    #         damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
+    #             features=building_multicurve.rename(
+    #                 columns={
+    #                     "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
+    #                     "COST_CONTENTS_USD_SQM": "maximum_damage_content",
+    #                 }
+    #             ),
+    #             hazard=flood_map,
+    #             multi_curves=multi_curves,
+    #         )
 
-            # sum structure and content damages
-            damage_buildings["damages"] = (
-                damage_buildings["damages_structure"]
-                + damage_buildings["damages_content"]
-            )
-            damage_buildings["damages_flood_proofed"] = (
-                damage_buildings["damages_structure_flood_proofed"]
-                + damage_buildings["damages_content_flood_proofed"]
-            )
-            # concatenate damages to building_multicurve
-            building_multicurve = pd.concat(
-                [building_multicurve, damage_buildings], axis=1
-            )
+    #         # sum structure and content damages
+    #         damage_buildings["damages"] = (
+    #             damage_buildings["damages_structure"]
+    #             + damage_buildings["damages_content"]
+    #         )
+    #         damage_buildings["damages_flood_proofed"] = (
+    #             damage_buildings["damages_structure_flood_proofed"]
+    #             + damage_buildings["damages_content_flood_proofed"]
+    #         )
+    #         # concatenate damages to building_multicurve
+    #         building_multicurve = pd.concat(
+    #             [building_multicurve, damage_buildings], axis=1
+    #         )
 
-            if export_building_damages:
-                fn_for_export = self.model.output_folder / "building_damages"
-                fn_for_export.mkdir(parents=True, exist_ok=True)
-                building_multicurve.to_parquet(
-                    self.model.output_folder
-                    / "building_damages"
-                    / f"building_damages_rp{return_period}_{self.model.current_time.year}.parquet"
-                )
-            building_multicurve = building_multicurve[
-                ["id", "damages", "damages_flood_proofed"]
-            ]
-            # merged["damage"] is aligned with agents
-            damages_do_not_adapt[i], damages_adapt[i] = self.assign_damages_to_agents(
-                agent_df,
-                building_multicurve,
-            )
-            if verbose:
-                print(
-                    f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
-                )
-                print(
-                    f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
-                )
-        return damages_do_not_adapt, damages_adapt
+    #         if export_building_damages:
+    #             fn_for_export = self.model.output_folder / "building_damages"
+    #             fn_for_export.mkdir(parents=True, exist_ok=True)
+    #             building_multicurve.to_parquet(
+    #                 self.model.output_folder
+    #                 / "building_damages"
+    #                 / f"building_damages_rp{return_period}_{self.model.current_time.year}.parquet"
+    #             )
+    #         building_multicurve = building_multicurve[
+    #             ["id", "damages", "damages_flood_proofed"]
+    #         ]
+    #         # merged["damage"] is aligned with agents
+    #         damages_do_not_adapt[i], damages_adapt[i] = self.assign_damages_to_agents(
+    #             agent_df,
+    #             building_multicurve,
+    #         )
+    #         if verbose:
+    #             print(
+    #                 f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
+    #             )
+    #             print(
+    #                 f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
+    #             )
+    #     return damages_do_not_adapt, damages_adapt
 
     def update_households_geodataframe_w_warning_variables(
         self, date_time: datetime
@@ -2650,400 +2678,400 @@ class Households(AgentBaseClass):
             / f"households_with_warning_parameters_{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
         )
 
-    def calculate_building_wind_damages(
-        self, verbose: bool = True, export_building_damages: bool = False
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """This function calculates the windstorm damages for the households in the model.
-
-        It iterates over the return periods and calculates the damages for each household
-        based on the windstorm maps and the building footprints.
-
-        Args:
-            verbose: Verbosity flag.
-            export_building_damages: Whether to export the building damages to parquet files.
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-        """
-        damages_unprotected_w = np.zeros(
-            (self.windstorm_return_periods.size, self.n), np.float32
-        )
-        damages_adapt_w = np.zeros(
-            (self.windstorm_return_periods.size, self.n), np.float32
-        )
-
-        # CRS alignment
-        crs = self.flood_maps[self.return_periods[0]].rio.crs
-        windstorm_map_crs = {
-            rp: self.windstorm_maps[rp].rio.reproject(crs)
-            for rp in self.windstorm_return_periods
-        }
-
-        debug_damage_stats = bool(
-            self.model.config.get("hazards", {})
-            .get("windstorm", {})
-            .get("debug_damage_stats", False)
-        )
-
-        # create a pandas data array for assigning damage to the agents:
-        agent_df = pd.DataFrame(
-            {"building_id_of_household": self.var.building_id_of_household}
-        )
-
-        # subset building to those exposed to flooding (multi-hazard exposure)
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(crs)
-
-        only_flooded_buildings = bool(
-            self.model.config.get("hazards", {})
-            .get("windstorm", {})
-            .get("only_flooded_buildings", True)
-        )
-        if only_flooded_buildings:
-            buildings = buildings[buildings["flooded"]]
-        # only calculate damages for buildings with more than 0 occupant
-        buildings = buildings[buildings["n_occupants"] > 0]
-
-        for i, return_period in enumerate(self.windstorm_return_periods):
-            wind_map = windstorm_map_crs[return_period]
-
-            wind_threshold = 27.01
-            wind_map_masked = wind_map.fillna(0.0)
-            mind_map_masked = wind_map_masked.where(
-                wind_map_masked >= wind_threshold, 0.0
-            )
-
-            building_multicurve = buildings.copy()
-
-            multi_curves = {
-                "damages_structure_unprotected": self.wind_buildings_structure_curve[
-                    "building_unprotected"
-                ],
-                "damages_structure_wind_shutters": self.wind_buildings_structure_curve[
-                    "building_window_shutters"
-                ],
-            }
-            damage_buildings: pd.Series = VectorScannerMultiCurves(
-                features=building_multicurve.rename(
-                    columns={"maximum_damage_m2": "maximum_damage"}
-                ),
-                hazard=wind_map_masked,
-                multi_curves=multi_curves,
-            )
-
-            damage_buildings["damages_unprotected"] = damage_buildings[
-                "damages_structure_unprotected"
-            ]
-            damage_buildings["damages_wind_shutters"] = damage_buildings[
-                "damages_structure_wind_shutters"
-            ]
-
-            building_multicurve = pd.concat(
-                [building_multicurve, damage_buildings], axis=1
-            )
-
-            # Damage_threshold = 0.001
-
-            # buildings_to_damage.loc[
-            #     buildings_to_damage["damages_unprotected"] < Damage_threshold,
-            #     "damages_unprotected",
-            # ] = 0.0
-
-            if export_building_damages:
-                fn_export = self.model.output_folder / "building_wind_damages"
-                fn_export.mkdir(parents=True, exist_ok=True)
-                building_multicurve.to_parquet(
-                    self.model.output_folder
-                    / "building_wind_damages"
-                    / f"building_wind_damages_rp{return_period}_{self.model.current_time.year}.parquet"
-                )
-            building_multicurve = building_multicurve[
-                ["id", "damages_unprotected", "damages_wind_shutters"]
-            ]
-            # merged["damage"] is aligned with agents
-            damages_unprotected_w[i], damages_adapt_w[i] = (
-                self.assign_wdamages_to_agents(
-                    agent_df,
-                    building_multicurve,
-                )
-            )
-
-            if debug_damage_stats:
-                unprot = damages_unprotected_w[i]
-                prot = damages_adapt_w[i]
-                # Keep this cheap: simple stats + non-zero fraction.
-                frac_nonzero = float(np.mean(unprot > 0))
-                print(
-                    "Wind damage stats "
-                    f"rp={int(return_period)}: "
-                    f"sum={float(unprot.sum()):.3e}, mean={float(np.mean(unprot)):.3e}, "
-                    f"p95={float(np.quantile(unprot, 0.95)):.3e}, max={float(np.max(unprot)):.3e}, "
-                    f"nonzero_frac={frac_nonzero:.3f}, "
-                    f"adapt_mean={float(np.mean(prot)):.3e}"
-                )
-            if verbose:
-                print(
-                    f"Wind Damages rp{return_period}: {round(damages_unprotected_w[i].sum() / 1e6)} million"
-                )
-                print(
-                    f"Wind Damages adapt rp{return_period}: {round(damages_adapt_w[i].sum() / 1e6)} million"
-                )
-        return damages_unprotected_w, damages_adapt_w
-
-    def get_max_wind_at_buildings(
-        self, buildings_gdf: gpd.GeoDataFrame, wind_map: xr.DataArray
-    ) -> np.ndarray:
-        """This function extracts the maximum wind speed at the location of each building.
-
-        Args:
-            buildings_gdf: GeoDataFrame containing building geometries.
-            wind_map: xarray DataArray containing the wind speed map.
-
-        Returns:
-            A numpy array containing the maximum wind speed at each building location.
-        """
-        # Extract the maximum wind speed at the location of each building
-        # by sampling the wind map at the building centroids
-        max_winds = []
-        for geom in buildings_gdf.geometry:
-            masked = wind_map.rio.clip([geom], buildings_gdf.crs, drop=False)
-            max_winds.append(float(masked.max()))
-
-        return np.array(max_winds)
-
-    def flood(self, flood_depth: xr.DataArray) -> float:
-        """This function computes the damages for the assets and land use types in the model.
-
-        Args:
-            flood_depth: The flood map containing water levels for the flood event [m].
-
-        Returns:
-            The total flood damages for the event for all assets and land use types.
-
-        """
-        flood_depth: xr.DataArray = flood_depth.compute()
-
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_depth.rio.crs)
-
-        household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
-            flood_depth.rio.crs
-        )
-
-        if self.model.config["agent_settings"]["households"]["warning_response"]:
-            # make sure household points and actions taken have the same length
-            assert len(household_points) == self.var.actions_taken.shape[0]
-
-            # add columns for protective actions
-            household_points["sandbags"] = False
-            household_points["elevated_possessions"] = False
-
-            # mark households that took protective actions
-            household_points.loc[
-                np.asarray(self.var.actions_taken)[:, 0] == 1, "elevated_possessions"
-            ] = True
-            household_points.loc[
-                np.asarray(self.var.actions_taken)[:, 1] == 1, "sandbags"
-            ] = True
-
-            # spatial join to get household attributes to buildings
-            buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
-                buildings, household_points, how="left", exclusive=True
-            )
-
-            # Assign object types for buildings based on protective measures taken
-            buildings["object_type"] = "building_unprotected"  # reset
-            buildings.loc[buildings["elevated_possessions"], "object_type"] = (
-                "building_elevated_possessions"
-            )
-            buildings.loc[buildings["sandbags"], "object_type"] = (
-                "building_with_sandbags"
-            )
-            buildings.loc[
-                buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
-            ] = "building_all_forecast_based"
-            # TODO: need to move the update of the actions takens by households to outside the flood function
-
-            # Save the buildings with actions taken
-            buildings.to_parquet(
-                self.model.output_folder
-                / "action_maps"
-                / "buildings_with_protective_measures.geoparquet"
-            )
-
-            # Assign object types for buildings centroid based on protective measures taken
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            buildings_centroid["object_type"] = np.select(
-                [
-                    (
-                        buildings_centroid["elevated_possessions"]
-                        & buildings_centroid["sandbags"]
-                    ),
-                    buildings_centroid["elevated_possessions"],
-                    buildings_centroid["sandbags"],
-                ],
-                [
-                    "building_all_forecast_based",
-                    "building_elevated_possessions",
-                    "building_with_sandbags",
-                ],
-                default="building_unprotected",
-            )
-            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-        if self.config["adapt"]:
-            household_points["building_id"] = (
-                self.var.building_id_of_household
-            )  # first assign building id to household points gdf
-            household_points = household_points.merge(
-                buildings[["id", "flood_proofed"]],
-                left_on="building_id",
-                right_on="id",
-                how="left",
-            )  # now merge to get flood proofed status
-
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-
-            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-            buildings["object_type"] = np.where(
-                buildings["flood_proofed"],
-                "building_flood_proofed",
-                "building_unprotected",
-            )
-
-            buildings_centroid["object_type"] = np.where(
-                buildings_centroid["flood_proofed"],
-                "building_protected",
-                "building_unprotected",
-            )
-
-        else:
-            household_points["protect_building"] = False
-
-            buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
-                buildings, household_points, how="left", exclusive=True
-            )
-
-            buildings["object_type"] = "building_unprotected"
-
-            # Right now there is no condition to make the households protect their buildings outside of the warning response
-            buildings.loc[buildings["protect_building"], "object_type"] = (
-                "building_protected"
-            )
-
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            buildings_centroid["object_type"] = buildings_centroid[
-                "protect_building"
-            ].apply(lambda x: "building_protected" if x else "building_unprotected")
-            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-        # Create the folder to save damage maps if it doesn't exist
-        damage_folder: Path = self.model.output_folder / "damage_maps"
-        damage_folder.mkdir(parents=True, exist_ok=True)
-
-        damages_buildings_content = VectorScanner(
-            features=buildings_centroid,
-            hazard=flood_depth,
-            vulnerability_curves=self.buildings_content_curve,
-        )
-
-        total_damages_content = damages_buildings_content.sum()
-
-        # save it to a gpkg file
-        gdf_content = buildings_centroid.copy()
-        gdf_content["damage"] = damages_buildings_content
-        category_name: str = "buildings_content"
-        filename: str = f"damage_map_{category_name}.gpkg"
-        gdf_content.to_file(damage_folder / filename, driver="GPKG")
-
-        print(f"damages to building content are: {total_damages_content}")
-
-        # Compute damages for buildings structure
-        damages_buildings_structure: pd.Series = VectorScanner(
-            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
-            hazard=flood_depth,
-            vulnerability_curves=self.buildings_structure_curve,
-        )
-
-        total_damage_structure = damages_buildings_structure.sum()
-
-        print(f"damages to building structure are: {total_damage_structure}")
-
-        # save it to a gpkg file
-        gdf_structure = buildings.copy()
-        gdf_structure["damage"] = damages_buildings_structure
-        category_name: str = "buildings_structure"
-        filename: str = f"damage_map_{category_name}.gpkg"
-        gdf_structure.to_file(damage_folder / filename, driver="GPKG")
-
-        print(
-            f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
-        )
-
-        agriculture = from_landuse_raster_to_polygon(
-            self.HRU.decompress(self.HRU.var.land_owners != -1),
-            self.HRU.transform,
-            self.model.crs,
-        )
-        agriculture["object_type"] = "agriculture"
-        agriculture["maximum_damage"] = self.var.max_dam_agriculture_m2
-
-        agriculture = agriculture.to_crs(flood_depth.rio.crs)
-
-        damages_agriculture = VectorScanner(
-            features=agriculture,
-            hazard=flood_depth,
-            vulnerability_curves=self.var.agriculture_curve,
-        )
-        total_damages_agriculture = damages_agriculture.sum()
-        print(f"damages to agriculture are: {total_damages_agriculture}")
-
-        # Load landuse and make turn into polygons
-        forest = from_landuse_raster_to_polygon(
-            self.HRU.decompress(self.HRU.var.land_use_type == FOREST),
-            self.HRU.transform,
-            self.model.crs,
-        )
-        forest["object_type"] = "forest"
-        forest["maximum_damage"] = self.var.max_dam_forest_m2
-
-        forest = forest.to_crs(flood_depth.rio.crs)
-
-        damages_forest = VectorScanner(
-            features=forest,
-            hazard=flood_depth,
-            vulnerability_curves=self.var.forest_curve,
-        )
-        total_damages_forest = damages_forest.sum()
-        print(f"damages to forest are: {total_damages_forest}")
-
-        roads = self.roads.to_crs(flood_depth.rio.crs)
-        damages_roads = VectorScanner(
-            features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_depth,
-            vulnerability_curves=self.var.road_curves,
-        )
-        total_damages_roads = damages_roads.sum()
-        print(f"damages to roads are: {total_damages_roads} ")
-
-        rail = self.rail.to_crs(flood_depth.rio.crs)
-        damages_rail = VectorScanner(
-            features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_depth,
-            vulnerability_curves=self.var.rail_curve,
-        )
-        total_damages_rail = damages_rail.sum()
-        print(f"damages to rail are: {total_damages_rail}")
-
-        total_flood_damages = (
-            total_damage_structure
-            + total_damages_content
-            + total_damages_roads
-            + total_damages_rail
-            + total_damages_forest
-            + total_damages_agriculture
-        )
-        print(f"the total flood damages are: {total_flood_damages}")
-
-        return total_flood_damages
+    # def calculate_building_wind_damages(
+    #     self, verbose: bool = True, export_building_damages: bool = False
+    # ) -> tuple[np.ndarray, np.ndarray]:
+    #     """This function calculates the windstorm damages for the households in the model.
+
+    #     It iterates over the return periods and calculates the damages for each household
+    #     based on the windstorm maps and the building footprints.
+
+    #     Args:
+    #         verbose: Verbosity flag.
+    #         export_building_damages: Whether to export the building damages to parquet files.
+    #     Returns:
+    #         Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
+    #     """
+    #     damages_unprotected_w = np.zeros(
+    #         (self.windstorm_return_periods.size, self.n), np.float32
+    #     )
+    #     damages_adapt_w = np.zeros(
+    #         (self.windstorm_return_periods.size, self.n), np.float32
+    #     )
+
+    #     # CRS alignment
+    #     crs = self.flood_maps[self.return_periods[0]].rio.crs
+    #     windstorm_map_crs = {
+    #         rp: self.windstorm_maps[rp].rio.reproject(crs)
+    #         for rp in self.windstorm_return_periods
+    #     }
+
+    #     debug_damage_stats = bool(
+    #         self.model.config.get("hazards", {})
+    #         .get("windstorm", {})
+    #         .get("debug_damage_stats", False)
+    #     )
+
+    #     # create a pandas data array for assigning damage to the agents:
+    #     agent_df = pd.DataFrame(
+    #         {"building_id_of_household": self.var.building_id_of_household}
+    #     )
+
+    #     # subset building to those exposed to flooding (multi-hazard exposure)
+    #     buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(crs)
+
+    #     only_flooded_buildings = bool(
+    #         self.model.config.get("hazards", {})
+    #         .get("windstorm", {})
+    #         .get("only_flooded_buildings", True)
+    #     )
+    #     if only_flooded_buildings:
+    #         buildings = buildings[buildings["flooded"]]
+    #     # only calculate damages for buildings with more than 0 occupant
+    #     buildings = buildings[buildings["n_occupants"] > 0]
+
+    #     for i, return_period in enumerate(self.windstorm_return_periods):
+    #         wind_map = windstorm_map_crs[return_period]
+
+    #         wind_threshold = 27.01
+    #         wind_map_masked = wind_map.fillna(0.0)
+    #         mind_map_masked = wind_map_masked.where(
+    #             wind_map_masked >= wind_threshold, 0.0
+    #         )
+
+    #         building_multicurve = buildings.copy()
+
+    #         multi_curves = {
+    #             "damages_structure_unprotected": self.wind_buildings_structure_curve[
+    #                 "building_unprotected"
+    #             ],
+    #             "damages_structure_wind_shutters": self.wind_buildings_structure_curve[
+    #                 "building_window_shutters"
+    #             ],
+    #         }
+    #         damage_buildings: pd.Series = VectorScannerMultiCurves(
+    #             features=building_multicurve.rename(
+    #                 columns={"maximum_damage_m2": "maximum_damage"}
+    #             ),
+    #             hazard=wind_map_masked,
+    #             multi_curves=multi_curves,
+    #         )
+
+    #         damage_buildings["damages_unprotected"] = damage_buildings[
+    #             "damages_structure_unprotected"
+    #         ]
+    #         damage_buildings["damages_wind_shutters"] = damage_buildings[
+    #             "damages_structure_wind_shutters"
+    #         ]
+
+    #         building_multicurve = pd.concat(
+    #             [building_multicurve, damage_buildings], axis=1
+    #         )
+
+    #         # Damage_threshold = 0.001
+
+    #         # buildings_to_damage.loc[
+    #         #     buildings_to_damage["damages_unprotected"] < Damage_threshold,
+    #         #     "damages_unprotected",
+    #         # ] = 0.0
+
+    #         if export_building_damages:
+    #             fn_export = self.model.output_folder / "building_wind_damages"
+    #             fn_export.mkdir(parents=True, exist_ok=True)
+    #             building_multicurve.to_parquet(
+    #                 self.model.output_folder
+    #                 / "building_wind_damages"
+    #                 / f"building_wind_damages_rp{return_period}_{self.model.current_time.year}.parquet"
+    #             )
+    #         building_multicurve = building_multicurve[
+    #             ["id", "damages_unprotected", "damages_wind_shutters"]
+    #         ]
+    #         # merged["damage"] is aligned with agents
+    #         damages_unprotected_w[i], damages_adapt_w[i] = (
+    #             self.assign_wdamages_to_agents(
+    #                 agent_df,
+    #                 building_multicurve,
+    #             )
+    #         )
+
+    #         if debug_damage_stats:
+    #             unprot = damages_unprotected_w[i]
+    #             prot = damages_adapt_w[i]
+    #             # Keep this cheap: simple stats + non-zero fraction.
+    #             frac_nonzero = float(np.mean(unprot > 0))
+    #             print(
+    #                 "Wind damage stats "
+    #                 f"rp={int(return_period)}: "
+    #                 f"sum={float(unprot.sum()):.3e}, mean={float(np.mean(unprot)):.3e}, "
+    #                 f"p95={float(np.quantile(unprot, 0.95)):.3e}, max={float(np.max(unprot)):.3e}, "
+    #                 f"nonzero_frac={frac_nonzero:.3f}, "
+    #                 f"adapt_mean={float(np.mean(prot)):.3e}"
+    #             )
+    #         if verbose:
+    #             print(
+    #                 f"Wind Damages rp{return_period}: {round(damages_unprotected_w[i].sum() / 1e6)} million"
+    #             )
+    #             print(
+    #                 f"Wind Damages adapt rp{return_period}: {round(damages_adapt_w[i].sum() / 1e6)} million"
+    #             )
+    #     return damages_unprotected_w, damages_adapt_w
+
+    # def get_max_wind_at_buildings(
+    #     self, buildings_gdf: gpd.GeoDataFrame, wind_map: xr.DataArray
+    # ) -> np.ndarray:
+    #     """This function extracts the maximum wind speed at the location of each building.
+
+    #     Args:
+    #         buildings_gdf: GeoDataFrame containing building geometries.
+    #         wind_map: xarray DataArray containing the wind speed map.
+
+    #     Returns:
+    #         A numpy array containing the maximum wind speed at each building location.
+    #     """
+    #     # Extract the maximum wind speed at the location of each building
+    #     # by sampling the wind map at the building centroids
+    #     max_winds = []
+    #     for geom in buildings_gdf.geometry:
+    #         masked = wind_map.rio.clip([geom], buildings_gdf.crs, drop=False)
+    #         max_winds.append(float(masked.max()))
+
+    #     return np.array(max_winds)
+
+    # def flood(self, flood_depth: xr.DataArray) -> float:
+    #     """This function computes the damages for the assets and land use types in the model.
+
+    #     Args:
+    #         flood_depth: The flood map containing water levels for the flood event [m].
+
+    #     Returns:
+    #         The total flood damages for the event for all assets and land use types.
+
+    #     """
+    #     flood_depth: xr.DataArray = flood_depth.compute()
+
+    #     buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_depth.rio.crs)
+
+    #     household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
+    #         flood_depth.rio.crs
+    #     )
+
+    #     if self.model.config["agent_settings"]["households"]["warning_response"]:
+    #         # make sure household points and actions taken have the same length
+    #         assert len(household_points) == self.var.actions_taken.shape[0]
+
+    #         # add columns for protective actions
+    #         household_points["sandbags"] = False
+    #         household_points["elevated_possessions"] = False
+
+    #         # mark households that took protective actions
+    #         household_points.loc[
+    #             np.asarray(self.var.actions_taken)[:, 0] == 1, "elevated_possessions"
+    #         ] = True
+    #         household_points.loc[
+    #             np.asarray(self.var.actions_taken)[:, 1] == 1, "sandbags"
+    #         ] = True
+
+    #         # spatial join to get household attributes to buildings
+    #         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
+    #             buildings, household_points, how="left", exclusive=True
+    #         )
+
+    #         # Assign object types for buildings based on protective measures taken
+    #         buildings["object_type"] = "building_unprotected"  # reset
+    #         buildings.loc[buildings["elevated_possessions"], "object_type"] = (
+    #             "building_elevated_possessions"
+    #         )
+    #         buildings.loc[buildings["sandbags"], "object_type"] = (
+    #             "building_with_sandbags"
+    #         )
+    #         buildings.loc[
+    #             buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
+    #         ] = "building_all_forecast_based"
+    #         # TODO: need to move the update of the actions takens by households to outside the flood function
+
+    #         # Save the buildings with actions taken
+    #         buildings.to_parquet(
+    #             self.model.output_folder
+    #             / "action_maps"
+    #             / "buildings_with_protective_measures.geoparquet"
+    #         )
+
+    #         # Assign object types for buildings centroid based on protective measures taken
+    #         buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+    #         buildings_centroid["object_type"] = np.select(
+    #             [
+    #                 (
+    #                     buildings_centroid["elevated_possessions"]
+    #                     & buildings_centroid["sandbags"]
+    #                 ),
+    #                 buildings_centroid["elevated_possessions"],
+    #                 buildings_centroid["sandbags"],
+    #             ],
+    #             [
+    #                 "building_all_forecast_based",
+    #                 "building_elevated_possessions",
+    #                 "building_with_sandbags",
+    #             ],
+    #             default="building_unprotected",
+    #         )
+    #         buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+
+    #     if self.config["adapt"]:
+    #         household_points["building_id"] = (
+    #             self.var.building_id_of_household
+    #         )  # first assign building id to household points gdf
+    #         household_points = household_points.merge(
+    #             buildings[["id", "flood_proofed"]],
+    #             left_on="building_id",
+    #             right_on="id",
+    #             how="left",
+    #         )  # now merge to get flood proofed status
+
+    #         buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+
+    #         buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+
+    #         buildings["object_type"] = np.where(
+    #             buildings["flood_proofed"],
+    #             "building_flood_proofed",
+    #             "building_unprotected",
+    #         )
+
+    #         buildings_centroid["object_type"] = np.where(
+    #             buildings_centroid["flood_proofed"],
+    #             "building_protected",
+    #             "building_unprotected",
+    #         )
+
+    #     else:
+    #         household_points["protect_building"] = False
+
+    #         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
+    #             buildings, household_points, how="left", exclusive=True
+    #         )
+
+    #         buildings["object_type"] = "building_unprotected"
+
+    #         # Right now there is no condition to make the households protect their buildings outside of the warning response
+    #         buildings.loc[buildings["protect_building"], "object_type"] = (
+    #             "building_protected"
+    #         )
+
+    #         buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+    #         buildings_centroid["object_type"] = buildings_centroid[
+    #             "protect_building"
+    #         ].apply(lambda x: "building_protected" if x else "building_unprotected")
+    #         buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+
+    #     # Create the folder to save damage maps if it doesn't exist
+    #     damage_folder: Path = self.model.output_folder / "damage_maps"
+    #     damage_folder.mkdir(parents=True, exist_ok=True)
+
+    #     damages_buildings_content = VectorScanner(
+    #         features=buildings_centroid,
+    #         hazard=flood_depth,
+    #         vulnerability_curves=self.buildings_content_curve,
+    #     )
+
+    #     total_damages_content = damages_buildings_content.sum()
+
+    #     # save it to a gpkg file
+    #     gdf_content = buildings_centroid.copy()
+    #     gdf_content["damage"] = damages_buildings_content
+    #     category_name: str = "buildings_content"
+    #     filename: str = f"damage_map_{category_name}.gpkg"
+    #     gdf_content.to_file(damage_folder / filename, driver="GPKG")
+
+    #     print(f"damages to building content are: {total_damages_content}")
+
+    #     # Compute damages for buildings structure
+    #     damages_buildings_structure: pd.Series = VectorScanner(
+    #         features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
+    #         hazard=flood_depth,
+    #         vulnerability_curves=self.buildings_structure_curve,
+    #     )
+
+    #     total_damage_structure = damages_buildings_structure.sum()
+
+    #     print(f"damages to building structure are: {total_damage_structure}")
+
+    #     # save it to a gpkg file
+    #     gdf_structure = buildings.copy()
+    #     gdf_structure["damage"] = damages_buildings_structure
+    #     category_name: str = "buildings_structure"
+    #     filename: str = f"damage_map_{category_name}.gpkg"
+    #     gdf_structure.to_file(damage_folder / filename, driver="GPKG")
+
+    #     print(
+    #         f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
+    #     )
+
+    #     agriculture = from_landuse_raster_to_polygon(
+    #         self.HRU.decompress(self.HRU.var.land_owners != -1),
+    #         self.HRU.transform,
+    #         self.model.crs,
+    #     )
+    #     agriculture["object_type"] = "agriculture"
+    #     agriculture["maximum_damage"] = self.var.max_dam_agriculture_m2
+
+    #     agriculture = agriculture.to_crs(flood_depth.rio.crs)
+
+    #     damages_agriculture = VectorScanner(
+    #         features=agriculture,
+    #         hazard=flood_depth,
+    #         vulnerability_curves=self.var.agriculture_curve,
+    #     )
+    #     total_damages_agriculture = damages_agriculture.sum()
+    #     print(f"damages to agriculture are: {total_damages_agriculture}")
+
+    #     # Load landuse and make turn into polygons
+    #     forest = from_landuse_raster_to_polygon(
+    #         self.HRU.decompress(self.HRU.var.land_use_type == FOREST),
+    #         self.HRU.transform,
+    #         self.model.crs,
+    #     )
+    #     forest["object_type"] = "forest"
+    #     forest["maximum_damage"] = self.var.max_dam_forest_m2
+
+    #     forest = forest.to_crs(flood_depth.rio.crs)
+
+    #     damages_forest = VectorScanner(
+    #         features=forest,
+    #         hazard=flood_depth,
+    #         vulnerability_curves=self.var.forest_curve,
+    #     )
+    #     total_damages_forest = damages_forest.sum()
+    #     print(f"damages to forest are: {total_damages_forest}")
+
+    #     roads = self.roads.to_crs(flood_depth.rio.crs)
+    #     damages_roads = VectorScanner(
+    #         features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
+    #         hazard=flood_depth,
+    #         vulnerability_curves=self.var.road_curves,
+    #     )
+    #     total_damages_roads = damages_roads.sum()
+    #     print(f"damages to roads are: {total_damages_roads} ")
+
+    #     rail = self.rail.to_crs(flood_depth.rio.crs)
+    #     damages_rail = VectorScanner(
+    #         features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
+    #         hazard=flood_depth,
+    #         vulnerability_curves=self.var.rail_curve,
+    #     )
+    #     total_damages_rail = damages_rail.sum()
+    #     print(f"damages to rail are: {total_damages_rail}")
+
+    #     total_flood_damages = (
+    #         total_damage_structure
+    #         + total_damages_content
+    #         + total_damages_roads
+    #         + total_damages_rail
+    #         + total_damages_forest
+    #         + total_damages_agriculture
+    #     )
+    #     print(f"the total flood damages are: {total_flood_damages}")
+
+    #     return total_flood_damages
 
     def water_demand(
         self,
