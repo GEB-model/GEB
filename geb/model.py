@@ -408,7 +408,7 @@ class GEBModel(Module):
                         )
 
                         # Update household geodataframe with warning parameters
-                        self.agents.households.update_households_gdf(
+                        self.agents.households.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
 
