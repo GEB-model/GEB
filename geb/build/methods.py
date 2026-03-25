@@ -10,6 +10,7 @@ from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import networkx as nx
+import pandas as pd
 
 __all__: list[str] = ["build_method"]
 
@@ -205,7 +206,6 @@ class _build_method:
         # Track what has already been flushed to the stats spreadsheet so
         # incremental calls to write_build_stats never produce duplicate rows.
         self._methods_written_to_stats: set[str] = set()
-        self._disk_stats_written: bool = False
 
     def _resolve_logger(
         self, call_args: tuple[Any, ...] | None = None
@@ -521,6 +521,95 @@ class _build_method:
             active_logger.info(
                 f"Max memory usage: {max(self.peak_memory_usage.values()) / 1024 / 1024:.2f} MB."
             )
+
+    def _directory_size_bytes(self, directory_path: Path) -> int:
+        """Calculate total file size in a directory tree.
+
+        Args:
+            directory_path: Directory path to measure.
+
+        Returns:
+            Total size of regular files in bytes.
+        """
+        if not directory_path.exists() or not directory_path.is_dir():
+            return 0
+
+        total_size_bytes: int = 0
+        for file_path in directory_path.rglob("*"):
+            if file_path.is_file():
+                total_size_bytes += file_path.stat().st_size
+        return total_size_bytes
+
+    def write_build_stats(
+        self,
+        stats_path: Path,
+        cluster_name: str,
+        run_timestamp: Any,
+        cluster_dir: Path,
+    ) -> None:
+        """Append new per-method build stats to a shared Excel file.
+
+        This function is intentionally incremental. It only writes methods that have
+        not yet been flushed for the current process so repeated calls after each
+        method do not create duplicate rows.
+
+        Args:
+            stats_path: Path to the Excel file where build stats are stored.
+            cluster_name: Name of the cluster/scenario group.
+            run_timestamp: Timestamp representing the start of the current build run.
+            cluster_dir: Directory whose subdirectories are measured for on-disk size.
+        """
+        methods_to_write: list[str] = [
+            method_name
+            for method_name in self.time_taken
+            if method_name not in self._methods_written_to_stats
+        ]
+        if not methods_to_write:
+            return
+
+        # We report the physical footprint of generated folders so partial build
+        # progress can be inspected even when a long run crashes.
+        input_dir_size_bytes: int = self._directory_size_bytes(cluster_dir / "input")
+        base_dir_size_bytes: int = self._directory_size_bytes(cluster_dir / "base")
+
+        run_timestamp_str: str = str(run_timestamp)
+        rows: list[dict[str, Any]] = []
+        for method_name in methods_to_write:
+            rows.append(
+                {
+                    "run_timestamp": run_timestamp_str,
+                    "cluster_name": cluster_name,
+                    "method": method_name,
+                    "duration_seconds": round(self.time_taken.get(method_name, 0.0), 6),
+                    "peak_memory_megabytes": round(
+                        self.peak_memory_usage.get(method_name, 0) * _BYTES_TO_MB,
+                        6,
+                    ),
+                    "input_directory_gigabytes": round(
+                        input_dir_size_bytes / (1024**3),
+                        6,
+                    ),
+                    "base_directory_gigabytes": round(
+                        base_dir_size_bytes / (1024**3),
+                        6,
+                    ),
+                }
+            )
+
+        new_rows_df = pd.DataFrame(rows)
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if stats_path.exists():
+            existing_rows_df = pd.read_excel(stats_path)
+            combined_rows_df = pd.concat(
+                [existing_rows_df, new_rows_df],
+                ignore_index=True,
+            )
+        else:
+            combined_rows_df = new_rows_df
+
+        combined_rows_df.to_excel(stats_path, index=False)
+        self._methods_written_to_stats.update(methods_to_write)
 
     @property
     def methods(self) -> list[str]:

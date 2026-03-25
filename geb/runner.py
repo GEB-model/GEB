@@ -1,7 +1,6 @@
 """Runner module for GEB functions."""
 
 import cProfile
-import csv
 import importlib
 import logging
 import os
@@ -189,9 +188,10 @@ def create_logger(name: str) -> logging.Logger:
     folder = Path("logs")
     folder.mkdir(exist_ok=True, parents=True)
     fp = folder / f"{name}.log"
-    if fp.exists():
-        fp.unlink()  # remove existing log file if it exists
-    fh = logging.FileHandler(fp)
+    # mode='w' clears the existing file rather than deleting and recreating it.
+    # Deleting it would cause the shell and Python to write to different files,
+    # so error messages would never appear in build.log.
+    fh = logging.FileHandler(fp, mode="w")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
@@ -885,77 +885,6 @@ def set_fn(
         )
 
 
-def _write_build_stats(working_directory: Path, logger: logging.Logger) -> None:
-    """Append per-method build timing and peak-RSS stats to {model_dir}/build_stats.csv.
-
-    Handles three model layouts:
-
-    - Multi-basin:          ``<model_dir>/<cluster>/base``
-    - Single with scenario: ``<model_dir>/base``
-    - Flat single:          ``<model_dir>`` (model.yml sits directly in working_directory)
-
-    The multi-basin case is detected by the presence of ``model.yml`` in the
-    grandparent directory (e.g. ``large_scale6/model.yml``). For single models
-    the CSV is written to the immediate parent of the working directory.
-
-    Args:
-        working_directory: Working directory of the build run.
-        logger: Logger instance for progress messages.
-    """
-    if not build_method.time_taken:
-        return
-
-    wd = Path(working_directory).resolve()
-
-    # Multi-basin: grandparent owns a model.yml (e.g. large_scale6/model.yml).
-    # Single/flat: no model.yml at grandparent level.
-    grandparent = wd.parents[1] if len(wd.parents) > 1 else wd.parent
-    if (grandparent / "model.yml").exists():
-        model_dir_path = grandparent
-        cluster_name = wd.parent.name  # e.g. "Europe_001"
-    else:
-        # Single model: wd is the scenario subdir → model_dir is the parent.
-        # Flat model: wd IS the model dir → model_dir is wd itself.
-        model_dir_path = wd.parent if not (wd / "model.yml").exists() else wd
-        cluster_name = model_dir_path.name
-
-    csv_path = model_dir_path / "build_stats.csv"
-    record_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    with open(csv_path, "a", newline="") as fh:
-        writer = csv.DictWriter(
-            fh,
-            fieldnames=[
-                "record_time",
-                "model_dir",
-                "cluster",
-                "method",
-                "duration_s",
-                "peak_rss_mb",
-            ],
-        )
-        if not csv_path.stat().st_size:  # empty file → write header
-            writer.writeheader()
-        for method, duration in build_method.time_taken.items():
-            writer.writerow(
-                {
-                    "record_time": record_time,
-                    "model_dir": model_dir_path.name,
-                    "cluster": cluster_name,
-                    "method": method,
-                    "duration_s": round(duration, 2),
-                    "peak_rss_mb": round(
-                        build_method.peak_memory_usage.get(method, 0) / (1024 * 1024),
-                        0,
-                    ),
-                }
-            )
-
-    logger.info(
-        f"Build stats ({len(build_method.time_taken)} methods) appended to {csv_path}"
-    )
-
-
 def build_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
@@ -1006,8 +935,11 @@ def build_fn(
                 region=parse_config(config, schema=Config)["general"]["region"],
                 continue_=continue_,
             )
-        finally:
-            _write_build_stats(working_directory=working_directory, logger=logger)
+        except Exception:
+            # Log the full traceback through the logger so it is captured in
+            # build.log even when stdout/stderr are redirected via &>.
+            logger.exception("Build failed with unhandled exception")
+            raise
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
