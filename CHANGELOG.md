@@ -7,7 +7,7 @@
 - Remove old data catalog entirely, and all references to it. Rename NewDataCatalog to DataCatalog.
 - Optimize GTSM data catalog, now pre-processing to zarr files.
 - Improve CLI help so `geb evaluate --help` list the available evaluation methods.
-- Fix issue in the entalphy calculations. Previously there would be 0 infiltration even when only part of the soil was frozen. In addition, rainfall that didn't infiltrate never warmed the soil (if soil is colder..) which led to situations with too much frozen soil, too much runoff and too much discharge in winters.
+- Fix issue in the enthalpy calculations. Previously there would be 0 infiltration even when only part of the soil was frozen. In addition, rainfall that didn't infiltrate never warmed the soil (if soil is colder..) which led to situations with too much frozen soil, too much runoff and too much discharge in winters.
 - Made quite a few plots and exporters for the water balance plotting. Note that not all plots show a correct balance yet. This is highly likely not due to actual balance errors (they are checked in the running model) but because we don't yet plot the right variables. To be continued..
 - Remove support for include_spinup in the evalution. This option was supported sometimes and sometimes not, which led to silent ignores and general over complications. It is still possible to run the evaluate for the spinup (only) by using the run_name: `geb evaluate --run_name spinup`.
 - fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.

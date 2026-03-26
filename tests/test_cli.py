@@ -12,7 +12,7 @@ from geb.cli import AVAILABLE_EVALUATION_METHODS, cli
 from .testconfig import IN_GITHUB_ACTIONS
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in Github Actions.")
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in GitHub Actions.")
 def test_cli() -> None:
     """Test that all CLI commands are accessible and return help information."""
     runner = CliRunner()
@@ -31,7 +31,7 @@ def test_cli() -> None:
         assert runner.invoke(cli, [cmd, "--help"]).exit_code == 0
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in Github Actions.")
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in GitHub Actions.")
 def test_cli_init_help() -> None:
     """Test that the init command returns help information."""
     runner = CliRunner()
@@ -40,7 +40,7 @@ def test_cli_init_help() -> None:
     assert "Name of the example" in result.output
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in Github Actions.")
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in GitHub Actions.")
 def test_cli_exec_help() -> None:
     """Test that the exec command returns help information."""
     runner = CliRunner()
@@ -49,7 +49,7 @@ def test_cli_exec_help() -> None:
     assert "Method to run" in result.output
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in Github Actions.")
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in GitHub Actions.")
 def test_cli_evaluate_help_lists_methods() -> None:
     """Test that evaluate help includes the available evaluation methods."""
     runner = CliRunner()

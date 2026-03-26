@@ -1592,7 +1592,7 @@ class LandSurface(Module):
                 if np.isnan(layer_data[~self.HRU.mask]).any():
                     raise ValueError(
                         f"Found NaN values in soil layer data. This likely means that something went wrong with the "
-                        f"chunked interpolation of nan values in the build (setup_soil). Advise is to open the submask and"
+                        f"chunked interpolation of nan values in the build (setup_soil). Advice is to open the submask and "
                         f"soil data file: {filepath}."
                     )
                 self.HRU.convert_subgrid_to_HRU_numba(
