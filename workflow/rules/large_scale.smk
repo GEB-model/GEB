@@ -93,6 +93,7 @@ rule build_cluster:
         slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
+        mkdir -p $(dirname {log})
         # Route temp files to the per-job scratch directory so that large
         # intermediate zarr files written by write_zarr do not fill /tmp,
         # which caused Python exit-code-1 crashes on some nodes (e.g. Europe_016).
@@ -121,6 +122,7 @@ rule spinup_cluster:
         slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
+        mkdir -p $(dirname {log})
         if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
         cd {params.cluster_dir}
         geb spinup &> {log}
@@ -146,6 +148,7 @@ rule run_cluster:
         slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
         """
+        mkdir -p $(dirname {log})
         if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
         cd {params.cluster_dir}
         geb run &> {log}
@@ -171,6 +174,7 @@ rule evaluate_cluster:
         slurm_account="ivm",
     shell:
         """
+        mkdir -p $(dirname {log})
         cd {params.cluster_dir}
         geb evaluate --methods {params.methods} --include-spinup &> {log}
         touch {output}
