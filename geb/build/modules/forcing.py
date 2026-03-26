@@ -743,7 +743,12 @@ class Forcing(BuildModelBase):
             )
             * da.dtype.itemsize
         )  # aim for chunks of around 100 MB
-        time_chunksize = max(1, time_chunksize)  # ensure at least 1 time step per chunk
+        # make chunk size divisible by 24 to ensure that we don't split days across chunks for daily data
+        # as needed by the model.
+        time_chunksize = (time_chunksize // 24) * 24
+        time_chunksize = max(
+            24, time_chunksize
+        )  # ensure at least 24 time steps per chunk
         da = da.chunk({"time": time_chunksize})
 
         with warnings.catch_warnings():
