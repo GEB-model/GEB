@@ -244,9 +244,6 @@ class GTSM_timeseries(Adapter):
                     for month in range(1, 13)
                     for year in year_batch
                 ]
-                # print files in zip
-                zip_contents = zip_ref.namelist()
-                print(f"Contents of zip file {zip_fp}: {zip_contents}")
 
                 self.logger.info(
                     f"Processing GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]}"
@@ -414,19 +411,15 @@ class GTSM_timeseries(Adapter):
             for start_year in range(self.start_year, self.end_year + 1, 5)
         ]
 
-        with xr.open_mfdataset(
-            [str(zarr_path) for zarr_path in zarr_paths],
-            engine="zarr",
-            concat_dim="time",
-            combine_attrs="drop_conflicts",
-        ) as combined_dataset:
-            selected_station_ids: list[int] = [
-                int(station_id) for station_id in station_locations.index
-            ]
-            combined_data_array: xr.DataArray = combined_dataset[variable].sel(
-                stations=selected_station_ids
-            )
-            gtsm_data_region_pd = combined_data_array.to_pandas()
+        das: list[xr.DataArray] = []
+        for zarr_path in zarr_paths:
+            das.append(xr.open_dataarray(zarr_path, engine="zarr", chunks={"time": -1}))
+
+        da = xr.concat(das, dim="time", combine_attrs="drop_conflicts").sel(
+            stations=station_locations.index
+        )
+
+        gtsm_data_region_pd: pd.DataFrame = da.to_pandas()
 
         assert isinstance(gtsm_data_region_pd, pd.DataFrame)
         return gtsm_data_region_pd, station_locations
