@@ -1406,8 +1406,8 @@ class Hydrography(BuildModelBase):
             return
 
         # Continue with GTSM setup
-        self.setup_gtsm_surge_levels()
         self.setup_gtsm_water_levels()
+        self.setup_gtsm_surge_levels()
         self.setup_gtsm_sea_level_rise()
         self.setup_coast_rp()
 
