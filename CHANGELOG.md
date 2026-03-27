@@ -14,7 +14,11 @@
 - For large scale (multiple basins) only: build stats are now written to CSV files under `build_memory_stats/<cluster>.csv`.  Individual files are made for each basin cluster. 
 - New command "geb clean" to reset and delete the data for a model, except the .yml files. Also works for multiple basin clusters/models. 
 - The buffer size check fuction (check_buffer_size) is removed as this caused errors but is redundant. 
- 
+- Fixes in water circle displaying.
+- Update format for custom river discharge time series. See geb/examples/geul/data/discharge_observations
+- Make full integration test, now checking discharge with observed discharge in the test_run.
+- Fix recent regression where water demand for households was set to 0 except on January 1st.
+- Include evaluation tests in the test_run for simplicity. 
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.

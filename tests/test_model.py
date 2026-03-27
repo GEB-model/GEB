@@ -78,7 +78,6 @@ def test_init(clean_working_directory: bool) -> None:
             "update_config": "update.yml",
             "working_directory": ".",
             "from_example": "geul",
-            "basin_id": "23011134",
         }
         init_fn(
             **args,
@@ -413,6 +412,7 @@ def test_run() -> None:
                 "_water_circle": True,
                 "_water_balance": True,
                 "_water_storage": True,
+                "_energy_balance": True,
             }
         )
         args["config"]["hazards"]["floods"]["simulate"] = True
@@ -423,6 +423,8 @@ def test_run() -> None:
             "hydrology.plot_water_balance",
             "hydrology.plot_discharge",
             "hydrology.plot_water_storage",
+            "hydrology.plot_water_circle",
+            "energy.plot_soil_temperature",
         ):
             evaluate_args = DEFAULT_RUN_ARGS.copy()
             evaluate_args["method_args"] = {"method": evaluation_method}
@@ -441,6 +443,26 @@ def test_run() -> None:
         assert (hydrology_eval_folder / "water_storage_timeseries.svg").exists()
         assert (hydrology_eval_folder / "water_storage_timeseries_yearly.svg").exists()
         assert (hydrology_eval_folder / "outflow").exists()
+
+        method_args = {
+            "method": "hydrology.evaluate_discharge",
+            "include_yearly_plots": False,
+        }
+        args["method_args"] = method_args
+        result = run_model_with_method(method="evaluate", **args)
+
+        # Verify that the result is a dictionary and contains expected keys
+        assert isinstance(result, dict)
+        assert "KGE" in result
+        assert "NSE" in result
+        assert "R" in result
+
+        assert result["KGE"] is not None
+        assert result["NSE"] is not None
+        assert result["R"] is not None
+
+        # Note this should be much higher.
+        assert result["KGE"] > -0.07
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -475,81 +497,6 @@ def test_alter() -> None:
         ] + timedelta(days=370)  # run just over a year more is not needed
 
         run_model_with_method(method="spinup", **run_args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate_water_circle() -> None:
-    """Test water balance evaluation.
-
-    Does not check the evaluation results itself. Just if it can be run.
-    """
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_RUN_ARGS.copy()
-        method_args = {
-            "method": "hydrology.water_circle",
-        }
-        args["method_args"] = method_args
-        run_model_with_method(method="evaluate", **args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate_evaluate_discharge() -> None:
-    """Test model evaluation functionality.
-
-    Verifies that model outputs can be evaluated and analyzed
-    for correctness and consistency. Checks that the evaluation
-    returns a dictionary containing expected metrics.
-    """
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_RUN_ARGS.copy()
-        method_args = {
-            "method": "hydrology.evaluate_discharge",
-            "include_yearly_plots": False,
-        }
-        args["method_args"] = method_args
-        result = run_model_with_method(method="evaluate", **args)
-
-        # Verify that the result is a dictionary and contains expected keys
-        assert isinstance(result, dict)
-        assert "KGE" in result
-        assert "NSE" in result
-        assert "R" in result
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate_evaluate_water_balance() -> None:
-    """Test model evaluation functionality.
-
-    Verifies that model outputs can be evaluated and analyzed
-    for correctness and consistency. Does not check the evaluation
-    results itself. Just if it can be run.
-    """
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_RUN_ARGS.copy()
-        method_args = {
-            "method": "hydrology.water_balance",
-        }
-        args["method_args"] = method_args
-        run_model_with_method(method="evaluate", **args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate_energy() -> None:
-    """Test energy evaluation functionality.
-
-    Verifies that model outputs can be evaluated and analyzed
-    for correctness and consistency. Does not check the evaluation
-    results itself. Just if it can be run.
-    """
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_RUN_ARGS.copy()
-        method_args = {
-            "method": "energy.plot_soil_temperature",
-            "include_yearly_plots": False,
-            "run_name": "spinup",
-        }
-        args["method_args"] = method_args
-        run_model_with_method(method="evaluate", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

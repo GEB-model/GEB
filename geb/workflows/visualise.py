@@ -61,19 +61,13 @@ def plot_sunburst(
         start_angle: float = 0,
         total_span: float = 2 * np.pi,
         p_color: str | None = None,
+        parent_value: float | None = None,
     ) -> None:
         current_angle = start_angle
+        segment_total = get_total_value(data) if parent_value is None else parent_value
 
-        # Sort root sections
-        if level == 0:
-            order = ["in", "out", "storage change"]
-            items = sorted(
-                data.items(), key=lambda x: order.index(x[0]) if x[0] in order else 99
-            )
-        else:
-            items = sorted(
-                data.items(), key=lambda x: get_total_value(x[1]), reverse=True
-            )
+        # Preserve the order provided in the hierarchy.
+        items = data.items()
 
         for name, value in items:
             if name == "_self":
@@ -83,7 +77,7 @@ def plot_sunburst(
             if val == 0:
                 continue
 
-            width = (val / total_value) * total_span
+            width = (val / segment_total) * total_span
 
             # Use root level's color as foundation if not in 'colors'
             seg_color = colors.get(name, p_color)
@@ -100,7 +94,14 @@ def plot_sunburst(
             )
 
             if isinstance(value, dict):
-                collect_segments(value, level + 1, current_angle, width, seg_color)
+                collect_segments(
+                    value,
+                    level + 1,
+                    current_angle,
+                    width,
+                    seg_color,
+                    val,
+                )
 
             current_angle += width
 

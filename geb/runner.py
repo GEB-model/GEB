@@ -769,6 +769,13 @@ def init_fn(
                     "column": "GID_0",
                 }
             }
+        else:
+            # if the default region is given, also copy the data folder with specific data for that
+            shutil.copytree(
+                example_folder / "data",
+                working_directory / "data",
+                dirs_exist_ok=True,
+            )
 
         with open(config, "w") as f:
             # do not sort keys, to keep the order of the config file
