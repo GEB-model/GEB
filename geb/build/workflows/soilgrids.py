@@ -1,5 +1,6 @@
 """Load soilgrids data from ISRIC SoilGrids."""
 
+import geopandas as gpd
 import numpy as np
 import xarray as xr
 
