@@ -27,6 +27,7 @@ def test_cli() -> None:
         "update",
         "share",
         "evaluate",
+        "clean",
     ):
         assert runner.invoke(cli, [cmd, "--help"]).exit_code == 0
 
