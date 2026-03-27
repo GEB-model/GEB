@@ -294,7 +294,6 @@ def donate_and_receive_crop_prices(
     for _, region in recipient_regions.iterrows():
         ISO3 = region["ISO3"]
         region_id = region["region_id"]
-        print(f"Processing region {region_id}")
 
         # Filter the data for the current country
         country_data = donor_data[donor_data["ISO3"] == ISO3]

@@ -8,6 +8,7 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Literal, cast, overload
 
+import dask.array as dask_array
 import geopandas as gpd
 import numba
 import numpy as np
@@ -1056,27 +1057,51 @@ def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArra
     return da
 
 
-def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
+def interpolate_na_2d(
+    da: xr.DataArray, buffer: int | tuple[int, int] = 0
+) -> xr.DataArray:
     """Interpolate NaN values in a 2D DataArray using nearest neighbor interpolation.
 
     Args:
         da: The input DataArray with dimensions ('y', 'x').
+        buffer: Overlap depth in cells used when processing Dask chunks. The
+            effective overlap is capped per axis to the raster extent so large
+            requested buffers remain valid for small arrays. If a tuple is
+            provided, it is interpreted as ``(buffer_y, buffer_x)``.
 
     Returns:
         A new DataArray with NaN values interpolated.
 
     Raises:
         ValueError: If '_FillValue' attribute is missing.
+        ValueError: If ``buffer`` is not a non-negative integer or a tuple of
+            two non-negative integers.
     """
     if "_FillValue" not in da.attrs:
         raise ValueError("DataArray must have '_FillValue' attribute")
 
     nodata = da.attrs["_FillValue"]
 
+    if isinstance(buffer, int):
+        if buffer < 0:
+            raise ValueError("buffer must be non-negative")
+        buffer_y: int = buffer
+        buffer_x: int = buffer
+    elif isinstance(buffer, tuple) and len(buffer) == 2:
+        buffer_y, buffer_x = buffer
+        if not all(isinstance(value, int) and value >= 0 for value in buffer):
+            raise ValueError("buffer values must be non-negative integers")
+    else:
+        raise ValueError(
+            "buffer must be a non-negative integer or a tuple of two non-negative integers"
+        )
+
     def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
         mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
 
         if not mask.any():
+            return arr
+        if mask.all():
             return arr
 
         y, x = np.indices(arr.shape)
@@ -1091,16 +1116,30 @@ def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
         arr_filled[mask] = filled_values
         return arr_filled
 
-    return xr.apply_ufunc(
+    if da.chunks is None:
+        filled_values = fillna_2d(np.asarray(da.data), nodata=nodata)
+        result = da.copy(data=filled_values)
+        result.attrs = da.attrs.copy()
+        return result
+
+    overlap_depth: dict[int, int] = {
+        0: min(buffer_y, max(da.sizes["y"] - 1, 0)),
+        1: min(buffer_x, max(da.sizes["x"] - 1, 0)),
+    }
+
+    filled_data = dask_array.map_overlap(
         fillna_2d,
-        da,
-        input_core_dims=[["y", "x"]],
-        output_core_dims=[["y", "x"]],
-        dask="parallelized",
-        output_dtypes=[da.dtype],
-        kwargs={"nodata": nodata},
-        keep_attrs=True,
+        da.data,
+        depth=overlap_depth,
+        boundary="none",
+        trim=True,
+        dtype=da.dtype,
+        nodata=nodata,
     )
+
+    result = da.copy(data=filled_data)
+    result.attrs = da.attrs.copy()
+    return result
 
 
 def resample_like(

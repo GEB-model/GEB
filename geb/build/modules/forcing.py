@@ -743,7 +743,12 @@ class Forcing(BuildModelBase):
             )
             * da.dtype.itemsize
         )  # aim for chunks of around 100 MB
-        time_chunksize = max(1, time_chunksize)  # ensure at least 1 time step per chunk
+        # make chunk size divisible by 24 to ensure that we don't split days across chunks for daily data
+        # as needed by the model.
+        time_chunksize = (time_chunksize // 24) * 24
+        time_chunksize = max(
+            24, time_chunksize
+        )  # ensure at least 24 time steps per chunk
         da = da.chunk({"time": time_chunksize})
 
         with warnings.catch_warnings():
@@ -752,19 +757,15 @@ class Forcing(BuildModelBase):
                 category=ZarrUserWarning,
                 message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
             )
-            # the last chunk may be smaller than the specified chunk size,
-            # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
-            # This can be safely ignored in this context.
-            with np.errstate(invalid="ignore"):
-                da: xr.DataArray = self.set_other(
-                    da,
-                    name=name,
-                    filters=filters,
-                    shards={
-                        "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
-                    },
-                    **kwargs,
-                )
+            da: xr.DataArray = self.set_other(
+                da,
+                name=name,
+                filters=filters,
+                shards={
+                    "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
+                },
+                **kwargs,
+            )
 
         if create_plots:
             plot_forcing(mask, self.geom["mask"], self.report_dir, da, name)

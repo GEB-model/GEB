@@ -27,6 +27,7 @@ from geb.cli import (
     share_fn,
     update_fn,
 )
+from geb.evaluate.hydrology import _get_datetime_index_step_label
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.hydrology.routing import get_river_width
 from geb.model import GEBModel
@@ -44,6 +45,13 @@ working_directory_coastal: Path = tmp_folder / "model_coastal"
 
 DEFAULT_BUILD_ARGS: dict[str, Any] = {"continue_": True}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
+
+
+def test_get_datetime_index_step_label_uses_day_for_daily_frequency() -> None:
+    """Test that daily datetime frequencies use a readable timestep label."""
+    time_index: pd.DatetimeIndex = pd.date_range("2000-01-01", periods=3, freq="D")
+
+    assert _get_datetime_index_step_label(time_index) == "day"
 
 
 @pytest.mark.parametrize(
@@ -391,7 +399,8 @@ def test_run() -> None:
     """Test basic model execution.
 
     Verifies that the model can run a complete simulation
-    from initialization through execution without errors.
+    from initialization through execution without errors, and that the main
+    hydrology plot evaluations can be created from the resulting outputs.
     """
     args = DEFAULT_RUN_ARGS.copy()
 
@@ -400,11 +409,36 @@ def test_run() -> None:
         args["config"]["report"].update(
             {
                 "_water_circle": True,
+                "_water_balance": True,
+                "_water_storage": True,
             }
         )
         args["config"]["hazards"]["floods"]["simulate"] = True
 
         run_model_with_method(method="run", **args)
+
+        for evaluation_method in (
+            "hydrology.plot_water_balance",
+            "hydrology.plot_discharge",
+            "hydrology.plot_water_storage",
+        ):
+            evaluate_args = DEFAULT_RUN_ARGS.copy()
+            evaluate_args["method_args"] = {"method": evaluation_method}
+            run_model_with_method(method="evaluate", **evaluate_args)
+
+        hydrology_eval_folder: Path = Path("output") / "evaluate" / "hydrology"
+        assert (hydrology_eval_folder / "water_balance_timeseries.svg").exists()
+        assert (hydrology_eval_folder / "water_balance_timeseries_yearly.svg").exists()
+        assert (
+            hydrology_eval_folder / "water_balance_top_soil_timeseries.svg"
+        ).exists()
+        assert (
+            hydrology_eval_folder / "water_balance_top_soil_timeseries_yearly.svg"
+        ).exists()
+        assert (hydrology_eval_folder / "mean_discharge_m3_per_s.png").exists()
+        assert (hydrology_eval_folder / "water_storage_timeseries.svg").exists()
+        assert (hydrology_eval_folder / "water_storage_timeseries_yearly.svg").exists()
+        assert (hydrology_eval_folder / "outflow").exists()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
