@@ -1048,7 +1048,10 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(depends_on=["setup_coastlines", "setup_elevation"], required=True)
+    @build_method(
+        depends_on=["setup_coastlines", "setup_elevation"],
+        required=True,
+    )
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         if self.geom["routing/subbasins"]["is_coastal"].any():

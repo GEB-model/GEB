@@ -27,6 +27,7 @@ from geb.runner import (
     WORKING_DIRECTORY_DEFAULT,
     alter_fn,
     build_fn,
+    clean_fn,
     create_logger,
     init_fn,
     init_multiple_fn,
@@ -961,9 +962,9 @@ def workflow(
 )
 @click.option(
     "--target-area-km2",
-    default=817e3,
+    default=420000,
     type=float,
-    help="Target cumulative upstream area per cluster in km². Defaults to 817,000 km².",
+    help="Target cumulative upstream area per cluster in km². Defaults to 420,000 km².",
 )
 @click.option(
     "--cluster-prefix",
@@ -1004,6 +1005,57 @@ def init_multiple(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model for multiple subbasins."""
     # Initialize the model with the given config and build config
     init_multiple_fn(*args, **kwargs)
+
+
+@cli.command()
+@click.option(
+    "--scenario",
+    "-s",
+    default="base",
+    show_default=True,
+    help="Scenario subdirectory to clean (e.g. 'base' or an alternative scenario created with 'geb alter').",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt and delete immediately.",
+)
+@working_directory_option
+def clean(
+    scenario: str,
+    yes: bool,
+    working_directory: Path,
+) -> None:
+    """Clean generated files from a model, keeping model.yml,  update.yml and build.yml.
+
+    Run from inside the model directory (e.g. cd large_scale6 && geb clean),
+    following the same convention as all other 'geb' commands.
+
+    Works for both single-model layouts (created with 'geb init') and
+    multi-basin layouts (created with 'geb init-multiple'). In the latter
+    case, all cluster subdirectories are cleaned at once.
+
+    Shows a list of items to be deleted and asks for confirmation.
+    Type 'y' and press Enter to confirm, or press Enter to abort.
+    Use --yes / -y to skip the prompt (useful in scripts).
+
+    Examples:
+
+      Clean the base scenario (run from inside the model dir):
+
+        cd large_scale6 && geb clean
+
+      Clean an alternative scenario:
+
+        geb clean --scenario myalternative
+    """
+    clean_fn(
+        working_directory=working_directory,
+        scenario=scenario,
+        yes=yes,
+    )
 
 
 @cli.command()

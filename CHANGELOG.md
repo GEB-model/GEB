@@ -11,6 +11,10 @@
 - Made quite a few plots and exporters for the water balance plotting. Note that not all plots show a correct balance yet. This is highly likely not due to actual balance errors (they are checked in the running model) but because we don't yet plot the right variables. To be continued..
 - Remove support for include_spinup in the evalution. This option was supported sometimes and sometimes not, which led to silent ignores and general over complications. It is still possible to run the evaluate for the spinup (only) by using the run_name: `geb evaluate --run_name spinup`.
 - fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
+- For large scale (multiple basins) only: build stats are now written to CSV files under `build_memory_stats/<cluster>.csv`.  Individual files are made for each basin cluster. 
+- New command "geb clean" to reset and delete the data for a model, except the .yml files. Also works for multiple basin clusters/models. 
+- The buffer size check fuction (check_buffer_size) is removed as this caused errors but is redundant. 
+ 
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.

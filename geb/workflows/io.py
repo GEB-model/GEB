@@ -510,30 +510,6 @@ def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
     return True
 
 
-def check_buffer_size(
-    da: xr.DataArray,
-    chunks_or_shards: dict[str, int],
-    max_buffer_size: int = 2147483647,
-) -> None:
-    """Check if the buffer size for the given chunks or shards is within the maximum allowed size.
-
-    Args:
-        da: The xarray DataArray to check.
-        chunks_or_shards: A dictionary with the chunk or shard sizes for each dimension.
-        max_buffer_size: The maximum allowed buffer size in bytes. Default is 2GB (2147483647 bytes).
-
-    Raises:
-        ValueError: If the buffer size exceeds the maximum allowed size.
-    """
-    buffer_size = (
-        np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
-    )
-    if buffer_size >= max_buffer_size:
-        raise ValueError(
-            f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
-        )
-
-
 def _chunk_index_to_region(
     chunk_structure: tuple[tuple[int, ...], ...],
     block_index: tuple[int, ...],
@@ -751,8 +727,6 @@ def write_zarr(
         write_block_spec: dict[str, int] = (
             shard_spec if shard_spec is not None else chunk_spec
         )
-
-        check_buffer_size(da, chunks_or_shards=write_block_spec)
 
         da = da.chunk(write_block_spec)
 

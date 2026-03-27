@@ -188,9 +188,10 @@ def create_logger(name: str) -> logging.Logger:
     folder = Path("logs")
     folder.mkdir(exist_ok=True, parents=True)
     fp = folder / f"{name}.log"
-    if fp.exists():
-        fp.unlink()  # remove existing log file if it exists
-    fh = logging.FileHandler(fp)
+    # mode='w' clears the existing file rather than deleting and recreating it.
+    # Deleting it would cause the shell and Python to write to different files,
+    # so error messages would never appear in build.log.
+    fh = logging.FileHandler(fp, mode="w")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
@@ -1302,6 +1303,113 @@ def share_fn(
                 )  # Print progress
             print(f"Exporting file {progress}/{total_files} to {zip_filename}")
             print("Done!")
+
+
+def clean_fn(
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    scenario: str = "base",
+    yes: bool = False,
+) -> list[Path]:
+    """Clean generated files from a GEB model, keeping only initialization files.
+
+    Deletes all files and directories produced by 'geb build', 'geb spinup',
+    'geb run', and 'geb evaluate' from the specified scenario folder(s), while
+    preserving the model initialization files (model.yml, build.yml, and
+    update.yml).
+
+    Notes:
+        Symlinks are unlinked directly, never followed. This prevents accidental
+        deletion of data outside the model directory if a symlink-to-directory exists.
+
+    Args:
+        working_directory: Model directory to clean. Defaults to the current
+            working directory, so run this command from inside the model folder.
+        scenario: Scenario subdirectory to clean. Defaults to 'base'. Use the
+            name of the folder created by 'geb alter' to clean an alternative
+            scenario.
+        yes: If True, skip the confirmation prompt and delete immediately.
+
+    Returns:
+        List of paths that were deleted.
+
+    Raises:
+        FileNotFoundError: If the working directory or matching scenario folder
+            cannot be found.
+    """
+    model_dir: Path = Path(working_directory).resolve()
+    if not model_dir.is_dir():
+        raise FileNotFoundError(f"Model directory not found: {model_dir}")
+
+    files_to_keep: set[str] = {"model.yml", "build.yml", "update.yml"}
+
+    # Detect whether this is a multi-basin or single model.
+    if any(
+        (d / scenario / "model.yml").exists() for d in model_dir.iterdir() if d.is_dir()
+    ):
+        # Multi-basin: each cluster subdir contains the scenario subdir with init
+        # files (e.g. large_scale6/Europe_000/base/model.yml).
+        scenario_dirs: list[Path] = [
+            d / scenario
+            for d in sorted(model_dir.iterdir())
+            if d.is_dir() and (d / scenario / "model.yml").exists()
+        ]
+    elif (model_dir / scenario / "model.yml").exists():
+        # Single-model with scenario subdir (e.g. france/base/model.yml).
+        scenario_dirs = [model_dir / scenario]
+    elif (model_dir / "model.yml").exists():
+        # Single-model, flat: init files sit directly in model_dir.
+        scenario_dirs = [model_dir]
+    else:
+        raise FileNotFoundError(
+            f"No '{scenario}' scenario found in {model_dir}. "
+            "Check that the model name and scenario name are correct."
+        )
+
+    items_to_delete: list[Path] = []
+
+    for scenario_dir in scenario_dirs:
+        for item in sorted(scenario_dir.iterdir()):
+            if item.name not in files_to_keep:
+                items_to_delete.append(item)
+
+    if not items_to_delete:
+        print(f"Nothing to clean in scenario '{scenario}' of model '{model_dir.name}'.")
+        return []
+
+    folders_affected: int = len({item.parent for item in items_to_delete})
+    print(
+        f"The following items will be deleted from the '{scenario}' scenario of model '{model_dir.name}':"
+    )
+    for item in items_to_delete:
+        print(f"  [{'dir' if item.is_dir() else 'file'}] {item.relative_to(model_dir)}")
+
+    # Require explicit 'y' so that pressing Enter alone safely aborts.
+    if not yes:
+        response: str = (
+            input(
+                f"\nDelete {len(items_to_delete)} item(s) across {folders_affected} folder(s)? [y/N] "
+            )
+            .strip()
+            .lower()
+        )
+        if response != "y":
+            print("Aborted.")
+            return []
+
+    for item in items_to_delete:
+        # Always treat symlinks first: never follow them, just unlink.
+        if item.is_symlink():
+            item.unlink()
+        elif item.is_dir():
+            # Only delete real directories, not symlinks-to-directories.
+            shutil.rmtree(item)
+        elif item.is_file():
+            item.unlink()
+
+    print(
+        f"Successfully cleaned {len(items_to_delete)} item(s) from {folders_affected} folder(s) in '{model_dir.name}/{scenario}'."
+    )
+    return items_to_delete
 
 
 def init_multiple_fn(
