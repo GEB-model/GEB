@@ -72,22 +72,18 @@ class DamageFunctions(Adapter):
             url = "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC105688/copy_of_global_flood_depth-damage_functions__30102017.xlsx"
             response = requests.get(url)
             response.raise_for_status()
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                tmp_file.write(response.content)
-                tmp_file.flush()
-                # read the file into a dataframe
-                df = pd.read_excel(
-                    tmp_file.name,
-                    sheet_name="Damage functions",
-                    skiprows=2,
-                )
-            # clean the dataframe
-            damage_functions = self._clean_damage_functions(df)
-
-            # save the cleaned dataframe as parquet
-            for damage_class, df_damage_class in damage_functions.items():
-                output_path = self.path.parent / f"{damage_class}_damage_functions.csv"
-                df_damage_class.to_csv(output_path, index=False)
+            # save the file to self.path
+            with open(self.path, "wb") as f:
+                f.write(response.content)
+        return self
 
     def read(self, *args, **kwargs):
-        return super().read(*args, **kwargs)
+        df = pd.read_excel(
+            self.path,
+            sheet_name="Damage functions",
+            skiprows=2,
+        )
+        # clean the dataframe
+        damage_functions = self._clean_damage_functions(df)
+
+        return damage_functions

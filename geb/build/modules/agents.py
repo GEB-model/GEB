@@ -1353,6 +1353,12 @@ class Agents(BuildModelBase):
     @build_method(required=True)
     def setup_damage_functions(self):
         damage_functions = self.data_catalog.fetch("damage_functions").read()
+        # save the cleaned dataframe as parquet
+        for damage_class, df_damage_class in damage_functions.items():
+            self.set_table(
+                df_damage_class,
+                name=f"damage_functions/flood/{damage_class}",
+            )
 
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
