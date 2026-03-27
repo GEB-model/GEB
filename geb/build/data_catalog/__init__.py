@@ -7,6 +7,7 @@ from .aquastat import AQUASTAT
 from .base import Adapter
 from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
+from .damage_functions import DamageFunctions
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
@@ -810,6 +811,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Yamazaki et al.",
             "version": "2019",
             "license": "CC BY 4.0 or ODbL 1.0",
+        },
+    },
+    "damage_functions": {
+        "adapter": DamageFunctions(
+            folder="damage_functions",
+            local_version=1,
+            filename="huizinga2017.xlsx",
+            cache="local",
+        ),
+        "url": "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC105688/copy_of_global_flood_depth-damage_functions__30102017.xlsx",
+        "source": {
+            "name": "Damage Functions",
+            "author": "Example Author",
+            "version": "1.0",
+            "license": "CC BY 4.0",
         },
     },
     "delta_dtm": {

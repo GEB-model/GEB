@@ -1350,6 +1350,10 @@ class Agents(BuildModelBase):
         # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
 
+    @build_method(required=True)
+    def setup_damage_functions(self):
+        damage_functions = self.data_catalog.fetch("damage_functions").read()
+
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
     ) -> dict[str, gpd.GeoDataFrame]:
