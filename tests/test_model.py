@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from click.testing import CliRunner
 from shapely.geometry import Point
 
 from geb.build.methods import build_method
@@ -22,11 +23,13 @@ from geb.cli import (
     CONFIG_DEFAULT,
     alter_fn,
     build_fn,
+    cli,
     init_fn,
     run_model_with_method,
     share_fn,
     update_fn,
 )
+from geb.evaluate.hydrology import _get_datetime_index_step_label
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.hydrology.routing import get_river_width
 from geb.model import GEBModel
@@ -44,6 +47,13 @@ working_directory_coastal: Path = tmp_folder / "model_coastal"
 
 DEFAULT_BUILD_ARGS: dict[str, Any] = {"continue_": True}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
+
+
+def test_get_datetime_index_step_label_uses_day_for_daily_frequency() -> None:
+    """Test that daily datetime frequencies use a readable timestep label."""
+    time_index: pd.DatetimeIndex = pd.date_range("2000-01-01", periods=3, freq="D")
+
+    assert _get_datetime_index_step_label(time_index) == "day"
 
 
 @pytest.mark.parametrize(
@@ -391,7 +401,8 @@ def test_run() -> None:
     """Test basic model execution.
 
     Verifies that the model can run a complete simulation
-    from initialization through execution without errors.
+    from initialization through execution without errors, and that the main
+    hydrology plot evaluations can be created from the resulting outputs.
     """
     args = DEFAULT_RUN_ARGS.copy()
 
@@ -400,11 +411,36 @@ def test_run() -> None:
         args["config"]["report"].update(
             {
                 "_water_circle": True,
+                "_water_balance": True,
+                "_water_storage": True,
             }
         )
         args["config"]["hazards"]["floods"]["simulate"] = True
 
         run_model_with_method(method="run", **args)
+
+        for evaluation_method in (
+            "hydrology.plot_water_balance",
+            "hydrology.plot_discharge",
+            "hydrology.plot_water_storage",
+        ):
+            evaluate_args = DEFAULT_RUN_ARGS.copy()
+            evaluate_args["method_args"] = {"method": evaluation_method}
+            run_model_with_method(method="evaluate", **evaluate_args)
+
+        hydrology_eval_folder: Path = Path("output") / "evaluate" / "hydrology"
+        assert (hydrology_eval_folder / "water_balance_timeseries.svg").exists()
+        assert (hydrology_eval_folder / "water_balance_timeseries_yearly.svg").exists()
+        assert (
+            hydrology_eval_folder / "water_balance_top_soil_timeseries.svg"
+        ).exists()
+        assert (
+            hydrology_eval_folder / "water_balance_top_soil_timeseries_yearly.svg"
+        ).exists()
+        assert (hydrology_eval_folder / "mean_discharge_m3_per_s.png").exists()
+        assert (hydrology_eval_folder / "water_storage_timeseries.svg").exists()
+        assert (hydrology_eval_folder / "water_storage_timeseries_yearly.svg").exists()
+        assert (hydrology_eval_folder / "outflow").exists()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -1032,3 +1068,109 @@ def test_share() -> None:
         assert output_fn.exists()
 
         output_fn.unlink()
+
+
+def test_set_and_clean(tmp_path: Path) -> None:
+    """Test setting config values and cleaning a copied model folder with the CLI.
+
+    Initializes a model in a temporary source directory, creates representative
+    generated files, copies the full model folder to a second temporary
+    directory, updates multiple config values in the copied model with
+    ``geb set``, and runs ``geb clean`` on the copy. This verifies that the
+    copied config is updated as expected, that only the generated files are
+    removed from the copied model, and that the source model remains unchanged.
+
+    Args:
+        tmp_path: Temporary test directory provided by pytest.
+    """
+    source_model_directory: Path = tmp_path / "model_source"
+    copied_model_directory: Path = tmp_path / "model_copy"
+    updated_spinup_time: date = date(1980, 1, 1)
+    updated_start_time: date = date(1981, 1, 1)
+    updated_end_time: date = date(1981, 12, 31)
+
+    source_model_directory.mkdir(parents=True, exist_ok=True)
+
+    with WorkingDirectory(source_model_directory):
+        init_fn(
+            config="model.yml",
+            build_config="build.yml",
+            update_config="update.yml",
+            working_directory=Path("."),
+            from_example="geul",
+            basin_id="23011134",
+            overwrite=True,
+        )
+
+        generated_paths: list[Path] = [
+            Path("cache"),
+            Path("input"),
+            Path("output"),
+            Path("logs"),
+        ]
+        for generated_path in generated_paths:
+            generated_path.mkdir(parents=True, exist_ok=True)
+            (generated_path / "placeholder.txt").write_text("generated data")
+
+    shutil.copytree(source_model_directory, copied_model_directory)
+
+    runner = CliRunner()
+    set_result = runner.invoke(
+        cli,
+        [
+            "set",
+            "--config",
+            "model.yml",
+            "--working-directory",
+            str(copied_model_directory),
+            f"general.spinup_time={updated_spinup_time.isoformat()}",
+            f"general.start_time={updated_start_time.isoformat()}",
+            f"general.end_time={updated_end_time.isoformat()}",
+            "hazards.floods.simulate=false",
+            "report=null",
+            "report._discharge_stations+=true",
+        ],
+    )
+
+    assert set_result.exit_code == 0, set_result.output
+
+    copied_config: dict[str, Any] = parse_config(copied_model_directory / "model.yml")
+    assert copied_config["general"]["spinup_time"] == updated_spinup_time
+    assert copied_config["general"]["start_time"] == updated_start_time
+    assert copied_config["general"]["end_time"] == updated_end_time
+    assert copied_config["hazards"]["floods"]["simulate"] is False
+    assert copied_config["report"] == {"_discharge_stations": True}
+
+    source_config: dict[str, Any] = parse_config(source_model_directory / "model.yml")
+    assert source_config["general"]["spinup_time"] != updated_spinup_time
+    assert source_config["general"]["start_time"] != updated_start_time
+    assert source_config["general"]["end_time"] != updated_end_time
+
+    clean_result = runner.invoke(
+        cli,
+        [
+            "clean",
+            "--yes",
+            "--working-directory",
+            str(copied_model_directory),
+        ],
+    )
+
+    assert clean_result.exit_code == 0, clean_result.output
+
+    expected_remaining_files: set[str] = {"build.yml", "model.yml", "update.yml"}
+    remaining_files: set[str] = {
+        path.name for path in copied_model_directory.iterdir() if path.exists()
+    }
+    assert remaining_files == expected_remaining_files
+
+    cleaned_config: dict[str, Any] = parse_config(copied_model_directory / "model.yml")
+    assert cleaned_config["general"]["spinup_time"] == updated_spinup_time
+    assert cleaned_config["general"]["start_time"] == updated_start_time
+    assert cleaned_config["general"]["end_time"] == updated_end_time
+    assert cleaned_config["hazards"]["floods"]["simulate"] is False
+    assert cleaned_config["report"] == {"_discharge_stations": True}
+
+    for generated_directory_name in ("cache", "input", "logs", "output"):
+        assert not (copied_model_directory / generated_directory_name).exists()
+        assert (source_model_directory / generated_directory_name).exists()

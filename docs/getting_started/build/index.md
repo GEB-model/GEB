@@ -160,6 +160,16 @@ You can find more information about these and other options by running:
 geb update --help
 ```
 
+### GEB clean
+
+Removes all generated files (input, output, cache, logs) from a model directory, keeping only `model.yml`, `build.yml`, and `update.yml`. Run from inside the model directory:
+
+```bash
+geb clean
+```
+
+Works for both single-model and multi-basin (`geb init-multiple`) file structures. You will be prompted to confirm before anything is deleted. To skip the prompt (e.g. in scripts), use `--yes` / `-y`. To clean a non-default scenario, use `--scenario` / `-s`. See `geb clean --help` for all options.
+
 ### Running alternative scenarios (geb alter)
 
 Often you want to run alternative model scenarios, for example with other input files. However, usually, you don't need to change all inputs, just 1 or a few.

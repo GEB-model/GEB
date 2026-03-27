@@ -428,6 +428,45 @@ class LandSurface(BuildModelBase):
             "setup_land_use_parameters is removed, please remove it from your build configuration"
         )
 
+    def _load_soilgrids_variable_by_layer(
+        self,
+        subgrid_mask: xr.DataArray,
+        variable_name: str,
+        conversion_factor: float,
+        soil_layer_names: list[str],
+    ) -> xr.DataArray:
+        """Load a SoilGrids variable for all configured soil layers.
+
+        Args:
+            subgrid_mask: Target subgrid mask used to request SoilGrids data.
+            variable_name: SoilGrids variable name.
+            conversion_factor: Multiplier used to convert the source units to the
+                model units.
+            soil_layer_names: SoilGrids layer labels in top-to-bottom order.
+
+        Returns:
+            SoilGrids variable concatenated along the ``soil_layer`` dimension.
+        """
+        soilgrids_layers: list[xr.DataArray] = []
+        for layer_name in soil_layer_names:
+            soilgrids_layers.append(
+                load_soilgrids_v2(
+                    self.data_catalog,
+                    subgrid_mask,
+                    variable_name=variable_name,
+                    layer_name=layer_name,
+                    region=self.region,
+                )
+                * conversion_factor
+            )
+
+        soil_layer_numbers: list[int] = list(range(1, len(soil_layer_names) + 1))
+        return xr.concat(
+            soilgrids_layers,
+            dim=xr.Variable("soil_layer", soil_layer_numbers),
+            compat="equals",
+        )
+
     @build_method(depends_on=[], required=True)
     def setup_soil(self) -> None:
         """Sets up the soil parameters for the model.
@@ -482,24 +521,13 @@ class LandSurface(BuildModelBase):
         ]
 
         for variable_name, conversion_factor in soilgrids_conversion_factors.items():
-            soilgrids_variables: list[xr.DataArray] = []
-            for soil_layer, layer_name in enumerate(soil_layer_names, start=1):
-                soilgrids_variables.append(
-                    load_soilgrids_v2(
-                        self.data_catalog,
-                        subgrid_mask,
-                        variable_name=variable_name,
-                        layer_name=layer_name,
-                    )
-                    * conversion_factor
-                )
-
-            soilgrids_variable: xr.DataArray = xr.concat(
-                soilgrids_variables,
-                dim=xr.Variable("soil_layer", [1, 2, 3, 4, 5, 6]),
-                compat="equals",
+            soilgrids_variable: xr.DataArray = self._load_soilgrids_variable_by_layer(
+                subgrid_mask=subgrid_mask,
+                variable_name=variable_name,
+                conversion_factor=conversion_factor,
+                soil_layer_names=soil_layer_names,
             )
-            self.set_subgrid(
+            soilgrids_variable: xr.DataArray = self.set_subgrid(
                 soilgrids_variable,
                 name=soilgrids_output_names[variable_name],
             )
@@ -512,6 +540,7 @@ class LandSurface(BuildModelBase):
         soil_layer_height_m = soil_layer_height_per_layer_m.broadcast_like(
             soilgrids_variable
         )
+        soil_layer_height_m = soil_layer_height_m.chunk({"soil_layer": 1})
         soil_layer_height_m.attrs["units"] = "m"
         soil_layer_height_m.attrs["description"] = "Height of each soil layer"
         soil_layer_height_m.attrs["_FillValue"] = np.nan

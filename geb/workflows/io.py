@@ -225,12 +225,15 @@ def read_geom(filepath: str | Path, **kwargs: Any) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath, **kwargs)
 
 
-def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
+def write_geom(
+    gdf: gpd.GeoDataFrame, filepath: Path, write_covering_bbox: bool = False
+) -> None:
     """Save a GeoDataFrame to a parquet file.
 
     Args:
         gdf: The GeoDataFrame to save.
         filepath: Path to the output parquet file.
+        write_covering_bbox: Whether to write the covering bounding box to the file.
     """
     gdf.to_parquet(
         filepath,
@@ -239,6 +242,7 @@ def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
         compression_level=9,
         row_group_size=max(min(10_000, len(gdf)), 1),
         schema_version="1.1.0",
+        write_covering_bbox=write_covering_bbox,
     )
 
 
@@ -505,28 +509,121 @@ def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
     return True
 
 
-def check_buffer_size(
-    da: xr.DataArray,
-    chunks_or_shards: dict[str, int],
-    max_buffer_size: int = 2147483647,
-) -> None:
-    """Check if the buffer size for the given chunks or shards is within the maximum allowed size.
+def _chunk_index_to_region(
+    chunk_structure: tuple[tuple[int, ...], ...],
+    block_index: tuple[int, ...],
+) -> tuple[slice, ...]:
+    """Convert a Dask block index into absolute array slices.
 
     Args:
-        da: The xarray DataArray to check.
-        chunks_or_shards: A dictionary with the chunk or shard sizes for each dimension.
-        max_buffer_size: The maximum allowed buffer size in bytes. Default is 2GB (2147483647 bytes).
+        chunk_structure: Chunk sizes for each array dimension.
+        block_index: Block index for each array dimension.
+
+    Returns:
+        The selection tuple describing the block position in the full array.
+    """
+    selection: list[slice] = []
+    for dimension_chunks, dimension_index in zip(
+        chunk_structure, block_index, strict=True
+    ):
+        start: int = sum(dimension_chunks[:dimension_index])
+        stop: int = start + dimension_chunks[dimension_index]
+        selection.append(slice(start, stop))
+    return tuple(selection)
+
+
+def _store_dask_array_blocks(
+    da: dask.array.core.Array, store_target: Any, progress: bool
+) -> None:
+    """Store a Dask array into a Zarr target block by block.
+
+    Args:
+        da: Source Dask array whose existing block structure defines
+            the write granularity.
+        store_target: Writable Zarr target array.
+        progress: Whether to wrap the block iterator in a progress bar.
+    """
+    block_indices: Any = np.ndindex(*da.numblocks)
+
+    array_blocks = da.blocks
+
+    # the last chunk may be smaller than the specified chunk size,
+    # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
+    # This can be safely ignored in this context.
+    with np.errstate(invalid="ignore"):
+        stores = []
+        for block_index in block_indices:
+            region = _chunk_index_to_region(da.chunks, block_index)
+            block = array_blocks[block_index]
+
+            stores.append(
+                dask.array.store(
+                    block,
+                    store_target,
+                    regions=region,
+                    lock=False,
+                    compute=False,  # Use compute=False to return a Dask object instead of executing
+                    return_stored=False,
+                )
+            )
+
+        if progress:
+            with ProgressBar():
+                dask.compute(*stores)
+        else:
+            dask.compute(*stores)
+
+
+def _normalize_shards(
+    chunk_spec: dict[str, int],
+    requested_shards: dict[str, int] | None,
+    dimension_sizes: dict[str, int],
+) -> dict[str, int] | None:
+    """Normalize shard sizes from chunk multiples to exact shard sizes.
+
+    Args:
+        chunk_spec: Chunk sizes for each array dimension.
+        requested_shards: Requested shard sizes expressed as the number of chunks
+            per shard for a subset of dimensions.
+        dimension_sizes: Full array size for each dimension.
+
+    Returns:
+        A complete shard specification using chunk-sized shards for unspecified
+        dimensions, or None when no sharding is requested. Each shard size is an
+        exact multiple of the chunk size for its dimension.
 
     Raises:
-        ValueError: If the buffer size exceeds the maximum allowed size.
+        ValueError: If a requested shard dimension does not exist.
+        ValueError: If a requested shard size is smaller than 1.
     """
-    buffer_size = (
-        np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
-    )
-    if buffer_size >= max_buffer_size:
+    if requested_shards is None:
+        return None
+
+    invalid_dimensions = sorted(set(requested_shards) - set(chunk_spec))
+    if invalid_dimensions:
         raise ValueError(
-            f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
+            f"Shard dimensions {invalid_dimensions} are not present in the array"
         )
+
+    shard_spec: dict[str, int] = chunk_spec.copy()
+    for dim_name, requested_shard_size in requested_shards.items():
+        if requested_shard_size < 1:
+            raise ValueError(
+                f"Shard size for dimension '{dim_name}' must be at least 1"
+            )
+
+        chunk_size: int = chunk_spec[dim_name]
+        dimension_size: int = dimension_sizes[dim_name]
+
+        requested_shard_size_in_elements: int = requested_shard_size * chunk_size
+        minimum_full_shard_size: int = (
+            (dimension_size + chunk_size - 1) // chunk_size
+        ) * chunk_size
+        shard_spec[dim_name] = min(
+            requested_shard_size_in_elements, minimum_full_shard_size
+        )
+
+    return shard_spec
 
 
 def _chunk_index_to_region(
@@ -740,8 +837,6 @@ def write_zarr(
         write_block_spec: dict[str, int] = (
             shard_spec if shard_spec is not None else chunk_spec
         )
-
-        check_buffer_size(da, chunks_or_shards=write_block_spec)
 
         da = da.chunk(write_block_spec)
 
