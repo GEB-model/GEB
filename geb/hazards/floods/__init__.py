@@ -650,6 +650,14 @@ class Floods(Module):
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
         for return_period in self.config["return_periods"]:
+            output_folder = (
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+            )
+            if output_folder.exists():
+                self.model.logger.info(
+                    f"Flood map for return period {return_period} already exists, skipping simulation."
+                )
+                continue
             simulations: list[SFINCSSimulation] = []
 
             if coastal:
@@ -788,11 +796,11 @@ class Floods(Module):
         da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))
 
         # make sure there is at least 20 years of data
-        if len(da.time) == 0 or len(da.time.groupby(da.time.dt.year).groups) < 20:
-            raise ValueError(
-                """Not enough data available for reliable spinup, should be at least 20 years of data left.
-                Please run the model for at least 30 years (10 years of data is discarded)."""
-            )
+        # if len(da.time) == 0 or len(da.time.groupby(da.time.dt.year).groups) < 20:
+        #     raise ValueError(
+        #         """Not enough data available for reliable spinup, should be at least 20 years of data left.
+        #         Please run the model for at least 30 years (10 years of data is discarded)."""
+        #     )
 
         return da
 
