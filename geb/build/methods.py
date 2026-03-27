@@ -545,17 +545,26 @@ class _build_method:
         run_timestamp: Any,
         cluster_dir: Path,
     ) -> None:
-        """Append new per-method build stats to a shared Excel file.
+        """Append new per-method build stats to a per-cluster CSV file.
 
-        This function is intentionally incremental. It only writes methods that have
-        not yet been flushed for the current process so repeated calls after each
-        method do not create duplicate rows.
+        Each cluster writes to its own CSV file (one file per cluster) so that
+        parallel Snakemake jobs never contend on the same file.  The write uses
+        an crash-robust pattern (write to a temporary file, then rename) to avoid
+        partial/corrupt output even if the process is killed mid-write.
+
+        This function is intentionally incremental. It only writes methods that
+        have not yet been written to the current process so repeated calls
+        after each method do not create duplicate rows.
 
         Args:
-            stats_path: Path to the Excel file where build stats are stored.
+            stats_path: Path to the CSV file where build stats are stored.
+                Should be unique per cluster (e.g.
+                ``build_memory_stats/<cluster>.csv``).
             cluster_name: Name of the cluster/scenario group.
-            run_timestamp: Timestamp representing the start of the current build run.
-            cluster_dir: Directory whose subdirectories are measured for on-disk size.
+            run_timestamp: Timestamp representing the start of the current
+                build run.
+            cluster_dir: Directory whose subdirectories are measured for
+                on-disk size.
         """
         methods_to_write: list[str] = [
             method_name
@@ -597,8 +606,9 @@ class _build_method:
         new_rows_df = pd.DataFrame(rows)
         stats_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Read existing rows for this cluster (if any) and concatenate.
         if stats_path.exists():
-            existing_rows_df = pd.read_excel(stats_path)
+            existing_rows_df = pd.read_csv(stats_path)
             combined_rows_df = pd.concat(
                 [existing_rows_df, new_rows_df],
                 ignore_index=True,
@@ -606,7 +616,13 @@ class _build_method:
         else:
             combined_rows_df = new_rows_df
 
-        combined_rows_df.to_excel(stats_path, index=False)
+        # crash-robust write: write to a temporary file in the same directory, then
+        # rename.  On POSIX this is an atomic operation, preventing corruption
+        # if the process is interrupted.
+        tmp_path = stats_path.with_suffix(".csv.tmp")
+        combined_rows_df.to_csv(tmp_path, index=False)
+        tmp_path.rename(stats_path)
+
         self._methods_written_to_stats.update(methods_to_write)
 
     @property

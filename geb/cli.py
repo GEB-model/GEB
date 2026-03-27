@@ -991,7 +991,7 @@ def clean(
     yes: bool,
     working_directory: Path,
 ) -> None:
-    """Clean generated files from a model, keeping model.yml and build.yml.
+    """Clean generated files from a model, keeping model.yml,  update.yml and build.yml.
 
     Run from inside the model directory (e.g. cd large_scale6 && geb clean),
     following the same convention as all other 'geb' commands.

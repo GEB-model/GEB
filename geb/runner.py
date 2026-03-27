@@ -1317,11 +1317,9 @@ def clean_fn(
     preserving the model initialization files (model.yml, build.yml, and
     update.yml).
 
-    Run from inside the model directory (e.g. large_scale6/ or france/),
-    following the same convention as all other 'geb' commands.
-
-    Works with both single-model configurations (created with 'geb init') and
-    multi-basin configurations (created with 'geb init-multiple').
+    Notes:
+        Symlinks are unlinked directly, never followed. This prevents accidental
+        deletion of data outside the model directory if a symlink-to-directory exists.
 
     Args:
         working_directory: Model directory to clean. Defaults to the current
@@ -1399,9 +1397,13 @@ def clean_fn(
             return []
 
     for item in items_to_delete:
-        if item.is_dir():
+        # Always treat symlinks first: never follow them, just unlink.
+        if item.is_symlink():
+            item.unlink()
+        elif item.is_dir():
+            # Only delete real directories, not symlinks-to-directories.
             shutil.rmtree(item)
-        elif item.is_file() or item.is_symlink():
+        elif item.is_file():
             item.unlink()
 
     print(

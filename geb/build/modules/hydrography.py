@@ -1049,7 +1049,7 @@ class Hydrography(BuildModelBase):
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
     @build_method(
-        depends_on=["setup_coastlines", "setup_elevation", "setup_elevation"],
+        depends_on=["setup_coastlines", "setup_elevation"],
         required=True,
     )
     def setup_coastal_sfincs_model_regions(self) -> None:
@@ -1369,7 +1369,7 @@ class Hydrography(BuildModelBase):
             series = sea_level_rise_df[station]
             # check that the values are monotonically increasing
             if not series.is_monotonic_increasing:
-                self.logger.warning(
+                raise ValueError(
                     f"Sea level rise data for station {station} is not monotonically increasing after extrapolation."
                 )
             # check that the values are reasonable (less than 2 meters by 2100)

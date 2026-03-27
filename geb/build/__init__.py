@@ -3436,8 +3436,12 @@ class GEBModel(
         stats_path: Path | None = None
         cluster_name_for_stats: str = ""
         if record_progress and (model_dir / "model.yml").exists():
-            stats_path = model_dir / "build_memory_stats.xlsx"
             cluster_name_for_stats = cluster_dir.name
+            # Each cluster writes its own CSV to avoid corrupt conditions when
+            # multiple Snakemake jobs build clusters in parallel.
+            stats_path = (
+                model_dir / "build_memory_stats" / f"{cluster_name_for_stats}.csv"
+            )
 
         for method in methods:
             if method in completed_methods:
@@ -3451,15 +3455,12 @@ class GEBModel(
                 # Write memory stats after every method regardless of success or
                 # failure so partial results survive job crashes.
                 if stats_path is not None:
-                    try:
-                        build_method.write_build_stats(
-                            stats_path=stats_path,
-                            cluster_name=cluster_name_for_stats,
-                            run_timestamp=build_run_started_at,
-                            cluster_dir=scenario_dir,  # measure subdirs of base/, not input/
-                        )
-                    except Exception as exc:
-                        self.logger.warning(f"Could not write memory stats: {exc}")
+                    build_method.write_build_stats(
+                        stats_path=stats_path,
+                        cluster_name=cluster_name_for_stats,
+                        run_timestamp=build_run_started_at,
+                        cluster_dir=scenario_dir,  # measure subdirs of base/, not input/
+                    )
             self.write_file_library()
 
             if record_progress:
