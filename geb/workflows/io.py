@@ -36,6 +36,7 @@ import xarray as xr
 import yaml
 import zarr
 import zarr.storage
+from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
