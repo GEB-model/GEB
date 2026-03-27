@@ -292,6 +292,7 @@ class SFINCSRootModel:
 
         subbasins: gpd.GeoDataFrame = subbasins.to_crs(mask.rio.crs)
         rivers: gpd.GeoDataFrame = rivers.to_crs(mask.rio.crs)
+        self.all_rivers = rivers.copy()
 
         self.logger.info("Starting SFINCS model build...")
         # build base model
@@ -1369,14 +1370,34 @@ class SFINCSRootModel:
         recession_limb_hours: int = rising_limb_hours
 
         # here we only select the rivers that have an upstream forcing point
+        # here we only select the rivers that have an upstream forcing point
         rivers_with_return_period: gpd.GeoDataFrame = self.active_rivers[
             ~self.active_rivers["is_downstream_outflow"]
         ].copy()
 
+        # also create df for finding river points
+        all_rivers_with_return_period: gpd.GeoDataFrame = (
+            self.rivers[~self.rivers["is_downstream_outflow"]]
+            .copy()
+            .reset_index(drop=False)
+        )  # ty:ignore[invalid-argument-type]
+        # intersect with subbasins to ensure we only keep rivers that are within the model domain
+        all_rivers_with_return_period = gpd.sjoin(
+            all_rivers_with_return_period,  # ty:ignore[invalid-argument-type]
+            self.subbasins.reset_index(drop=True),  # ty:ignore[invalid-argument-type]
+            predicate="intersects",
+        )
+
+        all_rivers_with_return_period = (
+            all_rivers_with_return_period.drop_duplicates(subset="COMID")
+            .drop(columns=["index_right"])
+            .set_index("COMID")
+        )  # ty:ignore[invalid-assignment]
+
         river_representative_points: list[list[tuple[int, int]]] = []
         for ID in rivers_with_return_period.index:
             river_representative_points.append(
-                get_representative_river_points(ID, rivers_with_return_period)
+                get_representative_river_points(ID, all_rivers_with_return_period)
             )
 
         discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
