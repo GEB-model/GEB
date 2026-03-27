@@ -1,6 +1,11 @@
 # dev
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
 - Refactored setup farms from lowder and created a test. Non-lowder datasets are not supported anymore. This will be added back later in the simplified setup when it is required for a specific purpose.
+- Write a custom zarr writer that is able to write chunked data and adapt all build methods to work with this.
+- Made numerous changes throughout the build to reduce memory usage. No content changes.
+- Set fill depressions to False by default in build. This option uses too much memory for large areas. If needed this can be build in again at the hydrodynamics stage.
+- Remove old data catalog entirely, and all references to it. Rename NewDataCatalog to DataCatalog.
+- fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.

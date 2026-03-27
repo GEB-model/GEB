@@ -40,7 +40,10 @@ class SoilGridsV2(Adapter):
         Returns:
             The (lazy) data array containing the SoilGrids data for the specified variable and depth.
         """
-        da = rxr.open_rasterio(self.url.format(variable=variable, depth=depth))
+        da = rxr.open_rasterio(
+            self.url.format(variable=variable, depth=depth),
+            chunks={"x": 1024, "y": 1024},
+        )
         assert isinstance(da, xr.DataArray)
         da = da.sel(band=1)
         assert isinstance(da, xr.DataArray)
@@ -76,7 +79,9 @@ class SoilGridsV1(Adapter):
         Returns:
             The (lazy) data array containing the SoilGrids data for the specified variable and depth.
         """
-        da = rxr.open_rasterio(self.url.format(variable=variable))
+        da = rxr.open_rasterio(
+            self.url.format(variable=variable), chunks={"x": 1024, "y": 1024}
+        )
         assert isinstance(da, xr.DataArray)
         da = da.sel(band=1)
         assert isinstance(da, xr.DataArray)

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from tqdm import tqdm
 
-from geb.build.data_catalog import NewDataCatalog
+from geb.build.data_catalog import DataCatalog
 from geb.build.workflows.farmers import (
     create_farm_distributions,
     create_farms_numba,
@@ -96,7 +96,7 @@ def test_create_farms_numba_single_farmer_single_cell() -> None:
 )
 def test_create_farm_distributions_for_all_lowder_regions() -> None:
     """Ensure each Lowder ISO3 group can produce a farm-size distribution."""
-    lowder_farm_sizes = NewDataCatalog().fetch("lowder_farm_size_distribution").read()
+    lowder_farm_sizes = DataCatalog().fetch("lowder_farm_size_distribution").read()
     cultivated_land_area_region_m2 = 10_000_000.0
     average_subgrid_area_region = 1.0
     cultivated_land_region_total_cells = int(

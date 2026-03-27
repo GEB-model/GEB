@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import tempfile
 from collections.abc import Generator, Hashable, Mapping
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -1074,22 +1073,34 @@ def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
 
     nodata = da.attrs["_FillValue"]
 
-    mask = np.isnan(da.values) if np.isnan(nodata) else da.values == nodata
+    def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
+        mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
 
-    if not mask.any():
-        return da
+        if not mask.any():
+            return arr
 
-    y, x = np.indices(da.values.shape)
-    known_x, known_y = x[~mask], y[~mask]
-    known_v = da.values[~mask]
-    missing_x, missing_y = x[mask], y[mask]
+        y, x = np.indices(arr.shape)
+        known_x, known_y = x[~mask], y[~mask]
+        known_v = arr[~mask]
+        missing_x, missing_y = x[mask], y[mask]
 
-    filled_values = griddata(
-        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+        filled_values = griddata(
+            (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+        )
+        arr_filled = arr.copy()
+        arr_filled[mask] = filled_values
+        return arr_filled
+
+    return xr.apply_ufunc(
+        fillna_2d,
+        da,
+        input_core_dims=[["y", "x"]],
+        output_core_dims=[["y", "x"]],
+        dask="parallelized",
+        output_dtypes=[da.dtype],
+        kwargs={"nodata": nodata},
+        keep_attrs=True,
     )
-    da_filled = da.copy()
-    da_filled.values[mask] = filled_values
-    return da_filled
 
 
 def resample_like(
@@ -1616,11 +1627,9 @@ def get_neighbor_cell_ids_for_linear_indices(
 @contextmanager
 def create_temp_zarr(
     da: xr.DataArray,
-    name: str = "temp",
-    x_chunksize: int = 350,
-    y_chunksize: int = 350,
-    time_chunksize: int = 1,
-    time_chunks_per_shard: int | None = 30,
+    name: str = "tmp",
+    shards: dict[str, int] | None = None,
+    **kwargs: Any,
 ) -> Generator[xr.DataArray, None, None]:
     """Create a DataArray to a temporary Zarr file with specified chunks.
 
@@ -1630,10 +1639,8 @@ def create_temp_zarr(
     Args:
         da: The DataArray to create.
         name: Name suffix for the temporary file.
-        x_chunksize: Chunk size for x dimension.
-        y_chunksize: Chunk size for y dimension.
-        time_chunksize: Chunk size for time dimension.
-        time_chunks_per_shard: Time chunks per shard.
+        shards: Optional dictionary specifying sharding for dimensions, e.g. {"time": 30}.
+        **kwargs: Additional keyword arguments to pass to `write_zarr`.
 
     Yields:
         The created DataArray opened from the temporary Zarr file.
@@ -1644,20 +1651,15 @@ def create_temp_zarr(
     if da.rio.crs is None:
         raise ValueError("DataArray must have a CRS defined to use create_temp_zarr")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir) / f"{name}.zarr"
-        temp_da = write_zarr(
-            da,
-            tmp_path,
-            crs=da.rio.crs,
-            x_chunksize=x_chunksize,
-            y_chunksize=y_chunksize,
-            time_chunksize=time_chunksize,
-            time_chunks_per_shard=time_chunks_per_shard,
-            progress=True,
-            compression_level=1,
-        )
-        yield temp_da
+    temp_da = write_zarr(
+        da,
+        path=None,
+        crs=da.rio.crs,
+        progress=True,
+        compression_level=1,
+        shards=shards,
+    )
+    yield temp_da
 
 
 def rechunk_zarr_file(
@@ -1692,7 +1694,7 @@ def rechunk_zarr_file(
         shards = None
     elif how == "space-optimized":
         x_chunk, y_chunk, time_chunk = 350, 350, 1
-        shards = 30
+        shards = {"time": 30}
     elif how == "balanced":
         x_chunk, y_chunk, time_chunk = 50, 50, 50
         shards = None
@@ -1709,12 +1711,8 @@ def rechunk_zarr_file(
             "Creating intermediate rechunked Zarr with 50x50 spatial chunks and 50 time chunks..."
         )
         ctx = create_temp_zarr(
-            da,
+            da.chunk({"x": 50, "y": 50, "time": 50}),
             name="intermediate",
-            x_chunksize=50,
-            y_chunksize=50,
-            time_chunksize=50,
-            time_chunks_per_shard=None,
         )
     else:
         # No intermediate step, directly rechunk from source to target
@@ -1726,12 +1724,9 @@ def rechunk_zarr_file(
             f"Rechunking Zarr with strategy '{how}' (x_chunk={x_chunk}, y_chunk={y_chunk}, time_chunk={time_chunk}, shards={shards})..."
         )
         write_zarr(
-            source_da,
+            source_da.chunk({"x": x_chunk, "y": y_chunk, "time": time_chunk}),
             output_path,
             crs=da.rio.crs,
-            x_chunksize=x_chunk,
-            y_chunksize=y_chunk,
-            time_chunksize=time_chunk,
-            time_chunks_per_shard=shards,
+            shards=shards,
             progress=True,
         )

@@ -10,7 +10,7 @@ import pandas as pd
 from geb.build.workflows.conversions import setup_donor_countries
 from geb.geb_types import TwoDArrayInt32
 
-from ..data_catalog import NewDataCatalog
+from ..data_catalog import DataCatalog
 
 
 def get_day_index(date: date) -> int:
@@ -203,7 +203,7 @@ def parse_MIRCA_file(
 
 
 def parse_MIRCA2000_crop_calendar(
-    data_catalog: NewDataCatalog, MIRCA_units: list[int]
+    data_catalog: DataCatalog, MIRCA_units: list[int]
 ) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
     """Parse MIRCA2000 crop calendars for given MIRCA units.
 
@@ -250,7 +250,7 @@ def donate_and_receive_crop_prices(
     donor_data: pd.DataFrame,
     recipient_regions: pd.DataFrame,
     trade_regions: dict[str, str],
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     global_countries: gpd.GeoDataFrame,
     regions: gpd.GeoDataFrame,
 ) -> pd.DataFrame:
