@@ -1213,6 +1213,32 @@ class Bucket:
                     filename.stem,
                     np.load(filename),
                 )
+            elif (
+                filename.suffixes == [".storearray", ".npz"]
+                or filename.suffix == ".npy"
+            ):
+                value = np.load(filename)
+                # unpack the value if it was saved as a .array.npz
+                if filename.suffixes == [".storearray", ".npz"]:
+                    value = value["_data"]
+
+                setattr(
+                    self,
+                    filename.name.removesuffix("".join(filename.suffixes)),
+                    value,
+                )
+
+            elif filename.suffixes == [".array", ".npz"] or filename.suffix == ".npy":
+                value = np.load(filename)
+                # unpack the value if it was saved as a .array.npz
+                if filename.suffixes == [".array", ".npz"]:
+                    value = value["value"]
+                setattr(
+                    self,
+                    filename.name.removesuffix("".join(filename.suffixes)),
+                    value,
+                )
+
             elif filename.suffixes == [".array", ".zarr"]:
                 value = read_array(filename)
                 if value.ndim == 0:
