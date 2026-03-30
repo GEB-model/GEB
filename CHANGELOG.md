@@ -19,6 +19,13 @@
 - Make full integration test, now checking discharge with observed discharge in the test_run.
 - Fix recent regression where water demand for households was set to 0 except on January 1st.
 - Include evaluation tests in the test_run for simplicity. 
+- Include global Huizinga curves as alternative to local Endendijk in build and reasenable model config. 
+
+To support this version:
+- Run `setup_global_damage_model`: `geb update -b build.yml::setup_global_damage_model`.
+- Run `setup_local_damage_model`: `geb update -b build.yml::l`.
+
+
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.
