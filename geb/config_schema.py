@@ -68,7 +68,7 @@ class FloodEventConfig(BaseModel):
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
-    damage_model: str = Field(
+    damage_model: Literal["local", "global"] = Field(
         "local", description="The damage model to use (local or global)."
     )
     simulate: bool = Field(False, description="Whether to simulate floods.")
