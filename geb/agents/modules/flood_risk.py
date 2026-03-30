@@ -405,12 +405,7 @@ class FloodRiskModule:
                 ],
             }
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
-                features=building_multicurve.rename(
-                    columns={
-                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
-                    }
-                ),
+                features=building_multicurve,
                 hazard=flood_map,
                 multi_curves=multi_curves,
             )
