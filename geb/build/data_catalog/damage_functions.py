@@ -71,9 +71,7 @@ class DamageFunctions(Adapter):
                     damage_functions[damage_class] = pd.DataFrame(
                         {
                             "depth": df_damage_class["depth"].values,
-                            "damage_fraction": df_damage_class.iloc[:, 1:-1].mean(
-                                axis=1
-                            ),
+                            "damage_ratio": df_damage_class.iloc[:, 1:-1].mean(axis=1),
                         }
                     )
                 else:
@@ -87,10 +85,10 @@ class DamageFunctions(Adapter):
                 raise ValueError(
                     f"Region '{region}' not found in damage functions dataframe. Either use the global column or one of the following: {', '.join(df_damage_class.columns[1:])}"
                 )
-            damage_functions[damage_class].columns = ["depth", "damage_fraction"]
+            damage_functions[damage_class].columns = ["depth", "damage_ratio"]
         return damage_functions
 
-    def fetch(self) -> DamageFunctions:
+    def fetch(self, url: str) -> DamageFunctions:
         """Fetch the damage functions file from the specified URL and save it to the local path if it doesn't already exist.
 
         Returns:
@@ -98,7 +96,7 @@ class DamageFunctions(Adapter):
         """
         # download the file if it doesn't exist
         if not self.path.exists():
-            url = "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC105688/copy_of_global_flood_depth-damage_functions__30102017.xlsx"
+            url = url
             response = requests.get(url)
             response.raise_for_status()
             # save the file to self.path
