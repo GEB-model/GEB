@@ -98,6 +98,8 @@ agent_settings:
           ruleset: no-adaptation
       crop_switching: 
         ruleset: no-adaptation
+        loan_duration: 0
+        switching_cap: 1 # if 1 there is no cap. < 1 there a cap of maximum switches per year (e.g., 0.10 = 10% of agents can switch each year) 
       adaptation_sprinkler:
         ruleset: no-adaptation
         adaptation_type: dynamic
@@ -112,6 +114,7 @@ agent_settings:
         irr_eff_surface: 0.60
         irr_eff_sprinkler: 0.75
         irr_eff_drip:  0.95
+        efficiency_division: [0.5, 0.3, 0.2]   # ratio of different irrigation methods (surface, sprinkler, drip))
       adaptation_irrigation_expansion:
         ruleset: no-adaptation
       adaptation_well:
