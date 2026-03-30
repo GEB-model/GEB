@@ -158,7 +158,7 @@ class FloodRiskModule:
         )
         self.households.buildings_structure_curve.set_index("depth", inplace=True)
 
-        # insert a row with depth of 1.01m and damage ratio corresponding to the damage ratio at 1m depth modeling dry flood proofing untill 1m depth.
+        # insert a row with depth of 1.01m and damage ratio corresponding to the damage ratio at 1m depth modeling dry flood proofing until 1m depth.
         self.households.buildings_structure_curve.loc[1.01] = (
             self.households.buildings_structure_curve.loc[1]
         )
