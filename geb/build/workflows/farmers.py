@@ -1,13 +1,255 @@
 """Workflows for constructing farmer distributions and farm maps."""
 
 import logging
+import math
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 from numba import njit
 
-from geb.types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.raster import pixels_to_coords
+
+
+def create_farm_distributions(
+    region_farm_sizes: pd.DataFrame,
+    size_class_boundaries: dict[str, tuple[float, float]],
+    cultivated_land_area_region_m2: float,
+    average_subgrid_area_region: float,
+    cultivated_land_region_total_cells: int,
+    UID: int,
+    ISO3: str,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """Create farm size distributions for a region based on farm size data and cultivated land area.
+
+    Args:
+        region_farm_sizes: DataFrame containing farm size data for the region. Must have columns 'Holdings/ agricultural area', 'ISO3', and one column for each size class with the number of holdings or agricultural area for that size class.
+        size_class_boundaries: Dictionary mapping size class names to their minimum and maximum size in m2.
+        cultivated_land_area_region_m2: Total cultivated land area in the region in m2.
+        average_subgrid_area_region: Average area of a subgrid cell in the region in m2.
+        cultivated_land_region_total_cells: Total number of cultivated land cells in the region.
+        UID: Unique ID of the region.
+        ISO3: ISO3 code of the region.
+        logger: Logger for logging warnings and errors.
+
+    Returns:
+        DataFrame containing the farm size distribution for the region, with columns 'average_farm_size_m2', 'n_holdings', and 'whole_cells' for each size class.
+
+    Raises:
+        ValueError: If the input data is inconsistent or if a valid farm size distribution cannot be created based on the input data.
+    """
+    # Extract holdings and agricultural area data
+    # Note that this while the preprocessing is at the region level
+    # within the study area, the source data can be for example on
+    # country level, so we need to make sure to use the correct data
+    # for the region we are processing
+    n_holdings_database = (
+        region_farm_sizes.loc[
+            region_farm_sizes["Holdings/ agricultural area"] == "Holdings"
+        ]
+        .iloc[0]
+        .drop(["Holdings/ agricultural area", "ISO3"])
+        .replace("..", np.nan)
+        .astype(np.float64)
+    )
+    agricultural_area_ha_database = (
+        region_farm_sizes.loc[
+            region_farm_sizes["Holdings/ agricultural area"] == "Agricultural area (Ha)"
+        ]
+        .iloc[0]
+        .drop(["Holdings/ agricultural area", "ISO3"])
+        .replace("..", np.nan)
+        .astype(np.float64)
+    )
+
+    # Calculate average sizes for each bin
+    farm_statistics: dict[str, tuple[float, int]] = {}
+    for (
+        size_class,
+        all_holding_area_ha,
+    ) in agricultural_area_ha_database.items():
+        all_holding_area_m2 = all_holding_area_ha * 10000  # convert from ha to m2
+        n_holdings = n_holdings_database[size_class]
+        size_class = size_class.strip()
+
+        min_size_m2, max_size_m2 = size_class_boundaries[size_class]
+
+        if np.isnan(all_holding_area_ha) and (np.isnan(n_holdings) or n_holdings == 0):
+            continue
+        elif (
+            np.isnan(all_holding_area_ha)
+            and not np.isnan(n_holdings)
+            and n_holdings > 0
+        ):
+            logger.warning(
+                f"Total agricultural area for bin '{size_class}' in {ISO3} is missing, but number of holdings is {n_holdings}. "
+                "Setting average farm size to the midpoint of the size class."
+            )
+            if np.isinf(max_size_m2):
+                average_farm_size_m2 = (
+                    min_size_m2 * 1.5
+                )  # if max is infinite, set average to 1.5 times the min size
+            else:
+                average_farm_size_m2 = (min_size_m2 + max_size_m2) / 2
+        else:  # both area and holdings are available, calculate average size as area / holdings
+            average_farm_size_m2 = all_holding_area_m2 / n_holdings
+
+            if average_farm_size_m2 < min_size_m2:
+                logger.warning(
+                    f"Average farm size for bin '{size_class}' in {ISO3} is {average_farm_size_m2:.2f} m², which is below the minimum expected size of {min_size_m2:.2f} m²."
+                )
+                average_farm_size_m2 = min_size_m2
+            elif average_farm_size_m2 > max_size_m2:
+                logger.warning(
+                    f"Average farm size for bin '{size_class}' in {ISO3} is {average_farm_size_m2:.2f} m², which is above the maximum expected size of {max_size_m2:.2f} m²."
+                )
+                average_farm_size_m2 = max_size_m2
+
+        assert not np.isnan(average_farm_size_m2)
+        assert not np.isnan(n_holdings)
+        assert n_holdings >= 0
+        assert average_farm_size_m2 >= 0
+        farm_statistics[size_class] = (average_farm_size_m2, n_holdings)
+
+    farm_statistics: pd.DataFrame = pd.DataFrame.from_dict(
+        farm_statistics,
+        orient="index",
+        columns=np.array(["average_farm_size_m2", "n_holdings"]),
+    )
+    total_farm_area_m2_database = (
+        farm_statistics["average_farm_size_m2"] * farm_statistics["n_holdings"]
+    ).sum()
+
+    # correct number of holdings for the region size, based on the ratio of cultivated land area
+    # in the region to the cultivated land area in the database
+    farm_statistics["n_holdings"] = farm_statistics["n_holdings"] * (
+        cultivated_land_area_region_m2 / total_farm_area_m2_database
+    )
+    farm_statistics["n_cells"] = (
+        farm_statistics["n_holdings"]
+        * farm_statistics["average_farm_size_m2"]
+        / average_subgrid_area_region
+    )
+
+    # checking if all our corrections make sense by comparing the total cultivated land in the region to the total cultivated land implied by the number of holdings and their average size. We allow for a small difference of 1 cell, as there are some rounding errors in the corrections.
+    assert math.isclose(
+        cultivated_land_region_total_cells,
+        farm_statistics["n_cells"].sum(),
+        abs_tol=1,
+    ), (
+        f"{cultivated_land_region_total_cells}, {farm_statistics['n_cells'].sum().item()}"
+    )
+
+    farm_statistics["whole_cells"] = (farm_statistics["n_cells"] // 1).astype(int)
+    farm_statistics["leftover_cells"] = farm_statistics["n_cells"] % 1
+    whole_cells = farm_statistics["whole_cells"].sum()
+    n_missing_cells = cultivated_land_region_total_cells - whole_cells
+
+    original_index = farm_statistics.index.copy()
+    farm_statistics = farm_statistics.sort_values(
+        "leftover_cells", ascending=False
+    ).copy()
+
+    farm_statistics.loc[farm_statistics.index[:n_missing_cells], "whole_cells"] += 1
+
+    assert farm_statistics["whole_cells"].sum() == cultivated_land_region_total_cells
+
+    farm_statistics = farm_statistics.reindex(original_index).drop(
+        ["leftover_cells", "n_cells"], axis=1
+    )
+    farm_statistics = farm_statistics[farm_statistics["whole_cells"] > 0]
+
+    farm_statistics["n_holdings"] = farm_statistics["n_holdings"].round().astype(int)
+    farm_statistics["n_holdings"] = farm_statistics["n_holdings"].clip(
+        lower=1
+    )  # at least 1 holding per size class, otherwise we cannot create agents for that size class
+
+    region_farm_sizes: list[ArrayInt32] = []
+    for size_class_data in farm_statistics.itertuples():
+        size_class = size_class_data.Index
+        min_size_m2, max_size_m2 = size_class_boundaries[size_class]
+
+        # for the largest size class, we set the max size to 2 times the average size,
+        # to avoid having some extremely large farms.
+        if np.isinf(max_size_m2):
+            max_size_m2 = size_class_data.average_farm_size_m2 * 2
+
+        min_farm_size_cells: int = int(min_size_m2 / average_subgrid_area_region)
+        min_farm_size_cells = max(
+            min_farm_size_cells, 1
+        )  # farm can never be smaller than one cell
+
+        max_farm_size_cells: int = (
+            int(max_size_m2 / average_subgrid_area_region) - 1
+        )  # otherwise they overlap with next size class
+
+        if not size_class_data.whole_cells >= size_class_data.n_holdings:
+            raise ValueError(
+                f"Number of holdings for size class '{size_class}' in {ISO3} is {size_class_data.n_holdings}, "
+                f"which is greater than the number of whole cells {size_class_data.whole_cells}. "
+                f"Consider adjusting the size class boundaries or the number of subgrid cells to ensure "
+                f"that there are enough cells to accommodate the holdings."
+            )
+
+        mean_cells_per_agent: int = int(
+            size_class_data.whole_cells / size_class_data.n_holdings
+        )
+
+        offset = (
+            size_class_data.whole_cells
+            - size_class_data.n_holdings * mean_cells_per_agent
+        )
+
+        if (
+            size_class_data.n_holdings * mean_cells_per_agent + offset
+            < min_farm_size_cells * size_class_data.n_holdings
+        ):
+            min_farm_size_cells = (
+                size_class_data.n_holdings * mean_cells_per_agent + offset
+            ) // size_class_data.n_holdings
+        if (
+            size_class_data.n_holdings * mean_cells_per_agent + offset
+            > max_farm_size_cells * size_class_data.n_holdings
+        ):
+            max_farm_size_cells = (
+                size_class_data.n_holdings * mean_cells_per_agent + offset
+            ) // size_class_data.n_holdings + 1
+
+        n_farms_size_class, farm_sizes_size_class = get_farm_distribution(
+            size_class_data.n_holdings,
+            min_farm_size_cells,
+            max_farm_size_cells,
+            mean_cells_per_agent,
+            offset,
+            logger,
+        )
+
+        assert n_farms_size_class.sum() == size_class_data.n_holdings
+        assert (farm_sizes_size_class >= 1).all()
+        assert (
+            n_farms_size_class * farm_sizes_size_class
+        ).sum() == size_class_data.whole_cells
+
+        # expand farm sizes according to the number of farms in each size class
+        farm_sizes = farm_sizes_size_class.repeat(n_farms_size_class)
+
+        # shuffle farm sizes
+        np.random.shuffle(farm_sizes)
+
+        region_farm_sizes.append(farm_sizes)
+
+        assert farm_sizes.sum() == size_class_data.whole_cells
+
+    region_farm_sizes: ArrayInt32 = np.concatenate(region_farm_sizes)
+    region_agents = pd.DataFrame(
+        {
+            "farm_size_cells": region_farm_sizes,
+            "region_id": np.full_like(region_farm_sizes, UID, dtype=np.int32),
+        }
+    )
+    return region_agents
 
 
 @njit(cache=True, parallel=False)
@@ -203,7 +445,7 @@ def fit_n_farms_to_sizes(
     target_area: int = int(n * mean + offset)
 
     # Start from the integer part of the estimate per size
-    n_farms: np.ndarray = (estimate // 1).astype(int)
+    n_farms: ArrayInt32 = (estimate // 1).astype(np.int32)
     estimated_area_int: int = int((n_farms * farm_sizes).sum())
 
     # Sanity check: the number still to assign must be less than the number of bins
@@ -211,7 +453,7 @@ def fit_n_farms_to_sizes(
     assert missing < n_farms.size
 
     # Distribute the leftover fractional mass to neighbors to mitigate rounding bias
-    extra: np.ndarray = np.zeros_like(estimate, dtype=n_farms.dtype)
+    extra: ArrayInt32 = np.zeros_like(estimate, dtype=n_farms.dtype)
     leftover_estimate: np.ndarray = estimate % 1
     for i in range(len(leftover_estimate)):
         v: float = float(leftover_estimate[i])
@@ -297,7 +539,7 @@ def get_farm_distribution(
     mean: int,
     offset: int,
     logger: logging.Logger | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[ArrayInt32, ArrayInt32]:
     """Generates a distribution of farm sizes and counts to match target area.
 
     This function computes the number of farms for each size in a given range
@@ -339,16 +581,16 @@ def get_farm_distribution(
         f"There is no solution for this problem. The total farm size (incl. offset) is larger or smaller than possible with min (x0) and max (x1) farm size. n: {n}, x0: {x0}, x1: {x1}, mean: {mean}, offset: {offset}"
     )  # make sure there is a solution to the problem.
 
-    farm_sizes: np.ndarray = np.arange(x0, x1 + 1)
+    farm_sizes: ArrayInt32 = np.arange(x0, x1 + 1).astype(np.int32)
     n_farm_sizes: int = farm_sizes.size
 
     if n == 0:
-        n_farms: np.ndarray = np.zeros(n_farm_sizes, dtype=np.int32)
+        n_farms: ArrayInt32 = np.zeros(n_farm_sizes, dtype=np.int32)
         assert target_area == (n_farms * farm_sizes).sum()
 
     elif n == 1:
-        farm_sizes = np.array([mean + offset])
-        n_farms = np.array([1])
+        farm_sizes = np.array([mean + offset], dtype=np.int32)
+        n_farms = np.array([1], dtype=np.int32)
         assert target_area == (n_farms * farm_sizes).sum()
 
     # elif mean == x0:
@@ -386,32 +628,28 @@ def get_farm_distribution(
     else:
         growth_factor: float = 1
 
-        start_from_bottom: bool = True
+        dist_low = (n * mean + offset) - x0 * n
+        dist_high = x1 * n - (n * mean + offset)
+
+        if dist_low < dist_high:
+            start_from_bottom: bool = True
+        else:
+            start_from_bottom: bool = False
+
+        prev_growth_factor: float = -1.0
+        prev_estimated_area: float = -1.0
+
         while True:
             if start_from_bottom:
-                estimate: np.ndarray = np.zeros(n_farm_sizes, dtype=np.float64)
+                estimate = np.full(n_farm_sizes, growth_factor, dtype=np.float64)
                 estimate[0] = 1
-                for i in range(1, estimate.size):
-                    estimate[i] = estimate[i - 1] * growth_factor
-                estimate /= estimate.sum() / n
+                estimate = np.cumprod(estimate)
+            else:
+                estimate = np.full(n_farm_sizes, 1.0 / growth_factor, dtype=np.float64)
+                estimate[0] = 1
+                estimate = np.cumprod(estimate)[::-1]
 
-            # when there are only some farms at the top of the farm size distribution, the growth factor can become very large and the estimate can become very small.
-            # is can lead to NaNs in the estimate. In this case we can start from the top of the farm size distribution.
-            if np.isnan(estimate).any() or not start_from_bottom:
-                if (
-                    start_from_bottom
-                ):  # reset growth factor, but only first time this code is run
-                    start_from_bottom = False
-                    growth_factor = 1
-                if logger is not None:
-                    logger.warning(
-                        f"estimate contains NaNs; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}, start from the top"
-                    )
-                estimate = np.zeros(n_farm_sizes, dtype=np.float64)
-                estimate[-1] = 1
-                for i in range(estimate.size - 2, -1, -1):
-                    estimate[i] = estimate[i + 1] * growth_factor
-                estimate /= estimate.sum() / n
+            estimate /= estimate.sum() / n
 
             assert (estimate >= 0).all(), (
                 f"Some numbers are negative; growth_factor: {growth_factor}, estimate size: {estimate.size}, estimate: {estimate}"
@@ -423,11 +661,23 @@ def get_farm_distribution(
             if abs(absolute_difference) < 1e-3:
                 break
 
-            difference: float = (target_area / estimated_area) ** (
-                1 / (n_farm_sizes - 1)
-            )
+            # Calculate adaptive exponent based on secant method in log-log space
+            exponent: float = 1.0 / (n_farm_sizes - 1)
+
+            if prev_growth_factor > 0 and prev_estimated_area > 0:
+                log_g_diff = np.log(growth_factor) - np.log(prev_growth_factor)
+                log_A_diff = np.log(estimated_area) - np.log(prev_estimated_area)
+                exponent = log_g_diff / log_A_diff
+
+            # Update history
+            prev_growth_factor = growth_factor
+            prev_estimated_area = estimated_area
+
+            difference: float = (target_area / estimated_area) ** exponent
+
             if difference == 1:
                 break
+
             growth_factor *= difference
 
         n_farms, farm_sizes = fit_n_farms_to_sizes(
@@ -443,9 +693,7 @@ def get_farm_distribution(
     return n_farms, farm_sizes
 
 
-def get_farm_locations(
-    farms: TwoDArrayInt32, method: str = "centroid"
-) -> TwoDArrayInt32:
+def get_farm_locations(farms: xr.DataArray, method: str = "centroid") -> TwoDArrayInt32:
     """Get farm locations from farm map.
 
     Args:
@@ -459,7 +707,7 @@ def get_farm_locations(
         raise NotImplementedError
     gt = farms.rio.transform().to_gdal()
 
-    farms = farms.values
+    farms: np.ndarray = farms.values
     n_farmers = np.unique(farms[farms != -1]).size
 
     vertical_index = (

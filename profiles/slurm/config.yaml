@@ -1,0 +1,36 @@
+# Compatible with Snakemake >=9.0 and snakemake-executor-plugin-slurm >=2.0
+# Use the SLURM executor plugin instead of the legacy cluster: string.
+# Resource mapping (rule resources → sbatch flags):
+#   cpus_per_task   → --cpus-per-task
+#   mem_mb          → --mem
+#   runtime         → --time (minutes)
+#   slurm_partition → --partition
+#   slurm_account   → --account
+executor: slurm
+
+# Job management
+# Snakemake submits up to `jobs` jobs to SLURM simultaneously.
+# Jobs are excluded from small defq nodes (node003-015, ~257 GB) and distributed
+# freely across node001/002 (~1031 GB) and node243 (~773 GB) via --mem hints.
+jobs: 8
+max-jobs-per-second: 2
+max-status-checks-per-second: 1
+
+# Resource defaults (overridden by rule-specific resources)
+default-resources:
+  cpus_per_task: 2
+  mem_mb: 4000
+  runtime: 11520
+  slurm_partition: defq
+  slurm_account: ivm
+
+rerun-incomplete: true
+keep-going: true
+printshellcmds: true
+latency-wait: 60
+
+# Snakemake 9.x uses UUIDs as job names for reliable status tracking.
+# Rule+wildcard info is stored in the SLURM comment field instead.
+# View with: squeue -u $USER -o "%.10i %.10P %.10T %.12M %k"
+slurm-logdir: "logs/snakemake_logs"
+slurm-jobname-prefix: "geb"

@@ -1,9 +1,12 @@
 """Workflow helpers used in the GEB."""
 
 from time import time
-from typing import Iterable
+from typing import Literal, overload
 
 import numpy as np
+
+from geb.geb_types import ArrayFloat
+from geb.store import DynamicArray
 
 
 class TimingModule:
@@ -54,17 +57,60 @@ class TimingModule:
         return to_print
 
 
+@overload
 def balance_check(
     name: str,
     how: str = "cellwise",
-    influxes: Iterable = [],
-    outfluxes: Iterable = [],
-    prestorages: Iterable = [],
-    poststorages: Iterable = [],
+    influxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    prestorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    poststorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
     tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
-) -> bool:
+    return_max_imbalance_index: Literal[False] = False,
+) -> bool: ...
+
+
+@overload
+def balance_check(
+    name: str,
+    how: str = "cellwise",
+    influxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    prestorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    poststorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    tolerance: float = 1e-10,
+    error_identifiers: dict = {},
+    raise_on_error: bool = False,
+    return_max_imbalance_index: Literal[True] = ...,
+) -> tuple[Literal[False], int] | tuple[Literal[True], None]: ...
+
+
+def balance_check(
+    name: str,
+    how: str = "cellwise",
+    influxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    prestorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    poststorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    tolerance: float = 1e-10,
+    error_identifiers: dict = {},
+    raise_on_error: bool = False,
+    return_max_imbalance_index: bool = False,
+) -> bool | tuple[Literal[False], int] | tuple[Literal[True], None]:
     """Check the balance of a system, usually for water.
 
     Essentially checks that influxes + prestorages = outfluxes + poststorages,
@@ -82,6 +128,8 @@ def balance_check(
             Can only be used with how='cellwise'.
             When an error is found, the values of these identifiers at the location of the maximum error will be printed.
         raise_on_error: Whether to raise an error if the balance check fails.
+        return_max_imbalance_index: Whether to return the maximum imbalance instead of a boolean.
+            Only applicable when how='cellwise'.
 
     Returns:
         True if the balance check passes, False otherwise.
@@ -89,30 +137,34 @@ def balance_check(
     Raises:
         ValueError: If NaN values are found in the balance calculation.
         AssertionError: If the balance check fails and raise_on_error is True.
+        ValueError: If return_max_imbalance_index is True when using 'sum' method.
     """
     income = 0
     out = 0
     store = 0
 
-    if not isinstance(influxes, (list, tuple)):
-        influxes = [influxes]
-    if not isinstance(outfluxes, (list, tuple)):
-        outfluxes = [outfluxes]
-    if not isinstance(prestorages, (list, tuple)):
-        prestorages = [prestorages]
-    if not isinstance(poststorages, (list, tuple)):
-        poststorages = [poststorages]
-
     if how == "cellwise":
-        inflow: np.ndarray = np.add.reduce(influxes)
-        outflow: np.ndarray = np.add.reduce(outfluxes)
-        prestorage: np.ndarray = np.add.reduce(prestorages)
-        poststorage: np.ndarray = np.add.reduce(poststorages)
+        influx = np.add.reduce(influxes)
+        outflux = np.add.reduce(outfluxes)
+        prestorage = np.add.reduce(prestorages)
+        poststorage = np.add.reduce(poststorages)
 
-        balance = inflow - outflow + prestorage - poststorage
+        balance = influx - outflux + prestorage - poststorage
 
         if np.isnan(balance).any():
-            raise ValueError("Balance check failed, NaN values found.")
+            for kind, array in zip(
+                ["influx", "outflux", "prestorage", "poststorage"],
+                [influxes, outfluxes, prestorages, poststorages],
+            ):
+                for i, component in enumerate(array, start=1):
+                    if np.isnan(component).any():
+                        raise ValueError(
+                            f"NaN values found in {kind} component {i} (1-indexed)."
+                        )
+            else:
+                raise ValueError(
+                    "NaN values found in balance calculation, but could not identify component (shouldn't happen)."
+                )
 
         if balance.size == 0:
             return True
@@ -130,22 +182,32 @@ def balance_check(
                 print(text)
             if raise_on_error:
                 raise AssertionError(text)
-            return False
+            if return_max_imbalance_index:
+                return False, index
+            else:
+                return False
         else:
-            return True
+            if return_max_imbalance_index:
+                return True, None
+            else:
+                return True
 
     elif how == "sum":
+        if return_max_imbalance_index:
+            raise ValueError(
+                "return_max_imbalance_index cannot be True when using 'sum' method."
+            )
         assert not error_identifiers, (
             "Error identifiers not supported for 'sum' method."
         )
-        for fluxIn in influxes:
-            income += fluxIn.sum()
-        for fluxOut in outfluxes:
-            out += fluxOut.sum()
-        for preStorage in prestorages:
-            store += preStorage.sum()
-        for endStorage in poststorages:
-            store -= endStorage.sum()
+        for influx in influxes:
+            income += influx.sum()
+        for outflux in outfluxes:
+            out += outflux.sum()
+        for prestorage in prestorages:
+            store += prestorage.sum()
+        for poststorage in poststorages:
+            store -= poststorage.sum()
 
         balance = abs(income + store - out)
         if np.isnan(balance):

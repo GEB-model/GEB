@@ -1,7 +1,11 @@
 """I/O related functions and classes for the GEB project."""
 
+from __future__ import annotations
+
 import asyncio
+import bz2
 import datetime
+import hashlib
 import json
 import os
 import platform
@@ -12,19 +16,21 @@ import threading
 import time
 import warnings
 from collections.abc import Hashable
-from functools import partial
 from pathlib import Path
 from types import TracebackType
-from typing import Any, overload
+from typing import Any, cast, overload
 
-import cftime
+import dask.array
+import dask.tokenize
 import geopandas as gpd
+import joblib
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyproj
 import rasterio
 import requests
+import rioxarray  # noqa: F401
 import s3fs
 import xarray as xr
 import yaml
@@ -34,11 +40,11 @@ from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
-from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
-from zarr.codecs.blosc import BloscShuffle
+from zarr.codecs.zstd import ZstdCodec
+from zarr.errors import ZarrUserWarning
 
-from geb.types import (
+from geb.geb_types import (
     ArrayDatetime64,
     ThreeDArray,
     ThreeDArrayFloat32,
@@ -46,133 +52,202 @@ from geb.types import (
     TwoDArrayFloat32,
 )
 
+zarr.config.set({"codec_pipeline.fill_missing_chunks": False})
 
-def load_table(fp: Path | str) -> pd.DataFrame:
+
+def read_table(fp: Path, **kwargs: Any) -> pd.DataFrame:
     """Load a parquet file as a pandas DataFrame.
 
     Args:
         fp: The path to the parquet file.
+        kwargs: Additional keyword arguments to pass to `pd.read_parquet`.
 
     Returns:
         The pandas DataFrame.
     """
-    return pd.read_parquet(fp, engine="pyarrow")
+    return pd.read_parquet(fp, engine="pyarrow", **kwargs)
 
 
-def load_array(fp: Path) -> np.ndarray:
-    """Load a numpy array from a .npz or .zarr file.
+def write_table(df: pd.DataFrame, fp: Path) -> None:
+    """Save a pandas DataFrame to a parquet file.
 
     Args:
-        fp: The path to the .npz or .zarr file.
+        df: The pandas DataFrame to save.
+        fp: The path to the output parquet file.
+    """
+    df.to_parquet(
+        fp,
+        engine="pyarrow",
+        compression="zstd",
+        compression_level=9,
+        row_group_size=max(min(10_000, len(df)), 1),
+    )
+
+
+@overload
+def read_array(fp: Path, return_attributes: bool = False) -> np.ndarray: ...
+
+
+@overload
+def read_array(
+    fp: Path, return_attributes: bool = True
+) -> tuple[np.ndarray, dict[str, Any]]: ...
+
+
+def read_array(
+    fp: Path, return_attributes: bool = False
+) -> np.ndarray | tuple[np.ndarray, dict[str, Any]]:
+    """Load a numpy array from a .zarr file.
+
+    Args:
+        fp: The path to the .zarr file.
+        return_attributes: Whether to return the attributes along with the array.
 
     Returns:
-        The numpy array.
-
-    Raises:
-        ValueError: If the file format is not supported.
+        The numpy array, or a tuple of the array and its attributes if return_attributes is True.
     """
-    if fp.suffix == ".npz":
-        return np.load(fp)["data"]
-    elif fp.suffix == ".zarr":
-        zarr_object = zarr.load(fp)
-        assert isinstance(zarr_object, np.ndarray)
-        return zarr_object
-    else:
-        raise ValueError(f"Unsupported file format: {fp.suffix}")
+    zarr_object = zarr.open_array(fp, mode="r")
+    array = zarr_object[:]
+    assert isinstance(array, np.ndarray)
+    if return_attributes:
+        return array, dict(zarr_object.attrs)
+    return array
+
+
+def write_array(
+    arr: np.ndarray, fp: Path, attributes: dict[str, Any] | None = None
+) -> None:
+    """Save a numpy array to a .zarr file.
+
+    Args:
+        arr: The numpy array to save.
+        fp: The path to the output .zarr file.
+        attributes: Optional dictionary of attributes to store with the array.
+    """
+    zarr.save_array(fp, arr, overwrite=True, attributes=attributes)  # ty:ignore[invalid-argument-type]
 
 
 @overload
-def load_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
-) -> np.ndarray: ...
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
+) -> ThreeDArray: ...
 
 
 @overload
-def load_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = True
-) -> tuple[np.ndarray, Affine, str]: ...
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
+) -> tuple[ThreeDArray, Affine, str]: ...
 
 
-def load_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
+@overload
+def read_grid(
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+) -> TwoDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+) -> tuple[TwoDArray, Affine, str]: ...
+
+
+def read_grid(
+    filepath: Path,
+    layer: int | None = None,
+    return_transform_and_crs: bool = False,
 ) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
     """Load a raster grid from a .tif or .zarr file.
 
     Args:
         filepath: The path to the .tif or .zarr file.
-        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is 1.
+        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is None.
         return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
 
     Returns:
         The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
 
     Raises:
-        ValueError: If the file format is not supported.
+        ValueError: If layer is specified but data is not 3-dimensional.
     """
-    if filepath.suffix == ".tif":
-        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
-        with rasterio.open(filepath) as src:
-            data: TwoDArray | ThreeDArray = src.read(layer)
-            data: TwoDArray | ThreeDArray = (
-                data.astype(np.float32) if data.dtype == np.float64 else data
-            )
-            if return_transform_and_crs:
-                return data, src.transform, src.crs
-            else:
-                return data
-
-    elif filepath.suffix == ".zarr":
-        store: zarr.storage.LocalStore = zarr.storage.LocalStore(
-            filepath, read_only=True
-        )
-        group: zarr.Group = zarr.open_group(store, mode="r")
-        data_array: zarr.Array | zarr.Group = group[filepath.stem]
-        assert isinstance(data_array, zarr.Array)
-        data = data_array[:]
-        if data.dtype == np.float64:
-            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
-        if return_transform_and_crs:
-            x_array: zarr.Array | zarr.Group = group["x"]
-            assert isinstance(x_array, zarr.Array)
-            x = x_array[:]
-            assert isinstance(x, np.ndarray)
-            y_array: zarr.Array | zarr.Group = group["y"]
-            assert isinstance(y_array, zarr.Array)
-            y = y_array[:]
-            assert isinstance(y, np.ndarray)
-            x_diff: float = np.diff(x[:]).mean().item()
-            y_diff: float = np.diff(y[:]).mean().item()
-            transform: Affine = Affine(
-                a=x_diff,
-                b=0,
-                c=x[0] - x_diff / 2,
-                d=0,
-                e=y_diff,
-                f=y[0] - y_diff / 2,
-            )
-            crs = data_array.attrs["_CRS"]
-            wkt: str = crs["wkt"]  # ty: ignore[invalid-argument-type,non-subscriptable]
-            return data, transform, wkt
-        else:
-            return data
+    store: zarr.storage.LocalStore = zarr.storage.LocalStore(filepath, read_only=True)
+    group: zarr.Group = zarr.open_group(store, mode="r")
+    data_array: zarr.Array | zarr.Group = group[filepath.stem]
+    assert isinstance(data_array, zarr.Array)
+    if layer is not None:
+        if not data_array.ndim == 3:
+            raise ValueError("Data must be 3-dimensional to select a layer")
+        data = data_array[layer]
     else:
-        raise ValueError("File format not supported.")
+        data = data_array[:]
+    assert isinstance(data, np.ndarray)
+    data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
+    if data.dtype == np.float64:
+        data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
+    assert data.ndim in (2, 3)
+    if return_transform_and_crs:
+        x_array: zarr.Array | zarr.Group = group["x"]
+        assert isinstance(x_array, zarr.Array)
+        x = x_array[:]
+        assert isinstance(x, np.ndarray)
+        y_array: zarr.Array | zarr.Group = group["y"]
+        assert isinstance(y_array, zarr.Array)
+        y = y_array[:]
+        assert isinstance(y, np.ndarray)
+        x_diff: float = np.diff(x[:]).mean().item()  # ty:ignore[invalid-argument-type]
+        y_diff: float = np.diff(y[:]).mean().item()  # ty:ignore[invalid-argument-type]
+        transform: Affine = Affine(
+            a=x_diff,
+            b=0,
+            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type]
+            d=0,
+            e=y_diff,
+            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type]
+        )
+        crs = data_array.attrs["_CRS"]
+        assert isinstance(crs, dict)
+        wkt: str = crs["wkt"]  # ty:ignore[invalid-argument-type]
+        store.close()
+        return data, transform, wkt
+    else:
+        store.close()
+        return data
 
 
-def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+def read_geom(filepath: str | Path, **kwargs: Any) -> gpd.GeoDataFrame:
     """Load a geometry for the GEB model from disk.
 
     Args:
         filepath: Path to the geometry file.
+        **kwargs: Additional keyword arguments to pass to `gpd.read_parquet`.
 
     Returns:
         A GeoDataFrame containing the geometries.
-
     """
-    return gpd.read_parquet(filepath)
+    return gpd.read_parquet(filepath, **kwargs)
 
 
-def load_dict(filepath: Path) -> Any:
+def write_geom(
+    gdf: gpd.GeoDataFrame, filepath: Path, write_covering_bbox: bool = False
+) -> None:
+    """Save a GeoDataFrame to a parquet file.
+
+    Args:
+        gdf: The GeoDataFrame to save.
+        filepath: Path to the output parquet file.
+        write_covering_bbox: Whether to write the covering bounding box to the file.
+    """
+    gdf.to_parquet(
+        filepath,
+        engine="pyarrow",
+        compression="zstd",
+        compression_level=9,
+        row_group_size=max(min(10_000, len(gdf)), 1),
+        schema_version="1.1.0",
+        write_covering_bbox=write_covering_bbox,
+    )
+
+
+def read_params(filepath: Path) -> Any:
     """Load a dictionary from a JSON or YAML file.
 
     Args:
@@ -214,7 +289,7 @@ def _convert_paths_to_strings(obj: Any) -> Any:
         return obj
 
 
-def to_dict(d: dict, filepath: Path) -> None:
+def write_params(d: dict, filepath: Path) -> None:
     """Save a dictionary to a YAML file.
 
     Args:
@@ -228,7 +303,7 @@ def to_dict(d: dict, filepath: Path) -> None:
 
 
 def calculate_scaling(
-    da: xr.DataArray,
+    da: xr.DataArray | np.ndarray,
     min_value: float,
     max_value: float,
     precision: float,
@@ -302,7 +377,27 @@ def calculate_scaling(
     return scaling_factor, in_dtype, out_dtype
 
 
-def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+def parse_and_set_zarr_CRS(da: xr.DataArray) -> xr.DataArray:
+    """Parse the _CRS attribute of an xarray DataArray and set it as the CRS using rioxarray.
+
+    The _CRS attribute is expected to be a dictionary with a "wkt" key containing the WKT string.
+
+    Args:
+        da: The xarray DataArray to parse and set the CRS for.
+
+    Returns:
+        The xarray DataArray with the CRS set.
+    """
+    if "_CRS" in da.attrs:
+        crs_attr = da.attrs["_CRS"]
+        if isinstance(crs_attr, dict) and "wkt" in crs_attr:
+            wkt: str = crs_attr["wkt"]
+            da.rio.write_crs(pyproj.CRS(wkt), inplace=True)
+            del da.attrs["_CRS"]
+    return da
+
+
+def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     """Open a zarr file as an xarray DataArray.
 
     If the data is a boolean type and does not have a _FillValue attribute,
@@ -327,9 +422,16 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     path: Path = Path(zarr_folder)
     if not path.exists():
         raise FileNotFoundError(f"Zarr folder {zarr_folder} does not exist")
-    ds: xr.Dataset = xr.open_dataset(
-        zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
-    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=ZarrUserWarning)
+        ds: xr.Dataset = xr.open_dataset(
+            zarr_folder,
+            engine="zarr",
+            chunks={},
+            consolidated=False,
+            mask_and_scale=False,
+        )
     if "spatial_ref" in ds.data_vars:
         spatial_ref_data = ds["spatial_ref"]
         ds = ds.drop_vars("spatial_ref")
@@ -344,14 +446,12 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
 
-    if "_CRS" in da.attrs:
-        da.rio.write_crs(pyproj.CRS(da.attrs["_CRS"]["wkt"]), inplace=True)
-        del da.attrs["_CRS"]
+    da = parse_and_set_zarr_CRS(da)
 
     return da
 
 
-def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[unresolved-attribute]
+def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
     """Convert a CRS object (pyproj CRS, rasterio CRS or EPSG code) to a WKT string.
 
     Args:
@@ -367,7 +467,7 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[u
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
         return crs_obj.to_wkt()
-    elif isinstance(crs_obj, rasterio.crs.CRS):  # ty: ignore[unresolved-attribute]
+    elif isinstance(crs_obj, rasterio.crs.CRS):
         return CRS(crs_obj.to_wkt()).to_wkt()
     else:
         raise TypeError("Unsupported CRS type")
@@ -410,72 +510,167 @@ def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
     return True
 
 
-def check_buffer_size(
-    da: xr.DataArray,
-    chunks_or_shards: dict[str, int],
-    max_buffer_size: int = 2147483647,
-) -> None:
-    """Check if the buffer size for the given chunks or shards is within the maximum allowed size.
+def _chunk_index_to_region(
+    chunk_structure: tuple[tuple[int, ...], ...],
+    block_index: tuple[int, ...],
+) -> tuple[slice, ...]:
+    """Convert a Dask block index into absolute array slices.
 
     Args:
-        da: The xarray DataArray to check.
-        chunks_or_shards: A dictionary with the chunk or shard sizes for each dimension.
-        max_buffer_size: The maximum allowed buffer size in bytes. Default is 2GB (2147483647 bytes).
+        chunk_structure: Chunk sizes for each array dimension.
+        block_index: Block index for each array dimension.
+
+    Returns:
+        The selection tuple describing the block position in the full array.
+    """
+    selection: list[slice] = []
+    for dimension_chunks, dimension_index in zip(
+        chunk_structure, block_index, strict=True
+    ):
+        start: int = sum(dimension_chunks[:dimension_index])
+        stop: int = start + dimension_chunks[dimension_index]
+        selection.append(slice(start, stop))
+    return tuple(selection)
+
+
+def _store_dask_array_blocks(
+    da: dask.array.core.Array, store_target: Any, progress: bool
+) -> None:
+    """Store a Dask array into a Zarr target block by block.
+
+    Args:
+        da: Source Dask array whose existing block structure defines
+            the write granularity.
+        store_target: Writable Zarr target array.
+        progress: Whether to wrap the block iterator in a progress bar.
+    """
+    block_indices: Any = np.ndindex(*da.numblocks)
+
+    array_blocks = da.blocks
+
+    # the last chunk may be smaller than the specified chunk size,
+    # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
+    # This can be safely ignored in this context.
+    with np.errstate(invalid="ignore"):
+        stores = []
+        for block_index in block_indices:
+            region = _chunk_index_to_region(da.chunks, block_index)
+            block = array_blocks[block_index]
+
+            stores.append(
+                dask.array.store(
+                    block,
+                    store_target,
+                    regions=region,
+                    lock=False,
+                    compute=False,  # Use compute=False to return a Dask object instead of executing
+                    return_stored=False,
+                )
+            )
+
+        if progress:
+            with ProgressBar():
+                dask.compute(*stores)
+        else:
+            dask.compute(*stores)
+
+
+def _normalize_shards(
+    chunk_spec: dict[str, int],
+    requested_shards: dict[str, int] | None,
+    dimension_sizes: dict[str, int],
+) -> dict[str, int] | None:
+    """Normalize shard sizes from chunk multiples to exact shard sizes.
+
+    Args:
+        chunk_spec: Chunk sizes for each array dimension.
+        requested_shards: Requested shard sizes expressed as the number of chunks
+            per shard for a subset of dimensions.
+        dimension_sizes: Full array size for each dimension.
+
+    Returns:
+        A complete shard specification using chunk-sized shards for unspecified
+        dimensions, or None when no sharding is requested. Each shard size is an
+        exact multiple of the chunk size for its dimension.
 
     Raises:
-        ValueError: If the buffer size exceeds the maximum allowed size.
+        ValueError: If a requested shard dimension does not exist.
+        ValueError: If a requested shard size is smaller than 1.
     """
-    buffer_size = (
-        np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
-    )
-    if buffer_size >= max_buffer_size:
+    if requested_shards is None:
+        return None
+
+    invalid_dimensions = sorted(set(requested_shards) - set(chunk_spec))
+    if invalid_dimensions:
         raise ValueError(
-            f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
+            f"Shard dimensions {invalid_dimensions} are not present in the array"
         )
 
+    shard_spec: dict[str, int] = chunk_spec.copy()
+    for dim_name, requested_shard_size in requested_shards.items():
+        if requested_shard_size < 1:
+            raise ValueError(
+                f"Shard size for dimension '{dim_name}' must be at least 1"
+            )
 
-def to_zarr(
+        chunk_size: int = chunk_spec[dim_name]
+        dimension_size: int = dimension_sizes[dim_name]
+
+        requested_shard_size_in_elements: int = requested_shard_size * chunk_size
+        minimum_full_shard_size: int = (
+            (dimension_size + chunk_size - 1) // chunk_size
+        ) * chunk_size
+        shard_spec[dim_name] = min(
+            requested_shard_size_in_elements, minimum_full_shard_size
+        )
+
+    return shard_spec
+
+
+def write_zarr(
     da: xr.DataArray,
-    path: str | Path,
+    path: str | Path | None,
     crs: int | pyproj.CRS,
-    x_chunksize: int = 350,
-    y_chunksize: int = 350,
-    time_chunksize: int = 1,
-    time_chunks_per_shard: int | None = 30,
-    byteshuffle: bool = True,
-    filters: list = [],
-    compressor: None | BytesBytesCodec = None,
+    shards: dict[str, int] | None = None,
+    filters: list | None = None,
+    compression_level: int = 18,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
 
     Args:
         da: The xarray DataArray to save.
-        path: The path to the zarr file.
+        path: The path to the zarr file. If None, the file will be saved to a temporary location.
         crs: The coordinate reference system to use.
-        x_chunksize: The chunk size for the x dimension. Default is 350.
-        y_chunksize: The chunk size for the y dimension. Default is 350.
-        time_chunksize: The chunk size for the time dimension. Default is 1.
-        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
-            to disable sharding.
-        byteshuffle: Whether to use byteshuffle compression. Default is True.
+        shards: A dictionary with the number of chunks per shard for each
+            dimension. If provided, these will be used instead of chunk-sized
+            shards. Default is None.
         filters: A list of filters to apply. Default is [].
-        compressor: The compressor to use. Default is None, using the default Blosc compressor.
+        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 18.
         progress: Whether to show a progress bar. Default is True.
 
     Returns:
         The xarray DataArray saved to disk.
+
+    Raises:
+        ValueError: If the DataArray has invalid dimensions or attributes.
+        ValueError: If the DataArray dtype is float64.
+        ValueError: If shards contains an unknown dimension or non-positive size.
 
     """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
     assert "latitudes" not in da.dims, "latitudes should be y"
 
+    if filters is None:
+        filters: list = []
+
     if "y" in da.dims and "x" in da.dims:
         assert da.dims[-2] == "y", "y should be the second last dimension"
         assert da.dims[-1] == "x", "x should be the last dimension"
 
-    assert da.dtype != np.float64, "should be float32"
+    if da.dtype == np.float64:
+        raise ValueError("DataArray dtype should be float32, not float64")
 
     assert "_FillValue" in da.attrs, "Fill value must be set"
     if da.dtype == bool:
@@ -493,96 +688,104 @@ def to_zarr(
             f"Fill value must be nan, not {da.attrs['_FillValue']}"
         )
 
-    path: Path = Path(path)
+    if path is None:
+        is_temporary_file = True
+        path: Path = Path(f"temp_{dask.tokenize.tokenize(da)}.zarr")
+    else:
+        path: Path = Path(path)
+        is_temporary_file = False
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(delete=not is_temporary_file) as tmp_dir:
         tmp_zarr = Path(tmp_dir) / path.name
 
         da.name = path.stem.split("/")[-1]
 
         da: xr.DataArray = da.drop_vars([v for v in da.coords if v not in da.dims])
-
-        chunks, shards = {}, None
         if "y" in da.dims and "x" in da.dims:
-            chunks.update(
-                {
-                    "y": min(y_chunksize, da.sizes["y"]),
-                    "x": min(x_chunksize, da.sizes["x"]),
-                }
-            )
             da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
-        if "member" in da.dims:
-            member_chunksize = 1  # Use full size as default da.sizes["member"]
-            chunks.update({"member": member_chunksize})
-
-        if "time" in da.dims:
-            chunks.update({"time": min(time_chunksize, da.sizes["time"])})
-            if time_chunks_per_shard is not None:
-                shards = chunks.copy()
-                shards["time"] = time_chunks_per_shard * chunks["time"]
-
-        if compressor is None:
-            compressor: BloscCodec = BloscCodec(
-                cname="zstd",
-                clevel=9,
-                shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
+        chunk_spec: dict[str, int] = {}
+        for dim in da.dims:
+            dim_name = str(dim)
+            requested_chunk_size = (
+                da.chunksizes[dim_name][0]
+                if dim_name in da.chunksizes
+                else da.sizes[dim_name]
             )
+            chunk_spec[dim_name] = min(requested_chunk_size, da.sizes[dim_name])
 
-        check_buffer_size(da, chunks_or_shards=shards if shards else chunks)
+        compressor: ZstdCodec = ZstdCodec(
+            level=compression_level,
+        )
 
-        da: xr.DataArray = da.chunk(shards if shards is not None else chunks)
+        dimension_sizes: dict[str, int] = {
+            str(dim): da.sizes[str(dim)] for dim in da.dims
+        }
+        shard_spec = _normalize_shards(chunk_spec, shards, dimension_sizes)
+
+        # when sharding is enabled, the write block size is determined by the shard size, otherwise by the chunk size
+        write_block_spec: dict[str, int] = (
+            shard_spec if shard_spec is not None else chunk_spec
+        )
+
+        da = da.chunk(write_block_spec)
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
-        chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)
+        storage_chunks = tuple(chunk_spec[str(dim)] for dim in da.dims)
 
         array_encoding: dict[str, Any] = {
             "compressors": (compressor,),
-            "chunks": chunks,
+            "chunks": storage_chunks,
             "filters": filters,
         }
 
-        if shards is not None:
-            shards = tuple(
-                (shards[dim] if dim in shards else getattr(da, str(dim)).size)
-                for dim in da.dims
-            )
-            array_encoding["shards"] = shards
+        if shard_spec is not None:
+            storage_shards = tuple(shard_spec[str(dim)] for dim in da.dims)
+            array_encoding["shards"] = storage_shards
 
         assert isinstance(da.name, str)
         encoding: dict[Hashable, dict[str, Any]] = {da.name: array_encoding}
         for coord in da.coords:
-            encoding[coord] = {"compressors": (compressor,)}
+            encoding[coord] = {
+                "compressors": (compressor,),
+                "chunks": (da.coords[coord].size,),
+            }
 
-        to_zarr_partial = partial(
-            da.to_zarr,
+        da.to_zarr(
             store=tmp_zarr,
             mode="w",
             encoding=encoding,
             zarr_format=3,
             consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
             write_empty_chunks=True,
+            compute=False,
         )
 
-        if progress:
-            # start writing after 10 seconds, and update every 0.1 seconds
-            with ProgressBar(
-                minimum=0.1,
-                dt=float(os.environ.get("GEB_OVERRIDE_PROGRESSBAR_DT", 0.1)),
-            ):
-                store = to_zarr_partial()
-        else:
-            store = to_zarr_partial()
+        # Open the target array in the Zarr store for writing
+        target = zarr.open_array(
+            store=tmp_zarr,
+            zarr_format=3,
+            path=da.name,
+            mode="r+",
+        )
+        store_target = cast(Any, target)
 
-        store.close()
+        # When sharding is enabled we rechunk the source data to the shard layout
+        # so each write call covers one shard instead of one storage chunk.
+        da = da.chunk(shard_spec) if shard_spec is not None else da
+        _store_dask_array_blocks(da.data, store_target, progress)
 
-        folder: Path = path.parent
-        folder.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            shutil.rmtree(path)
-        shutil.move(tmp_zarr, folder)
+        if not is_temporary_file:
+            folder: Path = path.parent
+            folder.mkdir(parents=True, exist_ok=True)
 
-    da_disk: xr.DataArray = open_zarr(path)
+            if path.exists():
+                shutil.rmtree(path)
+            shutil.move(tmp_zarr, folder)
+        if is_temporary_file:
+            path = tmp_zarr
+
+    da_disk: xr.DataArray = read_zarr(path)
 
     # perform some asserts to check if the data was written and read correctly
     assert da.dtype == da_disk.dtype, "dtype mismatch"
@@ -596,7 +799,7 @@ def to_zarr(
 def get_window(
     x: xr.DataArray,
     y: xr.DataArray,
-    bounds: tuple[int | float, int | float, int | float, int | float],
+    bounds: tuple[float, float, float, float],
     buffer: int = 0,
     raise_on_out_of_bounds: bool = True,
     raise_on_buffer_out_of_bounds: bool = True,
@@ -726,40 +929,9 @@ class AsyncGriddedForcingReader:
 
     This reader uses the Zarr async API for efficient reads, with a workaround
     for occasional Zarr async loading issues.
-
-    All instances of this class share a single event loop running in a background thread.
     """
 
-    # Class-level shared event loop and thread
-    _shared_loop: asyncio.AbstractEventLoop | None = None
-    _shared_thread: threading.Thread | None = None
-    _init_lock = threading.Lock()
-
-    @classmethod
-    def _get_loop(cls) -> asyncio.AbstractEventLoop:
-        """Get or create the shared event loop.
-
-        Returns:
-            The shared event loop.
-        """
-        if cls._shared_loop is None:
-            with cls._init_lock:
-                if cls._shared_loop is None:
-                    cls._shared_loop = asyncio.new_event_loop()
-                    cls._shared_thread = threading.Thread(
-                        target=cls._run_shared_loop,
-                        daemon=True,
-                        name="AsyncZarrLoop",
-                    )
-                    cls._shared_thread.start()
-        return cls._shared_loop
-
-    @classmethod
-    def _run_shared_loop(cls) -> None:
-        """Run the shared event loop in a background thread."""
-        assert cls._shared_loop is not None
-        asyncio.set_event_loop(cls._shared_loop)
-        cls._shared_loop.run_forever()
+    array: zarr.Array
 
     def __init__(
         self,
@@ -786,27 +958,43 @@ class AsyncGriddedForcingReader:
         self.ds = zarr.open_group(self.store, mode="r")
 
         # Metadata and time index
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Numcodecs codecs are not in the Zarr version 3 specification",
-            )
-            time_arr = self.ds["time"]
-            assert isinstance(time_arr, zarr.Array)
-            time = time_arr[:]
+        time_arr = self.ds["time"]
+        assert isinstance(time_arr, zarr.Array)
+        time = time_arr[:]
+        assert isinstance(time, np.ndarray)
 
-        datetime_index_unparsed = cftime.num2date(
-            time,
-            units=self.ds["time"].attrs.get("units"),
-            calendar=self.ds["time"].attrs.get("calendar"),
-        )
+        assert self.ds["time"].attrs.get("calendar") == "proleptic_gregorian"
+
+        time_unit = self.ds["time"].attrs.get("units")
+        assert isinstance(time_unit, str)
+        time_unit, origin = time_unit.split(" since ")
+        pandas_time_unit: str = {
+            "seconds": "s",
+            "minutes": "m",
+            "hours": "h",
+            "days": "D",
+        }[time_unit]
+
         self.datetime_index: ArrayDatetime64 = pd.to_datetime(
-            [obj.isoformat() for obj in datetime_index_unparsed]
+            time, unit=pandas_time_unit, origin=origin
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
-        # Check if the variable uses NaN as fill value for the retry workaround
-        self.array = self.ds[self.variable_name]
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ZarrUserWarning)
+            # Check if the variable uses NaN as fill value for the retry workaround
+            array = self.ds[self.variable_name]
+
+        assert isinstance(array, zarr.Array)
+        self.array: zarr.Array = array
+
+        for compressor in self.array.compressors:
+            # Blosc is not supported due to known issues with async reading
+            if isinstance(compressor, BloscCodec):
+                raise ValueError(
+                    f"Variable {self.variable_name} uses Blosc compression, which is not supported by AsyncGriddedForcingReader. Please recompress the data using a different codec (e.g., Zstd)."
+                )
+
         fill_value = self.array.fill_value
         # The fill value is NaN if it's a float type and is NaN, or explicitly None for some types
         has_nan_fill = isinstance(fill_value, (float, np.floating)) and np.isnan(
@@ -818,168 +1006,210 @@ class AsyncGriddedForcingReader:
                 f"Variable {self.variable_name} does not use NaN as fill value, AsyncGriddedForcingReader requires NaN fill value for retry workaround."
             )
 
-        # Cache tracking
-        self.current_start_index = -1
-        self.current_end_index = -1
-        self.current_data: npt.NDArray[Any] | None = None
+        # The on-disk chunk size along the time dimension - we always load full chunks
+        # from disk (e.g. 7 * 24 = 168 for weekly hourly data).
+        self.time_chunk_size: int = int(self.array.chunks[1])
+
+        # Chunk-aligned cache: holds the start index and data for the currently loaded chunk.
+        self.current_chunk_start_index: int = -1
+        self.current_chunk_data: TwoDArrayFloat32 | None = None
+        # The time-index at which a background preload has been (or is being) fetched.
+        self.preloaded_chunk_start_index: int = -1
         self.preloaded_data_future: asyncio.Task | None = None
 
         # Async event loop setup
         if self.asynchronous:
-            self.loop: asyncio.AbstractEventLoop | None = self._get_loop()
-            assert self.loop is not None
+            self.loop: asyncio.AbstractEventLoop | None = asyncio.new_event_loop()
+            self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+            self.thread.start()
 
             # Initialize lock in the shared loop
-            async def _init_lock() -> asyncio.Lock:
-                return asyncio.Lock()
+            async def _init_lock() -> tuple[asyncio.Lock, asyncio.Lock]:
+                return asyncio.Lock(), asyncio.Lock()
 
-            self.async_lock = asyncio.run_coroutine_threadsafe(
+            self.async_lock, self.io_lock = asyncio.run_coroutine_threadsafe(
                 _init_lock(), self.loop
             ).result()
         else:
             self.loop = None
             self.async_lock = None
+            self.io_lock = None
 
-    def load(self, start_index: int, end_index: int) -> np.ndarray:
+    def load(self, start_index: int, end_index: int) -> TwoDArrayFloat32:
         """Safe synchronous load (only used if asynchronous=False).
 
         Returns:
             The requested data slice.
         """
-        array = self.ds[self.variable_name]
-        assert isinstance(array, zarr.Array)
-        data = array[start_index:end_index]
-        assert isinstance(data, np.ndarray)
-        return data
+        assert isinstance(self.array, zarr.Array)
+        data = self.array[:, start_index:end_index]
+        assert (
+            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 2
+        )
+        return data  # ty:ignore[invalid-return-type]
 
-    async def load_await(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
+    async def load_await(self, start_index: int, end_index: int) -> TwoDArrayFloat32:
         """Load data asynchronously via reusable async group.
-
-        Uses a workaround for Zarr async loading issues: if the first read returns
-        all NaN values (and the array uses NaN as fill value), retry the read.
 
         Returns:
             The requested data slice (not a copy - caller must copy if needed).
 
         Raises:
-            RuntimeError: If data loading fails after maximum retries.
+            IOError: If the async load returns only NaN values after multiple attempts.
         """
-        # Select the variable array from the pre-opened async group.
-        arr: zarr.AsyncArray[Any] = self.array.async_array
-        max_retries = 100
-        retries = 0
-        while retries < max_retries:
-            data = await arr.getitem(
-                (slice(start_index, end_index), slice(None), slice(None))
-            )
+        assert self.io_lock is not None
+        async with self.io_lock:
+            # Select the variable array from the pre-opened async group.
+            arr: zarr.AsyncArray[Any] = self.array.async_array
 
-            # Only apply the NaN workaround if the array actually uses NaN as fill value
-            if np.isnan(data).any():
-                retries += 1
+            attempts: int = 100
+
+            # Try up to 100 times
+            for _ in range(attempts):
+                data = await arr.getitem((slice(None), slice(start_index, end_index)))
+
+                if not np.any(np.isnan(data)):
+                    assert (
+                        isinstance(data, np.ndarray)
+                        and data.dtype == np.float32
+                        and data.ndim == 2
+                    )
+                    return data  # ty:ignore[invalid-return-type]
                 print(
-                    f"Warning: Async read returned NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
+                    f"Async load returned NaN values for indices {start_index}:{end_index}, retrying..."
                 )
-                await asyncio.sleep(delay=0.1)  # brief pause before retrying
+
             else:
-                return data
+                raise IOError(
+                    f"Async load failed after {attempts} attempts for indices {start_index}:{end_index}"
+                )
 
-        # If still NaN after retries, raise an error
-        raise RuntimeError(
-            f"Failed to load data for {self.variable_name} after {max_retries} retries due to NaN values."
-        )
+    async def preload_chunk(self, chunk_start: int) -> TwoDArrayFloat32 | None:
+        """Preload the chunk starting at chunk_start asynchronously.
 
-    async def preload_next(
-        self, start_index: int, end_index: int, n: int
-    ) -> npt.NDArray[Any] | None:
-        """Preload next timestep asynchronously.
+        Args:
+            chunk_start: The time index at which the chunk to preload begins.
 
         Returns:
-            The preloaded data, or None if out of bounds.
+            The preloaded chunk data, or None if beyond available data.
         """
-        if end_index + n <= self.time_size:
-            return await self.load_await(start_index + n, end_index + n)
-        return None
+        if chunk_start >= self.time_size:
+            return None
+        chunk_end: int = min(chunk_start + self.time_chunk_size, self.time_size)
+        return await self.load_await(chunk_start, chunk_end)
 
     async def read_timestep_async(
-        self, start_index: int, end_index: int, n: int
-    ) -> npt.NDArray[Any]:
-        """Core async read with safe preload caching.
+        self, start_index: int, end_index: int
+    ) -> tuple[TwoDArrayFloat32, np.datetime64]:
+        """Core async read with chunk-aligned caching and background preloading.
 
-        This method ensures that only one read operation (including preloading)
-        occurs at a time. It fetches the requested data, updates the cache,
-        and then triggers a background task to preload the next timestep.
+        Loads the full on-disk chunk that contains the requested timesteps,
+        caches it, and schedules the next chunk for background preloading so
+        that subsequent requests within the same or the next chunk are cheap.
 
         Args:
             start_index: The starting index of the time slice to read.
-            end_index: The ending index of the time slice to read.
-            n: The number of timesteps in a single read operation, used for preloading.
+            end_index: The exclusive ending index of the time slice to read.
 
         Returns:
-            The requested data slice as a NumPy array.
+            A tuple of (requested data slice as a NumPy array, start datetime of the slice).
 
         Raises:
-            ValueError: If the requested index is out of bounds.
+            ValueError: If the requested index is out of bounds or spans more
+                than one on-disk chunk.
             IOError: If the async read returns incomplete data.
         """
         if start_index < 0 or end_index > self.time_size:
             raise ValueError(f"Index out of bounds ({start_index}:{end_index})")
 
+        n: int = end_index - start_index
+        start_date: np.datetime64 = self.datetime_index[start_index]
+
+        # Determine which on-disk chunk this request falls in.
+        chunk_start: int = (start_index // self.time_chunk_size) * self.time_chunk_size
+        chunk_end: int = min(chunk_start + self.time_chunk_size, self.time_size)
+        offset: int = start_index - chunk_start
+
+        # Requests must be aligned with chunk boundaries and never cross it.
+        # This simplifies the reader and ensures that the source data is saved
+        # efficiently for the intended access pattern.
+        if n > self.time_chunk_size:
+            raise ValueError(
+                f"Requested {n} timesteps exceeds on-disk chunk size {self.time_chunk_size}."
+            )
+        if (start_index % n != 0) or (offset + n > (chunk_end - chunk_start)):
+            raise ValueError(
+                f"Requested slice {start_index}:{end_index} is not aligned with "
+                f"the chunk size {self.time_chunk_size} or spacing {n}."
+            )
+
         assert self.async_lock is not None
         async with self.async_lock:
-            data: npt.NDArray[Any] | None = None
+            chunk_data: TwoDArrayFloat32 | None = None
 
-            # Cache hit
+            # Cache hit: the required chunk is already in memory.
             if (
-                self.current_data is not None
-                and start_index == self.current_start_index
-                and end_index == self.current_end_index
+                self.current_chunk_data is not None
+                and self.current_chunk_start_index == chunk_start
             ):
-                data = self.current_data
+                chunk_data = self.current_chunk_data
 
-            # Check Preload
+            # Preload hit: the required chunk was being preloaded in the background.
             elif (
                 self.preloaded_data_future is not None
-                and self.current_start_index + n == start_index
+                and self.preloaded_chunk_start_index == chunk_start
             ):
                 try:
-                    data = await self.preloaded_data_future
+                    chunk_data = await self.preloaded_data_future
                 except Exception:
-                    pass
+                    chunk_data = None
 
-            # Load if needed
-            if data is None:
+            # Cache miss: cancel any pending (wrong) preload and load from disk.
+            if chunk_data is None:
                 if self.preloaded_data_future and not self.preloaded_data_future.done():
                     self.preloaded_data_future.cancel()
-                data = await self.load_await(start_index, end_index)
+                    try:
+                        await self.preloaded_data_future
+                    except asyncio.CancelledError:
+                        pass
+                chunk_data = await self.load_await(chunk_start, chunk_end)
 
-            # Consistency check
-            if data.shape[0] != (end_index - start_index):
+            expected_chunk_len: int = chunk_end - chunk_start
+            if chunk_data.shape[1] != expected_chunk_len:
                 raise IOError(
                     "Async read returned incomplete data; possible disk contention"
                 )
 
-            # Update Cache
-            self.current_start_index = start_index
-            self.current_end_index = end_index
-            self.current_data = data
+            # Update the chunk cache.
+            self.current_chunk_start_index = chunk_start
+            self.current_chunk_data = chunk_data
 
-            # Schedule next preload
+            # Schedule preload of the next chunk unless it is already in flight.
+            next_chunk_start: int = chunk_start + self.time_chunk_size
             assert self.loop is not None
-            self.preloaded_data_future = self.loop.create_task(
-                self.preload_next(start_index, end_index, n)
-            )
+            if self.preloaded_chunk_start_index != next_chunk_start:
+                if self.preloaded_data_future and not self.preloaded_data_future.done():
+                    self.preloaded_data_future.cancel()
+                    try:
+                        await self.preloaded_data_future
+                    except asyncio.CancelledError:
+                        pass
+                self.preloaded_chunk_start_index = next_chunk_start
+                self.preloaded_data_future = self.loop.create_task(
+                    self.preload_chunk(next_chunk_start)
+                )
 
-            return data
+            # Slice out only the requested timesteps from the cached chunk.
+            return chunk_data[:, offset : offset + n], start_date
 
-    def get_index(self, date: datetime.datetime, n: int) -> int:
+    def get_index(self, date: datetime.datetime) -> int:
         """Get the time index for a given datetime.
 
-        Optimized for sequential access by checking the current and next indices
-        before performing a full search.
+        Uses binary search for correctness and falls back to an O(1) check
+        against the current chunk boundaries for the common sequential-access case.
 
         Args:
             date: The datetime to find the index for.
-            n: The step size for the 'next' index check.
 
         Returns:
             The integer index for the given date.
@@ -988,46 +1218,105 @@ class AsyncGriddedForcingReader:
             ValueError: If the date is not found in the time index.
         """
         numpy_date = np.datetime64(date, "ns")
-        if (
-            self.current_start_index != -1
-            and self.datetime_index[self.current_start_index] == numpy_date
-        ):
-            return self.current_start_index
-        elif (
-            self.current_start_index != -1
-            and self.current_start_index + n < self.time_size
-            and self.datetime_index[self.current_start_index + n] == numpy_date
-        ):
-            return self.current_start_index + n
-        else:
-            indices = np.where(self.datetime_index == numpy_date)[0]
-            if indices.size == 0:
-                raise ValueError(f"Date {date} not found in {self.filepath}")
-            return indices[0]
 
-    def read_timestep(self, date: datetime.datetime, n: int = 1) -> npt.NDArray[Any]:
-        """Public synchronous entrypoint; blocks until async result ready.
+        # Very fast (lol): check whether the date falls within the currently loaded chunk.
+        if self.current_chunk_start_index >= 0:
+            chunk_end: int = min(
+                self.current_chunk_start_index + self.time_chunk_size, self.time_size
+            )
+            chunk_slice = self.datetime_index[
+                self.current_chunk_start_index : chunk_end
+            ]
+            local_idx: npt.NDArray[np.intp] = np.where(chunk_slice == numpy_date)[0]
+            if local_idx.size > 0:
+                return int(self.current_chunk_start_index + local_idx[0])
+
+        # Still fast: check whether the date falls within the next chunk.
+        # This the most logical for climate data. That the model requests the next
+        # chunk.
+        next_chunk_start: int = self.current_chunk_start_index + self.time_chunk_size
+        if self.current_chunk_start_index >= 0 and next_chunk_start < self.time_size:
+            next_chunk_end: int = min(
+                next_chunk_start + self.time_chunk_size, self.time_size
+            )
+            next_chunk_slice = self.datetime_index[next_chunk_start:next_chunk_end]
+            local_idx_next: npt.NDArray[np.intp] = np.where(
+                next_chunk_slice == numpy_date
+            )[0]
+            if local_idx_next.size > 0:
+                return int(next_chunk_start + local_idx_next[0])
+
+        # Full search via binary search (handles non-sequential access)
+        # This should happen on the very first access and when the model were
+        # to jump around in time, which it typically shouldn't do.
+        idx: int = int(np.searchsorted(self.datetime_index, numpy_date))
+        if idx >= self.time_size or self.datetime_index[idx] != numpy_date:
+            raise ValueError(f"Date {date} not found in {self.filepath}")
+        return idx
+
+    def read_timestep(
+        self, date: datetime.datetime, n: int = 1
+    ) -> tuple[npt.NDArray[Any], np.datetime64]:
+        """Return n timesteps starting at date, loading from the on-disk chunk as needed.
+
+        On the first call (or whenever the required chunk is not cached) the full
+        on-disk chunk is fetched from disk and the next chunk is queued for
+        background pre-loading. Subsequent calls for timesteps within the same
+        chunk are served entirely from memory.
+
+        Args:
+            date: Start datetime of the slice to return.
+            n: Number of consecutive timesteps to return. Must not exceed the
+               on-disk chunk size along the time dimension.
 
         Returns:
-            The requested data slice.
+            A tuple of (Array of shape (n, y, x) with dtype float32, start datetime of the slice as np.datetime64).
 
         Raises:
-            ValueError: If the requested time range exceeds available data.
+            ValueError: If the requested range exceeds available data or the
+                on-disk chunk size.
         """
-        start_index = self.get_index(date, n)
-        end_index = start_index + n
+        start_index: int = self.get_index(date)
+        end_index: int = start_index + n
         if end_index > self.time_size:
             raise ValueError(
                 f"Requested {n} timesteps from {date} exceeds available range"
             )
 
+        start_date: np.datetime64 = self.datetime_index[start_index]
+
         if self.asynchronous:
-            coro = self.read_timestep_async(start_index, end_index, n)
+            coro = self.read_timestep_async(start_index, end_index)
             assert isinstance(self.loop, asyncio.AbstractEventLoop)
             future = asyncio.run_coroutine_threadsafe(coro, self.loop)
             return future.result()
         else:
-            return self.load(start_index, end_index)
+            # Synchronous path: respect chunk alignment for consistency.
+            chunk_start: int = (
+                start_index // self.time_chunk_size
+            ) * self.time_chunk_size
+            chunk_end: int = min(chunk_start + self.time_chunk_size, self.time_size)
+            offset: int = start_index - chunk_start
+
+            # Requests must be aligned with chunk boundaries and never cross it.
+            if n > self.time_chunk_size:
+                raise ValueError(
+                    f"Requested {n} timesteps exceeds on-disk chunk size {self.time_chunk_size}."
+                )
+            if (start_index % n != 0) or (offset + n > (chunk_end - chunk_start)):
+                raise ValueError(
+                    f"Requested slice {start_index}:{end_index} is not aligned with "
+                    f"the chunk size {self.time_chunk_size} or spacing {n}."
+                )
+
+            if (
+                self.current_chunk_data is None
+                or self.current_chunk_start_index != chunk_start
+            ):
+                self.current_chunk_data = self.load(chunk_start, chunk_end)
+                self.current_chunk_start_index = chunk_start
+
+            return self.current_chunk_data[:, offset : offset + n], start_date
 
     def close(self) -> None:
         """Clean up this instance's async resources."""
@@ -1038,34 +1327,18 @@ class AsyncGriddedForcingReader:
             """Cancel this instance's pending tasks and close async group."""
             if self.preloaded_data_future and not self.preloaded_data_future.done():
                 self.preloaded_data_future.cancel()
-                try:
-                    await self.preloaded_data_future
-                except asyncio.CancelledError:
-                    pass
+            # Stop the loop
+            asyncio.get_event_loop().stop()
 
         if self.loop and self.loop.is_running():
             try:
-                asyncio.run_coroutine_threadsafe(cleanup(), self.loop).result(timeout=5)
+                # Because we are not writing, we can just cancel the pending preload
+                # task and stop the loop without waiting for it to finish.
+                # This allows for a much faster shutdown, especially if the loop is currently waiting on a slow disk read.
+                asyncio.run_coroutine_threadsafe(cleanup(), self.loop)
             except Exception:
                 pass
-
-    @property
-    def x(self) -> np.ndarray:
-        """The x-coordinates of the grid."""
-        x_array = self.ds["x"]
-        assert isinstance(x_array, zarr.Array)
-        x = x_array[:]
-        assert isinstance(x, np.ndarray)
-        return x
-
-    @property
-    def y(self) -> npt.NDArray[Any]:
-        """The y-coordinates of the grid."""
-        y_array = self.ds["y"]
-        assert isinstance(y_array, zarr.Array)
-        y = y_array[:]
-        assert isinstance(y, np.ndarray)
-        return y
+            # Don't join the thread - it's a daemon and will die when the process dies
 
 
 class WorkingDirectory:
@@ -1084,7 +1357,7 @@ class WorkingDirectory:
         """
         self._new_path = new_path
 
-    def __enter__(self) -> "WorkingDirectory":
+    def __enter__(self) -> WorkingDirectory:
         """Enters the context, changing the current working directory.
 
         Returns:
@@ -1116,6 +1389,190 @@ class WorkingDirectory:
         os.chdir(self._original_path)
 
 
+class RemoteFile:
+    """A file-like object that reads from a remote URL using HTTP Range headers.
+
+    This class mimics a file object (seek, read) but fetches data on-demand
+    using HTTP Range requests. It includes retry logic for robust downloads.
+    """
+
+    def __init__(self, url: str, max_retries: int = 5, base_delay: float = 1.0) -> None:
+        """Initialize the RemoteFile.
+
+        Args:
+            url: The URL of the remote file.
+            max_retries: Maximum number of retries for HTTP requests.
+            base_delay: Base delay in seconds for exponential backoff.
+
+        Raises:
+            OSError: If the URL cannot be accessed.
+        """
+        self.url_original = url
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+
+        # Resolve redirects and get size
+        resp = self._request_with_retry("HEAD", url, allow_redirects=True)
+
+        # Confirm range support
+        range_supported = (
+            resp.status_code == 200 and resp.headers.get("Accept-Ranges") == "bytes"
+        )
+
+        if not range_supported:
+            # Close the HEAD response before overwriting
+            resp.close()
+            # Fallback to GET with Range if HEAD fails or doesn't confirm support
+            resp = self._request_with_retry(
+                "GET",
+                url,
+                headers={"Range": "bytes=0-0"},
+                stream=True,
+                allow_redirects=True,
+            )
+            if resp.status_code != 206:
+                resp.close()
+                raise OSError(
+                    f"Server does not support HTTP Range requests (Expected 206, got {resp.status_code})"
+                )
+
+        try:
+            if resp.url is None:
+                raise OSError("Failed to resolve URL: response URL is None")
+            self.url: str = resp.url
+
+            if "Content-Range" in resp.headers:
+                self.size = int(resp.headers["Content-Range"].split("/")[-1])
+            else:
+                self.size = int(resp.headers.get("Content-Length", 0))
+        finally:
+            # Ensure connection is closed
+            resp.close()
+
+        self.pos = 0
+
+    def _request_with_retry(
+        self, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        """Execute HTTP request with exponential backoff retry.
+
+        Args:
+            method: HTTP method (e.g. "GET").
+            url: The URL to request.
+            **kwargs: Additional arguments for requests.request.
+
+        Returns:
+            The response object.
+
+        Raises:
+            OSError: If the request fails after maximum retries.
+        """
+        last_error: str | None = None
+        resp: requests.Response | None = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = requests.request(method, url, timeout=30, **kwargs)
+                if resp.status_code in [200, 206]:
+                    return resp
+                if resp.status_code in [429, 500, 502, 503, 504]:
+                    last_error = f"HTTP {resp.status_code}"
+                    # Transient error, continue to retry
+                else:
+                    # Likely a permanent error (404, 403, etc)
+                    # Return response so caller can handle the status code
+                    return resp
+            except requests.RequestException as e:
+                last_error = str(e)
+
+            if attempt < self.max_retries:
+                sleep_time = self.base_delay * (2**attempt)
+                time.sleep(sleep_time)
+
+        if resp is not None:
+            # Return the last failed response
+            return resp
+
+        raise OSError(
+            f"Failed to request {url} after {self.max_retries} retries: {last_error}"
+        )
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        """Move to a new file position.
+
+        Args:
+            offset: The offset.
+            whence: The reference point (0=start, 1=current, 2=end).
+
+        Returns:
+            The new file position.
+        """
+        if whence == 0:
+            self.pos = offset
+        elif whence == 1:
+            self.pos += offset
+        elif whence == 2:
+            self.pos = self.size + offset
+        return self.pos
+
+    def tell(self) -> int:
+        """Return the current file position."""
+        return self.pos
+
+    def read(self, size: int = -1) -> bytes:
+        """Read bytes from the remote file.
+
+        Args:
+            size: Number of bytes to read. -1 means read until end.
+
+        Returns:
+            The read bytes.
+
+        Raises:
+            OSError: If reading from the URL fails.
+        """
+        if size == 0:
+            return b""
+
+        if size == -1:
+            range_header = f"bytes={self.pos}-"
+        else:
+            end = self.pos + size - 1
+            range_header = f"bytes={self.pos}-{end}"
+
+        headers = {"Range": range_header}
+        try:
+            resp = self._request_with_retry("GET", self.url, headers=headers)
+        except OSError as e:
+            raise OSError(f"Failed to read from {self.url}: {e}")
+
+        # If we asked for a range but got 200, it means the server sent the whole file.
+        # This is only okay if we requested from the beginning (pos=0) and wanted everything (size=-1)
+        # or the whole file matches the requested size.
+        # However, for simplicity and safety in random access:
+        # If we expect a partial response (which we always do here with Range header),
+        # we should require 206 Partial Content unless we happen to request the exact full content
+        # effectively making 200 OK valid. But typically 206 is strict for Range.
+        is_partial_request = self.pos > 0 or (size != -1 and size < self.size)
+
+        if is_partial_request and resp.status_code == 200:
+            # Server ignored Range header and sent full file - this is bad for seek/partial read
+            raise OSError(
+                f"Server returned 200 OK but 206 Partial Content was expected for range {range_header}"
+            )
+
+        if resp.status_code not in [200, 206]:
+            raise OSError(f"Failed to read from {self.url}: {resp.status_code}")
+
+        data = resp.content
+        self.pos += len(data)
+        return data
+
+    def seekable(self) -> bool:
+        """Return True if the file is seekable."""
+        return True
+
+
 def fetch_and_save(
     url: str,
     file_path: Path,
@@ -1129,6 +1586,7 @@ def fetch_and_save(
     timeout: float | int = 30,
     show_progress: bool = True,
     verbose: bool = True,
+    decompress: str | None = None,
 ) -> bool:
     """Fetches data from a URL and saves it to a file, with a retry mechanism.
 
@@ -1149,15 +1607,20 @@ def fetch_and_save(
         timeout: The timeout in seconds for HTTP requests.
         show_progress: Whether to show a progress bar during download.
         verbose: Whether to print download status messages. Default is True.
+        decompress: The decompression type to use. Supported values are 'bz2'. Default is None.
 
     Returns:
         True if the file was successfully downloaded, False otherwise.
 
     Raises:
         RuntimeError: If the download fails after all retries.
+        ValueError: If an unsupported decompression type is specified.
     """
     if file_path.exists() and not overwrite:
         return True
+
+    if decompress is not None and decompress != "bz2":
+        raise ValueError(f"Unsupported decompression type: {decompress}")
 
     if session is None:
         session = requests.Session()
@@ -1226,14 +1689,27 @@ def fetch_and_save(
                 # Write to the temporary file
                 if show_progress:
                     total_size = int(response.headers.get("content-length", 0))
-                    progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-                    for data in response.iter_content(chunk_size=chunk_size):
-                        temp_file.write(data)
-                        progress_bar.update(len(data))
+                    progress_bar = tqdm(
+                        total=total_size, unit="B", unit_scale=True, leave=False
+                    )
+                    if decompress == "bz2":
+                        decompressor = bz2.BZ2Decompressor()
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(decompressor.decompress(data))
+                            progress_bar.update(len(data))
+                    else:
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(data)
+                            progress_bar.update(len(data))
                     progress_bar.close()
                 else:
-                    for data in response.iter_content(chunk_size=chunk_size):
-                        temp_file.write(data)
+                    if decompress == "bz2":
+                        decompressor = bz2.BZ2Decompressor()
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(decompressor.decompress(data))
+                    else:
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(data)
 
                 # Close the temporary file
                 temp_file.close()
@@ -1309,3 +1785,87 @@ def fast_rmtree(path: Path) -> None:
         raise NotImplementedError(
             f"Optimized fast deletion is not implemented for system: {system}"
         )
+
+
+def create_hash_from_parameters(
+    parameters: dict[str, Any], code_path: Path | None = None
+) -> str:
+    """Create a hash from a dictionary of parameters.
+
+    Args:
+        parameters: A dictionary of parameters.
+        code_path: Optional path to a file or directory containing code to include in the hash.
+
+    Returns:
+        A hexadecimal string representing the hash of the parameters.
+
+    Raises:
+        ValueError: If the parameters dictionary contains a key named '_code_content'.
+    """
+
+    def make_hashable(value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            value = str(value.tobytes())
+        elif isinstance(value, (xr.DataArray, xr.Dataset)):
+            value = dask.tokenize.tokenize(value, ensure_deterministic=True)
+        elif isinstance(value, dict):
+            value = {k: make_hashable(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            value = [make_hashable(v) for v in value]
+        elif isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
+            value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
+        elif isinstance(value, np.generic):
+            value = value.item()
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"Value {value} is not JSON serializable")
+        return value
+
+    hashable_dict = make_hashable(parameters)
+
+    if code_path is not None:
+        if "_code_content" in hashable_dict:
+            raise ValueError(
+                "The parameters dictionary cannot contain a key named '_code_content'"
+            )
+        code_content: dict[str, str] = {}
+        if code_path.is_file():
+            code_content[code_path.name] = code_path.read_text()
+        elif code_path.is_dir():
+            for root, _, files in sorted(os.walk(code_path)):
+                for file in sorted(files):
+                    file_path = Path(root) / file
+                    try:
+                        rel_path = str(file_path.relative_to(code_path))
+                        code_content[rel_path] = file_path.read_text()
+                    except UnicodeDecodeError:
+                        continue
+        hashable_dict["_code_content"] = code_content
+
+    hash_: str = hashlib.md5(
+        json.dumps(hashable_dict, sort_keys=True).encode()
+    ).hexdigest()
+    return hash_
+
+
+def write_hash(path: Path, hash: str) -> None:
+    """Write a hash to a file in hexadecimal format.
+
+    Args:
+        path: The path to the file where the hash will be written.
+        hash: The hash as a str object.
+    """
+    path.write_text(hash)
+
+
+def read_hash(path: Path) -> str:
+    """Read a hash from a file in hexadecimal format.
+
+    Args:
+        path: The path to the file containing the hash.
+
+    Returns:
+        The hash as a str object.
+    """
+    return path.read_text().strip()

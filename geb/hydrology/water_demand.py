@@ -28,10 +28,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.module import Module
-from geb.types import ArrayFloat32
 from geb.workflows import TimingModule, balance_check
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 from geb.workflows.raster import write_to_array
 
 if TYPE_CHECKING:
@@ -101,14 +101,17 @@ class WaterDemand(Module):
 
         This method initializes the reservoir command areas for the HRU grid.
         """
+        subgrid_command_areas = read_grid(
+            self.model.files["subgrid"]["waterbodies/subcommand_areas"]
+        )
         reservoir_command_areas = self.HRU.convert_subgrid_to_HRU(
-            load_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
+            subgrid_command_areas,
             method="last",
         )
 
-        water_body_mapping = self.hydrology.lakes_reservoirs.var.waterbody_mapping
+        waterbody_mapping = self.hydrology.waterbodies.var.waterbody_mapping
         self.HRU.var.reservoir_command_areas = np.take(
-            water_body_mapping, reservoir_command_areas, mode="clip"
+            waterbody_mapping, reservoir_command_areas, mode="clip"
         )
 
     def get_available_water(
@@ -125,10 +128,10 @@ class WaterDemand(Module):
             Available water in groundwater.
         """
         available_reservoir_storage_m3: np.ndarray = np.zeros(
-            self.hydrology.lakes_reservoirs.n, dtype=np.float32
+            self.hydrology.waterbodies.n, dtype=np.float32
         )
 
-        available_reservoir_storage_m3[self.hydrology.lakes_reservoirs.is_reservoir] = (
+        available_reservoir_storage_m3[self.hydrology.waterbodies.is_reservoir] = (
             self.model.agents.reservoir_operators.get_command_area_release(
                 gross_irrigation_demand_m3_per_command_area
             )
@@ -137,6 +140,8 @@ class WaterDemand(Module):
         available_channel_storage_m3: np.ndarray = (
             self.hydrology.routing.router.get_available_storage(
                 Q=self.grid.var.discharge_in_rivers_m3_s_substep,
+                river_storage_alpha=self.grid.var.river_storage_alpha,
+                river_storage_beta=self.grid.var.river_storage_beta,
                 maximum_abstraction_ratio=0.1,
             )
         )
@@ -144,7 +149,7 @@ class WaterDemand(Module):
         available_channel_storage_m3 = np.maximum(available_channel_storage_m3 - 100, 0)
 
         assert (
-            available_channel_storage_m3[self.grid.var.waterBodyID != -1] == 0.0
+            available_channel_storage_m3[self.grid.var.waterbody_ids != -1] == 0.0
         ).all()
 
         available_groundwater_m3: np.ndarray = (
@@ -218,11 +223,45 @@ class WaterDemand(Module):
 
         total_water_demand_loss_m3 = 0.0
 
+        def household_demand_to_grid(
+            water_demand_per_household_m3: ArrayFloat32,
+            household_locations: TwoDArrayFloat32,
+        ) -> ArrayFloat32:
+            """Convert household water demand to grid-level water demand.
+
+            This function is passed to the household agent's water demand function, which calculates
+            the water demand per household and then uses this function to convert it to a grid-level
+            water demand that can be used in the hydrological model.
+
+            Args:
+                water_demand_per_household_m3: Water demand per household in m3 per day.
+                household_locations: Locations of households in the same order as the water demand array.
+
+            Returns:
+                Grid-level water demand in m3 per day.
+            """
+            assert (water_demand_per_household_m3 >= 0).all()
+
+            domestic_water_demand_m3_map = np.zeros(
+                self.model.hydrology.grid.shape, np.float32
+            )
+
+            domestic_water_demand_m3 = write_to_array(
+                domestic_water_demand_m3_map,
+                water_demand_per_household_m3,
+                household_locations,
+                self.model.hydrology.grid.gt,
+            )
+            domestic_water_demand_m3 = self.model.hydrology.grid.compress(
+                domestic_water_demand_m3
+            )
+            return domestic_water_demand_m3
+
         (
-            domestic_water_demand_per_household,
+            domestic_water_demand_m3,
             domestic_water_efficiency_per_household,
-            household_locations,
-        ) = self.model.agents.households.water_demand()
+        ) = self.model.agents.households.water_demand(household_demand_to_grid)
+
         timer.finish_split("Domestic")
         industry_water_demand, industry_water_efficiency = (
             self.model.agents.industry.water_demand()
@@ -246,21 +285,20 @@ class WaterDemand(Module):
             )
         )
 
-        gross_irrigation_demand_m3_per_water_body: npt.NDArray[np.float32] = (
+        gross_irrigation_demand_m3_per_waterbody: npt.NDArray[np.float32] = (
             weighted_sum_per_reservoir(
                 self.model.agents.crop_farmers.command_area,
                 gross_irrigation_demand_m3_per_farmer_reservoir,
-                min_length=self.hydrology.lakes_reservoirs.n,
+                min_length=self.hydrology.waterbodies.n,
             )
         )
 
         gross_irrigation_demand_m3_per_reservoir: npt.NDArray[np.float32] = (
-            gross_irrigation_demand_m3_per_water_body[
-                self.hydrology.lakes_reservoirs.is_reservoir
+            gross_irrigation_demand_m3_per_waterbody[
+                self.hydrology.waterbodies.is_reservoir
             ]
         )
 
-        assert (domestic_water_demand_per_household >= 0).all()
         assert (industry_water_demand >= 0).all()
         assert (livestock_water_demand >= 0).all()
 
@@ -274,35 +312,23 @@ class WaterDemand(Module):
         available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         available_groundwater_m3_pre = available_groundwater_m3.copy()
 
-        domestic_water_demand_m3 = np.zeros(self.model.hydrology.grid.shape, np.float32)
-
-        domestic_water_demand_m3 = write_to_array(
-            domestic_water_demand_m3,
-            domestic_water_demand_per_household,
-            household_locations,
-            self.model.hydrology.grid.gt,
-        )
-        domestic_water_demand_m3 = self.model.hydrology.grid.compress(
-            domestic_water_demand_m3
-        )
-
         assert (domestic_water_efficiency_per_household == 1).all()
         domestic_water_efficiency = 1
 
         # 1. domestic (surface + ground)
-        self.hydrology.grid.domestic_withdrawal_m3 = self.withdraw(
+        domestic_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, domestic_water_demand_m3
         )  # withdraw from surface water
-        self.hydrology.grid.domestic_withdrawal_m3 += self.withdraw(
+        domestic_withdrawal_m3 += self.withdraw(
             available_groundwater_m3, domestic_water_demand_m3
         )  # withdraw from groundwater
-        domestic_return_flow_m3 = self.hydrology.grid.domestic_withdrawal_m3 * (
+        domestic_return_flow_m3 = domestic_withdrawal_m3 * (
             1 - domestic_water_efficiency
         )
         domestic_return_flow_m = domestic_return_flow_m3 / self.grid.var.cell_area
 
         domestic_water_loss_m3 = (
-            self.hydrology.grid.domestic_withdrawal_m3 - domestic_return_flow_m3
+            domestic_withdrawal_m3 - domestic_return_flow_m3
         ).sum()
         total_water_demand_loss_m3 += domestic_water_loss_m3
 
@@ -315,19 +341,19 @@ class WaterDemand(Module):
         )
         del industry_water_demand
 
-        self.hydrology.grid.industry_withdrawal_m3 = self.withdraw(
+        industry_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, industry_water_demand_m3
         )  # withdraw from surface water
-        self.hydrology.grid.industry_withdrawal_m3 += self.withdraw(
+        industry_withdrawal_m3 += self.withdraw(
             available_groundwater_m3, industry_water_demand_m3
         )  # withdraw from groundwater
-        industry_return_flow_m3 = self.hydrology.grid.industry_withdrawal_m3 * (
+        industry_return_flow_m3 = industry_withdrawal_m3 * (
             1 - industry_water_efficiency
         )
         industry_return_flow_m = industry_return_flow_m3 / self.grid.var.cell_area
 
         industry_water_loss_m3 = (
-            self.hydrology.grid.industry_withdrawal_m3 - industry_return_flow_m3
+            industry_withdrawal_m3 - industry_return_flow_m3
         ).sum()
         total_water_demand_loss_m3 += industry_water_loss_m3
 
@@ -340,16 +366,16 @@ class WaterDemand(Module):
         )
         del livestock_water_demand
 
-        self.hydrology.grid.livestock_withdrawal_m3 = self.withdraw(
+        livestock_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, livestock_water_demand_m3
         )  # withdraw from surface water
-        livestock_return_flow_m3 = self.hydrology.grid.livestock_withdrawal_m3 * (
+        livestock_return_flow_m3 = livestock_withdrawal_m3 * (
             1 - livestock_water_efficiency
         )
         livestock_return_flow_m = livestock_return_flow_m3 / self.grid.var.cell_area
 
         livestock_water_loss_m3 = (
-            self.hydrology.grid.livestock_withdrawal_m3 - livestock_return_flow_m3
+            livestock_withdrawal_m3 - livestock_return_flow_m3
         ).sum()
         total_water_demand_loss_m3 += livestock_water_loss_m3
 
@@ -402,18 +428,9 @@ class WaterDemand(Module):
                 tolerance=1e-5,
             )
 
-        self.HRU.var.actual_irrigation_consumption = irrigation_water_consumption_m
+        actual_irrigation_consumption = irrigation_water_consumption_m
 
-        assert (self.HRU.var.actual_irrigation_consumption + 1e-5 >= 0).all()
-
-        actual_irrigation_consumption_m3 = (
-            self.HRU.var.actual_irrigation_consumption * self.HRU.var.cell_area
-        )
-
-        self.hydrology.grid.irrigation_consumption_m3 = self.hydrology.to_grid(
-            HRU_data=actual_irrigation_consumption_m3,
-            fn="sum",
-        )
+        assert (actual_irrigation_consumption + 1e-5 >= 0).all()
 
         groundwater_abstraction_m3 = (
             available_groundwater_m3_pre - available_groundwater_m3
@@ -453,9 +470,9 @@ class WaterDemand(Module):
                 how="sum",
                 influxes=[],
                 outfluxes=[
-                    self.hydrology.grid.domestic_withdrawal_m3,
-                    self.hydrology.grid.industry_withdrawal_m3,
-                    self.hydrology.grid.livestock_withdrawal_m3,
+                    domestic_withdrawal_m3,
+                    industry_withdrawal_m3,
+                    livestock_withdrawal_m3,
                     (irrigation_water_withdrawal_m * self.HRU.var.cell_area).sum(),
                 ],
                 prestorages=[
@@ -471,7 +488,7 @@ class WaterDemand(Module):
                 tolerance=10000,
             )
         if self.model.timing:
-            print(timer)
+            self.model.logger.debug(timer)
 
         self.var.return_flow_m3_agents = np.bincount(
             self.HRU.var.land_owners[self.HRU.var.land_owners != -1],
@@ -487,5 +504,5 @@ class WaterDemand(Module):
             return_flow,  # from all sources, re-added in routing
             irrigation_loss_to_evaporation_m,
             total_water_demand_loss_m3,
-            self.HRU.var.actual_irrigation_consumption,
+            actual_irrigation_consumption,
         )

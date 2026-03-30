@@ -1,36 +1,48 @@
 """The main GEB model class. This class is used to initialize and run the model."""
 
+from __future__ import annotations
+
 import copy
 import datetime
 import logging
-import os
+import warnings
 from pathlib import Path
 from time import time
 from types import TracebackType
-from typing import Any, overload
+from typing import Any, cast, overload
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
+from packaging.version import Version
 
+from geb import GEB_PACKAGE_DIR, __version__
 from geb.agents import Agents
+from geb.build.version_updates import VERSION_UPDATES
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
 )
 from geb.module import Module
 from geb.reporter import Reporter
-from geb.store import Store
-from geb.workflows.io import load_dict, load_geom, open_zarr
+from geb.store import Bucket, Store
+from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
 from .hydrology import Hydrology
 
 
-class GEBModel(Module, HazardDriver):
+class GEBModelVariables(Bucket):
+    """Class to hold GEB model variables."""
+
+    _spinup_start: datetime.datetime
+    _run_start: datetime.datetime
+
+
+class GEBModel(Module):
     """GEB parent class.
 
     Args:
@@ -40,10 +52,14 @@ class GEBModel(Module, HazardDriver):
         timing: Boolean indicating if the model steps should be timed.
     """
 
+    var: GEBModelVariables
+    plantFATE: list[Any]
+
     def __init__(
         self,
         config: dict,
         files: dict,
+        logger: logging.Logger | None = None,
         mode: str = "w",
         timing: bool = False,
     ) -> None:
@@ -52,6 +68,7 @@ class GEBModel(Module, HazardDriver):
         Args:
             config: A dictionary containing the model configuration.
             files: A dictionary containing the paths to the input files.
+            logger: A logging.Logger instance to use for logging. If None, a default logger will be created.
             mode: Run model writing mode "w", or reading mode "r". Defaults to "w" for writing.
                 If "r", the model will not write any output files, but will read from existing files.
             timing: Whether to log timing of modules. Defaults to False.
@@ -59,15 +76,17 @@ class GEBModel(Module, HazardDriver):
         Raises:
             ValueError: If the mode is not 'r' or 'w'.
         """
-        self.config: dict[str, Any] = config  # model configuration
-        self.logger: logging.Logger = self.create_logger()
-
+        self.config: dict[str, Any] = copy.deepcopy(config)  # model configuration
+        self.logger = logger or logging.getLogger(__name__)  # model logger
         self.timing = timing  # whether to log timing of modules
         self.mode = mode  # mode of the model, either 'r' (read) or 'w' (write)
         if self.mode not in ["r", "w"]:
             raise ValueError(
                 "Mode must be either 'r' (read) or 'w' (write)"
             )  # validate mode
+
+        self.verify_build_complete()
+        self.check_data_version()
 
         Module.__init__(self, self, create_var=False)  # initialize the Module class
 
@@ -80,13 +99,57 @@ class GEBModel(Module, HazardDriver):
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
 
-        self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
-
         self.store = Store(self)
 
         self.evaluator = Evaluate(self)  # initialize the evaluator
 
         self.plantFATE = []  # Empty list to hold plantFATE models. If forests are not used, this will be empty
+
+    def verify_build_complete(self) -> None:
+        """Verify that the build completed.
+
+        Raises:
+            RuntimeError: If the file 'build_complete.txt' is not found in the input folder, indicating that the build is not complete.
+        """
+        build_complete_path = self.input_folder / "build_complete.txt"
+        if not build_complete_path.exists():
+            raise RuntimeError(
+                (
+                    f"Build not complete. The file 'build_complete.txt' was not found in the input folder "
+                    f"({self.input_folder.resolve()}). If you created the model with an older version, make "
+                    f"a new file named 'build_complete.txt' in {self.input_folder.resolve()} to indicate that "
+                    "the build is complete, or run a new build with the current version of GEB."
+                )
+            )
+
+    def check_data_version(self) -> None:
+        """Check if the model version of the data matches the current model version.
+
+        If the version file does not exist, it will ignore the check.
+        If the version file exists, but there are no updates between the data version
+        and the current model version, it will also ignore the check.
+
+        Raises:
+            RuntimeError: If the version file exists and there are updates between the data version and the current model version.
+        """
+        version_path = self.input_folder / "version.txt"
+        if not version_path.exists():
+            return
+
+        version_info = version_path.read_text()
+        if Version(version_info) == Version(__version__):
+            return
+
+        # find and print all updates between the stored version and the current version
+        current_v = Version(__version__)
+        stored_v = Version(version_info)
+
+        for v_str in VERSION_UPDATES.keys():
+            v = Version(v_str)
+            if v > stored_v and v <= current_v and VERSION_UPDATES[v_str]:
+                error = f"Version mismatch: input data version is {version_info}, but current model version is {__version__}. Please run 'geb update-version' to update the model to the current version."
+                self.logger.error(error)
+                raise RuntimeError(error)
 
     def restore(self, store_location: Path, timestep: int, n_timesteps: int) -> None:
         """Restore the model state to the original state given by the function input.
@@ -160,6 +223,11 @@ class GEBModel(Module, HazardDriver):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
+        original_is_activated: bool = (
+            self.reporter.is_activated
+        )  # store original reporter state
+        self.reporter.is_activated = False  # disable reporting during multiverse runs
+
         if return_mean_discharge:
             mean_discharge: dict[
                 Any, float
@@ -172,7 +240,7 @@ class GEBModel(Module, HazardDriver):
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 # open one forecast to see the number of members
-                forecast_data[loader_name] = open_zarr(
+                forecast_data[loader_name] = read_zarr(
                     self.input_folder
                     / "other"
                     / "forecasts"
@@ -226,7 +294,7 @@ class GEBModel(Module, HazardDriver):
                         da=forecast_data[loader_name].sel(member=member),
                     )
 
-            print(f"Running forecast member {member}")  # debugging print
+            self.logger.info(f"Running forecast member {member}")
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
 
             if return_mean_discharge:
@@ -243,7 +311,7 @@ class GEBModel(Module, HazardDriver):
                 n_timesteps=self.n_timesteps,
             )  # restore the initial state of the multiverse
 
-        print("Forecast finished, restoring all conditions...")  # debugging print
+        self.logger.info("Forecast finished, restoring all conditions...")
 
         # after ALL forecast members have been processed, restore the model to the state before the multiverse
         # so the n_timesteps is restored to the number of the full model run
@@ -252,6 +320,10 @@ class GEBModel(Module, HazardDriver):
             timestep=store_timestep,
             n_timesteps=store_n_timesteps,
         )  # restore the initial state of the multiverse
+
+        self.reporter.is_activated = (
+            original_is_activated  # restore original reporter state
+        )
 
         # after all forecast members have been processed, restore the original forcing data
         for loader in self.forcing.loaders.values():
@@ -270,6 +342,8 @@ class GEBModel(Module, HazardDriver):
         If configured, this function will also run the model in multiverse mode
         for the current timestep, using forecast data if available.
 
+        Raises:
+            RuntimeError: If forecast file for the current timestep is not found when forecasts are enabled in the config.
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
@@ -302,9 +376,9 @@ class GEBModel(Module, HazardDriver):
                     )  # convert the string to a datetime object
                     forecast_issue_dates.append(dt)  # append the date to the list
                 else:
-                    print(
-                        f"Warning: Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'. Skipping this file."
-                    )  # print a warning if the format is invalid
+                    raise RuntimeError(
+                        f"Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
+                    )
 
             forecast_issue_dates = list(
                 set(forecast_issue_dates)
@@ -325,7 +399,7 @@ class GEBModel(Module, HazardDriver):
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
-                        print(
+                        self.logger.info(
                             f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
                         self.agents.households.create_flood_probability_maps(
@@ -349,14 +423,13 @@ class GEBModel(Module, HazardDriver):
         if self.simulate_hydrology:
             self.hydrology.step()
 
-        HazardDriver.step(self)
+        self.hazard_driver.step()
 
         self.report(locals())
 
         t1 = time()
-        print(
-            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}finished {self.current_time} ({round(t1 - t0, 4)}s)",
-            flush=True,
+        self.logger.info(
+            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}step {self.current_time.date()} took {round(t1 - t0, 4)}s",
         )
 
         self.current_timestep += 1
@@ -394,13 +467,13 @@ class GEBModel(Module, HazardDriver):
         self.n_timesteps = n_timesteps
         self.current_timestep = 0
 
-        self.regions: gpd.GeoDataFrame = load_geom(self.files["geom"]["regions"])
+        self.regions: gpd.GeoDataFrame = read_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
         self.hydrology: Hydrology = Hydrology(self)
 
-        HazardDriver.__init__(self)
+        self.hazard_driver = HazardDriver(self)
 
         self.agents = Agents(self)
 
@@ -468,7 +541,7 @@ class GEBModel(Module, HazardDriver):
 
         self.step_to_end()
 
-        print("Model run finished, finalizing report...")
+        self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
 
     def run_yearly(self) -> None:
@@ -486,6 +559,7 @@ class GEBModel(Module, HazardDriver):
         """
         current_time: datetime.datetime = self.run_start
         end_time: datetime.datetime = self.run_end
+        self.config["report"] = {}
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
@@ -510,14 +584,55 @@ class GEBModel(Module, HazardDriver):
             n_timesteps=n_timesteps,
             timestep_length=relativedelta(years=1),
             simulate_hydrology=False,
-            clean_report_folder=True,
+            clean_report_folder=False,
             load_data_from_store=True,
         )
 
         self.step_to_end()
 
-        print("Model run finished, finalizing report...")
+        self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
+
+    def refresh_agent_attributes(self, agent_type: str = "households") -> None:
+        """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
+
+        This function is only included for development purposes.
+
+        Args:
+            agent_type: Type of agent to refresh attributes for. Examples: "households", "crop_farmers", etc.
+
+        """
+        # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
+        current_time = self.spinup_start
+        end_time_exclusive = self.run_start
+
+        timestep_length = datetime.timedelta(days=1)
+        n_timesteps = (end_time_exclusive - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
+
+        # create var bucket
+        self.var = cast(GEBModelVariables, self.store.create_bucket("var"))
+
+        # initialize the model
+        self._initialize(
+            create_reporter=True,
+            current_time=current_time,
+            n_timesteps=n_timesteps,
+            timestep_length=datetime.timedelta(days=1),
+            load_data_from_store=False,
+            clean_report_folder=False,
+            in_spinup=True,
+        )
+
+        # save initial household attributes
+        self.logger.info(f"Refreshing household attributes for {agent_type}...")
+        path: Path = self.store.path
+        name = getattr(self.agents, agent_type).name
+        self.logger.debug(f"Saving {name}.var")
+        bucket = self.store.buckets[f"{name}.var"]
+        bucket.save(path / f"{name}.var")
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
@@ -533,8 +648,9 @@ class GEBModel(Module, HazardDriver):
         end_time_exclusive = self.run_start
 
         if end_time_exclusive.year - current_time.year < 10:
-            print(
-                "Spinup time is less than 10 years. This is not recommended and may lead to issues later."
+            warnings.warn(
+                "Spinup time is less than 10 years. This is not recommended and may lead to issues later.",
+                UserWarning,
             )
 
         timestep_length = datetime.timedelta(days=1)
@@ -556,7 +672,9 @@ class GEBModel(Module, HazardDriver):
         #     }
         # }
 
-        self.var = self.store.create_bucket("var")
+        self.var: GEBModelVariables = cast(
+            GEBModelVariables, self.store.create_bucket("var")
+        )
 
         self.check_time_range()
         self._initialize(
@@ -573,7 +691,7 @@ class GEBModel(Module, HazardDriver):
 
         self.step_to_end()
 
-        print("Spinup finished, saving conditions at end of spinup...")
+        self.logger.info("Spinup finished, saving conditions at end of spinup...")
         self.store.save()
 
         self.reporter.finalize()
@@ -625,16 +743,20 @@ class GEBModel(Module, HazardDriver):
         )
 
         # ugly switch to determine whether model has coastal basins
-        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
-        if subbasins["is_coastal_basin"].any():
+        subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
+        if subbasins["is_coastal"].any():
             generate_storm_surge_hydrographs(self)
 
-        self.floods.get_return_period_maps()
+        self.hazard_driver.floods.get_return_period_maps()
 
-    def evaluate(self, *args: Any, **kwargs: Any) -> None:
-        """Call the evaluator to evaluate the model results."""
-        print("Evaluating model...")
-        self.evaluator.run(*args, **kwargs)
+    def evaluate(self, *args: Any, **kwargs: Any) -> Any:
+        """Call the evaluator to evaluate the model results.
+
+        Returns:
+            The result of the evaluation method.
+        """
+        self.logger.info("Evaluating model...")
+        return self.evaluator.run(*args, **kwargs)
 
     @property
     def current_day_of_year(self) -> int:
@@ -737,7 +859,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             Path to the folder containing GEB binaries.
         """
-        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
+        return GEB_PACKAGE_DIR / "bin"
 
     @property
     def diagnostics_folder(self) -> Path:
@@ -755,52 +877,6 @@ class GEBModel(Module, HazardDriver):
         """Get the coordinate reference system (CRS) of the model."""
         return 4326
 
-    @property
-    def bounds(self) -> tuple[float, float, float, float]:
-        """Get the bounding box of the model's mask.
-
-        Returns:
-            A tuple representing the bounding box in the format (minx, miny, maxx, maxy).
-        """
-        total_bounds = self.mask.total_bounds
-        return (total_bounds[0], total_bounds[1], total_bounds[2], total_bounds[3])
-
-    @property
-    def xmin(self) -> float:
-        """Get the minimum x-coordinate of the model's bounding box.
-
-        Returns:
-            Minimum x-coordinate of the bounding box.
-        """
-        return self.bounds[0]
-
-    @property
-    def xmax(self) -> float:
-        """Get the maximum x-coordinate of the model's bounding box.
-
-        Returns:
-            Maximum x-coordinate of the bounding box.
-        """
-        return self.bounds[2]
-
-    @property
-    def ymin(self) -> float:
-        """Get the minimum y-coordinate of the model's bounding box.
-
-        Returns:
-            Minimum y-coordinate of the bounding box.
-        """
-        return self.bounds[1]
-
-    @property
-    def ymax(self) -> float:
-        """Get the maximum y-coordinate of the model's bounding box.
-
-        Returns:
-            Maximum y-coordinate of the bounding box.
-        """
-        return self.bounds[3]
-
     def close(self) -> None:
         """Finalizes the model."""
         if (
@@ -812,11 +888,11 @@ class GEBModel(Module, HazardDriver):
 
             # Close all async forcing readers
             if hasattr(self, "forcing"):
-                for forcing_loader in self.forcing._loaders.values():
+                for forcing_loader in self.forcing.forcing_loaders.values():
                     if hasattr(forcing_loader, "reader"):
                         forcing_loader.reader.close()
 
-    def __enter__(self) -> "GEBModel":
+    def __enter__(self) -> GEBModel:
         """Enters the context of the model.
 
         Returns:
@@ -857,7 +933,7 @@ class GEBModel(Module, HazardDriver):
             ValueError: If the spinup start date is before the model build start date.
             ValueError: If the run end date is after the model build end date.
         """
-        model_build_time_range: dict[str, str] = load_dict(
+        model_build_time_range: dict[str, str] = read_params(
             self.files["dict"]["model_time_range"]
         )
 
@@ -994,42 +1070,3 @@ class GEBModel(Module, HazardDriver):
             Name of the module.
         """
         return ""
-
-    def create_logger(self) -> logging.Logger:
-        """Create a logger for the model.
-
-        Returns:
-            Logger instance for the model.
-        """
-        logger: logging.Logger = logging.getLogger("GEB")
-
-        if (
-            self.config
-            and "logging" in self.config
-            and "loglevel" in self.config["logging"]
-        ):
-            loglevel = self.config["logging"]["loglevel"]
-        else:
-            loglevel = "INFO"
-        logger.setLevel(logging.getLevelName(loglevel))
-
-        if (
-            self.config
-            and "logging" in self.config
-            and "logfile" in self.config["logging"]
-        ):
-            logfile = self.config["logging"]["logfile"]
-        else:
-            logfile = "GEB.log"
-
-        formatter = logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
-
-        file_handler = logging.FileHandler(logfile, mode="w")
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-
-        stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(formatter)
-        logger.addHandler(stream_handler)
-
-        return logger

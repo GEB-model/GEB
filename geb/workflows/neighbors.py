@@ -7,7 +7,7 @@ from typing import Any
 import numba as nb
 import numpy as np
 
-from geb.types import TwoDArrayUint32, TwoDArrayUint64
+from geb.geb_types import TwoDArrayUint32, TwoDArrayUint64
 
 from . import geohash
 

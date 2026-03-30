@@ -6,9 +6,11 @@ Contains the Evaluate class which contains evaluation routines for model runs.
 
 from __future__ import annotations
 
+from operator import attrgetter
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from .energy import Energy
 from .hydrology import Hydrology
 from .meteorological_forecasts import MeteorologicalForecasts
 
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
-class Evaluate(Hydrology, MeteorologicalForecasts):
+class Evaluate:
     """The main class that implements all evaluation procedures for the GEB model.
 
     Args:
@@ -26,64 +28,58 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
     def __init__(self, model: GEBModel) -> None:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
+        self.hydrology = Hydrology(model, self)
+        self.energy = Energy(model, self)
+        self.meteorological_forecasts = MeteorologicalForecasts(model, self)
+
+    @property
+    def sub_evaluators(self) -> list[str]:
+        """Returns a list of available sub-evaluators."""
+        return [
+            attr
+            for attr, value in self.__dict__.items()
+            if not attr.startswith("_") and attr != "model"
+        ]
 
     def run(
         self,
-        methods: list,
-        spinup_name: str = "spinup",
+        method: str,
         run_name: str = "default",
-        include_spinup: bool = False,
-        include_yearly_plots: bool = False,
-        correct_Q_obs: bool = False,
-    ) -> None:
-        """Run the evaluation methods.
+        **kwargs: Any,
+    ) -> Any:
+        """Run a single evaluation method.
 
         Args:
-            methods: List of method names to run. Defaults to
-                ["plot_discharge", "evaluate_discharge"].
-            spinup_name: Name of the spinup run. Defaults to "spinup".
+            method: Fully-qualified method name to run, for example
+                `hydrology.evaluate_discharge`.
             run_name: Name of the run to evaluate. Defaults to "default".
-            include_spinup: If True, includes the spinup run in the evaluation.
-            include_yearly_plots: If True, creates plots for every year showing the evaluation
-            correct_Q_obs: If True, corrects the observed discharge values.
+            **kwargs: Additional keyword arguments to pass to the evaluation method.
+
+        Returns:
+            The result of the evaluation method.
 
         Raises:
-            ValueError: If a specified method is not implemented in the Evaluate class.
+            AttributeError: If the specified method is not implemented in the Evaluate class.
+            TypeError: If method is not a string.
         """
-        if methods is None:
-            methods: list = [
-                "plot_discharge",
-                "evaluate_discharge",
-                "evaluate_hydrodynamics",
-                "evaluate_forecasts",
-            ]
-        else:
-            assert isinstance(methods, (list, tuple)), (
-                "Methods should be a list or tuple."
-            )
-            assert all(isinstance(method, str) for method in methods), (
-                "All methods should be strings."
-            )
+        if not isinstance(method, str):
+            raise TypeError("Method should be a string.")
 
-        for method in methods:
-            assert hasattr(self, method), (
+        try:
+            attr = attrgetter(method)(self)
+        except AttributeError as exc:
+            raise AttributeError(
                 f"Method {method} is not implemented in Evaluate class."
-            )
+            ) from exc
 
-        for method in methods:
-            if hasattr(self, method):
-                attr = getattr(self, method)
-            else:
-                raise ValueError(
-                    f"Method {method} is not implemented in Evaluate class."
-                )
-            attr(
-                spinup_name=spinup_name,
-                run_name=run_name,
-                include_spinup=include_spinup,
-                include_yearly_plots=include_yearly_plots,
-                correct_Q_obs=correct_Q_obs,
-            )  # this calls the method and executes them
+        # Merge run_name into kwargs to pass all evaluation options as keyword arguments.
+        all_kwargs = {
+            "run_name": run_name,
+            **kwargs,
+        }
+
+        # Run the method and return the result
+        return attr(**all_kwargs)
 
     @property
     def output_folder_evaluate(self) -> Path:

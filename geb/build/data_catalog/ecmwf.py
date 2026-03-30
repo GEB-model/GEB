@@ -169,7 +169,7 @@ class ECMWFForecasts(Adapter):
         bounds_str: str = f"{bounds[3]}/{bounds[0]}/{bounds[1]}/{bounds[2]}"  # setup bounds -- > bounds should be in North/West/South/East format for MARS
 
         forecast_date_list = pd.date_range(
-            forecast_start, forecast_end, freq="24H"
+            forecast_start, forecast_end, freq="24h"
         )  # Generate list of forecast dates at 24-hour intervals
         earliest_allowed_date = date(2010, 1, 1)  # Set earliest allowed forecast date
         for forecast_date in forecast_date_list:  # Loop through all forecast dates
@@ -308,13 +308,12 @@ class ECMWFForecasts(Adapter):
         forecast_horizon: int,
         forecast_timestep_hours: int,
         reproject_like: xr.DataArray,
-    ) -> None | xr.Dataset:
+    ) -> xr.Dataset:
         """Process downloaded ECMWF forecast data.
 
         We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
 
         Args:
-            preprocessing_folder: Path to the folder containing the downloaded ECMWF forecast data.
             bounds: The bounding box in the format (min_lon, min_lat, max_lon,
                     max_lat).
             forecast_issue_date: The forecast initialization time.
@@ -452,7 +451,7 @@ class ECMWFForecasts(Adapter):
                 f"Timesteps in the forecast are not hourly, resampling to hourly. Found timesteps: {np.unique(ds.step.diff('step').astype(np.int64) / 1e9 / 3600)} hours"
             )  # Log the current timesteps found in the data
 
-            ds = ds.resample(step="1H").interpolate(
+            ds = ds.resample(step="1h").interpolate(
                 "linear"
             )  # Resample to hourly timesteps using linear interpolation
             # convert back to float32
@@ -557,7 +556,7 @@ class ECMWFForecasts(Adapter):
             x=((ds.x + 180) % 360 - 180)
         )  # Convert longitude coordinates to -180 to 180 format
         ds.attrs["_FillValue"] = np.nan  # Set fill value attribute for missing data
-        ds: xr.DataArray = convert_nodata(ds, np.nan)
+        ds: xr.Dataset = convert_nodata(ds, np.nan)
 
         # assert that time is monotonically increasing with a constant step size
         assert (
@@ -594,7 +593,7 @@ class ECMWFForecasts(Adapter):
                 "increase the buffer around the forecasts (fc_area_buffer), as probably not "
                 "the whole area is downloaded"
             )
-            # fill the nan values using interpolate_na_along_time_dim and interpolate_na in space
+            # fill the nan values using interpolate_na_along_dim and interpolate_na in space
             if nan_percentage > 0:  # Check if there are any NaN values to fill
                 print(
                     f"Found {nan_percentage:.2f}% missing values for variable '{variable_name}' after regridding. Interpolating missing values."

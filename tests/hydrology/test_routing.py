@@ -9,7 +9,6 @@ import math
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 import pyflwdir
 import pytest
 
@@ -17,135 +16,9 @@ from geb.hydrology.routing import (
     Accuflux,
     KinematicWave,
     create_river_network,
-    fill_discharge_gaps,
     get_channel_ratio,
     update_node_kinematic,
 )
-from geb.types import ArrayFloat32, ArrayInt32
-
-
-def test_fill_discharge_gaps() -> None:
-    """Test the fill_discharge_gaps function to ensure it fills NaN values correctly."""
-    Q: ArrayFloat32 = np.array(
-        [
-            [np.nan, 1, np.nan, 4],
-            [7, np.nan, 0, np.nan],
-            [5, 2, 0, 0],
-            [np.nan, np.nan, 3, np.nan],
-            [6, 6, 6, 6],
-            [np.nan, 4, 4, 5],
-            [np.nan, np.nan, np.nan, np.nan],
-        ],
-        dtype=np.float32,
-    ).ravel()
-
-    # rivers are defined up to downstream
-    rivers: pd.DataFrame = pd.DataFrame(
-        data={
-            "river_id": [0, 1, 2, 3, 4, 5, 6],
-            "hydrography_linear": [
-                [0, 1, 5, 9, 14, 15],  # river with nans at start, middle and end
-                [2, 3, 7],  # river with nans at start and end
-                [8, 12, 13],  # river with nan at end
-                [19, 18, 17, 16],  # river with no nans
-                [20, 21, 22, 23],  # river with nan at start
-                [24, 25, 26, 27],  # river with all nans
-                [4],  # single cell river with no nans
-            ],
-        },
-    )
-    Q_filled: ArrayFloat32 = fill_discharge_gaps(
-        Q,
-        rivers,
-        waterbody_ids=np.full(Q.shape, -1, dtype=np.int32),
-        outflow_per_waterbody_m3_s=np.array([], dtype=np.float32),
-    )
-
-    np.testing.assert_array_equal(
-        Q_filled.reshape((7, 4)),
-        np.array(
-            [
-                [1, 1, 4, 4],
-                [7, 1, 0, 4],
-                [5, 2, 0, 0],
-                [5, 5, 3, 3],
-                [6, 6, 6, 6],
-                [4, 4, 4, 5],
-                [np.nan, np.nan, np.nan, np.nan],
-            ],
-            dtype=np.float32,
-        ),
-    )
-
-
-def test_fill_discharge_gaps_with_waterbodies() -> None:
-    """Test the fill_discharge_gaps function to ensure it fills NaN values correctly."""
-    Q: ArrayFloat32 = np.array(
-        [
-            [np.nan, 1, np.nan, 4],
-            [7, np.nan, 0, np.nan],
-            [5, 2, 0, 0],
-            [np.nan, np.nan, 3, np.nan],
-            [6, 6, 6, 6],
-            [np.nan, 4, 4, 5],
-            [np.nan, np.nan, np.nan, np.nan],
-        ],
-        dtype=np.float32,
-    ).ravel()
-
-    # rivers are defined up to downstream
-    rivers: pd.DataFrame = pd.DataFrame(
-        data={
-            "river_id": [0, 1, 2, 3, 4, 5, 6],
-            "hydrography_linear": [
-                [0, 1, 5, 9, 14, 15],  # river with nans at start, middle and end
-                [2, 3, 7],  # river with nans at start and end
-                [8, 12, 13],  # river with nan at end
-                [19, 18, 17, 16],  # river with no nans
-                [20, 21, 22, 23],  # river with nan at start
-                [24, 25, 26, 27],  # river with all nans
-                [4],  # single cell river with no nans
-            ],
-        },
-    )
-    waterbody_ids: ArrayInt32 = np.array(
-        [
-            [0, -1, 2, -1],
-            [-1, -1, -1, -1],
-            [-1, -1, -1, -1],
-            [-1, 4, -1, -1],
-            [-1, -1, -1, -1],
-            [3, -1, -1, -1],
-            [-1, 1, -1, -1],
-        ],
-        dtype=np.int32,
-    ).ravel()
-
-    outflow_per_waterbody_m3_s: ArrayFloat32 = np.array(
-        [8, 9, 10, 11, 12], dtype=np.float32
-    )
-    Q_filled: ArrayFloat32 = fill_discharge_gaps(
-        Q,
-        rivers,
-        waterbody_ids=waterbody_ids,
-        outflow_per_waterbody_m3_s=outflow_per_waterbody_m3_s,
-    )
-
-    np.testing.assert_array_equal(
-        Q_filled.reshape((7, 4)),
-        np.array(
-            [
-                [8, 1, 10, 4],
-                [7, 1, 0, 4],
-                [5, 2, 0, 0],
-                [5, 12, 3, 3],
-                [6, 6, 6, 6],
-                [11, 4, 4, 5],
-                [9, 9, 9, 9],
-            ],
-            dtype=np.float32,
-        ),
-    )
 
 
 def test_update_node_kinematic_1() -> None:
@@ -300,6 +173,7 @@ def test_accuflux(
     router: Accuflux = Accuflux(
         dt=1,
         river_network=river_network,
+        river_length=np.ones_like(mask[mask], dtype=np.float32),
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
     )
@@ -327,6 +201,8 @@ def test_accuflux(
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
+        river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
 
     assert (
@@ -359,6 +235,7 @@ def test_accuflux_with_longer_dt(
     router: Accuflux = Accuflux(
         dt=15,
         river_network=river_network,
+        river_length=np.ones_like(mask[mask], dtype=np.float32),
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
     )
@@ -386,6 +263,8 @@ def test_accuflux_with_longer_dt(
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
+        river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
 
     assert (
@@ -418,6 +297,7 @@ def test_accuflux_with_sideflow(
     router = Accuflux(
         dt=1,
         river_network=river_network,
+        river_length=np.ones_like(mask[mask], dtype=np.float32),
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
     )
@@ -444,6 +324,8 @@ def test_accuflux_with_sideflow(
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
+        river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
 
     assert (
@@ -467,7 +349,7 @@ def test_accuflux_with_sideflow(
     )
 
 
-def test_accuflux_with_water_bodies(
+def test_accuflux_with_waterbodies(
     mask: npt.NDArray[np.bool_],
     ldd: npt.NDArray[np.uint8],
     Q_initial: npt.NDArray[np.float32],
@@ -492,6 +374,7 @@ def test_accuflux_with_water_bodies(
     router: Accuflux = Accuflux(
         dt=1,
         river_network=river_network,
+        river_length=np.ones_like(mask[mask], dtype=np.float32),
         is_waterbody_outflow=np.array(
             [
                 [False, False, False, False],
@@ -530,6 +413,8 @@ def test_accuflux_with_water_bodies(
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=waterbody_storage_m3,
         outflow_per_waterbody_m3=outflow_per_waterbody_m3,
+        river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
+        river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
 
     np.testing.assert_array_equal(
@@ -573,10 +458,7 @@ def test_kinematic(
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router: KinematicWave = KinematicWave(
         river_network=river_network,
-        river_width=np.full_like(mask, 2.0)[mask],
-        river_length=np.full_like(mask, 5.0)[mask],
-        river_alpha=np.full_like(mask, 1.0)[mask],
-        river_beta=0.6,
+        river_length=np.full_like(mask, np.float32(5.0), dtype=np.float32)[mask],
         dt=15,
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
@@ -598,4 +480,73 @@ def test_kinematic(
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        river_storage_alpha=np.full_like(mask[mask], np.float32(1.0), dtype=np.float32),
+        river_storage_beta=np.full_like(mask[mask], np.float32(0.6), dtype=np.float32),
     )
+
+
+def test_accuflux_inverse_ops(
+    ldd: npt.NDArray[np.uint8],
+    mask: npt.NDArray[np.bool_],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
+    """Test if Accuflux's total_storage and discharge_from_river_storage are inverses."""
+    river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
+    dt = 3600
+    river_length = np.full_like(mask[mask], 100.0, dtype=np.float32)
+    waterbody_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    is_waterbody_outflow = np.zeros_like(mask[mask], dtype=bool)
+
+    router: Accuflux = Accuflux(
+        dt, river_network, river_length, waterbody_id, is_waterbody_outflow
+    )
+
+    # Use Q_initial as dummy discharge values (m3/s)
+    Q = Q_initial[mask]
+    alpha = np.ones_like(Q, dtype=np.float32)  # Unused for Accuflux
+    beta = np.ones_like(Q, dtype=np.float32)  # Unused for Accuflux
+
+    # Q -> Storage
+    storage = router.get_total_storage(Q, alpha, beta)
+
+    # Storage -> Q
+    Q_inv = router.calculate_discharge_from_river_storage(
+        storage, alpha, beta, river_length, waterbody_id
+    )
+
+    # Check if Q_inv matches Q (Accuflux should be exact as it's linear: S = Q * dt)
+    np.testing.assert_allclose(Q, Q_inv, rtol=1e-5)
+
+
+def test_kinematic_wave_inverse_ops(
+    ldd: npt.NDArray[np.uint8],
+    mask: npt.NDArray[np.bool_],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
+    """Test if KinematicWave's total_storage and discharge_from_river_storage are inverses."""
+    river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
+    dt = 3600
+    river_length = np.full_like(mask[mask], 100.0, dtype=np.float32)
+    waterbody_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    is_waterbody_outflow = np.zeros_like(mask[mask], dtype=bool)
+
+    router: KinematicWave = KinematicWave(
+        dt, river_network, river_length, waterbody_id, is_waterbody_outflow
+    )
+
+    # Use Q_initial as dummy discharge values (m3/s)
+    Q = Q_initial[mask]
+    # Typical alpha, beta values for kinematic wave
+    alpha = np.full_like(Q, 1.5, dtype=np.float32)
+    beta = np.full_like(Q, 0.6, dtype=np.float32)
+
+    # Q -> Storage
+    storage = router.get_total_storage(Q, alpha, beta)
+
+    # Storage -> Q
+    Q_inv = router.calculate_discharge_from_river_storage(
+        storage, alpha, beta, river_length, waterbody_id
+    )
+
+    # Check if Q_inv matches Q
+    np.testing.assert_allclose(Q, Q_inv, rtol=1e-5)

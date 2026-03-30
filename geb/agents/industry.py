@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import calendar
+import datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
+import xarray as xr
 
-from geb.types import ArrayFloat32
+from geb.geb_types import ArrayFloat32
+from geb.hydrology.HRUs import load_water_demand_xr
+from geb.store import Bucket
 
 from ..hydrology.landcovers import SEALED
 from .general import AgentBaseClass, downscale_volume
@@ -15,6 +19,14 @@ from .general import AgentBaseClass, downscale_volume
 if TYPE_CHECKING:
     from geb.agents import Agents
     from geb.model import GEBModel
+
+
+class IndustryVariables(Bucket):
+    """Variables for the LivestockFarmers agent."""
+
+    current_water_demand: ArrayFloat32
+    current_efficiency: ArrayFloat32
+    last_water_demand_update: datetime.datetime
 
 
 class Industry(AgentBaseClass):
@@ -28,6 +40,8 @@ class Industry(AgentBaseClass):
         model: The GEB model.
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
+
+    var: IndustryVariables
 
     def __init__(self, model: GEBModel, agents: Agents) -> None:
         """Initialize the Industry agent module.
@@ -49,6 +63,12 @@ class Industry(AgentBaseClass):
             else {}
         )
 
+        self.industry_water_consumption_ds: xr.Dataset = load_water_demand_xr(
+            self.model.files["other"]["water_demand/industry_water_consumption"]
+        )
+        self.industry_water_demand_ds: xr.Dataset = load_water_demand_xr(
+            self.model.files["other"]["water_demand/industry_water_demand"]
+        )
         if self.model.in_spinup:
             self.spinup()
 
@@ -93,8 +113,10 @@ class Industry(AgentBaseClass):
             days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
             water_demand = (
-                self.model.industry_water_demand_ds.sel(
-                    time=self.model.current_time, method="ffill", tolerance="366D"
+                self.industry_water_demand_ds.sel(
+                    time=self.model.current_time,
+                    method="ffill",
+                    tolerance="366D",  # ty:ignore[invalid-argument-type]
                 ).industry_water_demand
                 * 1_000_000
                 / days_in_year
@@ -126,7 +148,7 @@ class Industry(AgentBaseClass):
             )
 
             water_consumption = (
-                self.model.industry_water_consumption_ds.sel(
+                self.industry_water_consumption_ds.sel(
                     time=self.model.current_time, method="ffill"
                 ).industry_water_consumption
                 * 1_000_000
@@ -180,7 +202,7 @@ class Industry(AgentBaseClass):
         """
         if (
             np.datetime64(self.model.current_time, "ns")
-            in self.model.industry_water_consumption_ds.time
+            in self.industry_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
             self.var.current_water_demand = water_demand

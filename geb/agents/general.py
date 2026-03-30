@@ -127,8 +127,6 @@ class AgentBaseClass(Module):
         Args:
             model: The GEB model instance.
         """
-        if not hasattr(self, "redundancy"):
-            self.redundancy = None  # default redundancy is None
         Module.__init__(self, model)
 
     @property

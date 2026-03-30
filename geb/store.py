@@ -2,29 +2,31 @@
 
 from __future__ import annotations
 
-import json
 import pickle
 import shutil
 from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Iterator,
-    Literal,
-)
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Literal, overload
 
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import yaml
 from numpy.typing import NDArray
 
-from geb.workflows.io import load_geom
+from geb.geb_types import ArrayStr
+from geb.workflows.io import (
+    read_array,
+    read_geom,
+    read_params,
+    read_table,
+    write_array,
+    write_geom,
+    write_params,
+    write_table,
+)
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -52,11 +54,11 @@ class DynamicArray:
 
     def __init__(
         self,
-        input_array: npt.ArrayLike | None = None,
+        input_array: np.ndarray | None = None,
         n: int | None = None,
         max_n: int | None = None,
         extra_dims: tuple[int, ...] | None = None,
-        extra_dims_names: list[str] = [],
+        extra_dims_names: Iterable[str] | ArrayStr = [],
         dtype: npt.DTypeLike | None = None,
         fill_value: Any | None = None,
     ) -> None:
@@ -113,9 +115,13 @@ class DynamicArray:
             raise ValueError("Only one of input_array or dtype can be given")
 
         if input_array is not None:
-            assert extra_dims is None, (
-                "extra_dims cannot be given if input_array is given"
-            )
+            if (
+                input_array.ndim > 1
+                and input_array.ndim - 1 != self.extra_dims_names.size
+            ):
+                raise ValueError(
+                    "extra_dims_names must be given if input_array has extra dimensions"
+                )
             assert n is None, "n cannot be given if input_array is given"
             # assert dtype is not object
             assert input_array.dtype != object, "dtype cannot be object"
@@ -192,17 +198,22 @@ class DynamicArray:
         return self._n
 
     @property
-    def extra_dims_names(self) -> npt.NDArray[np.str_] | None:
+    def extra_dims_names(self) -> ArrayStr:
         """
         Names associated with any extra trailing dimensions.
 
         Returns:
             Array of names for extra trailing dimensions, or None.
+
+        Raises:
+            AttributeError: If `extra_dims_names` has not been set.
         """
+        if not hasattr(self, "_extra_dims_names"):
+            raise AttributeError("extra_dims_names attribute not set")
         return self._extra_dims_names
 
     @extra_dims_names.setter
-    def extra_dims_names(self, value: npt.NDArray[np.str_]) -> None:
+    def extra_dims_names(self, value: ArrayStr) -> None:
         """
         Set names for extra trailing dimensions.
 
@@ -266,7 +277,7 @@ class DynamicArray:
         ufunc: np.ufunc,
         method: Literal["__call__", "reduce", "reduceat", "accumulate", "outer", "at"],
         *inputs: tuple[Any],
-        **kwargs: dict[str, Any],
+        **kwargs: Any,
     ) -> Any:
         """
         Handle NumPy ufuncs applied to DynamicArray instances.
@@ -287,13 +298,49 @@ class DynamicArray:
             input_.data if isinstance(input_, DynamicArray) else input_
             for input_ in inputs
         )
-        result = self._data.__array_ufunc__(ufunc, method, *modified_inputs, **kwargs)
+
+        out_orig = kwargs.get("out")
+        if out_orig is not None:
+            kwargs = kwargs.copy()
+            kwargs["out"] = tuple(
+                o.data if isinstance(o, DynamicArray) else o for o in out_orig
+            )
+
+        # Call the ufunc method on the underlying data type's implementation
+        # We use the ufunc directly to avoid issues with delegation to _data
+        result = getattr(ufunc, method)(*modified_inputs, **kwargs)
+
+        if result is NotImplemented:
+            return NotImplemented
+
         if method == "reduce":
             return result
-        elif not isinstance(inputs[0], DynamicArray):
-            return result
-        else:
-            return self.__class__(result, max_n=self._data.shape[0])
+
+        if out_orig is not None:
+            if len(out_orig) == 1:
+                return out_orig[0]
+            return out_orig
+
+        if isinstance(result, np.ndarray):
+            # Find the first DynamicArray in inputs to inherit metadata from
+            first_da = next((i for i in inputs if isinstance(i, DynamicArray)), self)
+
+            # Determine extra_dims_names. If result ndim changed (e.g. reduction),
+            # we might need to adjust them.
+            # For __call__ (standard elementwise), it stays the same if shape matches elementwise.
+            # Here we assume elementwise or compatible shape.
+            new_extra_dims_names = first_da.extra_dims_names
+            if result.ndim - 1 != len(new_extra_dims_names):
+                # If dimensions changed, we can't reliably guess the names
+                new_extra_dims_names = []
+
+            return self.__class__(
+                result,
+                extra_dims_names=new_extra_dims_names,
+                max_n=first_da.max_n,
+            )
+
+        return result
 
     def __array_function__(
         self,
@@ -301,7 +348,7 @@ class DynamicArray:
         types: tuple[Any],
         args: tuple[Any],
         kwargs: dict[str, Any],
-    ) -> Any:
+    ) -> Any | DynamicArray:
         """
         Delegate NumPy __array_function__ calls to the underlying NumPy array.
 
@@ -314,21 +361,33 @@ class DynamicArray:
         Returns:
             Result of calling the function on the underlying NumPy array(s).
         """
+
+        def recursive_convert(arg: Any) -> Any:
+            if isinstance(arg, DynamicArray):
+                return arg.data
+            if isinstance(arg, (list, tuple)):
+                return type(arg)(recursive_convert(x) for x in arg)
+            return arg
+
         # Explicitly call __array_function__ of the underlying NumPy array
-        modified_args: tuple = tuple(
-            arg.data if isinstance(arg, DynamicArray) else arg for arg in args
+        modified_args = tuple(recursive_convert(arg) for arg in args)
+
+        result = self._data.__array_function__(
+            func, (np.ndarray,), modified_args, kwargs
         )
-        modified_types: tuple = tuple(
-            type(arg.data) if isinstance(arg, DynamicArray) else type(arg)
-            for arg in args
-        )
-        return self._data.__array_function__(
-            func, modified_types, modified_args, kwargs
-        )
+
+        if func == np.where and len(args) == 3:
+            return self.__class__(
+                input_array=result,
+                max_n=self._data.shape[0],
+                extra_dims_names=self.extra_dims_names,
+            )
+
+        return result
 
     def __setitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
+        key: int | slice | NDArray[np.integer] | NDArray[np.bool_],
         value: Any,
     ) -> None:
         """
@@ -340,10 +399,49 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
+    @overload
+    def __getitem__(
+        self, key: tuple[slice[None, int | None, int | None], *Any]
+    ) -> DynamicArray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[slice[int, int, int], *Any]) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: slice[None, int | None, int | None]) -> DynamicArray: ...
+
+    @overload
+    def __getitem__(self, key: slice[int, int, int | None]) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: list) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: DynamicArray) -> NDArray[Any]: ...
+
+    @overload
+    def __getitem__(self, key: int) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(
+        self, key: NDArray[np.integer] | NDArray[np.bool_]
+    ) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[int, ...]) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(
+        self, key: tuple[NDArray[np.integer] | NDArray[np.bool_], ...]
+    ) -> np.ndarray: ...
+
+    @overload
+    def __getitem__(self, key: tuple[Any, ...]) -> DynamicArray | np.ndarray: ...
+
     def __getitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
-    ) -> DynamicArray | np.ndarray:
+        key: int | slice | NDArray[np.integer] | NDArray[np.bool_] | list,
+    ) -> DynamicArray | NDArray[Any]:
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -457,7 +555,7 @@ class DynamicArray:
             "_extra_dims_names",
             "extra_dims_names",
         ):
-            return super().__getattr__(name)
+            return object.__getattribute__(self, name)
         else:
             return getattr(self.data, name)
 
@@ -527,7 +625,11 @@ class DynamicArray:
             self.data = result
             return self
         else:
-            return self.__class__(result, max_n=self._data.shape[0])
+            return self.__class__(
+                result,
+                max_n=self._data.shape[0],
+                extra_dims_names=self.extra_dims_names,
+            )
 
     def __add__(self, other: Any) -> DynamicArray:
         """Addition operator.
@@ -770,7 +872,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: object, operation: str) -> DynamicArray:
+    def _compare(self, value: Any, operation: str) -> DynamicArray:
         """
         Helper for comparison operations.
 
@@ -782,12 +884,29 @@ class DynamicArray:
             Result of the comparison.
         """
         if isinstance(value, DynamicArray):
+            res = getattr(self.data, operation)(value.data)
+            if res is NotImplemented:
+                return NotImplemented
             return self.__class__(
-                getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
+                res, extra_dims_names=self.extra_dims_names, max_n=self._data.shape[0]
             )
-        return self.__class__(getattr(self.data, operation)(value))
+        res = getattr(self.data, operation)(value)
+        if res is NotImplemented:
+            return NotImplemented
+        return self.__class__(
+            res, extra_dims_names=self.extra_dims_names, max_n=self.max_n
+        )
 
-    def __eq__(self, value: object) -> DynamicArray:
+    @overload
+    def __eq__(self, value: DynamicArray) -> DynamicArray: ...
+
+    @overload
+    def __eq__(self, value: Any) -> DynamicArray: ...
+
+    @overload
+    def __eq__(self, value: object) -> Any: ...
+
+    def __eq__(self, value: object | DynamicArray | int) -> Any | DynamicArray:
         """Equality comparison.
 
         Args:
@@ -798,7 +917,13 @@ class DynamicArray:
         """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: object) -> DynamicArray:
+    @overload
+    def __ne__(self, value: DynamicArray) -> DynamicArray: ...
+
+    @overload
+    def __ne__(self, value: object) -> Any: ...
+
+    def __ne__(self, value: object) -> Any:
         """Inequality comparison.
 
         Args:
@@ -853,7 +978,7 @@ class DynamicArray:
         """
         return self._compare(value, "__le__")
 
-    def __and__(self, other: npt.NDArray[Any]) -> DynamicArray:
+    def __and__(self, other: npt.NDArray[Any] | DynamicArray) -> DynamicArray:
         """Bitwise and / logical and operator.
 
         Returns:
@@ -861,7 +986,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__and__")
 
-    def __or__(self, other: npt.NDArray[Any]) -> DynamicArray:
+    def __or__(self, other: npt.NDArray[Any] | DynamicArray) -> DynamicArray:
         """Bitwise or / logical or operator.
 
         Returns:
@@ -898,14 +1023,18 @@ class DynamicArray:
 
     def save(self, path: Path) -> None:
         """
-        Save the DynamicArray to disk in a compressed NumPy archive.
+        Save the DynamicArray to disk in a compressed format.
 
         Args:
-            path: Path-like object (without suffix) where the .storearray.npz file will be written.
+            path: Path-like object (without suffix) where the .dynamicarray.zarr file will be written.
         """
-        np.savez_compressed(
-            path.with_suffix(".storearray.npz"),
-            **{slot: getattr(self, slot) for slot in self.__slots__},
+        write_array(
+            self._data,
+            path.with_suffix(".dynamicarray.zarr"),
+            attributes={
+                "n": self._n,
+                "extra_dims_names": self._extra_dims_names.tolist(),
+            },
         )
 
     @classmethod
@@ -914,17 +1043,18 @@ class DynamicArray:
         Load a DynamicArray previously saved with `save`.
 
         Args:
-            path: Path to a .storearray.npz file.
+            path: Path to a .dynamicarray.zarr file.
 
         Returns:
             A reconstructed DynamicArray instance.
         """
-        assert path.suffixes == [".storearray", ".npz"]
-        with np.load(path) as data:
-            obj = cls.__new__(cls)
-            for slot in cls.__slots__:
-                setattr(obj, slot, data[slot])
-            return obj
+        assert path.suffixes == [".dynamicarray", ".zarr"]
+        array, attributes = read_array(path, return_attributes=True)
+        obj = cls.__new__(cls)
+        setattr(obj, "_data", array)
+        setattr(obj, "_n", attributes["n"])
+        setattr(obj, "_extra_dims_names", np.array(attributes["extra_dims_names"]))
+        return obj
 
 
 class Bucket:
@@ -939,7 +1069,7 @@ class Bucket:
 
     """
 
-    def __init__(self, validator: Callable | None = None) -> None:
+    def __init__(self, validator: Callable[..., bool] | None = None) -> None:
         """Initialize the Bucket with an optional validator.
 
         Args:
@@ -973,7 +1103,8 @@ class Bucket:
         | str
         | dict
         | datetime
-        | Callable,
+        | Callable[..., bool]
+        | None,
     ) -> None:
         """Set an value in the bucket with optional validation, except if the name is '_validator'.
 
@@ -1036,32 +1167,17 @@ class Bucket:
             if isinstance(value, DynamicArray):
                 value.save(path / name)
             elif isinstance(value, np.ndarray):
-                np.savez_compressed(
-                    (path / name).with_suffix(".array.npz"), value=value
-                )
+                write_array(value, (path / name).with_suffix(".array.zarr"))
             elif isinstance(value, gpd.GeoDataFrame):
-                value.to_parquet(
-                    (path / name).with_suffix(".geoparquet"),
-                    engine="pyarrow",
-                    compression="gzip",
-                    compression_level=9,
-                )
+                write_geom(value, (path / name).with_suffix(".geoparquet"))
             elif isinstance(value, pd.DataFrame):
-                value.to_parquet(
-                    (path / name).with_suffix(".parquet"),
-                    engine="pyarrow",
-                    compression="gzip",
-                    compression_level=9,
-                )
+                write_table(value, (path / name).with_suffix(".parquet"))
             elif isinstance(value, (list, dict, float, int, str, datetime)):
-                with open((path / name).with_suffix(".yml"), "w") as f:
-                    yaml.safe_dump(value, f, default_flow_style=False)
-            elif isinstance(value, np.ndarray):
-                if value.ndim == 0:
-                    raise ValueError(
-                        "0-dim arrays should be saved as scalars. Otherwise we get undefined and unexpected behavior when loading the array back. Here, 0-dim array are converted to scalars."
-                    )
-                np.save((path / name).with_suffix(".npy"), value)
+                if isinstance(value, np.generic):
+                    value = (
+                        value.item()
+                    )  # If it's a numpy scalar, convert to native Python type
+                write_params(value, (path / name).with_suffix(".yml"))
             elif isinstance(value, np.generic):
                 np.save((path / name).with_suffix(".npy"), value)
             elif isinstance(value, deque):
@@ -1085,17 +1201,20 @@ class Bucket:
             ValueError: If a value type is not supported for loading.
         """
         for filename in path.iterdir():
-            if filename.suffixes == [".storearray", ".npz"]:
+            if filename.suffixes == [".dynamicarray", ".zarr"]:
                 setattr(
                     self,
                     filename.name.removesuffix("".join(filename.suffixes)),
                     DynamicArray.load(filename),
                 )
-            elif filename.suffixes == [".array", ".npz"] or filename.suffix == ".npy":
-                value = np.load(filename)
-                # unpack the value if it was saved as a .array.npz
-                if filename.suffixes == [".array", ".npz"]:
-                    value = value["value"]
+            elif filename.suffix == ".npy":
+                setattr(
+                    self,
+                    filename.stem,
+                    np.load(filename),
+                )
+            elif filename.suffixes == [".array", ".zarr"]:
+                value = read_array(filename)
                 if value.ndim == 0:
                     value = value[()]  # convert to scalar but keep dtype
                 setattr(
@@ -1107,33 +1226,16 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    load_geom(filename),
+                    read_geom(filename),
                 )
             elif filename.suffix == ".parquet":
                 setattr(
                     self,
                     filename.stem,
-                    pd.read_parquet(filename),
+                    read_table(filename),
                 )
             elif filename.suffix == ".yml":
-                with open(filename, "r") as f:
-                    setattr(self, filename.stem, yaml.safe_load(f))
-            # TODO: Can be removed in 2026
-            elif filename.suffix == ".txt":
-                with open(filename, "r") as f:
-                    setattr(self, filename.stem, f.read())
-            # TODO: Can be removed in 2026
-            elif filename.suffix == ".datetime":
-                with open(filename, "r") as f:
-                    setattr(
-                        self,
-                        filename.stem,
-                        datetime.fromisoformat(f.read()),
-                    )
-            # TODO: Can be removed in 2026
-            elif filename.suffix == ".json":
-                with open(filename, "r") as f:
-                    setattr(self, filename.stem, json.load(f))
+                setattr(self, filename.stem, read_params(filename))
             elif filename.suffix == ".pkl":
                 # TODO: Remove this option when we use the BMI of SFINCS and deques
                 # are no longer needed.
@@ -1181,7 +1283,7 @@ class Store:
             The created Bucket instance.
         """
         assert name not in self.buckets
-        bucket = Bucket(validator=validator)
+        bucket: Bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 

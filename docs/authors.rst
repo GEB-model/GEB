@@ -1,1 +1,0 @@
-Jens de Bruijn, Maurice Kalthof, Mikhail Smilovic, Luca Guillamot, Peter Burek

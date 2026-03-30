@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -9,9 +10,10 @@ from typing import Any
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+import yaml
 
 from geb.workflows.geometry import read_parquet_with_geom
-from geb.workflows.io import open_zarr
+from geb.workflows.io import read_zarr
 
 
 class Adapter:
@@ -67,11 +69,19 @@ class Adapter:
 
         Returns:
             The full path to the processed data file.
+
+        Raises:
+            ValueError: If the root directory is not set.
+            ValueError: If the filename is not set.
         """
+        if self.root is None:
+            raise ValueError("Root directory is not set; cannot determine data path.")
+        if self.filename is None:
+            raise ValueError("Filename is not set; cannot determine data path.")
         return self.root / self.filename
 
     @property
-    def root(self) -> Path | None:
+    def root(self) -> Path:
         """Root directory for the dataset.
 
         If the directory does not exist, it will be created.
@@ -84,22 +94,24 @@ class Adapter:
         Raises:
             ValueError: If the cache attribute is not 'global' or 'local'.
         """
+        if self.folder is None or self.local_version is None or self.cache is None:
+            raise ValueError("Root directory is not set; cannot determine data root.")
         if self.cache == "global":
             geb_data_root: str | None = os.getenv(key="GEB_DATA_ROOT", default=None)
             if geb_data_root:
-                catalog_root = Path(geb_data_root) / ".." / "datacatalog"
+                catalog_root: Path = Path(geb_data_root)
             else:
-                catalog_root = Path.home() / ".geb_cache"
+                catalog_root: Path = Path.home() / ".geb_cache"
 
             root = catalog_root / self.folder / f"v{self.local_version}"
-            root.mkdir(parents=True, exist_ok=True)
-            return root
         elif self.cache == "local":
-            return Path("cache") / self.folder / f"v{self.local_version}"
-        elif self.cache is None:
-            return None
+            root = Path("cache") / self.folder / f"v{self.local_version}"
         else:
             raise ValueError("Cache must be either 'global' or 'local'")
+
+        # create the root directory if it doesn't exist
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     @property
     def is_ready(self) -> bool:
@@ -115,15 +127,19 @@ class Adapter:
             )
         return is_ready
 
-    def fetch(self) -> Adapter:
+    def fetch(self, *args: Any, **kwargs: Any) -> Adapter:
         """Process the data after downloading.
+
+        Args:
+            *args: Additional positional arguments for data processing.
+            **kwargs: Additional keyword arguments for data processing.
 
         Returns:
             The Adapter instance.
         """
         return self
 
-    def read(self, **kwargs: Any) -> xr.DataArray | pd.DataFrame | gpd.GeoDataFrame:
+    def read(self, *args: Any, **kwargs: Any) -> Any:
         """Read the processed data from storage.
 
         Detects the file format based on the file extension and uses the appropriate reader.
@@ -140,11 +156,14 @@ class Adapter:
 
         """
         if self.path.suffix == ".zarr":
-            return open_zarr(self.path)
+            return read_zarr(self.path)
         elif self.path.suffix == ".nc":
             return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix in (".tif", ".asc"):
             return xr.open_dataarray(self.path, **kwargs)
+        elif self.path.suffix == ".yml" or self.path.suffix == ".yaml":
+            with open(self.path, "r") as file:
+                return yaml.safe_load(file)
         elif self.path.suffix == ".parquet":
             if "columns" in kwargs and "geometry" not in kwargs["columns"]:
                 return pd.read_parquet(path=self.path, **kwargs)
@@ -158,5 +177,30 @@ class Adapter:
             return pd.read_csv(self.path, **kwargs)
         elif self.path.suffix == ".xlsx":
             return pd.read_excel(self.path, **kwargs)
+        elif self.path.suffix == ".pkl":
+            return pd.read_pickle(self.path, **kwargs)
         else:
             raise ValueError("Unsupported file format for reading data.")
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Get a logger for the adapter.
+
+        Returns:
+            A logging.Logger instance with the adapter's class name as the logger name.
+
+        Raises:
+            ValueError: If the logger is not set.
+        """
+        if not hasattr(self, "_logger"):
+            raise ValueError("Logger is not set")
+        return self._logger
+
+    @logger.setter
+    def logger(self, logger: logging.Logger) -> None:
+        """Set a logger for the adapter.
+
+        Args:
+            logger: A logging.Logger instance to be used by the adapter.
+        """
+        self._logger = logger

@@ -1,0 +1,35 @@
+name: Auto Approve Docs
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  auto-approve:
+    runs-on: ubuntu-latest
+    if: github.repository == 'GEB-model/GEB' # prevent running on forks if they enable it inadvertently, though secrets wouldn't be there usually.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # We need the PR head to check changes, but usually pull_request_target checks out base.
+          # Explicitly checking out the PR head.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Check for changes outside of docs folder
+        id: check_changes
+        uses: ./.github/actions/check-docs-changes
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Approve Pull Request
+        if: steps.check_changes.outputs.only_docs_changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review ${{ github.event.pull_request.number }} --approve --body "Auto-approved documentation changes."

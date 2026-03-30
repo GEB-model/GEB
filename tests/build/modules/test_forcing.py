@@ -16,7 +16,9 @@ def test_get_pressure_correction_factor() -> None:
     Pressure decreases with elevation, following the barometric formula.
     This test checks that the function returns reasonable values.
     """
-    elevation = np.linspace(0, 8848.86, 1000)
+    elevation = np.linspace(0, 8848.86, 1000).astype(
+        np.float32
+    )  # From sea level to Everest
     g = 9.80665
     Mo = 0.0289644
     lapse_rate = -0.0065

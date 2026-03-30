@@ -27,8 +27,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
+from geb.geb_types import ArrayFloat32
 from geb.module import Module
-from geb.types import ArrayFloat32
+from geb.store import Bucket
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -319,6 +320,27 @@ def get_flow_velocity(
     )
 
 
+class HillSlopeErosionVariables(Bucket):
+    """Variables for the HillSlopeErosion module."""
+
+    total_erosion: np.float32
+    mannings_bare_soil: np.float32
+    surface_roughness_parameter_tillage: np.float32
+    alpha: np.float32
+    K_clay: np.float32
+    K_silt: np.float32
+    K_sand: np.float32
+    detachability_due_to_runoff_clay: np.float32
+    detachability_due_to_runoff_silt: np.float32
+    detachability_due_to_runoff_sand: np.float32
+    particle_diameter_clay: np.float32
+    particle_diameter_silt: np.float32
+    particle_diameter_sand: np.float32
+    rho: np.float32
+    rho_s: np.float32
+    eta: np.float32
+
+
 class HillSlopeErosion(Module):
     """Calculate soil erosion on hillslopes using the MMF model.
 
@@ -327,6 +349,8 @@ class HillSlopeErosion(Module):
     or event-based soil loss by considering the detachment and transport of soil
     particles separately.
     """
+
+    var: HillSlopeErosionVariables
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the hillslope erosion model.
@@ -388,13 +412,6 @@ class HillSlopeErosion(Module):
 
         raise ValueError(
             "Check if slope is correctly implemented here. There seems to be some uncertainty whether slope should be in radians or m/m (or perhaps something else entirely)"
-        )
-
-        self.HRU.var.slope = self.hydrology.to_HRU(
-            data=self.hydrology.grid.load(
-                self.model.files["grid"]["landsurface/slope"]
-            ),
-            fn=None,
         )
 
         # Is correct? -> Does not seem to be correct. Should be "length" of the element. But what is that?
@@ -483,7 +500,9 @@ class HillSlopeErosion(Module):
 
         mannings_field = (mannings_soil**2 + mannings_vegated_field**2) ** 0.5
         flow_velocity_field = get_flow_velocity(
-            mannings_field, self.HRU.var.water_depth_in_field, self.HRU.var.slope
+            mannings_field,
+            self.HRU.var.water_depth_in_field,
+            self.HRU.var.slope_m_per_m,
         )
 
         mannings_vegated_field_harvested = get_mannings_vegatation(
@@ -499,7 +518,7 @@ class HillSlopeErosion(Module):
         flow_velocity_field_harvested = get_flow_velocity(
             mannings_field_harvested,
             self.HRU.var.water_depth_in_field,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
         )
 
         # all cells without a crop (-1), but with a land owner (not -1) can be considered harvested
@@ -511,7 +530,7 @@ class HillSlopeErosion(Module):
         )
         return flow_velocity
 
-    def step(self) -> ArrayFloat32 | None:
+    def step(self, overland_runoff_m: ArrayFloat32) -> ArrayFloat32 | None:
         """Perform one timestep of the hillslope erosion model.
 
         Returns:
@@ -524,7 +543,7 @@ class HillSlopeErosion(Module):
             24.0 * 3600.0
         )  # kg/m²/s to mm/day (assuming water density = 1000 kg/m³)
         effective_rainfall_mm_day = pr_mm_day * np.cos(
-            self.HRU.var.slope
+            self.HRU.var.slope_m_per_m
         )  # slope-corrected rainfall (mm/day)
 
         leaf_drainage = effective_rainfall_mm_day * self.HRU.var.canopy_cover
@@ -549,7 +568,8 @@ class HillSlopeErosion(Module):
 
         detachment_from_raindrops_clay = get_detachment_from_raindrops(
             self.var.K_clay,
-            self.HRU.var.clay[0] / np.float32(100.0),  # only consider top layer
+            self.HRU.var.clay_percentage[0]
+            / np.float32(100.0),  # only consider top layer
             kinetic_energy,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
@@ -557,7 +577,8 @@ class HillSlopeErosion(Module):
 
         detachment_from_raindrops_silt = get_detachment_from_raindrops(
             self.var.K_silt,
-            self.HRU.var.silt[0] / np.float32(100.0),  # only consider top layer
+            self.HRU.var.silt_percentage[0]
+            / np.float32(100.0),  # only consider top layer
             kinetic_energy,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
@@ -565,7 +586,8 @@ class HillSlopeErosion(Module):
 
         detachment_from_raindrops_sand = get_detachment_from_raindrops(
             self.var.K_sand,
-            self.HRU.var.sand[0] / np.float32(100.0),  # only consider top layer
+            self.HRU.var.sand_percentage[0]
+            / np.float32(100.0),  # only consider top layer
             kinetic_energy,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
@@ -579,27 +601,30 @@ class HillSlopeErosion(Module):
 
         detachment_from_flow_clay = get_detachment_from_flow(
             self.var.detachability_due_to_runoff_clay,
-            self.HRU.var.clay[0] / np.float32(100.0),  # only consider top layer
-            self.HRU.var.direct_runoff,
-            self.HRU.var.slope,
+            self.HRU.var.clay_percentage[0]
+            / np.float32(100.0),  # only consider top layer
+            overland_runoff_m * 1000.0,  # convert m to mm
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
         )
 
         detachment_from_flow_silt = get_detachment_from_flow(
             self.var.detachability_due_to_runoff_silt,
-            self.HRU.var.silt[0] / np.float32(100.0),  # only consider top layer
-            self.HRU.var.direct_runoff,
-            self.HRU.var.slope,
+            self.HRU.var.silt_percentage[0]
+            / np.float32(100.0),  # only consider top layer
+            overland_runoff_m * 1000.0,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
         )
 
         detachment_from_flow_sand = get_detachment_from_flow(
             self.var.detachability_due_to_runoff_sand,
-            self.HRU.var.sand[0] / np.float32(100.0),  # only consider top layer
-            self.HRU.var.direct_runoff,
-            self.HRU.var.slope,
+            self.HRU.var.sand_percentage[0]
+            / np.float32(100.0),  # only consider top layer
+            overland_runoff_m * 1000.0,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.no_erosion,
             self.HRU.var.cover,
         )
@@ -619,7 +644,7 @@ class HillSlopeErosion(Module):
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.cell_length,
         )
 
@@ -630,7 +655,7 @@ class HillSlopeErosion(Module):
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.cell_length,
         )
 
@@ -641,7 +666,7 @@ class HillSlopeErosion(Module):
             self.var.rho_s,
             self.var.rho,
             self.var.eta,
-            self.HRU.var.slope,
+            self.HRU.var.slope_m_per_m,
             self.HRU.var.cell_length,
         )
 
