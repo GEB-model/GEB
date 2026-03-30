@@ -1388,10 +1388,14 @@ class Agents(BuildModelBase):
 
     @build_method(required=True)
     def setup_global_damage_model(self, region: str = "global") -> None:
-        """This method sets up the damage functions for flood events for the specified region. It retrieves the damage functions from the data catalog, processes them, and saves them as parquet files for use in the model.
+        """This method sets up the damage functions for flood events for the specified region. It
+        retrieves the damage functions from the data catalog, processes them, and saves them as
+        parquet files for use in the model.
 
         Args:
-            region: The region for which to set up the damage functions. Default is 'global', alternative
+            region: The region for which to set up the damage functions. Default is 'global'; the
+                accepted region identifiers are determined by the underlying 'global_damage_model'
+                dataset.
         """
         damage_functions = self.data_catalog.fetch("global_damage_model").read(
             region=region
