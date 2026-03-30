@@ -816,10 +816,10 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "local_damage_model": {
         "adapter": LocalDamageModel(
-            folder="local_damage_model",
-            local_version=1,
-            filename="huizinga2017.xlsx",
-            cache="global",
+            folder=None,
+            local_version=None,
+            filename=None,
+            cache=None,
         ),
         "url": None,  # No direct URL available for local damage functions
         "source": {
