@@ -34,7 +34,9 @@ class FloodRiskModule:
         """
         self.model = model
         self.households = households
-        self.load_damage_curves()
+        # self.load_damage_curves()
+        self.load_global_damage_curves()
+        self.alter_global_damage_curves_for_flood_proofed_buildings()
         self.load_max_damage_values()
         self.load_flood_maps()
 
@@ -138,6 +140,45 @@ class FloodRiskModule:
                 ]
             )["maximum_damage"]
         )
+
+    def load_global_damage_curves(self) -> None:
+        """Load global damage curves from model files and store them in the model variables."""
+        self.households.var.buildings_structure_curve = read_table(
+            self.households.model.files["table"]["damage_functions/flood/residential"]
+        )
+        self.households.var.buildings_structure_curve.set_index("depth", inplace=True)
+
+        self.households.var.buildings_content_curve = read_table(
+            self.households.model.files["table"]["damage_functions/flood/residential"]
+        )
+        self.households.var.buildings_content_curve.set_index("depth", inplace=True)
+
+    def alter_global_damage_curves_for_flood_proofed_buildings(self) -> None:
+        """Alter the global damage curves for flood-proofed buildings by applying a reduction factor to the unprotected building curves."""
+        self.households.var.buildings_structure_curve["building_unprotected"] = (
+            self.households.var.buildings_structure_curve["damage_ratio"]
+        )
+        self.households.var.buildings_content_curve["building_unprotected"] = (
+            self.households.var.buildings_content_curve["damage_ratio"]
+        )
+
+        # create another column (curve) in the buildings structure curve for flood-proofed buildings
+        self.households.var.buildings_structure_curve["building_flood_proofed"] = (
+            self.households.var.buildings_structure_curve["damage_ratio"] * 0.85
+        )
+
+        self.households.var.buildings_structure_curve.loc[
+            0:1, "building_flood_proofed"
+        ] = 0.0
+        # create another column (curve) in the buildings content curve for flood-proofed buildings
+
+        self.households.var.buildings_content_curve["building_flood_proofed"] = (
+            self.households.var.buildings_content_curve["damage_ratio"] * 0.85
+        )
+
+        self.households.var.buildings_content_curve.loc[
+            0:1, "building_flood_proofed"
+        ] = 0.0
 
     def load_damage_curves(self) -> None:
         """Load damage curves from model files and store them in the model variables."""
@@ -350,16 +391,16 @@ class FloodRiskModule:
                     building_multicurve = building_multicurve.to_crs(flood_crs)
 
             multi_curves = {
-                "damages_structure": self.households.buildings_structure_curve[
+                "damages_structure": self.households.var.buildings_structure_curve[
                     "building_unprotected"
                 ],
-                "damages_content": self.households.buildings_content_curve[
+                "damages_content": self.households.var.buildings_content_curve[
                     "building_unprotected"
                 ],
-                "damages_structure_flood_proofed": self.households.buildings_structure_curve[
+                "damages_structure_flood_proofed": self.households.var.buildings_structure_curve[
                     "building_flood_proofed"
                 ],
-                "damages_content_flood_proofed": self.households.buildings_content_curve[
+                "damages_content_flood_proofed": self.households.var.buildings_content_curve[
                     "building_flood_proofed"
                 ],
             }
