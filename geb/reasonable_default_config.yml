@@ -19,8 +19,7 @@ general:
 
 hazards:
   floods:
-    damage_model:
-      type: local # options are 'local' or 'global' (maybe terms are not ideal)
+    damage_model: local # options are 'local' or 'global' (maybe terms are not ideal)
     simulate: false
     forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05

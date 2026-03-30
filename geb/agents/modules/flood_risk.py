@@ -35,17 +35,15 @@ class FloodRiskModule:
         """
         self.model = model
         self.households = households
-        damage_model_type = self.model.config["hazards"]["floods"]["damage_model"][
-            "type"
-        ]
-        if damage_model_type == "local":
+        damage_model = self.model.config["hazards"]["floods"]["damage_model"]
+        if damage_model == "local":
             self.load_damage_curves()
-        elif damage_model_type == "global":
+        elif damage_model == "global":
             self.load_global_damage_curves()
             self.alter_global_damage_curves_for_flood_proofed_buildings()
         else:
             raise ValueError(
-                f"Invalid damage model type: {damage_model_type}. Expected 'local' or 'global'."
+                f"Invalid damage model type: {damage_model}. Expected 'local' or 'global'."
             )
         self.load_max_damage_values()
         self.load_flood_maps()
