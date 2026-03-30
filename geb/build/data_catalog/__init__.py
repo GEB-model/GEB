@@ -827,7 +827,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Endendijk et al. (2023)",
             "version": "1.0",
             "license": "CC BY 4.0",
-            "doi": " https://doi.org/10.1029/2022WR034192",
+            "doi": "https://doi.org/10.1029/2022WR034192",
         },
     },
     "global_damage_model": {
