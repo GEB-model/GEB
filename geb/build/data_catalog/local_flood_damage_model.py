@@ -218,7 +218,7 @@ class LocalFloodDamageModel(Adapter):
     """Adapter to fetch and clean local damage functions data."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize the LocalDamageFunctions adapter.
+        """Initialize the LocalFloodDamageModel adapter.
 
         Args:
             *args: Positional arguments passed to the base Adapter class.
@@ -233,7 +233,7 @@ class LocalFloodDamageModel(Adapter):
             *args: Positional arguments (not used).
             **kwargs: Keyword arguments (not used).
         Returns:
-                The LocalDamageFunctions instance.
+            The LocalFloodDamageModel instance.
         """
         return self
 
