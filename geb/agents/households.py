@@ -134,17 +134,10 @@ class Households(AgentBaseClass):
         # Load buildings
         columns_to_load = [
             "id",
-            "floorspace",
-            "occupancy",
-            "height",
-            # "geometry",
             "x",
             "y",
-            "NAME_1",
-            "TOTAL_REPL_COST_USD_SQM",
-            "COST_STRUCTURAL_USD_SQM",
-            "COST_NONSTRUCTURAL_USD_SQM",
-            "COST_CONTENTS_USD_SQM",
+            "maximum_damage_structure",
+            "maximum_damage_content",
         ]
         self.buildings = read_table(
             self.model.files["geom"]["assets/open_building_map"],
