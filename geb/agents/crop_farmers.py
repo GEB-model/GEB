@@ -454,14 +454,6 @@ class CropFarmers(AgentBaseClass):
                 "farmers"
             ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
 
-        self.allocation_reduction = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["adaptation_sprinkler"]["allocation_reduction"]
-
-        self.irrigation_reduction = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["adaptation_sprinkler"]["allocation_reduction"]
-
         if self.model.in_spinup:
             self.spinup()
 
@@ -1040,11 +1032,6 @@ class CropFarmers(AgentBaseClass):
         self.var.return_fraction[
             self.var.irrigation_efficiency == self.var.irr_eff_drip
         ] = self.var.return_fraction_drip
-
-        self.var.mean_irrigation_efficiency = np.mean(self.var.irrigation_efficiency)
-        _, self.var.irrigation_efficiency_group = np.unique(
-            self.var.irrigation_efficiency, return_inverse=True
-        )
 
         rng_drip = np.random.default_rng(70)
         self.var.time_adapted[
@@ -2759,10 +2746,15 @@ class CropFarmers(AgentBaseClass):
         ] = water_costs_groundwater
 
         # Total: robust with differing masks
-        total = self.var.yearly_water_costs_by_farmer[:, TOTAL_IRRIGATION, 0]
-        total[mask_channel] += water_costs_channel
-        total[mask_reservoir] += water_costs_reservoir
-        total[mask_groundwater] += water_costs_groundwater
+        self.var.yearly_water_costs_by_farmer[mask_channel, TOTAL_IRRIGATION, 0] += (
+            water_costs_channel
+        )
+        self.var.yearly_water_costs_by_farmer[mask_reservoir, TOTAL_IRRIGATION, 0] += (
+            water_costs_reservoir
+        )
+        self.var.yearly_water_costs_by_farmer[
+            mask_groundwater, TOTAL_IRRIGATION, 0
+        ] += water_costs_groundwater
 
         # Adds the water costs to the annual loan for farmers
         interest_rate_farmer = 0.0001  # Annual interest rate
@@ -2775,7 +2767,10 @@ class CropFarmers(AgentBaseClass):
             * (1 + interest_rate_farmer) ** loan_duration
             / ((1 + interest_rate_farmer) ** loan_duration - 1)
         )
-        annual_cost_water_energy = total * annuity_factor
+        annual_cost_water_energy = (
+            self.var.yearly_water_costs_by_farmer[:, TOTAL_IRRIGATION, 0]
+            * annuity_factor
+        )
 
         # Update loan records with the annual cost of water and energy
         for i in range(4):
