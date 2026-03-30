@@ -1359,11 +1359,11 @@ class Agents(BuildModelBase):
         self.set_geom(buildings, name="assets/open_building_map")
 
     @build_method(required=True)
-    def setup_local_damage_model(
+    def setup_local_flood_damage_model(
         self,
     ) -> None:
         """Sets up damage parameters for different hazards and asset types."""
-        parameters = self.data_catalog.fetch("local_damage_model").read()
+        parameters = self.data_catalog.fetch("local_flood_damage_model").read()
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
                 for component, asset_components in asset_parameters.items():
@@ -1387,7 +1387,7 @@ class Agents(BuildModelBase):
                     )
 
     @build_method(required=True)
-    def setup_global_damage_model(self, region: str = "global") -> None:
+    def setup_global_flood_damage_model(self, region: str = "global") -> None:
         """This method sets up the damage functions for flood events for the specified region.
 
         It retrieves the damage functions from the data catalog, processes them, and saves them as
@@ -1395,10 +1395,10 @@ class Agents(BuildModelBase):
 
         Args:
             region: The region for which to set up the damage functions. Default is 'global'; the
-                accepted region identifiers are determined by the underlying 'global_damage_model'
+                accepted region identifiers are determined by the underlying 'global_flood_damage_model'
                 dataset.
         """
-        damage_functions = self.data_catalog.fetch("global_damage_model").read(
+        damage_functions = self.data_catalog.fetch("global_flood_damage_model").read(
             region=region
         )
         # save the cleaned dataframe as parquet

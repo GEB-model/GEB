@@ -179,9 +179,9 @@ setup_crop_prices:
     sunflower: 
       - sunflower seed
 
-setup_local_damage_model:
+setup_local_flood_damage_model:
 
-setup_global_damage_model:
+setup_global_flood_damage_model:
   region: europe
 
 setup_forcing:
