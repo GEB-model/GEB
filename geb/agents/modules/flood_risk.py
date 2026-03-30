@@ -478,6 +478,11 @@ class FloodRiskModule:
             The total flood damages for the event for all assets and land use types.
 
         """
+        if self.model.config["hazards"]["floods"]["damage_model"] == "global":
+            raise NotImplementedError(
+                "The flood function is not implemented for the global damage model yet."
+            )
+
         flood_depth: xr.DataArray = flood_depth.compute()
 
         # subset building to those exposed to flooding
