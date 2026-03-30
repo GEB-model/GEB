@@ -4,6 +4,7 @@ VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b19": [
         "[manual] Add a new file called 'build_complete.txt' in your input folder. In future versions this file will be made automatically.",
         "[manual] Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.",
+        "[manual] Add `setup_global_damage_model` and `setup_local_damage_model` to your `build.yml`.",
         "[manual] Run `setup_global_damage_model`: `geb update -b build.yml::setup_global_damage_model`.",
         "[manual] Run `setup_local_damage_model`: `geb update -b build.yml::setup_local_damage_model`.",
     ],
