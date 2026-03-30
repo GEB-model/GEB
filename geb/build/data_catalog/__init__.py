@@ -18,7 +18,7 @@ from .fao import FAOSTAT, GMIA
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
-from .global_damage_functions import GlobalDamageFunctions
+from .global_damage_model import GlobalDamageModel
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
 from .global_ocean_mean_dynamic_topography import (
@@ -32,7 +32,7 @@ from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
-from .local_damage_functions import LocalDamageFunctions
+from .local_damage_model import LocalDamageModel
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -814,9 +814,9 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 4.0 or ODbL 1.0",
         },
     },
-    "local_damage_functions": {
-        "adapter": LocalDamageFunctions(
-            folder="local_damage_functions",
+    "local_damage_model": {
+        "adapter": LocalDamageModel(
+            folder="local_damage_model",
             local_version=1,
             filename="huizinga2017.xlsx",
             cache="global",
@@ -830,9 +830,9 @@ data_catalog: dict[str, dict[str, Any]] = {
             "doi": " https://doi.org/10.1029/2022WR034192",
         },
     },
-    "global_damage_functions": {
-        "adapter": GlobalDamageFunctions(
-            folder="global_damage_functions",
+    "global_damage_model": {
+        "adapter": GlobalDamageModel(
+            folder="global_damage_model",
             local_version=1,
             filename="huizinga2017.xlsx",
             cache="global",
