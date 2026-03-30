@@ -818,7 +818,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             folder="damage_functions",
             local_version=1,
             filename="huizinga2017.xlsx",
-            cache="local",
+            cache="global",
         ),
         "url": "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC105688/copy_of_global_flood_depth-damage_functions__30102017.xlsx",
         "source": {

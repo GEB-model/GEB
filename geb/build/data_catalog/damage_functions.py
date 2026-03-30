@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-import unicodedata
-from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
-import numpy as np
 import pandas as pd
 import requests
 
@@ -19,11 +13,18 @@ from .base import Adapter
 class DamageFunctions(Adapter):
     """Adapter to download and setup damage functions."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize the DamageFunctions adapter.
+
+        Args:
+            *args: Additional positional arguments passed to the base Adapter class.
+            **kwargs: Additional keyword arguments passed to the base Adapter class.
+        """
         super().__init__(*args, **kwargs)
 
     @property
     def map_damage_functions(self) -> dict[str, tuple]:
+        """Mapping of damage classes to their corresponding row and column slices in the raw damage functions dataframe."""
         return {
             "residential": [slice(0, 9), slice(1, 9)],
             "commercial": [slice(9, 18), slice(1, 9)],
@@ -33,16 +34,18 @@ class DamageFunctions(Adapter):
             "agricultural": [slice(45, 54), slice(1, 9)],
         }
 
-    def _clean_damage_functions(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _clean_damage_functions(self, df: pd.DataFrame, region: str) -> pd.DataFrame:
         """Clean the residential damage functions dataframe.
 
         Args:
             df: The raw dataframe containing the damage functions.
+            region: The region for which to extract damage functions.
 
         Returns:
             A cleaned dataframe with standardized columns and numeric values.
+        Raises:
+            ValueError: If the specified region is not found in the damage functions dataframe.
         """
-
         damage_functions = {}
 
         for damage_class in self.map_damage_functions:
@@ -63,10 +66,36 @@ class DamageFunctions(Adapter):
             ]
 
             df_damage_class = df_damage_class.apply(pd.to_numeric, errors="coerce")
-            damage_functions[damage_class] = df_damage_class
+            if region == "global":
+                if df_damage_class["global"].isna().sum() > 0:
+                    damage_functions[damage_class] = pd.DataFrame(
+                        {
+                            "depth": df_damage_class["depth"].values,
+                            "damage_fraction": df_damage_class.iloc[:, 1:-1].mean(
+                                axis=1
+                            ),
+                        }
+                    )
+                else:
+                    damage_functions[damage_class] = df_damage_class[
+                        ["depth", "global"]
+                    ]
+
+            elif region in df_damage_class.columns:
+                damage_functions[damage_class] = df_damage_class[["depth", region]]
+            else:
+                raise ValueError(
+                    f"Region '{region}' not found in damage functions dataframe. Either use the global column or one of the following: {', '.join(df_damage_class.columns[1:])}"
+                )
+            damage_functions[damage_class].columns = ["depth", "damage_fraction"]
         return damage_functions
 
-    def fetch(self, *args, **kwargs):
+    def fetch(self) -> DamageFunctions:
+        """Fetch the damage functions file from the specified URL and save it to the local path if it doesn't already exist.
+
+        Returns:
+            The DamageFunctions instance with the damage functions file downloaded and saved locally.
+        """
         # download the file if it doesn't exist
         if not self.path.exists():
             url = "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC105688/copy_of_global_flood_depth-damage_functions__30102017.xlsx"
@@ -77,13 +106,20 @@ class DamageFunctions(Adapter):
                 f.write(response.content)
         return self
 
-    def read(self, *args, **kwargs):
+    def read(self, region: str = "global") -> dict[str, pd.DataFrame]:
+        """Read the damage functions from the local file, clean them, and return them as a dictionary of dataframes.
+
+        Args:
+            region: The region for which to extract damage functions. Default is 'global'.
+        Returns:
+            A dictionary where keys are damage classes and values are dataframes containing depth and damage fraction for the specified region.
+        """
         df = pd.read_excel(
             self.path,
             sheet_name="Damage functions",
             skiprows=2,
         )
         # clean the dataframe
-        damage_functions = self._clean_damage_functions(df)
+        damage_functions = self._clean_damage_functions(df, region=region)
 
         return damage_functions

@@ -1351,12 +1351,19 @@ class Agents(BuildModelBase):
         self.set_geom(buildings, name="assets/open_building_map")
 
     @build_method(required=True)
-    def setup_damage_functions(self):
-        damage_functions = self.data_catalog.fetch("damage_functions").read()
+    def setup_damage_functions(self, region: str = "global") -> None:
+        """This method sets up the damage functions for flood events for the specified region. It retrieves the damage functions from the data catalog, processes them, and saves them as parquet files for use in the model.
+
+        Args:
+            region: The region for which to set up the damage functions. Default is 'global'.
+        """
+        damage_functions = self.data_catalog.fetch("damage_functions").read(
+            region=region
+        )
         # save the cleaned dataframe as parquet
         for damage_class, df_damage_class in damage_functions.items():
             self.set_table(
-                df_damage_class,
+                df_damage_class[region],
                 name=f"damage_functions/flood/{damage_class}",
             )
 
