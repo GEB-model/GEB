@@ -1358,7 +1358,7 @@ class Agents(BuildModelBase):
         # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
 
-    @build_method(required=False)
+    @build_method(required=True)
     def setup_local_damage_model(
         self,
     ) -> None:
