@@ -182,7 +182,7 @@ setup_crop_prices:
 setup_local_damage_model:
 
 setup_global_damage_model:
-    region: europe
+  region: europe
 
 setup_forcing:
   forcing: ERA5
