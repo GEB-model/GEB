@@ -1374,7 +1374,7 @@ class Agents(BuildModelBase):
 
                     self.set_table(
                         curve,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
+                        name=f"damage_model/local/{hazard}/{asset_type}/{component}/curve",
                     )
 
                     maximum_damage = {
@@ -1383,7 +1383,7 @@ class Agents(BuildModelBase):
 
                     self.set_params(
                         maximum_damage,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
+                        name=f"damage_model/local/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
     @build_method(required=True)
@@ -1393,14 +1393,14 @@ class Agents(BuildModelBase):
         Args:
             region: The region for which to set up the damage functions. Default is 'global', alternative
         """
-        damage_functions = self.data_catalog.fetch("damage_functions").read(
+        damage_functions = self.data_catalog.fetch("global_damage_functions").read(
             region=region
         )
         # save the cleaned dataframe as parquet
         for damage_class, df_damage_class in damage_functions.items():
             self.set_table(
                 df_damage_class,
-                name=f"damage_functions/flood/{damage_class}",
+                name=f"damage_model/global/flood/{damage_class}",
             )
 
     def assign_buildings_to_grid_cells(
