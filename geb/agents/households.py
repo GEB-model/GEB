@@ -1955,7 +1955,7 @@ class Households(AgentBaseClass):
             )
 
         return (
-            self.var.water_demand_per_household_m3_gridded,
+            self.var.water_demand_per_household_m3_gridded.copy(),
             self.var.water_efficiency_per_household,
         )
 

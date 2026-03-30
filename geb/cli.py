@@ -2,6 +2,7 @@
 
 import datetime
 import functools
+import inspect
 import json
 import subprocess
 import sys
@@ -52,15 +53,15 @@ def get_available_evaluation_methods() -> list[str]:
     evaluator = Evaluate(cast(Any, None))
     available_methods: list[str] = []
 
-    for sub_evaluator_name in evaluator.sub_evaluators:
-        sub_evaluator = getattr(evaluator, sub_evaluator_name)
-        for attribute_name in dir(sub_evaluator):
-            if attribute_name.startswith("_"):
-                continue
+    for sub_name in evaluator.sub_evaluators:
+        sub_evaluator = getattr(evaluator, sub_name)
 
-            attribute = getattr(sub_evaluator, attribute_name)
-            if callable(attribute):
-                available_methods.append(f"{sub_evaluator_name}.{attribute_name}")
+        # This returns a list of (name, value) tuples for methods only
+        methods = inspect.getmembers(sub_evaluator, predicate=inspect.ismethod)
+
+        for attr_name, _ in methods:
+            if not attr_name.startswith("_"):
+                available_methods.append(f"{sub_name}.{attr_name}")
 
     return sorted(available_methods)
 

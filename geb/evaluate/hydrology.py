@@ -634,7 +634,9 @@ def _plot_outflow_discharge_timeseries(
             edgecolor="white",
             labelcolor="white",
         )
-        ax.set_title(f"GEB river outflow for outlet {outlet_id}")
+        ax.set_title(
+            f"GEB river outflow for outlet {outlet_id}, mean: {outflow_series.mean():.2f} m3/s"
+        )
 
         plt.savefig(
             outflow_plot_folder / f"{outflow_file.stem}.svg",
@@ -686,7 +688,9 @@ def _plot_outflow_discharge_timeseries(
                     linewidth=0.9,
                     zorder=2,
                 )
-            axis.set_title(f"GEB river outflow for outlet {outlet_id} - {year}")
+            axis.set_title(
+                f"GEB river outflow for outlet {outlet_id} - {year}. Mean: {yearly_outflow_series.mean():.2f} m3/s"
+            )
             axis.set_ylabel("Discharge [m3/s]")
             _set_outflow_axis_limits(axis, yearly_outflow_series)
             axis.grid(True, alpha=0.2, color="white")
@@ -1195,6 +1199,7 @@ def _plot_discharge_validation_graphs(
             edgecolor="none",
             s=1,
         )
+    ax.set_aspect("equal")
     ax.set_xlabel("Discharge observations [m3/s] (%s)" % station_name)
     ax.set_ylabel("GEB discharge simulation [m3/s]")
     ax.set_title("GEB vs observations (discharge)")
@@ -2099,10 +2104,6 @@ class Hydrology:
                 in the report directory.
         """
         _ = args, kwargs
-        hydrology_eval_folder: Path = (
-            self.evaluator.output_folder_evaluate / "hydrology"
-        )
-        hydrology_eval_folder.mkdir(parents=True, exist_ok=True)
 
         # check if discharge file exists
         if not (
@@ -2130,7 +2131,7 @@ class Hydrology:
 
         write_zarr(
             mean_discharge,
-            hydrology_eval_folder / "mean_discharge_m3_per_s.zarr",
+            self.output_folder / "mean_discharge_m3_per_s.zarr",
             crs=4326,
         )
 
@@ -2142,7 +2143,7 @@ class Hydrology:
         ax.set_ylabel("Latitude")
 
         plt.savefig(
-            hydrology_eval_folder / "mean_discharge_m3_per_s.png",
+            self.output_folder / "mean_discharge_m3_per_s.png",
             dpi=300,
         )
         plt.show()
@@ -2152,7 +2153,7 @@ class Hydrology:
             model=self.model,
             output_folder=self.model.output_folder,
             run_name=run_name,
-            eval_plot_folder=hydrology_eval_folder,
+            eval_plot_folder=self.output_folder,
         )
         if outflow_plot_count > 0:
             print(f"Created {outflow_plot_count} outflow discharge plots.")
@@ -2189,19 +2190,6 @@ class Hydrology:
         Raises:
             FileNotFoundError: If the run folder does not exist in the report directory.
         """
-        #  create folders
-        eval_plot_folder: Path = (
-            Path(self.evaluator.output_folder_evaluate) / "hydrology"
-        )
-        eval_result_folder = (
-            Path(self.evaluator.output_folder_evaluate)
-            / "hydrology"
-            / "evaluation_results"
-        )
-
-        eval_plot_folder.mkdir(parents=True, exist_ok=True)
-        eval_result_folder.mkdir(parents=True, exist_ok=True)
-
         # load input data files
         discharge_observations_hourly: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_hourly"]
@@ -2294,7 +2282,7 @@ class Hydrology:
                         kge=KGE,
                         nse=NSE,
                         r_value=R,
-                        eval_plot_folder=eval_plot_folder,
+                        eval_plot_folder=self.output_folder,
                         include_yearly_plots=include_yearly_plots,
                         frequency=freq_label,
                     )
@@ -2333,7 +2321,7 @@ class Hydrology:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
 
         evaluation_df.to_excel(
-            eval_result_folder / "evaluation_metrics.xlsx",
+            self.output_folder / "evaluation_metrics.xlsx",
             index=True,
         )
 
@@ -2344,7 +2332,7 @@ class Hydrology:
             crs="EPSG:4326",
         )  # create a geodataframe from the evaluation dataframe
         evaluation_gdf.to_parquet(
-            eval_result_folder / "evaluation_metrics.geoparquet",
+            self.output_folder / "evaluation_metrics.geoparquet",
         )
 
         # Return mean metrics if available
@@ -2354,13 +2342,13 @@ class Hydrology:
                     evaluation_gdf=evaluation_gdf,
                     region_shapefile=region_shapefile,
                     rivers=rivers,
-                    eval_result_folder=eval_result_folder,
+                    eval_result_folder=self.output_folder,
                 )
 
                 _create_discharge_folium_map(
                     evaluation_gdf=evaluation_gdf,
-                    eval_plot_folder=eval_plot_folder,
-                    eval_result_folder=eval_result_folder,
+                    eval_plot_folder=self.output_folder,
+                    eval_result_folder=self.output_folder,
                     region_shapefile=region_shapefile,
                     rivers=rivers,
                 )
@@ -2371,7 +2359,7 @@ class Hydrology:
                     model=self.model,
                     output_folder=self.model.output_folder,
                     run_name=run_name,
-                    eval_plot_folder=eval_plot_folder,
+                    eval_plot_folder=self.output_folder,
                 )
                 print(f"Created {outflow_plot_count} outflow discharge plots.")
             return {
@@ -2389,7 +2377,7 @@ class Hydrology:
                 "R": None,
             }
 
-    def skill_score_graphs(
+    def plot_skill_scores(
         self,
         export: bool = True,
     ) -> None:
@@ -2407,14 +2395,7 @@ class Hydrology:
         Args:
             export: Whether to save the skill score graphs to PNG files.
         """
-        eval_result_folder = (
-            Path(self.evaluator.output_folder_evaluate)
-            / "hydrology"
-            / "evaluation_results"
-        )
-        evaluation_df = pd.read_excel(
-            eval_result_folder.joinpath("evaluation_metrics.xlsx")
-        )
+        evaluation_df = pd.read_excel(self.output_folder / "evaluation_metrics.xlsx")
 
         # Check if evaluation dataframe is empty
         if evaluation_df.empty:
@@ -2485,7 +2466,7 @@ class Hydrology:
 
         # Save the plot
         if export:
-            boxplot_path = eval_result_folder / "evaluation_boxplots_simple.svg"
+            boxplot_path = self.output_folder / "evaluation_boxplots_simple.svg"
             plt.savefig(boxplot_path, bbox_inches="tight")
             print(f"Boxplots saved to: {boxplot_path}")
 
@@ -2494,7 +2475,7 @@ class Hydrology:
 
         print("Skill score graphs created.")
 
-    def water_circle(
+    def plot_water_circle(
         self,
         run_name: str,
         *args: Any,
@@ -2607,12 +2588,12 @@ class Hydrology:
                     "river evaporation": river_evaporation,
                     "waterbody evaporation": waterbody_evaporation,
                 },
+                "river outflow": river_outflow,
                 "water demand": {
                     "domestic water loss": domestic_water_loss,
                     "industry water loss": industry_water_loss,
                     "livestock water loss": livestock_water_loss,
                 },
-                "river outflow": river_outflow,
             },
             "storage change": abs(storage_change),
         }
@@ -2624,11 +2605,18 @@ class Hydrology:
                 sublimation_or_deposition
             )
 
+        if storage_change > 0:
+            order: list[str] = ["in", "out", "storage change"]
+        else:
+            order: list[str] = ["storage change", "in", "out"]
+
+        hierarchy = {key: hierarchy[key] for key in order}
+
         water_circle = plot_sunburst(hierarchy, title="water circle")
 
         if export:
             water_circle.savefig(
-                self.evaluator.output_folder_evaluate / "water_circle.svg",
+                self.output_folder / "water_circle.svg",
             )
 
         return water_circle
@@ -3533,7 +3521,7 @@ class Hydrology:
 
         print("Flood map performance metrics calculated for all events.")
 
-    def water_balance(
+    def plot_water_balance(
         self,
         run_name: str,
         export: bool = True,
@@ -3548,6 +3536,9 @@ class Hydrology:
             Potential evapotranspiration is shown as an optional context bar when
             the corresponding report output is available. It is not included in
             the actual water balance totals.
+
+        Raises:
+            ValueError: If the water balance dataframe does not contain any rows.
         """
         folder = self.model.output_folder / "report" / run_name
         df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(folder)
@@ -3669,11 +3660,7 @@ class Hydrology:
         )
 
         if export:
-            fig_path = (
-                self.evaluator.output_folder_evaluate
-                / "hydrology"
-                / "water_balance_yearly_subplots.svg"
-            )
+            fig_path = self.output_folder / "water_balance_yearly_subplots.svg"
             fig_path.parent.mkdir(parents=True, exist_ok=True)
             plt.savefig(fig_path)
             print(f"Water balance yearly plot saved as: {fig_path}")
@@ -3681,28 +3668,6 @@ class Hydrology:
         plt.show()
         plt.close(fig)
 
-    def plot_water_balance(
-        self,
-        run_name: str,
-        export: bool = True,
-    ) -> None:
-        """Plot water balance component time series for the full run and per year.
-
-        Notes:
-            Input components are plotted as positive values and output components are
-            plotted as negative values. This keeps all components on a single axis while
-            making imbalances and storage changes visually easier to interpret.
-            Potential evapotranspiration is plotted as optional context when the
-            corresponding report output is available, but it is excluded from the
-            balance calculations and yearly totals captions.
-
-        Args:
-            run_name: Name of the run to evaluate.
-            export: Whether to export the water balance plots to files.
-
-        Raises:
-            ValueError: If the water balance dataframe does not contain any rows.
-        """
         folder: Path = self.model.output_folder / "report" / run_name
         water_balance_df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(
             folder
@@ -3773,9 +3738,6 @@ class Hydrology:
             water_balance_df_m3_per_timestep,
             total_area_m2,
         )
-
-        plot_folder: Path = self.evaluator.output_folder_evaluate / "hydrology"
-        plot_folder.mkdir(parents=True, exist_ok=True)
 
         time_index: pd.DatetimeIndex = pd.DatetimeIndex(
             signed_water_balance_df_m3_per_timestep.index
@@ -3919,8 +3881,10 @@ class Hydrology:
         )
 
         if export:
-            full_path: Path = plot_folder / "water_balance_timeseries.svg"
-            yearly_path: Path = plot_folder / "water_balance_timeseries_yearly.svg"
+            full_path: Path = self.output_folder / "water_balance_timeseries.svg"
+            yearly_path: Path = (
+                self.output_folder / "water_balance_timeseries_yearly.svg"
+            )
             _save_figure_with_background(full_figure, full_path)
             _save_figure_with_background(yearly_figure, yearly_path)
             print(f"Water balance time-series plot saved as: {full_path}")
@@ -4176,10 +4140,10 @@ class Hydrology:
 
         if export:
             top_soil_full_path: Path = (
-                plot_folder / "water_balance_top_soil_timeseries.svg"
+                self.output_folder / "water_balance_top_soil_timeseries.svg"
             )
             top_soil_yearly_path: Path = (
-                plot_folder / "water_balance_top_soil_timeseries_yearly.svg"
+                self.output_folder / "water_balance_top_soil_timeseries_yearly.svg"
             )
             _save_figure_with_background(top_soil_full_figure, top_soil_full_path)
             _save_figure_with_background(top_soil_yearly_figure, top_soil_yearly_path)
@@ -4230,9 +4194,6 @@ class Hydrology:
             column_name: _format_water_storage_component_label(column_name)
             for column_name in component_columns
         }
-
-        plot_folder: Path = self.evaluator.output_folder_evaluate / "hydrology"
-        plot_folder.mkdir(parents=True, exist_ok=True)
 
         time_index: pd.DatetimeIndex = pd.DatetimeIndex(water_storage_df_m.index)
         full_figure, full_axis = plt.subplots(figsize=(14, 6.5), facecolor="#000000")
@@ -4310,8 +4271,10 @@ class Hydrology:
         )
 
         if export:
-            full_path: Path = plot_folder / "water_storage_timeseries.svg"
-            yearly_path: Path = plot_folder / "water_storage_timeseries_yearly.svg"
+            full_path: Path = self.output_folder / "water_storage_timeseries.svg"
+            yearly_path: Path = (
+                self.output_folder / "water_storage_timeseries_yearly.svg"
+            )
             _save_figure_with_background(full_figure, full_path)
             _save_figure_with_background(yearly_figure, yearly_path)
             print(f"Water storage time-series plot saved as: {full_path}")
@@ -4320,3 +4283,10 @@ class Hydrology:
         plt.show()
         plt.close(full_figure)
         plt.close(yearly_figure)
+
+    @property
+    def output_folder(self) -> Path:
+        """Path to the folder where evaluation outputs for this evaluator are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
