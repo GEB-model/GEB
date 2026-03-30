@@ -9,7 +9,6 @@ import pstats
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 from collections.abc import Callable
 from datetime import datetime
@@ -34,7 +33,7 @@ from geb.build.__init__ import (
     save_clusters_as_merged_geometries,
     save_clusters_to_geoparquet,
 )
-from geb.build.data_catalog import NewDataCatalog
+from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
 from geb.config_schema import Config
 from geb.model import GEBModel
@@ -49,15 +48,10 @@ UPDATE_DEFAULT: Path = Path("update.yml")
 BUILD_DEFAULT: Path = Path("build.yml")
 PROFILE_SPEED_DEFAULT: bool = False
 PROFILE_RAM_DEFAULT: bool = False
+CORES_DEFAULT: int | None = None
 
 DATA_CATALOG_DEFAULT: Path = GEB_PACKAGE_DIR / "data_catalog.yml"
 DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
-DATA_ROOT_DEFAULT: Path = Path(
-    os.environ.get(
-        "GEB_DATA_ROOT",
-        GEB_PACKAGE_DIR.parent.parent / "data_catalog",
-    )
-)
 ALTER_FROM_MODEL_DEFAULT: Path = Path("../base")
 
 ResultType = TypeVar("ResultType")
@@ -196,13 +190,50 @@ def create_logger(name: str) -> logging.Logger:
     folder = Path("logs")
     folder.mkdir(exist_ok=True, parents=True)
     fp = folder / f"{name}.log"
-    if fp.exists():
-        fp.unlink()  # remove existing log file if it exists
-    fh = logging.FileHandler(fp)
+    # mode='w' clears the existing file rather than deleting and recreating it.
+    # Deleting it would cause the shell and Python to write to different files,
+    # so error messages would never appear in build.log.
+    fh = logging.FileHandler(fp, mode="w")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
     return logger
+
+
+def _restart_if_needed(optimize: bool, cores: int | None) -> None:
+    """Restarts the process with optimized flags or taskset core restriction if needed.
+
+    Args:
+        optimize: Whether to run in optimized mode (-O).
+        cores: Number of cores to restrict to via taskset (Linux only).
+
+    Raises:
+        SystemExit: If the process is restarted with new flags.
+    """
+    if (optimize and sys.flags.optimize == 0) or (
+        cores is not None and platform.system() == "Linux"
+    ):
+        needs_optimize_restart = optimize and sys.flags.optimize == 0
+        needs_taskset_restart = False
+        if cores is not None and platform.system() == "Linux":
+            try:
+                current_cores = len(os.sched_getaffinity(0))
+                if current_cores != cores:
+                    needs_taskset_restart = True
+            except AttributeError:
+                needs_taskset_restart = True
+
+        if needs_optimize_restart or needs_taskset_restart:
+            if platform.system() == "Windows" and not sys.argv[0].endswith(".py"):
+                sys.argv[0] = sys.argv[0] + ".exe"
+            command: list[str] = []
+            if needs_taskset_restart and cores is not None:
+                command.extend(["taskset", "-c", f"0-{cores - 1}"])
+            command.extend([sys.executable])
+            if optimize:
+                command.append("-O")
+            command.extend(sys.argv)
+            raise SystemExit(subprocess.run(command).returncode)
 
 
 def run_model_with_method(
@@ -213,6 +244,7 @@ def run_model_with_method(
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
     method_args: dict = {},
     close_after_run: bool = True,
 ) -> Any:
@@ -226,24 +258,14 @@ def run_model_with_method(
         profile_speed: If True, run the model with speed profiling.
         profile_ram: If True, run the model with RAM profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
+        cores: Number of cores to restrict the model to using taskset. If None, all cores are used.
         method_args: Optional arguments to pass to the method.
         close_after_run: If True, close the model after running the method. Defaults to True.
 
     Returns:
         The result of the method run or the GEBModel instance if no method was run.
-
-    Raises:
-        SystemExit: If the model is restarted in optimized mode.
     """
-    # check if we need to run the model in optimized mode
-    # if the model is already running in optimized mode, we don't need to restart it
-    # or else we start an infinite loop
-    if optimize and sys.flags.optimize == 0:
-        # If the script is not a .py file, we need to add the .exe extension
-        if platform.system() == "Windows" and not sys.argv[0].endswith(".py"):
-            sys.argv[0] = sys.argv[0] + ".exe"
-        command: list[str] = [sys.executable, "-O"] + sys.argv
-        raise SystemExit(subprocess.run(command).returncode)
+    _restart_if_needed(optimize=optimize, cores=cores)
 
     def run_operation(
         logger: logging.Logger, close_after_run: bool = close_after_run
@@ -620,52 +642,18 @@ def get_model_builder_class(custom_model: None | str) -> type:
         return attrgetter(custom_model)(geb_build.custom_models)
 
 
-def customize_data_catalog(data_catalog: Path, data_root: None | Path = None) -> Path:
-    """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
-
-    This enables reading the data catalog from a different location than the location of the yml-file
-    without the need to specify root in the meta of the data catalog.
-
-    Args:
-        data_catalog: List of paths to data catalog yml files.
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
-
-    Returns:
-        List of paths to data catalog yml files, possibly modified to include the data_root.
-    """
-    if data_root:
-        with open(data_catalog, "r") as stream:
-            data_catalog_yml = yaml.load(stream, Loader=yaml.FullLoader)
-
-            if "meta" not in data_catalog_yml:
-                data_catalog_yml["meta"] = {}
-            data_catalog_yml["meta"]["root"] = str(data_root)
-
-        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
-            yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
-        return Path(tmp.name)
-    else:
-        return data_catalog
-
-
 def get_builder(
     config: Path | dict[str, Any],
-    data_catalog: Path,
     logger: logging.Logger,
     custom_model: str | None,
-    data_provider: str | None,
-    data_root: Path | None,
 ) -> GEBModelBuild:
     """Get model builder.
 
     Args:
         config: Path to the model configuration file.
-        data_catalog: Path to the data catalog file.
         logger: Logger instance to pass to the model builder.
         custom_model: Name of the custom model to use. If None, the default GEBModelBuild is used.
             custom_models are available in the geb.build.custom_models module.
-        data_provider: Data variant to use from data catalog (see hydroMT documentation).
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
 
     Returns:
         Instance of the model builder.
@@ -673,13 +661,9 @@ def get_builder(
     config = parse_config(config, schema=Config)
     input_folder = Path(config["general"]["input_folder"])
 
-    data_catalog = customize_data_catalog(data_catalog, data_root=data_root)
-
     arguments = {
         "root": input_folder,
-        "data_catalog": data_catalog,
         "logger": logger,
-        "data_provider": data_provider,
     }
 
     builder_class = get_model_builder_class(custom_model)(**arguments)
@@ -696,6 +680,12 @@ def init_fn(
     basin_id: str | None = None,
     ISO3: str | None = None,
     overwrite: bool = False,
+    profile_speed: bool = PROFILE_SPEED_DEFAULT,
+    profile_ram: bool = PROFILE_RAM_DEFAULT,
+    optimize: bool = OPTIMIZE_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
+    **kwargs: Any,
 ) -> None:
     """Create a new model.
 
@@ -709,11 +699,19 @@ def init_fn(
             If not set, the basin ID is taken from the config file.
         ISO3: ISO3 country code to use for the model. Cannot be used together with --basin-id.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
+        profile_speed: If True, run the init with speed profiling.
+        profile_ram: If True, run the init with RAM profiling.
+        optimize: If True, run the init in optimized mode.
+        timing: If True, run the init with timing.
+        cores: Number of cores to restrict the init to.
+        **kwargs: Additional keyword arguments.
 
     Raises:
         ValueError: If both basin_id and ISO3 are set.
 
     """
+    _restart_if_needed(optimize=optimize, cores=cores)
+
     if basin_id is not None and ISO3 is not None:
         raise ValueError("Cannot use --basin-id and --ISO3 together.")
 
@@ -773,6 +771,13 @@ def init_fn(
                     "column": "GID_0",
                 }
             }
+        else:
+            # if the default region is given, also copy the data folder with specific data for that
+            shutil.copytree(
+                example_folder / "data",
+                working_directory / "data",
+                dirs_exist_ok=True,
+            )
 
         with open(config, "w") as f:
             # do not sort keys, to keep the order of the config file
@@ -790,8 +795,8 @@ def init_fn(
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
-            PROFILE_SPEED_DEFAULT,
-            PROFILE_RAM_DEFAULT,
+            profile_speed,
+            profile_ram,
             init_operation,
             name="init",
             logger=create_logger(name="init"),
@@ -801,6 +806,11 @@ def init_fn(
 def set_fn(
     config: Path,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    profile_speed: bool = PROFILE_SPEED_DEFAULT,
+    profile_ram: bool = PROFILE_RAM_DEFAULT,
+    optimize: bool = OPTIMIZE_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
     **kwargs: Any,
 ) -> None:
     """Set model configuration values by updating a YAML configuration file.
@@ -810,20 +820,22 @@ def set_fn(
     using dot notation, e.g., 'section.subsection.key'), and saves the
     modified configuration back to the file.
 
+    Args:
         config: Path to the model configuration file (as a string or Path object).
         working_directory: Working directory for the model.
+        profile_speed: If True, run the set with speed profiling.
+        profile_ram: If True, run the set with RAM profiling.
+        optimize: If True, run the set in optimized mode.
+        timing: If True, run the set with timing.
+        cores: Number of cores to restrict the set to.
         **kwargs: Keyword arguments representing keys and values to set in the config.
                   Keys can be nested using dots (e.g., 'model.lr' sets 'lr' under 'model').
 
     Note:
         If a nested key does not exist, intermediate dictionaries are created automatically.
         The file is overwritten with the updated configuration in YAML format.
-
-    Args:
-        config: Path to the model configuration file.
-        working_directory: Working directory for the model.
-        **kwargs: Keyword arguments to set in the config file.
     """
+    _restart_if_needed(optimize=optimize, cores=cores)
 
     def set_operation(logger: logging.Logger, **kwargs: Any) -> None:
         logger.info("Updating model configuration values.")
@@ -874,8 +886,8 @@ def set_fn(
             return set_operation(logger=logger, **kwargs)
 
         _run_with_optional_profiling(
-            PROFILE_SPEED_DEFAULT,
-            PROFILE_RAM_DEFAULT,
+            profile_speed,
+            profile_ram,
             operation_forward,
             name="set",
             logger=create_logger(name="set"),
@@ -887,11 +899,12 @@ def build_fn(
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: Path = DATA_ROOT_DEFAULT,
     continue_: bool = False,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
+    optimize: bool = OPTIMIZE_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
 ) -> None:
     """Build model.
 
@@ -900,25 +913,25 @@ def build_fn(
         config: Path to the model configuration file.
         build_config: Path to the model build configuration file.
         working_directory: Working directory for the model.
-        data_provider: Data variant to use from data catalog (see hydroMT documentation).
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
         continue_: Continue previous build if it was interrupted or failed.
         profile_speed: If True, run the build with speed profiling.
         profile_ram: If True, run the build with RAM profiling.
+        optimize: If True, run the build in optimized mode.
+        timing: If True, run the build with timing.
+        cores: Number of cores to restrict the build to.
     """
+    _restart_if_needed(optimize=optimize, cores=cores)
+
     build_config_input: Path | dict[str, Any] = build_config
 
     def build_operation(logger: logging.Logger, **kwargs: Any) -> None:
         parsed_build_config = parse_config(build_config_input)
         model = get_builder(
             config,
-            data_catalog,
             logger=logger,
             custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider=data_provider,
-            data_root=data_root,
         )
         methods: dict[str, Any] = {
             method: args
@@ -947,10 +960,11 @@ def alter_fn(
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     from_model: Path = ALTER_FROM_MODEL_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: Path = DATA_ROOT_DEFAULT,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
+    optimize: bool = OPTIMIZE_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
 ) -> None:
     """Create alternative version from base model with only changed files.
 
@@ -965,13 +979,23 @@ def alter_fn(
         build_config: Path to the model build configuration file.
         working_directory: Working directory for the model.
         from_model: Folder for the existing model.
-        data_provider: Data variant to use from data catalog (see hydroMT documentation).
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
-        profile_speed: If True, run the alter flow with speed profiling.
-        profile_ram: If True, run the alter flow with RAM profiling.
+        profile_speed: If True, run the alter with speed profiling.
+        profile_ram: If True, run the alter with RAM profiling.
+        optimize: If True, run the alter in optimized mode.
+        timing: If True, run the alter with timing.
+        cores: Number of cores to restrict the alter to.
     """
+    _restart_if_needed(optimize=optimize, cores=cores)
+
+    config_parent = config.parent if isinstance(config, Path) else Path(".")
     from_model: Path = Path(from_model)
     build_config_input: Path | dict[str, Any] = build_config
+
+    if isinstance(build_config_input, Path) and not build_config_input.exists():
+        print(
+            f"Build config file {build_config_input} does not exist. Creating an empty build config file."
+        )
+        build_config_input.touch()  # Create empty build config file if it does not exist
 
     def alter_operation(logger: logging.Logger, **kwargs: Any) -> None:
         original_config: Path = from_model / config
@@ -1021,13 +1045,10 @@ def alter_fn(
         parsed_build_config = parse_config(build_config_input)
         model = get_builder(
             config,
-            data_catalog,
             logger=logger,
             custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider=data_provider,
-            data_root=data_root,
         )
         methods = {
             method: args
@@ -1038,6 +1059,8 @@ def alter_fn(
         model.update(
             methods=methods,
         )
+
+        model.write_build_complete()
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
@@ -1053,27 +1076,21 @@ def update_version_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: Path = DATA_ROOT_DEFAULT,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
+    optimize: bool = OPTIMIZE_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
     **kwargs: Any,
 ) -> None:
     """Update the model version file to the current model version.
 
     This function initializes the GEBModelBuild, which automatically checks and updates
     the version file if it is outdated, printing any necessary update instructions.
-
-    Args:
-        data_catalog: Path to the data catalog file.
-        config: Path to the model configuration file.
-        working_directory: Working directory for the model.
-        data_provider: Data variant to use from data catalog.
-        data_root: Root folder where the data is located.
-        profile_speed: If True, run the update flow with speed profiling.
-        profile_ram: If True, run the update flow with RAM profiling.
-        **kwargs: Additional keyword arguments.
     """
+    _restart_if_needed(optimize=optimize, cores=cores)
+
+    config_parsed = parse_config(config)
 
     def update_version_operation(logger: logging.Logger, **kwargs: Any) -> None:
         parsed_config = parse_config(config, schema=Config)
@@ -1084,14 +1101,10 @@ def update_version_fn(
             else None
         )
 
-        data_catalog_path = customize_data_catalog(data_catalog, data_root=data_root)
-
         builder_class = get_model_builder_class(custom_model)
         builder_class(
             logger=logger,
             root=input_folder,
-            data_catalog=str(data_catalog_path),
-            data_provider=data_provider,
         )
 
     with WorkingDirectory(working_directory):
@@ -1109,10 +1122,11 @@ def update_fn(
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: Path = DATA_ROOT_DEFAULT,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
+    optimize: bool = OPTIMIZE_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
 ) -> None:
     """Update model.
 
@@ -1121,11 +1135,14 @@ def update_fn(
         config: Path to the model configuration file.
         build_config: Path to the model build configuration file or a specific method within the build file using :: syntax, e.g., 'build.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.
         working_directory: Working directory for the model.
-        data_provider: Data variant to use from data catalog (see hydroMT documentation).
-        data_root: Root folder where the data is located. If None, the data catalog is not modified.
-        profile_speed: If True, run the update flow with speed profiling.
-        profile_ram: If True, run the update flow with RAM profiling.
+        profile_speed: If True, run the update with speed profiling.
+        profile_ram: If True, run the update with RAM profiling.
+        optimize: If True, run the update in optimized mode.
+        timing: If True, run the update with timing.
+        cores: Number of cores to restrict the update to.
     """
+    _restart_if_needed(optimize=optimize, cores=cores)
+
     build_config_input: Path | dict[str, Any] = build_config
 
     def update_operation(logger: logging.Logger, **kwargs: Any) -> None:
@@ -1203,13 +1220,10 @@ def update_fn(
 
         model = get_builder(
             config,
-            data_catalog,
             logger=logger,
             custom_model=parsed_build_config["_custom_model"]
             if "_custom_model" in parsed_build_config
             else None,
-            data_provider=data_provider,
-            data_root=data_root,
         )
 
         model.update(methods=methods)
@@ -1300,6 +1314,113 @@ def share_fn(
             print("Done!")
 
 
+def clean_fn(
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    scenario: str = "base",
+    yes: bool = False,
+) -> list[Path]:
+    """Clean generated files from a GEB model, keeping only initialization files.
+
+    Deletes all files and directories produced by 'geb build', 'geb spinup',
+    'geb run', and 'geb evaluate' from the specified scenario folder(s), while
+    preserving the model initialization files (model.yml, build.yml, and
+    update.yml).
+
+    Notes:
+        Symlinks are unlinked directly, never followed. This prevents accidental
+        deletion of data outside the model directory if a symlink-to-directory exists.
+
+    Args:
+        working_directory: Model directory to clean. Defaults to the current
+            working directory, so run this command from inside the model folder.
+        scenario: Scenario subdirectory to clean. Defaults to 'base'. Use the
+            name of the folder created by 'geb alter' to clean an alternative
+            scenario.
+        yes: If True, skip the confirmation prompt and delete immediately.
+
+    Returns:
+        List of paths that were deleted.
+
+    Raises:
+        FileNotFoundError: If the working directory or matching scenario folder
+            cannot be found.
+    """
+    model_dir: Path = Path(working_directory).resolve()
+    if not model_dir.is_dir():
+        raise FileNotFoundError(f"Model directory not found: {model_dir}")
+
+    files_to_keep: set[str] = {"model.yml", "build.yml", "update.yml"}
+
+    # Detect whether this is a multi-basin or single model.
+    if any(
+        (d / scenario / "model.yml").exists() for d in model_dir.iterdir() if d.is_dir()
+    ):
+        # Multi-basin: each cluster subdir contains the scenario subdir with init
+        # files (e.g. large_scale6/Europe_000/base/model.yml).
+        scenario_dirs: list[Path] = [
+            d / scenario
+            for d in sorted(model_dir.iterdir())
+            if d.is_dir() and (d / scenario / "model.yml").exists()
+        ]
+    elif (model_dir / scenario / "model.yml").exists():
+        # Single-model with scenario subdir (e.g. france/base/model.yml).
+        scenario_dirs = [model_dir / scenario]
+    elif (model_dir / "model.yml").exists():
+        # Single-model, flat: init files sit directly in model_dir.
+        scenario_dirs = [model_dir]
+    else:
+        raise FileNotFoundError(
+            f"No '{scenario}' scenario found in {model_dir}. "
+            "Check that the model name and scenario name are correct."
+        )
+
+    items_to_delete: list[Path] = []
+
+    for scenario_dir in scenario_dirs:
+        for item in sorted(scenario_dir.iterdir()):
+            if item.name not in files_to_keep:
+                items_to_delete.append(item)
+
+    if not items_to_delete:
+        print(f"Nothing to clean in scenario '{scenario}' of model '{model_dir.name}'.")
+        return []
+
+    folders_affected: int = len({item.parent for item in items_to_delete})
+    print(
+        f"The following items will be deleted from the '{scenario}' scenario of model '{model_dir.name}':"
+    )
+    for item in items_to_delete:
+        print(f"  [{'dir' if item.is_dir() else 'file'}] {item.relative_to(model_dir)}")
+
+    # Require explicit 'y' so that pressing Enter alone safely aborts.
+    if not yes:
+        response: str = (
+            input(
+                f"\nDelete {len(items_to_delete)} item(s) across {folders_affected} folder(s)? [y/N] "
+            )
+            .strip()
+            .lower()
+        )
+        if response != "y":
+            print("Aborted.")
+            return []
+
+    for item in items_to_delete:
+        # Always treat symlinks first: never follow them, just unlink.
+        if item.is_symlink():
+            item.unlink()
+        elif item.is_dir():
+            # Only delete real directories, not symlinks-to-directories.
+            shutil.rmtree(item)
+        elif item.is_file():
+            item.unlink()
+
+    print(
+        f"Successfully cleaned {len(items_to_delete)} item(s) from {folders_affected} folder(s) in '{model_dir.name}/{scenario}'."
+    )
+    return items_to_delete
+
+
 def init_multiple_fn(
     config: str | Path,
     build_config: str | Path,
@@ -1315,6 +1436,9 @@ def init_multiple_fn(
     skip_visualization: bool = False,
     min_bbox_efficiency: float = 0.99,
     ocean_outlets_only: bool = False,
+    optimize: bool = OPTIMIZE_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -1333,12 +1457,19 @@ def init_multiple_fn(
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
         ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
         init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created (e.g. 'large_scale' or 'large_scale2').
+        optimize: If True, run the init-multiple in optimized mode.
+        timing: If True, run the init-multiple with timing.
+        cores: Number of cores to restrict the init-multiple to.
 
     Raises:
         FileNotFoundError: If the example folder does not exist, or if the parent
             models/ directory does not exist.
         ValueError: If geometry_bounds format is invalid.
     """
+    _restart_if_needed(optimize=optimize, cores=cores)
+
+    logger = create_logger("init_multiple")
+
     # set paths
     config: Path = Path(config)
     build_config: Path = Path(build_config)
@@ -1346,7 +1477,7 @@ def init_multiple_fn(
     working_directory: Path = Path(working_directory)
 
     # Initialize data catalog and logger
-    data_catalog_instance = NewDataCatalog()
+    data_catalog_instance = DataCatalog(logger=logger)
     with WorkingDirectory(working_directory):
         logger = create_logger("init_multiple")
 

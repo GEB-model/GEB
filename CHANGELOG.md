@@ -1,7 +1,54 @@
 # dev
+- Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
+- Refactored setup farms from lowder and created a test. Non-lowder datasets are not supported anymore. This will be added back later in the simplified setup when it is required for a specific purpose.
+- Write a custom zarr writer that is able to write chunked data and adapt all build methods to work with this.
+- Made numerous changes throughout the build to reduce memory usage. No content changes.
+- Set fill depressions to False by default in build. This option uses too much memory for large areas. If needed this can be build in again at the hydrodynamics stage.
+- Remove old data catalog entirely, and all references to it. Rename NewDataCatalog to DataCatalog.
+- Optimize GTSM data catalog, now pre-processing to zarr files.
+- Improve CLI help so `geb evaluate --help` list the available evaluation methods.
+- Fix issue in the enthalpy calculations. Previously there would be 0 infiltration even when only part of the soil was frozen. In addition, rainfall that didn't infiltrate never warmed the soil (if soil is colder..) which led to situations with too much frozen soil, too much runoff and too much discharge in winters.
+- Made quite a few plots and exporters for the water balance plotting. Note that not all plots show a correct balance yet. This is highly likely not due to actual balance errors (they are checked in the running model) but because we don't yet plot the right variables. To be continued..
+- Remove support for include_spinup in the evalution. This option was supported sometimes and sometimes not, which led to silent ignores and general over complications. It is still possible to run the evaluate for the spinup (only) by using the run_name: `geb evaluate --run_name spinup`.
+- fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
+- For large scale (multiple basins) only: build stats are now written to CSV files under `build_memory_stats/<cluster>.csv`.  Individual files are made for each basin cluster. 
+- New command "geb clean" to reset and delete the data for a model, except the .yml files. Also works for multiple basin clusters/models. 
+- The buffer size check fuction (check_buffer_size) is removed as this caused errors but is redundant. 
+- Fixes in water circle displaying.
+- Update format for custom river discharge time series. See geb/examples/geul/data/discharge_observations
+- Make full integration test, now checking discharge with observed discharge in the test_run.
+- Fix recent regression where water demand for households was set to 0 except on January 1st.
+- Include evaluation tests in the test_run for simplicity. 
+
+# v1.0.0b19
+- Add option for filling and raise out of bounds error for sample_from_map.
+- Activate dynamic river widths during spinup. During the first years of spinup there may be some small balance errors, but they will resolve over time and in the run (when river width alpha and beta are stable).
+- Only re-calculate household water demand every year (performance).
+- Set SPEI calibration period to 1960-1990.
+- Reduce memory usage during build with custom clip that works with dask.
+
+To support this version:
+- Add a new file called 'build_complete.txt' in your input folder. In future versions this file will be made automatically.
+- Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.
+
+# v1.0.0b18
 - Add loggers to groundwater model and SFINCS models.
 - Close all open figures in SFINCS to reduce memory usage.
 - Several fixes in sfincs.py to avoid futurewarnings for pandas 3.0.
+- Compress forcing data to 1D. This makes the input folder significantly smaller (~50% depending on the area).
+- Reduce area that elevation and land use maps are written for reducing size on disk.
+- Remove self.buildings_centroid as attribute (appears not to be used).
+- Load in buildings as pandas df, only load geometry data for flood damage calculations.
+- Make filling of discharge gaps a lot more efficient (quite some reduction in run speed).
+- Make it possible to specify the number of cores using `--cores`. Default is all cores (no change).
+- Make an option to auto-fix the build order if it is incorrect.
+- Simulate return period based flood events for updating risk perceptions (instead of fixed threshold).
+
+To support this version:
+- Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.
 
 # v1.0.0b17
 - Synchronize start and end dates in reasonable default config and example.

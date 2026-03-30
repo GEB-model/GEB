@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import bz2
 import datetime
 import hashlib
 import json
@@ -15,11 +16,11 @@ import threading
 import time
 import warnings
 from collections.abc import Hashable
-from functools import partial
 from pathlib import Path
 from types import TracebackType
-from typing import Any, overload
+from typing import Any, cast, overload
 
+import dask.array
 import dask.tokenize
 import geopandas as gpd
 import joblib
@@ -29,6 +30,7 @@ import pandas as pd
 import pyproj
 import rasterio
 import requests
+import rioxarray  # noqa: F401
 import s3fs
 import xarray as xr
 import yaml
@@ -44,7 +46,6 @@ from zarr.errors import ZarrUserWarning
 
 from geb.geb_types import (
     ArrayDatetime64,
-    ArrayFloat64,
     ThreeDArray,
     ThreeDArrayFloat32,
     TwoDArray,
@@ -70,40 +71,60 @@ def read_table(fp: Path, **kwargs: Any) -> pd.DataFrame:
 def write_table(df: pd.DataFrame, fp: Path) -> None:
     """Save a pandas DataFrame to a parquet file.
 
-    brotli is a bit slower but gives better compression,
-    gzip is faster to read. Higher compression levels
-    generally don't make it slower to read, therefore
-    we use the highest compression level for gzip
-
     Args:
         df: The pandas DataFrame to save.
         fp: The path to the output parquet file.
     """
-    df.to_parquet(fp, engine="pyarrow", compression="gzip", compression_level=9)
+    df.to_parquet(
+        fp,
+        engine="pyarrow",
+        compression="zstd",
+        compression_level=9,
+        row_group_size=max(min(10_000, len(df)), 1),
+    )
 
 
-def read_array(fp: Path) -> np.ndarray:
+@overload
+def read_array(fp: Path, return_attributes: bool = False) -> np.ndarray: ...
+
+
+@overload
+def read_array(
+    fp: Path, return_attributes: bool = True
+) -> tuple[np.ndarray, dict[str, Any]]: ...
+
+
+def read_array(
+    fp: Path, return_attributes: bool = False
+) -> np.ndarray | tuple[np.ndarray, dict[str, Any]]:
     """Load a numpy array from a .zarr file.
 
     Args:
-        fp: The path to the .npz or .zarr file.
+        fp: The path to the .zarr file.
+        return_attributes: Whether to return the attributes along with the array.
 
     Returns:
-        The numpy array.
+        The numpy array, or a tuple of the array and its attributes if return_attributes is True.
     """
-    zarr_object = zarr.load(fp)
-    assert isinstance(zarr_object, np.ndarray)
-    return zarr_object
+    zarr_object = zarr.open_array(fp, mode="r")
+    array = zarr_object[:]
+    assert isinstance(array, np.ndarray)
+    if return_attributes:
+        return array, dict(zarr_object.attrs)
+    return array
 
 
-def write_array(arr: np.ndarray, fp: Path) -> None:
+def write_array(
+    arr: np.ndarray, fp: Path, attributes: dict[str, Any] | None = None
+) -> None:
     """Save a numpy array to a .zarr file.
 
     Args:
         arr: The numpy array to save.
         fp: The path to the output .zarr file.
+        attributes: Optional dictionary of attributes to store with the array.
     """
-    zarr.save_array(fp, arr, overwrite=True)  # ty:ignore[invalid-argument-type]
+    zarr.save_array(fp, arr, overwrite=True, attributes=attributes)  # ty:ignore[invalid-argument-type]
 
 
 @overload
@@ -205,20 +226,24 @@ def read_geom(filepath: str | Path, **kwargs: Any) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath, **kwargs)
 
 
-def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
+def write_geom(
+    gdf: gpd.GeoDataFrame, filepath: Path, write_covering_bbox: bool = False
+) -> None:
     """Save a GeoDataFrame to a parquet file.
 
     Args:
         gdf: The GeoDataFrame to save.
         filepath: Path to the output parquet file.
+        write_covering_bbox: Whether to write the covering bounding box to the file.
     """
     gdf.to_parquet(
         filepath,
         engine="pyarrow",
         compression="zstd",
         compression_level=9,
-        row_group_size=10_000,
+        row_group_size=max(min(10_000, len(gdf)), 1),
         schema_version="1.1.0",
+        write_covering_bbox=write_covering_bbox,
     )
 
 
@@ -485,55 +510,143 @@ def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
     return True
 
 
-def check_buffer_size(
-    da: xr.DataArray,
-    chunks_or_shards: dict[str, int],
-    max_buffer_size: int = 2147483647,
-) -> None:
-    """Check if the buffer size for the given chunks or shards is within the maximum allowed size.
+def _chunk_index_to_region(
+    chunk_structure: tuple[tuple[int, ...], ...],
+    block_index: tuple[int, ...],
+) -> tuple[slice, ...]:
+    """Convert a Dask block index into absolute array slices.
 
     Args:
-        da: The xarray DataArray to check.
-        chunks_or_shards: A dictionary with the chunk or shard sizes for each dimension.
-        max_buffer_size: The maximum allowed buffer size in bytes. Default is 2GB (2147483647 bytes).
+        chunk_structure: Chunk sizes for each array dimension.
+        block_index: Block index for each array dimension.
+
+    Returns:
+        The selection tuple describing the block position in the full array.
+    """
+    selection: list[slice] = []
+    for dimension_chunks, dimension_index in zip(
+        chunk_structure, block_index, strict=True
+    ):
+        start: int = sum(dimension_chunks[:dimension_index])
+        stop: int = start + dimension_chunks[dimension_index]
+        selection.append(slice(start, stop))
+    return tuple(selection)
+
+
+def _store_dask_array_blocks(
+    da: dask.array.core.Array, store_target: Any, progress: bool
+) -> None:
+    """Store a Dask array into a Zarr target block by block.
+
+    Args:
+        da: Source Dask array whose existing block structure defines
+            the write granularity.
+        store_target: Writable Zarr target array.
+        progress: Whether to wrap the block iterator in a progress bar.
+    """
+    block_indices: Any = np.ndindex(*da.numblocks)
+
+    array_blocks = da.blocks
+
+    # the last chunk may be smaller than the specified chunk size,
+    # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
+    # This can be safely ignored in this context.
+    with np.errstate(invalid="ignore"):
+        stores = []
+        for block_index in block_indices:
+            region = _chunk_index_to_region(da.chunks, block_index)
+            block = array_blocks[block_index]
+
+            stores.append(
+                dask.array.store(
+                    block,
+                    store_target,
+                    regions=region,
+                    lock=False,
+                    compute=False,  # Use compute=False to return a Dask object instead of executing
+                    return_stored=False,
+                )
+            )
+
+        if progress:
+            with ProgressBar():
+                dask.compute(*stores)
+        else:
+            dask.compute(*stores)
+
+
+def _normalize_shards(
+    chunk_spec: dict[str, int],
+    requested_shards: dict[str, int] | None,
+    dimension_sizes: dict[str, int],
+) -> dict[str, int] | None:
+    """Normalize shard sizes from chunk multiples to exact shard sizes.
+
+    Args:
+        chunk_spec: Chunk sizes for each array dimension.
+        requested_shards: Requested shard sizes expressed as the number of chunks
+            per shard for a subset of dimensions.
+        dimension_sizes: Full array size for each dimension.
+
+    Returns:
+        A complete shard specification using chunk-sized shards for unspecified
+        dimensions, or None when no sharding is requested. Each shard size is an
+        exact multiple of the chunk size for its dimension.
 
     Raises:
-        ValueError: If the buffer size exceeds the maximum allowed size.
+        ValueError: If a requested shard dimension does not exist.
+        ValueError: If a requested shard size is smaller than 1.
     """
-    buffer_size = (
-        np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
-    )
-    if buffer_size >= max_buffer_size:
+    if requested_shards is None:
+        return None
+
+    invalid_dimensions = sorted(set(requested_shards) - set(chunk_spec))
+    if invalid_dimensions:
         raise ValueError(
-            f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
+            f"Shard dimensions {invalid_dimensions} are not present in the array"
         )
+
+    shard_spec: dict[str, int] = chunk_spec.copy()
+    for dim_name, requested_shard_size in requested_shards.items():
+        if requested_shard_size < 1:
+            raise ValueError(
+                f"Shard size for dimension '{dim_name}' must be at least 1"
+            )
+
+        chunk_size: int = chunk_spec[dim_name]
+        dimension_size: int = dimension_sizes[dim_name]
+
+        requested_shard_size_in_elements: int = requested_shard_size * chunk_size
+        minimum_full_shard_size: int = (
+            (dimension_size + chunk_size - 1) // chunk_size
+        ) * chunk_size
+        shard_spec[dim_name] = min(
+            requested_shard_size_in_elements, minimum_full_shard_size
+        )
+
+    return shard_spec
 
 
 def write_zarr(
     da: xr.DataArray,
-    path: str | Path,
+    path: str | Path | None,
     crs: int | pyproj.CRS,
-    x_chunksize: int = 350,
-    y_chunksize: int = 350,
-    time_chunksize: int = 1,
-    time_chunks_per_shard: int | None = 30,
-    filters: list = [],
-    compression_level: int = 22,
+    shards: dict[str, int] | None = None,
+    filters: list | None = None,
+    compression_level: int = 18,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
 
     Args:
         da: The xarray DataArray to save.
-        path: The path to the zarr file.
+        path: The path to the zarr file. If None, the file will be saved to a temporary location.
         crs: The coordinate reference system to use.
-        x_chunksize: The chunk size for the x dimension. Default is 350.
-        y_chunksize: The chunk size for the y dimension. Default is 350.
-        time_chunksize: The chunk size for the time dimension. Default is 1.
-        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
-            to disable sharding.
+        shards: A dictionary with the number of chunks per shard for each
+            dimension. If provided, these will be used instead of chunk-sized
+            shards. Default is None.
         filters: A list of filters to apply. Default is [].
-        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 22.
+        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 18.
         progress: Whether to show a progress bar. Default is True.
 
     Returns:
@@ -542,11 +655,15 @@ def write_zarr(
     Raises:
         ValueError: If the DataArray has invalid dimensions or attributes.
         ValueError: If the DataArray dtype is float64.
+        ValueError: If shards contains an unknown dimension or non-positive size.
 
     """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
     assert "latitudes" not in da.dims, "latitudes should be y"
+
+    if filters is None:
+        filters: list = []
 
     if "y" in da.dims and "x" in da.dims:
         assert da.dims[-2] == "y", "y should be the second last dimension"
@@ -571,93 +688,102 @@ def write_zarr(
             f"Fill value must be nan, not {da.attrs['_FillValue']}"
         )
 
-    path: Path = Path(path)
+    if path is None:
+        is_temporary_file = True
+        path: Path = Path(f"temp_{dask.tokenize.tokenize(da)}.zarr")
+    else:
+        path: Path = Path(path)
+        is_temporary_file = False
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(delete=not is_temporary_file) as tmp_dir:
         tmp_zarr = Path(tmp_dir) / path.name
 
         da.name = path.stem.split("/")[-1]
 
         da: xr.DataArray = da.drop_vars([v for v in da.coords if v not in da.dims])
-
-        chunks, shards = {}, None
         if "y" in da.dims and "x" in da.dims:
-            chunks.update(
-                {
-                    "y": min(y_chunksize, da.sizes["y"]),
-                    "x": min(x_chunksize, da.sizes["x"]),
-                }
-            )
             da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
-        if "member" in da.dims:
-            member_chunksize = 1  # Use full size as default da.sizes["member"]
-            chunks.update({"member": member_chunksize})
-
-        if "time" in da.dims:
-            chunks.update({"time": min(time_chunksize, da.sizes["time"])})
-            if time_chunks_per_shard is not None:
-                shards = chunks.copy()
-                shards["time"] = min(
-                    time_chunks_per_shard * chunks["time"], da.time.size
-                )
+        chunk_spec: dict[str, int] = {}
+        for dim in da.dims:
+            dim_name = str(dim)
+            requested_chunk_size = (
+                da.chunksizes[dim_name][0]
+                if dim_name in da.chunksizes
+                else da.sizes[dim_name]
+            )
+            chunk_spec[dim_name] = min(requested_chunk_size, da.sizes[dim_name])
 
         compressor: ZstdCodec = ZstdCodec(
             level=compression_level,
         )
 
-        check_buffer_size(da, chunks_or_shards=shards if shards else chunks)
+        dimension_sizes: dict[str, int] = {
+            str(dim): da.sizes[str(dim)] for dim in da.dims
+        }
+        shard_spec = _normalize_shards(chunk_spec, shards, dimension_sizes)
 
-        da: xr.DataArray = da.chunk(shards if shards is not None else chunks)
+        # when sharding is enabled, the write block size is determined by the shard size, otherwise by the chunk size
+        write_block_spec: dict[str, int] = (
+            shard_spec if shard_spec is not None else chunk_spec
+        )
+
+        da = da.chunk(write_block_spec)
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
-        chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)
+        storage_chunks = tuple(chunk_spec[str(dim)] for dim in da.dims)
 
         array_encoding: dict[str, Any] = {
             "compressors": (compressor,),
-            "chunks": chunks,
+            "chunks": storage_chunks,
             "filters": filters,
         }
 
-        if shards is not None:
-            shards = tuple(
-                (shards[dim] if dim in shards else getattr(da, str(dim)).size)
-                for dim in da.dims
-            )
-            array_encoding["shards"] = shards
+        if shard_spec is not None:
+            storage_shards = tuple(shard_spec[str(dim)] for dim in da.dims)
+            array_encoding["shards"] = storage_shards
 
         assert isinstance(da.name, str)
         encoding: dict[Hashable, dict[str, Any]] = {da.name: array_encoding}
         for coord in da.coords:
-            encoding[coord] = {"compressors": (compressor,)}
+            encoding[coord] = {
+                "compressors": (compressor,),
+                "chunks": (da.coords[coord].size,),
+            }
 
-        to_zarr_partial = partial(
-            da.to_zarr,
+        da.to_zarr(
             store=tmp_zarr,
             mode="w",
             encoding=encoding,
             zarr_format=3,
             consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
             write_empty_chunks=True,
+            compute=False,
         )
 
-        if progress:
-            # start writing after 10 seconds, and update every 0.1 seconds
-            with ProgressBar(
-                minimum=0.1,
-                dt=float(os.environ.get("GEB_OVERRIDE_PROGRESSBAR_DT", 0.1)),
-            ):
-                store = to_zarr_partial()
-        else:
-            store = to_zarr_partial()
+        # Open the target array in the Zarr store for writing
+        target = zarr.open_array(
+            store=tmp_zarr,
+            zarr_format=3,
+            path=da.name,
+            mode="r+",
+        )
+        store_target = cast(Any, target)
 
-        store.close()
+        # When sharding is enabled we rechunk the source data to the shard layout
+        # so each write call covers one shard instead of one storage chunk.
+        da = da.chunk(shard_spec) if shard_spec is not None else da
+        _store_dask_array_blocks(da.data, store_target, progress)
 
-        folder: Path = path.parent
-        folder.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            shutil.rmtree(path)
-        shutil.move(tmp_zarr, folder)
+        if not is_temporary_file:
+            folder: Path = path.parent
+            folder.mkdir(parents=True, exist_ok=True)
+
+            if path.exists():
+                shutil.rmtree(path)
+            shutil.move(tmp_zarr, folder)
+        if is_temporary_file:
+            path = tmp_zarr
 
     da_disk: xr.DataArray = read_zarr(path)
 
@@ -882,11 +1008,11 @@ class AsyncGriddedForcingReader:
 
         # The on-disk chunk size along the time dimension - we always load full chunks
         # from disk (e.g. 7 * 24 = 168 for weekly hourly data).
-        self.time_chunk_size: int = int(self.array.chunks[0])
+        self.time_chunk_size: int = int(self.array.chunks[1])
 
         # Chunk-aligned cache: holds the start index and data for the currently loaded chunk.
         self.current_chunk_start_index: int = -1
-        self.current_chunk_data: ThreeDArrayFloat32 | None = None
+        self.current_chunk_data: TwoDArrayFloat32 | None = None
         # The time-index at which a background preload has been (or is being) fetched.
         self.preloaded_chunk_start_index: int = -1
         self.preloaded_data_future: asyncio.Task | None = None
@@ -909,20 +1035,20 @@ class AsyncGriddedForcingReader:
             self.async_lock = None
             self.io_lock = None
 
-    def load(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
+    def load(self, start_index: int, end_index: int) -> TwoDArrayFloat32:
         """Safe synchronous load (only used if asynchronous=False).
 
         Returns:
             The requested data slice.
         """
         assert isinstance(self.array, zarr.Array)
-        data = self.array[start_index:end_index]
+        data = self.array[:, start_index:end_index]
         assert (
-            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 3
+            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 2
         )
         return data  # ty:ignore[invalid-return-type]
 
-    async def load_await(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
+    async def load_await(self, start_index: int, end_index: int) -> TwoDArrayFloat32:
         """Load data asynchronously via reusable async group.
 
         Returns:
@@ -940,15 +1066,13 @@ class AsyncGriddedForcingReader:
 
             # Try up to 100 times
             for _ in range(attempts):
-                data = await arr.getitem(
-                    (slice(start_index, end_index), slice(None), slice(None))
-                )
+                data = await arr.getitem((slice(None), slice(start_index, end_index)))
 
                 if not np.any(np.isnan(data)):
                     assert (
                         isinstance(data, np.ndarray)
                         and data.dtype == np.float32
-                        and data.ndim == 3
+                        and data.ndim == 2
                     )
                     return data  # ty:ignore[invalid-return-type]
                 print(
@@ -960,7 +1084,7 @@ class AsyncGriddedForcingReader:
                     f"Async load failed after {attempts} attempts for indices {start_index}:{end_index}"
                 )
 
-    async def preload_chunk(self, chunk_start: int) -> ThreeDArrayFloat32 | None:
+    async def preload_chunk(self, chunk_start: int) -> TwoDArrayFloat32 | None:
         """Preload the chunk starting at chunk_start asynchronously.
 
         Args:
@@ -976,7 +1100,7 @@ class AsyncGriddedForcingReader:
 
     async def read_timestep_async(
         self, start_index: int, end_index: int
-    ) -> tuple[ThreeDArrayFloat32, np.datetime64]:
+    ) -> tuple[TwoDArrayFloat32, np.datetime64]:
         """Core async read with chunk-aligned caching and background preloading.
 
         Loads the full on-disk chunk that contains the requested timesteps,
@@ -1021,7 +1145,7 @@ class AsyncGriddedForcingReader:
 
         assert self.async_lock is not None
         async with self.async_lock:
-            chunk_data: ThreeDArrayFloat32 | None = None
+            chunk_data: TwoDArrayFloat32 | None = None
 
             # Cache hit: the required chunk is already in memory.
             if (
@@ -1051,7 +1175,7 @@ class AsyncGriddedForcingReader:
                 chunk_data = await self.load_await(chunk_start, chunk_end)
 
             expected_chunk_len: int = chunk_end - chunk_start
-            if chunk_data.shape[0] != expected_chunk_len:
+            if chunk_data.shape[1] != expected_chunk_len:
                 raise IOError(
                     "Async read returned incomplete data; possible disk contention"
                 )
@@ -1076,7 +1200,7 @@ class AsyncGriddedForcingReader:
                 )
 
             # Slice out only the requested timesteps from the cached chunk.
-            return chunk_data[offset : offset + n], start_date
+            return chunk_data[:, offset : offset + n], start_date
 
     def get_index(self, date: datetime.datetime) -> int:
         """Get the time index for a given datetime.
@@ -1192,7 +1316,7 @@ class AsyncGriddedForcingReader:
                 self.current_chunk_data = self.load(chunk_start, chunk_end)
                 self.current_chunk_start_index = chunk_start
 
-            return self.current_chunk_data[offset : offset + n], start_date
+            return self.current_chunk_data[:, offset : offset + n], start_date
 
     def close(self) -> None:
         """Clean up this instance's async resources."""
@@ -1203,37 +1327,18 @@ class AsyncGriddedForcingReader:
             """Cancel this instance's pending tasks and close async group."""
             if self.preloaded_data_future and not self.preloaded_data_future.done():
                 self.preloaded_data_future.cancel()
-                try:
-                    await self.preloaded_data_future
-                except asyncio.CancelledError:
-                    pass
             # Stop the loop
             asyncio.get_event_loop().stop()
 
         if self.loop and self.loop.is_running():
             try:
-                asyncio.run_coroutine_threadsafe(cleanup(), self.loop).result(timeout=5)
+                # Because we are not writing, we can just cancel the pending preload
+                # task and stop the loop without waiting for it to finish.
+                # This allows for a much faster shutdown, especially if the loop is currently waiting on a slow disk read.
+                asyncio.run_coroutine_threadsafe(cleanup(), self.loop)
             except Exception:
                 pass
-            self.thread.join(timeout=1)
-
-    @property
-    def x(self) -> ArrayFloat64:
-        """The x-coordinates of the grid."""
-        x_array = self.ds["x"]
-        assert isinstance(x_array, zarr.Array)
-        x = x_array[:]
-        assert isinstance(x, np.ndarray) and x.dtype == np.float64 and x.ndim == 1
-        return x  # ty:ignore[invalid-return-type]
-
-    @property
-    def y(self) -> ArrayFloat64:
-        """The y-coordinates of the grid."""
-        y_array = self.ds["y"]
-        assert isinstance(y_array, zarr.Array)
-        y = y_array[:]
-        assert isinstance(y, np.ndarray) and y.dtype == np.float64 and y.ndim == 1
-        return y  # ty:ignore[invalid-return-type]
+            # Don't join the thread - it's a daemon and will die when the process dies
 
 
 class WorkingDirectory:
@@ -1481,6 +1586,7 @@ def fetch_and_save(
     timeout: float | int = 30,
     show_progress: bool = True,
     verbose: bool = True,
+    decompress: str | None = None,
 ) -> bool:
     """Fetches data from a URL and saves it to a file, with a retry mechanism.
 
@@ -1501,15 +1607,20 @@ def fetch_and_save(
         timeout: The timeout in seconds for HTTP requests.
         show_progress: Whether to show a progress bar during download.
         verbose: Whether to print download status messages. Default is True.
+        decompress: The decompression type to use. Supported values are 'bz2'. Default is None.
 
     Returns:
         True if the file was successfully downloaded, False otherwise.
 
     Raises:
         RuntimeError: If the download fails after all retries.
+        ValueError: If an unsupported decompression type is specified.
     """
     if file_path.exists() and not overwrite:
         return True
+
+    if decompress is not None and decompress != "bz2":
+        raise ValueError(f"Unsupported decompression type: {decompress}")
 
     if session is None:
         session = requests.Session()
@@ -1578,14 +1689,27 @@ def fetch_and_save(
                 # Write to the temporary file
                 if show_progress:
                     total_size = int(response.headers.get("content-length", 0))
-                    progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-                    for data in response.iter_content(chunk_size=chunk_size):
-                        temp_file.write(data)
-                        progress_bar.update(len(data))
+                    progress_bar = tqdm(
+                        total=total_size, unit="B", unit_scale=True, leave=False
+                    )
+                    if decompress == "bz2":
+                        decompressor = bz2.BZ2Decompressor()
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(decompressor.decompress(data))
+                            progress_bar.update(len(data))
+                    else:
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(data)
+                            progress_bar.update(len(data))
                     progress_bar.close()
                 else:
-                    for data in response.iter_content(chunk_size=chunk_size):
-                        temp_file.write(data)
+                    if decompress == "bz2":
+                        decompressor = bz2.BZ2Decompressor()
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(decompressor.decompress(data))
+                    else:
+                        for data in response.iter_content(chunk_size=chunk_size):
+                            temp_file.write(data)
 
                 # Close the temporary file
                 temp_file.close()

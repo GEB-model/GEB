@@ -5,8 +5,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from geb.hydrology.landsurface import model as landsurface
-from geb.hydrology.landsurface.model import land_surface_model
+from geb.hydrology import landsurface as landsurface_file
+from geb.hydrology.landsurface.landsurface_model import land_surface_model
 from geb.workflows import balance_check
 
 
@@ -27,7 +27,7 @@ def get_error_cases() -> list[Path]:
 def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) -> None:
     """Test the land surface model with previous error cases."""
     # Set the global N_SOIL_LAYERS variable required by the numba function
-    landsurface.N_SOIL_LAYERS = 6
+    landsurface_file.N_SOIL_LAYERS = 6
 
     # Load the error case data
     with np.load(error_case_path) as data:
@@ -86,7 +86,15 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         out_interflow_h_loss,
         out_gw_recharge_h_loss,
         out_transpiration_h_loss,
+        _,
+        out_top_soil_rise_from_layer_2_m,
+        _,
+        out_top_soil_transpiration_m,
     ) = results
+
+    assert np.all(out_top_soil_rise_from_layer_2_m >= 0.0)
+    assert np.all(out_top_soil_transpiration_m >= 0.0)
+    assert np.all(out_top_soil_transpiration_m <= out_transpiration_m + 1e-6)
 
     # Perform water balance check
     post_water_content_m = inputs["water_content_m"]
@@ -103,8 +111,8 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
             -out_sublimation_m,
             out_interception_evaporation_m,
             out_open_water_evaporation_m,
-            out_runoff_m.sum(axis=0),
-            out_interflow_m.sum(axis=0),
+            out_runoff_m.sum(axis=1),
+            out_interflow_m.sum(axis=1),
             out_groundwater_recharge_m,
             out_bare_soil_evaporation,
             out_transpiration_m,

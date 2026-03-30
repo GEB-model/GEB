@@ -1,7 +1,6 @@
 """Crops data processing and setup methods for GEB."""
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -1252,10 +1251,7 @@ class Crops(BuildModelBase):
             - The first DataArray contains the fraction of each crop to the total cropped area for each year.
             - The second DataArray contains the fraction of irrigated area for each crop for each
         """
-        output_folder = "plot/mirca_crops"
-        os.makedirs(output_folder, exist_ok=True)
-
-        crops = [
+        crops: list[str] = [
             "Wheat",  # 0
             "Maize",  # 1
             "Rice",  # 2
@@ -1277,12 +1273,12 @@ class Crops(BuildModelBase):
             "Others_annual",  # 25,
         ]
 
-        years = ["2000", "2005", "2010", "2015"]
-        irrigation_types = ["ir", "rf"]
+        years: list[str] = ["2000", "2005", "2010", "2015"]
+        irrigation_types: list[str] = ["ir", "rf"]
 
         # Initialize lists to collect DataArrays across years
-        fraction_da_list = []
-        irrigated_fraction_da_list = []
+        fraction_da_list: list[xr.DataArray] = []
+        irrigated_fraction_da_list: list[xr.DataArray] = []
 
         # Initialize a dictionary to store datasets
         crop_data = {}
@@ -1458,7 +1454,7 @@ class Crops(BuildModelBase):
         )
 
         n_cells = grid_id_da.max().item()
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
 
         farmer_cells = sample_from_map(
             grid_id_da.values,
@@ -1588,7 +1584,7 @@ class Crops(BuildModelBase):
         Raises:
             ValueError: If no rotations are found for a crop in a unit or no valid neighbor data is found.
         """
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
 
         MIRCA_unit_grid = self.data_catalog.fetch("mirca2000_unit_grid").read()
         assert isinstance(MIRCA_unit_grid, xr.DataArray)

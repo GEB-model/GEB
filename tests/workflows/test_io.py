@@ -6,14 +6,17 @@ from datetime import datetime
 from pathlib import Path
 from time import sleep, time
 
+import dask.array
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 import zarr.storage
 from zarr.codecs.numcodecs import FixedScaleOffset
 
+import geb.workflows.io as io_module
 from geb.workflows.io import (
     AsyncGriddedForcingReader,
     calculate_scaling,
@@ -203,6 +206,110 @@ def test_io() -> None:
     write_zarr(da, tmp_folder / "test.zarr", crs=4326)
 
 
+def test_write_zarr_uses_shards_as_chunk_multiples() -> None:
+    """Test that shard values are interpreted as multiples of the chunk size.
+
+    Verifies that the public shards argument expresses the number of chunks per
+    shard for each dimension and that the stored Zarr metadata reflects the
+    resulting absolute shard shape.
+    """
+    x = np.linspace(-4, 4, 9)
+    y = np.linspace(7, 0, 8)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 2, "y": 3},
+        progress=False,
+    )
+
+    zarr_array = zarr.open_array(
+        store=tmp_folder / "test.zarr",
+        zarr_format=3,
+        path="test",
+        mode="r",
+    )
+
+    assert zarr_array.chunks == (2, 3)
+    assert zarr_array.shards == (6, 6)
+
+
+def test_write_zarr_rounds_shards_up_to_chunk_multiple() -> None:
+    """Test that shard metadata stays aligned to full chunk multiples.
+
+    Verifies that when a requested shard would otherwise be clipped by the array
+    extent, the stored shard size is rounded up to the smallest full chunk
+    multiple that still covers the dimension.
+    """
+    x = np.linspace(-3.5, 3.5, 8)
+    y = np.linspace(4, 0, 5)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 4, "y": 4},
+        progress=False,
+    )
+
+    zarr_array = zarr.open_array(
+        store=tmp_folder / "test.zarr",
+        zarr_format=3,
+        path="test",
+        mode="r",
+    )
+
+    assert zarr_array.chunks == (2, 3)
+    assert zarr_array.shards == (6, 9)
+
+
+def test_write_zarr_stores_per_shard_when_shards_are_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that write_zarr switches the source write granularity to shards.
+
+    Verifies that enabling sharding causes the block-wise write loop to operate
+    on shard-sized source blocks rather than storage-chunk-sized source blocks.
+    """
+    captured_numblocks: dict[str, tuple[int, ...]] = {}
+
+    original_store_blocks = io_module._store_dask_array_blocks
+
+    def store_blocks_spy(
+        source_array: dask.array.Array, store_target: object, progress: bool
+    ) -> None:
+        captured_numblocks["value"] = source_array.numblocks
+        original_store_blocks(source_array, store_target, progress)
+
+    monkeypatch.setattr(io_module, "_store_dask_array_blocks", store_blocks_spy)
+
+    x = np.linspace(-4, 4, 9)
+    y = np.linspace(7, 0, 8)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 2, "y": 3},
+        progress=False,
+    )
+
+    assert captured_numblocks["value"] == (2, 2)
+
+
 def test_get_window() -> None:
     """Test the get_window function with various bounding box and buffer scenarios.
 
@@ -359,14 +466,14 @@ def zarr_file(varname: str) -> Path:
     periods: int = 100
 
     times: pd.DatetimeIndex = pd.date_range("2000-01-01", periods=periods, freq="D")
-    data: npt.NDArray[np.float32] = np.empty((periods, size, size), dtype=np.float32)
+    data: npt.NDArray[np.float32] = np.empty((size * size, periods), dtype=np.float32)
     for i in range(periods):
-        data[i][:] = i
+        data[:, i] = i
     ds: xr.Dataset = xr.Dataset(
         {
-            varname: (("time", "x", "y"), data),
+            varname: (("idxs", "time"), data),
         },
-        coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)[::-1]},
+        coords={"time": times, "idxs": np.arange(0, size * size)},
     )
 
     store: zarr.storage.LocalStore = zarr.storage.LocalStore(file_path, read_only=False)
@@ -375,7 +482,7 @@ def zarr_file(varname: str) -> Path:
         mode="w",
         encoding={
             varname: {
-                "chunks": (1, size, size),
+                "chunks": (size * size, 1),
                 "fill_value": np.nan,
             }
         },
@@ -500,7 +607,7 @@ def test_read_timestep_sync() -> None:
     assert (data1 == 1).all()
     assert (data2 == 2).all()
     assert data0.dtype == np.float32
-    assert data0.shape == (1, 1000, 1000)
+    assert data0.shape == (1000000, 1)
 
     # Test reading the same timestep twice
     data1_again, _ = reader.read_timestep(datetime(2000, 1, 2))
@@ -530,8 +637,8 @@ def test_read_multiple_timesteps() -> None:
 
     # Read 1 timestep starting from Jan 1
     data_multi, _ = reader_async.read_timestep(datetime(2000, 1, 1), n=1)
-    assert data_multi.shape == (1, 1000, 1000)
-    assert (data_multi[0] == 0).all()
+    assert data_multi.shape == (1000000, 1)
+    assert (data_multi == 0).all()
 
     sleep(2)  # Allow preloading to happen
 
@@ -540,8 +647,8 @@ def test_read_multiple_timesteps() -> None:
     data_multi_next, _ = reader_async.read_timestep(datetime(2000, 1, 2), n=1)
     t1 = time()
     print(f"Async - Load next timestep (should be quick): {t1 - t0:.3f}s")
-    assert data_multi_next.shape == (1, 1000, 1000)
-    assert (data_multi_next[0] == 1).all()
+    assert data_multi_next.shape == (1000000, 1)
+    assert (data_multi_next == 1).all()
 
     reader_async.close()
 
@@ -552,8 +659,8 @@ def test_read_multiple_timesteps() -> None:
 
     # Read 1 timestep starting from Jan 1
     data_multi_sync, _ = reader_sync.read_timestep(datetime(2000, 1, 1), n=1)
-    assert data_multi_sync.shape == (1, 1000, 1000)
-    assert (data_multi_sync[0] == 0).all()
+    assert data_multi_sync.shape == (1000000, 1)
+    assert (data_multi_sync == 0).all()
 
     # Verify that async and sync give same results
     assert np.array_equal(data_multi, data_multi_sync), "Async and sync results differ"
@@ -600,16 +707,15 @@ def zarr_file_hourly(varname: str) -> Path:
     periods: int = n_weeks * HOURLY_CHUNK_SIZE  # 4 weeks of hourly data
 
     times: pd.DatetimeIndex = pd.date_range("2000-01-01", periods=periods, freq="h")
-    data: npt.NDArray[np.float32] = np.empty((periods, size, size), dtype=np.float32)
+    data: npt.NDArray[np.float32] = np.empty((size * size, periods), dtype=np.float32)
     for i in range(periods):
-        data[i, :, :] = float(i)
+        data[:, i] = float(i)
 
     ds: xr.Dataset = xr.Dataset(
-        {varname: (("time", "y", "x"), data)},
+        {varname: (("idxs", "time"), data)},
         coords={
             "time": times,
-            "y": np.arange(size, dtype=np.float64),
-            "x": np.arange(size, dtype=np.float64),
+            "idxs": np.arange(size * size, dtype=np.int64),
         },
     )
 
@@ -619,7 +725,7 @@ def zarr_file_hourly(varname: str) -> Path:
         mode="w",
         encoding={
             varname: {
-                "chunks": (HOURLY_CHUNK_SIZE, size, size),
+                "chunks": (size * size, HOURLY_CHUNK_SIZE),
                 "fill_value": np.nan,
             }
         },
@@ -651,14 +757,14 @@ def test_chunk_aligned_reading_correctness() -> None:
 
         # Day 1: hours 0-23, first slice of chunk 0
         data_day1, _ = reader.read_timestep(datetime(2000, 1, 1), n=hours_per_day)
-        assert data_day1.shape == (hours_per_day, 4, 4)
+        assert data_day1.shape == (16, hours_per_day)
         for h in range(hours_per_day):
-            assert (data_day1[h] == float(h)).all(), f"day1 hour {h} wrong"
+            assert (data_day1[:, h] == float(h)).all(), f"day1 hour {h} wrong"
 
         # Day 2: hours 24-47, still within chunk 0 (served from cache)
         data_day2, _ = reader.read_timestep(datetime(2000, 1, 2), n=hours_per_day)
         for h in range(hours_per_day):
-            assert (data_day2[h] == float(hours_per_day + h)).all(), (
+            assert (data_day2[:, h] == float(hours_per_day + h)).all(), (
                 f"day2 hour {h} wrong"
             )
 
@@ -666,7 +772,7 @@ def test_chunk_aligned_reading_correctness() -> None:
         data_day7, _ = reader.read_timestep(datetime(2000, 1, 7), n=hours_per_day)
         offset_day7: int = 6 * hours_per_day
         for h in range(hours_per_day):
-            assert (data_day7[h] == float(offset_day7 + h)).all(), (
+            assert (data_day7[:, h] == float(offset_day7 + h)).all(), (
                 f"day7 hour {h} wrong"
             )
 
@@ -674,7 +780,7 @@ def test_chunk_aligned_reading_correctness() -> None:
         data_day8, _ = reader.read_timestep(datetime(2000, 1, 8), n=hours_per_day)
         offset_day8: int = HOURLY_CHUNK_SIZE  # start of chunk 1
         for h in range(hours_per_day):
-            assert (data_day8[h] == float(offset_day8 + h)).all(), (
+            assert (data_day8[:, h] == float(offset_day8 + h)).all(), (
                 f"day8 hour {h} wrong"
             )
 
@@ -683,7 +789,7 @@ def test_chunk_aligned_reading_correctness() -> None:
         data_week3, _ = reader.read_timestep(week3_start, n=hours_per_day)
         offset_week3: int = 2 * HOURLY_CHUNK_SIZE
         for h in range(hours_per_day):
-            assert (data_week3[h] == float(offset_week3 + h)).all(), (
+            assert (data_week3[:, h] == float(offset_week3 + h)).all(), (
                 f"week3 hour {h} wrong"
             )
 
@@ -723,7 +829,7 @@ def test_chunk_aligned_reading_preload_performance() -> None:
     # Verify data correctness.
     offset_day8: int = HOURLY_CHUNK_SIZE
     for h in range(hours_per_day):
-        assert (data_day8[h] == float(offset_day8 + h)).all()
+        assert (data_day8[:, h] == float(offset_day8 + h)).all()
 
     # Read same day again (cache hit) - must be essentially instant.
     t0 = time()
@@ -881,7 +987,7 @@ def test_chunk_aligned_reading_within_same_day() -> None:
     data_c, _ = reader.read_timestep(datetime(2000, 1, 5), n=hours_per_day)
     offset: int = 4 * hours_per_day
     for h in range(hours_per_day):
-        assert (data_c[h] == float(offset + h)).all()
+        assert (data_c[:, h] == float(offset + h)).all()
 
     reader.close()
     shutil.rmtree(hourly_file)
@@ -935,9 +1041,9 @@ def test_first_request_mid_chunk() -> None:
 
         # Cold cache, first request lands in the middle of chunk 1.
         data, _ = reader.read_timestep(mid_chunk_start, n=hours_per_day)
-        assert data.shape == (hours_per_day, 4, 4)
+        assert data.shape == (16, hours_per_day)
         for h in range(hours_per_day):
-            assert (data[h] == float(start_value + h)).all(), (
+            assert (data[:, h] == float(start_value + h)).all(), (
                 f"async={asynchronous} hour {h}: expected {start_value + h}"
             )
 
@@ -945,9 +1051,9 @@ def test_first_request_mid_chunk() -> None:
         # hour 216 = chunk 1 offset 48. 216 % 24 == 0.
         next_day_start: datetime = datetime(2000, 1, 10, 0)  # hour 216
         data_next, _ = reader.read_timestep(next_day_start, n=hours_per_day)
-        assert data_next.shape == (hours_per_day, 4, 4)
+        assert data_next.shape == (16, hours_per_day)
         for h in range(hours_per_day):
-            assert (data_next[h] == float(216 + h)).all(), (
+            assert (data_next[:, h] == float(216 + h)).all(), (
                 f"async={asynchronous} intra-chunk hour {h}: expected {216 + h}"
             )
 

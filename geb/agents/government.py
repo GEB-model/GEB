@@ -310,6 +310,24 @@ class Government(AgentBaseClass):
             forest_mean = arr[:, forest_mask].mean(axis=1)
             arr[:, suitability_HRU] = forest_mean[:, np.newaxis]
 
+        water_sat = hydrology.HRU.var.water_content_saturated_m
+        water_res = hydrology.HRU.var.water_content_residual_m
+        wc = hydrology.HRU.var.water_content_m
+
+        # Case 1: wc > new saturation — route excess to topwater (water conserved).
+        excess = np.maximum(0.0, wc[:, suitability_HRU] - water_sat[:, suitability_HRU])
+        wc[:, suitability_HRU] -= excess
+        hydrology.HRU.var.topwater_m[suitability_HRU] += excess.sum(axis=0)
+
+        # Case 2: wc < new residual — raise wc to residual, sourcing from topwater (water conserved).
+        deficit = np.maximum(
+            0.0, water_res[:, suitability_HRU] - wc[:, suitability_HRU]
+        )
+        wc[:, suitability_HRU] += deficit
+        topwater = hydrology.HRU.var.topwater_m[suitability_HRU]
+        drawn = np.minimum(deficit.sum(axis=0), topwater)
+        hydrology.HRU.var.topwater_m[suitability_HRU] -= drawn
+
         self.remove_farmers_from_converted_forest_areas(suitability_HRU)
 
         output_folder = self.model.output_folder / "forest_planting"

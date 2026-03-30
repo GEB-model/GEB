@@ -8,7 +8,6 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import zarr.storage
@@ -104,7 +103,7 @@ WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
     },
 }
 
-WATER_BALANCE_REPORT_CONFIG = {
+WATER_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology": {
         "_water_balance_storage": {
             "varname": ".current_storage",
@@ -146,6 +145,11 @@ WATER_BALANCE_REPORT_CONFIG = {
             "type": "HRU",
             "function": "weightedsum",
         },
+        "_water_balance_potential_evapotranspiration": {
+            "varname": ".potential_evapotranspiration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
         "_water_balance_sublimation_or_deposition": {
             "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
@@ -153,6 +157,51 @@ WATER_BALANCE_REPORT_CONFIG = {
         },
         "_water_balance_interflow": {
             "varname": ".interflow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_storage": {
+            "varname": "HRU.var.water_content_m[0]",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_precipitation": {
+            "varname": ".rain_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_snow": {
+            "varname": ".snow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_runoff": {
+            "varname": ".runoff_m_daily",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_evaporation": {
+            "varname": ".top_soil_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_infiltration": {
+            "varname": ".top_soil_infiltration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_rise_from_layer_2": {
+            "varname": ".top_soil_rise_from_layer_2_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_percolation_to_layer_2": {
+            "varname": ".top_soil_percolation_to_layer_2_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_transpiration": {
+            "varname": ".top_soil_transpiration_m",
             "type": "HRU",
             "function": "weightedsum",
         },
@@ -187,7 +236,52 @@ WATER_BALANCE_REPORT_CONFIG = {
     },
 }
 
-ENERGY_BALANCE_REPORT_CONFIG = {
+WATER_STORAGE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
+    "hydrology.landsurface": {
+        "_water_storage_soil_water_content_layer_0_m": {
+            "varname": "HRU.var.water_content_m[0]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_1_m": {
+            "varname": "HRU.var.water_content_m[1]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_2_m": {
+            "varname": "HRU.var.water_content_m[2]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_3_m": {
+            "varname": "HRU.var.water_content_m[3]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_4_m": {
+            "varname": "HRU.var.water_content_m[4]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_5_m": {
+            "varname": "HRU.var.water_content_m[5]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+    },
+}
+
+OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
+    "hydrology.landsurface": {
+        "_outflow_plot_top_soil_frozen_fraction": {
+            "varname": ".top_soil_frozen_fraction",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+    },
+}
+
+ENERGY_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology.landsurface": {
         "_energy_balance_soil_temperature_layer_0_C": {
             "varname": ".soil_temperature_C[0]",
@@ -702,6 +796,10 @@ class Reporter:
                             report_config,
                             {"hydrology.routing": outflow_reporters},
                         )
+                        report_config = multi_level_merge(
+                            report_config,
+                            OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
+                        )
                     elif module_name == "_water_circle":
                         if module_values is True:
                             report_config = multi_level_merge(
@@ -713,6 +811,12 @@ class Reporter:
                             report_config = multi_level_merge(
                                 report_config,
                                 WATER_BALANCE_REPORT_CONFIG,
+                            )
+                    elif module_name == "_water_storage":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                WATER_STORAGE_REPORT_CONFIG,
                             )
                     elif module_name == "_energy_balance":
                         if module_values is True:
@@ -1250,14 +1354,6 @@ class Reporter:
                     folder.mkdir(parents=True, exist_ok=True)
 
                     df.to_csv(folder / (name + ".csv"))
-
-                    fig, ax = plt.subplots(figsize=(30, 5))
-                    fig.tight_layout()
-
-                    df.plot(y=name, title=f"{module_name}.{name}", ax=ax)
-                    plt.grid()
-                    plt.savefig(folder / (name + ".svg"), format="svg")
-                    plt.close()
 
     def report(
         self, module: Module, local_variables: dict[str, Any], module_name: str

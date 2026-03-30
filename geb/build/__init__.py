@@ -27,7 +27,6 @@ import xarray as xr
 import yaml
 import zarr
 from affine import Affine
-from hydromt.data_catalog import DataCatalog
 from packaging.version import Version
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
@@ -35,7 +34,7 @@ from shapely.geometry import Point, shape
 from shapely.ops import unary_union
 
 from geb import GEB_PACKAGE_DIR, __version__
-from geb.build.data_catalog import NewDataCatalog
+from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
 from geb.build.version_updates import VERSION_UPDATES
 from geb.workflows.io import (
@@ -45,7 +44,15 @@ from geb.workflows.io import (
     write_params,
     write_table,
 )
-from geb.workflows.raster import clip_region, clip_with_grid, full_like, repeat_grid
+from geb.workflows.raster import (
+    clip_region,
+    clip_with_grid,
+    create_temp_zarr,
+    full_like,
+    interpolate_na_along_dim as interpolate_na_along_dim,
+    repeat_grid,
+    snap_to_grid as snap_to_grid,
+)
 
 from ..workflows.io import (
     read_zarr,
@@ -74,8 +81,6 @@ GDAL_HTTP_ENV_OPTS = {
     "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
-
-XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
@@ -174,7 +179,7 @@ def boolean_mask_to_graph(
     return G
 
 
-def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
+def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     """Create a directed graph for the river network.
 
     Args:
@@ -218,7 +223,7 @@ def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
 
 
 def get_subbasin_id_from_coordinate(
-    data_catalog: NewDataCatalog, lon: float, lat: float
+    data_catalog: DataCatalog, lon: float, lat: float
 ) -> int:
     """Find the subbasin ID for a given coordinate.
 
@@ -260,7 +265,7 @@ def get_subbasin_id_from_coordinate(
 
 
 def get_sink_subbasin_id_for_geom(
-    data_catalog: NewDataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
+    data_catalog: DataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
 ) -> list[int]:
     """Find all sink subbasins that intersect with the given geometry.
 
@@ -305,7 +310,7 @@ def get_sink_subbasin_id_for_geom(
 
 
 def get_all_downstream_subbasins_in_geom(
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     geom: gpd.GeoDataFrame,
     ocean_outlets_only: bool,
     logger: logging.Logger,
@@ -376,7 +381,7 @@ def get_all_downstream_subbasins_in_geom(
 
 
 def get_subbasin_upstream_areas(
-    data_catalog: NewDataCatalog, subbasin_ids: list[int]
+    data_catalog: DataCatalog, subbasin_ids: list[int]
 ) -> dict[int, float]:
     """Get upstream areas for a list of subbasins with optimized batch loading.
 
@@ -503,7 +508,7 @@ def calculate_bbox_efficiency(
 
 
 def cluster_subbasins_following_coastline(
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     subbasin_ids: list[int],
     target_area_km2: float,
     logger: logging.Logger,
@@ -640,7 +645,9 @@ def cluster_subbasins_following_coastline(
             outlet_coords = [
                 (oid, coords_array[subbasin_to_idx[oid]]) for oid in remaining_outlets
             ]
-            outlet_coords.sort(key=lambda x: (-x[1][1], -x[1][0]))  # Sort by -lat, -lon
+            outlet_coords.sort(
+                key=lambda x: (-x[1][1], -x[1][0])
+            )  # Sort by -lat, -lon (top-right corner)
             start_outlet = outlet_coords[0][0]
             logger.info(f"  Starting outlet: {start_outlet} (top-right corner)")
         else:
@@ -946,7 +953,7 @@ def cluster_subbasins_following_coastline(
 
 def save_clusters_to_geoparquet(
     clusters: list[list[int]],
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     output_path: Path,
     cluster_prefix: str = "cluster",
 ) -> None:
@@ -1025,7 +1032,7 @@ def save_clusters_to_geoparquet(
 
 def create_cluster_visualization_map(
     clusters: list[list[int]],
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     river_graph: networkx.DiGraph,
     output_path: str | Path,
     cluster_prefix: str = "cluster",
@@ -1262,7 +1269,7 @@ def create_multi_basin_configs(
     clusters: list[list[int]],
     working_directory: Path,
     cluster_prefix: str = "cluster",
-    data_catalog: NewDataCatalog | None = None,
+    data_catalog: DataCatalog | None = None,
     river_graph: networkx.DiGraph | None = None,
 ) -> list[Path]:
     """Create separate config files and directories for each cluster of subbasins.
@@ -1282,14 +1289,12 @@ def create_multi_basin_configs(
     # Create full build.yml in init_multiple_dir directory
     print("Creating build.yml in main init multiple directory...")
     build_config_path = working_directory / "build.yml"
-    # Read build config from geul example and automatically copy it
-    geul_build_path = GEB_PACKAGE_DIR / "examples" / "geul" / "build.yml"
 
-    print(f"Reading build configuration from: {geul_build_path}")
-
-    # Copy geul build.yml content directly to init_multiple_dir build.yml
-    with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
-        dst.write(src.read())
+    # Write a build.yml that inherits from the geul example, mirroring
+    # how model.yml inherits from reasonable_default_config.yml
+    build_config_content = 'inherits: "{GEB_PACKAGE_DIR}/examples/geul/build.yml"\n'
+    with open(build_config_path, "w") as f:
+        f.write(build_config_content)
 
     print(f"Created build.yml in {working_directory}")
 
@@ -1425,7 +1430,7 @@ def calculate_cluster_basin_area(
 
     # Load geometries for subbasins - only load geometry and area columns for performance
     cluster_geometries = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,  # type: ignore[attr-defined]
+        data_catalog.fetch("merit_basins_catchments").path,
         filters=[("COMID", "in", subbasins_to_merge)],
         columns=["COMID", "geometry"],  # Only load required columns
     ).set_index("COMID")
@@ -1442,7 +1447,7 @@ def calculate_cluster_basin_area(
 
 def save_clusters_as_merged_geometries(
     clusters: list[list[int]],
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     river_graph: networkx.DiGraph,
     output_path: Path,
     cluster_prefix: str = "cluster",
@@ -1622,41 +1627,6 @@ def save_clusters_as_merged_geometries(
     # Save to geoparquet
     print(f"Saving to {output_path}...")
     merged_gdf.to_parquet(output_path)
-
-
-def get_touching_subbasins(
-    data_catalog: DataCatalog, subbasins: gpd.GeoDataFrame
-) -> gpd.GeoDataFrame:
-    """Find all subbasins that touch the given subbasins.
-
-    Args:
-        data_catalog: Data catalog containing the MERIT basins.
-        subbasins: GeoDataFrame containing the subbasins to find touching subbasins for.
-
-    Returns:
-        A GeoDataFrame containing all subbasins that touch the given subbasins.
-    """
-    bbox = subbasins.total_bounds
-    buffer: float = 0.1
-    buffered_bbox = (
-        bbox[0] - buffer,
-        bbox[1] - buffer,
-        bbox[2] + buffer,
-        bbox[3] + buffer,
-    )
-    potentially_touching_basins = gpd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_cat").path,
-        bbox=buffered_bbox,
-        filters=[
-            ("COMID", "not in", subbasins.index.tolist()),
-        ],
-    )
-    # get all touching subbasins
-    touching_subbasins = potentially_touching_basins[
-        potentially_touching_basins.geometry.touches(subbasins.union_all())
-    ]
-
-    return touching_subbasins.set_index("COMID")
 
 
 def get_coastline_nodes(
@@ -1983,24 +1953,17 @@ class GEBModel(
         self,
         logger: logging.Logger,
         root: Path,
-        data_catalog: str | None = None,
         epsg: int = 4326,
-        data_provider: str = "default",
     ) -> None:
         """Initialize the GEB build model.
 
         Args:
             logger: Logger to use for logging.
             root: Root directory for the model build. If None, the current working directory is used.
-            data_catalog: List of data catalogs to use. If None, the default data catalogs are used.
             epsg: EPSG code for the model grid. Default is 4326 (WGS84).
-            data_provider: Data provider to use for the data catalog. Default is "default".
         """
         self._logger = logger
         build_method.logger = logger
-        self._old_data_catalog = DataCatalog(
-            data_libs=[data_catalog], logger=self._logger, fallback_lib=None
-        )
 
         Hydrography.__init__(self)
         Forcing.__init__(self)
@@ -2012,14 +1975,12 @@ class GEBModel(
 
         self.root = root
         self.epsg = epsg
-        self.data_provider = data_provider
-        self._data_catalog = NewDataCatalog()
+        self._data_catalog = DataCatalog(logger=logger)
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
         self.grid = xr.Dataset()
         self.subgrid = xr.Dataset()
-        self.region_subgrid = xr.Dataset()
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
@@ -2101,26 +2062,14 @@ class GEBModel(
     def logger(self, value: logging.Logger) -> None:
         self._logger = value
         build_method.logger = value
-        # Ensure that child classes use the updated logger
-        if hasattr(self, "_old_data_catalog"):
-            self._old_data_catalog.logger = value
 
     @property
-    def old_data_catalog(self) -> DataCatalog:
-        """Get the data catalog."""
-        return self._old_data_catalog
-
-    @old_data_catalog.setter
-    def old_data_catalog(self, value: DataCatalog) -> None:
-        self._old_data_catalog: DataCatalog = value
-
-    @property
-    def data_catalog(self) -> NewDataCatalog:
+    def data_catalog(self) -> DataCatalog:
         """Get the new data catalog."""
         return self._data_catalog
 
     @data_catalog.setter
-    def data_catalog(self, value: NewDataCatalog) -> None:
+    def data_catalog(self, value: DataCatalog) -> None:
         self._data_catalog = value
 
     @property
@@ -2140,15 +2089,6 @@ class GEBModel(
     @subgrid.setter
     def subgrid(self, value: xr.Dataset) -> None:
         self._subgrid = value
-
-    @property
-    def region_subgrid(self) -> xr.Dataset:
-        """Get the region subgrid."""
-        return self._region_subgrid
-
-    @region_subgrid.setter
-    def region_subgrid(self, value: xr.Dataset) -> None:
-        self._region_subgrid = value
 
     @property
     def geom(self) -> DelayedReader:
@@ -2384,7 +2324,7 @@ class GEBModel(
             # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
-                f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
+                f"Approximate riverine basin size: {round(geom.to_crs('ESRI:54009').area.sum() / 1e6, 2)} km2"
             )
 
             riverine_mask = create_riverine_mask(ldd, ldd_network, geom)
@@ -2638,7 +2578,10 @@ class GEBModel(
         # the original resolution is 3 arcseconds, thus we divide by 3
         scale_factor: int = target_resolution_arcsec // 3
 
-        self.logger.info("Coarsening hydrography")
+        self.logger.info(
+            "Coarsening drainage network to resolution %d arcseconds",
+            target_resolution_arcsec,
+        )
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
         flow_raster_upscaled, idxs_out = flow_raster.upscale(
             scale_factor=scale_factor,
@@ -2725,8 +2668,7 @@ class GEBModel(
                 + np.arange(mask.shape[1] * subgrid_factor) * dst_transform.a,
             },
             attrs={"_FillValue": None},
-        )
-
+        ).chunk({"x": -1, "y": -1})
         self.set_subgrid(submask, name="mask")
 
     @build_method(required=True)
@@ -2826,45 +2768,6 @@ class GEBModel(
             return "ssp585"
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
-
-    def setup_coastal_water_levels(
-        self,
-    ) -> None:
-        """Sets up coastal water level data from the GTSM dataset.
-
-        Filters the dataset to include only stations within the model bounds,
-        and ensures that the time dimension is consistent.
-        """
-        water_levels = self.old_data_catalog.get_dataset("GTSM")
-        assert isinstance(water_levels, xr.DataArray)
-        assert (
-            water_levels.time.diff("time").astype(np.int64)
-            == (water_levels.time[1] - water_levels.time[0]).astype(np.int64)
-        ).all()
-        # convert to geodataframe
-        stations = gpd.GeoDataFrame(
-            water_levels.stations,
-            geometry=gpd.points_from_xy(
-                water_levels.station_x_coordinate, water_levels.station_y_coordinate
-            ),
-        )
-        # filter all stations within the bounds, considering a buffer
-        station_ids = stations.cx[
-            self.bounds[0] - 0.1 : self.bounds[2] + 0.1,
-            self.bounds[1] - 0.1 : self.bounds[3] + 0.1,
-        ].index.values
-
-        water_levels = water_levels.sel(stations=station_ids)
-
-        assert len(water_levels.stations) > 0, (
-            "No stations found in the region. If no stations should be set, set include_coastal_area=False"
-        )
-
-        self.set_other(
-            water_levels,
-            name="waterlevels",
-            time_chunksize=24 * 6,  # 10 minute data
-        )
 
     @build_method(required=True)
     def setup_damage_parameters(
@@ -3022,6 +2925,10 @@ class GEBModel(
         """Path to the progress file that contains the build progress."""
         return Path(self.root, "progress.txt")
 
+    def write_build_complete(self) -> None:
+        """Writes a file that indicates that the build is complete."""
+        self.build_complete_path.write_text("Build complete.")
+
     @property
     def build_complete_path(self) -> Path:
         """Path to the file that indicates that the build is complete."""
@@ -3068,7 +2975,6 @@ class GEBModel(
                 "dict": {},
                 "grid": {},
                 "subgrid": {},
-                "region_subgrid": {},
                 "other": {},
             }
         else:
@@ -3130,20 +3036,6 @@ class GEBModel(
             data: xr.DataArray = read_zarr(Path(self.root) / fn)
             self.set_subgrid(data, name=name, write=False)
 
-    def read_region_subgrid(self) -> None:
-        """Reads all region subgrid data arrays from disk based on the file library."""
-        # first read and set the mask. This is required.
-        region_subgrid_files: dict[str, Path] = self.files["region_subgrid"]
-        if len(region_subgrid_files) == 0:
-            return
-        mask: xr.DataArray = read_zarr(Path(self.root) / region_subgrid_files["mask"])
-        self.set_region_subgrid(mask, name="mask", write=False)
-        for name, fn in self.files["region_subgrid"].items():
-            if name == "mask":  # mask already read
-                continue
-            data: xr.DataArray = read_zarr(Path(self.root) / fn)
-            self.set_region_subgrid(data, name=name, write=False)
-
     def read_other(self) -> None:
         """Reads all "other" data arrays from disk based on the file library."""
         for name, fn in self.files["other"].items():
@@ -3163,7 +3055,6 @@ class GEBModel(
 
             self.read_subgrid()
             self.read_grid()
-            self.read_region_subgrid()
 
             self.read_other()
 
@@ -3172,8 +3063,6 @@ class GEBModel(
         da: xr.DataArray,
         name: str,
         write: bool = True,
-        x_chunksize: int = XY_CHUNKSIZE,
-        y_chunksize: int = XY_CHUNKSIZE,
         time_chunksize: int = 1,
         **kwargs: Any,
     ) -> xr.DataArray:
@@ -3187,10 +3076,6 @@ class GEBModel(
             da: The data array to set.
             name: The name of the data array.
             write: If True, write the data array to disk. Defaults to True.
-            x_chunksize: The chunk size in the x dimension for writing to zarr.
-                Defaults to XY_CHUNKSIZE.
-            y_chunksize: The chunk size in the y dimension for writing to zarr.
-                Defaults to XY_CHUNKSIZE.
             time_chunksize: The chunk size in the time dimension for writing to zarr.
                 Defaults to 1.
             **kwargs: Additional keyword arguments to pass to write_zarr.
@@ -3212,9 +3097,6 @@ class GEBModel(
             da: xr.DataArray = write_zarr(
                 da,
                 fp_with_root,
-                x_chunksize=x_chunksize,
-                y_chunksize=y_chunksize,
-                time_chunksize=time_chunksize,
                 crs=da.rio.crs,
                 **kwargs,
             )
@@ -3228,21 +3110,19 @@ class GEBModel(
         data: xr.DataArray,
         name: str,
         write: bool,
-        x_chunksize: int = XY_CHUNKSIZE,
-        y_chunksize: int = XY_CHUNKSIZE,
+        **kwargs: Any,
     ) -> xr.Dataset:
         """Add data to grid dataset.
 
         All layers of grid must have identical spatial coordinates.
 
         Args:
-            grid_name: name of the grid, e.g. "grid", "subgrid", "region_subgrid"
+            grid_name: name of the grid, e.g. "grid", "subgrid"
             grid: the gridded dataset itself
             data: the data to add to the grid
             write: if True, write the data to disk
             name: the name of the layer that will be added to the grid.
-            x_chunksize: the chunk size in the x dimension for writing to zarr
-            y_chunksize: the chunk size in the y dimension for writing to zarr
+            **kwargs: additional keyword arguments to pass to write_zarr
 
         Returns:
             grid: the updated grid with the new layer addedå
@@ -3263,8 +3143,17 @@ class GEBModel(
             # when updating, it is possible that the mask already exists.
             if name != "mask":
                 # if the mask exists, mask the data, saving some valuable space on disk
+                if data.chunks is not None and (
+                    len(data.chunksizes["x"]) != 1 or len(data.chunksizes["y"]) != 1
+                ):
+                    # if the data is chunked, we need to chunk the mask in the same way before applying it
+                    mask: xr.DataArray = grid["mask"].chunk(
+                        {"x": data.chunksizes["x"], "y": data.chunksizes["y"]}
+                    )
+                else:
+                    mask: xr.DataArray = grid["mask"]
                 data_ = xr.where(
-                    ~grid["mask"],
+                    ~mask,
                     data,
                     data.attrs["_FillValue"] if data.dtype != bool else False,
                     keep_attrs=True,
@@ -3276,20 +3165,34 @@ class GEBModel(
         if write:
             fn = Path(grid_name) / (name + ".zarr")
             self.logger.info(f"Writing file {fn}")
-            data = write_zarr(
-                data,
-                path=self.root / fn,
-                x_chunksize=x_chunksize,
-                y_chunksize=y_chunksize,
-                crs=4326,
-            )
+            if data.chunks is not None and (
+                len(data.chunksizes["x"]) != 1 or len(data.chunksizes["y"]) != 1
+            ):
+                with create_temp_zarr(
+                    data,
+                    name=grid_name + "_" + "tmp",
+                ) as tmp_zarr_path:
+                    del data
+                    data: xr.DataArray = write_zarr(
+                        tmp_zarr_path.chunk({"x": -1, "y": -1}),
+                        path=self.root / fn,
+                        crs=4326,
+                        **kwargs,
+                    )
+            else:
+                data: xr.DataArray = write_zarr(
+                    data,
+                    path=self.root / fn,
+                    crs=4326,
+                    **kwargs,
+                )
             self.files[grid_name][name] = Path(grid_name) / (name + ".zarr")
 
         grid[name] = data
         return grid
 
     def set_grid(
-        self, data: xr.DataArray, name: str, write: bool = True
+        self, data: xr.DataArray, name: str, write: bool = True, **kwargs: Any
     ) -> xr.DataArray:
         """Set a new grid layer.
 
@@ -3301,6 +3204,7 @@ class GEBModel(
             data: The data to add to the grid. Must have the same spatial coordinates
             name: The name of the layer to add to the grid.
             write: If True, write the data to disk. Defaults to True.
+            **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
             The added grid layer. The returned layer is read from disk if write=True, so
@@ -3310,7 +3214,11 @@ class GEBModel(
         return self.grid[name]
 
     def set_subgrid(
-        self, data: xr.DataArray, name: str, write: bool = True
+        self,
+        data: xr.DataArray,
+        name: str,
+        write: bool = True,
+        **kwargs: Any,
     ) -> xr.DataArray:
         """Set a new subgrid layer.
 
@@ -3323,43 +3231,21 @@ class GEBModel(
                 as the existing subgrid.
             name: The name of the layer to add to the subgrid.
             write: If True, write the data to disk. Defaults to True.
+            **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
             The added subgrid layer. The returned layer is read from disk if write=True, so
             it is not the same object as the input data.
         """
         self.subgrid = self._set_grid(
-            "subgrid", self.subgrid, data, write=write, name=name
-        )
-        return self.subgrid[name]
-
-    def set_region_subgrid(
-        self, data: xr.DataArray, name: str, write: bool = True
-    ) -> xr.DataArray:
-        """Set a new region subgrid layer.
-
-        When the first layer is added to the region subgrid, it must be the mask layer.
-        This layer is used to define the spatial extent of the region subgrid and set
-        the active cells.
-
-        Args:
-            data: The data to add to the region subgrid. Must have the same spatial coordinates
-                as the existing region subgrid.
-            name: The name of the layer to add to the region subgrid.
-            write: If True, write the data to disk. Defaults to True.
-
-        Returns:
-            The added region subgrid layer. The returned layer is read from disk if write=True, so
-            it is not the same object as the input data.
-        """
-        self.region_subgrid = self._set_grid(
-            "region_subgrid",
-            self.region_subgrid,
+            "subgrid",
+            self.subgrid,
             data,
             write=write,
             name=name,
+            **kwargs,
         )
-        return self.region_subgrid[name]
+        return self.subgrid[name]
 
     @property
     def subgrid_factor(self) -> int:
@@ -3518,7 +3404,9 @@ class GEBModel(
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        build_method.validate_methods(methods, validate_order=validate_order)
+        methods = build_method.validate_methods(
+            methods, validate_order=validate_order, fix_order_if_broken=True
+        )
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (
@@ -3538,13 +3426,42 @@ class GEBModel(
                         f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
                     )
 
+        build_run_started_at: datetime = datetime.now()
+
+        # For cluster builds (large_scale6/<cluster>/<scenario>/<input_folder>),
+        # detect the top-level model dir by looking for model.yml three levels up.
+        root_abs: Path = Path(self.root).resolve()
+        scenario_dir: Path = root_abs.parent
+        cluster_dir: Path = scenario_dir.parent
+        model_dir: Path = cluster_dir.parent
+        stats_path: Path | None = None
+        cluster_name_for_stats: str = ""
+        if record_progress and (model_dir / "model.yml").exists():
+            cluster_name_for_stats = cluster_dir.name
+            # Each cluster writes its own CSV to avoid corrupt conditions when
+            # multiple Snakemake jobs build clusters in parallel.
+            stats_path = (
+                model_dir / "build_memory_stats" / f"{cluster_name_for_stats}.csv"
+            )
+
         for method in methods:
             if method in completed_methods:
                 self.logger.info(f"Skipping already completed method: {method}")
                 continue
 
             kwargs = {} if methods[method] is None else methods[method]
-            self.run_method(method, **kwargs)
+            try:
+                self.run_method(method, **kwargs)
+            finally:
+                # Write memory stats after every method regardless of success or
+                # failure so partial results survive job crashes.
+                if stats_path is not None:
+                    build_method.write_build_stats(
+                        stats_path=stats_path,
+                        cluster_name=cluster_name_for_stats,
+                        run_timestamp=build_run_started_at,
+                        cluster_dir=scenario_dir,  # measure subdirs of base/, not input/
+                    )
             self.write_file_library()
 
             if record_progress:
@@ -3555,7 +3472,7 @@ class GEBModel(
 
         self.logger.info("Finished!")
 
-        build_method.log_time_taken()
+        build_method.log_statistics()
 
     def build(
         self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
@@ -3605,7 +3522,7 @@ class GEBModel(
             continue_=continue_,
         )
 
-        self.build_complete_path.write_text("Build complete")
+        self.write_build_complete()
 
     def update(
         self,

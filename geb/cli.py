@@ -2,25 +2,24 @@
 
 import datetime
 import functools
+import inspect
 import json
 import subprocess
 import sys
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import click
 
 from geb import GEB_PACKAGE_DIR, __version__
-from geb.build.data_catalog import NewDataCatalog
+from geb.build.data_catalog import DataCatalog
 from geb.evaluate import Evaluate
 from geb.runner import (
     ALTER_FROM_MODEL_DEFAULT,
     BUILD_DEFAULT,
     CONFIG_DEFAULT,
-    DATA_CATALOG_DEFAULT,
-    DATA_PROVIDER_DEFAULT,
-    DATA_ROOT_DEFAULT,
+    CORES_DEFAULT,
     OPTIMIZE_DEFAULT,
     PROFILE_RAM_DEFAULT,
     PROFILE_SPEED_DEFAULT,
@@ -29,6 +28,8 @@ from geb.runner import (
     WORKING_DIRECTORY_DEFAULT,
     alter_fn,
     build_fn,
+    clean_fn,
+    create_logger,
     init_fn,
     init_multiple_fn,
     run_model_with_method,
@@ -43,7 +44,60 @@ from geb.workflows.raster import rechunk_zarr_file
 IS_WINDOWS = sys.platform == "win32"
 
 
-@click.group()
+def get_available_evaluation_methods() -> list[str]:
+    """Return the public evaluation methods available through ``geb evaluate``.
+
+    Returns:
+        Sorted list of fully-qualified evaluation method names.
+    """
+    evaluator = Evaluate(cast(Any, None))
+    available_methods: list[str] = []
+
+    for sub_name in evaluator.sub_evaluators:
+        sub_evaluator = getattr(evaluator, sub_name)
+
+        # This returns a list of (name, value) tuples for methods only
+        methods = inspect.getmembers(sub_evaluator, predicate=inspect.ismethod)
+
+        for attr_name, _ in methods:
+            if not attr_name.startswith("_"):
+                available_methods.append(f"{sub_name}.{attr_name}")
+
+    return sorted(available_methods)
+
+
+def format_available_evaluation_methods(methods: list[str]) -> str:
+    """Format evaluation methods for CLI help text.
+
+    Args:
+        methods: Fully-qualified evaluation method names.
+
+    Returns:
+        Multi-line bullet list for CLI help output.
+    """
+    if not methods:
+        return "  - No evaluation methods available."
+
+    return "\n".join(f"  - {method_name}" for method_name in methods)
+
+
+AVAILABLE_EVALUATION_METHODS: list[str] = get_available_evaluation_methods()
+AVAILABLE_EVALUATION_METHODS_HELP: str = format_available_evaluation_methods(
+    AVAILABLE_EVALUATION_METHODS
+)
+EVALUATE_HELP = (
+    "Evaluate model, for example by comparing observed and simulated discharge.\n\n"
+    "Accepts additional parameter assignments in the form `--key value` or "
+    "`--key=value` to pass to the evaluation method. Strings `true` and "
+    "`false` (case-insensitive) are converted to booleans.\n\n"
+    "\b\n"
+    "Available methods:\n"
+    f"{AVAILABLE_EVALUATION_METHODS_HELP}\n\n"
+    "Use `geb evaluate [METHOD] --help` for method-specific documentation."
+)
+
+
+@click.group(help="Command line interface for GEB.")
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
 def cli(context: click.core.Context) -> None:
@@ -70,7 +124,6 @@ def click_config(func: Callable[..., Any]) -> Callable[..., Any]:
 
     @click.option(
         "--config",
-        "-c",
         type=click.Path(path_type=Path),
         default=Path(CONFIG_DEFAULT),
         help=f"Path of the model configuration file. Defaults to '{CONFIG_DEFAULT}'.",
@@ -122,6 +175,72 @@ def working_directory_option(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def universal_options(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator to add universal options to a click command.
+
+    Useful to add the same options to multiple commands.
+
+    Args:
+        func: Function to decorate.
+
+    Returns:
+        Decorated function.
+    """
+
+    @click_config
+    @working_directory_option
+    @click.option(
+        "--profile-speed",
+        is_flag=True,
+        default=PROFILE_SPEED_DEFAULT,
+        help="Run GEB with speed profiling. Stats are saved in the profiling directory.",
+    )
+    @click.option(
+        "--profile-ram",
+        is_flag=True,
+        default=PROFILE_RAM_DEFAULT,
+        help="Run GEB with RAM profiling (using memray). A .bin file is saved in the profiling directory. Not supported on Windows."
+        if not IS_WINDOWS
+        else "RAM profiling is not supported on Windows.",
+    )
+    @click.option(
+        "--optimize",
+        is_flag=True,
+        default=OPTIMIZE_DEFAULT,
+        help="Run GEB in optimized mode, skipping asserts and water balance checks.",
+    )
+    @click.option(
+        "--timing",
+        is_flag=True,
+        default=TIMING_DEFAULT,
+        help="Run GEB with timing.",
+    )
+    @click.option(
+        "--cores",
+        "-n",
+        type=int,
+        default=CORES_DEFAULT,
+        help="Restrict the number of CPU cores used by the process. Not supported on Windows.",
+    )
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Wrapper function for universal options.
+
+        Returns:
+            The result of the wrapped function.
+
+        Raises:
+            click.ClickException: If RAM profiling is requested on Windows.
+        """
+        if kwargs.get("profile_ram") and IS_WINDOWS:
+            raise click.ClickException(
+                "RAM profiling with memray is not supported on Windows."
+            )
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def click_run_options() -> Any:
     """Decorator to add run options to a click command.
 
@@ -141,34 +260,7 @@ def click_run_options() -> Any:
             Decorated function.
         """
 
-        @click_config
-        @working_directory_option
-        @click.option(
-            "--profile-speed",
-            is_flag=True,
-            default=PROFILE_SPEED_DEFAULT,
-            help="Run GEB with speed profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
-        )
-        @click.option(
-            "--profile-ram",
-            is_flag=True,
-            default=PROFILE_RAM_DEFAULT,
-            help="Run GEB with RAM profiling (using memray). If this option is used a .bin file is saved in the working directory."
-            if not IS_WINDOWS
-            else "RAM profiling is not supported on Windows.",
-        )
-        @click.option(
-            "--optimize",
-            is_flag=True,
-            default=OPTIMIZE_DEFAULT,
-            help="Run GEB in optimized mode, skipping asserts and water balance checks.",
-        )
-        @click.option(
-            "--timing",
-            is_flag=True,
-            default=TIMING_DEFAULT,
-            help="Run GEB with timing.",
-        )
+        @universal_options
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for run options.
@@ -179,14 +271,7 @@ def click_run_options() -> Any:
 
             Returns:
                 The result of the wrapped function.
-
-            Raises:
-                click.ClickException: If RAM profiling is requested on Windows.
             """
-            if kwargs.get("profile_ram") and IS_WINDOWS:
-                raise click.ClickException(
-                    "RAM profiling with memray is not supported on Windows."
-                )
             return func(*args, **kwargs)
 
         return wrapper
@@ -265,49 +350,13 @@ def click_build_options(
 
             {build_config_help_extra}"""
 
-        @click_config
+        @universal_options
         @click.option(
             "--build-config",
             "-b",
             type=click.Path(path_type=Path),
             default=Path(build_config),
             help=build_config_help,
-        )
-        @working_directory_option
-        @click.option(
-            "--data-catalog",
-            "-d",
-            type=click.Path(path_type=Path),
-            default=Path(DATA_CATALOG_DEFAULT),
-            help=f"""Path to data catalog YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to {DATA_CATALOG_DEFAULT}""",
-        )
-        @click.option(
-            "--data-provider",
-            "-p",
-            type=str,
-            default=DATA_PROVIDER_DEFAULT,
-            help="Data variant to use from data catalog (see hydroMT documentation).",
-        )
-        @click.option(
-            "--data-root",
-            "-r",
-            type=click.Path(path_type=Path),
-            default=Path(DATA_ROOT_DEFAULT),
-            help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
-        )
-        @click.option(
-            "--profile-speed",
-            is_flag=True,
-            default=PROFILE_SPEED_DEFAULT,
-            help="Run with speed profiling. If this option is used, profiling stats are saved in the profiling directory.",
-        )
-        @click.option(
-            "--profile-ram",
-            is_flag=True,
-            default=PROFILE_RAM_DEFAULT,
-            help="Run with RAM profiling (using memray). If this option is used, a .bin file is saved in the profiling directory."
-            if not IS_WINDOWS
-            else "RAM profiling is not supported on Windows.",
         )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -319,14 +368,7 @@ def click_build_options(
 
             Returns:
             The result of the wrapped function.
-
-            Raises:
-                click.ClickException: If RAM profiling is requested on Windows.
             """
-            if kwargs.get("profile_ram") and IS_WINDOWS:
-                raise click.ClickException(
-                    "RAM profiling with memray is not supported on Windows."
-                )
             return func(*args, **kwargs)
 
         return wrapper
@@ -338,7 +380,7 @@ def click_build_options(
 
 
 @cli.command()
-@click_config
+@universal_options
 @click.option(
     "--build-config",
     "-b",
@@ -377,7 +419,6 @@ def click_build_options(
     default=False,
     help="If set, overwrite existing config and build config files.",
 )
-@working_directory_option
 def init(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model."""
     # Initialize the model with the given config and build config
@@ -385,10 +426,11 @@ def init(*args: Any, **kwargs: Any) -> None:
 
 
 @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
-@click_config
-@working_directory_option
+@universal_options
 @click.pass_context
-def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
+def set(
+    ctx: click.Context, config: Path, working_directory: Path, **kwargs: Any
+) -> None:
     """Set model configuration values.
 
     Accepts parameter assignments in the form key=value, where keys can use
@@ -401,6 +443,7 @@ def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
         ctx: Click context containing extra arguments.
         config: Path to the model configuration file.
         working_directory: Working directory for the model.
+        **kwargs: Universal options.
 
     """
     # Parse extra arguments as key=value pairs
@@ -486,7 +529,7 @@ def build(*args: Any, **kwargs: Any) -> None:
     "--from-model",
     type=click.Path(path_type=Path),
     default=ALTER_FROM_MODEL_DEFAULT,
-    help="Folder for the existing model.",
+    help=f"Folder for the existing model. Defaults to {ALTER_FROM_MODEL_DEFAULT}.",
 )
 def alter(*args: Any, **kwargs: Any) -> None:
     """Create alternative version from base model with only changed files.
@@ -528,18 +571,17 @@ def update_version(*args: Any, **kwargs: Any) -> None:
 @cli.command(
     context_settings=dict(
         ignore_unknown_options=True, allow_extra_args=True, help_option_names=[]
-    )
+    ),
+    help=EVALUATE_HELP,
 )
 @click.argument("method", default="hydrology.evaluate_discharge")
-@click_run_options()
-@click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
+@universal_options
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
 @click.option("--help", is_flag=True, help="Show this message and exit.")
 @click.pass_context
 def evaluate(
     ctx: click.Context,
     method: str,
-    spinup_name: str,
     run_name: str,
     help: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
@@ -548,6 +590,7 @@ def evaluate(
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
     timing: bool = TIMING_DEFAULT,
+    cores: int | None = CORES_DEFAULT,
 ) -> None:
     """Evaluate model, for example by comparing observed and simulated discharge.
 
@@ -560,7 +603,6 @@ def evaluate(
     Args:
         ctx: Click context containing extra arguments.
         method: Single evaluation method to run, e.g. `hydrology.evaluate_discharge`.
-        spinup_name: Name of the evaluation run.
         run_name: Name of the run to evaluate.
         help: Show this message and exit.
         working_directory: Working directory for the model.
@@ -568,7 +610,8 @@ def evaluate(
         profile_speed: If True, run the model with speed profiling.
         profile_ram: If True, run the model with RAM profiling.
         optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
-        timing: If True, run the model with timing, printing the time taken for specific methods
+        timing: If True, run the model with timing, printing the time taken for specific methods.
+        cores: Number of cores to restrict the model to using taskset.
 
     Raises:
         click.ClickException: If RAM profiling is requested on Windows.
@@ -588,7 +631,7 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
-            evaluator = Evaluate(None)  # type: ignore
+            evaluator = Evaluate(cast(Any, None))
             attr = attrgetter(method)(evaluator)
             click.echo(f"\nHelp for method '{method}':\n")
             if attr.__doc__:
@@ -597,23 +640,9 @@ def evaluate(
                 click.echo("No documentation found for this method.")
         except Exception:
             click.echo(f"Error: Method '{method}' not found.")
-            available_methods = []
-            try:
-                evaluator = Evaluate(None)  # type: ignore
-                # List methods in sub-evaluators
-                for sub_name in evaluator.sub_evaluators:
-                    sub_eval = getattr(evaluator, sub_name)
-                    for attr_name in dir(sub_eval):
-                        if not attr_name.startswith("_") and callable(
-                            getattr(sub_eval, attr_name)
-                        ):
-                            available_methods.append(f"{sub_name}.{attr_name}")
-            except Exception:
-                pass
-
-            if available_methods:
+            if AVAILABLE_EVALUATION_METHODS:
                 click.echo("\nAvailable methods are:")
-                for m in sorted(available_methods):
+                for m in AVAILABLE_EVALUATION_METHODS:
                     click.echo(f"  - {m}")
         ctx.exit()
 
@@ -680,7 +709,6 @@ def evaluate(
         method="evaluate",
         method_args={
             "method": method_name,
-            "spinup_name": spinup_name,
             "run_name": run_name,
             **extra_args,
         },
@@ -690,6 +718,7 @@ def evaluate(
         profile_ram=profile_ram,
         optimize=optimize,
         timing=timing,
+        cores=cores,
     )
 
     # If the result is a dictionary, print it as JSON to stdout
@@ -735,7 +764,7 @@ def data_catalog(method: str) -> None:
     Raises:
         ValueError: If the method is not recognized.
     """
-    data_catalog = NewDataCatalog()
+    data_catalog = DataCatalog(logger=create_logger("data_catalog"))
     if method == "size":
         print("Total size of data catalog:", data_catalog.size())
     elif method == "license":
@@ -764,6 +793,7 @@ def data_catalog(method: str) -> None:
 @click.option(
     "--cores",
     "-c",
+    "workflow_cores",
     default="all",
     help="Number of cores to use. Default is 'all'.",
 )
@@ -792,7 +822,7 @@ def data_catalog(method: str) -> None:
 def workflow(
     workflow_name: str,
     track: str | None,
-    cores: str,
+    workflow_cores: str,
     profile: Path | None,
     dryrun: bool,
     config_override: tuple[str, ...],
@@ -815,7 +845,7 @@ def workflow(
     Args:
         workflow_name: Name of the workflow to run.
         track: Optional calibration track (e.g., 'hydrology').
-        cores: Number of cores to use.
+        workflow_cores: Number of cores to use.
         profile: Snakemake profile directory.
         dryrun: Whether to perform a dry run.
         config_override: Config values to override.
@@ -857,7 +887,7 @@ def workflow(
                 cmd.extend(["--profile", str(profile)])
         else:
             # No profile specified, use default settings
-            cmd.extend(["--cores", cores])
+            cmd.extend(["--cores", workflow_cores])
 
         # Add dry run flag
         if dryrun:
@@ -934,9 +964,9 @@ def workflow(
 )
 @click.option(
     "--target-area-km2",
-    default=817e3,
+    default=420000,
     type=float,
-    help="Target cumulative upstream area per cluster in km². Defaults to 817,000 km².",
+    help="Target cumulative upstream area per cluster in km². Defaults to 420,000 km².",
 )
 @click.option(
     "--cluster-prefix",
@@ -977,6 +1007,57 @@ def init_multiple(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model for multiple subbasins."""
     # Initialize the model with the given config and build config
     init_multiple_fn(*args, **kwargs)
+
+
+@cli.command()
+@click.option(
+    "--scenario",
+    "-s",
+    default="base",
+    show_default=True,
+    help="Scenario subdirectory to clean (e.g. 'base' or an alternative scenario created with 'geb alter').",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt and delete immediately.",
+)
+@working_directory_option
+def clean(
+    scenario: str,
+    yes: bool,
+    working_directory: Path,
+) -> None:
+    """Clean generated files from a model, keeping model.yml,  update.yml and build.yml.
+
+    Run from inside the model directory (e.g. cd large_scale6 && geb clean),
+    following the same convention as all other 'geb' commands.
+
+    Works for both single-model layouts (created with 'geb init') and
+    multi-basin layouts (created with 'geb init-multiple'). In the latter
+    case, all cluster subdirectories are cleaned at once.
+
+    Shows a list of items to be deleted and asks for confirmation.
+    Type 'y' and press Enter to confirm, or press Enter to abort.
+    Use --yes / -y to skip the prompt (useful in scripts).
+
+    Examples:
+
+      Clean the base scenario (run from inside the model dir):
+
+        cd large_scale6 && geb clean
+
+      Clean an alternative scenario:
+
+        geb clean --scenario myalternative
+    """
+    clean_fn(
+        working_directory=working_directory,
+        scenario=scenario,
+        yes=yes,
+    )
 
 
 @cli.command()

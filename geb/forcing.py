@@ -10,7 +10,13 @@ import numpy as np
 import numpy.typing as npt
 import xarray as xr
 
-from geb.geb_types import ArrayFloat32, ArrayFloat64, ThreeDArrayFloat32
+from geb.geb_types import (
+    ArrayFloat32,
+    ArrayFloat64,
+    ArrayInt32,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+)
 from geb.workflows.io import read_grid, read_table
 
 from .module import Module
@@ -25,7 +31,9 @@ def generate_bilinear_interpolation_weights(
     src_y: ArrayFloat64,
     tgt_x: ArrayFloat64,
     tgt_y: ArrayFloat64,
-) -> tuple[ArrayFloat32, ArrayFloat32]:
+    mask: TwoDArrayBool | None = None,
+    src_mask: TwoDArrayBool | None = None,
+) -> tuple[ArrayInt32, ArrayFloat32]:
     """
     Generates indices and weights for bilinear interpolation.
 
@@ -36,23 +44,34 @@ def generate_bilinear_interpolation_weights(
         src_y: Source grid y-coordinates (must be monotonic).
         tgt_x: Target points x-coordinates.
         tgt_y: Target points y-coordinates.
+        mask: Optional mask of the target grid (True for masked/invalid points).
+            If provided, only unmasked points will have indices and weights generated.
+        src_mask: Optional mask of the source grid (True for kept/available
+            source cells). If provided, the returned indices are mapped onto the
+            compressed source-cell numbering defined by this mask.
 
     Returns:
-        tuple: A tuple containing:
-            - indices (ndarray): Shape (n_targets, 4) of flat source grid indices.
-            - weights (ndarray): Shape (n_targets, 4) of interpolation weights.
+        tuple[ArrayInt32, ArrayFloat32]: A tuple containing indices (int32) and
+            weights (float32).
 
     Raises:
         ValueError: If target points are outside the source grid bounds.
+        ValueError: If source x or y coordinates are not monotonic.
+        ValueError: If source mask excludes cells needed for interpolation.
     """
     # Create the full grid of target points and flatten them
     # The 'xy' indexing creates a target grid of shape (len(tgt_y), len(tgt_x))
     # Note: len(tgt_y) is the row count (Ny_tgt), len(tgt_x) is the col count (Nx_tgt)
     tgt_x_2d, tgt_y_2d = np.meshgrid(tgt_x, tgt_y, indexing="xy")
 
-    # Flatten the target coordinates into (N_targets,) arrays
-    tgt_x = tgt_x_2d.flatten()
-    tgt_y = tgt_y_2d.flatten()
+    if mask is not None:
+        # Filter target points by mask (keep unmasked points)
+        tgt_x_flat = tgt_x_2d[~mask]
+        tgt_y_flat = tgt_y_2d[~mask]
+    else:
+        # Flatten the target coordinates into (N_targets,) arrays
+        tgt_x_flat = tgt_x_2d.flatten()
+        tgt_y_flat = tgt_y_2d.flatten()
 
     # Source Grid Dimensions
     nx: int = len(src_x)
@@ -63,29 +82,29 @@ def generate_bilinear_interpolation_weights(
         raise ValueError("Source x-coordinates must be strictly ascending.")
 
     # ix is the index of the source x-coordinate that is just less than or equal to tgt_x
-    ix = np.searchsorted(src_x, tgt_x) - 1
+    ix = np.searchsorted(src_x, tgt_x_flat) - 1
     # Clip indices to be within valid bounds for x
     ix = np.clip(ix, 0, nx - 2)
     # Check bounds for ix after clipping - if any targets are still out of bounds, it's an error
-    if not np.all((tgt_x >= src_x[0]) & (tgt_x <= src_x[-1])):
+    if not np.all((tgt_x_flat >= src_x[0]) & (tgt_x_flat <= src_x[-1])):
         raise ValueError("Target x-coordinates are outside the source grid bounds.")
 
     is_y_descending = src_y[0] > src_y[-1]
 
     if not is_y_descending:
         # For ascending y-axis (normal case)
-        iy = np.searchsorted(src_y, tgt_y, side="right") - 1
+        iy = np.searchsorted(src_y, tgt_y_flat, side="right") - 1
         iy = np.clip(iy, 0, ny - 2)
         y0 = src_y[iy]
         y1 = src_y[iy + 1]
-        dy = (tgt_y - y0) / (y1 - y0)
+        dy = (tgt_y_flat - y0) / (y1 - y0)
     else:
         # For descending y-axis, use vectorized NumPy operations
         # Create a matrix comparison to find intervals efficiently
         # src_y[j] >= tgt_y >= src_y[j+1] for descending coordinates
 
         # Reshape for broadcasting: tgt_y as column, src_y as row
-        tgt_y_col = tgt_y[:, np.newaxis]  # Shape: (n_targets, 1)
+        tgt_y_col = tgt_y_flat[:, np.newaxis]  # Shape: (n_targets, 1)
         src_y_intervals = src_y[:-1]  # Shape: (ny-1,) - upper bounds of intervals
         src_y_intervals_next = src_y[1:]  # Shape: (ny-1,) - lower bounds of intervals
 
@@ -100,8 +119,8 @@ def generate_bilinear_interpolation_weights(
 
         # Handle out-of-bounds cases
         no_interval_found = ~np.any(in_interval, axis=1)
-        above_highest = tgt_y > src_y[0]
-        below_lowest = tgt_y < src_y[-1]
+        above_highest = tgt_y_flat > src_y[0]
+        below_lowest = tgt_y_flat < src_y[-1]
 
         # Assign boundary indices for out-of-bounds points
         iy = np.where(no_interval_found & above_highest, 0, iy)
@@ -112,12 +131,13 @@ def generate_bilinear_interpolation_weights(
         y1 = src_y[iy + 1]
         # For descending coordinates, the weight should be calculated as:
         # dy = (y0 - target_y) / (y0 - y1) since y0 > y1
-        dy = (y0 - tgt_y) / (y0 - y1)  # Get the corner coordinates
+        dy = (y0 - tgt_y_flat) / (y0 - y1)  # Get the corner coordinates
+
     x0 = src_x[ix]
     x1 = src_x[ix + 1]
 
     # Calculate normalized distances
-    dx = (tgt_x - x0) / (x1 - x0)
+    dx = (tgt_x_flat - x0) / (x1 - x0)
 
     # Weights for the four corners
     w00 = (1 - dx) * (1 - dy)  # Corresponds to (y0, x0)
@@ -130,6 +150,32 @@ def generate_bilinear_interpolation_weights(
     idx01 = iy * nx + (ix + 1)
     idx10 = (iy + 1) * nx + ix
     idx11 = (iy + 1) * nx + (ix + 1)
+
+    if src_mask is not None:
+        if src_mask.shape != (ny, nx):
+            raise ValueError(
+                f"Source mask shape {src_mask.shape} does not match source grid shape {(ny, nx)}."
+            )
+
+        compressed_index_lookup = np.full(nx * ny, -1, dtype=np.int32)
+        compressed_index_lookup[src_mask.reshape(-1)] = np.arange(
+            src_mask.sum(), dtype=np.int32
+        )
+
+        idx00 = compressed_index_lookup[idx00]
+        idx01 = compressed_index_lookup[idx01]
+        idx10 = compressed_index_lookup[idx10]
+        idx11 = compressed_index_lookup[idx11]
+
+        if (
+            np.any(idx00 < 0)
+            or np.any(idx01 < 0)
+            or np.any(idx10 < 0)
+            or np.any(idx11 < 0)
+        ):
+            raise ValueError(
+                "Source mask excludes cells needed by the bilinear interpolation stencils."
+            )
 
     # Stack indices and weights in a consistent order
     indices = np.stack([idx00, idx01, idx10, idx11], axis=1).astype(np.int32)
@@ -165,7 +211,12 @@ class ForcingLoader(ABC):
     """Abstract base class for loading and validating forcing data."""
 
     def __init__(
-        self, model: GEBModel, variable: str, n: int, supports_forecast: bool = True
+        self,
+        model: GEBModel,
+        variable: str,
+        n: int,
+        grid_mask: TwoDArrayBool,
+        supports_forecast: bool = True,
     ) -> None:
         """Initialize the ForcingLoader.
 
@@ -173,29 +224,83 @@ class ForcingLoader(ABC):
             model: The GEB model instance.
             variable: The variable name to load (e.g., "pr" for precipitation).
             n: Number of time steps to load at once (default is 1).
+            grid_mask: The mask of the model grid (True for masked cells, False
+                for active cells).
             supports_forecast: Whether the loader supports forecast mode.
         """
         self.model: GEBModel = model
         self.n: int = n
         self.variable: str = variable
+        self.grid_mask = grid_mask
         self.reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
             model.files["other"][f"climate/{variable}"], variable, asynchronous=True
         )
+        self.forcing_mask = self._load_forcing_mask()
 
         self.indices, self.weights = generate_bilinear_interpolation_weights(
-            self.reader.x,
-            self.reader.y,
+            self.forcing_mask.x.values,
+            self.forcing_mask.y.values,
             model.hydrology.grid.lon,
             model.hydrology.grid.lat,
+            mask=self.grid_mask,
+            src_mask=self.forcing_mask.values,
         )
+        self.output_size: int = self.indices.shape[0]
         self.xsize: int = model.hydrology.grid.lon.size
         self.ysize: int = model.hydrology.grid.lat.size
 
         self._supports_forecast = supports_forecast
-
-        self._in_forecast_mode: bool = False
-        self.ds_forecast: xr.DataArray | None = None
         self.forecast_issue_datetime: datetime | None = None
+        self.ds_forecast: xr.DataArray | None = None
+
+    def _load_forcing_mask(self) -> xr.DataArray:
+        """Load the forcing-grid keep mask if it is available.
+
+        Returns:
+            The forcing-grid keep mask where True marks source cells kept during
+            forcing preprocessing.
+        """
+        mask_key = f"climate/{self.variable}_mask"
+        forcing_mask: xr.DataArray = xr.open_dataarray(
+            self.model.files["other"][mask_key], consolidated=False
+        )
+        return forcing_mask
+
+    def _compress_source_values(
+        self,
+        values: npt.NDArray[np.float32],
+        name: str,
+    ) -> ArrayFloat32:
+        """Compress a source-grid field with the forcing keep mask.
+
+        Args:
+            values: Values on the forcing grid or already compressed to the
+                kept source cells.
+            name: Name used in validation errors.
+
+        Returns:
+            Compressed values aligned with the source-cell dimension read from
+            forcing storage.
+
+        Raises:
+            ValueError: If the input shape does not match the forcing mask.
+        """
+        if values.ndim == 1:
+            expected_size = int(self.forcing_mask.values.sum())
+            if values.size != expected_size:
+                raise ValueError(
+                    f"{name} size {values.size} does not match the expected "
+                    f"compressed source size {expected_size}."
+                )
+            return values.astype(np.float32, copy=False)
+
+        if values.shape != self.forcing_mask.shape:
+            raise ValueError(
+                f"{name} shape {values.shape} does not match forcing mask shape "
+                f"{self.forcing_mask.shape}."
+            )
+
+        return values[self.forcing_mask.values]
 
     @property
     def in_forecast_mode(self) -> bool:
@@ -204,11 +309,7 @@ class ForcingLoader(ABC):
         Returns:
             True if in forecast mode, False otherwise.
         """
-        return self._in_forecast_mode
-
-    @in_forecast_mode.setter
-    def in_forecast_mode(self, value: bool) -> None:
-        self._in_forecast_mode = value
+        return self.forecast_issue_datetime is not None
 
     @property
     def supports_forecast(self) -> bool:
@@ -219,7 +320,7 @@ class ForcingLoader(ABC):
         """
         return self._supports_forecast
 
-    def load(self, dt: datetime) -> ThreeDArrayFloat32:
+    def load(self, dt: datetime) -> TwoDArrayFloat32:
         """Load and validate forcing data for a given time.
 
         If in forecast mode and the time is after the forecast issue date,
@@ -231,7 +332,8 @@ class ForcingLoader(ABC):
             dt: The datetime for which to load the data.
 
         Returns:
-            The interpolated and validated data as a numpy array.
+            The interpolated and validated compressed data with shape
+            (n_active_cells, time).
 
         Raises:
             ValueError: If the data is invalid according to the validation criteria.
@@ -265,7 +367,7 @@ class ForcingLoader(ABC):
                     )
 
                 non_forecast_data: npt.NDArray[np.float32] = non_forecast_data_all[
-                    :substeps_to_forecast, :, :
+                    :substeps_to_forecast
                 ]
 
                 forecast_data: npt.NDArray[np.float32] = self.ds_forecast.isel(
@@ -313,25 +415,19 @@ class ForcingLoader(ABC):
             forecast_issue_datetime: The datetime when the forecast starts.
             da: The xarray DataArray containing the forecast data.
         """
-        self.forecast_issue_datetime: datetime = forecast_issue_datetime
-        self.ds_forecast: xr.DataArray = da
+        self.forecast_issue_datetime = forecast_issue_datetime
+        self.ds_forecast = da
 
     def unset_forecast(self) -> None:
         """Unset forecast mode."""
-        self.ds_forecast: None = None
-        self.forecast_issue_datetime: None = None
-
-    @property
-    def in_forecast_mode(self) -> bool:
-        """Indicates whether the loader is in forecast mode.
-
-        Returns:
-            True if in forecast mode, False otherwise.
-        """
-        return self.forecast_issue_datetime is not None
+        self.ds_forecast = None
+        self.forecast_issue_datetime = None
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
+
+        If a mask was provided during initialization, the output will be
+        compressed (only unmasked points returned).
 
         Args:
             data: The input data array to interpolate.
@@ -339,36 +435,40 @@ class ForcingLoader(ABC):
         Returns:
             The interpolated data array.
         """
-        data_flattened_xy_dims = data.reshape(data.shape[0], -1)
+        # data has shape (n_active_cells, n_timesteps)
         # the corner values must be gathered in the same order as the weights
-        corner_values = data_flattened_xy_dims[:, self.indices]
-        interpolated_flattened_xy_dims = np.sum(
-            corner_values * self.weights[np.newaxis, :, :], axis=2
-        )
-        output = interpolated_flattened_xy_dims.reshape(
-            interpolated_flattened_xy_dims.shape[0], self.ysize, self.xsize
-        )
-        return output
+        corner_values = data[self.indices, :]  # (N_target, 4, n_timesteps)
+        interpolated = np.sum(
+            corner_values * self.weights[:, :, np.newaxis], axis=1
+        )  # Result is (N_target, n_timesteps)
+
+        return interpolated
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate the data array.
 
         Args:
-            v: The data array to validate.
+            v: The data array to validate (possibly compressed).
 
         Returns:
-            True, indicating that by default all data is valid.
+            True if valid.
 
         Raises:
-            ValueError: If the data shape does not match the expected grid shape.
+            ValueError: If the data shape does not match the expected dimensions.
         """
-        if v.shape[0] != self.n:
+        if v.shape[1] != self.n:
             raise ValueError(f"Data time dimension does not match expected n {self.n}.")
-        if v.shape[1] != self.ysize or v.shape[2] != self.xsize:
+
+        if v.ndim != 2:
             raise ValueError(
-                f"Data shape {v.shape[1:]} does not match expected grid shape "
-                f"({self.ysize}, {self.xsize})."
+                f"Compressed data must be 2D, received array with shape {v.shape}."
             )
+        if v.shape[0] != self.output_size:
+            raise ValueError(
+                f"Compressed data shape {v.shape[0]} does not match "
+                f"expected number of active points {self.output_size}."
+            )
+
         if not self.validate_values(v):
             raise ValueError("Data validation failed.")
 
@@ -376,13 +476,13 @@ class ForcingLoader(ABC):
 
     @abstractmethod
     def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
-        """Validate the data array.
+        """Validate the data array values.
 
         Args:
             v: The data array to validate.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid, otherwise False.
         """
         pass
 
@@ -390,27 +490,25 @@ class ForcingLoader(ABC):
 class Precipitation(ForcingLoader):
     """Loader for precipitation data with specific validation."""
 
-    def __init__(self, model: GEBModel, grid_mask: npt.NDArray[np.bool_]) -> None:
+    def __init__(self, model: GEBModel, grid_mask: TwoDArrayBool) -> None:
         """Initialize the Precipitation loader.
 
         Args:
             model: The GEB model instance.
-            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+            grid_mask: The mask of the model grid.
         """
-        self.grid_mask = grid_mask
-        super().__init__(model, "pr_kg_per_m2_per_s", 24)
+        super().__init__(model, "pr_kg_per_m2_per_s", 24, grid_mask=grid_mask)
 
     def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate precipitation data.
 
         Args:
-            v: The data array to validate.
+            v: The data array to validate (compressed).
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid, otherwise False.
         """
-        v_non_masked = v[:, self.grid_mask]
-        return ((v_non_masked >= 0).all() and (v_non_masked < 500 / 3600).all()).item()
+        return ((v >= 0).all() and (v < 500 / 3600).all()).item()
 
 
 class Temperature(ForcingLoader):
@@ -421,32 +519,33 @@ class Temperature(ForcingLoader):
         model: GEBModel,
         forcing_DEM: npt.NDArray[np.float32],
         grid_DEM: npt.NDArray[np.float32],
-        grid_mask: npt.NDArray[np.bool_],
+        grid_mask: TwoDArrayBool,
         dewpoint: bool = False,
         lapse_rate: float = -0.0065,
     ) -> None:
         """Initialize the Temperature loader.
 
-        This class performs a lapse rate correction based on the difference between the
-        forcing DEM and the model grid DEM.
-
         Args:
             model: The GEB model instance.
             forcing_DEM: The DEM used in the forcing data.
             grid_DEM: The DEM used in the model grid.
-            grid_mask: The mask of the model grid (True for valid points, False for invalid).
-            dewpoint: If True, load dewpoint temperature; otherwise, load air temperature.
-            lapse_rate: The lapse rate in K/m (default is -0.0065 K/m).
+            grid_mask: The mask of the model grid.
+            dewpoint: If True, load dewpoint temperature.
+            lapse_rate: The lapse rate in K/m.
         """
-        self.forcing_DEM = forcing_DEM
-        self.grid_DEM = grid_DEM
-        self.grid_mask = grid_mask
         self.lapse_rate = lapse_rate
 
-        if dewpoint:
-            super().__init__(model, "dewpoint_tas_2m_K", 24)
-        else:
-            super().__init__(model, "tas_2m_K", 24)
+        super().__init__(
+            model,
+            "tas_2m_K" if not dewpoint else "dewpoint_tas_2m_K",
+            24,
+            grid_mask=grid_mask,
+        )
+        self.forcing_DEM_compressed = self._compress_source_values(
+            forcing_DEM,
+            "forcing_DEM",
+        )
+        self.grid_DEM_compressed: ArrayFloat32 = grid_DEM[~grid_mask]
 
     def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate temperature data.
@@ -455,61 +554,50 @@ class Temperature(ForcingLoader):
             v: The data array to validate.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid, otherwise False.
         """
-        v_non_masked = v[:, self.grid_mask]
-        return ((v_non_masked > 170).all() and (v_non_masked < 370).all()).item()
+        return ((v > 170).all() and (v < 370).all()).item()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
-        """Interpolate data to the model grid using bilinear interpolation.
-
-        Overrides the base class method to handle temperature with a lapse rate correction.
-        First, the temperature is adjusted to sea level using the forcing DEM and lapse rate.
-        Then, after interpolation, it is adjusted back to the model grid elevation.
-
-        This ensures a smooth temperature gradient with elevation.
+        """Interpolate temperature with lapse-rate correction.
 
         Args:
             data: The input data array to interpolate.
 
         Returns:
-            The interpolated data array.
+            The interpolated temperature data (compressed).
         """
+        # data has shape (n_source_cells, n_timesteps)
         temperature_sea_level = (
-            data - self.forcing_DEM[np.newaxis, :, :] * self.lapse_rate
+            data - self.forcing_DEM_compressed[:, np.newaxis] * self.lapse_rate
         )
-        interpolated_temperature_sea_level = super().interpolate(data)
         interpolated_temperature = (
-            interpolated_temperature_sea_level
-            + self.grid_DEM[np.newaxis, :, :] * self.lapse_rate
+            super().interpolate(temperature_sea_level)
+            + self.grid_DEM_compressed[:, np.newaxis] * self.lapse_rate
         )
 
         return interpolated_temperature
 
 
 class Wind(ForcingLoader):
-    """Loader for wind data with specific validation.
-
-    Note that wind can be both positive and negative.
-    """
+    """Loader for wind data with specific validation."""
 
     def __init__(
-        self, model: GEBModel, direction: str, grid_mask: npt.NDArray[np.bool_]
+        self, model: GEBModel, direction: str, grid_mask: TwoDArrayBool
     ) -> None:
         """Initialize the Wind loader.
 
         Args:
             model: The GEB model instance.
-            direction: The wind direction, either "u" or "v".
-            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+            direction: either "u" or "v".
+            grid_mask: The mask of the model grid.
 
         Raises:
-            ValueError: If the direction is not "u" or "v".
+            ValueError: If direction is not "u" or "v".
         """
         if direction not in ["u", "v"]:
             raise ValueError("Direction must be 'u' or 'v'")
-        self.grid_mask = grid_mask
-        super().__init__(model, f"wind_{direction}10m_m_per_s", 24)
+        super().__init__(model, f"wind_{direction}10m_m_per_s", 24, grid_mask=grid_mask)
 
     def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate wind data.
@@ -518,279 +606,246 @@ class Wind(ForcingLoader):
             v: The data array to validate.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid, otherwise False.
         """
-        v_non_masked = v[:, self.grid_mask]
-        return ((v_non_masked >= -150).all() and (v_non_masked < 150).all()).item()
+        return ((v >= -150).all() and (v < 150).all()).item()
 
 
 class Pressure(ForcingLoader):
-    """Loader for surface pressure data with elevation-based correction and validation."""
+    """Loader for surface pressure data with elevation-based correction."""
 
     def __init__(
         self,
         model: GEBModel,
         forcing_DEM: npt.NDArray[np.float32],
         grid_DEM: npt.NDArray[np.float32],
-        grid_mask: npt.NDArray[np.bool_],
+        grid_mask: TwoDArrayBool,
         g: float = 9.80665,
         Mo: float = 0.0289644,
         lapse_rate: float = -0.0065,
     ) -> None:
         """Initialize the Pressure loader.
 
-        This class performs an elevation-based pressure correction based on the difference
-        between the forcing DEM and the model grid DEM.
-
         Args:
             model: The GEB model instance.
-            forcing_DEM: The DEM used in the forcing data (meters).
-            grid_DEM: The DEM used in the model grid (meters).
-            grid_mask: The mask of the model grid (True for valid points, False for invalid).
-            g: Gravitational constant (m/s², default is 9.80665).
-            Mo: Molecular weight of dry air (kg/mol, default is 0.0289644).
-            lapse_rate: Temperature lapse rate (K/m, default is -0.0065).
+            forcing_DEM: The DEM for forcing.
+            grid_DEM: The DEM for the grid.
+            grid_mask: The mask for the grid.
+            g: Gravity constant.
+            Mo: Molecular weight of air.
+            lapse_rate: Lapse rate.
         """
-        self.forcing_DEM = forcing_DEM
-        self.grid_DEM = grid_DEM
-        self.grid_mask = grid_mask
         self.g = g
         self.Mo = Mo
         self.lapse_rate = lapse_rate
 
-        super().__init__(model, "ps_pascal", 24)
+        super().__init__(model, "ps_pascal", 24, grid_mask=grid_mask)
+        self.forcing_pressure_correction_factor = get_pressure_correction_factor(
+            self._compress_source_values(forcing_DEM, "forcing_DEM"),
+            g,
+            Mo,
+            lapse_rate,
+        )
+        self.grid_pressure_correction_factor: ArrayFloat32 = (
+            get_pressure_correction_factor(
+                grid_DEM[~grid_mask],
+                g,
+                Mo,
+                lapse_rate,
+            )
+        )
 
     def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate surface pressure data.
 
         Args:
-            v: The data array to validate (Pa).
+            v: The data array to validate.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid, otherwise False.
         """
-        v_non_masked = v[:, self.grid_mask]
-        return ((v_non_masked > 30_000).all() and (v_non_masked < 120_000).all()).item()
+        return ((v > 30_000).all() and (v < 120_000).all()).item()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
-        """Interpolate data to the model grid using bilinear interpolation.
-
-        Overrides the base class method to handle pressure with elevation correction.
-        First, the pressure is adjusted to sea level using the forcing DEM and atmospheric model.
-        Then, after interpolation, it is adjusted back to the model grid elevation.
-
-        This ensures proper pressure gradients with elevation.
+        """Interpolate pressure with elevation correction.
 
         Args:
-            data: The input pressure data array to interpolate (Pa).
+            data: The input data array to interpolate.
 
         Returns:
-            The interpolated pressure data array (Pa).
+            The interpolated pressure data (compressed).
         """
-        # Convert pressure to sea level by dividing by correction factor
-        # for the forcing grid
+        # data has shape (n_source_cells, n_timesteps)
         pressure_sea_level = (
-            data
-            / get_pressure_correction_factor(
-                self.forcing_DEM, self.g, self.Mo, self.lapse_rate
-            )[np.newaxis, :, :]
+            data / self.forcing_pressure_correction_factor[:, np.newaxis]
         )
 
         # Interpolate the sea level pressure
         interpolated_pressure_sea_level = super().interpolate(pressure_sea_level)
 
-        # Convert back to grid elevation by multiplying by correction factor, now
-        # for the model grid
         interpolated_pressure = (
             interpolated_pressure_sea_level
-            * get_pressure_correction_factor(
-                self.grid_DEM, self.g, self.Mo, self.lapse_rate
-            )[np.newaxis, :, :]
+            * self.grid_pressure_correction_factor[:, np.newaxis]
         )
 
         return interpolated_pressure
 
 
 class RSDS(ForcingLoader):
-    """Loader for surface downwelling shortwave radiation data with specific validation."""
+    """Loader for surface downwelling shortwave radiation data."""
 
-    def __init__(self, model: GEBModel, grid_mask: npt.NDArray[np.bool_]) -> None:
-        """Initialize the RSDS loader.
+    def __init__(self, model: GEBModel, grid_mask: TwoDArrayBool) -> None:
+        """Initialize RSDS.
 
         Args:
-            model: The GEB model instance.
-            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+            model: model instance.
+            grid_mask: grid mask.
         """
-        self.grid_mask = grid_mask
-        super().__init__(model, "rsds_W_per_m2", 24)
+        super().__init__(model, "rsds_W_per_m2", 24, grid_mask=grid_mask)
 
     def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
-        """Validate surface downwelling shortwave radiation data.
+        """Validate values.
 
         Args:
-            v: The data array to validate.
+            v: data array.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid.
         """
-        v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all().item()
+        return (v >= 0).all().item()
 
 
 class RLDS(ForcingLoader):
-    """Loader for surface downwelling longwave radiation data with specific validation."""
+    """Loader for surface downwelling longwave radiation data."""
 
-    def __init__(self, model: GEBModel, grid_mask: npt.NDArray[np.bool_]) -> None:
-        """Initialize the RLDS loader.
+    def __init__(self, model: GEBModel, grid_mask: TwoDArrayBool) -> None:
+        """Initialize RLDS.
 
         Args:
-            model: The GEB model instance.
-            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+            model: model instance.
+            grid_mask: grid mask.
         """
-        self.grid_mask = grid_mask
-        super().__init__(model, "rlds_W_per_m2", 24)
+        super().__init__(model, "rlds_W_per_m2", 24, grid_mask=grid_mask)
 
     def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
-        """Validate surface downwelling longwave radiation data.
+        """Validate values.
 
         Args:
-            v: The data array to validate.
+            v: data array.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid.
         """
-        v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all().item()
+        return (v >= 0).all().item()
 
 
 class SPEI(ForcingLoader):
-    """Loader for Standardized Precipitation-Evapotranspiration Index (SPEI) data with specific validation."""
+    """Loader for SPEI data."""
 
-    def __init__(self, model: GEBModel, grid_mask: npt.NDArray[np.bool_]) -> None:
-        """Initialize the SPEI loader.
+    def __init__(self, model: GEBModel, grid_mask: TwoDArrayBool) -> None:
+        """Initialize SPEI.
 
         Args:
-            model: The GEB model instance.
-            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+            model: model instance.
+            grid_mask: grid mask.
         """
-        self.grid_mask = grid_mask
-        super().__init__(model, "SPEI", 1, supports_forecast=False)
+        super().__init__(model, "SPEI", 1, grid_mask=grid_mask, supports_forecast=False)
 
     def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
-        """Validate SPEI data.
+        """Validate values.
 
         Args:
-            v: The data array to validate.
+            v: data array.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid.
         """
-        v_non_masked = v[:, self.grid_mask]
-        return not np.isnan(v_non_masked).any()
+        return not np.isnan(v).any()
 
 
 class CO2:
-    """Loader for CO2 concentration data with specific validation."""
+    """Loader for CO2 concentration data."""
 
     def __init__(self, model: GEBModel) -> None:
-        """Initialize the CO2 loader."""
+        """Initialize CO2 loader.
+
+        Args:
+            model: model instance.
+        """
         self.df = read_table(model.files["table"]["climate/CO2_ppm"])
 
     def load(self, time: datetime) -> float:
-        """Load CO2 concentration data for a given time.
+        """Load CO2.
 
         Args:
-            time: The datetime for which to load the data.
+            time: datetime.
 
         Returns:
-            The CO2 concentration value.
+            CO2 concentration.
 
         Raises:
-            ValueError: If the data is invalid according to the validation criteria.
+            ValueError: If the annual CO2 concentration is outside the expected
+                range.
         """
         data: float = self.df.loc[time.year].item()
-        valid: bool = self.validate_values(data)
-        if not valid:
+        if not self.validate_values(data):
             raise ValueError(f"Invalid CO2 data for time {time}.")
         return data
 
     def validate_values(self, v: float) -> bool:
-        """Validate CO2 concentration data.
+        """Validate values.
 
         Args:
-            v: the data value to validate.
+            v: value.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            True if valid.
         """
         return v > 270 and v < 2000
 
     @property
     def supports_forecast(self) -> bool:
-        """Indicates whether the loader supports forecast mode.
+        """Return whether forecast mode is supported.
 
         Returns:
-            False as CO2 loader does not support forecast mode.
+            False.
         """
         return False
 
     def set_forecast(self, forecast_issue_datetime: datetime, da: xr.DataArray) -> None:
-        """Set forecast mode.
+        """Set forecast.
 
-        CO2 loader does not support forecast mode.
-
-        Raises:
-            NotImplementedError: As CO2 loader does not support forecast mode.
+        Args:
+            forecast_issue_datetime: dt.
+            da: dataarray.
         """
         raise NotImplementedError("CO2 loader does not support forecast mode.")
 
     def unset_forecast(self) -> None:
-        """Unset forecast mode.
-
-        CO2 loader does not support forecast mode.
-
-        Raises:
-            NotImplementedError: As CO2 loader does not support forecast mode.
-        """
+        """Unset forecast."""
         raise NotImplementedError("CO2 loader does not support forecast mode.")
 
 
 class Forcing(Module):
-    """Module to handle climate forcing data.
-
-    This module is responsible for loading and validating climate forcing data such as temperature, humidity, pressure, and radiation.
-    It provides methods to load specific datasets and ensures that the data meets certain validation criteria.
-
-    Args:
-        model: The GEB model instance.
-    """
+    """Module to handle climate forcing data."""
 
     def __init__(self, model: GEBModel) -> None:
-        """Initialize the Forcing module.
-
-        All forcing loaders are initialized upfront to allow for efficient batch loading
-        and inter-variable dependencies during interpolation.
+        """Initialize forcing module.
 
         Args:
-            model: The GEB model instance.
+            model: model instance.
         """
         self.model = model
         self.forcing_DEM = read_grid(model.files["other"]["climate/elevation_forcing"])
-
-        # Initialize all forcing loaders upfront
         self._initialize_loaders()
 
     def _initialize_loaders(self) -> None:
-        """Initialize all forcing loaders.
-
-        This creates instances of all forcing loaders so they're ready to use.
-        """
-        grid_mask = ~self.model.hydrology.grid.mask
+        """Initialize loaders."""
+        grid_mask = self.model.hydrology.grid.mask
         grid_DEM = self.model.hydrology.grid.decompress(
             self.model.hydrology.grid.var.elevation
         )
 
-        # Initialize all loaders
         self._loaders: dict[str, CO2 | ForcingLoader] = {
             "pr_kg_per_m2_per_s": Precipitation(self.model, grid_mask=grid_mask),
             "tas_2m_K": Temperature(
@@ -823,10 +878,10 @@ class Forcing(Module):
 
     @property
     def name(self) -> str:
-        """Return the name of the module.
+        """Module name.
 
         Returns:
-            The name of the module.
+            Name.
         """
         return "forcing"
 
@@ -837,16 +892,16 @@ class Forcing(Module):
     def __getitem__(self, name: str) -> ForcingLoader: ...
 
     def __getitem__(self, name: str) -> ForcingLoader | CO2:
-        """Get the forcing loader for a given name.
+        """Get loader.
 
         Args:
-            name: name of forcing dataset, e.g. "pr_kg_per_m2_per_s", "tas_2m_K", etc.
+            name: variable name.
 
         Returns:
-            The forcing loader for the specified dataset.
+            Loader.
 
         Raises:
-            KeyError: If the forcing variable name is not recognized.
+            KeyError: If the forcing variable name is not available.
         """
         if name not in self._loaders:
             raise KeyError(
@@ -858,60 +913,65 @@ class Forcing(Module):
     def load(self, name: Literal["CO2_ppm"], dt: datetime | None = None) -> float: ...
 
     @overload
-    def load(self, name: str, dt: datetime | None = None) -> ThreeDArrayFloat32: ...
+    def load(
+        self,
+        name: Literal[
+            "pr_kg_per_m2_per_s",
+            "tas_2m_K",
+            "dewpoint_tas_2m_K",
+            "wind_u10m_m_per_s",
+            "wind_v10m_m_per_s",
+            "ps_pascal",
+            "rsds_W_per_m2",
+            "rlds_W_per_m2",
+        ],
+        dt: datetime | None = None,
+    ) -> TwoDArrayFloat32: ...
 
-    def load(self, name: str, dt: datetime | None = None) -> ThreeDArrayFloat32 | float:
-        """Load forcing data for a given name and time.
+    @overload
+    def load(
+        self, name: Literal["SPEI"], dt: datetime | None = None
+    ) -> TwoDArrayFloat32: ...
+
+    @overload
+    def load(self, name: str, dt: datetime | None = None) -> TwoDArrayFloat32: ...
+
+    def load(self, name: str, dt: datetime | None = None) -> TwoDArrayFloat32 | float:
+        """Load data.
 
         Args:
-            name: name of forcing dataset, e.g. "pr_kg_per_m2_per_s", "tas_2m_K", etc.
-            dt: time of forcing data to be returned. Defaults to None, in which case
-                the current time of the model is used.
+            name: variable name.
+            dt: datetime.
 
         Returns:
-            Forcing data as a numpy array or float.
+            Data.
         """
         if dt is None:
-            # the forcing data is the accumulated data over the current hour.
-            # Therefore, we load the data for the end of the hour to ensure we get
-            # the accumulated value for the day.
-            # For instantaneous values like temperature, we load the data for the
-            # start with the first full hour of the day. Perhaps it would
-            # be very slightly better to take the midpoint of the hour, but this
-            # would make the code more complex and the difference should be negligible,
-            # so we take the start of the hour for simplicity.
-            dt: datetime = self.model.current_time + timedelta(hours=1)
-
+            dt = self.model.current_time + timedelta(hours=1)
         return self[name].load(dt)
 
     @property
     def loaders(self) -> dict[str, CO2 | ForcingLoader]:
-        """Get all forcing loaders.
+        """All loaders.
 
         Returns:
-            A dictionary of all forcing loaders.
+            loaders.
         """
         return self._loaders
 
     @property
     def forcing_loaders(self) -> dict[str, ForcingLoader]:
-        """Get all forcing loaders except CO2.
+        """Forcing loaders.
 
         Returns:
-            A dictionary of all forcing loaders except CO2.
+            forcing loaders.
         """
         return {k: v for k, v in self._loaders.items() if isinstance(v, ForcingLoader)}
 
     def spinup(self) -> None:
-        """Prepare the forcing module for the simulation.
-
-        Does not do anything as no spinup is needed.
-        """
+        """Spinup."""
         pass
 
     def step(self) -> None:
-        """Advance the forcing module by one time step.
-
-        Does not do anything as the forcing data is read on demand.
-        """
+        """Step."""
         pass

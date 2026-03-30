@@ -1,5 +1,6 @@
 """Data catalog for predefined datasets in GEB."""
 
+import logging
 from typing import Any
 
 from .aquastat import AQUASTAT
@@ -10,6 +11,7 @@ from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
+from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
@@ -25,7 +27,7 @@ from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
-from .gtsm import GTSM
+from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
@@ -61,9 +63,21 @@ data_catalog: dict[str, dict[str, Any]] = {
     "era5": {
         "adapter": DestinationEarth(),
         "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
+    },
+    "ecmwf_geopotential": {
+        "adapter": ECMWFGeopotential(
+            folder="ecmwf_geopotential",
+            filename="geo_1279l4_0.1x0.1.grib2_v4_unpack.nc",
+            local_version=1,
+            cache="global",
+        ),
+        "url": "https://confluence.ecmwf.int/download/attachments/140385202/geo_1279l4_0.1x0.1.grib2_v4_unpack.nc?version=1&modificationDate=1591983422003&api=v2",
         "source": {
-            "name": "ERA5",
+            "name": "ECMWF ERA5-Land geopotential",
             "author": "ECMWF",
+            "url": "https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#ERA5Land:datadocumentation-parameterlistingParameterlistings",
+            "license": "CC BY 4.0",
         },
     },
     "ecmwf_forecasts": {
@@ -849,6 +863,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "https://doi.org/10.48670/moi-00150",
         },
     },
+    "gtsm_timeseries": {
+        "adapter": GTSM_timeseries(
+            folder="gtsm",
+            local_version=2,
+            filename="placeholder.zip",
+            cache="global",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
+        "source": {
+            "name": "Global Tide and Storm Surge Model (GTSM)",
+            "author": "Muis et al. (2022)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.24381/cds.a6d42d60",
+            "paper_doi": "10.5281/zenodo.8314503",
+        },
+    },
     "gtsm": {
         "adapter": GTSM(
             folder="gtsm",
@@ -1067,12 +1097,15 @@ data_catalog: dict[str, dict[str, Any]] = {
 }
 
 
-class NewDataCatalog:
+class DataCatalog:
     """The GEB data catalog for accessing predefined datasets."""
 
-    def __init__(self) -> None:
+    def __init__(self, logger: logging.Logger) -> None:
         """Initialize the data catalog with predefined entries."""
         self.catalog = data_catalog
+        for name, entry in self.catalog.items():
+            adapter = entry["adapter"]
+            adapter.logger = logger
 
     def fetch(self, name: str, *args: Any, **kwargs: Any) -> Adapter:
         """Get a data catalog entry by name.

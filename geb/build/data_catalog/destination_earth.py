@@ -12,7 +12,7 @@ import aiohttp
 import numpy as np
 import xarray as xr
 
-from geb.workflows.raster import convert_nodata, interpolate_na_along_dim
+from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
@@ -148,6 +148,8 @@ class DestinationEarth(Adapter):
                 ),
             )
 
+        da = da.chunk({"y": -1, "x": -1})
+
         # Reorder x to be between -180 and 180 degrees
         da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
 
@@ -157,6 +159,7 @@ class DestinationEarth(Adapter):
 
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
         da: xr.DataArray = convert_nodata(da, np.nan)
+
         return da
 
     def read(
@@ -206,10 +209,6 @@ class DestinationEarth(Adapter):
 
         assert da.time.dt.hour.min().item() == 0, "time does not start at hour 0"
 
-        # rechunk to have all data for a time step in one chunk
-        da = da.chunk({"x": -1, "y": -1, "time": 24})
-
         da: xr.DataArray = da.rio.write_crs(4326)
-        da: xr.DataArray = interpolate_na_along_dim(da)
 
         return da

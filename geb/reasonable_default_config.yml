@@ -185,6 +185,7 @@ report:
     chunk_target_size_bytes: 100000000  # target chunk size in bytes
   _water_circle: false
   _water_balance: true
+  _water_storage: true
   _energy_balance: true
   _discharge_stations: true
   _outflow_points: true
