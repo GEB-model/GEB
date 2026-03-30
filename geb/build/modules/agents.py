@@ -1366,9 +1366,9 @@ class Agents(BuildModelBase):
         parameters = self.data_catalog.fetch("local_damage_model").read()
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
-                for component, asset_compontents in asset_parameters.items():
+                for component, asset_components in asset_parameters.items():
                     curve = pd.DataFrame(
-                        asset_compontents["curve"],
+                        asset_components["curve"],
                         columns=np.array(["severity", "damage_ratio"]),
                     )
 
@@ -1378,7 +1378,7 @@ class Agents(BuildModelBase):
                     )
 
                     maximum_damage = {
-                        "maximum_damage": asset_compontents["maximum_damage"]
+                        "maximum_damage": asset_components["maximum_damage"]
                     }
 
                     self.set_params(
