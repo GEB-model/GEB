@@ -68,6 +68,9 @@ class FloodEventConfig(BaseModel):
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
+    damage_model: str = Field(
+        "local", description="The damage model to use (local or global)."
+    )
     simulate: bool = Field(False, description="Whether to simulate floods.")
     forcing_method: Literal["headwater_points", "accumulated_runoff"] = Field(
         "accumulated_runoff",
