@@ -7,7 +7,6 @@ from .aquastat import AQUASTAT
 from .base import Adapter
 from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
-from .damage_functions import DamageFunctions
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
@@ -19,6 +18,7 @@ from .fao import FAOSTAT, GMIA
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
+from .global_damage_functions import GlobalDamageFunctions
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
 from .global_ocean_mean_dynamic_topography import (
@@ -32,6 +32,7 @@ from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
+from .local_damage_functions import LocalDamageFunctions
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -813,17 +814,33 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 4.0 or ODbL 1.0",
         },
     },
-    "damage_functions": {
-        "adapter": DamageFunctions(
-            folder="damage_functions",
+    "local_damage_functions": {
+        "adapter": LocalDamageFunctions(
+            folder="local_damage_functions",
+            local_version=1,
+            filename="huizinga2017.xlsx",
+            cache="global",
+        ),
+        "url": None,  # No direct URL available for local damage functions
+        "source": {
+            "name": "Local Flood Depth-Damage Functions",
+            "author": "Endendijk et al. (2023)",
+            "version": "1.0",
+            "license": "CC BY 4.0",
+            "doi": " https://doi.org/10.1029/2022WR034192",
+        },
+    },
+    "global_damage_functions": {
+        "adapter": GlobalDamageFunctions(
+            folder="global_damage_functions",
             local_version=1,
             filename="huizinga2017.xlsx",
             cache="global",
         ),
         "url": "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC105688/copy_of_global_flood_depth-damage_functions__30102017.xlsx",
         "source": {
-            "name": "Damage Functions",
-            "author": "Example Author",
+            "name": "Global Flood Depth-Damage Functions",
+            "author": "Huizinga et al. (2017)",
             "version": "1.0",
             "license": "CC BY 4.0",
         },

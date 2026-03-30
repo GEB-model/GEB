@@ -1358,12 +1358,40 @@ class Agents(BuildModelBase):
         # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
 
+    @build_method(required=False)
+    def setup_local_damage_functions(
+        self,
+    ) -> None:
+        """Sets up damage parameters for different hazards and asset types."""
+        parameters = self.data_catalog.fetch("local_damage_functions").read()
+        for hazard, hazard_parameters in parameters.items():
+            for asset_type, asset_parameters in hazard_parameters.items():
+                for component, asset_compontents in asset_parameters.items():
+                    curve = pd.DataFrame(
+                        asset_compontents["curve"],
+                        columns=np.array(["severity", "damage_ratio"]),
+                    )
+
+                    self.set_table(
+                        curve,
+                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
+                    )
+
+                    maximum_damage = {
+                        "maximum_damage": asset_compontents["maximum_damage"]
+                    }
+
+                    self.set_params(
+                        maximum_damage,
+                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
+                    )
+
     @build_method(required=True)
-    def setup_damage_functions(self, region: str = "global") -> None:
+    def setup_global_damage_functions(self, region: str = "global") -> None:
         """This method sets up the damage functions for flood events for the specified region. It retrieves the damage functions from the data catalog, processes them, and saves them as parquet files for use in the model.
 
         Args:
-            region: The region for which to set up the damage functions. Default is 'global'.
+            region: The region for which to set up the damage functions. Default is 'global', alternative
         """
         damage_functions = self.data_catalog.fetch("damage_functions").read(
             region=region

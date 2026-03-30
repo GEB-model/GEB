@@ -30,13 +30,23 @@ class FloodRiskModule:
         Args:
             model (GEBModel): The main model instance containing configuration and file paths.
             households (Agents): The households agent instance where the loaded data will be stored.
-
+        Raises:
+            ValueError: If the damage model type specified in the configuration is invalid (not 'local' or 'global').
         """
         self.model = model
         self.households = households
-        # self.load_damage_curves()
-        self.load_global_damage_curves()
-        self.alter_global_damage_curves_for_flood_proofed_buildings()
+        self.damage_model_type = self.model.config["hazards"]["floods"]["damage_model"][
+            "type"
+        ]
+        if self.damage_model_type == "local":
+            self.load_damage_curves()
+        elif self.damage_model_type == "global":
+            self.load_global_damage_curves()
+            self.alter_global_damage_curves_for_flood_proofed_buildings()
+        else:
+            raise ValueError(
+                f"Invalid damage model type: {self.model.config['hazards']['floods']['damage_model']['type']}. Expected 'local' or 'global'."
+            )
         self.load_max_damage_values()
         self.load_flood_maps()
 
