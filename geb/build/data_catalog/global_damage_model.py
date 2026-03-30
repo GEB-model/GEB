@@ -23,15 +23,15 @@ class GlobalDamageModel(Adapter):
         super().__init__(*args, **kwargs)
 
     @property
-    def map_damage_functions(self) -> dict[str, tuple]:
+    def map_damage_functions(self) -> dict[str, tuple[slice, slice]]:
         """Mapping of damage classes to their corresponding row and column slices in the raw damage functions dataframe."""
         return {
-            "residential": [slice(0, 9), slice(1, 9)],
-            "commercial": [slice(9, 18), slice(1, 9)],
-            "industrial": [slice(18, 27), slice(1, 9)],
-            "transport": [slice(27, 36), slice(1, 9)],
-            "infrastructure": [slice(36, 45), slice(1, 9)],
-            "agricultural": [slice(45, 54), slice(1, 9)],
+            "residential": (slice(0, 9), slice(1, 9)),
+            "commercial": (slice(9, 18), slice(1, 9)),
+            "industrial": (slice(18, 27), slice(1, 9)),
+            "transport": (slice(27, 36), slice(1, 9)),
+            "infrastructure": (slice(36, 45), slice(1, 9)),
+            "agricultural": (slice(45, 54), slice(1, 9)),
         }
 
     def _clean_damage_functions(self, df: pd.DataFrame, region: str) -> dict[str, pd.DataFrame]:
