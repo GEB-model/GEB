@@ -34,19 +34,20 @@ class GlobalDamageModel(Adapter):
             "agricultural": [slice(45, 54), slice(1, 9)],
         }
 
-    def _clean_damage_functions(self, df: pd.DataFrame, region: str) -> pd.DataFrame:
-        """Clean the residential damage functions dataframe.
+    def _clean_damage_functions(self, df: pd.DataFrame, region: str) -> dict[str, pd.DataFrame]:
+        """Clean the damage functions dataframe for all damage classes.
 
         Args:
             df: The raw dataframe containing the damage functions.
             region: The region for which to extract damage functions.
 
         Returns:
-            A cleaned dataframe with standardized columns and numeric values.
+            A dictionary where keys are damage classes and values are cleaned dataframes
+            with standardized columns and numeric values for the specified region.
         Raises:
             ValueError: If the specified region is not found in the damage functions dataframe.
         """
-        damage_functions = {}
+        damage_functions: dict[str, pd.DataFrame] = {}
 
         for damage_class in self.map_damage_functions:
             df_damage_class = df.iloc[
