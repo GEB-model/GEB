@@ -14,7 +14,6 @@ from collections.abc import Callable
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-import re
 from typing import Any, TextIO, TypeVar, cast
 
 import geopandas as gpd

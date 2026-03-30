@@ -12,7 +12,6 @@ import numpy as np
 import osmnx as ox
 import pandas as pd
 import xarray as xr
-from pyproj import CRS
 from rasterio.features import rasterize
 from scipy import interpolate
 
