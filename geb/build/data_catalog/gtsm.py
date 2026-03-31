@@ -112,6 +112,8 @@ class GTSM(Adapter):
             bounds: A tuple of four floats representing the bounding box (min_x, min_y, max_x, max_y).
         Returns:
             An xarray DataArray containing the GTSM data clipped to the specified bounds.
+        Raises:
+            ValueError: If no data values are found for stations in the specified bounds.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             extract_path = temp_dir
