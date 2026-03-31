@@ -143,6 +143,12 @@ class GTSM(Adapter):
         # use boolean indexing along the 'stations' dimension
         merged_data = merged_data.isel(stations=mask)
 
+        # assert that sea level contains data
+        if merged_data.mean_sea_level.isnull().any():
+            raise ValueError(
+                "No data values found for stations in the specified bounds. Check input data and bounds."
+            )
+
         return merged_data
 
 
