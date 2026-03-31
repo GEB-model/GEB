@@ -3702,7 +3702,13 @@ class CropFarmers(AgentBaseClass):
             * 100,
             2,
         )
-        print("Irrigation efficient farms:", percentage_adapted, "(%)")
+        print(
+            "Irrigation efficient farms:",
+            percentage_adapted,
+            "(%)",
+            "Adaptation type:",
+            adaptation_type,
+        )
 
     def update_adaptation_decision(
         self,
