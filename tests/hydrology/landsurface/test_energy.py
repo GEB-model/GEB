@@ -3,10 +3,12 @@
 import numpy as np
 
 from geb.hydrology.landsurface.energy import (
+    apply_rain_heat_advection,
     calculate_sensible_heat_flux,
     calculate_soil_thermal_conductivity_from_frozen_fraction,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_heat_capacity_solid_fraction,
+    get_temperature_and_frozen_fraction_from_enthalpy_scalar,
 )
 
 
@@ -209,3 +211,44 @@ def test_calculate_sensible_heat_flux() -> None:
         surface_pressure_pa=np.float32(101325.0),
     )
     assert flux_cooling < 0.0
+
+
+def test_apply_rain_heat_advection_reduces_frozen_fraction() -> None:
+    """Test that warm liquid input can thaw a partially frozen top layer."""
+    solid_heat_capacity_J_per_m2_K = np.float32(1.0e6)
+    water_content_m = np.float32(0.02)
+    topwater_m = np.float32(0.01)
+
+    latent_heat_areal_J_per_m2 = (
+        (water_content_m + topwater_m) * np.float32(1000.0) * np.float32(334000.0)
+    )
+    initial_enthalpy_J_per_m2 = np.float32(-0.5) * latent_heat_areal_J_per_m2
+
+    initial_temperature_C, initial_frozen_fraction = (
+        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+            enthalpy_J_per_m2=initial_enthalpy_J_per_m2,
+            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
+            water_content_m=water_content_m,
+            topwater_m=topwater_m,
+        )
+    )
+
+    updated_enthalpy_J_per_m2 = apply_rain_heat_advection(
+        soil_enthalpy_top_layer_J_per_m2=initial_enthalpy_J_per_m2,
+        liquid_water_input_m=topwater_m,
+        rain_temperature_C=np.float32(5.0),
+    )
+    updated_temperature_C, updated_frozen_fraction = (
+        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+            enthalpy_J_per_m2=updated_enthalpy_J_per_m2,
+            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
+            water_content_m=water_content_m,
+            topwater_m=topwater_m,
+        )
+    )
+
+    assert initial_temperature_C == np.float32(0.0)
+    assert updated_temperature_C == np.float32(0.0)
+    assert initial_frozen_fraction > np.float32(0.0)
+    assert updated_frozen_fraction < initial_frozen_fraction
+    assert updated_frozen_fraction >= np.float32(0.0)

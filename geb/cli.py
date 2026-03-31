@@ -2,12 +2,13 @@
 
 import datetime
 import functools
+import inspect
 import json
 import subprocess
 import sys
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import click
 
@@ -27,6 +28,8 @@ from geb.runner import (
     WORKING_DIRECTORY_DEFAULT,
     alter_fn,
     build_fn,
+    clean_fn,
+    create_logger,
     init_fn,
     init_multiple_fn,
     run_model_with_method,
@@ -41,7 +44,60 @@ from geb.workflows.raster import rechunk_zarr_file
 IS_WINDOWS = sys.platform == "win32"
 
 
-@click.group()
+def get_available_evaluation_methods() -> list[str]:
+    """Return the public evaluation methods available through ``geb evaluate``.
+
+    Returns:
+        Sorted list of fully-qualified evaluation method names.
+    """
+    evaluator = Evaluate(cast(Any, None))
+    available_methods: list[str] = []
+
+    for sub_name in evaluator.sub_evaluators:
+        sub_evaluator = getattr(evaluator, sub_name)
+
+        # This returns a list of (name, value) tuples for methods only
+        methods = inspect.getmembers(sub_evaluator, predicate=inspect.ismethod)
+
+        for attr_name, _ in methods:
+            if not attr_name.startswith("_"):
+                available_methods.append(f"{sub_name}.{attr_name}")
+
+    return sorted(available_methods)
+
+
+def format_available_evaluation_methods(methods: list[str]) -> str:
+    """Format evaluation methods for CLI help text.
+
+    Args:
+        methods: Fully-qualified evaluation method names.
+
+    Returns:
+        Multi-line bullet list for CLI help output.
+    """
+    if not methods:
+        return "  - No evaluation methods available."
+
+    return "\n".join(f"  - {method_name}" for method_name in methods)
+
+
+AVAILABLE_EVALUATION_METHODS: list[str] = get_available_evaluation_methods()
+AVAILABLE_EVALUATION_METHODS_HELP: str = format_available_evaluation_methods(
+    AVAILABLE_EVALUATION_METHODS
+)
+EVALUATE_HELP = (
+    "Evaluate model, for example by comparing observed and simulated discharge.\n\n"
+    "Accepts additional parameter assignments in the form `--key value` or "
+    "`--key=value` to pass to the evaluation method. Strings `true` and "
+    "`false` (case-insensitive) are converted to booleans.\n\n"
+    "\b\n"
+    "Available methods:\n"
+    f"{AVAILABLE_EVALUATION_METHODS_HELP}\n\n"
+    "Use `geb evaluate [METHOD] --help` for method-specific documentation."
+)
+
+
+@click.group(help="Command line interface for GEB.")
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
 def cli(context: click.core.Context) -> None:
@@ -143,7 +199,7 @@ def universal_options(func: Callable[..., Any]) -> Callable[..., Any]:
         "--profile-ram",
         is_flag=True,
         default=PROFILE_RAM_DEFAULT,
-        help="Run GEB with RAM profiling (using memray). A .bin file is saved in the profiling directory."
+        help="Run GEB with RAM profiling (using memray). A .bin file is saved in the profiling directory. Not supported on Windows."
         if not IS_WINDOWS
         else "RAM profiling is not supported on Windows.",
     )
@@ -164,7 +220,7 @@ def universal_options(func: Callable[..., Any]) -> Callable[..., Any]:
         "-n",
         type=int,
         default=CORES_DEFAULT,
-        help="Restrict the number of CPU cores used by the process (Linux only).",
+        help="Restrict the number of CPU cores used by the process. Not supported on Windows.",
     )
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -514,18 +570,17 @@ def update_version(*args: Any, **kwargs: Any) -> None:
 @cli.command(
     context_settings=dict(
         ignore_unknown_options=True, allow_extra_args=True, help_option_names=[]
-    )
+    ),
+    help=EVALUATE_HELP,
 )
 @click.argument("method", default="hydrology.evaluate_discharge")
 @universal_options
-@click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
 @click.option("--help", is_flag=True, help="Show this message and exit.")
 @click.pass_context
 def evaluate(
     ctx: click.Context,
     method: str,
-    spinup_name: str,
     run_name: str,
     help: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
@@ -547,7 +602,6 @@ def evaluate(
     Args:
         ctx: Click context containing extra arguments.
         method: Single evaluation method to run, e.g. `hydrology.evaluate_discharge`.
-        spinup_name: Name of the evaluation run.
         run_name: Name of the run to evaluate.
         help: Show this message and exit.
         working_directory: Working directory for the model.
@@ -576,7 +630,7 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
-            evaluator = Evaluate(None)  # type: ignore
+            evaluator = Evaluate(cast(Any, None))
             attr = attrgetter(method)(evaluator)
             click.echo(f"\nHelp for method '{method}':\n")
             if attr.__doc__:
@@ -585,23 +639,9 @@ def evaluate(
                 click.echo("No documentation found for this method.")
         except Exception:
             click.echo(f"Error: Method '{method}' not found.")
-            available_methods = []
-            try:
-                evaluator = Evaluate(None)  # type: ignore
-                # List methods in sub-evaluators
-                for sub_name in evaluator.sub_evaluators:
-                    sub_eval = getattr(evaluator, sub_name)
-                    for attr_name in dir(sub_eval):
-                        if not attr_name.startswith("_") and callable(
-                            getattr(sub_eval, attr_name)
-                        ):
-                            available_methods.append(f"{sub_name}.{attr_name}")
-            except Exception:
-                pass
-
-            if available_methods:
+            if AVAILABLE_EVALUATION_METHODS:
                 click.echo("\nAvailable methods are:")
-                for m in sorted(available_methods):
+                for m in AVAILABLE_EVALUATION_METHODS:
                     click.echo(f"  - {m}")
         ctx.exit()
 
@@ -668,7 +708,6 @@ def evaluate(
         method="evaluate",
         method_args={
             "method": method_name,
-            "spinup_name": spinup_name,
             "run_name": run_name,
             **extra_args,
         },
@@ -724,7 +763,7 @@ def data_catalog(method: str) -> None:
     Raises:
         ValueError: If the method is not recognized.
     """
-    data_catalog = DataCatalog()
+    data_catalog = DataCatalog(logger=create_logger("data_catalog"))
     if method == "size":
         print("Total size of data catalog:", data_catalog.size())
     elif method == "license":
@@ -924,9 +963,9 @@ def workflow(
 )
 @click.option(
     "--target-area-km2",
-    default=817e3,
+    default=420000,
     type=float,
-    help="Target cumulative upstream area per cluster in km². Defaults to 817,000 km².",
+    help="Target cumulative upstream area per cluster in km². Defaults to 420,000 km².",
 )
 @click.option(
     "--cluster-prefix",
@@ -967,6 +1006,57 @@ def init_multiple(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model for multiple subbasins."""
     # Initialize the model with the given config and build config
     init_multiple_fn(*args, **kwargs)
+
+
+@cli.command()
+@click.option(
+    "--scenario",
+    "-s",
+    default="base",
+    show_default=True,
+    help="Scenario subdirectory to clean (e.g. 'base' or an alternative scenario created with 'geb alter').",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt and delete immediately.",
+)
+@working_directory_option
+def clean(
+    scenario: str,
+    yes: bool,
+    working_directory: Path,
+) -> None:
+    """Clean generated files from a model, keeping model.yml,  update.yml and build.yml.
+
+    Run from inside the model directory (e.g. cd large_scale6 && geb clean),
+    following the same convention as all other 'geb' commands.
+
+    Works for both single-model layouts (created with 'geb init') and
+    multi-basin layouts (created with 'geb init-multiple'). In the latter
+    case, all cluster subdirectories are cleaned at once.
+
+    Shows a list of items to be deleted and asks for confirmation.
+    Type 'y' and press Enter to confirm, or press Enter to abort.
+    Use --yes / -y to skip the prompt (useful in scripts).
+
+    Examples:
+
+      Clean the base scenario (run from inside the model dir):
+
+        cd large_scale6 && geb clean
+
+      Clean an alternative scenario:
+
+        geb clean --scenario myalternative
+    """
+    clean_fn(
+        working_directory=working_directory,
+        scenario=scenario,
+        yes=yes,
+    )
 
 
 @cli.command()

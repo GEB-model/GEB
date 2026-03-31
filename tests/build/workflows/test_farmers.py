@@ -96,13 +96,15 @@ def test_create_farms_numba_single_farmer_single_cell() -> None:
 )
 def test_create_farm_distributions_for_all_lowder_regions() -> None:
     """Ensure each Lowder ISO3 group can produce a farm-size distribution."""
-    lowder_farm_sizes = DataCatalog().fetch("lowder_farm_size_distribution").read()
+    logger = logging.getLogger("test_create_farm_distributions_for_all_lowder_regions")
+    lowder_farm_sizes = (
+        DataCatalog(logger=logger).fetch("lowder_farm_size_distribution").read()
+    )
     cultivated_land_area_region_m2 = 10_000_000.0
     average_subgrid_area_region = 1.0
     cultivated_land_region_total_cells = int(
         cultivated_land_area_region_m2 / average_subgrid_area_region
     )
-    logger = logging.getLogger("test_create_farm_distributions_for_all_lowder_regions")
 
     processed_iso3: list[str] = []
 

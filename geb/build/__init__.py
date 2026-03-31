@@ -645,7 +645,9 @@ def cluster_subbasins_following_coastline(
             outlet_coords = [
                 (oid, coords_array[subbasin_to_idx[oid]]) for oid in remaining_outlets
             ]
-            outlet_coords.sort(key=lambda x: (-x[1][1], -x[1][0]))  # Sort by -lat, -lon
+            outlet_coords.sort(
+                key=lambda x: (-x[1][1], -x[1][0])
+            )  # Sort by -lat, -lon (top-right corner)
             start_outlet = outlet_coords[0][0]
             logger.info(f"  Starting outlet: {start_outlet} (top-right corner)")
         else:
@@ -1287,14 +1289,12 @@ def create_multi_basin_configs(
     # Create full build.yml in init_multiple_dir directory
     print("Creating build.yml in main init multiple directory...")
     build_config_path = working_directory / "build.yml"
-    # Read build config from geul example and automatically copy it
-    geul_build_path = GEB_PACKAGE_DIR / "examples" / "geul" / "build.yml"
 
-    print(f"Reading build configuration from: {geul_build_path}")
-
-    # Copy geul build.yml content directly to init_multiple_dir build.yml
-    with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
-        dst.write(src.read())
+    # Write a build.yml that inherits from the geul example, mirroring
+    # how model.yml inherits from reasonable_default_config.yml
+    build_config_content = 'inherits: "{GEB_PACKAGE_DIR}/examples/geul/build.yml"\n'
+    with open(build_config_path, "w") as f:
+        f.write(build_config_content)
 
     print(f"Created build.yml in {working_directory}")
 
@@ -1975,7 +1975,7 @@ class GEBModel(
 
         self.root = root
         self.epsg = epsg
-        self._data_catalog = DataCatalog()
+        self._data_catalog = DataCatalog(logger=logger)
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
@@ -2324,7 +2324,7 @@ class GEBModel(
             # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
-                f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
+                f"Approximate riverine basin size: {round(geom.to_crs('ESRI:54009').area.sum() / 1e6, 2)} km2"
             )
 
             riverine_mask = create_riverine_mask(ldd, ldd_network, geom)
@@ -3172,14 +3172,15 @@ class GEBModel(
                     data,
                     name=grid_name + "_" + "tmp",
                 ) as tmp_zarr_path:
-                    data = write_zarr(
+                    del data
+                    data: xr.DataArray = write_zarr(
                         tmp_zarr_path.chunk({"x": -1, "y": -1}),
                         path=self.root / fn,
                         crs=4326,
                         **kwargs,
                     )
             else:
-                data = write_zarr(
+                data: xr.DataArray = write_zarr(
                     data,
                     path=self.root / fn,
                     crs=4326,
@@ -3425,13 +3426,42 @@ class GEBModel(
                         f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
                     )
 
+        build_run_started_at: datetime = datetime.now()
+
+        # For cluster builds (large_scale6/<cluster>/<scenario>/<input_folder>),
+        # detect the top-level model dir by looking for model.yml three levels up.
+        root_abs: Path = Path(self.root).resolve()
+        scenario_dir: Path = root_abs.parent
+        cluster_dir: Path = scenario_dir.parent
+        model_dir: Path = cluster_dir.parent
+        stats_path: Path | None = None
+        cluster_name_for_stats: str = ""
+        if record_progress and (model_dir / "model.yml").exists():
+            cluster_name_for_stats = cluster_dir.name
+            # Each cluster writes its own CSV to avoid corrupt conditions when
+            # multiple Snakemake jobs build clusters in parallel.
+            stats_path = (
+                model_dir / "build_memory_stats" / f"{cluster_name_for_stats}.csv"
+            )
+
         for method in methods:
             if method in completed_methods:
                 self.logger.info(f"Skipping already completed method: {method}")
                 continue
 
             kwargs = {} if methods[method] is None else methods[method]
-            self.run_method(method, **kwargs)
+            try:
+                self.run_method(method, **kwargs)
+            finally:
+                # Write memory stats after every method regardless of success or
+                # failure so partial results survive job crashes.
+                if stats_path is not None:
+                    build_method.write_build_stats(
+                        stats_path=stats_path,
+                        cluster_name=cluster_name_for_stats,
+                        run_timestamp=build_run_started_at,
+                        cluster_dir=scenario_dir,  # measure subdirs of base/, not input/
+                    )
             self.write_file_library()
 
             if record_progress:

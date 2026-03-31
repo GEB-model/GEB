@@ -1048,7 +1048,10 @@ class Hydrography(BuildModelBase):
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(depends_on=["setup_coastlines", "setup_elevation"], required=True)
+    @build_method(
+        depends_on=["setup_coastlines", "setup_elevation"],
+        required=True,
+    )
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         if self.geom["routing/subbasins"]["is_coastal"].any():
@@ -1290,8 +1293,8 @@ class Hydrography(BuildModelBase):
     def setup_gtsm_surge_levels(self) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds."""
         gtsm_data_region, _ = self.data_catalog.fetch(
-            "gtsm_timeseries", variable="surge"
-        ).read(bounds=self.bounds, variable="surge")
+            "gtsm_timeseries", variable="storm_surge_residual"
+        ).read(bounds=self.bounds, variable="storm_surge_residual")
         self.set_table(gtsm_data_region, name="gtsm/surge")
         self.logger.info("GTSM station surge levels set")
 
@@ -1388,11 +1391,9 @@ class Hydrography(BuildModelBase):
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
         # remove stations that are not in coast_rp index
-        stations = stations[
-            stations["station_id"].astype(int).isin(coast_rp.index)
-        ].reset_index(drop=True)
+        stations = stations[stations.index.astype(int).isin(coast_rp.index)]
 
-        coast_rp = coast_rp.loc[stations["station_id"].astype(int)]
+        coast_rp = coast_rp.loc[stations.index]
         self.set_table(coast_rp, name="coast_rp")
 
         # also set stations (only those that are in coast_rp)

@@ -595,26 +595,28 @@ def apply_evaporative_cooling(
 @njit(cache=True, inline="always")
 def apply_rain_heat_advection(
     soil_enthalpy_top_layer_J_per_m2: np.float32,
-    infiltration_amount_m: np.float32,
+    liquid_water_input_m: np.float32,
     rain_temperature_C: np.float32,
 ) -> np.float32:
-    """Apply advective heat transport from infiltrating rain to top-layer enthalpy.
+    """Apply advective heat transport from liquid water to top-layer enthalpy.
 
     Notes:
-        The infiltrating water enters as liquid water at `rain_temperature_C`.
+        The liquid water enters the top-layer thermal control volume at
+        `rain_temperature_C`. This is used for rainfall reaching the soil surface,
+        even when part of that water remains ponded instead of infiltrating.
         This updates enthalpy conservatively:
         $H_{new} = H_{old} + m c_w T_{rain}$.
 
     Args:
         soil_enthalpy_top_layer_J_per_m2: Top-layer enthalpy (J/m2).
-        infiltration_amount_m: Infiltration added to the top layer (m).
+        liquid_water_input_m: Liquid water added to the top-layer control volume (m).
         rain_temperature_C: Rain temperature (C).
 
     Returns:
         Updated top-layer enthalpy (J/m2).
     """
     enthalpy_added_J_per_m2: np.float32 = (
-        infiltration_amount_m
+        liquid_water_input_m
         * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
         * rain_temperature_C
     )
