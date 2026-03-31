@@ -433,6 +433,93 @@ class Agents(BuildModelBase):
         )
         self.set_table(income_distributions_pd, "income/national_distribution")
 
+    @build_method(depends_on=["setup_income_distribution_parameters"], required=True)
+    def setup_subnational_income_distribution(
+        self, skip_countries_ISO3: list[str] = ([],)
+    ) -> None:
+        """Sets up the subnational income distributions for GEB.
+
+        Notes:
+            This function generates subnational income distribution profiles for each region based on the national income distribution parameters and the population distribution within the region. It retrieves the population data for each region, calculates the mean and median disposable income for each subnational unit, and generates synthetic income distributions based on these parameters assuming a log-normal distribution. The resulting distributions are set as tables (be mindful for models outside of the EU that we do not yet account for currencies).
+        """
+
+        # create income percentile based on wealth index mapping
+        wealth_index_to_income_percentile = {
+            1: (1, 19),
+            2: (20, 39),
+            3: (40, 59),
+            4: (60, 79),
+            5: (80, 100),
+        }
+
+        # load national income distribution
+        national_income_distribution = self.table["income/national_distribution"]
+
+        # load GDL region within model domain
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+        # initiate the subnational income distribution parameters
+        subnational_income_params = []
+
+        for GDL_code in GDL_regions["GDLcode"]:
+            self.logger.info(f"Setting up household characteristics for {GDL_code}...")
+            if GDL_code[:3] in skip_countries_ISO3:
+                self.logger.info(f"Skipping {GDL_code[:3]}")
+
+            GLOPOP_S_region, _ = self.data_catalog.fetch(
+                "glopop-sg", region=GDL_code
+            ).read(GDL_code)
+
+            # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefore, we combine these.)
+            GLOPOP_S_region["wealth_index"] = (
+                GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
+            )
+
+            # sample income percentile
+            GLOPOP_S_region["income_percentile"] = np.uint16(np.iinfo(np.uint16).max)
+            for wealth_index in wealth_index_to_income_percentile:
+                percentile_range = wealth_index_to_income_percentile[wealth_index]
+
+                GLOPOP_S_region.loc[
+                    GLOPOP_S_region["wealth_index"] == wealth_index,
+                    "income_percentile",
+                ] = np.random.randint(
+                    percentile_range[0],
+                    percentile_range[1],
+                    size=len(
+                        GLOPOP_S_region.loc[
+                            GLOPOP_S_region["wealth_index"] == wealth_index
+                        ]
+                    ),
+                ).astype(np.uint16)
+            assert not (
+                GLOPOP_S_region["income_percentile"] == np.iinfo(np.uint16).max
+            ).any()
+
+            # sample income from national distribution
+            disp_income = np.percentile(
+                np.array(national_income_distribution[GDL_code[:3]]),
+                np.array(GLOPOP_S_region["income_percentile"]),
+            )
+
+            subnational_income_params.append(
+                pd.DataFrame(
+                    {
+                        "mean_disp_income": np.mean(disp_income),
+                        "median_disp_income": np.median(disp_income),
+                    },
+                    index=[GDL_code],
+                )
+            )
+
+        # also export subnational income distribution
+        all_subnational_income_params = pd.concat(subnational_income_params)
+        self.set_table(
+            all_subnational_income_params,
+            name="income/subnational_distribution_parameters",
+        )
+
     @build_method(
         depends_on=["setup_regions_and_land_use", "set_time_range"], required=True
     )
