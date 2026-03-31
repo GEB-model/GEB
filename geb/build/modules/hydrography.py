@@ -1331,6 +1331,10 @@ class Hydrography(BuildModelBase):
         # sort by datetime index
         mean_sea_level_df = mean_sea_level_df.sort_index()
 
+        # we do not model receding sea levels, so enforce that the absolute mean sea level
+        # for each time step is at least as high as in the previous step, i.e. mean sea level is monotonically increasing
+        mean_sea_level_df = mean_sea_level_df.cummax(axis=0)
+
         # set table for model
         self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
 
