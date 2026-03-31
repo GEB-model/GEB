@@ -49,8 +49,8 @@ def get_resources(cluster_name):
     #                                          → 2 concurrent jobs
     #   Grand total: up to 6 concurrent jobs
     partition = "defq,ivm-fat"
-    cpus = 32
-    memory_mb = 300000
+    cpus = 16
+    memory_mb = 200000
 
     return memory_mb, partition, cpus, exclude
 

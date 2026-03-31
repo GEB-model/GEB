@@ -1461,10 +1461,10 @@ class Hydrography(BuildModelBase):
         # do some check on the extrapolated data
         for station in sea_level_rise_df.columns:
             series = sea_level_rise_df[station]
-            # check that the values are monotonically increasing
-            if not series.is_monotonic_increasing:
+            # check that the values are either monotonically increasing or decreasing
+            if not (series.is_monotonic_increasing or series.is_monotonic_decreasing):
                 raise ValueError(
-                    f"Sea level rise data for station {station} is not monotonically increasing after extrapolation."
+                    f"Sea level rise data for station {station} is neither monotonically increasing nor monotonically decreasing after extrapolation."
                 )
             # check that the values are reasonable (less than 2 meters by 2100)
             if series.iloc[-1] >= 2:
