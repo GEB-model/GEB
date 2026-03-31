@@ -1331,8 +1331,9 @@ class Hydrography(BuildModelBase):
         # sort by datetime index
         mean_sea_level_df = mean_sea_level_df.sort_index()
 
-        # we do not model receding sea levels, so clip the sea level rise for each year
-        # to be at least as high as the previous year, so that the sea level rise is monotonically increasing
+        # we do not model receding sea levels, so enforce that the absolute mean sea level
+        # for each time step is at least as high as in the previous step, i.e. mean sea level is monotonically increasing
+        # (the sea level rise relative to the reference year is computed only after this adjustment)
         for i in np.arange(1, mean_sea_level_df.shape[0]):
             mean_sea_level_df.iloc[i, :] = np.maximum(
                 mean_sea_level_df.iloc[i, :], mean_sea_level_df.iloc[i - 1, :]
