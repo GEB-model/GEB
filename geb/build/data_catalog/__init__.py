@@ -15,12 +15,12 @@ from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .flood_damage_model import GlobalFloodDamageModel, LocalFloodDamageModel
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
-from .global_flood_damage_model import GlobalFloodDamageModel
 from .global_ocean_mean_dynamic_topography import (
     GlobalOceanMeanDynamicTopography as GlobalOceanMeanDynamicTopography,
 )
@@ -32,7 +32,6 @@ from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
-from .local_flood_damage_model import LocalFloodDamageModel
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
