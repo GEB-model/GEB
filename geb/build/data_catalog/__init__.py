@@ -15,7 +15,10 @@ from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
-from .flood_damage_model import GlobalFloodDamageModel, LocalFloodDamageModel
+from .flood_damage_model import (
+    GeulFloodDamageModel,
+    GlobalFloodDamageModel,
+)
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
@@ -813,8 +816,8 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 4.0 or ODbL 1.0",
         },
     },
-    "local_flood_damage_model": {
-        "adapter": LocalFloodDamageModel(
+    "geul_flood_damage_model": {
+        "adapter": GeulFloodDamageModel(
             folder=None,
             local_version=None,
             filename=None,
@@ -822,7 +825,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         ),
         "url": None,  # No direct URL available for local damage functions
         "source": {
-            "name": "Local Flood Depth-Damage Functions",
+            "name": "Flood Depth-Damage Functions for the Geul River Basin",
             "author": "Endendijk et al. (2023)",
             "version": "1.0",
             "license": "CC BY 4.0",

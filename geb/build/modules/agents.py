@@ -1359,11 +1359,11 @@ class Agents(BuildModelBase):
         self.set_geom(buildings, name="assets/open_building_map")
 
     @build_method(required=True)
-    def setup_local_flood_damage_model(
+    def setup_geul_flood_damage_model(
         self,
     ) -> None:
         """Sets up damage parameters for different hazards and asset types."""
-        parameters = self.data_catalog.fetch("local_flood_damage_model").read()
+        parameters = self.data_catalog.fetch("geul_flood_damage_model").read()
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
                 for component, asset_components in asset_parameters.items():
@@ -1374,7 +1374,7 @@ class Agents(BuildModelBase):
 
                     self.set_table(
                         curve,
-                        name=f"damage_model/local/{hazard}/{asset_type}/{component}/curve",
+                        name=f"damage_model/geul/{hazard}/{asset_type}/{component}/curve",
                     )
 
                     maximum_damage = {
@@ -1383,7 +1383,7 @@ class Agents(BuildModelBase):
 
                     self.set_params(
                         maximum_damage,
-                        name=f"damage_model/local/{hazard}/{asset_type}/{component}/maximum_damage",
+                        name=f"damage_model/geul/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
     @build_method(required=True)

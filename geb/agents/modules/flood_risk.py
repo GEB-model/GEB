@@ -31,19 +31,19 @@ class FloodRiskModule:
             model (GEBModel): The main model instance containing configuration and file paths.
             households (Agents): The households agent instance where the loaded data will be stored.
         Raises:
-            ValueError: If the damage model type specified in the configuration is invalid (not 'local' or 'global').
+            ValueError: If the damage model type specified in the configuration is invalid (not 'geul' or 'global').
         """
         self.model = model
         self.households = households
         damage_model = self.model.config["hazards"]["floods"]["damage_model"]
-        if damage_model == "local":
-            self.load_damage_curves()
-        elif damage_model == "global":
+        if damage_model == "global":
             self.load_global_damage_curves()
             self.alter_global_damage_curves_for_flood_proofed_buildings()
+        elif damage_model == "geul":
+            self.load_geul_damage_curves()
         else:
             raise ValueError(
-                f"Invalid damage model type: {damage_model}. Expected 'local' or 'global'."
+                f"Invalid damage model type: {damage_model}. Expected 'geul' or 'global'."
             )
         self.load_max_damage_values()
         self.load_flood_maps()
@@ -197,23 +197,23 @@ class FloodRiskModule:
             0.15
         )
 
-    def load_damage_curves(self) -> None:
+    def load_geul_damage_curves(self) -> None:
         """Load damage curves from model files and store them in the model variables."""
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
         road_curves = []
         road_types = [
-            ("residential", "damage_model/local/flood/road/residential/curve"),
-            ("unclassified", "damage_model/local/flood/road/unclassified/curve"),
-            ("tertiary", "damage_model/local/flood/road/tertiary/curve"),
-            ("tertiary_link", "damage_model/local/flood/road/tertiary_link/curve"),
-            ("primary", "damage_model/local/flood/road/primary/curve"),
-            ("primary_link", "damage_model/local/flood/road/primary_link/curve"),
-            ("secondary", "damage_model/local/flood/road/secondary/curve"),
-            ("secondary_link", "damage_model/local/flood/road/secondary_link/curve"),
-            ("motorway", "damage_model/local/flood/road/motorway/curve"),
-            ("motorway_link", "damage_model/local/flood/road/motorway_link/curve"),
-            ("trunk", "damage_model/local/flood/road/trunk/curve"),
-            ("trunk_link", "damage_model/local/flood/road/trunk_link/curve"),
+            ("residential", "damage_model/geul/flood/road/residential/curve"),
+            ("unclassified", "damage_model/geul/flood/road/unclassified/curve"),
+            ("tertiary", "damage_model/geul/flood/road/tertiary/curve"),
+            ("tertiary_link", "damage_model/geul/flood/road/tertiary_link/curve"),
+            ("primary", "damage_model/geul/flood/road/primary/curve"),
+            ("primary_link", "damage_model/geul/flood/road/primary_link/curve"),
+            ("secondary", "damage_model/geul/flood/road/secondary/curve"),
+            ("secondary_link", "damage_model/geul/flood/road/secondary_link/curve"),
+            ("motorway", "damage_model/geul/flood/road/motorway/curve"),
+            ("motorway_link", "damage_model/geul/flood/road/motorway_link/curve"),
+            ("trunk", "damage_model/geul/flood/road/trunk/curve"),
+            ("trunk_link", "damage_model/geul/flood/road/trunk_link/curve"),
         ]
 
         for road_type, path in road_types:
@@ -231,7 +231,7 @@ class FloodRiskModule:
 
         self.households.var.forest_curve = read_table(
             self.households.model.files["table"][
-                "damage_model/local/flood/land_use/forest/curve"
+                "damage_model/geul/flood/land_use/forest/curve"
             ]
         )
         self.households.var.forest_curve.set_index("severity", inplace=True)
@@ -240,7 +240,7 @@ class FloodRiskModule:
         )
         self.households.var.agriculture_curve = read_table(
             self.households.model.files["table"][
-                "damage_model/local/flood/land_use/agriculture/curve"
+                "damage_model/geul/flood/land_use/agriculture/curve"
             ]
         )
         self.households.var.agriculture_curve.set_index("severity", inplace=True)
@@ -252,7 +252,7 @@ class FloodRiskModule:
 
         self.households.buildings_structure_curve = read_table(
             self.households.model.files["table"][
-                "damage_model/local/flood/buildings/structure/curve"
+                "damage_model/geul/flood/buildings/structure/curve"
             ]
         )
         self.households.buildings_structure_curve.set_index("severity", inplace=True)
@@ -291,7 +291,7 @@ class FloodRiskModule:
 
         self.households.buildings_content_curve = read_table(
             self.households.model.files["table"][
-                "damage_model/local/flood/buildings/content/curve"
+                "damage_model/geul/flood/buildings/content/curve"
             ]
         )
         self.households.buildings_content_curve.set_index("severity", inplace=True)
@@ -345,7 +345,7 @@ class FloodRiskModule:
 
         self.households.var.rail_curve = read_table(
             self.households.model.files["table"][
-                "damage_model/local/flood/rail/main/curve"
+                "damage_model/geul/flood/rail/main/curve"
             ]
         )
         self.households.var.rail_curve.set_index("severity", inplace=True)
