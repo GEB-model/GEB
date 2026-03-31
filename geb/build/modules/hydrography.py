@@ -1333,11 +1333,7 @@ class Hydrography(BuildModelBase):
 
         # we do not model receding sea levels, so enforce that the absolute mean sea level
         # for each time step is at least as high as in the previous step, i.e. mean sea level is monotonically increasing
-        # (the sea level rise relative to the reference year is computed only after this adjustment)
-        for i in np.arange(1, mean_sea_level_df.shape[0]):
-            mean_sea_level_df.iloc[i, :] = np.maximum(
-                mean_sea_level_df.iloc[i, :], mean_sea_level_df.iloc[i - 1, :]
-            )
+        mean_sea_level_df = mean_sea_level_df.cummax(axis=0)
 
         # set table for model
         self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
