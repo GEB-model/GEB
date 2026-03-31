@@ -1391,11 +1391,9 @@ class Hydrography(BuildModelBase):
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
         # remove stations that are not in coast_rp index
-        stations = stations[
-            stations["station_id"].astype(int).isin(coast_rp.index)
-        ].reset_index(drop=True)
+        stations = stations[stations.index.astype(int).isin(coast_rp.index)]
 
-        coast_rp = coast_rp.loc[stations["station_id"].astype(int)]
+        coast_rp = coast_rp.loc[stations.index]
         self.set_table(coast_rp, name="coast_rp")
 
         # also set stations (only those that are in coast_rp)
