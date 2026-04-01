@@ -1,5 +1,6 @@
 """Module containing build methods for the agents for GEB."""
 
+import difflib
 import unicodedata
 import warnings
 from datetime import datetime
@@ -1345,8 +1346,8 @@ class Agents(BuildModelBase):
         Returns:
             A GeoDataFrame with reconstruction costs assigned to each building.
         Raises:
-            ValueError: If a region in GADM level 1 is not found in the global exposure model or
-                        if some buildings do not have reconstruction costs assigned.
+            ValueError: If one or more GADM level-1 regions cannot be matched
+                to the global exposure model, or if some buildings do not have reconstruction costs assigned.
         """
         # load GADM level 1 within model domain (older version for compatibility with global exposure model)
         gadm_level1 = self.data_catalog.fetch("gadm_28").read(
@@ -1395,29 +1396,40 @@ class Agents(BuildModelBase):
 
         # Iterate over unique admin-1 region names to avoid redundant checks and assignments
         buildings["NAME_1"] = buildings["NAME_1"].apply(self.canon)
-        for name_1 in gadm_level1["NAME_1"].dropna().unique():
-            # clean up name
-            name_1 = self.canon(name_1)
-            # check if region is in global exposure model
-            if name_1 not in global_exposure_model:
-                raise ValueError(
-                    f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
-                )
-            exposure_model_region = global_exposure_model[name_1]
-            for reconstruction_type in exposure_model_region:
-                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
-                    float(exposure_model_region[reconstruction_type])
-                )
-        # assert all buildings have reconstruction costs assigned (i.e., no null values in the reconstruction cost columns)
-        reconstruction_cost_columns = list(exposure_model_region.keys())
-        if buildings[reconstruction_cost_columns].isnull().any().any():
-            # get NAME_1 values for buildings with null reconstruction costs
-            buildings_with_null_costs = buildings[
-                buildings[reconstruction_cost_columns].isnull().any(axis=1)
-            ]
-            missing_name_1_values = buildings_with_null_costs["NAME_1"].unique()
+
+        exposure_model_keys: list[str] = list(global_exposure_model.keys())
+        gadm_names: list[str] = [
+            self.canon(n) for n in gadm_level1["NAME_1"].dropna().unique()
+        ]
+
+        # Any GADM name absent from the exposure model must be resolved
+        # manually via gadm_converter — no silent auto-mapping.
+        missing = {n for n in gadm_names if n not in global_exposure_model}
+        if missing:
+            def _suggest(name: str) -> str:
+                n = name.lower()
+                hits = [k for k in exposure_model_keys if k.lower().startswith(n + " ") or n.startswith(k.lower() + " ")]
+                hits = hits or difflib.get_close_matches(name, exposure_model_keys, n=1, cutoff=0.3)
+                return hits[0] if hits else "???"
+
+            new_entries = {_suggest(n): n for n in sorted(missing)}
+            dict_repr = "{\n" + "".join(f'    "{k}": "{v}",\n' for k, v in new_entries.items()) + "}"
             raise ValueError(
-                f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
+                f"{len(missing)} GADM region(s) are not in the global exposure model. "
+                f"Add the following entries to gadm_converter in "
+                f"geb/build/data_catalog/global_exposure_model.py:\n\n{dict_repr}"
+            )
+
+        # Vectorised assignment: build a DataFrame from the exposure model
+        # keyed by NAME_1 and merge onto buildings in one step.
+        exposure_df = pd.DataFrame.from_dict(global_exposure_model, orient="index")
+        buildings = gpd.GeoDataFrame(buildings.join(exposure_df, on="NAME_1"))
+        reconstruction_cost_columns = exposure_df.columns.tolist()
+        if buildings[reconstruction_cost_columns].isnull().any().any():
+            missing_regions = buildings.loc[buildings[reconstruction_cost_columns].isnull().any(axis=1), "NAME_1"].unique()
+            raise ValueError(
+                f"Buildings in {missing_regions} have no reconstruction costs. "
+                f"Check the global exposure model and region names."
             )
 
         return buildings
