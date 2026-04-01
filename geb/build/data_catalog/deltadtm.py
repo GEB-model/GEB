@@ -62,7 +62,7 @@ class DeltaDTM(Adapter):
         super().__init__(*args, **kwargs)
 
     def get_tiles_for_mask(self, mask: BaseGeometry) -> tuple[list[str], list[str]]:
-        """Get the DeltaDTM tiles that intersect with the mask. This function uses the DeltaDTM tiles geopackage.
+        """Get the DeltaDTM tiles that intersect with the mask, with a buffer. This function uses the DeltaDTM tiles geopackage.
 
         Args:
             mask: The geometry used to filter intersecting tiles.
@@ -87,8 +87,9 @@ class DeltaDTM(Adapter):
                 raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
             # load the geopackage
             gdf_tiles = gpd.read_file(filepath)
-        # get the tiles that intersect with the model bounds
-        xmin, ymin, xmax, ymax = mask.bounds
+        # get the tiles that intersect with the model bounds, with a buffer (0.4 degrees)
+        buffered_mask = mask.buffer(0.4)
+        xmin, ymin, xmax, ymax = buffered_mask.bounds
         tiles_in_bounds = gdf_tiles.cx[xmin:xmax, ymin:ymax]
         tile_names = tiles_in_bounds["tile"].tolist()
 
