@@ -449,6 +449,8 @@ class Agents(BuildModelBase):
 
         Args:
             skip_countries_ISO3: A list of ISO3 country codes to skip when setting up subnational income distributions.
+        Raises:
+            ValueError: If no regions are processed for subnational income distribution.
         """
         wealth_to_pct = {
             1: (1, 19),
