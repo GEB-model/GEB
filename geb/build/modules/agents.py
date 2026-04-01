@@ -508,6 +508,12 @@ class Agents(BuildModelBase):
                 )
             )
 
+        # assert regions is not empty
+        if len(results) == 0:
+            raise ValueError(
+                "No regions to process for subnational income distribution"
+            )
+
         self.set_table(
             pd.concat(results),
             name="income/subnational_distribution_parameters",
