@@ -51,7 +51,14 @@ gadm_converter: dict[str, str] = {
     "Vaduz": "Valduz",
     "Luzern": "Lucerne",
     "St. Gallen": "Sankt Gallen",
+    "Novgorod Oblast": "Novgorod",
+    "Pskov Oblast": "Pskov",
+    "Smolensk Oblast": "Smolensk",
+    "Tver Oblast": "Tver'",
+    "Arkhangelsk Oblast": "Arkhangel'sk",
+    "Murmansk Oblast": "Murmansk",
 }
+
 
 
 class GlobalExposureModel(Adapter):
