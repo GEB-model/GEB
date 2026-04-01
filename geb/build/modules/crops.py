@@ -18,7 +18,6 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
-
 from geb.build.methods import build_method
 from geb.geb_types import ArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
@@ -1226,6 +1225,7 @@ class Crops(BuildModelBase):
             adjust_currency=adjust_currency,
         )
         self.set_params(parsed_crop_prices, name="crops/crop_prices")
+        self.set_params(parsed_crop_prices, name="crops/cultivation_costs")
 
     @build_method(depends_on=[], required=False)
     def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:
@@ -1478,13 +1478,14 @@ class Crops(BuildModelBase):
                 n_farmers,
                 max(
                     [
+                        FIELD_EXPANSION_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+                        IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
+                        PERSONAL_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                         SURFACE_IRRIGATION_EQUIPMENT,
                         WELL_ADAPTATION,
-                        IRRIGATION_EFFICIENCY_ADAPTATION,
-                        FIELD_EXPANSION_ADAPTATION,
-                        PERSONAL_INSURANCE_ADAPTATION,
-                        INDEX_INSURANCE_ADAPTATION,
-                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
@@ -1885,29 +1886,40 @@ class Crops(BuildModelBase):
             return crop_calendar_per_farmer
 
         def unify_crop_variants(
-            crop_calendar_per_farmer: np.ndarray, target_crop: int
+            crop_calendar_per_farmer: np.ndarray,
+            target_crop: int,
         ) -> np.ndarray:
-            # Create a mask for all entries whose first value == target_crop
-            mask = crop_calendar_per_farmer[..., 0] == target_crop
+            """Replace all full rotation blocks for one crop by the most common block.
 
-            # If the crop does not appear at all, nothing to do
-            if not np.any(mask):
+            Assumes crop_calendar_per_farmer has shape:
+                (n_farmers, n_rotation_slots, 4)
+
+            and that the dominant crop of a block is stored in [0, 0].
+
+            Returns:
+                The updated crop calendar with only one crop rotation type per crop.
+            """
+            # Select full farmer blocks belonging to this dominant crop
+            block_mask = crop_calendar_per_farmer[:, 0, 0] == target_crop
+
+            if not np.any(block_mask):
                 return crop_calendar_per_farmer
 
-            # Extract only the rows/entries that match the target crop
-            crop_entries = crop_calendar_per_farmer[mask]
+            # Full 3D blocks, not individual rows
+            crop_blocks = crop_calendar_per_farmer[block_mask]
 
-            # Among these crop rows, find unique variants and their counts
-            # (axis=0 ensures we treat each row/entry as a unit)
+            # Count unique full-block variants
             unique_variants, variant_counts = np.unique(
-                crop_entries, axis=0, return_counts=True
+                crop_blocks,
+                axis=0,
+                return_counts=True,
             )
 
-            # The most common variant is the unique variant with the highest count
+            # Pick most frequent full rotation block
             most_common_variant = unique_variants[np.argmax(variant_counts)]
 
-            # Replace all the target_crop rows with the most common variant
-            crop_calendar_per_farmer[mask] = most_common_variant
+            # Replace all matching blocks with that dominant full block
+            crop_calendar_per_farmer[block_mask] = most_common_variant
 
             return crop_calendar_per_farmer
 
