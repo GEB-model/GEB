@@ -435,7 +435,8 @@ class Agents(BuildModelBase):
 
     @build_method(depends_on=["setup_income_distribution_parameters"], required=True)
     def setup_subnational_income_distribution(
-        self, skip_countries_ISO3: list[str] = ()
+        self,
+        skip_countries_ISO3: list[str] = [],
     ) -> None:
         """Set up subnational income distributions for GDL regions based on GLOPOP-S.
 
