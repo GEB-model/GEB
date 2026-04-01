@@ -59,6 +59,8 @@ setup_create_farms:
 
 setup_income_distribution_parameters:
 
+setup_subnational_income_distribution:
+
 setup_buildings:
 
 setup_household_characteristics:
