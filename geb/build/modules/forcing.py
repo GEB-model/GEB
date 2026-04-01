@@ -1420,10 +1420,23 @@ class Forcing(BuildModelBase):
                 # to ensure they are saved on the regular model grid.
                 grid_mask = self.other["climate/pr_kg_per_m2_per_s_mask"]
                 for param in ["c", "loc", "scale"]:
+                    values_1d = GEV.sel(dparams=param).values.astype(np.float32)
+                    mask_2d = grid_mask.values.astype(bool)
+
+                    assert values_1d.ndim == 1
+                    assert np.count_nonzero(mask_2d) == len(values_1d)
+
+                    out = np.full(mask_2d.shape, np.nan, dtype=np.float32)
+                    out[mask_2d] = values_1d
+
                     param_da = self.full_like(
-                        grid_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+                        grid_mask,
+                        fill_value=np.nan,
+                        nodata=np.nan,
+                        dtype=np.float32,
                     )
-                    param_da.values[grid_mask.values] = GEV.sel(dparams=param).values
+                    param_da.values = out
+
                     self.set_other(param_da, name=f"climate/gev_{param}")
 
     @build_method(depends_on=["setup_forcing"], required=True)
