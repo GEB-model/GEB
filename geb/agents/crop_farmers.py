@@ -1000,7 +1000,7 @@ class CropFarmers(AgentBaseClass):
 
         # HETAO: you could initialize your irrigation efficiency here
         efficiency_division_array = np.array(
-            [efficiency_division[0], efficiency_division[1], efficiency_division[2]],
+            [efficiency_division[0], efficiency_division[1]],
             dtype=float,
         )
         efficiency_division_array /= np.array(efficiency_division_array).sum()
@@ -1010,7 +1010,6 @@ class CropFarmers(AgentBaseClass):
         self.var.irrigation_efficiency[self.irrigated] = rng.choice(
             [
                 self.var.irr_eff_surface,
-                self.var.irr_eff_sprinkler,
                 self.var.irr_eff_drip,
             ],
             size=self.irrigated.sum(),
@@ -1018,32 +1017,16 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.adaptations[
-            self.var.irrigation_efficiency == self.var.irr_eff_sprinkler,
-            IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-        ] = 1
-        self.var.adaptations[
             self.var.irrigation_efficiency == self.var.irr_eff_drip,
             IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
         ] = 1
 
         self.var.return_fraction[
-            self.var.irrigation_efficiency == self.var.irr_eff_sprinkler
-        ] = self.var.return_fraction_sprinkler
-        self.var.return_fraction[
             self.var.irrigation_efficiency == self.var.irr_eff_drip
         ] = self.var.return_fraction_drip
 
         rng_drip = np.random.default_rng(70)
-        self.var.time_adapted[
-            self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER] == 1,
-            IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-        ] = rng_drip.uniform(
-            1,
-            self.var.lifespan_irrigation,
-            np.sum(
-                self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER] == 1
-            ),
-        )
+
         self.var.time_adapted[
             self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_DRIP] == 1,
             IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
@@ -4971,13 +4954,6 @@ class CropFarmers(AgentBaseClass):
                             IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
                             self.var.irr_eff_drip,
                             self.var.return_fraction_drip,
-                        )
-                        self.adapt_irrigation_efficiency(
-                            farmer_yield_probability_relation,
-                            annual_cost_sprinkler,
-                            IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-                            self.var.irr_eff_sprinkler,
-                            self.var.return_fraction_sprinkler,
                         )
 
                         self.var.mean_irrigation_efficiency = np.mean(
