@@ -21,38 +21,20 @@ EVALUATION_METHODS = config.get("EVALUATION_METHODS", "hydrology.plot_discharge,
 def get_resources(cluster_name):
     """Get SLURM resources for a cluster job.
 
-    All clusters use the same resource allocation. CPU count is the effective
-    concurrency knob (SLURM on this cluster ignores --mem for placement).
-
-    Args:
-        cluster_name: Name of the cluster directory (e.g. "Europe_007").
-
-    Returns:
-        Tuple of (memory_mb, partition_name, cpus_per_task, slurm_extra).
+    Memory profiling across all 17 European clusters (April 2026) shows peak
+    RSS of 54–75 GB regardless of basin size, dominated by
+    setup_gtsm_station_data.  100 GB provides ~33 % headroom and fits within
+    the ivm nodes (123 GB), opening more scheduling slots.
+    defq has MaxTime=7 days; build/run stay within that, spinup uses ivm-fat.
     """
-    exclude = "--exclude=node[003-015]"
+    return 100000, "defq,ivm,ivm-fat", 8, ""
 
-    # Resource strategy (updated Mar 2026):
-    # Actual peak RSS from SACCT across all phases:
-    #   build_cluster:  max ~190 GB  (job 1239390)
-    #   spinup_cluster: max ~287 GB  (job 1234070)
-    #   run_cluster:    max ~263 GB  (job 1234403)
-    # → 300 GB covers all three phases with a ~1.05-1.6× safety margin.
-    #
-    # SLURM on this cluster does not use --mem for placement, so CPUs are the
-    # effective concurrency knob. Using partition "defq,ivm-fat" allows SLURM to
-    # schedule on whichever node is free first:
-    #   defq  node001/002: 64 CPUs, 1031 GB → 2 jobs × 32 CPUs = 64 CPUs filled
-    #                                          2 jobs × 300 GB  = 600 GB  < 1031 GB ✓
-    #                                          → 4 concurrent jobs (2 nodes)
-    #   ivm-fat node243:  128 CPUs,  773 GB → RAM limits to 2 jobs (2×300=600 GB)
-    #                                          → 2 concurrent jobs
-    #   Grand total: up to 6 concurrent jobs
-    partition = "defq,ivm-fat"
-    cpus = 16
-    memory_mb = 200000
 
-    return memory_mb, partition, cpus, exclude
+# defq MaxTime = 7 days (10080 min); build and run fit within 5 days.
+# Spinup can exceed 7 days so it targets ivm-fat (unlimited MaxTime).
+RUNTIME_BUILD_MIN = 7200   # 5 days
+RUNTIME_SPINUP_MIN = 14400  # 10 days
+RUNTIME_RUN_MIN = 7200     # 5 days
 
 
 # Dynamically discover cluster directories (run only once)
@@ -86,7 +68,7 @@ rule build_cluster:
         LARGE_SCALE_DIR + "/{cluster}/base/logs/build.log"
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
-        runtime=11520,  # 8 days
+        runtime=RUNTIME_BUILD_MIN,
         cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
@@ -114,9 +96,10 @@ rule spinup_cluster:
         LARGE_SCALE_DIR + "/{cluster}/base/logs/spinup.log"
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
-        runtime=11520,  # 8 days
+        runtime=RUNTIME_SPINUP_MIN,
         cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
-        slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
+        # spinup can exceed defq's 7-day MaxTime, so restrict to ivm-fat only
+        slurm_partition="ivm-fat",
         slurm_account="ivm",
         slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
     shell:
@@ -139,7 +122,7 @@ rule run_cluster:
         LARGE_SCALE_DIR + "/{cluster}/base/logs/run.log"
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
-        runtime=11520,  # 8 days
+        runtime=RUNTIME_RUN_MIN,
         cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
