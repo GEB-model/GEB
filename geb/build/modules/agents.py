@@ -1235,13 +1235,21 @@ class Agents(BuildModelBase):
     def canon(self, string_to_normalize: str) -> str:
         """Canonicalizes a string by normalizing it to ASCII and stripping whitespace.
 
+        Some characters (e.g. Polish Ł/ł) do not decompose to ASCII via NFKD
+        and would be silently dropped, causing mismatches (e.g. "Łódź" → "odz").
+        These are mapped to their closest ASCII equivalents first.
+
         Args:
             string_to_normalize: The string to canonicalize.
         Returns:
             The canonicalized string.
         """
+        # Characters that NFKD cannot decompose to ASCII must be substituted
+        # explicitly; otherwise encode("ascii", "ignore") drops them entirely.
+        _non_decomposable = str.maketrans("ŁłØøÐð", "LlOoDd")
+        s = string_to_normalize.translate(_non_decomposable)
         return (
-            unicodedata.normalize("NFKD", string_to_normalize)
+            unicodedata.normalize("NFKD", s)
             .encode("ascii", "ignore")
             .decode("ascii")
             .strip()

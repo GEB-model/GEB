@@ -59,6 +59,12 @@ gadm_converter: dict[str, str] = {
     "Murmansk Oblast": "Murmansk",
 }
 
+# Mapping from GADM country names (NAME_0, underscores replacing spaces) to
+# the folder names used in the GEM GitHub repository, where they differ.
+gem_country_name_aliases: dict[str, str] = {
+    "Czech_Republic": "Czechia",
+}
+
 
 
 class GlobalExposureModel(Adapter):
@@ -76,13 +82,21 @@ class GlobalExposureModel(Adapter):
     def canon(self, string_to_normalize: str) -> str:
         """Canonicalizes a string by normalizing it to ASCII and stripping whitespace.
 
+        Some characters (e.g. Polish Ł/ł) do not decompose to ASCII via NFKD
+        and would be silently dropped, causing mismatches (e.g. "Łódź" → "odz").
+        These are mapped to their closest ASCII equivalents first.
+
         Args:
             string_to_normalize: The string to canonicalize.
         Returns:
             The canonicalized string.
         """
+        # Characters that NFKD cannot decompose to ASCII must be substituted
+        # explicitly; otherwise encode("ascii", "ignore") drops them entirely.
+        _non_decomposable = str.maketrans("ŁłØøÐð", "LlOoDd")
+        s = string_to_normalize.translate(_non_decomposable)
         return (
-            unicodedata.normalize("NFKD", string_to_normalize)
+            unicodedata.normalize("NFKD", s)
             .encode("ascii", "ignore")
             .decode("ascii")
             .strip()
@@ -217,7 +231,12 @@ class GlobalExposureModel(Adapter):
         """
         # set attribute of the adapter to the list of countries for which data is being fetched
         countries = [country.replace(" ", "_") for country in countries]
-        self.countries = [self.canon(country) for country in countries]
+        # Apply country-name aliases upfront so fetch() and read() both use the
+        # same (aliased) name when constructing cached CSV filenames.
+        self.countries = [
+            gem_country_name_aliases.get(self.canon(c), self.canon(c))
+            for c in countries
+        ]
 
         # Query the repository tree for all files in the `main` branch so we
         # can locate country-specific folders without cloning the repo.
@@ -243,6 +262,8 @@ class GlobalExposureModel(Adapter):
             )
             # replace spaces with dashes for matching folder names and search
             country = country.replace(" ", "_")
+            # apply any known country-name aliases (e.g. GADM "Czech_Republic" → GEM "Czechia")
+            country = gem_country_name_aliases.get(country, country)
             # create pathname and check if exist in GEB datacatalog
             fn_country_data = self.path.parent / f"global_exposure_model_{country}.csv"
             if not fn_country_data.exists():
