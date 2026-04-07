@@ -452,7 +452,7 @@ class Agents(BuildModelBase):
         Raises:
             ValueError: If no regions are processed for subnational income distribution.
         """
-        wealth_to_pct = {
+        wealth_index_to_income_percentile = {
             1: (1, 20),
             2: (20, 40),
             3: (40, 60),
@@ -486,7 +486,7 @@ class Agents(BuildModelBase):
 
             # vectorized percentile assignment
             GLOPOP_S_region["income_percentile"] = np.uint16(0)
-            for w, (low, high) in wealth_to_pct.items():
+            for w, (low, high) in wealth_index_to_income_percentile.items():
                 mask = GLOPOP_S_region["wealth_index"] == w
                 GLOPOP_S_region.loc[mask, "income_percentile"] = np.random.randint(
                     low, high, size=mask.sum()
