@@ -453,10 +453,10 @@ class Agents(BuildModelBase):
             ValueError: If no regions are processed for subnational income distribution.
         """
         wealth_to_pct = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
             5: (80, 100),
         }
 
@@ -1523,10 +1523,10 @@ class Agents(BuildModelBase):
 
         # create income percentile based on wealth index mapping
         wealth_index_to_income_percentile = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
             5: (80, 100),
         }
 
