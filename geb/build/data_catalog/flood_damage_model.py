@@ -9,7 +9,7 @@ import requests
 
 from .base import Adapter
 
-flood = {
+geul_damage_model = {
     "flood": {
         "land_use": {
             "forest": {
@@ -246,7 +246,7 @@ class GeulFloodDamageModel(Adapter):
         Returns:
             A dictionary containing cleaned local damage functions data.
         """
-        return flood
+        return geul_damage_model
 
 
 class GlobalFloodDamageModel(Adapter):
