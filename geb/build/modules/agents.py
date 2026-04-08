@@ -1371,6 +1371,14 @@ class Agents(BuildModelBase):
                 the underlying 'global_flood_damage_model' dataset and include: europe, north america,
                 central&south america, asia, africa, oceania, and 'global'; representing the global average curves.
         """
+        # clear model files for damage model to avoid issues with old files when changing region
+        for key in list(self.files["table"]):
+            if key.startswith("damage_model/"):
+                del self.files["table"][key]
+        for key in list(self.files["dict"]):
+            if key.startswith("damage_model/"):
+                del self.files["dict"][key]
+
         if region == "geul":
             parameters = self.data_catalog.fetch("geul_flood_damage_model").read()
             for hazard, hazard_parameters in parameters.items():
@@ -1378,23 +1386,22 @@ class Agents(BuildModelBase):
                     for component, asset_components in asset_parameters.items():
                         curve = pd.DataFrame(
                             asset_components["curve"],
-                            columns=np.array(["severity", "damage_ratio"]),
+                            columns=np.array(["depth", "damage_ratio"]),
                         )
 
                         self.set_table(
                             curve,
-                            name=f"damage_model/geul/{hazard}/{asset_type}/{component}/curve",
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/curve",
                         )
-
                         maximum_damage = {
                             "maximum_damage": asset_components["maximum_damage"]
                         }
 
                         self.set_params(
                             maximum_damage,
-                            name=f"damage_model/geul/{hazard}/{asset_type}/{component}/maximum_damage",
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/maximum_damage",
                         )
-                return None
+                return
 
         damage_functions = self.data_catalog.fetch("global_flood_damage_model").read(
             region=region
@@ -1403,8 +1410,9 @@ class Agents(BuildModelBase):
         for damage_class, df_damage_class in damage_functions.items():
             self.set_table(
                 df_damage_class,
-                name=f"damage_model/global/flood/{damage_class}",
+                name=f"damage_model/flood/{damage_class}/structure/curve",
             )
+        self.write_file_library()
 
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
