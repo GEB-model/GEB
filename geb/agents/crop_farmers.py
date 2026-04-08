@@ -657,6 +657,15 @@ class CropFarmers(AgentBaseClass):
             0, self.var.crop_calendar_rotation_years
         )
 
+        if self.hydrological_year_start != 1:
+            month_to_day_index = np.array(
+                [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+            )
+            month = self.hydrological_year_start
+            day_of_the_year = month_to_day_index[month - 1]
+            mask_annual_crops = self.var.crop_calendar[:, 0, 0] == 23
+            self.var.crop_calendar[mask_annual_crops, 0, 1] = day_of_the_year
+
         self.var.adaptations = DynamicArray(
             read_array(self.model.files["array"]["agents/farmers/adaptations"]),
             max_n=self.var.max_n,
@@ -2200,8 +2209,7 @@ class CropFarmers(AgentBaseClass):
                 f"Harvesting {number_of_harvesting_fields} fields with crops: "
                 f"{np.unique(harvested_crops[harvested_crops >= 0])}"
             )
-            if 23 in np.unique(harvested_crops[harvested_crops >= 0]):
-                pass
+
             # it's okay for some crop prices to be nan, as they will be filtered out in the next step
             crop_prices = self.agents.market.crop_prices
 
@@ -2290,9 +2298,7 @@ class CropFarmers(AgentBaseClass):
                         f"actual_profit={actual_profit_per_field[i]:.6g}"
                     )
 
-            if not (actual_profit_per_field >= 0).all():
-                pass
-            assert (potential_profit_per_field >= 0).all()
+            assert (potential_profit_per_field > 0).all()
             assert (actual_profit_per_field >= 0).all()
 
             # Convert from the profit and potential profit per field to the profit per farmer
@@ -3682,6 +3688,10 @@ class CropFarmers(AgentBaseClass):
             switch[i_keep] = False
 
         SEUT_adaptation_decision = switch
+
+        mask = np.array([57, 244])
+        if np.any(SEUT_adaptation_decision[mask]):
+            pass
 
         new_id_final = new_id_temp[SEUT_adaptation_decision]
 
@@ -5376,8 +5386,6 @@ class CropFarmers(AgentBaseClass):
 
         self.harvest()
         timer.finish_split("harvest")
-        self.plant()
-        timer.finish_split("planting")
 
         self.water_abstraction_sum()
         timer.finish_split("water abstraction calculation")
@@ -5413,6 +5421,9 @@ class CropFarmers(AgentBaseClass):
                 self.var.yearly_potential_income,
                 np.nan,
             )
+            if np.any(self.var.yearly_potential_income[:, 0] == 0):
+                mask = self.var.yearly_potential_income[:, 0] == 0
+                pass
             self.var.yearly_yield_ratio = (
                 self.var.yearly_income / yearly_potential_income
             )
@@ -5695,6 +5706,14 @@ class CropFarmers(AgentBaseClass):
                         "Cannot adapt without yield - probability relation"
                     )
 
+        # Plant after potential crop switches and adaptation changes
+        self.plant()
+        timer.finish_split("planting")
+
+        if (
+            self.model.current_time.month == self.hydrological_year_start
+            and self.model.current_time.day == 1
+        ):
             advance_crop_rotation_year(
                 current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index,
                 crop_calendar_rotation_years=self.var.crop_calendar_rotation_years,
