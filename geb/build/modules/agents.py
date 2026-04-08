@@ -1412,7 +1412,6 @@ class Agents(BuildModelBase):
                 df_damage_class,
                 name=f"damage_model/flood/{damage_class}/structure/curve",
             )
-        self.write_file_library()
 
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
