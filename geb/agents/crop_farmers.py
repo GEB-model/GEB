@@ -860,6 +860,14 @@ class CropFarmers(AgentBaseClass):
             dtype=np.float32,
             fill_value=0,
         )
+
+        self.var.seasonal_income_farmer = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=0,
+        )
+
         # note that this is NOT inflation corrected
         self.var.yearly_potential_income = DynamicArray(
             n=self.var.n,
@@ -2307,7 +2315,7 @@ class CropFarmers(AgentBaseClass):
                 weights=potential_profit_per_field,
                 minlength=self.var.n,
             )
-            self.income_farmer = np.bincount(
+            self.var.seasonal_income_farmer = np.bincount(
                 harvesting_farmer_fields,
                 weights=actual_profit_per_field,
                 minlength=self.var.n,
@@ -2330,7 +2338,9 @@ class CropFarmers(AgentBaseClass):
             harvesting_farmers_mask = np.zeros(self.var.n, dtype=bool)
             harvesting_farmers_mask[harvesting_farmers] = True
 
-            self.save_yearly_income(self.income_farmer, potential_income_farmer)
+            self.save_yearly_income(
+                self.var.seasonal_income_farmer, potential_income_farmer
+            )
             self.save_harvest_spei(harvesting_farmers)
             self.save_harvest_precipitation(harvesting_farmers, current_crop_age)
 
@@ -2342,7 +2352,7 @@ class CropFarmers(AgentBaseClass):
             self.var.previous_month = self.model.current_time.month
 
         else:
-            self.income_farmer = np.zeros(self.var.n, dtype=np.float32)
+            self.var.seasonal_income_farmer[:] = np.zeros(self.var.n, dtype=np.float32)
 
         # Reset transpiration values for harvested fields
         self.HRU.var.actual_evapotranspiration_crop_life[harvest] = 0
@@ -3732,6 +3742,10 @@ class CropFarmers(AgentBaseClass):
             farmer_yield_probability_relation: Per-farmer
                 yield-SPEI relationship used to evaluate profits under drought risk.
         """
+        assert np.any(self.well_irrigated), (
+            "Irrigation well adaptation requires some agents with initial well access"
+        )
+
         groundwater_depth = self.groundwater_depth.copy()
         groundwater_depth[groundwater_depth <= 0] = 0.001
 
