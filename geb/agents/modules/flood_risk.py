@@ -30,8 +30,6 @@ class FloodRiskModule:
         Args:
             model (GEBModel): The main model instance containing configuration and file paths.
             households (Agents): The households agent instance where the loaded data will be stored.
-        Raises:
-            ValueError: If the damage model type specified in the configuration is invalid (not 'geul' or 'global').
         """
         self.model = model
         self.households = households
@@ -267,7 +265,6 @@ class FloodRiskModule:
 
     def alter_damage_curves_for_flood_proofed_buildings(self) -> None:
         """Alter the global damage curves for flood-proofed buildings by applying a reduction factor to the unprotected building curves."""
-
         # insert a row with depth of 1.01m and damage ratio corresponding to the damage ratio at 1m depth modeling dry flood proofing until 1m depth.
         self.households.buildings_structure_curve.loc[1.01] = (
             self.households.buildings_structure_curve.loc[1]
