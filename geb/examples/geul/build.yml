@@ -179,10 +179,8 @@ setup_crop_prices:
     sunflower: 
       - sunflower seed
 
-setup_geul_flood_damage_model:
-
-setup_global_flood_damage_model:
-  region: europe
+setup_flood_damage_model:
+  region: geul
 
 setup_forcing:
   forcing: ERA5
