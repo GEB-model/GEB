@@ -35,16 +35,8 @@ class FloodRiskModule:
         """
         self.model = model
         self.households = households
-        damage_model = self.model.config["hazards"]["floods"]["damage_model"]
-        if damage_model == "global":
-            self.load_global_damage_curves()
-            self.alter_global_damage_curves_for_flood_proofed_buildings()
-        elif damage_model == "geul":
-            self.load_geul_damage_curves()
-        else:
-            raise ValueError(
-                f"Invalid damage model type: {damage_model}. Expected 'geul' or 'global'."
-            )
+        self.load_damage_curves()
+        self.alter_damage_curves_for_flood_proofed_buildings()
         self.load_max_damage_values()
         self.load_flood_maps()
 
@@ -65,98 +57,216 @@ class FloodRiskModule:
     def load_max_damage_values(self) -> None:
         """Load maximum damage values from model files and store them in the model variables."""
         # Load maximum damages
-        self.households.var.max_dam_buildings_structure = float(
-            read_params(
+        if (
+            "damage_model/flood/residential/structure/maximum_damage"
+            in self.households.model.files["dict"]
+        ):
+            self.households.var.max_dam_buildings_structure = float(
+                read_params(
+                    self.households.model.files["dict"][
+                        "damage_model/flood/residential/structure/maximum_damage"
+                    ]
+                )["maximum_damage"]
+            )
+            self.households.buildings["maximum_damage_m2"] = (
+                self.households.var.max_dam_buildings_structure
+            )
+        if (
+            "damage_model/flood/residential/content/maximum_damage"
+            in self.households.model.files["dict"]
+        ):
+            max_dam_buildings_content = read_params(
                 self.households.model.files["dict"][
-                    "damage_model/local/flood/buildings/structure/maximum_damage"
+                    "damage_model/flood/residential/content/maximum_damage"
                 ]
-            )["maximum_damage"]
-        )
-        self.households.buildings["maximum_damage_m2"] = (
-            self.households.var.max_dam_buildings_structure
-        )
+            )
+            self.households.var.max_dam_buildings_content = float(
+                max_dam_buildings_content["maximum_damage"]
+            )
 
-        max_dam_buildings_content = read_params(
-            self.households.model.files["dict"][
-                "damage_model/local/flood/buildings/content/maximum_damage"
-            ]
-        )
-        self.households.var.max_dam_buildings_content = float(
-            max_dam_buildings_content["maximum_damage"]
-        )
-
-        self.households.var.max_dam_rail = float(
-            read_params(
-                self.households.model.files["dict"][
-                    "damage_model/local/flood/rail/main/maximum_damage"
-                ]
-            )["maximum_damage"]
-        )
-        self.households.rail["maximum_damage_m"] = self.households.var.max_dam_rail
+        if (
+            "damage_model/flood/rail/main/maximum_damage"
+            in self.households.model.files["dict"]
+        ):
+            self.households.var.max_dam_rail = float(
+                read_params(
+                    self.households.model.files["dict"][
+                        "damage_model/flood/rail/main/maximum_damage"
+                    ]
+                )["maximum_damage"]
+            )
+            self.households.rail["maximum_damage_m"] = self.households.var.max_dam_rail
 
         max_dam_road_m: dict[str, float] = {}
         road_types = [
             (
                 "residential",
-                "damage_model/local/flood/road/residential/maximum_damage",
+                "damage_model/flood/road/residential/maximum_damage",
             ),
             (
                 "unclassified",
-                "damage_model/local/flood/road/unclassified/maximum_damage",
+                "damage_model/flood/road/unclassified/maximum_damage",
             ),
-            ("tertiary", "damage_model/local/flood/road/tertiary/maximum_damage"),
-            ("primary", "damage_model/local/flood/road/primary/maximum_damage"),
+            ("tertiary", "damage_model/flood/road/tertiary/maximum_damage"),
+            ("primary", "damage_model/flood/road/primary/maximum_damage"),
             (
                 "primary_link",
-                "damage_model/local/flood/road/primary_link/maximum_damage",
+                "damage_model/flood/road/primary_link/maximum_damage",
             ),
-            ("secondary", "damage_model/local/flood/road/secondary/maximum_damage"),
+            ("secondary", "damage_model/flood/road/secondary/maximum_damage"),
             (
                 "secondary_link",
-                "damage_model/local/flood/road/secondary_link/maximum_damage",
+                "damage_model/flood/road/secondary_link/maximum_damage",
             ),
-            ("motorway", "damage_model/local/flood/road/motorway/maximum_damage"),
+            ("motorway", "damage_model/flood/road/motorway/maximum_damage"),
             (
                 "motorway_link",
-                "damage_model/local/flood/road/motorway_link/maximum_damage",
+                "damage_model/flood/road/motorway_link/maximum_damage",
             ),
-            ("trunk", "damage_model/local/flood/road/trunk/maximum_damage"),
-            ("trunk_link", "damage_model/local/flood/road/trunk_link/maximum_damage"),
+            ("trunk", "damage_model/flood/road/trunk/maximum_damage"),
+            ("trunk_link", "damage_model/flood/road/trunk_link/maximum_damage"),
         ]
 
         for road_type, path in road_types:
-            max_dam_road_m[road_type] = read_params(
-                self.households.model.files["dict"][path]
-            )["maximum_damage"]
+            if path in self.households.model.files["dict"]:
+                max_dam_road_m[road_type] = read_params(
+                    self.households.model.files["dict"][path]
+                )["maximum_damage"]
 
-        self.households.roads["maximum_damage_m"] = self.households.roads[
-            "object_type"
-        ].map(max_dam_road_m)
+        if not max_dam_road_m:
+            print(
+                "Warning: No maximum damage values found for roads. Skipping loading maximum damage for roads."
+            )
+        else:
+            self.households.roads["maximum_damage_m"] = self.households.roads[
+                "object_type"
+            ].map(max_dam_road_m)
 
-        self.households.var.max_dam_forest_m2 = float(
-            read_params(
-                self.households.model.files["dict"][
-                    "damage_model/local/flood/land_use/forest/maximum_damage"
-                ]
-            )["maximum_damage"]
-        )
+        if (
+            "damage_model/flood/land_use/forest/maximum_damage"
+            in self.households.model.files["dict"]
+        ):
+            self.households.var.max_dam_forest_m2 = float(
+                read_params(
+                    self.households.model.files["dict"][
+                        "damage_model/flood/land_use/forest/maximum_damage"
+                    ]
+                )["maximum_damage"]
+            )
 
-        self.households.var.max_dam_agriculture_m2 = float(
-            read_params(
-                self.households.model.files["dict"][
-                    "damage_model/local/flood/land_use/agriculture/maximum_damage"
-                ]
-            )["maximum_damage"]
-        )
+        if (
+            "damage_model/flood/land_use/agriculture/maximum_damage"
+            in self.households.model.files["dict"]
+        ):
+            self.households.var.max_dam_agriculture_m2 = float(
+                read_params(
+                    self.households.model.files["dict"][
+                        "damage_model/flood/land_use/agriculture/maximum_damage"
+                    ]
+                )["maximum_damage"]
+            )
 
-    def load_global_damage_curves(self) -> None:
+    def load_damage_curves(self) -> None:
         """Load global damage curves from model files and store them in the model variables."""
         self.households.buildings_structure_curve = read_table(
             self.households.model.files["table"][
-                "damage_model/global/flood/residential"
+                "damage_model/flood/residential/structure/curve"
             ]
         )
         self.households.buildings_structure_curve.set_index("depth", inplace=True)
+
+        # now do the same for the content curve. Since there are no content curves in the global model, we use the structural curve again.
+        if (
+            "damage_model/flood/residential/content/curve"
+            not in self.households.model.files["table"]
+        ):
+            self.households.buildings_content_curve = (
+                self.households.buildings_structure_curve.copy()
+            )
+        else:
+            self.households.buildings_content_curve = read_table(
+                self.households.model.files["table"][
+                    "damage_model/flood/residential/content/curve"
+                ]
+            )
+            self.households.buildings_content_curve.set_index("depth", inplace=True)
+
+        """Load damage curves from model files and store them in the model variables."""
+        # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
+        road_curves = []
+        road_types = [
+            ("residential", "damage_model/flood/road/residential/curve"),
+            ("unclassified", "damage_model/flood/road/unclassified/curve"),
+            ("tertiary", "damage_model/flood/road/tertiary/curve"),
+            ("tertiary_link", "damage_model/flood/road/tertiary_link/curve"),
+            ("primary", "damage_model/flood/road/primary/curve"),
+            ("primary_link", "damage_model/flood/road/primary_link/curve"),
+            ("secondary", "damage_model/flood/road/secondary/curve"),
+            ("secondary_link", "damage_model/flood/road/secondary_link/curve"),
+            ("motorway", "damage_model/flood/road/motorway/curve"),
+            ("motorway_link", "damage_model/flood/road/motorway_link/curve"),
+            ("trunk", "damage_model/flood/road/trunk/curve"),
+            ("trunk_link", "damage_model/flood/road/trunk_link/curve"),
+        ]
+
+        for road_type, path in road_types:
+            if path not in self.households.model.files["table"]:
+                continue
+            df = read_table(self.households.model.files["table"][path])
+            df = df.rename(columns={"damage_ratio": road_type})
+
+            road_curves.append(df[[road_type]])
+
+        if road_curves:
+            depth_column: pd.DataFrame = df[["depth"]]
+
+            self.households.var.road_curves = pd.concat(
+                [depth_column] + road_curves, axis=1
+            )
+            self.households.var.road_curves.set_index("depth", inplace=True)
+
+        if (
+            "damage_model/flood/land_use/forest/curve"
+            in self.households.model.files["table"]
+        ):
+            self.households.var.forest_curve = read_table(
+                self.households.model.files["table"][
+                    "damage_model/flood/land_use/forest/curve"
+                ]
+            )
+            self.households.var.forest_curve.set_index("depth", inplace=True)
+            self.households.var.forest_curve = self.households.var.forest_curve.rename(
+                columns={"damage_ratio": "forest"}
+            )
+        if (
+            "damage_model/flood/land_use/agriculture/curve"
+            in self.households.model.files["table"]
+        ):
+            self.households.var.agriculture_curve = read_table(
+                self.households.model.files["table"][
+                    "damage_model/flood/land_use/agriculture/curve"
+                ]
+            )
+            self.households.var.agriculture_curve.set_index("depth", inplace=True)
+            self.households.var.agriculture_curve = (
+                self.households.var.agriculture_curve.rename(
+                    columns={"damage_ratio": "agriculture"}
+                )
+            )
+
+        if "damage_model/flood/rail/main/curve" in self.households.model.files["table"]:
+            self.households.var.rail_curve = read_table(
+                self.households.model.files["table"][
+                    "damage_model/flood/rail/main/curve"
+                ]
+            )
+            self.households.var.rail_curve.set_index("depth", inplace=True)
+            self.households.var.rail_curve = self.households.var.rail_curve.rename(
+                columns={"damage_ratio": "rail"}
+            )
+
+    def alter_damage_curves_for_flood_proofed_buildings(self) -> None:
+        """Alter the global damage curves for flood-proofed buildings by applying a reduction factor to the unprotected building curves."""
 
         # insert a row with depth of 1.01m and damage ratio corresponding to the damage ratio at 1m depth modeling dry flood proofing until 1m depth.
         self.households.buildings_structure_curve.loc[1.01] = (
@@ -165,14 +275,19 @@ class FloodRiskModule:
         self.households.buildings_structure_curve = (
             self.households.buildings_structure_curve.sort_index()
         )
-
-        # now do the same for the content curve. Since there are no content curves in the global model, we use the structural curve again.
+        # also do this for content curves
+        self.households.buildings_content_curve.loc[1.01] = (
+            self.households.buildings_content_curve.loc[1]
+        )
         self.households.buildings_content_curve = (
-            self.households.buildings_structure_curve.copy()
+            self.households.buildings_content_curve.sort_index()
         )
 
-    def alter_global_damage_curves_for_flood_proofed_buildings(self) -> None:
-        """Alter the global damage curves for flood-proofed buildings by applying a reduction factor to the unprotected building curves."""
+        # sanity check
+        assert self.households.buildings_structure_curve.index.equals(
+            self.households.buildings_content_curve.index
+        )
+
         self.households.buildings_structure_curve["building_unprotected"] = (
             self.households.buildings_structure_curve["damage_ratio"]
         )
@@ -195,71 +310,6 @@ class FloodRiskModule:
 
         self.households.buildings_content_curve.loc[0:1, "building_flood_proofed"] *= (
             0.15
-        )
-
-    def load_geul_damage_curves(self) -> None:
-        """Load damage curves from model files and store them in the model variables."""
-        # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
-        road_curves = []
-        road_types = [
-            ("residential", "damage_model/geul/flood/road/residential/curve"),
-            ("unclassified", "damage_model/geul/flood/road/unclassified/curve"),
-            ("tertiary", "damage_model/geul/flood/road/tertiary/curve"),
-            ("tertiary_link", "damage_model/geul/flood/road/tertiary_link/curve"),
-            ("primary", "damage_model/geul/flood/road/primary/curve"),
-            ("primary_link", "damage_model/geul/flood/road/primary_link/curve"),
-            ("secondary", "damage_model/geul/flood/road/secondary/curve"),
-            ("secondary_link", "damage_model/geul/flood/road/secondary_link/curve"),
-            ("motorway", "damage_model/geul/flood/road/motorway/curve"),
-            ("motorway_link", "damage_model/geul/flood/road/motorway_link/curve"),
-            ("trunk", "damage_model/geul/flood/road/trunk/curve"),
-            ("trunk_link", "damage_model/geul/flood/road/trunk_link/curve"),
-        ]
-
-        for road_type, path in road_types:
-            df = read_table(self.households.model.files["table"][path])
-            df = df.rename(columns={"damage_ratio": road_type})
-
-            road_curves.append(df[[road_type]])
-
-        severity_column: pd.DataFrame = df[["severity"]]
-
-        self.households.var.road_curves = pd.concat(
-            [severity_column] + road_curves, axis=1
-        )
-        self.households.var.road_curves.set_index("severity", inplace=True)
-
-        self.households.var.forest_curve = read_table(
-            self.households.model.files["table"][
-                "damage_model/geul/flood/land_use/forest/curve"
-            ]
-        )
-        self.households.var.forest_curve.set_index("severity", inplace=True)
-        self.households.var.forest_curve = self.households.var.forest_curve.rename(
-            columns={"damage_ratio": "forest"}
-        )
-        self.households.var.agriculture_curve = read_table(
-            self.households.model.files["table"][
-                "damage_model/geul/flood/land_use/agriculture/curve"
-            ]
-        )
-        self.households.var.agriculture_curve.set_index("severity", inplace=True)
-        self.households.var.agriculture_curve = (
-            self.households.var.agriculture_curve.rename(
-                columns={"damage_ratio": "agriculture"}
-            )
-        )
-
-        self.households.buildings_structure_curve = read_table(
-            self.households.model.files["table"][
-                "damage_model/geul/flood/buildings/structure/curve"
-            ]
-        )
-        self.households.buildings_structure_curve.set_index("severity", inplace=True)
-        self.households.buildings_structure_curve = (
-            self.households.buildings_structure_curve.rename(
-                columns={"damage_ratio": "building_unprotected"}
-            )
         )
 
         # TODO: Need to adjust the vulnerability curves
@@ -289,18 +339,6 @@ class FloodRiskModule:
             0.0
         )
 
-        self.households.buildings_content_curve = read_table(
-            self.households.model.files["table"][
-                "damage_model/geul/flood/buildings/content/curve"
-            ]
-        )
-        self.households.buildings_content_curve.set_index("severity", inplace=True)
-        self.households.buildings_content_curve = (
-            self.households.buildings_content_curve.rename(
-                columns={"damage_ratio": "building_unprotected"}
-            )
-        )
-
         # create another column (curve) in the buildings content curve for protected buildings
         self.households.buildings_content_curve["building_protected"] = (
             self.households.buildings_content_curve["building_unprotected"] * 0.7
@@ -309,8 +347,6 @@ class FloodRiskModule:
         self.households.buildings_content_curve["building_flood_proofed"] = (
             self.households.buildings_content_curve["building_unprotected"] * 0.85
         )
-
-        self.households.buildings_content_curve.loc[0:1, "building_flood_proofed"] = 0.0
 
         # TODO: need to adjust the vulnerability curves
         # create another column (curve) in the buildings content curve for
@@ -329,28 +365,6 @@ class FloodRiskModule:
         # protected buildings with both sandbags and elevated possessions
         self.households.buildings_content_curve["building_all_forecast_based"] = (
             self.households.buildings_content_curve["building_unprotected"] * 0.85
-        )
-
-        # create damage curves for adaptation
-        buildings_content_curve_adapted = self.households.buildings_content_curve.copy()
-        buildings_content_curve_adapted.loc[0:1] = (
-            0  # assuming zero damages untill 1m water depth
-        )
-        buildings_content_curve_adapted.loc[1:] *= (
-            0.8  # assuming 80% damages above 1m water depth
-        )
-        self.households.buildings_content_curve_adapted = (
-            buildings_content_curve_adapted
-        )
-
-        self.households.var.rail_curve = read_table(
-            self.households.model.files["table"][
-                "damage_model/geul/flood/rail/main/curve"
-            ]
-        )
-        self.households.var.rail_curve.set_index("severity", inplace=True)
-        self.households.var.rail_curve = self.households.var.rail_curve.rename(
-            columns={"damage_ratio": "rail"}
         )
 
     def calculate_building_flood_damages(
