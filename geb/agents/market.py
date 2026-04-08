@@ -140,11 +140,8 @@ class Market(AgentBaseClass):
         start_idx = inflation["time"].index(
             self.model.config["general"]["spinup_time"].year
         )
-        end_idx = inflation["time"].index(self.model.config["general"]["end_time"].year)
         for region in inflation["data"]:
-            region_inflation = [1] + inflation["data"][region][
-                start_idx + 1 : end_idx + 1
-            ]
+            region_inflation = [1] + inflation["data"][region][start_idx + 1 : -1]
             self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
 
     def estimate_price_model(self) -> None:
