@@ -45,7 +45,7 @@ geul_damage_model = {
                 "maximum_damage": 1.83,
             },
         },
-        "buildings": {
+        "residential": {
             "structure": {
                 "curve": [
                     [0, 0],
