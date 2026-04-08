@@ -2769,53 +2769,6 @@ class GEBModel(
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
 
-    @build_method(required=True)
-    def setup_damage_parameters(
-        self,
-        parameters: dict[
-            str, dict[str, dict[str, dict[str, list[tuple[float, float]] | float]]]
-        ],
-    ) -> None:
-        """Sets up damage parameters for different hazards and asset types.
-
-        Args:
-            parameters: A nested dictionary containing damage parameters. The structure is:
-                {
-                    "hazard_type": {
-                        "asset_type": {
-                            "component": {
-                                "curve": [(severity, damage_ratio), ...],
-                                "maximum_damage": float
-                            },
-                            ...
-                        },
-                        ...
-                    },
-                    ...
-                }
-        """
-        for hazard, hazard_parameters in parameters.items():
-            for asset_type, asset_parameters in hazard_parameters.items():
-                for component, asset_compontents in asset_parameters.items():
-                    curve = pd.DataFrame(
-                        asset_compontents["curve"],
-                        columns=np.array(["severity", "damage_ratio"]),
-                    )
-
-                    self.set_table(
-                        curve,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
-                    )
-
-                    maximum_damage = {
-                        "maximum_damage": asset_compontents["maximum_damage"]
-                    }
-
-                    self.set_params(
-                        maximum_damage,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
-                    )
-
     @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors: list[tuple[float, float]]
