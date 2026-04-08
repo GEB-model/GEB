@@ -65,13 +65,13 @@ class LiveStockFarmers(AgentBaseClass):
             if "town_managers" in self.model.config["agent_settings"]
             else {}
         )
-        self.hydrological_year_start = self.model.config["general"][
-            "hydrological_year_start"
-        ]
+
         self.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
-
+        self.hydrological_year_start = self.model.config["general"][
+            "hydrological_year_start"
+        ]
         if self.model.in_spinup:
             self.spinup()
 

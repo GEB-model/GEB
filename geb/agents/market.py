@@ -280,6 +280,18 @@ class Market(AgentBaseClass):
         if self.model.current_day_of_year == 1:
             self.var.production[:, self.year_index] = 0
             self.var.total_farmer_income[:, self.year_index] = 0
+
+        # Check if income_farmer array size matches current number of farmers
+        # This can differ after farmer removal (e.g., from forest conversion)
+        current_n_farmers = self.agents.crop_farmers.var.n
+        if (
+            hasattr(self.agents.crop_farmers.var, "seasonal_income_farmer")
+            and len(self.agents.crop_farmers.var.seasonal_income_farmer)
+            != current_n_farmers
+        ):
+            # income_farmer hasn't been updated yet this timestep, skip tracking until next harvest
+            return
+
         mask = self.agents.crop_farmers.var.harvested_crop != -1
         # TODO: This does not yet diffentiate per region
         yield_per_crop = np.bincount(
@@ -289,7 +301,7 @@ class Market(AgentBaseClass):
         )
         income_per_crop = np.bincount(
             self.agents.crop_farmers.var.harvested_crop[mask],
-            weights=self.agents.crop_farmers.income_farmer[mask],
+            weights=self.agents.crop_farmers.var.seasonal_income_farmer[mask],
             minlength=self.var.production.shape[0],
         )
         self.var.production[:, self.year_index] += yield_per_crop

@@ -1,4 +1,4 @@
-"""Utilities to download DeltaDTM tiles for a given bounding box.
+"""Utilities to download DeltaDTM tiles for a given region.
 
 This module provides a downloader that downloads and extracts the needed
 GeoTIFF tiles from the remote ZIP packages hosted by DeltaDTM.
@@ -14,7 +14,6 @@ Notes:
 
 from __future__ import annotations
 
-import os
 import tempfile
 import zipfile
 from pathlib import Path
@@ -24,10 +23,10 @@ import geopandas as gpd
 import numpy as np
 import rioxarray as rxr
 import xarray as xr
-from rioxarray import merge
+from shapely.geometry.base import BaseGeometry
 
 from geb.workflows.io import fetch_and_save
-from geb.workflows.raster import convert_nodata
+from geb.workflows.raster import clip_with_geometry, convert_nodata
 
 from .base import Adapter
 
@@ -62,26 +61,21 @@ class DeltaDTM(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def get_tiles_in_model_bounds(
-        self, xmin: float, xmax: float, ymin: float, ymax: float
-    ) -> tuple[list[str], list[str]]:
-        """Get the DeltaDTM tiles that intersect with the model bounds. This function uses the DeltaDTM tiles geopackage.
+    def get_tiles_for_mask(self, mask: BaseGeometry) -> tuple[list[str], list[str]]:
+        """Get the DeltaDTM tiles that intersect with the mask. This function uses the DeltaDTM tiles geopackage.
 
         Args:
-            xmin: Minimum x-coordinate (longitude) of the model bounds.
-            xmax: Maximum x-coordinate (longitude) of the model bounds.
-            ymin: Minimum y-coordinate (latitude) of the model bounds.
-            ymax: Maximum y-coordinate (latitude) of the model bounds.
+            mask: The geometry used to filter intersecting tiles.
         Returns:
             A tuple containing:
-                - A list of tile filenames that intersect with the model bounds.
+                - A list of tile filenames that intersect with the mask.
                 - A list of continent ZIP filenames to download.
         Raises:
             RuntimeError: If the DeltaDTM tiles geopackage cannot be downloaded.
         """
         # download the DeltaDTM tiles geopackage
         url_delta_dtm_tiles = "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/60a69899-2e67-4f9f-8761-3b57094acd12"
-        os.makedirs(self.root, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             filepath = temp_dir / "delta_dtm_tiles.gpkg"
@@ -94,6 +88,7 @@ class DeltaDTM(Adapter):
             # load the geopackage
             gdf_tiles = gpd.read_file(filepath)
         # get the tiles that intersect with the model bounds
+        xmin, ymin, xmax, ymax = mask.bounds
         tiles_in_bounds = gdf_tiles.cx[xmin:xmax, ymin:ymax]
         tile_names = tiles_in_bounds["tile"].tolist()
 
@@ -153,9 +148,19 @@ class DeltaDTM(Adapter):
         Returns:
             Merged dataset of the specified tiles.
         """
-        das: list[xr.DataArray] = [rxr.open_rasterio(path) for path in tile_paths]  # ty: ignore[invalid-assignment]
+        das: list[xr.DataArray] = [
+            rxr.open_rasterio(path, chunks={}) for path in tile_paths
+        ]  # ty: ignore[invalid-assignment]
         das = [da.sel(band=1) for da in das]
-        da: xr.DataArray = merge.merge_arrays(das)
+        da = xr.combine_by_coords(
+            das,
+            fill_value=das[0].rio.nodata,
+            combine_attrs="drop_conflicts",
+            join="outer",
+            compat="broadcast_equals",
+            data_vars="all",
+        )
+        assert isinstance(da, xr.DataArray)
         return da
 
     def _unpack_tiles(
@@ -191,31 +196,35 @@ class DeltaDTM(Adapter):
         """
         return Path(str(self.path).format(continent))
 
-    def fetch(
-        self, xmin: float, xmax: float, ymin: float, ymax: float, url: str | None = None
-    ) -> DeltaDTM:
-        """Fetch DeltaDTM tiles for the specified bounding box.
+    def fetch(self, mask: BaseGeometry, url: str | None = None) -> DeltaDTM:
+        """Fetch DeltaDTM tiles for the specified mask.
 
         Args:
-            xmin: Minimum x-coordinate (longitude) of the bounding box.
-            xmax: Maximum x-coordinate (longitude) of the bounding box.
-            ymin: Minimum y-coordinate (latitude) of the bounding box.
-            ymax: Maximum y-coordinate (latitude) of the bounding box.
+            mask: The geometry used to filter intersecting tiles.
             url: URL to download DeltaDTM data from. Defaults to None.
         Returns:
             The DeltaDTM adapter instance with the downloaded data.
         """
-        self.tile_names, self.continents_to_download = self.get_tiles_in_model_bounds(
-            xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax
+        self.tile_names, self.continents_to_download = self.get_tiles_for_mask(
+            mask=mask
         )
         self.download_deltadtm(self.continents_to_download)
         return self
 
-    def read(self) -> xr.DataArray:
-        """Read and unpack the downloaded DeltaDTM data.
+    def read(self, mask: BaseGeometry) -> xr.DataArray:
+        """Read and unpack the downloaded DeltaDTM data, masking it to the project geometry.
+
+        Args:
+            mask: The geometry used to filter intersecting tiles. If None, no masking is applied
 
         Returns:
             The downloaded DeltaDTM data.
         """
         da = self.unpack_and_merge_tiles(self.continents_to_download, self.tile_names)
+        da = clip_with_geometry(
+            da,
+            gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
+            all_touched=True,
+            drop=True,
+        )
         return da

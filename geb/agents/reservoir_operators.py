@@ -759,17 +759,6 @@ class ReservoirOperators(AgentBaseClass):
         return self.model.current_time.month - 1
 
     @property
-    def waterbody_ids(self) -> ArrayInt32:
-        """Get the waterbody IDs of the reservoirs.
-
-        Returns:
-            An array with the waterbody IDs of the reservoirs.
-        """
-        return self.model.hydrology.waterbodies.var.waterbody_ids_original[
-            self.model.hydrology.waterbodies.is_reservoir
-        ]
-
-    @property
     def yearly_usuable_release_m3(self) -> npt.NDArray[np.float32]:
         """Get the yearly usable release in m3.
 

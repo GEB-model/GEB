@@ -102,7 +102,7 @@ You can find the personal access token [here](https://earthdatahub.destine.eu/ac
 
 3.  To use forecasts in GEB, unflag the build-method "setup_forecasts" in the build.yml file. This will trigger the downloading and processing of ECMWF ensemble forecasts from the ECMWF archive. To access ECMWF forecasts, request access to the [ECMWF MARS archive](https://confluence.ecmwf.int/display/WEBAPI/Access+MARS). Afterwards, find your [API key](https://api.ecmwf.int/v1/key/) and add the content to the ".env"-file in the GEB repository.
 
-4.  To set up the Global Tide and Surge Model using the build-method `setup_gtsm_station_data` you first need to create an account on [ECMF](https://earthdatahub.destine.eu/]https://accounts.ecmwf.int/auth/realms/ecmwf/protocol/openid-connect/auth?client_id=cds&scope=openid%20email&response_type=code&redirect_uri=https%3A%2F%2Fcds.climate.copernicus.eu%2Fapi%2Fauth%2Fcallback%2Fkeycloak&state=IA76J5TAf7ZAgZ3YBCPSjsC1b4LKiENc3SozoQ5hbWA&code_challenge=LZdj2TMGRZZ4Aei7DFEKlht_kLHs7EInxqL3qax9oIE&code_challenge_method=S256). Afterwards, you will find your CDS API key and further instructions [here](https://cds.climate.copernicus.eu/how-to-api). You should store the API url and key in your home folder as "$HOME/.cdsapirc".
+4.  To set up the Global Tide and Surge Model using the build-method `setup_gtsm_station_data` you first need to create an account on [ECMF](https://earthdatahub.destine.eu/]https://accounts.ecmwf.int/auth/realms/ecmwf/protocol/openid-connect/auth?client_id=cds&scope=openid%20email&response_type=code&redirect_uri=https%3A%2F%2Fcds.climate.copernicus.eu%2Fapi%2Fauth%2Fcallback%2Fkeycloak&state=IA76J5TAf7ZAgZ3YBCPSjsC1b4LKiENc3SozoQ5hbWA&code_challenge=LZdj2TMGRZZ4Aei7DFEKlht_kLHs7EInxqL3qax9oIE&code_challenge_method=S256). Afterwards, you will find your CDS API key and further instructions [here](https://cds.climate.copernicus.eu/how-to-api). You should store the API url and key in your home folder as "$HOME/.cdsapirc". For CDS datasets, you need to manually accept the terms and conditions of datasets. Currently, this is only needed for the [future sea level rise dataset](https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download): 
 
 ### Building to model
 
@@ -132,7 +132,7 @@ It is also possible to update an already existing model by running the following
 geb update
 ```
 
-This assumes you have a "update.yml"-file in the working directory. The `update.yml`-file contains the name of functions that should be run to update the data. The functions are defined in the "geb" plugin of HydroMT. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
+This assumes you have a "update.yml"-file in the working directory. The `update.yml`-file contains the name of functions that should be run to update the data. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
 
 For example to update the forcing data of the model, your "update.yml"-file could look like this, essentially a subset of the build.yml-file:
 
@@ -159,3 +159,50 @@ You can find more information about these and other options by running:
 ```bash
 geb update --help
 ```
+
+### GEB clean
+
+Removes all generated files (input, output, cache, logs) from a model directory, keeping only `model.yml`, `build.yml`, and `update.yml`. Run from inside the model directory:
+
+```bash
+geb clean
+```
+
+Works for both single-model and multi-basin (`geb init-multiple`) file structures. You will be prompted to confirm before anything is deleted. To skip the prompt (e.g. in scripts), use `--yes` / `-y`. To clean a non-default scenario, use `--scenario` / `-s`. See `geb clean --help` for all options.
+
+### Running alternative scenarios (geb alter)
+
+Often you want to run alternative model scenarios, for example with other input files. However, usually, you don't need to change all inputs, just 1 or a few.
+
+`geb alter` can help you set up an alternative model, but with only the different files where you need. To use `geb alter`, set up your model files as follows:
+
+```text
+my_awesome_model/
+├── base/
+│   ├── model.yml
+│   └── input/
+│       └── ...
+└── alternative_scenario/
+    └── build.yml
+```
+
+the `my_awesome_model/alternative_scenario/build.yml` should ONLY contain what you want to change. For example, when you want to change the calibration period of SPEI, it would just contain:
+
+```yaml
+setup_SPEI:
+  window_months: 12
+  calibration_period_start: 2010-01-01
+  calibration_period_end: 2021-12-31
+```
+
+then in the folder `my_awesome_model/alternative_scenario`, run 
+
+```sh
+geb alter
+```
+
+Optional, parameters include `--from-model` to use an alternative base model (default is `../base`). Other options can be found using `geb alter --help`.
+
+This will create a new `input` folder in the `my_awesome_model/alternative_scenario` folder. If you look into `input/files.yml` you will see that all paths refer to the original base model, except those that have been update in the alternative model.
+
+If want to make an alternative scenario with only changes to the config, you can provide an empty `build.yml` (or no `build.yml`), in which case the model will use the same input as the base model. However, it will use the own config files.

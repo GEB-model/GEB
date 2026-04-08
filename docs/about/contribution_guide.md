@@ -10,7 +10,7 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 4. After you finished the feature or bugfix, make sure to push all your changes to GitHub, where you should be able to find the branch with your changes.
 5. Now you can [open a pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request). This is a request to merge your code with the main branch.
 6. Once you opened the request, there will first be an automated review from copilot after a few minutes. Have a look at these suggestions and implement them if you feel they are useful. Note that this is AI so not everything is useful, but it often allows you to catch some errors or make some clarifications.
-7. In addition, all sorts of other automated checks are performed related to formatting and tests. Ensure that all tests tests pass.
+7. In addition, all sorts of other automated checks are performed related to formatting and tests. Ensure that all tests pass.
 8. Then, [request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/requesting-a-pull-request-review) someone (a human this time) to review your code. They will review your code and approve the code or request you to make changes. If they request changes, make these changes and request a re-review.
 9. Once the code is approved, you or the reviewer can merge the branch with the main branch and delete the feature branch (so we keep things clean).
 10. Congrats your code is now in the main branch!
@@ -19,7 +19,11 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 
 First of all, thank you for (thinking about) contributing to the documentation! When you are a member of the GEB repository, you can edit documentation yourself. Pull requests that only edit the documentation are automatically approved. For outside contributors, please make a pull request and we will merge it for you.
 
-We use [mkdocs](https://www.mkdocs.org) to automatically create a full website based on simple markdown files and a simple GitHub action. You can use this to test your changes locally first. For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
+We use [mkdocs](https://www.mkdocs.org) to automatically create a full website based on markdown files and a GitHub action.
+
+### Building documentation locally
+
+You can also test your changes locally first. For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
 
 ```sh
 uv run mkdocs serve
@@ -34,6 +38,30 @@ uv run mkdocs build
 Your files will end up in the folder `site`. Open `index.html` in your browser for the main page.
 
 You can also update the site index or other configuration in mkdocs.yml in the root folder of the GEB repository.
+
+### Adding citations
+
+We use bibtex to add references to the documentation. To add a reference you should do the following:
+
+1. Find the bibtex entry for the paper you want to cite. For example, on Google Scholar you can click "cite" below a paper, and then BibTex. On many scientific publishers websites you can also find the bibtex for the paper. For example, the bibtex for the original GEB paper looks like this:
+
+    ```
+    @article{debruijn2023geb,
+      title={GEB v0.1: a large-scale agent-based socio-hydrological model--simulating 10 million individual farming households in a fully distributed hydrological model},
+      author={{de Bruijn}, Jens A and Smilovic, Mikhail and Burek, Peter and Guillaumot, Luca and Wada, Yoshihide and Aerts, Jeroen CJH},
+      journal={Geoscientific Model Development},
+      volume={16},
+      number={9},
+      pages={2437--2454},
+      year={2023},
+      publisher={Copernicus Publications G{\"o}ttingen, Germany}
+    }
+    ```
+
+    The first part after "&#64;article\{" is the name of the bibtex entry, then everything after are the details such as title and author list. There are also other types of entries, such as "&#64;techreport\{" and "&#64;misc\{". Depending on the the type of entry, different data may be required. You can learn more about bibtex [here](https://www.bibtex.org).
+
+2. Add the bibtex entry to [references.bib](https://github.com/GEB-model/GEB/blob/main/docs/references.bib). It doesn't matter where in the file as long as the formatting stays correct.
+3. Then, in the documentation you write "some statement that needs a reference\[&#64;debruijn2023geb\]". Here, the `debruijn2023geb` is the name of the bibtex-entry. It should then be automatically formatted correctly and add the citation to the bibliography at the bottom of the page.
 
 ## Making a release
 
@@ -94,3 +122,23 @@ We use `pytest` for automated testing of the GEB model.
 - It is RECOMMENDED to use `assert` statements in the model to ensure correct behaviour.
 - When there is an error, the model SHOULD fail. Do not catch exceptions and replace with dummy data.
 - All code MUST be formatted using `ruff format` and `ruff check`. Imports MUST be ordered using `isort` (included in `ruff`). It is RECOMMENDED to install the ruff plugin and set ruff as the default formatter in Visual Studio Code. Also turn on "format on paste" and "format on save". `ruff format` and `ruff check` are automatically executed when pushing to GitHub.
+
+### AI-assisted contributions
+
+AI coding tools are increasingly common in open source development. These tools are welcome in GEB, but the same standards apply to all contributions regardless of how they were produced.
+
+#### You are responsible for your changes
+
+If you submit a pull request, you are responsible for understanding and having fully reviewed the changes. You must be able to explain why each change is correct and how it fits into the project.
+
+#### Communication must be your own
+
+PR descriptions, issue comments, and review responses must be in your own words. The substance and reasoning must come from you.
+
+#### Review every line
+
+You must have personally reviewed and understood all changes before submitting. If you used AI to generate code, you are expected to have read it critically and tested it. The PR description should explain the approach and reasoning — do not leave it to reviewers to figure out what the code does and why.
+
+#### Keep PRs reviewable
+
+Generating code with AI is fast; reviewing it is not. A large diff shifts the burden from the contributor to the reviewer. Use AI tools not only to write code but to prepare better, more reviewable PRs — well-structured commits, clear descriptions, and minimal scope.

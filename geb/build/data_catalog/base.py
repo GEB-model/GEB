@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -98,7 +99,7 @@ class Adapter:
         if self.cache == "global":
             geb_data_root: str | None = os.getenv(key="GEB_DATA_ROOT", default=None)
             if geb_data_root:
-                catalog_root: Path = Path(geb_data_root) / ".." / "datacatalog"
+                catalog_root: Path = Path(geb_data_root)
             else:
                 catalog_root: Path = Path.home() / ".geb_cache"
 
@@ -176,5 +177,30 @@ class Adapter:
             return pd.read_csv(self.path, **kwargs)
         elif self.path.suffix == ".xlsx":
             return pd.read_excel(self.path, **kwargs)
+        elif self.path.suffix == ".pkl":
+            return pd.read_pickle(self.path, **kwargs)
         else:
             raise ValueError("Unsupported file format for reading data.")
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Get a logger for the adapter.
+
+        Returns:
+            A logging.Logger instance with the adapter's class name as the logger name.
+
+        Raises:
+            ValueError: If the logger is not set.
+        """
+        if not hasattr(self, "_logger"):
+            raise ValueError("Logger is not set")
+        return self._logger
+
+    @logger.setter
+    def logger(self, logger: logging.Logger) -> None:
+        """Set a logger for the adapter.
+
+        Args:
+            logger: A logging.Logger instance to be used by the adapter.
+        """
+        self._logger = logger

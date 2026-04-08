@@ -126,6 +126,8 @@ def VectorScannerMultiCurves(
     curve_y = np.ascontiguousarray(curve_y)
     curve_slopes = np.ascontiguousarray(curve_slopes)
 
+    # Preserve index of features for final output
+    index_features = features.index.copy()
     # Extract exposure geometry
     features, _, _, cell_area_m2 = VectorExposureDS(
         hazard_file=hazard,
@@ -223,7 +225,7 @@ def VectorScannerMultiCurves(
         index=filtered.index,
     )
     # fill missing buildings with zero damage
-    df_damage_structure = df_damage_structure.reindex(features.index, fill_value=0.0)
+    df_damage_structure = df_damage_structure.reindex(index_features, fill_value=0.0)
 
     # only select curves relevant for content
     i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
@@ -247,7 +249,7 @@ def VectorScannerMultiCurves(
         index=filtered.index,
     )
     # fill missing buildings with zero damage
-    df_damage_content = df_damage_content.reindex(features.index, fill_value=0.0)
+    df_damage_content = df_damage_content.reindex(index_features, fill_value=0.0)
 
     # concat both dataframes
     df_damage_combined = pd.concat([df_damage_structure, df_damage_content], axis=1)
@@ -284,10 +286,13 @@ def VectorScanner(
     assert features["object_type"].isin(vulnerability_curves.columns).all(), (
         "All unique object_types in the features GeoDataFrame must be present as columns in the vulnerability_curves DataFrame."
     )
-    return VectorScannerDS(
+    features_index = features.index.copy()
+    features_with_damages = VectorScannerDS(
         feature_file=features,
         hazard_file=hazard,
         curve_path=vulnerability_curves,
         gridded=False,
         disable_progress=disable_progress,
     )["damage"]
+    # Fill missing features with zero damage
+    return features_with_damages.reindex(features_index, fill_value=0.0)

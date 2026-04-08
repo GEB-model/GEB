@@ -1,5 +1,6 @@
 """Tests for the SFINCS flood model and its integration in GEB."""
 
+import logging
 import math
 import os
 from datetime import datetime
@@ -30,6 +31,8 @@ working_directory: Path = tmp_folder / "model"
 TEST_MODEL_NAME: str = "test_model"
 SFINCS_PLOT_FOLDER = tmp_folder / "SFINCS_plots"
 SFINCS_PLOT_FOLDER.mkdir(exist_ok=True, parents=True)
+
+logger = logging.getLogger(__name__)
 
 
 def plot_flood_map(flood_map: xr.DataArray, name: str) -> None:
@@ -109,7 +112,9 @@ def build_sfincs(
     Returns:
         A SFINCS model instance with static grids and configuration written.
     """
-    sfincs_model: SFINCSRootModel = SFINCSRootModel(tmp_folder / "SFINCS", name)
+    sfincs_model: SFINCSRootModel = SFINCSRootModel(
+        tmp_folder / "SFINCS", name, logger=logger
+    )
     DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = (
         geb_model.hazard_driver.floods.DEM_config.copy()
     )
@@ -151,6 +156,7 @@ def build_sfincs(
         if "routing/custom_rivers" in geb_model.files["geom"]
         else None,
         overwrite="auto",
+        write_figures=True,
     )
     geb_model.close()
 
@@ -306,7 +312,7 @@ def test_accumulated_runoff(
             geb_model.files["grid"]["routing/basin_ids"], compress=False
         )
         upstream_area = geb_model.hydrology.grid.load(
-            geb_model.files["grid"]["routing/upstream_area"], compress=False
+            geb_model.files["grid"]["routing/upstream_area_m2"], compress=False
         )
 
         cell_area = geb_model.hydrology.grid.decompress(
@@ -614,7 +620,9 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         horizontal_dam = gpd.GeoDataFrame(geometry=horizontal_line, crs=subbasins.crs)
 
         # combine both dams into one GeoDataFrame
-        multiple_dams = pd.concat([vertical_dam, horizontal_dam], ignore_index=True)
+        multiple_dams: gpd.GeoDataFrame = pd.concat(
+            [vertical_dam, horizontal_dam], ignore_index=True
+        )  # ty:ignore[invalid-assignment]
 
         start_time: datetime = datetime(2000, 1, 1, 0)
         end_time: datetime = datetime(2000, 1, 10, 0)
@@ -719,7 +727,7 @@ def test_read(geb_model: GEBModel) -> None:
         )
 
         sfincs_model_read: SFINCSRootModel = SFINCSRootModel(
-            tmp_folder / "SFINCS", name=TEST_MODEL_NAME
+            tmp_folder / "SFINCS", name=TEST_MODEL_NAME, logger=logger
         ).read()
 
         # assert that both models have the same attributes

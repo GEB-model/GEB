@@ -9,12 +9,13 @@ Contains several dictionaries to convert between different country coding system
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 import geopandas as gpd
+from pyproj import Geod
 
 if TYPE_CHECKING:
-    from ..data_catalog import NewDataCatalog
+    from ..data_catalog import DataCatalog
 
 # Trade regions as used in GLOBIOM, but with minor modifications. See comments below for respective countries.
 TRADE_REGIONS: dict[str, str] = {
@@ -122,6 +123,7 @@ TRADE_REGIONS: dict[str, str] = {
     "ISL": "ROWE",
     "NOR": "ROWE",
     "CHE": "EU_MidWest",  # Switzerland is grouped with EU_MidWest
+    "LIE": "EU_MidWest",  # Liechtenstein is grouped with EU_MidWest
     "BOL": "RSAM",
     "CHL": "RSAM",
     "COL": "RSAM",
@@ -201,10 +203,30 @@ TRADE_REGIONS: dict[str, str] = {
 }
 
 
+def get_geodesic_distance(
+    geod: Geod, geom1: gpd.GeoSeries, geom2: gpd.GeoSeries
+) -> float:
+    """Calculate geodesic distance between two geometries.
+
+    Args:
+        geod: Geod object for geodesic calculations.
+        geom1: Geometry of the first country.
+        geom2: Geometry of the second country.
+
+    Returns:
+        Geodesic distance in meters between the centroids of the two geometries.
+    """
+    # Using centroids for point-to-point geodesic distance
+    p1 = geom1.centroid
+    p2 = geom2.centroid
+    _, _, distance = geod.inv(p1.x, p1.y, p2.x, p2.y)
+    return distance
+
+
 def setup_donor_countries(
-    data_catalog: NewDataCatalog,
+    data_catalog: DataCatalog,
     global_countries: gpd.GeoDataFrame,
-    countries_with_data: list[str],
+    countries_with_data: Iterable[str],
     alternative_countries: list[str],
 ) -> dict[str, str]:
     """Sets up the donor countries for GEB.
@@ -252,7 +274,13 @@ def setup_donor_countries(
                 & global_countries.index.isin(dev_index.index)
             ]
             current_country_geometry = global_countries.loc[country].geometry
-            distances = region_countries_with_hdi.distance(current_country_geometry)
+            geod = Geod(ellps="WGS84")
+
+            distances = region_countries_with_hdi.geometry.apply(
+                lambda x: get_geodesic_distance(
+                    geod=geod, geom1=x, geom2=current_country_geometry
+                )
+            )
             distances = distances[
                 distances > 0
             ]  # remove zero distances (self-distance)
@@ -273,9 +301,12 @@ def setup_donor_countries(
         # calculate distances from target country to donors
         donors = donors.sort_values("HDI_diff").head(10)
 
-        donors["distance"] = donors.geometry.distance(
-            global_countries.loc[country].geometry
-        )
+        current_country_geometry = global_countries.loc[country].geometry
+        geod = Geod(ellps="WGS84")
+
+        donors["distance"] = donors.geometry.apply(
+            lambda x: get_geodesic_distance(geod, x, current_country_geometry)
+        ).values
 
         # select the top 3 closest donors based on distance
         donor_country = (

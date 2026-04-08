@@ -1,7 +1,6 @@
 """Crops data processing and setup methods for GEB."""
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +26,7 @@ from geb.workflows.raster import (
     get_neighbor_cell_ids_for_linear_indices,
     interpolate_na_2d,
     sample_from_map,
+    snap_to_grid,
 )
 
 from ..workflows.conversions import TRADE_REGIONS
@@ -36,6 +36,558 @@ from ..workflows.crop_calendars import (
 )
 from ..workflows.farmers import get_farm_locations
 from .base import BuildModelBase
+
+# CROP_DATA from Siebert et al. (2010)
+# source doi: 10.1016/j.jhydrol.2009.07.031
+# license: Creative Commons Attribution 4.0 International
+CROP_DATA = [
+    {
+        "name": "wheat",
+        "id": 0,
+        "is_paddy": False,
+        "a": 0.9885,
+        "b": 0.1103,
+        "P0": 0.1,
+        "P1": 0.25,
+        "l_ini": 15.0,
+        "l_dev": 25.0,
+        "l_mid": 40,
+        "l_late": 20,
+        "kc_initial": 0.4,
+        "kc_mid": 1.15,
+        "kc_end": 0.3,
+        "rd_irr": 1.25,
+        "rd_rain": 1.6,
+        "reference_yield_kg_m2": 1.0,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/whtfra.dat",
+    },
+    {
+        "name": "maize",
+        "id": 1,
+        "is_paddy": False,
+        "a": 1.2929,
+        "b": -0.0798,
+        "P0": 0.1,
+        "P1": 0.4,
+        "l_ini": 17.0,
+        "l_dev": 28.000000000000004,
+        "l_mid": 33,
+        "l_late": 22,
+        "kc_initial": 0.3,
+        "kc_mid": 1.2,
+        "kc_end": 0.4,
+        "rd_irr": 1.0,
+        "rd_rain": 1.6,
+        "reference_yield_kg_m2": 2.4,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/maiz.w41",
+    },
+    {
+        "name": "rice",
+        "id": 2,
+        "is_paddy": True,
+        "a": 1.0,
+        "b": -0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 17.0,
+        "l_dev": 18.0,
+        "l_mid": 44,
+        "l_late": 21,
+        "kc_initial": 1.05,
+        "kc_mid": 1.2,
+        "kc_end": 0.75,
+        "rd_irr": 0.5,
+        "rd_rain": 1.0,
+        "reference_yield_kg_m2": 1.2,
+        "crop_group_number": 3.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/ric501.cab",
+    },
+    {
+        "name": "barley",
+        "id": 3,
+        "is_paddy": False,
+        "a": 1.478,
+        "b": -0.4288,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 15.0,
+        "l_dev": 25.0,
+        "l_mid": 40,
+        "l_late": 20,
+        "kc_initial": 0.3,
+        "kc_mid": 1.15,
+        "kc_end": 0.25,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.8,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/bar301.cab",
+    },
+    {
+        "name": "rye",
+        "id": 4,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 10.0,
+        "l_dev": 60.0,
+        "l_mid": 20,
+        "l_late": 10,
+        "kc_initial": 0.4,
+        "kc_mid": 1.15,
+        "kc_end": 0.3,
+        "rd_irr": 1.25,
+        "rd_rain": 1.6,
+        "reference_yield_kg_m2": 0.75,
+        "crop_group_number": 3.0,
+        "crop_group_number_reference": "grass: https://edepot.wur.nl/336784",
+    },
+    {
+        "name": "millet",
+        "id": 5,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 14.000000000000002,
+        "l_dev": 22.0,
+        "l_mid": 40,
+        "l_late": 24,
+        "kc_initial": 0.3,
+        "kc_mid": 1.0,
+        "kc_end": 0.3,
+        "rd_irr": 1.0,
+        "rd_rain": 1.8,
+        "reference_yield_kg_m2": 0.8,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/millet.w41",
+    },
+    {
+        "name": "sorghum",
+        "id": 6,
+        "is_paddy": False,
+        "a": 0.8681,
+        "b": 0.2753,
+        "P0": 0.1,
+        "P1": 0.3,
+        "l_ini": 15.0,
+        "l_dev": 28.000000000000004,
+        "l_mid": 33,
+        "l_late": 24,
+        "kc_initial": 0.3,
+        "kc_mid": 1.1,
+        "kc_end": 0.55,
+        "rd_irr": 1.0,
+        "rd_rain": 1.8,
+        "reference_yield_kg_m2": 1.5,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/sorghum.w41",
+    },
+    {
+        "name": "soybeans",
+        "id": 7,
+        "is_paddy": False,
+        "a": 0.8373,
+        "b": 0.208,
+        "P0": 0.1,
+        "P1": 0.4,
+        "l_ini": 15.0,
+        "l_dev": 20.0,
+        "l_mid": 45,
+        "l_late": 20,
+        "kc_initial": 0.4,
+        "kc_mid": 1.15,
+        "kc_end": 0.5,
+        "rd_irr": 0.6,
+        "rd_rain": 1.3,
+        "reference_yield_kg_m2": 0.4,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/soy0901.cab",
+    },
+    {
+        "name": "sunflower",
+        "id": 8,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 19.0,
+        "l_dev": 27.0,
+        "l_mid": 35,
+        "l_late": 19,
+        "kc_initial": 0.35,
+        "kc_mid": 1.1,
+        "kc_end": 0.25,
+        "rd_irr": 0.8,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.4,
+        "crop_group_number": 3.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/sun1101.cab",
+    },
+    {
+        "name": "potatoes",
+        "id": 9,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 20.0,
+        "l_dev": 25.0,
+        "l_mid": 35,
+        "l_late": 20,
+        "kc_initial": 0.35,
+        "kc_mid": 1.15,
+        "kc_end": 0.5,
+        "rd_irr": 0.4,
+        "rd_rain": 0.6,
+        "reference_yield_kg_m2": 7.0,
+        "crop_group_number": 3.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/pot701.cab",
+    },
+    {
+        "name": "cassava",
+        "id": 10,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.15,
+        "P1": 0.5,
+        "l_ini": 10.0,
+        "l_dev": 20.0,
+        "l_mid": 43,
+        "l_late": 27,
+        "kc_initial": 0.3,
+        "kc_mid": 0.95,
+        "kc_end": 0.4,
+        "rd_irr": 0.6,
+        "rd_rain": 0.9,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/cassava.w41",
+    },
+    {
+        "name": "sugar cane",
+        "id": 11,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": -0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 0.0,
+        "kc_mid": 0.9,
+        "kc_end": 0.0,
+        "rd_irr": 1.2,
+        "rd_rain": 1.8,
+        "reference_yield_kg_m2": 15.0,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/sugrcane.w41",
+    },
+    {
+        "name": "sugar beets",
+        "id": 12,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 20.0,
+        "l_dev": 25.0,
+        "l_mid": 35,
+        "l_late": 20,
+        "kc_initial": 0.35,
+        "kc_mid": 1.2,
+        "kc_end": 0.8,
+        "rd_irr": 0.7,
+        "rd_rain": 1.2,
+        "reference_yield_kg_m2": 9.0,
+        "crop_group_number": 2.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/sug0601.cab",
+    },
+    {
+        "name": "oil palm",
+        "id": 13,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 0.0,
+        "kc_mid": 1.0,
+        "kc_end": 0.0,
+        "rd_irr": 0.7,
+        "rd_rain": 1.1,
+        "reference_yield_kg_m2": 3.2,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "similar to olive: https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "rapeseed",
+        "id": 14,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 30.0,
+        "l_dev": 25.0,
+        "l_mid": 30,
+        "l_late": 15,
+        "kc_initial": 0.35,
+        "kc_mid": 1.1,
+        "kc_end": 0.35,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.5,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/rap1001.cab",
+    },
+    {
+        "name": "groundnuts",
+        "id": 15,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 22.0,
+        "l_dev": 28.000000000000004,
+        "l_mid": 30,
+        "l_late": 20,
+        "kc_initial": 0.4,
+        "kc_mid": 1.15,
+        "kc_end": 0.6,
+        "rd_irr": 0.5,
+        "rd_rain": 1.0,
+        "reference_yield_kg_m2": 0.85,
+        "crop_group_number": 4.0,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/gr_nut.w41",
+    },
+    {
+        "name": "pulses",
+        "id": 16,
+        "is_paddy": False,
+        "a": 1.3,
+        "b": -0.2,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 18.0,
+        "l_dev": 27.0,
+        "l_mid": 35,
+        "l_late": 20,
+        "kc_initial": 0.45,
+        "kc_mid": 1.1,
+        "kc_end": 0.6,
+        "rd_irr": 0.55,
+        "rd_rain": 0.85,
+        "reference_yield_kg_m2": 0.6,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/pigeopea.w41; https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/chickpea.w41",
+    },
+    {
+        "name": "citrus",
+        "id": 17,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.15,
+        "P1": 0.5,
+        "l_ini": 16.0,
+        "l_dev": 25.0,
+        "l_mid": 33,
+        "l_late": 26,
+        "kc_initial": 0.8,
+        "kc_mid": 0.8,
+        "kc_end": 0.8,
+        "rd_irr": 1.0,
+        "rd_rain": 1.3,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 4.0,
+        "crop_group_number_reference": "https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "date palm",
+        "id": 18,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.05,
+        "P1": 0.3,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 0.95,
+        "kc_mid": 0.95,
+        "kc_end": 0.95,
+        "rd_irr": 1.5,
+        "rd_rain": 2.2,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 5.0,
+        "crop_group_number_reference": "similar to olive: https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "grapes",
+        "id": 19,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.15,
+        "P0": 0.05,
+        "P1": 0.3,
+        "l_ini": 30.0,
+        "l_dev": 14.000000000000002,
+        "l_mid": 20,
+        "l_late": 36,
+        "kc_initial": 0.3,
+        "kc_mid": 0.8,
+        "kc_end": 0.3,
+        "rd_irr": 1.0,
+        "rd_rain": 1.8,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 3.0,
+        "crop_group_number_reference": "https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "cotton",
+        "id": 20,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.1,
+        "P1": 0.2,
+        "l_ini": 17.0,
+        "l_dev": 33.0,
+        "l_mid": 25,
+        "l_late": 25,
+        "kc_initial": 0.35,
+        "kc_mid": 1.18,
+        "kc_end": 0.6,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.55,
+        "crop_group_number": 4.5,
+        "crop_group_number_reference": "https://github.com/ajwdewit/WOFOST/blob/deac197d3c74741832b815581699a6c825894758/cropd/cotton.w41",
+    },
+    {
+        "name": "cocoa",
+        "id": 21,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.15,
+        "P1": 0.6,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 1.05,
+        "kc_mid": 1.05,
+        "kc_end": 1.05,
+        "rd_irr": 0.7,
+        "rd_rain": 1.0,
+        "reference_yield_kg_m2": 0.15,
+        "crop_group_number": 2.5,
+        "crop_group_number_reference": "similar to banana, pepper: https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "coffee",
+        "id": 22,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.1,
+        "P0": 0.15,
+        "P1": 0.6,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 1.0,
+        "kc_mid": 1.0,
+        "kc_end": 1.0,
+        "rd_irr": 0.9,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 0.6,
+        "crop_group_number": 2.5,
+        "crop_group_number_reference": "similar to banana, pepper: https://wofost.readthedocs.io/en/7.2/_downloads/cf58a94b422342c8378f99ed36d6eb76/WOFOST_system_description.pdf",
+    },
+    {
+        "name": "others perennial",
+        "id": 23,
+        "is_paddy": False,
+        "a": 1.2,
+        "b": -0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 0.0,
+        "kc_mid": 0.8,
+        "kc_end": 0.0,
+        "rd_irr": 0.8,
+        "rd_rain": 1.2,
+        "reference_yield_kg_m2": 4.0,
+        "crop_group_number": 4.0,
+        "crop_group_number_reference": "mixed group, thus impossible to say. However most perennials are quite adapted to droughts, thus 4",
+    },
+    {
+        "name": "fodder grasses",
+        "id": 24,
+        "is_paddy": False,
+        "a": 1.0,
+        "b": 0.0,
+        "P0": 0.05,
+        "P1": 0.2,
+        "l_ini": 0.0,
+        "l_dev": 0.0,
+        "l_mid": 100,
+        "l_late": 0,
+        "kc_initial": 1.0,
+        "kc_mid": 1.0,
+        "kc_end": 1.0,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 10.0,
+        "crop_group_number": 3.0,
+        "crop_group_number_reference": "grass: https://edepot.wur.nl/336784",
+    },
+    {
+        "name": "others annual",
+        "id": 25,
+        "is_paddy": False,
+        "a": 1.2,
+        "b": -0.1,
+        "P0": 0.1,
+        "P1": 0.5,
+        "l_ini": 15.0,
+        "l_dev": 25.0,
+        "l_mid": 40,
+        "l_late": 20,
+        "kc_initial": 0.4,
+        "kc_mid": 1.05,
+        "kc_end": 0.5,
+        "rd_irr": 1.0,
+        "rd_rain": 1.5,
+        "reference_yield_kg_m2": 5.0,
+        "crop_group_number": 2.5,
+        "crop_group_number_reference": "Many similar, taking the average",
+    },
+]
 
 
 class Crops(BuildModelBase):
@@ -84,15 +636,15 @@ class Crops(BuildModelBase):
                 raise ValueError(
                     f"crop_variables_source {source_type} not understood, must be 'MIRCA2000'"
                 )
+
             crop_data = {
                 "data": (
-                    self.old_data_catalog.get_dataframe("MIRCA2000_crop_data")
-                    .set_index("id")
-                    .to_dict(orient="index")
+                    pd.DataFrame(CROP_DATA).set_index("id").to_dict(orient="index")
                 ),
                 "type": "MIRCA2000",
             }
 
+            crop_data["data"] = dict(sorted(crop_data["data"].items()))
             self.set_params(crop_data, name="crops/crop_data")
 
         else:
@@ -212,11 +764,9 @@ class Crops(BuildModelBase):
                 if ISO3 in TRADE_REGIONS
             }
 
-            all_ISO3_across_relevant_regions: set[str] = {
-                ISO3
-                for ISO3 in ISO3_codes_region
-                if TRADE_REGIONS[ISO3] in relevant_trade_regions.values()
-            }
+            all_ISO3_across_relevant_regions: set[str] = set(
+                relevant_trade_regions.keys()
+            )
 
             # Setup dataFrame for further data corrections
             donor_data: dict[str, pd.DataFrame] = {}
@@ -226,10 +776,7 @@ class Crops(BuildModelBase):
                     .set_index("crop")
                     .transpose()
                     .reindex(index=all_years_faostat, columns=all_crops_faostat)
-                )
-                # set all dtypes to float64
-                for col in region_faostat.columns:
-                    region_faostat[col] = region_faostat[col].astype(np.float64)
+                ).astype(np.float64)
 
                 region_faostat["ISO3"] = ISO3
                 donor_data[ISO3] = region_faostat
@@ -267,6 +814,7 @@ class Crops(BuildModelBase):
                 (slice(None), slice(self.start_date.year, self.end_date.year)), :
             ]
 
+            # here, also countries that are not in the trade regions (e.g. Kosovo) are included (in self.geom["regions"]) and found a donor for (in the setup_donor_countries function)
             data = donate_and_receive_crop_prices(
                 donor_data,
                 unique_regions,
@@ -703,10 +1251,7 @@ class Crops(BuildModelBase):
             - The first DataArray contains the fraction of each crop to the total cropped area for each year.
             - The second DataArray contains the fraction of irrigated area for each crop for each
         """
-        output_folder = "plot/mirca_crops"
-        os.makedirs(output_folder, exist_ok=True)
-
-        crops = [
+        crops: list[str] = [
             "Wheat",  # 0
             "Maize",  # 1
             "Rice",  # 2
@@ -728,15 +1273,18 @@ class Crops(BuildModelBase):
             "Others_annual",  # 25,
         ]
 
-        years = ["2000", "2005", "2010", "2015"]
-        irrigation_types = ["ir", "rf"]
+        years: list[str] = ["2000", "2005", "2010", "2015"]
+        irrigation_types: list[str] = ["ir", "rf"]
 
         # Initialize lists to collect DataArrays across years
-        fraction_da_list = []
-        irrigated_fraction_da_list = []
+        fraction_da_list: list[xr.DataArray] = []
+        irrigated_fraction_da_list: list[xr.DataArray] = []
 
         # Initialize a dictionary to store datasets
         crop_data = {}
+
+        # the datasets have slightly different grids, so we need to snap them to the same grid. We take the first one as reference and snap the others to it
+        first_crop_map_for_alignment = None
 
         for year in years:
             crop_data[year] = {}
@@ -744,23 +1292,24 @@ class Crops(BuildModelBase):
                 crop_data[year][crop] = {}
                 for irrigation in irrigation_types:
                     dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
+                    new_dataset_name = f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
-                    crop_map = xr.open_dataarray(
-                        self.old_data_catalog.get_source(dataset_name).path
-                    )
+                    crop_map = self.data_catalog.fetch(new_dataset_name).read()
+
                     crop_map = crop_map.isel(
-                        {
-                            **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
-                            **{"band": 0},
-                        },
+                        get_window(crop_map.x, crop_map.y, self.bounds, buffer=2)
                     )
 
                     crop_map = crop_map.fillna(0)
 
-                    crop_data[year][crop][irrigation] = crop_map.assign_coords(
-                        x=np.round(crop_map.coords["x"].values, decimals=6),
-                        y=np.round(crop_map.coords["y"].values, decimals=6),
-                    )
+                    # do the snapping unless it is the first dataset, then we take this one as reference for the others
+                    # see above comment for more info
+                    if first_crop_map_for_alignment is None:
+                        first_crop_map_for_alignment = crop_map
+                    else:
+                        crop_map = snap_to_grid(crop_map, first_crop_map_for_alignment)
+
+                    crop_data[year][crop][irrigation] = crop_map
 
             # Initialize variables for total calculations
             total_cropped_area = None
@@ -905,7 +1454,7 @@ class Crops(BuildModelBase):
         )
 
         n_cells = grid_id_da.max().item()
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
 
         farmer_cells = sample_from_map(
             grid_id_da.values,
@@ -928,14 +1477,14 @@ class Crops(BuildModelBase):
                 n_farmers,
                 max(
                     [
+                        FIELD_EXPANSION_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+                        IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
+                        PERSONAL_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                         SURFACE_IRRIGATION_EQUIPMENT,
                         WELL_ADAPTATION,
-                        IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-                        IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
-                        FIELD_EXPANSION_ADAPTATION,
-                        PERSONAL_INSURANCE_ADAPTATION,
-                        INDEX_INSURANCE_ADAPTATION,
-                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
@@ -989,7 +1538,9 @@ class Crops(BuildModelBase):
                             break
                     if not found_valid_neighbor:
                         # No valid neighboring cells found, handle accordingly
-                        print(f"No valid data found for cell {i} and its neighbors.")
+                        self.logger.warning(
+                            f"No valid data found for cell {i} and its neighbors."
+                        )
                         continue  # Skip this cell
 
                 # Normalize fractions
@@ -1036,7 +1587,7 @@ class Crops(BuildModelBase):
         Raises:
             ValueError: If no rotations are found for a crop in a unit or no valid neighbor data is found.
         """
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
 
         MIRCA_unit_grid = self.data_catalog.fetch("mirca2000_unit_grid").read()
         assert isinstance(MIRCA_unit_grid, xr.DataArray)
@@ -1334,29 +1885,40 @@ class Crops(BuildModelBase):
             return crop_calendar_per_farmer
 
         def unify_crop_variants(
-            crop_calendar_per_farmer: np.ndarray, target_crop: int
+            crop_calendar_per_farmer: np.ndarray,
+            target_crop: int,
         ) -> np.ndarray:
-            # Create a mask for all entries whose first value == target_crop
-            mask = crop_calendar_per_farmer[..., 0] == target_crop
+            """Replace all full rotation blocks for one crop by the most common block.
 
-            # If the crop does not appear at all, nothing to do
-            if not np.any(mask):
+            Assumes crop_calendar_per_farmer has shape:
+                (n_farmers, n_rotation_slots, 4)
+
+            and that the dominant crop of a block is stored in [0, 0].
+
+            Returns:
+                The updated crop calendar with only one crop rotation type per crop.
+            """
+            # Select full farmer blocks belonging to this dominant crop
+            block_mask = crop_calendar_per_farmer[:, 0, 0] == target_crop
+
+            if not np.any(block_mask):
                 return crop_calendar_per_farmer
 
-            # Extract only the rows/entries that match the target crop
-            crop_entries = crop_calendar_per_farmer[mask]
+            # Full 3D blocks, not individual rows
+            crop_blocks = crop_calendar_per_farmer[block_mask]
 
-            # Among these crop rows, find unique variants and their counts
-            # (axis=0 ensures we treat each row/entry as a unit)
+            # Count unique full-block variants
             unique_variants, variant_counts = np.unique(
-                crop_entries, axis=0, return_counts=True
+                crop_blocks,
+                axis=0,
+                return_counts=True,
             )
 
-            # The most common variant is the unique variant with the highest count
+            # Pick most frequent full rotation block
             most_common_variant = unique_variants[np.argmax(variant_counts)]
 
-            # Replace all the target_crop rows with the most common variant
-            crop_calendar_per_farmer[mask] = most_common_variant
+            # Replace all matching blocks with that dominant full block
+            crop_calendar_per_farmer[block_mask] = most_common_variant
 
             return crop_calendar_per_farmer
 

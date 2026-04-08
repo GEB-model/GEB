@@ -1046,7 +1046,7 @@ class fairSTREAMModel(GEBModel):
             crop_data_per_tehsil_fn: Excel file with crop holding counts per
                 tehsil and size class.
         """
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
         # Set all farmers within command areas to canal irrigation
@@ -1110,7 +1110,7 @@ class fairSTREAMModel(GEBModel):
         canal_irrigated_farms = canal_irrigated_farms[canal_irrigated_farms != -1]
         adaptations[canal_irrigated_farms, SURFACE_IRRIGATION_EQUIPMENT] = 1
 
-        groundwater_depth = self.grid["landsurface/elevation"] - self.grid[
+        groundwater_depth = self.grid["landsurface/elevation_m"] - self.grid[
             "groundwater/heads"
         ].sel(layer="upper")
         groundwater_depth_subgrid = repeat_grid(

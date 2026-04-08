@@ -2,13 +2,13 @@ setup_region:
   subgrid_factor: 20
 
 set_time_range:
-  start_date: 1990-01-01
+  start_date: 1960-01-01
   end_date: 2024-12-31
 
 set_ssp:
   ssp: ssp3
 
-setup_hydrography:
+setup_coastlines:
 
 setup_assets:
   feature_types:
@@ -17,26 +17,29 @@ setup_assets:
 
 setup_gtsm_station_data:
 
+setup_cell_area:
+
+setup_hydrography:
+
 setup_elevation:
+
+setup_coastal_sfincs_model_regions:
 
 setup_regions_and_land_use:
   region_database: GADM_level1
   ISO3_column: GID_0
 
-setup_cell_area:
-
-setup_mannings:
+setup_geomorphology:
   
 setup_economic_data:
 
 setup_soil:
 
-setup_land_use_parameters:
-
 setup_vegetation:
 
 setup_waterbodies:
-  command_areas: null
+  preset_command_areas: null
+  calculate_command_areas: null
   custom_reservoir_capacity: null
 
 setup_groundwater:
@@ -72,6 +75,7 @@ setup_farmer_crop_calendar:
   year: 2000
   reduce_crops: true
   replace_base: false
+  unify_variants: true
 
 setup_farmer_characteristics:
   interest_rate: 0.05
@@ -367,20 +371,16 @@ setup_forcing:
 
 setup_SPEI:
   window_months: 12
-  calibration_period_start: 2011-01-01
-  calibration_period_end: 2021-12-31
+  calibration_period_start: 1960-01-01
+  calibration_period_end: 1990-12-31
 
 setup_pr_GEV:
 
 setup_discharge_observations:
-  custom_river_stations: null
+  custom_river_stations: data/discharge_observations
 
 setup_CO2_concentration:
 
 setup_global_ocean_mean_dynamic_topography:
 
-setup_coastlines:
-
 setup_osm_land_polygons:
-
-setup_coastal_sfincs_model_regions:

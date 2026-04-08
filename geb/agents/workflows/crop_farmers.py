@@ -12,7 +12,7 @@ from geb.geb_types import (
     TwoDArrayFloat32,
     TwoDArrayInt32,
 )
-from geb.hydrology.evapotranspiration import get_root_ratios
+from geb.hydrology.landsurface.evapotranspiration import get_root_ratios
 
 
 @njit(cache=True, inline="always")
@@ -1298,22 +1298,20 @@ def _pick_representative_by_mean_total_profit(
 
 @njit(cache=True, parallel=True)
 def crop_profit_difference_total(
-    total_profits: npt.NDArray[
-        np.float32
-    ],  # (n_farmers, n_cols) includes events + no-event
+    total_profits: npt.NDArray[np.float32],
     crop_elevation_group: npt.NDArray[np.int32],
     unique_crop_groups: npt.NDArray[np.int32],
     group_indices: npt.NDArray[np.int32],
     unique_crop_calendars: npt.NDArray[np.int32],
 ) -> tuple[
-    npt.NDArray[np.float32],  # gains: (n_farmers, n_calendars, n_cols)
-    npt.NDArray[np.int32],  # new_farmer_id: (n_farmers, n_calendars)
+    npt.NDArray[np.float32],
+    npt.NDArray[np.int32],
 ]:
     """Compute profit gains from switching crop rotations within elevation groups.
 
     For each unique crop-elevation group, this function compares the current
     rotation with alternative candidate rotations that share the same metadata
-    but differ in the rotation sequence. It computes the per-scenario profit
+    but differ in the rotation sequence. It computes the per-event profit
     gain of switching to each candidate rotation and assigns a representative
     donor farmer whose mean profit matches the candidate group as closely as
     possible.

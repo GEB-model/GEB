@@ -3,6 +3,7 @@
 import faulthandler
 import os
 import platform
+import warnings
 from importlib.metadata import version
 from importlib.resources import files
 from pathlib import Path
@@ -10,10 +11,12 @@ from typing import cast
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
+from pandas.errors import SettingWithCopyWarning
 
 from geb.workflows.io import fetch_and_save
 
@@ -29,7 +32,7 @@ load_dotenv()
 
 # Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
 if Path("/research/BETA-IVM-HPC/GEB").exists():
-    os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/data_catalog/"
+    os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/datacatalog/"
     os.environ["SFINCS_CONTAINER"] = os.getenv(
         "SFINCS_CONTAINER",
         "/ada-software/containers/sfincs-cpu-v2.3.0-mt-Faber-Release.sif",
@@ -98,7 +101,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
             import tarfile
 
             with tarfile.open(tbb_path / tbb_compressed_file, "r:gz") as tar:
-                tar.extractall(path=tbb_path)
+                tar.extractall(path=tbb_path, filter="data")
         elif tbb_compressed_file.endswith(".zip"):
             import zipfile
 
@@ -160,5 +163,18 @@ else:
 # xarray uses bottleneck for some operations to speed up computations
 # however, some implementations are numerically unstable, so we disable it
 xr.set_options(use_bottleneck=False, keep_attrs=True)
+
+# raise all numpy warnings as errors, to catch potential issues early on
+np.seterr(divide="raise", over="raise", under="ignore", invalid="raise")
+
+# force solving of all warnings as errors, to catch potential issues early on
+warnings.simplefilter(action="error", category=FutureWarning)
+
+# specific warning for pandas
+warnings.simplefilter(action="error", category=SettingWithCopyWarning)
+pd.set_option("future.no_silent_downcasting", True)
+
+# we don't want to miss any runtime warnings, as they can indicate potential issues in the code, so we also raise them as errors
+warnings.simplefilter(action="error", category=RuntimeWarning)
 
 faulthandler.enable()

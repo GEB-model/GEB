@@ -1,23 +1,33 @@
 """Data catalog for predefined datasets in GEB."""
 
+import logging
 from typing import Any
 
+from .aquastat import AQUASTAT
 from .base import Adapter
+from .coast_rp import CoastRP
+from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
+from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
+from .global_ocean_mean_dynamic_topography import (
+    GlobalOceanMeanDynamicTopography as GlobalOceanMeanDynamicTopography,
+)
+from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
-from .gtsm import GTSM
+from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
@@ -26,6 +36,8 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
+from .mirca_os import MIRCAOS
+from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
 from .osm_data import OpenStreetMapCoastlines, OpenStreetMapLandPolygons
@@ -51,9 +63,21 @@ data_catalog: dict[str, dict[str, Any]] = {
     "era5": {
         "adapter": DestinationEarth(),
         "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
+    },
+    "ecmwf_geopotential": {
+        "adapter": ECMWFGeopotential(
+            folder="ecmwf_geopotential",
+            filename="geo_1279l4_0.1x0.1.grib2_v4_unpack.nc",
+            local_version=1,
+            cache="global",
+        ),
+        "url": "https://confluence.ecmwf.int/download/attachments/140385202/geo_1279l4_0.1x0.1.grib2_v4_unpack.nc?version=1&modificationDate=1591983422003&api=v2",
         "source": {
-            "name": "ERA5",
+            "name": "ECMWF ERA5-Land geopotential",
             "author": "ECMWF",
+            "url": "https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#ERA5Land:datadocumentation-parameterlistingParameterlistings",
+            "license": "CC BY 4.0",
         },
     },
     "ecmwf_forecasts": {
@@ -93,6 +117,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://soilgrids.org",
             "version": "2020",
             "paper_doi": "10.5194/soil-2020-65",
+        },
+    },
+    "forest_restoration_potential": {
+        "adapter": ForestRestorationPotential(
+            folder="forest_restoration_potential",
+            local_version=1,
+            filename="restoration_potential.tif",
+            cache="global",
+        ),
+        "url": "https://www.research-collection.ethz.ch/bitstreams/77c1863d-b9b0-417e-8e49-d13079fb7825/download",
+        "source": {
+            "name": "Forest Restoration Potential",
+            "author": "Bastin, Jean-François et al.",
+            "url": "https://www.research-collection.ethz.ch/entities/researchdata/7234f0a1-e37d-4362-99e9-d0e6e75793dc",
+            "license": "In Copyright - Non-Commercial Use Permitted",
+            "doi": "10.3929/ethz-b-000350258",
+            "year": "2019",
         },
     },
     "lisflood_crop_group_number_forest": {
@@ -200,6 +241,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use",
             "url": "https://www.gebco.net/",
             "paper_doi": "10.5285/a29c5465-b138-234d-e053-6c86abc040b9",
+        },
+    },
+    "aquastat": {
+        "adapter": AQUASTAT(
+            folder="aquastat",
+            local_version=1,
+            filename="aquastat.parquet",
+            cache="global",
+        ),
+        "url": "https://storage.googleapis.com/810c63d8-3fde-4ecd-9882-14d62e3058be/static/sites/aquastat/bulk/bulk_eng(in).csv",
+        "source": {
+            "name": "AQUASTAT",
+            "author": "FAO",
+            "url": "https://data.apps.fao.org/aquastat",
+            "license": "CC BY-NC- SA 3.0 IGO",
         },
     },
     "global_exposure_model": {
@@ -351,7 +407,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             folder="faostat_prices",
             local_version=1,
             filename="faostat_prices.parquet",
-            cache="local",
+            cache="global",
         ),
         "url": "https://bulks-faostat.fao.org/production/Prices_E_All_Data.zip",
         "source": {
@@ -363,7 +419,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "gcam_electricity_rates": {
         "adapter": GCAMElectricityRates(
-            folder="socioeconomic/electricity_rates",
+            folder="gcam/electricity_rates",
             local_version=1,
             filename="GCAM_Electricity_Rates.csv",
             cache="global",
@@ -511,6 +567,42 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://globaldatalab.org/mygdl/downloads/shapefiles/",
         },
     },
+    "global_preferences_survey_country": {
+        "adapter": GlobalPreferencesSurvey(
+            zip_filename="GPS_dataset_country_level.zip",
+            zip_member_path="country.dta",
+            folder="global_preferences_survey_country",
+            local_version=1,
+            filename="country.csv",
+            cache="global",
+        ),
+        "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        "source": {
+            "name": "Global Preferences Survey - Country Level",
+            "author": "Falk et al. (2018)",
+            "paper_doi": "10.1093/qje/qjy013",
+            "license": "CCC BY-NC-SA 4.0",
+            "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        },
+    },
+    "global_preferences_survey_individual": {
+        "adapter": GlobalPreferencesSurvey(
+            zip_filename="GPS_dataset_individual_level.zip",
+            zip_member_path="individual_new.dta",
+            folder="global_preferences_survey_individual",
+            local_version=1,
+            filename="individual_new.csv",
+            cache="global",
+        ),
+        "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        "source": {
+            "name": "Global Preferences Survey - Individual Level",
+            "author": "Falk et al. (2018)",
+            "paper_doi": "10.1093/qje/qjy013",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
+        },
+    },
     "wb_inflation_rate": {
         "adapter": WorldBankData(
             folder="world_bank_inflation_rate",
@@ -569,6 +661,36 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 3.0 IGO",
             "url": "https://ourworldindata.org/grapher/human-development-index",
             "original_source_url": "https://hdr.undp.org",
+        },
+    },
+    "oecd_idd": {
+        "adapter": OECD(
+            folder="oecd_idd",
+            local_version=1,
+            filename="oecd_idd.csv",
+            cache="global",
+        ),
+        "url": "https://sdmx.oecd.org/public/rest/data/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0/.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR.?startPeriod=2010&dimensionAtObservation=AllDimensions&format=csvfilewithlabels",
+        "source": {
+            "name": "OECD Income Distribution Database",
+            "author": "OECD",
+            "license": "CC BY 4.0",
+            "url": "https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov",
+        },
+    },
+    "coast_rp": {
+        "adapter": CoastRP(
+            folder="coast_rp",
+            local_version=1,
+            filename="COAST-RP.pkl",
+            cache="global",
+        ),
+        "url": "https://raw.githubusercontent.com/jobdullaart/HGRAPHER/refs/tags/v0.1/COAST-RP.pkl",
+        "source": {
+            "name": "COAST-RP",
+            "author": "Dullaart et al. (2023)",
+            "license": "Other (Open)",
+            "url": "https://zenodo.org/records/7912730",
         },
     },
     "esa_worldcover_2021": {
@@ -724,6 +846,39 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "10.1088/1748-9326/ac4d4f",
         },
     },
+    "global_ocean_mean_dynamic_topography": {
+        "adapter": GlobalOceanMeanDynamicTopography(
+            folder="global_ocean_mean_dynamic_topography",
+            local_version=1,
+            filename="global_ocean_mean_dynamic_topography.nc",
+            cache="global",
+        ),
+        "url": "https://cmr.earthdata.nasa.gov/search/concepts/C2216864025-ORNL_CLOUD.html",
+        "source": {
+            "name": "Global Ocean Mean Dynamic Topography",
+            "author": "Copernicus Marine Service",
+            "version": "1",
+            "license": "CC0",
+            "url": "https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_MDT_008_063/description",
+            "paper_doi": "https://doi.org/10.48670/moi-00150",
+        },
+    },
+    "gtsm_timeseries": {
+        "adapter": GTSM_timeseries(
+            folder="gtsm",
+            local_version=2,
+            filename="placeholder.zip",
+            cache="global",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
+        "source": {
+            "name": "Global Tide and Storm Surge Model (GTSM)",
+            "author": "Muis et al. (2022)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.24381/cds.a6d42d60",
+            "paper_doi": "10.5281/zenodo.8314503",
+        },
+    },
     "gtsm": {
         "adapter": GTSM(
             folder="gtsm",
@@ -845,28 +1000,112 @@ data_catalog: dict[str, dict[str, Any]] = {
     "glopop-sg": {
         "adapter": GLOPOP_SG(
             folder="glopop_sg",
-            local_version=1,
+            local_version=3,  # this is the third version of the dataset on Zenodo
             filename="placeholder",
             cache="local",
         ),
-        "url": "https://zenodo.org/records/15680747/files/GLOPOP_SG%20(1).zip?download=1",
+        "url": "https://zenodo.org/records/17076088/files/GLOPOP-SG(update).zip?download=1",
         "source": {
             "name": "GLOPOP-SG",
             "author": "M.J. Ton et al. (2025)",
             "license": "CC BY 4.0",
-            "url": "https://doi.org/10.5281/zenodo.15680747",
-            "paper_doi": "10.5281/zenodo.15680747",
+            "url": "https://doi.org/10.5281/zenodo.17076088",
+            "paper_doi": "10.5281/zenodo.17076088",
         },
+    },
+    **{
+        f"cwatm_industry_water_demand_{scenario}_year": {
+            "adapter": CWATMIndustryWaterDemand(
+                folder="cwatm_water_demand",
+                filename=f"{scenario}_ind_year_millionm3_5min.nc",
+                local_version=1,
+                cache="global",
+            ),
+            "url": None,
+            "source": {
+                "name": f"CWATM Industry Water Demand {scenario}",
+                "author": "Burek et al. (2016)",
+                "license": "CC BY 3.0",
+                "url": "https://doi.org/10.5194/gmd-9-175-2016",
+            },
+        }
+        for scenario in ["historical", "ssp1", "ssp2", "ssp3", "ssp5"]
+    },
+    **{
+        f"cwatm_livestock_water_demand_{scenario}_year": {
+            "adapter": CWATMLivestockWaterDemand(
+                folder="cwatm_water_demand",
+                filename=f"{scenario}_liv_year_millionm3_5min.nc",
+                local_version=1,
+                cache="global",
+            ),
+            "url": None,
+            "source": {
+                "name": f"CWATM Livestock Water Demand {scenario}",
+                "author": "Burek et al. (2016)",
+                "license": "CC BY 3.0",
+                "url": "https://doi.org/10.5194/gmd-9-175-2016",
+            },
+        }
+        for scenario in ["historical", "ssp1", "ssp2", "ssp3", "ssp5"]
+    },
+    **{
+        f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}": {
+            "adapter": MIRCAOS(
+                folder="mirca_os",
+                filename=f"Annual Harvested Area Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{irrigation}.tif",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/data/contents/Annual%20Harvested%20Area%20Grids/Annual_Harvested_Area_Grids.rar",
+            "source": {
+                "name": "MIRCA-OS",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://doi.org/10.4211/hs.60a890eb841c460192c03bb590687145",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
+        for resolution in ["5-arcminute", "30-arcminute"]
+        for crop in [
+            "Wheat",
+            "Maize",
+            "Rice",
+            "Barley",
+            "Rye",
+            "Millet",
+            "Sorghum",
+            "Soybeans",
+            "Sunflower",
+            "Potatoes",
+            "Cassava",
+            "Sugar_cane",
+            "Sugar_beet",
+            "Oil_palm",
+            "Rapeseed",
+            "Groundnuts",
+            "Others_perennial",
+            "Fodder",
+            "Others_annual",
+            "Cocoa",
+            "Coffee",
+            "Cotton",
+            "Pulses",
+        ]
+        for irrigation in ["ir", "rf"]
     },
 }
 
 
-class NewDataCatalog:
+class DataCatalog:
     """The GEB data catalog for accessing predefined datasets."""
 
-    def __init__(self) -> None:
+    def __init__(self, logger: logging.Logger) -> None:
         """Initialize the data catalog with predefined entries."""
         self.catalog = data_catalog
+        for name, entry in self.catalog.items():
+            adapter = entry["adapter"]
+            adapter.logger = logger
 
     def fetch(self, name: str, *args: Any, **kwargs: Any) -> Adapter:
         """Get a data catalog entry by name.

@@ -8,7 +8,7 @@
 - [Elisa Stefaniak](https://iiasa.ac.at/staff/elisa-stefaniak) - developer of the plantFATE integration
 - [Tim Busker](https://research.vu.nl/en/persons/tim-busker)
 - [Rafaella Oliveira](https://research.vu.nl/en/persons/rafaella-gouveia-loureiro-oliveira)
-- [Carolina Carral](https://vu.nl/en/research/scientists/carolina-ferman-carral)
+- [Carolina Ferman Carral](https://vu.nl/en/research/scientists/carolina-ferman-carral)
 - [Roy Pontman](https://research.vu.nl/en/persons/roy-pontman/)
 - [Lisanne van Amelsvoort](https://research.vu.nl/en/persons/lisanne-van-amelsvoort/)
 - [Joshua Kiesel](https://research.vu.nl/en/persons/joshua-kiesel/)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import pickle
 import shutil
 from collections import deque
@@ -15,11 +14,19 @@ import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import yaml
 from numpy.typing import NDArray
 
 from geb.geb_types import ArrayStr
-from geb.workflows.io import read_geom
+from geb.workflows.io import (
+    read_array,
+    read_geom,
+    read_params,
+    read_table,
+    write_array,
+    write_geom,
+    write_params,
+    write_table,
+)
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -270,7 +277,7 @@ class DynamicArray:
         ufunc: np.ufunc,
         method: Literal["__call__", "reduce", "reduceat", "accumulate", "outer", "at"],
         *inputs: tuple[Any],
-        **kwargs: dict[str, Any],
+        **kwargs: Any,
     ) -> Any:
         """
         Handle NumPy ufuncs applied to DynamicArray instances.
@@ -291,17 +298,49 @@ class DynamicArray:
             input_.data if isinstance(input_, DynamicArray) else input_
             for input_ in inputs
         )
-        result = self._data.__array_ufunc__(ufunc, method, *modified_inputs, **kwargs)
+
+        out_orig = kwargs.get("out")
+        if out_orig is not None:
+            kwargs = kwargs.copy()
+            kwargs["out"] = tuple(
+                o.data if isinstance(o, DynamicArray) else o for o in out_orig
+            )
+
+        # Call the ufunc method on the underlying data type's implementation
+        # We use the ufunc directly to avoid issues with delegation to _data
+        result = getattr(ufunc, method)(*modified_inputs, **kwargs)
+
+        if result is NotImplemented:
+            return NotImplemented
+
         if method == "reduce":
             return result
-        elif not isinstance(inputs[0], DynamicArray):
-            return result
-        else:
+
+        if out_orig is not None:
+            if len(out_orig) == 1:
+                return out_orig[0]
+            return out_orig
+
+        if isinstance(result, np.ndarray):
+            # Find the first DynamicArray in inputs to inherit metadata from
+            first_da = next((i for i in inputs if isinstance(i, DynamicArray)), self)
+
+            # Determine extra_dims_names. If result ndim changed (e.g. reduction),
+            # we might need to adjust them.
+            # For __call__ (standard elementwise), it stays the same if shape matches elementwise.
+            # Here we assume elementwise or compatible shape.
+            new_extra_dims_names = first_da.extra_dims_names
+            if result.ndim - 1 != len(new_extra_dims_names):
+                # If dimensions changed, we can't reliably guess the names
+                new_extra_dims_names = []
+
             return self.__class__(
                 result,
-                extra_dims_names=self.extra_dims_names,
-                max_n=self._data.shape[0],
+                extra_dims_names=new_extra_dims_names,
+                max_n=first_da.max_n,
             )
+
+        return result
 
     def __array_function__(
         self,
@@ -348,7 +387,7 @@ class DynamicArray:
 
     def __setitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
+        key: int | slice | NDArray[np.integer] | NDArray[np.bool_],
         value: Any,
     ) -> None:
         """
@@ -401,7 +440,7 @@ class DynamicArray:
 
     def __getitem__(
         self,
-        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_] | list,
+        key: int | slice | NDArray[np.integer] | NDArray[np.bool_] | list,
     ) -> DynamicArray | NDArray[Any]:
         """
         Retrieve item(s) or a sliced DynamicArray.
@@ -984,14 +1023,18 @@ class DynamicArray:
 
     def save(self, path: Path) -> None:
         """
-        Save the DynamicArray to disk in a compressed NumPy archive.
+        Save the DynamicArray to disk in a compressed format.
 
         Args:
-            path: Path-like object (without suffix) where the .storearray.npz file will be written.
+            path: Path-like object (without suffix) where the .dynamicarray.zarr file will be written.
         """
-        np.savez_compressed(
-            path.with_suffix(".storearray.npz"),
-            **{slot: getattr(self, slot) for slot in self.__slots__},
+        write_array(
+            self._data,
+            path.with_suffix(".dynamicarray.zarr"),
+            attributes={
+                "n": self._n,
+                "extra_dims_names": self._extra_dims_names.tolist(),
+            },
         )
 
     @classmethod
@@ -1000,17 +1043,18 @@ class DynamicArray:
         Load a DynamicArray previously saved with `save`.
 
         Args:
-            path: Path to a .storearray.npz file.
+            path: Path to a .dynamicarray.zarr file.
 
         Returns:
             A reconstructed DynamicArray instance.
         """
-        assert path.suffixes == [".storearray", ".npz"]
-        with np.load(path) as data:
-            obj = cls.__new__(cls)
-            for slot in cls.__slots__:
-                setattr(obj, slot, data[slot])
-            return obj
+        assert path.suffixes == [".dynamicarray", ".zarr"]
+        array, attributes = read_array(path, return_attributes=True)
+        obj = cls.__new__(cls)
+        setattr(obj, "_data", array)
+        setattr(obj, "_n", attributes["n"])
+        setattr(obj, "_extra_dims_names", np.array(attributes["extra_dims_names"]))
+        return obj
 
 
 class Bucket:
@@ -1123,36 +1167,17 @@ class Bucket:
             if isinstance(value, DynamicArray):
                 value.save(path / name)
             elif isinstance(value, np.ndarray):
-                np.savez_compressed(
-                    (path / name).with_suffix(".array.npz"), value=value
-                )
+                write_array(value, (path / name).with_suffix(".array.zarr"))
             elif isinstance(value, gpd.GeoDataFrame):
-                value.to_parquet(
-                    (path / name).with_suffix(".geoparquet"),
-                    engine="pyarrow",
-                    compression="gzip",
-                    compression_level=9,
-                )
+                write_geom(value, (path / name).with_suffix(".geoparquet"))
             elif isinstance(value, pd.DataFrame):
-                value.to_parquet(
-                    (path / name).with_suffix(".parquet"),
-                    engine="pyarrow",
-                    compression="gzip",
-                    compression_level=9,
-                )
+                write_table(value, (path / name).with_suffix(".parquet"))
             elif isinstance(value, (list, dict, float, int, str, datetime)):
                 if isinstance(value, np.generic):
                     value = (
                         value.item()
                     )  # If it's a numpy scalar, convert to native Python type
-                with open((path / name).with_suffix(".yml"), "w") as f:
-                    yaml.safe_dump(value, f, default_flow_style=False)
-            elif isinstance(value, np.ndarray):
-                if value.ndim == 0:
-                    raise ValueError(
-                        "0-dim arrays should be saved as scalars. Otherwise we get undefined and unexpected behavior when loading the array back. Here, 0-dim array are converted to scalars."
-                    )
-                np.save((path / name).with_suffix(".npy"), value)
+                write_params(value, (path / name).with_suffix(".yml"))
             elif isinstance(value, np.generic):
                 np.save((path / name).with_suffix(".npy"), value)
             elif isinstance(value, deque):
@@ -1176,17 +1201,20 @@ class Bucket:
             ValueError: If a value type is not supported for loading.
         """
         for filename in path.iterdir():
-            if filename.suffixes == [".storearray", ".npz"]:
+            if filename.suffixes == [".dynamicarray", ".zarr"]:
                 setattr(
                     self,
                     filename.name.removesuffix("".join(filename.suffixes)),
                     DynamicArray.load(filename),
                 )
-            elif filename.suffixes == [".array", ".npz"] or filename.suffix == ".npy":
-                value = np.load(filename)
-                # unpack the value if it was saved as a .array.npz
-                if filename.suffixes == [".array", ".npz"]:
-                    value = value["value"]
+            elif filename.suffix == ".npy":
+                setattr(
+                    self,
+                    filename.stem,
+                    np.load(filename),
+                )
+            elif filename.suffixes == [".array", ".zarr"]:
+                value = read_array(filename)
                 if value.ndim == 0:
                     value = value[()]  # convert to scalar but keep dtype
                 setattr(
@@ -1204,27 +1232,10 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    pd.read_parquet(filename),
+                    read_table(filename),
                 )
             elif filename.suffix == ".yml":
-                with open(filename, "r") as f:
-                    setattr(self, filename.stem, yaml.safe_load(f))
-            # TODO: Can be removed in 2026
-            elif filename.suffix == ".txt":
-                with open(filename, "r") as f:
-                    setattr(self, filename.stem, f.read())
-            # TODO: Can be removed in 2026
-            elif filename.suffix == ".datetime":
-                with open(filename, "r") as f:
-                    setattr(
-                        self,
-                        filename.stem,
-                        datetime.fromisoformat(f.read()),
-                    )
-            # TODO: Can be removed in 2026
-            elif filename.suffix == ".json":
-                with open(filename, "r") as f:
-                    setattr(self, filename.stem, json.load(f))
+                setattr(self, filename.stem, read_params(filename))
             elif filename.suffix == ".pkl":
                 # TODO: Remove this option when we use the BMI of SFINCS and deques
                 # are no longer needed.

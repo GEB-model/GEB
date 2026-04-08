@@ -16,7 +16,9 @@ class ForecastsConfig(BaseModel):
 class RegionConfig(BaseModel):
     """Configuration for region."""
 
-    subbasin: int | None = Field(None, description="Subbasin ID.")
+    subbasin: int | list[int] | None = Field(
+        None, description="Subbasin ID or list of subbasin IDs."
+    )
 
 
 class GeneralConfig(BaseModel):
@@ -94,6 +96,18 @@ class FloodsConfig(BaseModel):
     return_periods: list[int] = Field(
         [2, 5, 10, 25, 50, 100, 250, 500, 1000],
         description="Return periods for flood maps.",
+    )
+    p_value_threshold: float = Field(
+        0.05,
+        description="Anderson-Darling p-value threshold for threshold selection.",
+    )
+    selection_strategy: Literal["first_significant", "best_fit"] = Field(
+        "first_significant",
+        description="Strategy for selecting the best threshold: 'first_significant' (early stopping) or 'best_fit' (maximize p-value).",
+    )
+    fixed_shape: float | None = Field(
+        0.0,
+        description="Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted.",
     )
     flood_risk: bool = Field(False, description="Whether to calculate flood risk.")
     ncpus: int | Literal["auto"] = Field("auto", description="Number of CPUs to use.")
