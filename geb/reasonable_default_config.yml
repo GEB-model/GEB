@@ -19,7 +19,6 @@ general:
 
 hazards:
   floods:
-    damage_model: geul # options are 'geul' or 'global'
     simulate: false
     forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
