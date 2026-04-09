@@ -462,7 +462,13 @@ def test_run() -> None:
         assert result["R"] is not None
 
         # Note this should be much higher.
-        assert result["KGE"] > -0.07
+        assert result["KGE"] > -0.05
+
+        # method_args = {
+        #     "method": "hydrodynamics.evaluate_hydrodynamics",
+        # }
+        # args["method_args"] = method_args
+        # result = run_model_with_method(method="evaluate", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
