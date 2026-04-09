@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b20": ["[update-python;3.14.4]"],
     "1.0.0b19": [
-        "[manual] Add a new file called 'input/build_complete.txt'. In future versions this file will be made automatically.",
+        "[create-file;build_complete.txt]",
         "[update-method;setup_hydrography]",
     ],
     "1.0.0b18": [
@@ -128,6 +128,25 @@ def get_and_maybe_do_version_updates(
                     else:
                         updates_to_print.append(
                             f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
+                        )
+
+                elif update_type == "create-file":
+                    if len(update_type_arguments) != 1:
+                        raise ValueError(
+                            f"create-file update type should have exactly one argument, the file to create, but got: {update_type_arguments}"
+                        )
+                    file_path: str = update_type_arguments[0]
+                    if perform_auto_update:
+                        assert build_model is not None
+                        build_model.logger.info(
+                            f"Creating file {file_path} as part of auto-update..."
+                        )
+                        full_file_path = build_model.root / file_path
+                        full_file_path.parent.mkdir(parents=True, exist_ok=True)
+                        full_file_path.touch(exist_ok=True)
+                    else:
+                        updates_to_print.append(
+                            f"Add a new file called '{file_path}' in your input folder. In future versions this file will be made automatically."
                         )
 
                 elif update_type == "manual":
