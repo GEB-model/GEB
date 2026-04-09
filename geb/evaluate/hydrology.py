@@ -2123,10 +2123,14 @@ class Hydrology:
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
 
         Returns:
-            Dictionary containing mean metrics (KGE, NSE, R).
+            Dictionary containing mean metrics (KGE, NSE, R). In addition, the returned dictionary contains
+            frequency-specific metrics (e.g., KGE_hourly, KGE_daily).
+            Stations with hourly data are also evaluated on the daily resampled data, and those metrics are included in
+            the returned dictionary. Stations with only daily data are not evaluated on the hourly data.
 
         Raises:
             FileNotFoundError: If the run folder does not exist in the report directory.
+            ValueError: If a non-existing frequency label is encountered in the discharge observations data.
         """
         # load input data files
         discharge_observations_hourly: pd.DataFrame = read_table(
@@ -2225,19 +2229,54 @@ class Hydrology:
                         frequency=freq_label,
                     )
 
+                station_evaluation = {
+                    "station_ID": ID,
+                    "station_name": discharge_observations_station_name,
+                    "x": discharge_observations_station_coords[0],
+                    "y": discharge_observations_station_coords[1],
+                    "discharge_observations_to_GEB_upstream_area_ratio": discharge_observations_to_GEB_upstream_area_ratio,
+                    "KGE": KGE,
+                    "NSE": NSE,
+                    "R": R,
+                    f"KGE_{freq_label}": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
+                    f"NSE_{freq_label}": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
+                    f"R_{freq_label}": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
+                }
+
+                # if the frequency is hourly, also calculate the metrics on the daily resampled data
+                if freq_label == "hourly":
+                    # resample to daily, but keep only the days with 24 valid hourly observations
+                    counts = validation_df.resample("D").count()
+                    validation_df_daily = (
+                        validation_df.resample("D").mean()[counts == 24].dropna()
+                    )
+                    KGE_daily, NSE_daily, R_daily = (
+                        _calculate_discharge_validation_metrics(validation_df_daily)
+                    )
+                    station_evaluation.update(
+                        {
+                            "KGE_daily": KGE_daily,
+                            "NSE_daily": NSE_daily,
+                            "R_daily": R_daily,
+                        }
+                    )
+                # if the frequency is daily, we cannot calculate the metrics on the hourly resampled data,
+                # so we set those to NaN
+                elif freq_label == "daily":
+                    station_evaluation.update(
+                        {
+                            "KGE_hourly": np.nan,
+                            "NSE_hourly": np.nan,
+                            "R_hourly": np.nan,
+                        }
+                    )
+                else:
+                    raise ValueError(
+                        f"Unexpected frequency label '{freq_label}' in evaluation loop."
+                    )
+
                 # attach to the evaluation dataframe
-                evaluation_per_station.append(
-                    {
-                        "station_ID": ID,
-                        "station_name": discharge_observations_station_name,
-                        "x": discharge_observations_station_coords[0],
-                        "y": discharge_observations_station_coords[1],
-                        "discharge_observations_to_GEB_upstream_area_ratio": discharge_observations_to_GEB_upstream_area_ratio,
-                        "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
-                        "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
-                        "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
-                    }
-                )
+                evaluation_per_station.append(station_evaluation)
 
         if len(evaluation_per_station) == 0:
             # Create empty evaluation dataframe with proper structure
@@ -2248,6 +2287,12 @@ class Hydrology:
                         "x",
                         "y",
                         "discharge_observations_to_GEB_upstream_area_ratio",
+                        "KGE_daily",
+                        "NSE_daily",
+                        "R_daily",
+                        "KGE_hourly",
+                        "NSE_hourly",
+                        "R_hourly",
                         "KGE",
                         "NSE",
                         "R",
@@ -2300,7 +2345,14 @@ class Hydrology:
                     eval_plot_folder=self.output_folder,
                 )
                 print(f"Created {outflow_plot_count} outflow discharge plots.")
+
             return {
+                "KGE_hourly": float(evaluation_df["KGE_hourly"].mean()),
+                "NSE_hourly": float(evaluation_df["NSE_hourly"].mean()),
+                "R_hourly": float(evaluation_df["R_hourly"].mean()),
+                "KGE_daily": float(evaluation_df["KGE_daily"].mean()),
+                "NSE_daily": float(evaluation_df["NSE_daily"].mean()),
+                "R_daily": float(evaluation_df["R_daily"].mean()),
                 "KGE": float(evaluation_df["KGE"].mean()),
                 "NSE": float(evaluation_df["NSE"].mean()),
                 "R": float(evaluation_df["R"].mean()),
@@ -2309,7 +2361,14 @@ class Hydrology:
             self.model.logger.warning(
                 "No discharge stations found for evaluation. Returning None for all metrics."
             )
+
             return {
+                "KGE_hourly": None,
+                "NSE_hourly": None,
+                "R_hourly": None,
+                "KGE_daily": None,
+                "NSE_daily": None,
+                "R_daily": None,
                 "KGE": None,
                 "NSE": None,
                 "R": None,
