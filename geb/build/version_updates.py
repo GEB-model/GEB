@@ -2,7 +2,7 @@
 
 import re
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from packaging.version import Version
 
@@ -12,18 +12,16 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b20": [
-        "[update-python;3.14.4]",
-    ],
+    "1.0.0b20": ["[update-python;3.14.4]"],
     "1.0.0b19": [
-        "[manual] Add a new file called 'build_complete.txt' in your input folder. In future versions this file will be made automatically.",
-        "[manual] Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.",
+        "[manual] Add a new file called 'input/build_complete.txt'. In future versions this file will be made automatically.",
+        "[update-method;setup_hydrography]",
     ],
     "1.0.0b18": [
-        "[manual] Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.",
-        "[manual] Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.",
-        "[manual] Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.",
-        "[manual] Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.",
+        "[update-method;setup_forcing]",
+        "[update-method;setup_SPEI]",
+        "[update-method;setup_pr_GEV]",
+        "[update-method;setup_buildings]",
     ],
     "1.0.0b12": [
         "[manual] Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.",
@@ -53,6 +51,7 @@ def get_and_maybe_do_version_updates(
     version_info: str,
     perform_auto_update: bool = False,
     build_model: GEBModelBuild | None = None,
+    methods: dict[str, Any] | None = None,
 ) -> list[str]:
     """Get the version updates that need to be made to update from the stored version to the current version.
 
@@ -60,6 +59,7 @@ def get_and_maybe_do_version_updates(
         version_info: The version string stored in the version file, e.g. "1.2.3".
         perform_auto_update: Whether to perform auto updates.
         build_model: The GEB model instance for building. Must be provided if perform_auto_update is True.
+        methods: A dictionary of loaded methods from the build configuration. Must be provided if perform_auto_update is True.
 
     Returns:
         A list of strings describing the updates that need to be made to update to the current version.
@@ -70,10 +70,15 @@ def get_and_maybe_do_version_updates(
     if perform_auto_update and build_model is None:
         raise ValueError("build_model must be provided if perform_auto_update is True")
 
+    if perform_auto_update and methods is None:
+        raise ValueError("methods must be provided if perform_auto_update is True")
+
     current_v = Version(__version__)
     stored_v = Version(version_info)
 
-    versions: list[str] = sorted(VERSION_UPDATES.keys(), key=Version)
+    versions: list[str] = sorted(
+        VERSION_UPDATES.keys(), key=Version
+    )  # iterate from oldest to newest version
     updates_to_print: list[str] = []
     for v_str in versions:
         v = Version(v_str)
@@ -98,6 +103,31 @@ def get_and_maybe_do_version_updates(
                     ):
                         updates_to_print.append(
                             f"Update to Python {python_version}. If you use uv, ensure your uv is updated first: `uv self update`. Then use `uv sync`."
+                        )
+
+                elif update_type == "update-method":
+                    if len(update_type_arguments) != 1:
+                        raise ValueError(
+                            f"update-method update type should have exactly one argument, the method to update, but got: {update_type_arguments}"
+                        )
+                    method_name: str = update_type_arguments[0]
+                    if perform_auto_update:
+                        assert methods is not None
+                        assert build_model is not None
+                        update_method = getattr(build_model, method_name, None)
+                        if update_method is None:
+                            raise ValueError(
+                                f"Method {method_name} not found in geb.cli.update module"
+                            )
+
+                        build_model.logger.info(
+                            f"Performing auto-update for method {method_name}..."
+                        )
+
+                        update_method(**(methods[method_name] or {}))
+                    else:
+                        updates_to_print.append(
+                            f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
                         )
 
                 elif update_type == "manual":

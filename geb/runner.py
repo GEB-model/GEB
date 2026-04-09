@@ -920,10 +920,8 @@ def build_fn(
     """
     _restart_if_needed(optimize=optimize, cores=cores)
 
-    build_config_input: Path | dict[str, Any] = build_config
-
     def build_operation(logger: logging.Logger, **kwargs: Any) -> None:
-        parsed_build_config = parse_config(build_config_input)
+        parsed_build_config = parse_config(build_config)
         model = get_builder(
             config,
             logger=logger,
@@ -1073,6 +1071,7 @@ def alter_fn(
 def update_version_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
+    build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
@@ -1091,6 +1090,7 @@ def update_version_fn(
     config_parsed = parse_config(config)
 
     def update_version_operation(logger: logging.Logger, **kwargs: Any) -> None:
+        parsed_build_config = parse_config(build_config)
         parsed_config = parse_config(config, schema=Config)
         input_folder = Path(parsed_config["general"]["input_folder"])
         custom_model = (
@@ -1099,11 +1099,17 @@ def update_version_fn(
             else None
         )
 
+        methods: dict[str, Any] = {
+            method: args
+            for method, args in parsed_build_config.items()
+            if not method.startswith("_")
+        }
+
         builder_class = get_model_builder_class(custom_model)
         builder_class(
             logger=logger,
             root=input_folder,
-        )
+        ).update_version(methods=methods)
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
