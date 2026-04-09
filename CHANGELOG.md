@@ -20,6 +20,7 @@
 - Fix recent regression where water demand for households was set to 0 except on January 1st.
 - Include evaluation tests in the test_run for simplicity. 
 - Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
+- Move evaluation of hydrodynamics to seperate file.
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.
