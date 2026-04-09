@@ -1,7 +1,5 @@
 """Module containing general agent functions and the base class for all agents."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import numpy as np

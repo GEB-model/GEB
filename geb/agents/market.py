@@ -1,7 +1,5 @@
 """This module contains the Market agent class for simulating market dynamics in the GEB model."""
 
-from __future__ import annotations
-
 import warnings
 from typing import TYPE_CHECKING
 

@@ -1,7 +1,5 @@
 """Data adapter for obtaining ERA5 data from the Destination Earth."""
 
-from __future__ import annotations
-
 import base64
 import os
 import time

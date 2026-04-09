@@ -4,8 +4,6 @@ Evaluation utilities for the GEB model.
 Contains the Evaluate class which contains evaluation routines for model runs.
 """
 
-from __future__ import annotations
-
 from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any

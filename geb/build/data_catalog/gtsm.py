@@ -1,7 +1,5 @@
 """Utilities for working with GTSM data in GEB."""
 
-from __future__ import annotations
-
 import os
 import shutil
 import tempfile

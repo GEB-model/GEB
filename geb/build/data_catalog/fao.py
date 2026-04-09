@@ -1,7 +1,5 @@
 """File adapter for FAO datasets."""
 
-from __future__ import annotations
-
 import zipfile
 from typing import Any
 

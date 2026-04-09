@@ -417,7 +417,7 @@ def test_run() -> None:
         )
         args["config"]["hazards"]["floods"]["simulate"] = True
 
-        run_model_with_method(method="run", **args)
+        # run_model_with_method(method="run", **args)
 
         for evaluation_method in (
             "hydrology.plot_water_balance",

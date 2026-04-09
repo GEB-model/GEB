@@ -1,7 +1,5 @@
 """I/O related functions and classes for the GEB project."""
 
-from __future__ import annotations
-
 import asyncio
 import bz2
 import datetime
