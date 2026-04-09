@@ -27,7 +27,6 @@ import xarray as xr
 import yaml
 import zarr
 from affine import Affine
-from packaging.version import Version
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
@@ -36,7 +35,7 @@ from shapely.ops import unary_union
 from geb import GEB_PACKAGE_DIR, __version__
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
-from geb.build.version_updates import VERSION_UPDATES
+from geb.build.version_updates import get_and_maybe_do_version_updates
 from geb.workflows.io import (
     read_params,
     write_array,
@@ -2027,29 +2026,22 @@ class GEBModel(
         if self.version_is_current():
             self.logger.info("Version is already current.")
         else:
-            self.logger.warning(
-                f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
-            )
             # Find and print all updates between the stored version and the current version
-            current_v = Version(__version__)
-            stored_v = Version(version_info)
-
-            versions = sorted(VERSION_UPDATES.keys(), key=Version)
-            updates_to_print = []
-            for v_str in versions:
-                v = Version(v_str)
-                if v > stored_v and v <= current_v:
-                    updates_to_print.extend(VERSION_UPDATES[v_str])
-
-            if updates_to_print:
-                updates_msg = "\n- ".join(updates_to_print)
+            updates_to_print_to_user: list[str] = get_and_maybe_do_version_updates(
+                version_info, perform_auto_update=True, build_model=self
+            )
+            if updates_to_print_to_user:
+                self.logger.warning(
+                    f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
+                )
+                updates_msg = "\n- ".join(updates_to_print_to_user)
                 self.set_current_version()
                 error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
                 self.logger.error(error)
                 raise RuntimeError(error)
             else:
                 self.logger.info(
-                    "No specific updates found for this version. Updated version file."
+                    "No specific updates found for this version or auto-updated. Updated version file."
                 )
                 self.set_current_version()
 
