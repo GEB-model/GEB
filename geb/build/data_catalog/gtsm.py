@@ -322,7 +322,7 @@ class GTSM_timeseries(Adapter):
                     da,
                     final_zarr_fp,
                     crs=4326,
-                    compression_level=12,
+                    compression_level=22,
                     filters=filters,
                 )
 

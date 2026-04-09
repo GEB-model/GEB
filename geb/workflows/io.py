@@ -1818,7 +1818,7 @@ def create_hash_from_parameters(
             value = value.item()
         try:
             json.dumps(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             raise ValueError(f"Value {value} is not JSON serializable")
         return value
 
