@@ -1036,8 +1036,8 @@ name = "eccodeslib"
 version = "2.46.1.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "eckitlib" },
-    { name = "fckitlib" },
+    { name = "eckitlib", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "fckitlib", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/da/36/b2534e892486526a9f73cfa1e10fdd248ca61eb9b7c559d4a9ac6b34f224/eccodeslib-2.46.1.14-cp314-cp314-macosx_13_0_x86_64.whl", hash = "sha256:52fa0eb9ef513cc0d2bcf7716aad6e19214efd5b05b322b4992193b0bdcecdd8", size = 8566303, upload-time = "2026-03-18T16:24:34.953Z" },
@@ -1136,7 +1136,7 @@ name = "fckitlib"
 version = "0.14.2.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "eckitlib" },
+    { name = "eckitlib", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/75/43e3b00b7384f0bd6d913711c442af7b49e9f4b6bb65a31097a2d8bba46d/fckitlib-0.14.2.14-cp314-cp314-macosx_13_0_arm64.whl", hash = "sha256:87f26a0dbf4885e56c47cd872d2c1ea58ff82eeb6d51ff4cc6e82429353c3c25", size = 383834, upload-time = "2026-03-18T16:20:56.68Z" },
@@ -1337,7 +1337,7 @@ wheels = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b19"
+version = "1.0.0b20"
 source = { editable = "." }
 dependencies = [
     { name = "cartopy" },
@@ -2500,7 +2500,7 @@ name = "linkify-it-py"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "uc-micro-py" },
+    { name = "uc-micro-py", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2e/c9/06ea13676ef354f0af6169587ae292d3e2406e212876a413bf9eece4eb23/linkify_it_py-2.1.0.tar.gz", hash = "sha256:43360231720999c10e9328dc3691160e27a718e280673d444c38d7d3aaa3b98b", size = 29158, upload-time = "2026-03-01T07:48:47.683Z" }
 wheels = [
@@ -2563,7 +2563,7 @@ wheels = [
 
 [package.optional-dependencies]
 linkify = [
-    { name = "linkify-it-py" },
+    { name = "linkify-it-py", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 
 [[package]]
@@ -2730,9 +2730,9 @@ name = "memray"
 version = "1.19.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2" },
-    { name = "rich" },
-    { name = "textual" },
+    { name = "jinja2", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "rich", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "textual", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e9/db/56ff21f47be261ab781105b233d1851d3f2fcdd4f08ebf689f6d6fd84f0d/memray-1.19.2.tar.gz", hash = "sha256:680cb90ac4564d140673ac9d8b7a7e07a8405bd1fb8f933da22616f93124ca84", size = 2410256, upload-time = "2026-03-13T15:22:31.825Z" }
 wheels = [
@@ -4569,8 +4569,8 @@ name = "rich"
 version = "14.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py" },
-    { name = "pygments" },
+    { name = "markdown-it-py", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "pygments", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b3/c6/f3b320c27991c46f43ee9d856302c70dc2d0fb2dba4842ff739d5f46b393/rich-14.3.3.tar.gz", hash = "sha256:b8daa0b9e4eef54dd8cf7c86c03713f53241884e814f4e2f5fb342fe520f639b", size = 230582, upload-time = "2026-02-19T17:23:12.474Z" }
 wheels = [
@@ -5207,12 +5207,12 @@ name = "textual"
 version = "8.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py", extra = ["linkify"] },
-    { name = "mdit-py-plugins" },
-    { name = "platformdirs" },
-    { name = "pygments" },
-    { name = "rich" },
-    { name = "typing-extensions" },
+    { name = "markdown-it-py", extra = ["linkify"], marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "mdit-py-plugins", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "platformdirs", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "pygments", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "rich", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "typing-extensions", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/72/23/8c709655c5f2208ee82ab81b8104802421865535c278a7649b842b129db1/textual-8.1.1.tar.gz", hash = "sha256:eef0256a6131f06a20ad7576412138c1f30f92ddeedd055953c08d97044bc317", size = 1843002, upload-time = "2026-03-10T10:01:38.493Z" }
 wheels = [
