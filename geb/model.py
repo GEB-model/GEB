@@ -446,12 +446,12 @@ class GEBModel(Module):
         n_timesteps: int, # = 0,
         timestep_length: datetime.timedelta | relativedelta, # = datetime.timedelta(days=1),
         in_spinup: bool = False,
-        simulate_hydrology: bool = False,  # CARO
+        simulate_hydrology: bool = True,  # CARO
         clean_report_folder: bool = False,
         load_data_from_store: bool = False,
         omit: None | str = None,
-        initialize_hazards: bool = False,  # CARO
-        enabled_agents: list[str] | None = None,
+        #initialize_hazards: bool = False,  # CARO
+        #enabled_agents: list[str] | None = None,
     ) -> None:
         """Initializes the model.
 
@@ -478,26 +478,26 @@ class GEBModel(Module):
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
-        #self.hydrology: Hydrology = Hydrology(self)
+        self.hydrology: Hydrology = Hydrology(self)
 
         ## CARO
-        if self.simulate_hydrology:
-           self.hydrology = Hydrology(self)
-        else:
-           self.hydrology = None
+        # if self.simulate_hydrology:
+        #    self.hydrology = Hydrology(self)
+        # else:
+        #    self.hydrology = None
 
-        self.agents = Agents(self, enabled_agents=enabled_agents)
+        # self.agents = Agents(self, enabled_agents=enabled_agents)
 
-        if initialize_hazards:
-           self.hazard_driver = HazardDriver(self)
-        else:
-           self.hazard_driver = None
+        # if initialize_hazards:
+        #    self.hazard_driver = HazardDriver(self)
+        # else:
+        #    self.hazard_driver = None
 
         ## CARO
 
-        #self.hazard_driver = HazardDriver(self)
+        self.hazard_driver = HazardDriver(self)
 
-        # self.agents = Agents(self)
+        self.agents = Agents(self)
 
         if load_data_from_store:
             self.store.load(omit=omit)
@@ -515,8 +515,8 @@ class GEBModel(Module):
             self.hydrology.groundwater.initalize_modflow_model()
             self.hydrology.landsurface.set_global_variables()
 
-        # if create_reporter:
-        #     self.reporter = Reporter(self, clean=clean_report_folder)
+        if create_reporter:
+            self.reporter = Reporter(self, clean=clean_report_folder)
 
     def step_to_end(self) -> None:
         """Run the model to the end of the simulation period."""

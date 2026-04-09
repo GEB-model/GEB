@@ -37,38 +37,37 @@ class WindRiskModule:
 
     def load_wind_maps (self) -> None:
         """Load wind maps in this case for the 50 and 100 return periods.This maps are created separately and copied to the "wind_maps" folder.Creating the folder and copying the wind maps should be done manually."""
-        self.windstorm_return_periods = np.array(
+        self.households.windstorm_return_periods = np.array(
             self.model.config["hazards"]["windstorm"]["return_periods"]
         )
 
-        debug_maps = bool(
-            self.model.config.get("hazards", {})
-            .get("windstorm", {})
-            .get("debug_maps", False)
-        )
 
         windstorm_maps = {}
         windstorm_path = self.model.output_folder / "wind_maps"
-        for return_period in self.windstorm_return_periods:
+        for return_period in self.households.windstorm_return_periods:
             file_path = (
                 windstorm_path / f"return_level_rp{return_period}.tif"
             )  # adjust to file name
             windstorm_map = xr.open_dataarray(file_path, engine="rasterio")
-
-            if debug_maps:
-                try:
-                    crs = windstorm_map.rio.crs
-                except Exception:
-                    crs = None
-                print(
-                    "Loaded windstorm map: "
-                    f"rp={int(return_period)}, path={file_path}, "
-                    f"shape={tuple(windstorm_map.shape)}, crs={crs}"
-                )
-
             windstorm_maps[return_period] = windstorm_map
+        #     if debug_maps:
+        #         try:
+        #             crs = windstorm_map.rio.crs
+        #         except Exception:
+        #             crs = None
+        #         print(
+        #             "Loaded windstorm map: "
+        #             f"rp={int(return_period)}, path={file_path}, "
+        #             f"shape={tuple(windstorm_map.shape)}, crs={crs}"
+        #         )
 
-        self.windstorm_maps = windstorm_maps
+        # wind_maps ={}
+        # for return_period in self.households.return_periods:
+        #     file_path = (
+        #         self.model.output_folder/"wind_maps"/f"return_level_rp{return_period}.tif"
+        #     )
+        #     wind_maps[return_period] = read_zarr(file_path)
+        self.households.windstorm_maps = windstorm_maps
         # print("Wind maps loaded for return periods:", self.windstorm_return_periods)    def load_max_damage_values (self) -> None:
 
     def load_max_damage_values(self) -> None:
@@ -166,84 +165,65 @@ class WindRiskModule:
         For the purpose of building this code we will focus only on concrete building type when selecting the damage curves.
         """
         # Use only the residential concrete building type for now
-        self.wind_buildings_structure_curve = pd.read_parquet(
-            self.model.files["table"][
+        self.households.wind_buildings_structure_curve = pd.read_parquet(
+            self.households.model.files["table"][
                 "damage_parameters/windstorm/buildings/residential/curve"
             ]
         )
         # Set severity as index
-        self.wind_buildings_structure_curve.set_index("severity", inplace=True)
-        self.wind_buildings_structure_curve = (
-            self.wind_buildings_structure_curve.rename(
+        self.households.wind_buildings_structure_curve.set_index("severity", inplace=True)
+        self.households.wind_buildings_structure_curve = (
+            self.households.wind_buildings_structure_curve.rename(
                 columns={"damage_ratio": "building_unprotected"}
             )
         )
 
         # ADAPTATION MEASURES
         # Window shutters: 75% reduction => multiplies = 0.25
-        self.wind_buildings_structure_curve["building_window_shutters"] = (
-            self.wind_buildings_structure_curve["building_unprotected"] * 0.25
+        self.households.wind_buildings_structure_curve["building_window_shutters"] = (
+            self.households.wind_buildings_structure_curve["building_unprotected"] * 0.25
         )
 
         # Strengthened windows: 34% reduction => multiplier = 0.66
-        self.wind_buildings_structure_curve["building_strengthened_windows"] = (
-            self.wind_buildings_structure_curve["building_unprotected"] * 0.66
+        self.households.wind_buildings_structure_curve["building_strengthened_windows"] = (
+            self.households.wind_buildings_structure_curve["building_unprotected"] * 0.66
         )
 
     def create_wind_damage_interpolators(self):
         # Create interpolators for windstorm damage curves.
         # For now only concrete and unprotected buildings, no adaptation measures are considered.
 
-        self.windstorm_building_curve_interpolator = interpolate.interp1d(
-            x=self.wind_buildings_curve.index,
-            y=self.wind_building_curve["residential"],
+        self.households.windstorm_building_curve_interpolator = interpolate.interp1d(
+            x=self.households.wind_buildings_curve.index,
+            y=self.households.wind_building_curve["residential"],
             bounds_error=False,
             # fill_value="extrapolate",
         )
 
     
+    # 
     def calculate_building_wind_damages(
         self, verbose: bool = True, export_building_damages: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
-        """This function calculates the windstorm damages for the households in the model.
-
-        It iterates over the return periods and calculates the damages for each household
-        based on the windstorm maps and the building footprints.
-
-        Args:
-            verbose: Verbosity flag.
-            export_building_damages: Whether to export the building damages to parquet files.
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-        """
         damages_unprotected_w = np.zeros(
-            (self.windstorm_return_periods.size, self.n), np.float32
+            (self.households.windstorm_return_periods.size, self.households.n), np.float32
         )
         damages_adapt_w = np.zeros(
-            (self.windstorm_return_periods.size, self.n), np.float32
+            (self.households.windstorm_return_periods.size, self.households.n), np.float32
         )
-
-        # CRS alignment
-        crs = self.flood_maps[self.return_periods[0]].rio.crs
-        windstorm_map_crs = {
-            rp: self.windstorm_maps[rp].rio.reproject(crs)
-            for rp in self.windstorm_return_periods
-        }
-
+    
         debug_damage_stats = bool(
             self.model.config.get("hazards", {})
             .get("windstorm", {})
             .get("debug_damage_stats", False)
         )
-
-        # create a pandas data array for assigning damage to the agents:
+    
         agent_df = pd.DataFrame(
-            {"building_id_of_household": self.var.building_id_of_household}
+            {"building_id_of_household": self.households.var.building_id_of_household}
         )
-
-        # subset building to those exposed to flooding (multi-hazard exposure)
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(crs)
-
+    
+        buildings = self.households.buildings.copy()
+    
         only_flooded_buildings = bool(
             self.model.config.get("hazards", {})
             .get("windstorm", {})
@@ -251,77 +231,88 @@ class WindRiskModule:
         )
         if only_flooded_buildings:
             buildings = buildings[buildings["flooded"]]
-        # only calculate damages for buildings with more than 0 occupant
+    
         buildings = buildings[buildings["n_occupants"] > 0]
-
-        for i, return_period in enumerate(self.windstorm_return_periods):
-            wind_map = windstorm_map_crs[return_period]
-
+    
+        building_ids = np.array(buildings["id"])
+    
+        building_geometries = read_geom(
+            self.households.model.files["geom"]["assets/open_building_map"],
+            filters=[("id", "in", building_ids)],
+        )
+    
+        building_geometries = building_geometries.merge(
+            buildings[["id", "object_type", "maximum_damage_m2"]],
+            on="id",
+            how="left",
+        )
+    
+        for i, return_period in enumerate(self.households.windstorm_return_periods):
+            wind_map: xr.DataArray = self.households.windstorm_maps[return_period]
+    
+            building_multicurve = building_geometries.copy()
+    
+            wind_crs = wind_map.rio.crs
+            if building_multicurve.crs is not None and wind_crs is not None:
+                if building_multicurve.crs != wind_crs:
+                    building_multicurve = building_multicurve.to_crs(wind_crs)
+    
             wind_threshold = 27.01
             wind_map_masked = wind_map.fillna(0.0)
-            mind_map_masked = wind_map_masked.where(
+            wind_map_masked = wind_map_masked.where(
                 wind_map_masked >= wind_threshold, 0.0
             )
-
-            building_multicurve = buildings.copy()
-
+    
             multi_curves = {
-                "damages_structure_unprotected": self.wind_buildings_structure_curve[
+                "damages_structure_unprotected": self.households.wind_buildings_structure_curve[
                     "building_unprotected"
                 ],
-                "damages_structure_wind_shutters": self.wind_buildings_structure_curve[
+                "damages_structure_wind_shutters": self.households.wind_buildings_structure_curve[
                     "building_window_shutters"
                 ],
             }
-            damage_buildings: pd.Series = VectorScannerMultiCurves(
+    
+            damage_buildings = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
-                    columns={"maximum_damage_m2": "maximum_damage"}
+                    columns={"maximum_damage_m2": "maximum_damage_structure"}
                 ),
                 hazard=wind_map_masked,
                 multi_curves=multi_curves,
             )
-
+    
             damage_buildings["damages_unprotected"] = damage_buildings[
                 "damages_structure_unprotected"
             ]
             damage_buildings["damages_wind_shutters"] = damage_buildings[
                 "damages_structure_wind_shutters"
             ]
-
+    
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
             )
-
-            # Damage_threshold = 0.001
-
-            # buildings_to_damage.loc[
-            #     buildings_to_damage["damages_unprotected"] < Damage_threshold,
-            #     "damages_unprotected",
-            # ] = 0.0
-
+    
             if export_building_damages:
-                fn_export = self.model.output_folder / "building_wind_damages"
+                fn_export = self.households.model.output_folder / "building_wind_damages"
                 fn_export.mkdir(parents=True, exist_ok=True)
                 building_multicurve.to_parquet(
-                    self.model.output_folder
-                    / "building_wind_damages"
-                    / f"building_wind_damages_rp{return_period}_{self.model.current_time.year}.parquet"
+                    fn_export
+                    / f"building_wind_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
                 )
+    
             building_multicurve = building_multicurve[
                 ["id", "damages_unprotected", "damages_wind_shutters"]
             ]
-            # merged["damage"] is aligned with agents
+    
             damages_unprotected_w[i], damages_adapt_w[i] = (
-                self.assign_wdamages_to_agents(
+                self.households.assign_wdamages_to_agents(
                     agent_df,
                     building_multicurve,
                 )
             )
-
+    
             if debug_damage_stats:
                 unprot = damages_unprotected_w[i]
                 prot = damages_adapt_w[i]
-                # Keep this cheap: simple stats + non-zero fraction.
                 frac_nonzero = float(np.mean(unprot > 0))
                 print(
                     "Wind damage stats "
@@ -331,6 +322,7 @@ class WindRiskModule:
                     f"nonzero_frac={frac_nonzero:.3f}, "
                     f"adapt_mean={float(np.mean(prot)):.3e}"
                 )
+    
             if verbose:
                 print(
                     f"Wind Damages rp{return_period}: {round(damages_unprotected_w[i].sum() / 1e6)} million"
@@ -338,6 +330,7 @@ class WindRiskModule:
                 print(
                     f"Wind Damages adapt rp{return_period}: {round(damages_adapt_w[i].sum() / 1e6)} million"
                 )
+    
         return damages_unprotected_w, damages_adapt_w
 
     def get_max_wind_at_buildings(

@@ -2033,23 +2033,21 @@ class Households(AgentBaseClass):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
         # update risk perceptions
         self.update_risk_perceptions()
-        # self.update_windstorm_risk_perceptions(
-        #     damages_unprotected_w=damages_unprotected_w
-        # )
+        
         # calculate damages for adapting and not adapting households based on building footprints
         damages_do_not_adapt, damages_adapt = (
             self.flood_risk_module.calculate_building_flood_damages()
         )
-        damages_unprotected_w, damages_adapt_w = self.calculate_building_wind_damages()
+        damages_unprotected_w, damages_adapt_w = self.wind_risk_module.calculate_building_wind_damages()
         # update windstorm risk perceptions (use computed damages to avoid re-running scanners)
         self._last_damages_unprotected_w = damages_unprotected_w
         self._last_damages_adapt_w = damages_adapt_w
 
         self.update_windstorm_risk_perceptions()
 
-        risk_perception_multi = np.maximum(
-            self.var.risk_perception.data, self.var.risk_perception_windstorm.data
-        )
+        # risk_perception_multi = np.maximum(
+        #     self.var.risk_perception.data, self.var.risk_perception_windstorm.data
+        # )
 
         loan_duration_flood = 20
         loan_duration_wind = 20
@@ -2181,6 +2179,8 @@ class Households(AgentBaseClass):
                 insured_value=self.var.property_value.data.astype(np.float32),
             )
         )
+
+
         ## CARO REPORTING
         self._last_premium = premium
         self._last_premium_private = premium_private
@@ -2244,14 +2244,12 @@ class Households(AgentBaseClass):
         )  # one-time in your EU (still treated as cash-out)
         prem_cost = np.asarray(premium, dtype=np.float32).reshape(-1)
 
+
+        # OLD CODE
         # initial choices (before shared-budget reconciliation)
         choose_flood = (EU_adapt > EU_do_not_adapt) | (self.var.adapted.data == 1)
         choose_shutters = (EU_adapt_shutters > EU_unprotected_w) | (self.var.adapted_shutters.data == 1)
-        #choose_ins = EU_multirisk_insurance > EU_do_nothing
-        # if self.var.insurance_scheme == "catnat":
-        #     choose_ins = np.ones(self.n, dtype=bool)
-        # else:
-        #     choose_ins = EU_multirisk_insurance > EU_do_nothing
+        
 
         if self.var.insurance_scheme == "private":
             choose_ins = EU_multirisk_insurance > EU_do_nothing
@@ -2262,6 +2260,7 @@ class Households(AgentBaseClass):
         #     choose_ins[:] = True
 
         # "benefit" of each choice (used to decide what to drop if over budget)
+        # OLD CODE
         gain_flood = (EU_adapt - EU_do_not_adapt).astype(np.float32)
         gain_shutters = (EU_adapt_shutters - EU_unprotected_w).astype(np.float32)
         gain_ins = (EU_multirisk_insurance - EU_do_nothing).astype(np.float32)
@@ -2273,7 +2272,8 @@ class Households(AgentBaseClass):
                 + choose_ins.astype(np.float32) * prem_cost
             )
 
-        # drop least beneficial selected actions until within budget (max 3 drops)
+        # OLD CODE
+        # # drop least beneficial selected actions until within budget (max 3 drops)
         for _ in range(3):
             over = total_cost() > budget
             if not np.any(over):
@@ -2322,12 +2322,20 @@ class Households(AgentBaseClass):
             choose_shutters[drop_s] = False
             choose_ins[drop_i] = False
 
+        
         # -----------------------------
         # DEBUG: shared-cap diagnostics
         # -----------------------------
-        pre_flood = EU_adapt > EU_do_not_adapt
-        pre_shut = EU_adapt_shutters > EU_unprotected_w
-        pre_ins = EU_multirisk_insurance > EU_do_nothing
+        pre_flood = gain_flood > 0
+        pre_shut = gain_shutters > 0
+        pre_ins = (EU_multirisk_insurance > EU_do_nothing
+                   if self.var.insurance_scheme == "private"
+                   else np.ones(self.n, dtype=bool))
+        ## END NEW CODE
+
+        # pre_flood = EU_adapt > EU_do_not_adapt
+        # pre_shut = EU_adapt_shutters > EU_unprotected_w
+        # pre_ins = EU_multirisk_insurance > EU_do_nothing
 
         pre_cost = (
             pre_flood.astype(np.float32) * flood_cost

@@ -1144,7 +1144,6 @@ class DecisionModule:
             EU_flood=EU_flood,
             EU_wind=EU_wind,
         )
-
        
 
     def calcEU_insure_multirisk_residual(
