@@ -80,7 +80,7 @@ def get_and_maybe_do_version_updates(
         if v > stored_v and v <= current_v:
             version_updates: list[str] = VERSION_UPDATES[v_str]
             for version_update in version_updates:
-                match: re.Match[str] | None = re.search(r"\[(.*?)\]", version_update)
+                match: re.Match[str] | None = re.search(r"^\[(.*?)\]", version_update)
                 if match is None:
                     raise ValueError(
                         f"Version update text should start with the update type in square brackets, e.g. [update-python], but got: {version_update}"
