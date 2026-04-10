@@ -1,7 +1,5 @@
 """This module contains the Households agent class for simulating household behavior in the GEB model."""
 
-from __future__ import annotations
-
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -134,16 +132,9 @@ class Households(AgentBaseClass):
         # Load buildings
         columns_to_load = [
             "id",
-            "floorspace",
-            "occupancy",
-            "height",
-            # "geometry",
             "x",
             "y",
-            "NAME_1",
-            "TOTAL_REPL_COST_USD_SQM",
             "COST_STRUCTURAL_USD_SQM",
-            "COST_NONSTRUCTURAL_USD_SQM",
             "COST_CONTENTS_USD_SQM",
         ]
         self.buildings = read_table(

@@ -1,7 +1,5 @@
 """Adapter for MIRCA-OS datasets."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import rioxarray  # noqa: F401

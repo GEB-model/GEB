@@ -1,7 +1,5 @@
 """Forcing data processing and plotting methods for GEB."""
 
-from __future__ import annotations
-
 import math
 import re
 import warnings

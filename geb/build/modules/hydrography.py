@@ -1535,6 +1535,10 @@ class Hydrography(BuildModelBase):
         # sort by datetime index
         mean_sea_level_df = mean_sea_level_df.sort_index()
 
+        # we do not model receding sea levels, so enforce that the absolute mean sea level
+        # for each time step is at least as high as in the previous step, i.e. mean sea level is monotonically increasing
+        mean_sea_level_df = mean_sea_level_df.cummax(axis=0)
+
         # set table for model
         self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
 
@@ -1595,11 +1599,9 @@ class Hydrography(BuildModelBase):
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
         # remove stations that are not in coast_rp index
-        stations = stations[
-            stations["station_id"].astype(int).isin(coast_rp.index)
-        ].reset_index(drop=True)
+        stations = stations[stations.index.astype(int).isin(coast_rp.index)]
 
-        coast_rp = coast_rp.loc[stations["station_id"].astype(int)]
+        coast_rp = coast_rp.loc[stations.index]
         self.set_table(coast_rp, name="coast_rp")
 
         # also set stations (only those that are in coast_rp)

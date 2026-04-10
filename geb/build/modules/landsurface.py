@@ -23,7 +23,7 @@ from geb.workflows.raster import (
     resample_like,
 )
 
-from ..workflows.soilgrids import load_soilgrids_v2
+from ..workflows.soilgrids import process_soilgrids
 from .base import BuildModelBase
 
 
@@ -447,24 +447,27 @@ class LandSurface(BuildModelBase):
         Returns:
             SoilGrids variable concatenated along the ``soil_layer`` dimension.
         """
+        soilgrids_source = self.data_catalog.fetch("soilgridsv2")
         soilgrids_layers: list[xr.DataArray] = []
         for layer_name in soil_layer_names:
+            da = soilgrids_source.read(variable=variable_name, depth=layer_name)
+            da = da.astype(np.float32)
             soilgrids_layers.append(
-                load_soilgrids_v2(
-                    self.data_catalog,
-                    subgrid_mask,
-                    variable_name=variable_name,
-                    layer_name=layer_name,
+                process_soilgrids(
+                    da=da,
+                    mask=subgrid_mask,
                     region=self.region,
                 )
-                * conversion_factor
             )
 
         soil_layer_numbers: list[int] = list(range(1, len(soil_layer_names) + 1))
-        return xr.concat(
-            soilgrids_layers,
-            dim=xr.Variable("soil_layer", soil_layer_numbers),
-            compat="equals",
+        return (
+            xr.concat(
+                soilgrids_layers,
+                dim=xr.Variable("soil_layer", soil_layer_numbers),
+                compat="equals",
+            )
+            * conversion_factor
         )
 
     @build_method(depends_on=[], required=True)
@@ -527,6 +530,7 @@ class LandSurface(BuildModelBase):
                 conversion_factor=conversion_factor,
                 soil_layer_names=soil_layer_names,
             )
+
             soilgrids_variable: xr.DataArray = self.set_subgrid(
                 soilgrids_variable,
                 name=soilgrids_output_names[variable_name],
@@ -544,28 +548,30 @@ class LandSurface(BuildModelBase):
         soil_layer_height_m.attrs["units"] = "m"
         soil_layer_height_m.attrs["description"] = "Height of each soil layer"
         soil_layer_height_m.attrs["_FillValue"] = np.nan
-        soil_layer_height_per_layer_m = soil_layer_height_per_layer_m.rio.write_crs(
+        soil_layer_height_m = soil_layer_height_m.rio.write_crs(
             soilgrids_variable.rio.crs
         )
 
         self.set_subgrid(soil_layer_height_m, name="soil/soil_layer_height_m")
+
+        # clean up memory
+        del soil_layer_height_m
+        del soilgrids_variable
 
         depth_to_bedrock_cm = (
             self.data_catalog.fetch("soilgridsv1")
             .read(variable="BDTICM_M_250m_ll")
             .astype(np.float32)
         )
+        depth_to_bedrock_cm = process_soilgrids(
+            da=depth_to_bedrock_cm,
+            mask=subgrid_mask,
+            region=self.region,
+        )
         assert isinstance(depth_to_bedrock_cm, xr.DataArray)
-        depth_to_bedrock_cm: xr.DataArray = resample_like(
-            depth_to_bedrock_cm, subgrid_mask
-        ).chunk({"x": -1, "y": -1})
-        depth_to_bedrock_cm: xr.DataArray = convert_nodata(depth_to_bedrock_cm, np.nan)
-
         depth_to_bedrock_m: xr.DataArray = (
             depth_to_bedrock_cm / 100
         )  # convert from cm to m
-
-        depth_to_bedrock_m: xr.DataArray = interpolate_na_2d(depth_to_bedrock_m)
 
         self.set_subgrid(depth_to_bedrock_m, name="soil/depth_to_bedrock_m")
 

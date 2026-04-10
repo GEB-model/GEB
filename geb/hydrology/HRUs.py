@@ -1,7 +1,5 @@
 """This module contains classes and functions to handle Hydrological Response Units (HRUs) and grid cells."""
 
-from __future__ import annotations
-
 import math
 from datetime import datetime
 from pathlib import Path

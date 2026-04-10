@@ -1,7 +1,5 @@
 """This module contains the CropFarmers agent class for the GEB model."""
 
-from __future__ import annotations
-
 import calendar
 import copy
 import math

@@ -1,7 +1,5 @@
 """The Lowder adapter for downloading and processing farm size distribution data."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pandas as pd

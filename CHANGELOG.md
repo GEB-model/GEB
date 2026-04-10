@@ -1,4 +1,6 @@
 # dev
+
+# v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
 - Refactored setup farms from lowder and created a test. Non-lowder datasets are not supported anymore. This will be added back later in the simplified setup when it is required for a specific purpose.
 - Write a custom zarr writer that is able to write chunked data and adapt all build methods to work with this.
@@ -19,6 +21,18 @@
 - Make full integration test, now checking discharge with observed discharge in the test_run.
 - Fix recent regression where water demand for households was set to 0 except on January 1st.
 - Include evaluation tests in the test_run for simplicity. 
+- Include global Huizinga curves as alternative to local Endendijk in build and reasonable default config.
+- Move evaluation of hydrodynamics to seperate file.
+- Also calculate discharge metrics at daily frequency if only hourly data is available.
+- Added auto-update for build methods.
+- Improve memory usage of setup_soil (hopefully)
+- Update to Python 3.14.4.
+
+To support this version:
+- Run `setup_global_damage_model`: `geb update -b build.yml::setup_global_damage_model`.
+- Run `setup_local_damage_model`: `geb update -b build.yml::setup_local_damage_model`.
+- Included setup_subnational_income_distribution to also setup initial subnational income distribution parameters for simulating migration decisions.
+- Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.

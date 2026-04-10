@@ -1,7 +1,5 @@
 """ISIMIP CO2 data adapter."""
 
-from __future__ import annotations
-
 from io import StringIO
 from typing import Any
 

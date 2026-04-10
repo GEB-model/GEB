@@ -1,7 +1,5 @@
 """Reservoir operator agents."""
 
-from __future__ import annotations
-
 import calendar
 from typing import TYPE_CHECKING
 

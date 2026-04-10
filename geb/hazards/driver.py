@@ -1,7 +1,5 @@
 """Module for managing short-lived hazard simulations such as floods."""
 
-from __future__ import annotations
-
 import copy
 from datetime import datetime, timedelta
 from pathlib import Path

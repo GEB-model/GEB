@@ -1,7 +1,5 @@
 """Adapter for GPS country and individual preference datasets in Stata format."""
 
-from __future__ import annotations
-
 import zipfile
 from pathlib import Path
 from typing import Any

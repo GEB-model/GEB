@@ -11,6 +11,7 @@ def plot_sunburst(
     title: str = "Water Circle",
     colors: dict[str, str] | None = None,
     figsize: tuple[int, int] = (10, 10),
+    min_display_ratio: float = 0.02,
 ) -> plt.Figure:
     """Creates a sunburst plot using matplotlib to visualize a water circle hierarchy.
 
@@ -19,10 +20,18 @@ def plot_sunburst(
         title: Title of the plot.
         colors: Optional mapping of root sections to colors.
         figsize: Size of the figure.
+        min_display_ratio: Minimum segment size as a fraction of the full circle.
+            Segments smaller than this ratio are hidden.
 
     Returns:
         A matplotlib Figure object.
+
+    Raises:
+        ValueError: If min_display_ratio is outside the interval [0, 1).
     """
+    if not 0 <= min_display_ratio < 1:
+        raise ValueError("min_display_ratio must be in the interval [0, 1).")
+
     if colors is None:
         colors = {
             "in": "#636EFA",
@@ -78,6 +87,11 @@ def plot_sunburst(
                 continue
 
             width = (val / segment_total) * total_span
+            display_ratio = width / (2 * np.pi)
+
+            if display_ratio < min_display_ratio:
+                current_angle += width
+                continue
 
             # Use root level's color as foundation if not in 'colors'
             seg_color = colors.get(name, p_color)

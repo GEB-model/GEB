@@ -1,7 +1,5 @@
 """Data adapter for GLOPOP-SG population data."""
 
-from __future__ import annotations
-
 import gzip
 import zipfile
 from pathlib import Path

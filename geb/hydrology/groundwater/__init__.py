@@ -25,8 +25,6 @@ Groundwater submodule for hydrology in GEB.
 Provides groundwater simulation and ModFlow integration utilities.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import numpy as np

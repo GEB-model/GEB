@@ -1,7 +1,5 @@
 """Module for livestock farmers agent-based simulation."""
 
-from __future__ import annotations
-
 import calendar
 import datetime
 from typing import TYPE_CHECKING, Literal

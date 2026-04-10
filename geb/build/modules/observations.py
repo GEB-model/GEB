@@ -1,7 +1,5 @@
 """This module contains the classes and functions processing observational data during model building."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import geopandas as gpd
