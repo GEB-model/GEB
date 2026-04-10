@@ -3038,7 +3038,6 @@ class GEBModel(
         assert isinstance(data, xr.DataArray)
 
         if name in grid:
-            self.logger.warning(f"Replacing grid map: {name}")
             grid = grid.drop_vars(name)
 
         if len(grid) == 0:
