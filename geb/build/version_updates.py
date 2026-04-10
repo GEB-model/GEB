@@ -16,9 +16,8 @@ VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b19": [
         "[create-file;build_complete.txt]",
         "[update-method;setup_hydrography]",
-        "[manual] Add `setup_global_flood_damage_model` and `setup_geul_flood_damage_model` to your `build.yml`.",
-        "[manual] Run `setup_global_flood_damage_model`: `geb update -b build.yml::setup_global_flood_damage_model`.",
-        "[manual] Run `setup_geul_flood_damage_model`: `geb update -b build.yml::setup_geul_flood_damage_model`.",
+        "[manual] Add `setup_flood_damage_model` to your `build.yml`.",
+        "[manual] Run `setup_flood_damage_model`: `geb update -b build.yml::setup_flood_damage_model`.",
     ],
     "1.0.0b18": [
         "[update-method;setup_forcing]",
