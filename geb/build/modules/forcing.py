@@ -716,7 +716,7 @@ class Forcing(BuildModelBase):
             self.set_other(mask, name=f"{name}_mask")
 
         da = da.clip(min_value, max_value)
-        da = da.transpose("idxs", "time")
+        da = da.transpose("idxs", "time", ...)
 
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
             da, min_value, max_value, offset=offset, precision=precision
@@ -737,13 +737,22 @@ class Forcing(BuildModelBase):
                 ),
             ]
 
-        time_chunksize: int = 100_000_000 // (
-            math.prod(
-                [chunks[0] for dim, chunks in da.chunksizes.items() if dim != "time"]
+        time_chunksize: int = (
+            100_000_000
+            // (
+                math.prod(
+                    [
+                        chunks[0]
+                        for dim, chunks in da.chunksizes.items()
+                        if dim != "time"
+                    ]
+                )
+                * da.dtype.itemsize
             )
-            * da.dtype.itemsize
-        )  # aim for chunks of around 100 MB
-        time_chunksize = max(1, time_chunksize)  # ensure at least 1 time step per chunk
+        )  # aim for chunks of around 100 MB (increased from 100 MB for long simulations)
+        # Align chunk boundaries to 24-timestep intervals (daily boundaries) to prevent
+        # alignment errors when the model reads data in daily blocks (24 timesteps)
+        time_chunksize = max(24, (time_chunksize // 24) * 24)
         da = da.chunk({"time": time_chunksize})
 
         with warnings.catch_warnings():
