@@ -16,6 +16,8 @@ VERSION_UPDATES: dict[str, list[str]] = {
         "[update-python;3.14.4]",
         "[manual] Add `setup_subnational_income_distribution` to your `build.yml`",
         "[manual] Run `setup_subnational_income_distribution`: `geb update -b build.yml::setup_subnational_income_distribution`.",
+        "[manual] Add `setup_flood_damage_model` to your `build.yml`.",
+        "[manual] Run `setup_flood_damage_model`: `geb update -b build.yml::setup_flood_damage_model`.",
     ],
     "1.0.0b19": [
         "[create-file;build_complete.txt]",

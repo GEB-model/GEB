@@ -15,6 +15,10 @@ from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .flood_damage_model import (
+    GeulFloodDamageModel,
+    GlobalFloodDamageModel,
+)
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
@@ -808,6 +812,37 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Yamazaki et al.",
             "version": "2019",
             "license": "CC BY 4.0 or ODbL 1.0",
+        },
+    },
+    "geul_flood_damage_model": {
+        "adapter": GeulFloodDamageModel(
+            folder=None,
+            local_version=None,
+            filename=None,
+            cache=None,
+        ),
+        "url": None,  # No direct URL available for local damage functions
+        "source": {
+            "name": "Flood Depth-Damage Functions for the Geul River Basin",
+            "author": "Endendijk et al. (2023)",
+            "version": "1.0",
+            "license": "CC BY 4.0",
+            "doi": "https://doi.org/10.1029/2022WR034192",
+        },
+    },
+    "global_flood_damage_model": {
+        "adapter": GlobalFloodDamageModel(
+            folder="global_flood_damage_model",
+            local_version=1,
+            filename="huizinga2017.xlsx",
+            cache="global",
+        ),
+        "url": "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC105688/copy_of_global_flood_depth-damage_functions__30102017.xlsx",
+        "source": {
+            "name": "Global Flood Depth-Damage Functions",
+            "author": "Huizinga et al. (2017)",
+            "version": "1.0",
+            "license": "CC BY 4.0",
         },
     },
     "delta_dtm": {
