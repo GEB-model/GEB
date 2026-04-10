@@ -26,6 +26,7 @@ To support this version:
 - Run `setup_local_damage_model`: `geb update -b build.yml::setup_local_damage_model`.
 
 
+- Included setup_subnational_income_distribution to also setup initial subnational income distribution parameters for simulating migration decisions.
 - Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
 - Move evaluation of hydrodynamics to seperate file.
 - Also calculate discharge metrics at daily frequency if only hourly data is available.
