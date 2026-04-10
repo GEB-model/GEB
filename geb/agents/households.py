@@ -136,8 +136,8 @@ class Households(AgentBaseClass):
             "id",
             "x",
             "y",
-            "maximum_damage_structure",
-            "maximum_damage_content",
+            "COST_STRUCTURAL_USD_SQM",
+            "COST_CONTENTS_USD_SQM",
         ]
         self.buildings = read_table(
             self.model.files["geom"]["assets/open_building_map"],
