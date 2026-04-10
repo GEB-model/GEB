@@ -12,7 +12,11 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b20": ["[update-python;3.14.4]"],
+    "1.0.0b20": [
+        "[update-python;3.14.4]",
+        "[manual] Add `setup_subnational_income_distribution` to your `build.yml`",
+        "[manual] Run `setup_subnational_income_distribution`: `geb update -b build.yml::setup_subnational_income_distribution`.",
+    ],
     "1.0.0b19": [
         "[create-file;build_complete.txt]",
         "[update-method;setup_hydrography]",
