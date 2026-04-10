@@ -1418,6 +1418,7 @@ class Agents(BuildModelBase):
             raise ValueError(
                 f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
             )
+
         return buildings
 
     @build_method(required=True)
@@ -1437,6 +1438,61 @@ class Agents(BuildModelBase):
 
         # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
+
+    @build_method(required=True)
+    def setup_damage_model(self, region: str = "geul") -> None:
+        """This method sets up the damage functions for flood events for the specified region.
+
+        It retrieves the damage functions from the data catalog, processes them, and saves them as
+        parquet files for use in the model.
+
+        Args:
+            region: The region for which to set up the damage functions. Default is 'geul', selecting
+                the damage model constructed by Endendijk. Other accepted region identifiers are determined by
+                the underlying 'global_flood_damage_model' dataset and include: europe, north america,
+                central&south america, asia, africa, oceania, and 'global'; representing the global average curves.
+        """
+        # clear model files for damage model to avoid issues with old files when changing region
+        for key in list(self.files["table"]):
+            if key.startswith("damage_model/"):
+                del self.files["table"][key]
+        for key in list(self.files["dict"]):
+            if key.startswith("damage_model/"):
+                del self.files["dict"][key]
+
+        if region == "geul":
+            parameters = self.data_catalog.fetch("geul_flood_damage_model").read()
+            for hazard, hazard_parameters in parameters.items():
+                for asset_type, asset_parameters in hazard_parameters.items():
+                    for component, asset_components in asset_parameters.items():
+                        curve = pd.DataFrame(
+                            asset_components["curve"],
+                            columns=np.array(["depth", "damage_ratio"]),
+                        )
+
+                        self.set_table(
+                            curve,
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/curve",
+                        )
+                        maximum_damage = {
+                            "maximum_damage": asset_components["maximum_damage"]
+                        }
+
+                        self.set_params(
+                            maximum_damage,
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/maximum_damage",
+                        )
+                return
+
+        damage_functions = self.data_catalog.fetch("global_flood_damage_model").read(
+            region=region
+        )
+        # save the cleaned dataframe as parquet
+        for damage_class, df_damage_class in damage_functions.items():
+            self.set_table(
+                df_damage_class,
+                name=f"damage_model/flood/{damage_class}/structure/curve",
+            )
 
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
