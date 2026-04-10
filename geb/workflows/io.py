@@ -16,7 +16,7 @@ import warnings
 from collections.abc import Hashable
 from pathlib import Path
 from types import TracebackType
-from typing import Any, cast, overload
+from typing import Any, Iterable, cast, overload
 
 import dask.array
 import dask.tokenize
@@ -34,7 +34,6 @@ import xarray as xr
 import yaml
 import zarr
 import zarr.storage
-from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
@@ -532,7 +531,10 @@ def _chunk_index_to_region(
 
 
 def _store_dask_array_blocks(
-    da: dask.array.core.Array, store_target: Any, progress: bool
+    da: dask.array.core.Array,
+    store_target: Any,
+    progress: bool,
+    target_write_size_mb: int = 3000,
 ) -> None:
     """Store a Dask array into a Zarr target block by block.
 
@@ -541,6 +543,7 @@ def _store_dask_array_blocks(
             the write granularity.
         store_target: Writable Zarr target array.
         progress: Whether to wrap the block iterator in a progress bar.
+        target_write_size_mb: Target size in megabytes for each write operation.
     """
     block_indices: Any = np.ndindex(*da.numblocks)
 
@@ -550,27 +553,40 @@ def _store_dask_array_blocks(
     # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
     # This can be safely ignored in this context.
     with np.errstate(invalid="ignore"):
-        stores = []
+        stores: list = []
         for block_index in block_indices:
             region = _chunk_index_to_region(da.chunks, block_index)
             block = array_blocks[block_index]
-
             stores.append(
                 dask.array.store(
                     block,
                     store_target,
                     regions=region,
                     lock=False,
-                    compute=False,  # Use compute=False to return a Dask object instead of executing
+                    compute=False,
                     return_stored=False,
                 )
             )
 
+        # target chunk size of around 3000MB, but at least 1 block
+        chunk_size: int = (
+            np.prod([da.chunks[i][0] for i in range(len(da.chunks))])
+            * da.dtype.itemsize
+        )
+        batch_size: int = max(1, target_write_size_mb * 1_000_000 // chunk_size)
+
+        batches: Iterable[int] = list(range(0, len(stores), batch_size))
         if progress:
-            with ProgressBar():
-                dask.compute(*stores)
-        else:
-            dask.compute(*stores)
+            batches = tqdm(
+                batches,
+                total=int(np.ceil(len(stores) / batch_size)),
+                desc="Writing progress",
+                leave=False,
+            )
+
+        for i in batches:
+            batch = stores[i : i + batch_size]
+            dask.compute(*batch)
 
 
 def _normalize_shards(
