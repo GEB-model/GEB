@@ -433,6 +433,94 @@ class Agents(BuildModelBase):
         )
         self.set_table(income_distributions_pd, "income/national_distribution")
 
+    @build_method(depends_on=["setup_income_distribution_parameters"], required=True)
+    def setup_subnational_income_distribution(
+        self,
+        skip_countries_ISO3: list[str] = [],
+    ) -> None:
+        """Set up subnational income distributions for GDL regions based on GLOPOP-S.
+
+        It combines wealth and income data from GLOPOP-S into a single index, assigns income
+        percentiles based on this index, and then uses the national income distribution parameters
+        to generate subnational income distributions for each GDL region. The resulting subnational
+        income distribution parameters are stored in the model table. These parameters can be used to
+        generate synthetic income distributions for each region, which can then be used in the model
+        to model migration decisions towards other regions.
+
+        Args:
+            skip_countries_ISO3: A list of ISO3 country codes to skip when setting up subnational income distributions.
+        Raises:
+            ValueError: If no regions are processed for subnational income distribution.
+        """
+        wealth_index_to_income_percentile = {
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
+            5: (80, 100),
+        }
+
+        national_dist = self.table["income/national_distribution"]
+
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+        results = []
+
+        for code in GDL_regions["GDLcode"]:
+            iso3 = code[:3]
+            self.logger.info(f"Processing {code}...")
+
+            if iso3 in skip_countries_ISO3:
+                self.logger.info(f"Skipping {iso3}")
+                continue
+
+            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg", region=code).read(
+                code
+            )
+
+            # combine wealth/income into one index
+            GLOPOP_S_region["wealth_index"] = (
+                GLOPOP_S_region[["WEALTH", "INCOME"]].sum(axis=1) + 1
+            )
+
+            # vectorized percentile assignment
+            GLOPOP_S_region["income_percentile"] = np.uint16(0)
+            for w, (low, high) in wealth_index_to_income_percentile.items():
+                mask = GLOPOP_S_region["wealth_index"] == w
+                GLOPOP_S_region.loc[mask, "income_percentile"] = np.random.randint(
+                    low, high, size=mask.sum()
+                )
+
+            # sanity check
+            assert (GLOPOP_S_region["income_percentile"] > 0).all()
+
+            disp_income = np.percentile(
+                np.asarray(national_dist[iso3]),
+                GLOPOP_S_region["income_percentile"],
+            )
+
+            results.append(
+                pd.DataFrame(
+                    {
+                        "mean_disp_income": [disp_income.mean()],
+                        "median_disp_income": [np.median(disp_income)],
+                    },
+                    index=[code],
+                )
+            )
+
+        # assert regions is not empty
+        if len(results) == 0:
+            raise ValueError(
+                "No regions to process for subnational income distribution"
+            )
+
+        self.set_table(
+            pd.concat(results),
+            name="income/subnational_distribution_parameters",
+        )
+
     @build_method(
         depends_on=["setup_regions_and_land_use", "set_time_range"], required=True
     )
@@ -1435,10 +1523,10 @@ class Agents(BuildModelBase):
 
         # create income percentile based on wealth index mapping
         wealth_index_to_income_percentile = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
             5: (80, 100),
         }
 
