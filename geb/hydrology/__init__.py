@@ -21,8 +21,6 @@
 
 """Hydrology submodule for the GEB model. Holds all hydrology related submodules."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import numpy as np

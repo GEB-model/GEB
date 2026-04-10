@@ -1,7 +1,5 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
-from __future__ import annotations
-
 import math
 from collections.abc import Generator, Hashable, Mapping
 from contextlib import contextmanager, nullcontext

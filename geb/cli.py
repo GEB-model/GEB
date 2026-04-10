@@ -563,6 +563,7 @@ def update_version(*args: Any, **kwargs: Any) -> None:
 
     This command initializes the GEBModel, which automatically checks and updates
     the version file if it is outdated, printing any necessary update instructions.
+    If possible, auto-updates are performed.
     """
     update_version_fn(*args, **kwargs)
 

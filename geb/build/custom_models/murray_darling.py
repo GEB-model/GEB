@@ -1,7 +1,5 @@
 """Utilities to set up Australian water prices and drip irrigation prices."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

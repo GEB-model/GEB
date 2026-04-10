@@ -1,7 +1,5 @@
 """The main GEB model class. This class is used to initialize and run the model."""
 
-from __future__ import annotations
-
 import copy
 import datetime
 import logging
@@ -20,7 +18,7 @@ from packaging.version import Version
 
 from geb import GEB_PACKAGE_DIR, __version__
 from geb.agents import Agents
-from geb.build.version_updates import VERSION_UPDATES
+from geb.build.version_updates import get_and_maybe_do_version_updates
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
@@ -140,16 +138,17 @@ class GEBModel(Module):
         if Version(version_info) == Version(__version__):
             return
 
-        # find and print all updates between the stored version and the current version
-        current_v = Version(__version__)
-        stored_v = Version(version_info)
+        updates: list[str] = get_and_maybe_do_version_updates(version_info)
+        if updates:
+            error = f"Version mismatch and updating is required: input data version is {version_info}, but current model version is {__version__}. Please run 'geb update-version' to update the model to the current version."
+            self.logger.error(error)
+            raise RuntimeError(error)
 
-        for v_str in VERSION_UPDATES.keys():
-            v = Version(v_str)
-            if v > stored_v and v <= current_v and VERSION_UPDATES[v_str]:
-                error = f"Version mismatch: input data version is {version_info}, but current model version is {__version__}. Please run 'geb update-version' to update the model to the current version."
-                self.logger.error(error)
-                raise RuntimeError(error)
+        else:
+            self.logger.info(
+                f"Version mismatch but no specific updates found for this version. Updated version file."
+            )
+            version_path.write_text(__version__)
 
     def restore(self, store_location: Path, timestep: int, n_timesteps: int) -> None:
         """Restore the model state to the original state given by the function input.

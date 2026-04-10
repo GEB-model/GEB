@@ -20,6 +20,10 @@
 - Fix recent regression where water demand for households was set to 0 except on January 1st.
 - Include evaluation tests in the test_run for simplicity. 
 - Included setup_subnational_income_distribution to also setup initial subnational income distribution parameters for simulating migration decisions.
+- Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
+- Move evaluation of hydrodynamics to seperate file.
+- Also calculate discharge metrics at daily frequency if only hourly data is available.
+- Added auto-update for build methods.
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.

@@ -1,7 +1,5 @@
 """Class to setup, run, and post-process the SFINCS hydrodynamic model."""
 
-from __future__ import annotations
-
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path

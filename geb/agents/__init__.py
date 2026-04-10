@@ -4,8 +4,6 @@ Agent classes for the GEB model.
 This package exposes agent implementations used to simulate actors in the model.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from geb.module import Module

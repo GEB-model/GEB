@@ -1,7 +1,5 @@
 """Module implementing energy evaluation functions for the GEB model."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
