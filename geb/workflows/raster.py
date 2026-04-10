@@ -1057,6 +1057,36 @@ def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArra
     return da
 
 
+def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
+    """Interpolate NaN values in a 2D numpy array using nearest neighbor interpolation.
+
+    Args:
+        arr: The input 2D array with NaN values.
+        nodata: The nodata value to treat as missing.
+
+    Returns:
+        A new DataArray with NaN values interpolated.
+    """
+    mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
+
+    if not mask.any():
+        return arr
+    if mask.all():
+        return arr
+
+    y, x = np.indices(arr.shape)
+    known_x, known_y = x[~mask], y[~mask]
+    known_v = arr[~mask]
+    missing_x, missing_y = x[mask], y[mask]
+
+    filled_values = griddata(
+        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+    )
+    arr_filled = arr.copy()
+    arr_filled[mask] = filled_values
+    return arr_filled
+
+
 def interpolate_na_2d(
     da: xr.DataArray, buffer: int | tuple[int, int] = 0
 ) -> xr.DataArray:
@@ -1095,26 +1125,6 @@ def interpolate_na_2d(
         raise ValueError(
             "buffer must be a non-negative integer or a tuple of two non-negative integers"
         )
-
-    def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
-        mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
-
-        if not mask.any():
-            return arr
-        if mask.all():
-            return arr
-
-        y, x = np.indices(arr.shape)
-        known_x, known_y = x[~mask], y[~mask]
-        known_v = arr[~mask]
-        missing_x, missing_y = x[mask], y[mask]
-
-        filled_values = griddata(
-            (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
-        )
-        arr_filled = arr.copy()
-        arr_filled[mask] = filled_values
-        return arr_filled
 
     if da.chunks is None:
         filled_values = fillna_2d(np.asarray(da.data), nodata=nodata)

@@ -40,7 +40,7 @@ from geb.geb_types import (
 )
 from geb.store import Bucket
 from geb.workflows.io import read_grid, read_zarr
-from geb.workflows.raster import compress, decompress_with_mask
+from geb.workflows.raster import compress, decompress_with_mask, fillna_2d
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -568,8 +568,11 @@ class Grid(BaseVariables):
         spei_compressed: TwoDArrayFloat32 = self.model.forcing.load(
             name="SPEI", dt=spei_time
         )
+        nodata = np.nan
         assert spei_compressed.ndim == 2 and spei_compressed.shape[1] == 1
-        return self.decompress(spei_compressed[:, 0])
+        spei_decompressed = self.decompress(spei_compressed[:, 0])
+        spei_decompressed_filled = fillna_2d(spei_decompressed, nodata=nodata)
+        return spei_decompressed_filled
 
     @property
     def gev_c(self) -> xr.DataArray:
@@ -589,17 +592,17 @@ class Grid(BaseVariables):
     @property
     def pr_gev_c(self) -> TwoDArrayFloat32:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
-        return read_grid(self.model.files["other"]["climate/pr_gev_c"])
+        return read_zarr(self.model.files["other"]["climate/pr_gev_c"])
 
     @property
     def pr_gev_loc(self) -> TwoDArrayFloat32:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
-        return read_grid(self.model.files["other"]["climate/pr_gev_loc"])
+        return read_zarr(self.model.files["other"]["climate/pr_gev_loc"])
 
     @property
     def pr_gev_scale(self) -> TwoDArrayFloat32:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
-        return read_grid(self.model.files["other"]["climate/pr_gev_scale"])
+        return read_zarr(self.model.files["other"]["climate/pr_gev_scale"])
 
 
 class HRUVariables(Bucket):
