@@ -24,9 +24,7 @@ from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
-from .global_ocean_mean_dynamic_topography import (
-    GlobalOceanMeanDynamicTopography as GlobalOceanMeanDynamicTopography,
-)
+from .global_ocean_mean_dynamic_topography import GlobalOceanMeanDynamicTopography
 from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG

@@ -19,8 +19,6 @@ The class is intentionally lightweight: network interactions use
 division is guarded against zero area values.
 """
 
-from __future__ import annotations
-
 import os
 import tempfile
 import unicodedata

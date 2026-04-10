@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b19"
+version = "1.0.0b20"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -84,7 +84,7 @@ dependencies = [
     "simplejson>=3.20.2",
     "eccodes==2.44.0",  # pin until https://github.com/ecmwf/eccodes-python/issues/150 is fixed
 ]
-requires-python = ">=3.13, <3.14"
+requires-python = ">=3.14.4, <3.15"
 readme = "README.md"
 classifiers = [
     "Development Status :: 4 - Beta",

@@ -1,7 +1,5 @@
 """Utilities for working with GTSM data in GEB."""
 
-from __future__ import annotations
-
 import os
 import shutil
 import tempfile
@@ -322,7 +320,7 @@ class GTSM_timeseries(Adapter):
                     da,
                     final_zarr_fp,
                     crs=4326,
-                    compression_level=12,
+                    compression_level=22,
                     filters=filters,
                 )
 

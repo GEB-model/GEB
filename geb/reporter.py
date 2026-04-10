@@ -1,7 +1,5 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
-from __future__ import annotations
-
 import datetime
 import re
 from operator import attrgetter

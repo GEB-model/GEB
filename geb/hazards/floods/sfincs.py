@@ -6,8 +6,6 @@ and read simulation results.
 
 """
 
-from __future__ import annotations
-
 import logging
 import math
 import shutil

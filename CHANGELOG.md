@@ -26,6 +26,10 @@ To support this version:
 - Run `setup_local_damage_model`: `geb update -b build.yml::setup_local_damage_model`.
 
 
+- Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
+- Move evaluation of hydrodynamics to seperate file.
+- Also calculate discharge metrics at daily frequency if only hourly data is available.
+- Added auto-update for build methods.
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.
