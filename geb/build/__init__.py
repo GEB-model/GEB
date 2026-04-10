@@ -3453,7 +3453,9 @@ class GEBModel(
         build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
-        if continue_:
+        if (
+            continue_ and self.progress_path.exists()
+        ):  # check if continue and already some progress was made
             if not self.version_is_current():
                 raise ValueError(
                     "Cannot continue build: version mismatch. The version of the existing build is different from the current version of the code. This likely means that the code was updated since the last build. To continue, either restore the old version of the code or start a new build."
