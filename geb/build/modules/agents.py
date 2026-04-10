@@ -1330,13 +1330,6 @@ class Agents(BuildModelBase):
             raise ValueError(
                 f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
             )
-        # rename columns to match expected names in model
-        buildings = buildings.rename(
-            columns={
-                "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-                "COST_CONTENTS_USD_SQM": "maximum_damage_content",
-            }
-        )
 
         return buildings
 
