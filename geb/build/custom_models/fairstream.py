@@ -37,9 +37,9 @@ from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
     INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
-    PERSONAL_INSURANCE_ADAPTATION,
     PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
+    TRADITIONAL_INSURANCE_ADAPTATION,
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
@@ -1059,7 +1059,7 @@ class fairSTREAMModel(GEBModel):
                         WELL_ADAPTATION,
                         IRRIGATION_EFFICIENCY_ADAPTATION,
                         FIELD_EXPANSION_ADAPTATION,
-                        PERSONAL_INSURANCE_ADAPTATION,
+                        TRADITIONAL_INSURANCE_ADAPTATION,
                         INDEX_INSURANCE_ADAPTATION,
                         PR_INSURANCE_ADAPTATION,
                     ]

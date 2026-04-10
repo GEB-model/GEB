@@ -1449,22 +1449,17 @@ class Forcing(BuildModelBase):
             self.other["climate/pr_kg_per_m2_per_s"] * 3600
         )  # convert to mm/hour
 
-        self.logger.info("Calculating yearly maximum monthly precipitation ")
+        self.logger.info("Calculating yearly total precipitation")
         # with ProgressBar():
-        # Calculate monthly totals and then yearly max.
-        pr_yearly_max = (
-            pr.resample(time="MS")  # MS = Month Start
-            .sum(method="blockwise")
-            .resample(time="YS")  # YS = Year Start
-            .max(method="blockwise")
+        pr_yearly_total = (
+            pr.resample(time="YS").sum(method="blockwise")  # YS = Year Start
         ).compute()
 
         self.logger.info(
-            "Calculating GEV parameters for yearly maximum monthly precipitation"
+            "Calculating GEV parameters for low annual precipitation totals using Y = -X"
         )
-        # with ProgressBar():
         gev_pr = xcistats.fit(
-            pr_yearly_max,
+            -pr_yearly_total,
             dist="genextreme",
         ).compute()
 
@@ -1472,10 +1467,22 @@ class Forcing(BuildModelBase):
         # to ensure they are saved on the regular model grid.
         grid_mask = self.other["climate/pr_kg_per_m2_per_s_mask"]
         for param in ["c", "loc", "scale"]:
-            param_da: xr.DataArray = self.full_like(
-                grid_mask, np.nan, nodata=np.nan, dtype=np.float32
+            values_1d = gev_pr.sel(dparams=param).values.astype(np.float32)
+            mask_2d = grid_mask.values.astype(bool)
+
+            assert values_1d.ndim == 1
+            assert np.count_nonzero(mask_2d) == len(values_1d)
+
+            out = np.full(mask_2d.shape, np.nan, dtype=np.float32)
+            out[mask_2d] = values_1d
+
+            param_da = self.full_like(
+                grid_mask,
+                fill_value=np.nan,
+                nodata=np.nan,
+                dtype=np.float32,
             )
-            param_da.values[grid_mask.values] = gev_pr.sel(dparams=param).values
+            param_da.values = out
             self.set_other(param_da, name=f"climate/pr_gev_{param}")
 
     @build_method(depends_on=["set_ssp", "set_time_range"], required=True)

@@ -86,6 +86,19 @@ agent_settings:
           coef: -2.5
           max: 10
           min: 0.1
+  insurers:
+    duration: 1
+    seut_factor: 1
+    government_premium_cap: false
+    traditional_insurance: 
+      ruleset: no-adaptation
+      loading_rate: 0.3
+    index_insurance: 
+      ruleset: no-adaptation
+      loading_rate: 0.2
+    pr_insurance:
+      ruleset: no-adaptation
+      loading_rate: 0.2
   farmers:
     ruleset: no-adaptation
     base_management_yield_ratio: 1
@@ -101,15 +114,6 @@ agent_settings:
       radius: 5000 # m
       size: 10 # nr of neighbors
     expected_utility:
-      insurance:
-        duration: 2
-        seut_factor: 1
-        personal_insurance: 
-          ruleset: no-adaptation
-        index_insurance: 
-          ruleset: no-adaptation
-        pr_insurance:
-          ruleset: no-adaptation
       crop_switching: 
         ruleset: no-adaptation
         loan_duration: 0
@@ -130,7 +134,7 @@ agent_settings:
         irr_eff_surface: 0.60
         irr_eff_sprinkler: 0.75
         irr_eff_drip:  0.95
-        efficiency_division: [0.5, 0.3, 0.2]   # ratio of different irrigation methods (surface, sprinkler, drip))
+        efficiency_division: [0.5, 0.5]   # ratio of different irrigation methods (surface, sprinkler)
       adaptation_well:
         ruleset: no-adaptation
         seut_factor: 1
