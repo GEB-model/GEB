@@ -189,11 +189,11 @@ class CropFarmersVariables(Bucket):
     crop_data: pd.DataFrame
     crop_data_type: str
     crop_ids: dict[int, str]
+    crop_names: dict[str, int]
     field_indices: ArrayInt32
     harvested_crop: DynamicArray
     actual_yield_per_farmer: DynamicArray
     irrigation_limit_m3: DynamicArray
-    household_size: DynamicArray
     water_costs_m3_channel: float
     water_costs_m3_reservoir: float
     water_costs_m3_groundwater: float
@@ -212,10 +212,7 @@ class CropFarmersVariables(Bucket):
     well_depth: DynamicArray
     social_network: DynamicArray
     lifespan_well: int
-    pr_premium: DynamicArray
     insured_yearly_income: DynamicArray
-    index_premium: DynamicArray
-    traditional_premium: DynamicArray
     total_spinup_time: int
     return_fraction: DynamicArray
     n_loans: int
@@ -234,7 +231,6 @@ class CropFarmersVariables(Bucket):
     irr_eff_surface: float
     return_fraction_drip: float
     irr_eff_drip: float
-    drought_threshold: float
     why_class: DynamicArray
     locations: DynamicArray
     elevation: DynamicArray
@@ -243,8 +239,8 @@ class CropFarmersVariables(Bucket):
     yearly_SPEI: DynamicArray
     yearly_yield_ratio: DynamicArray
     activation_order_by_elevation_fixed: DynamicArray
-    adaptations: DynamicArray
     yearly_abstraction_m3_by_farmer: DynamicArray
+    yearly_water_costs_by_farmer: DynamicArray
     fraction_irrigated_field: DynamicArray
     irrigation_limit_reset_day_index: DynamicArray
     cumulative_water_deficit_m3: DynamicArray
@@ -271,6 +267,15 @@ class CropFarmersVariables(Bucket):
     cumulative_SPEI_count_during_growing_season: DynamicArray
     avg_income_per_agent: ArrayFloat64
     payout_mask: TwoDArrayBool
+    seasonal_income_farmer: DynamicArray
+    farmer_yield_probability_relation: DynamicArray
+    irr_eff_sprinkler: float
+    return_fraction_sprinkler: float
+    mean_irrigation_efficiency: float
+    irrigation_efficiency_group: DynamicArray
+    adjusted_annual_loan_cost: DynamicArray
+    adjusted_yearly_income: DynamicArray
+    decision_horizon: DynamicArray
 
 
 class CropFarmers(AgentBaseClass):
@@ -875,13 +880,6 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
-        self.var.household_size = DynamicArray(
-            n=self.var.n, max_n=self.var.max_n, dtype=np.int32, fill_value=-1
-        )
-        self.var.household_size[:] = read_array(
-            self.model.files["array"]["agents/farmers/household_size"]
-        )
-
         # Set irrigation efficiency data
         self.var.irr_eff_surface = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
@@ -916,12 +914,6 @@ class CropFarmers(AgentBaseClass):
             max_n=self.var.max_n,
             dtype=np.float32,
             fill_value=self.var.irr_eff_surface,
-        )
-        self.var.irrigation_reduction = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            dtype=np.float32,
-            fill_value=1,
         )
 
         efficiency_division_array = np.array(
@@ -1012,27 +1004,6 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
-        self.var.pr_premium = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            dtype=np.float32,
-            fill_value=0,
-        )
-
-        self.var.index_premium = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            dtype=np.float32,
-            fill_value=0,
-        )
-
-        self.var.traditional_premium = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            dtype=np.float32,
-            fill_value=0,
-        )
-
         # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation)
         self.var.loan_tracker = DynamicArray(
             n=self.var.n,
@@ -1045,14 +1016,6 @@ class CropFarmers(AgentBaseClass):
 
         self.var.farmer_base_class = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, dtype=np.int32, fill_value=-1
-        )
-        self.var.water_use = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            extra_dims=(4,),
-            extra_dims_names=("water_source",),
-            dtype=np.int32,
-            fill_value=0,
         )
 
         # Load the why class of agent's aquifer
