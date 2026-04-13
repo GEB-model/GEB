@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 class InsurersVariables(Bucket):
-    """Variables for the CropFarmers agent."""
+    """Variables for the Insurers agent."""
 
     insured_yearly_income: DynamicArray
     insurance_duration: int

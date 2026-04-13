@@ -1099,7 +1099,7 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_waterbodies(
         self,
-        preset_command_areas: None | str = None,
+        command_areas: None | str = None,
         calculate_command_areas: None | str = None,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
@@ -1111,7 +1111,7 @@ class Hydrography(BuildModelBase):
         routing network, and updating reservoir storage capacities.
 
         Notes:
-            If ``preset_command_areas`` is provided, those geometries are used to
+            If ``command_areas`` is provided, those geometries are used to
             define reservoir command areas and mapped onto the model grid and
             subgrid. If no preset command areas are provided but
             ``calculate_command_areas`` is truth, command areas are derived by
@@ -1120,7 +1120,7 @@ class Hydrography(BuildModelBase):
             overridden using that table.
 
         Args:
-            preset_command_areas: Identifier of the preset command area data in the
+            command_areas: Identifier of the preset command area data in the
                 data catalog. If None, command areas can be calculated from the
                 routing network instead.
             calculate_command_areas: Flag or identifier indicating that command areas
@@ -1183,25 +1183,23 @@ class Hydrography(BuildModelBase):
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
-        if preset_command_areas:
-            preset_command_areas: gpd.GeoDataFrame = gpd.read_file(
-                preset_command_areas, mask=self.region
+        if command_areas:
+            command_areas: gpd.GeoDataFrame = gpd.read_file(
+                command_areas, mask=self.region
             )
             assert isinstance(command_areas, gpd.GeoDataFrame)
-            preset_command_areas = preset_command_areas[
-                ~preset_command_areas["waterbody_id"].isnull()
+            command_areas = command_areas[
+                ~command_areas["waterbody_id"].isnull()
             ].reset_index(drop=True)
-            preset_command_areas["waterbody_id"] = preset_command_areas[
-                "waterbody_id"
-            ].astype(np.int32)
-
-            # Dissolve command areas with same reservoir
-            preset_command_areas = preset_command_areas.dissolve(
-                by="waterbody_id", as_index=False
+            command_areas["waterbody_id"] = command_areas["waterbody_id"].astype(
+                np.int32
             )
 
+            # Dissolve command areas with same reservoir
+            command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
+
             # Set lakes with command area to reservoirs and reservoirs without command area to lakes
-            ids_with_command: set[int] = set(preset_command_areas["waterbody_id"])
+            ids_with_command: set[int] = set(command_areas["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
                 "waterbody_type",
@@ -1213,8 +1211,8 @@ class Hydrography(BuildModelBase):
                     waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
                 ]
             )
-            command_areas_dissolved = preset_command_areas[
-                preset_command_areas["waterbody_id"].isin(reservoir_ids)
+            command_areas_dissolved = command_areas[
+                command_areas["waterbody_id"].isin(reservoir_ids)
             ].reset_index(drop=True)
 
             self.set_geom(command_areas_dissolved, name="waterbodies/command_areas")
@@ -1222,7 +1220,7 @@ class Hydrography(BuildModelBase):
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             command_area_raster = rasterize_like(
-                gdf=preset_command_areas,
+                gdf=command_areas,
                 column="waterbody_id",
                 raster=self.grid["mask"],
                 nodata=-1,
@@ -1232,7 +1230,7 @@ class Hydrography(BuildModelBase):
             self.set_grid(command_area_raster, name="waterbodies/command_area")
 
             subcommand_area_raster = rasterize_like(
-                gdf=preset_command_areas,
+                gdf=command_areas,
                 column="waterbody_id",
                 raster=self.subgrid["mask"],
                 nodata=-1,
