@@ -68,7 +68,7 @@ from .modules import (
 )
 from .modules.hydrography import (
     create_river_raster_from_river_lines,
-    extend_rivers_into_ocean,
+    extend_rivers_into_pits_and_set_pit_type,
 )
 
 # Set environment options for robustness
@@ -1854,19 +1854,6 @@ def create_riverine_mask(
 
     riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
 
-    # MERIT-Basins rivers don't always extend all the way into coastline pits.
-    # To extend these rivers, we first find all downstream cells of the area
-    # within the initial riverine mask. Then we find all pits within these
-    # downstream cells, and set these pits to be part of the riverine mask.
-    downstream_indices_of_area_in_mask = ldd_network.idxs_ds[
-        riverine_mask.values.ravel()
-    ]
-    all_pits_in_area = ldd_network.idxs_pit
-    downstream_indices_that_are_pits = np.intersect1d(
-        downstream_indices_of_area_in_mask, all_pits_in_area
-    )
-    riverine_mask.values.ravel()[downstream_indices_that_are_pits] = True
-
     # because the basin mask from the source is not perfect and has some holes
     # we need to extend the riverine mask to include all cells upstream of any
     # riverine cell. This is done by creating a flow raster from the masked
@@ -1884,6 +1871,19 @@ def create_riverine_mask(
     riverine_mask.values[ldd_network.basins(idxs=ldd_network_masked.idxs_pit) > 0] = (
         True
     )
+
+    # MERIT-Basins rivers don't always extend all the way into coastline pits.
+    # To extend these rivers, we first find all downstream cells of the area
+    # within the initial riverine mask. Then we find all pits within these
+    # downstream cells, and set these pits to be part of the riverine mask.
+    downstream_indices_of_area_in_mask = ldd_network.idxs_ds[
+        riverine_mask.values.ravel()
+    ]
+    all_pits_in_area = ldd_network.idxs_pit
+    downstream_indices_that_are_pits = np.intersect1d(
+        downstream_indices_of_area_in_mask, all_pits_in_area
+    )
+    riverine_mask.values.ravel()[downstream_indices_that_are_pits] = True
 
     return riverine_mask
 
@@ -2203,7 +2203,9 @@ class GEBModel(
             latlon=True,
         )
 
-        rivers: gpd.GeoDataFrame = extend_rivers_into_ocean(rivers, ldd_network)
+        rivers: gpd.GeoDataFrame = extend_rivers_into_pits_and_set_pit_type(
+            rivers, ldd_network, ldd.values
+        )
 
         self.logger.info("Preparing 2D grid.")
         if "outflow" in region:
@@ -2267,7 +2269,7 @@ class GEBModel(
                 rivers[rivers["is_downstream_outflow"]].index
             )
             subbasins["is_coastal"] = subbasins.apply(
-                lambda subbasin: rivers.loc[subbasin.name, "downstream_ID"] == -1,
+                lambda subbasin: rivers.loc[subbasin.name, "is_coastal"],
                 axis=1,
             )
 
