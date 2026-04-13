@@ -176,6 +176,11 @@ class Observations(BuildModelBase):
                         Q_station: pd.DataFrame = pd.read_parquet(
                             station_path
                         ).set_index("datetime")
+                    elif station_path.suffix in (".txt", ".md"):
+                        self.logger.info(
+                            f"Ignoring file {station_path} in custom river stations folder, as it is not a .csv or .parquet file."
+                        )
+                        continue  # ignore txt files (e.g., README)
                     else:
                         raise ValueError(
                             f"Unsupported file format for station {station_path}. Only .csv and .parquet are supported."
