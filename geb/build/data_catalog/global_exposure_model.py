@@ -51,20 +51,131 @@ gadm_converter: dict[str, str] = {
     "Vaduz": "Valduz",
     "Luzern": "Lucerne",
     "St. Gallen": "Sankt Gallen",
+    # Russia: oblasts whose base name differs from GADM (apostrophes, transliteration)
+    # Simple "X Oblast" → "X" cases are handled automatically by canon() stripping
+    # " Oblast"; only entries where the stripped name still doesn't match GADM are listed.
+    "Arkhangelsk Oblast": "Arkhangel'sk",
+    "Astrakhan Oblast": "Astrakhan'",
+    "Murmansk Oblast": "Murmansk",
+    "Nizhny Novgorod Oblast": "Nizhegorod",
     "Novgorod Oblast": "Novgorod",
+    "Oryol Oblast": "Orel",
     "Pskov Oblast": "Pskov",
+    "Ryazan Oblast": "Ryazan'",
     "Smolensk Oblast": "Smolensk",
     "Tver Oblast": "Tver'",
-    "Arkhangelsk Oblast": "Arkhangel'sk",
-    "Murmansk Oblast": "Murmansk",
+    "Tyumen Oblast": "Tyumen'",
+    "Ulyanovsk Oblast": "Ul'yanovsk",
+    "Yaroslavl Oblast": "Yaroslavl'",
+    # Russia: Krais (GADM uses shorter or transliterated names)
+    "Altai Krai": "Altay",
+    "Kamchatka Krai": "Kamchatka",
+    "Khabarovsk Krai": "Khabarovsk",
+    "Krasnodar Krai": "Krasnodar",
+    "Krasnoyarsk Krai": "Krasnoyarsk",
+    "Perm Krai": "Perm'",
+    "Primorsky Krai": "Primor'ye",
+    "Stavropol Krai": "Stavropol'",
+    "Zabaykalsky Krai": "Zabaykal'ye",
+    # Russia: Republics (GEM uses full official names; GADM uses shortened forms)
+    "Altai Republic": "Gorno-Altay",  # Republic of Altai ≠ Altai Krai in GADM
+    "Komi Republic": "Komi",
+    "Republic of Karelia": "Karelia",
+    "Republic of Mordovia": "Mordovia",
+    "Sakha Republic": "Sakha",
+    # Russia: autonomous okrugs / oblasts (GADM uses abbreviated names)
+    "Chukotka Autonomous Okrug": "Chukot",
+    "Jewish Autonomous Oblast": "Yevrey",
+    "Khanty-Mansiysk Autonomous Okrug - Ugra": "Khanty-Mansiy",
+    "Nenets Autonomous Okrug": "Nenets",
+    "Yamalo-Nenets Autonomous Okrug": "Yamal-Nenets",
+    # Russia: republics where GEM drops the "Republic" suffix but GADM uses a
+    # completely different transliteration
+    "Adygea": "Adygey",
+    "Buryatia": "Buryat",
+    "Chuvashia": "Chuvash",
+    "Ingushetia": "Ingush",
+    "Kabardino-Balkaria": "Kabardin-Balkar",
+    "Kalmykia": "Kalmyk",
+    "Karachay-Cherkessia": "Karachay-Cherkess",
+    "Khakassia": "Khakass",
+    "Mari El": "Mariy-El",
+    "North Ossetia-Alania": "North Ossetia",
+    "Udmurtia": "Udmurt",
+    # Russia: federal cities and Moscow Oblast
+    "Saint Petersburg": "City of St. Petersburg",
+    "Moscow": "Moscow City",
+    "Moscow Oblast": "Moskva",
+    # Russia: Magadan Oblast has a quirky name in GADM v2.8
+    "Magadan Oblast": "Maga Buryatdan",
+    # Turkey: GEM uses ALL-CAPS Turkish names; canon() normalises case, but
+    # one province has a genuinely different GADM name (GADM v2.8 uses the
+    # old short name "Afyon" instead of the full official name). The key uses
+    # the raw GEM CSV spelling (with Turkish capital İ) to match exactly.
+    "AFYONKARAHİSAR": "Afyon",
+    # Georgia: GEM uses English translations or "Autonomous Republic of ..."
+    # prefixes that differ from GADM v2.8 transliterations.
+    "Autonomous Republic of Abkhazia": "Abkhazia",
+    "Autonomous Republic of Adjara": "Ajaria",
+    "Lower Kartli": "Kvemo Kartli",  # kvemo = lower in Georgian
+    "Inner Kartli": "Shida Kartli",  # shida = inner in Georgian
+    "Samegrelo-Upper Svaneti": "Samegrelo-Zemo Svaneti",  # zemo = upper
+    "Racha-Lechkhumi and Lower Svaneti": "Racha-Lechkhumi-Kvemo Svaneti",
+    # Austria: GEM uses English names; GADM v2.8 uses German names.
+    "Carinthia": "Kärnten",
+    "Lower Austria": "Niederösterreich",
+    "Upper Austria": "Oberösterreich",
+    "Styria": "Steiermark",
+    "Vienna": "Wien",
+    # Italy: GEM uses Italian names that differ from GADM v2.8 equivalents.
+    "Puglia": "Apulia",
+    "Sicilia": "Sicily",
+    # Mexico: GEM uses the full official state name; GADM uses the short form.
+    "Coahuila de Zaragoza": "Coahuila",
 }
 
 # Mapping from GADM country names (NAME_0, underscores replacing spaces) to
 # the folder names used in the GEM GitHub repository, where they differ.
 gem_country_name_aliases: dict[str, str] = {
     "Czech_Republic": "Czechia",
+    # Åland Islands is an autonomous Finnish archipelago with no GEM folder;
+    # Finland is used as a proxy.
+    "Aland": "Finland",
+    # Faroe Islands is a Danish autonomous territory with no GEM folder;
+    # Denmark is used as a proxy.
+    "Faroe_Islands": "Denmark",
+    # UK Crown Dependencies: Guernsey and Jersey have no GEM folder;
+    # United Kingdom is used as a proxy.
+    "Guernsey": "United_Kingdom",
+    "Jersey": "United_Kingdom",
+    # Akrotiri and Dhekelia is a UK Sovereign Base Area on Cyprus; Cyprus is
+    # used as a proxy because it shares the same physical and construction context.
+    "Akrotiri_and_Dhekelia": "Cyprus",
+    # Northern Cyprus is a de-facto state on the island of Cyprus with no GEM
+    # folder; Cyprus is used as a proxy.
+    "Northern_Cyprus": "Cyprus",
+    # Greenland is a Danish autonomous territory with no GEM folder;
+    # Denmark is used as a proxy.
+    "Greenland": "Denmark",
+    # GADM uses the Spanish name "Palestina"; GEM uses "Palestine".
+    "Palestina": "Palestine",
+    # Western Sahara is a disputed territory with no GEM folder;
+    # Morocco administers most of it and is used as a proxy.
+    "Western_Sahara": "Morocco",
+    # San Marino is a microstate enclave within Italy with no GEM folder;
+    # Italy is used as a proxy.
+    "San_Marino": "Italy",
+    # Svalbard and Jan Mayen is a Norwegian territory (largely uninhabited)
+    # with no GEM folder; Norway is used as a proxy.
+    "Svalbard_and_Jan_Mayen": "Norway",
+    # Vatican City / Holy See is a microstate enclave within Italy with no
+    # GEM folder; Italy is used as a proxy. GADM may list this as either name.
+    "Vatican": "Italy",
+    "Holy_See": "Italy",
+    # GADM uses the former name "Macedonia"; GEM uses the current official
+    # name "North_Macedonia" (since 2019).
+    "Macedonia": "North_Macedonia",
 }
-
 
 
 class GlobalExposureModel(Adapter):
@@ -93,14 +204,29 @@ class GlobalExposureModel(Adapter):
         """
         # Characters that NFKD cannot decompose to ASCII must be substituted
         # explicitly; otherwise encode("ascii", "ignore") drops them entirely.
-        _non_decomposable = str.maketrans("ŁłØøÐð", "LlOoDd")
-        s = string_to_normalize.translate(_non_decomposable)
-        return (
+        # æ/Æ are ligatures that must be expanded to ae/AE before NFKD; they
+        # cannot be handled by str.maketrans (one-to-one only).
+        s = string_to_normalize.replace("æ", "ae").replace("Æ", "Ae")
+        # ı (U+0131, Turkish dotless i) and Ł/ł/Ø/ø/Ð/ð have no NFKD
+        # decomposition to ASCII; map them explicitly before normalisation.
+        _non_decomposable = str.maketrans("ŁłØøÐð\u0131", "LlOoDdi")
+        s = s.translate(_non_decomposable)
+        s = (
             unicodedata.normalize("NFKD", s)
             .encode("ascii", "ignore")
             .decode("ascii")
             .strip()
         )
+        # Normalise ALL-CAPS strings (e.g. GEM Turkey uses "ADANA", GADM uses
+        # "Adana") so that both sides produce the same canon key.
+        if s.isupper():
+            s = s.title()
+        # Strip the trailing " oblast" suffix (case-insensitive) so that GEM
+        # names like "Leningrad Oblast" and GADM names like "Leningrad" both
+        # resolve to the same key without manually enumerating every oblast.
+        if s.lower().endswith(" oblast"):
+            s = s[: -len(" oblast")]
+        return s
 
     def _filter_folders(
         self, tree: list[dict[str, Any]], csv_files: list[str], country: str
@@ -112,11 +238,10 @@ class GlobalExposureModel(Adapter):
             csv_files: List to append found CSV file paths to.
             country: The country name to filter folders by.
         Raises:
-            ValueError: If no matching country folder is found.
+            ValueError: If no matching country folder is found. Add an entry to
+                ``gem_country_name_aliases`` to map the country to a proxy if GEM
+                does not cover it.
         """
-        # Find folders in the repository tree whose leaf name matches the
-        # requested country (case-insensitive). The GitHub tree entries of
-        # type 'tree' represent directories.
         matching_paths = [
             item["path"]
             for item in tree
@@ -124,13 +249,14 @@ class GlobalExposureModel(Adapter):
             and item["path"].split("/")[-1].lower() == country.lower()
         ]
 
-        # Raise an error if no matching folder is found
         if not matching_paths:
-            raise ValueError(f"No folder found for country: {country}")
+            raise ValueError(
+                f"No folder found for country '{country}' in the GEM repository. "
+                f"Add an entry to gem_country_name_aliases in "
+                f"geb/build/data_catalog/global_exposure_model.py to map it to a "
+                f"proxy country, or verify the country name against the GEM repository."
+            )
 
-        # Search for CSV-like blobs under any matching folder. We further
-        # restrict to paths that include 'exposure_res' (case-insensitive)
-        # to focus on residential exposure result files.
         for item in tree:
             if item["type"] == "blob":
                 for folder in matching_paths:
@@ -302,4 +428,11 @@ class GlobalExposureModel(Adapter):
                 for col in df.columns:
                     if col != "NAME_1":
                         merged_result[admin_1][col] = row[col]
+            # Store a national average under a private key so that aliased
+            # territories (e.g. Faroe Islands NAME_1 regions when Denmark is
+            # used as a proxy) can fall back to it in setup_building_reconstruction_costs.
+            numeric_cols = [c for c in df.columns if c != "NAME_1"]
+            if numeric_cols:
+                country_avg = df[numeric_cols].mean(numeric_only=True).to_dict()
+                merged_result[f"_country_avg_{country}"] = country_avg
         return merged_result

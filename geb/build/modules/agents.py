@@ -13,6 +13,7 @@ import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 
+from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
 from geb.geb_types import TwoDArrayBool, TwoDArrayInt32
@@ -1239,21 +1240,38 @@ class Agents(BuildModelBase):
         and would be silently dropped, causing mismatches (e.g. "Łódź" → "odz").
         These are mapped to their closest ASCII equivalents first.
 
+        Trailing administrative suffixes such as " Oblast" are also stripped so
+        that GEM names like "Leningrad Oblast" and GADM names like "Leningrad"
+        both normalise to the same key regardless of which side carries the suffix.
+
         Args:
             string_to_normalize: The string to canonicalize.
         Returns:
             The canonicalized string.
         """
-        # Characters that NFKD cannot decompose to ASCII must be substituted
-        # explicitly; otherwise encode("ascii", "ignore") drops them entirely.
-        _non_decomposable = str.maketrans("ŁłØøÐð", "LlOoDd")
-        s = string_to_normalize.translate(_non_decomposable)
-        return (
+        # æ/Æ are ligatures that NFKD cannot expand to two ASCII characters
+        # (one-to-one only); substitute before normalization.
+        s = string_to_normalize.replace("æ", "ae").replace("Æ", "Ae")
+        # ı (U+0131, Turkish dotless i) and Ł/ł/Ø/ø/Ð/ð have no NFKD
+        # decomposition to ASCII; map them explicitly before normalisation.
+        _non_decomposable = str.maketrans("ŁłØøÐð\u0131", "LlOoDdi")
+        s = s.translate(_non_decomposable)
+        s = (
             unicodedata.normalize("NFKD", s)
             .encode("ascii", "ignore")
             .decode("ascii")
             .strip()
         )
+        # Normalise ALL-CAPS strings (e.g. GEM Turkey uses "ADANA", GADM uses
+        # "Adana") so that both sides produce the same canon key.
+        if s.isupper():
+            s = s.title()
+        # Strip the trailing " oblast" suffix (case-insensitive) so that GEM
+        # names like "Leningrad Oblast" and GADM names like "Leningrad" both
+        # resolve to the same key without manually enumerating every oblast.
+        if s.lower().endswith(" oblast"):
+            s = s[: -len(" oblast")]
+        return s
 
     def setup_building_reconstruction_costs(
         self, buildings: gpd.GeoDataFrame
@@ -1316,36 +1334,80 @@ class Agents(BuildModelBase):
         # Iterate over unique admin-1 region names to avoid redundant checks and assignments
         buildings["NAME_1"] = buildings["NAME_1"].apply(self.canon)
 
-        exposure_model_keys: list[str] = list(global_exposure_model.keys())
+        # Separate proxy-country averages (stored by read()) from per-region data.
+        # These are used as fallbacks for aliased territories and must not appear
+        # as real region keys.
+        country_averages: dict[str, dict[str, float]] = {
+            k.removeprefix("_country_avg_"): v
+            for k, v in global_exposure_model.items()
+            if k.startswith("_country_avg_")
+        }
+        exposure_model: dict[str, dict[str, float]] = {
+            k: v
+            for k, v in global_exposure_model.items()
+            if not k.startswith("_country_avg_")
+        }
+
         gadm_names: list[str] = [
             self.canon(n) for n in gadm_level1["NAME_1"].dropna().unique()
         ]
+        missing: set[str] = {n for n in gadm_names if n not in exposure_model}
 
-        # Any GADM name absent from the exposure model must be resolved
-        # manually via gadm_converter — no silent auto-mapping.
-        missing = {n for n in gadm_names if n not in global_exposure_model}
+        # For regions from aliased territories (e.g. Faroe Islands districts
+        # proxied to Denmark) their GADM NAME_1 values won't appear in the proxy
+        # CSV; fall back to the proxy country's national average.
+        for n in sorted(missing.copy()):
+            name_0_series = gadm_level1.loc[
+                gadm_level1["NAME_1"].apply(self.canon) == n, "NAME_0"
+            ]
+            if name_0_series.empty:
+                continue
+            proxy = gem_country_name_aliases.get(
+                self.canon(name_0_series.iloc[0].replace(" ", "_")),
+                self.canon(name_0_series.iloc[0].replace(" ", "_")),
+            )
+            if proxy in country_averages:
+                exposure_model[n] = country_averages[proxy]
+                warnings.warn(
+                    f"GADM region '{n}' not found in GEM; using national average for '{proxy}'.",
+                    stacklevel=2,
+                )
+                missing.discard(n)
+
         if missing:
-            def _suggest(name: str) -> str:
-                n = name.lower()
-                hits = [k for k in exposure_model_keys if k.lower().startswith(n + " ") or n.startswith(k.lower() + " ")]
-                hits = hits or difflib.get_close_matches(name, exposure_model_keys, n=1, cutoff=0.3)
-                return hits[0] if hits else "???"
+            region_keys = list(exposure_model)
 
-            new_entries = {_suggest(n): n for n in sorted(missing)}
-            dict_repr = "{\n" + "".join(f'    "{k}": "{v}",\n' for k, v in new_entries.items()) + "}"
+            def _candidates(name: str) -> list[str]:
+                return difflib.get_close_matches(name, region_keys, n=3, cutoff=0.6)
+
+            lines: list[str] = []
+            for n in sorted(missing):
+                hits = _candidates(n)
+                suggestion = f'"{hits[0]}"' if hits else "???"
+                lines.append(
+                    f'    {suggestion}: "{n}",'
+                    + (
+                        f"  # also consider: {', '.join(hits)}"
+                        if hits
+                        else "  # no close match — check GEM CSV manually"
+                    )
+                )
             raise ValueError(
-                f"{len(missing)} GADM region(s) are not in the global exposure model. "
-                f"Add the following entries to gadm_converter in "
-                f"geb/build/data_catalog/global_exposure_model.py:\n\n{dict_repr}"
+                f"{len(missing)} GADM region(s) could not be matched to the global exposure model.\n"
+                f"Add the correct entries to gadm_converter in\n"
+                f"geb/build/data_catalog/global_exposure_model.py:\n\n"
+                f"{{\n{chr(10).join(lines)}\n}}"
             )
 
         # Vectorised assignment: build a DataFrame from the exposure model
         # keyed by NAME_1 and merge onto buildings in one step.
-        exposure_df = pd.DataFrame.from_dict(global_exposure_model, orient="index")
+        exposure_df = pd.DataFrame.from_dict(exposure_model, orient="index")
         buildings = gpd.GeoDataFrame(buildings.join(exposure_df, on="NAME_1"))
         reconstruction_cost_columns = exposure_df.columns.tolist()
         if buildings[reconstruction_cost_columns].isnull().any().any():
-            missing_regions = buildings.loc[buildings[reconstruction_cost_columns].isnull().any(axis=1), "NAME_1"].unique()
+            missing_regions = buildings.loc[
+                buildings[reconstruction_cost_columns].isnull().any(axis=1), "NAME_1"
+            ].unique()
             raise ValueError(
                 f"Buildings in {missing_regions} have no reconstruction costs. "
                 f"Check the global exposure model and region names."

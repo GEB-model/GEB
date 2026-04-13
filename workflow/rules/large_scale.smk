@@ -21,19 +21,28 @@ EVALUATION_METHODS = config.get("EVALUATION_METHODS", "hydrology.plot_discharge,
 def get_resources(cluster_name):
     """Get SLURM resources for a cluster job.
 
-    Memory profiling across all 17 European clusters (April 2026) shows peak
-    RSS of 54–75 GB regardless of basin size, dominated by
-    setup_gtsm_station_data.  100 GB provides ~33 % headroom and fits within
-    the ivm nodes (123 GB), opening more scheduling slots.
+    Memory profiling across all 17 European clusters (April 2026) shows that
+    setup_elevation dominates peak RSS at ~105 GB.  120 GB provides ~15 %
+    headroom above the observed peak. Most defq nodes have 252 GB RAM so they
+    handle the 120 GB request fine; the three 59 GB defq nodes will simply
+    never be assigned these jobs by SLURM. Including defq maximises the number
+    of available nodes for parallel scheduling.
     defq has MaxTime=7 days; build/run stay within that, spinup uses ivm-fat.
+
+    32 CPUs is chosen for spinup: GEB uses Numba TBB threading which scales
+    across all allocated cores. ivm-fat has node001 (64 CPUs) and node243
+    (128 CPUs), so 32 CPUs allows 2 and 4 concurrent spinup jobs per node
+    respectively (6 total), which fits within the QOS MaxJobsPU=8 limit.
+    Using 64 CPUs would drop concurrent capacity to just 3 jobs across both nodes.
     """
-    return 100000, "defq,ivm,ivm-fat", 8, ""
+    return 120000, "defq,ivm,ivm-fat", 32, ""
 
 
 # defq MaxTime = 7 days (10080 min); build and run fit within 5 days.
-# Spinup can exceed 7 days so it targets ivm-fat (unlimited MaxTime).
+# ivm-fat has TIMELIMIT=infinite and QOS MaxWall is unset, so spinup jobs
+# will never be killed for time regardless of how long they run.
 RUNTIME_BUILD_MIN = 7200   # 5 days
-RUNTIME_SPINUP_MIN = 14400  # 10 days
+RUNTIME_SPINUP_MIN = 14400  # 10 days (advisory only; ivm-fat has no time limit)
 RUNTIME_RUN_MIN = 7200     # 5 days
 
 
@@ -79,6 +88,11 @@ rule build_cluster:
         # intermediate zarr files written by write_zarr do not fill /tmp,
         # which caused Python exit-code-1 crashes on some nodes (e.g. Europe_016).
         if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
+        # Cap Numba TBB thread count to the allocated CPUs. Without this, TBB
+        # reads os.cpu_count() (the full node, e.g. 128 on node243) and spawns
+        # far more threads than the job has CPU slots, causing oversubscription
+        # when multiple jobs share the same node.
+        export NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK
         cd {params.cluster_dir}
         geb build --continue &> {log}
         touch {output}
@@ -105,8 +119,14 @@ rule spinup_cluster:
     shell:
         """
         if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
+        export NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK
+        # Setting PYTHONOPTIMIZE=1 is equivalent to `python -O`, which sets
+        # __debug__=False and disables Numba BOUNDSCHECK (significant per-access overhead).
+        export PYTHONOPTIMIZE=1
         cd {params.cluster_dir}
-        geb spinup &> {log}
+        # Ensure input data version matches the current GEB version before running.
+        geb update-version &>> {log}
+        geb spinup --timing &>> {log}
         touch {output}
         """
 
@@ -130,6 +150,8 @@ rule run_cluster:
     shell:
         """
         if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
+        export NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK
+        export PYTHONOPTIMIZE=1
         cd {params.cluster_dir}
         geb run &> {log}
         touch {output}
