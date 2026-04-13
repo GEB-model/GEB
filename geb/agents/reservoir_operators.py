@@ -73,12 +73,12 @@ def get_irrigation_reservoir_release(
         The reservoir release for irrigation [m3].
     """
     # here the units don't matter as long as they are the same
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ratio_long_term_demand_to_inflow: ArrayFloat32 = np.where(
-            long_term_monthly_inflow_m3 > 0,
-            long_term_monthly_irrigation_demand_m3 / long_term_monthly_inflow_m3,
-            np.inf,
-        )
+    ratio_long_term_demand_to_inflow: ArrayFloat32 = np.divide(
+        long_term_monthly_irrigation_demand_m3,
+        long_term_monthly_inflow_m3,
+        out=np.full_like(long_term_monthly_inflow_m3, np.inf, dtype=np.float32),
+        where=long_term_monthly_inflow_m3 > 0,
+    )
     irrigation_dominant_reservoirs: ArrayBool = (
         ratio_long_term_demand_to_inflow > 1.0 - reservoir_M_factor
     )
@@ -97,27 +97,38 @@ def get_irrigation_reservoir_release(
         + current_irrigation_demand_m3[~irrigation_dominant_reservoirs]
     )
 
+    long_term_demand_per_substep_m3: ArrayFloat32 = np.divide(
+        long_term_monthly_irrigation_demand_m3[irrigation_dominant_reservoirs],
+        n_monthly_substeps,
+        out=np.zeros_like(
+            long_term_monthly_irrigation_demand_m3[irrigation_dominant_reservoirs],
+            dtype=np.float32,
+        ),
+    )
+    dominant_demand_ratio: ArrayFloat32 = np.divide(
+        current_irrigation_demand_m3[irrigation_dominant_reservoirs],
+        long_term_demand_per_substep_m3,
+        out=np.zeros_like(long_term_demand_per_substep_m3, dtype=np.float32),
+        where=long_term_demand_per_substep_m3 > 0,
+    )
     provisional_release[irrigation_dominant_reservoirs] = (
         long_term_monthly_inflow_m3[irrigation_dominant_reservoirs]
         / n_monthly_substeps
         * (
             reservoir_M_factor[irrigation_dominant_reservoirs]
             + (1 - reservoir_M_factor[irrigation_dominant_reservoirs])
-            * current_irrigation_demand_m3[irrigation_dominant_reservoirs]
-            / (
-                long_term_monthly_irrigation_demand_m3[irrigation_dominant_reservoirs]
-                / n_monthly_substeps
-            )
+            * dominant_demand_ratio
         )
     )  # equation 2b in Shin et al. (2019)
 
     # Targeted monthly release (Shin et al., 2019)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ratio_capacity_to_total_inflow: ArrayFloat64 = np.where(
-            long_term_monthly_inflow_m3 > 0,
-            capacity / (long_term_monthly_inflow_m3 * 12),
-            np.inf,
-        )
+    total_annual_inflow_m3: ArrayFloat32 = long_term_monthly_inflow_m3 * np.float32(12)
+    ratio_capacity_to_total_inflow: ArrayFloat64 = np.divide(
+        capacity,
+        total_annual_inflow_m3,
+        out=np.full_like(capacity, np.inf, dtype=np.float64),
+        where=total_annual_inflow_m3 > 0,
+    )
     # R in Shin et al. (2019). "As R varies from 0 to 1, the reservoir release changes
     # from run-of-the-river flow to demand-controlled release.""
     demand_controlled_release_ratio: ArrayFloat64 = np.minimum(
