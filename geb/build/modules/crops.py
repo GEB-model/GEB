@@ -1490,8 +1490,8 @@ class Crops(BuildModelBase):
                 )
                 + 1,
             ),
-            -1,
-            dtype=np.int32,
+            0,
+            dtype=np.bool_,
         )
 
         for i in range(n_cells):
@@ -1561,7 +1561,7 @@ class Crops(BuildModelBase):
 
                 adaptations[
                     farmer_indices_in_region, irrigation_equipment_per_farmer
-                ] = 1
+                ] = True
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 

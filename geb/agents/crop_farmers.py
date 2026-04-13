@@ -3674,7 +3674,7 @@ class CropFarmers(AgentBaseClass):
             expired_adaptations = (
                 self.var.time_adapted[:, adaptation_type] == loan_duration
             )
-            self.var.adaptations[expired_adaptations, adaptation_type] = -1
+            self.var.adaptations[expired_adaptations, adaptation_type] = 0
             self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
         if len(adaptation_types) > 1:
@@ -3682,7 +3682,7 @@ class CropFarmers(AgentBaseClass):
 
             # Define extra constraints -- cant adapt another insurance type while having one before
             for t in adaptation_types:
-                test_array += (self.var.adaptations[:, t] >= 0).astype(np.int8)
+                test_array += (self.var.adaptations[:, t] > 0).astype(np.int8)
 
             extra_constraint = test_array < 1
             adapted = np.zeros_like(interest_rate, dtype=bool)
@@ -4536,7 +4536,7 @@ class CropFarmers(AgentBaseClass):
         expired_adaptations = (
             self.var.time_adapted[:, adaptation_type] == self.var.lifespan_well
         ) | additional_diffentiator_expiration
-        self.var.adaptations[expired_adaptations, adaptation_type] = -1
+        self.var.adaptations[expired_adaptations, adaptation_type] = 0
         self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
         # Determine the IDS of the most similar group of yield
@@ -4947,8 +4947,8 @@ class CropFarmers(AgentBaseClass):
                 self.save_yearly_pr()
 
             if self.config["ruleset"] == "no-irrigation":
-                self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] = -1
-                self.var.adaptations[:, WELL_ADAPTATION] = -1
+                self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] = 0
+                self.var.adaptations[:, WELL_ADAPTATION] = 0
 
             # Set yearly yield ratio based on the difference between saved actual and potential profit
             yearly_potential_income = np.where(
