@@ -49,6 +49,7 @@ gadm_converter: dict[str, str] = {
     "Vaduz": "Valduz",
     "Luzern": "Lucerne",
     "St. Gallen": "Sankt Gallen",
+    "Balochistan": "Baluchistan",
 }
 
 
