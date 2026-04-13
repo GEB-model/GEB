@@ -149,22 +149,10 @@ def get_deficit_between_dates(
         )
 
     if deficit < 0:
-        print(
-            "DEBUG DEFICIT<0",
-            "farmer",
-            farmer,
-            "start",
-            start_index,
-            "end",
-            end_index,
-            "c_start",
-            cumulative_water_deficit_m3[farmer, start_index],
-            "c_end",
-            cumulative_water_deficit_m3[farmer, end_index],
-            "c_last",
-            cumulative_water_deficit_m3[farmer, -1],
+        raise ValueError(
+            "Water deficit must be non-negative; check cumulative water deficit "
+            "inputs and start/end day indices."
         )
-        raise ValueError("Deficit must be positive or zero")
     return deficit
 
 
