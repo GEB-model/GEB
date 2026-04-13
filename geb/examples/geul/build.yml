@@ -49,12 +49,6 @@ setup_well_prices_by_reference_year_global:
   WHY_30: 50 # $/m
   reference_year: 2017
 
-setup_irrigation_sources:
-  irrigation_sources:
-    "no": -1
-    canal: 0
-    well: 1
-
 setup_create_farms:
 
 setup_income_distribution_parameters:
