@@ -5,8 +5,6 @@ coastline data from the remote OSM coastlines dataset. The data is downloaded
 from osmdata.openstreetmap.de and stored to a local file in the GEB data catalog.
 """
 
-from __future__ import annotations
-
 import tempfile
 import zipfile
 from pathlib import Path

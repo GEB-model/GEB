@@ -1,7 +1,5 @@
 """Adapter for UNDP datasets."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pandas as pd

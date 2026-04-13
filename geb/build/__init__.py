@@ -27,7 +27,6 @@ import xarray as xr
 import yaml
 import zarr
 from affine import Affine
-from packaging.version import Version
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
@@ -36,7 +35,7 @@ from shapely.ops import unary_union
 from geb import GEB_PACKAGE_DIR, __version__
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
-from geb.build.version_updates import VERSION_UPDATES
+from geb.build.version_updates import get_and_maybe_do_version_updates
 from geb.workflows.io import (
     read_params,
     write_array,
@@ -1991,8 +1990,6 @@ class GEBModel(
         self.other = DelayedReader(reader=read_zarr)
         self.files = {}
 
-        self.maybe_update_version()
-
     def set_current_version(self) -> None:
         """Set the current version in the version file."""
         self.logger.info(
@@ -2010,48 +2007,6 @@ class GEBModel(
             return False
         version_info = self.version_path.read_text()
         return version_info == __version__
-
-    def maybe_update_version(self) -> None:
-        """Check if the version in the version file is the same as the current version.
-
-        If the version is not current, print a warning with the updates that need to be made to update to the current version.
-
-        Raises:
-            RuntimeError: If the version is not current and updates need to be made.
-        """
-        # No version file exists, so we create one with the current version
-        if not self.version_path.exists():
-            self.set_current_version()
-            return
-        version_info = self.version_path.read_text()
-        if self.version_is_current():
-            self.logger.info("Version is already current.")
-        else:
-            self.logger.warning(
-                f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
-            )
-            # Find and print all updates between the stored version and the current version
-            current_v = Version(__version__)
-            stored_v = Version(version_info)
-
-            versions = sorted(VERSION_UPDATES.keys(), key=Version)
-            updates_to_print = []
-            for v_str in versions:
-                v = Version(v_str)
-                if v > stored_v and v <= current_v:
-                    updates_to_print.extend(VERSION_UPDATES[v_str])
-
-            if updates_to_print:
-                updates_msg = "\n- ".join(updates_to_print)
-                self.set_current_version()
-                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
-                self.logger.error(error)
-                raise RuntimeError(error)
-            else:
-                self.logger.info(
-                    "No specific updates found for this version. Updated version file."
-                )
-                self.set_current_version()
 
     @property
     def logger(self) -> logging.Logger:
@@ -2769,53 +2724,6 @@ class GEBModel(
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
 
-    @build_method(required=True)
-    def setup_damage_parameters(
-        self,
-        parameters: dict[
-            str, dict[str, dict[str, dict[str, list[tuple[float, float]] | float]]]
-        ],
-    ) -> None:
-        """Sets up damage parameters for different hazards and asset types.
-
-        Args:
-            parameters: A nested dictionary containing damage parameters. The structure is:
-                {
-                    "hazard_type": {
-                        "asset_type": {
-                            "component": {
-                                "curve": [(severity, damage_ratio), ...],
-                                "maximum_damage": float
-                            },
-                            ...
-                        },
-                        ...
-                    },
-                    ...
-                }
-        """
-        for hazard, hazard_parameters in parameters.items():
-            for asset_type, asset_parameters in hazard_parameters.items():
-                for component, asset_compontents in asset_parameters.items():
-                    curve = pd.DataFrame(
-                        asset_compontents["curve"],
-                        columns=np.array(["severity", "damage_ratio"]),
-                    )
-
-                    self.set_table(
-                        curve,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
-                    )
-
-                    maximum_damage = {
-                        "maximum_damage": asset_compontents["maximum_damage"]
-                    }
-
-                    self.set_params(
-                        maximum_damage,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
-                    )
-
     @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors: list[tuple[float, float]]
@@ -3130,7 +3038,6 @@ class GEBModel(
         assert isinstance(data, xr.DataArray)
 
         if name in grid:
-            self.logger.warning(f"Replacing grid map: {name}")
             grid = grid.drop_vars(name)
 
         if len(grid) == 0:
@@ -3498,7 +3405,9 @@ class GEBModel(
         build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
-        if continue_:
+        if (
+            continue_ and self.progress_path.exists()
+        ):  # check if continue and already some progress was made
             if not self.version_is_current():
                 raise ValueError(
                     "Cannot continue build: version mismatch. The version of the existing build is different from the current version of the code. This likely means that the code was updated since the last build. To continue, either restore the old version of the code or start a new build."
@@ -3523,6 +3432,45 @@ class GEBModel(
         )
 
         self.write_build_complete()
+
+    def update_version(self, methods: dict[str, Any]) -> None:
+        """Check if the version in the version file is the same as the current version.
+
+        If the version is not current, print a warning with the updates that need to be made to update to the current version.
+
+        Raises:
+            RuntimeError: If the version is not current and updates need to be made.
+        """
+        # No version file exists, so we create one with the current version
+        if not self.version_path.exists():
+            self.set_current_version()
+            return
+        version_info = self.version_path.read_text()
+        if self.version_is_current():
+            self.logger.info("Version is already current.")
+        else:
+            self.read()
+            # Find and print all updates between the stored version and the current version
+            updates_to_print_to_user: list[str] = get_and_maybe_do_version_updates(
+                version_info,
+                perform_auto_update=True,
+                build_model=self,
+                methods=methods,
+            )
+            if updates_to_print_to_user:
+                self.logger.warning(
+                    f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
+                )
+                updates_msg = "\n- ".join(updates_to_print_to_user)
+                self.set_current_version()
+                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
+                self.logger.error(error)
+                raise RuntimeError(error)
+            else:
+                self.logger.info(
+                    "No specific updates found for this version or auto-updated. Updated version file."
+                )
+                self.set_current_version()
 
     def update(
         self,

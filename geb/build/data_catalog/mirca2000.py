@@ -1,7 +1,5 @@
 """Adapter for MIRCA2000 datasets."""
 
-from __future__ import annotations
-
 import gzip
 import zipfile
 from pathlib import Path

@@ -453,16 +453,31 @@ def test_run() -> None:
 
         # Verify that the result is a dictionary and contains expected keys
         assert isinstance(result, dict)
-        assert "KGE" in result
-        assert "NSE" in result
-        assert "R" in result
 
-        assert result["KGE"] is not None
-        assert result["NSE"] is not None
-        assert result["R"] is not None
+        for label in [
+            "KGE_hourly",
+            "NSE_hourly",
+            "R_hourly",
+            "KGE_daily",
+            "NSE_daily",
+            "R_daily",
+            "KGE",
+            "NSE",
+            "R",
+        ]:
+            assert label in result
+            assert result[label] is not None
 
         # Note this should be much higher.
-        assert result["KGE"] > -0.07
+        assert result["KGE"] > -0.05
+        assert result["NSE"] > -0.49
+        assert result["R"] > 0.41
+
+        # method_args = {
+        #     "method": "hydrodynamics.evaluate_hydrodynamics",
+        # }
+        # args["method_args"] = method_args
+        # result = run_model_with_method(method="evaluate", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

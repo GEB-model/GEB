@@ -1,7 +1,5 @@
 """Neighbor finding algorithms using geohashes."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import numba as nb
