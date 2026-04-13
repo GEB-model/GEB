@@ -30,8 +30,8 @@
 - Update to Python 3.14.4.
 
 To support this version:
-- Run `setup_flood_damage_model`: `geb update -b build.yml::setup_flood_damage_model`.
-- Run `setup_subnational_income_distribution`: `geb update -b build.yml::setup_subnational_income_distribution`.
+- Add `setup_flood_damage_model` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_flood_damage_model`.
+- Add `setup_subnational_income_distribution` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_subnational_income_distribution`.
 - Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
 
 # v1.0.0b19
