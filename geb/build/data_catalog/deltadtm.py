@@ -132,8 +132,13 @@ class DeltaDTM(Adapter):
                 continents_to_download, tile_names, temp_dir
             )
             da = self._merge_tiles(extracted_paths)
-            da = convert_nodata(da, np.nan)
-            return da
+            # Force a load: chunks={} makes rioxarray return a lazy dask array,
+            # so data is not read until computed. Loading here ensures all tile data
+            # is in memory before the temp directory (and its .tif files) is deleted.
+            da = da.load()
+
+        da = convert_nodata(da, np.nan)
+        return da
 
     def _merge_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
         """Merge extracted DeltaDTM tiles into a single xarray DataArray.
