@@ -1,6 +1,7 @@
 # dev
 - Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
 - Remove setup_irrigation_sources from build process as it is not needed anymore.
+- Fix division by zero error for reservoirs that have no long term inflow.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
