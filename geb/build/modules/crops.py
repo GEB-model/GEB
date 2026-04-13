@@ -1249,8 +1249,8 @@ class Crops(BuildModelBase):
 
         Returns:
             A tuple containing two xarray DataArrays:
-            - rainfed_crop_fraction: DataArray with dimensions (y, x, crop) representing the fraction of rainfed crop area for each crop.
-            - irrigated_crop_fraction: DataArray with dimensions (y, x, crop) representing the fraction of irrigated crop area for each crop.
+            - rainfed_crop_fraction: DataArray with dimensions (crop, y, x) representing the fraction of rainfed crop area for each crop.
+            - irrigated_crop_fraction: DataArray with dimensions (crop, y, x) representing the fraction of irrigated crop area for each crop.
         """
         crops: dict[str, int] = {
             "Wheat": 0,
@@ -1322,7 +1322,7 @@ class Crops(BuildModelBase):
 
                 assert not np.isnan(crop_map.values).any()
 
-                crop_map.assign_coords(crop=crop_id)
+                crop_map = crop_map.assign_coords(crop=crop_id)
 
                 crop_maps.append(crop_map)
 
@@ -2138,13 +2138,13 @@ class Crops(BuildModelBase):
             available_crops_mask_rainfed = np.zeros_like(
                 farmer_crop_rainfed_fractions, dtype=bool
             )
-            available_crops_mask_rainfed[available_crops] = True
+            available_crops_mask_rainfed[available_crops_rainfed] = True
             farmer_crop_rainfed_fractions[~available_crops_mask_rainfed] = 0
 
             available_crops_mask_irrigated = np.zeros_like(
                 farmer_crop_irrigated_fractions, dtype=bool
             )
-            available_crops_mask_irrigated[available_crops] = True
+            available_crops_mask_irrigated[available_crops_irrigated] = True
             farmer_crop_irrigated_fractions[~available_crops_mask_irrigated] = 0
 
             # Normalize the area fractions
