@@ -22,7 +22,7 @@
 - Fix recent regression where water demand for households was set to 0 except on January 1st.
 - Include evaluation tests in the test_run for simplicity. 
 - Include global Huizinga curves as alternative to local Endendijk in build and reasonable default config.
-- Included setup_subnational_income_distribution to also setup initial subnational income distribution parameters for simulating migration decisions.
+- Include setup_subnational_income_distribution to also set up initial subnational income distribution parameters for simulating migration decisions.
 - Move evaluation of hydrodynamics to seperate file.
 - Also calculate discharge metrics at daily frequency if only hourly data is available.
 - Added auto-update for build methods.
