@@ -1440,7 +1440,7 @@ class Agents(BuildModelBase):
         self.set_geom(buildings, name="assets/open_building_map")
 
     @build_method(required=True)
-    def setup_damage_model(self, region: str = "geul") -> None:
+    def setup_flood_damage_model(self, region: str = "geul") -> None:
         """This method sets up the damage functions for flood events for the specified region.
 
         It retrieves the damage functions from the data catalog, processes them, and saves them as

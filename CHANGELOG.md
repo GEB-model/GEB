@@ -22,6 +22,7 @@
 - Fix recent regression where water demand for households was set to 0 except on January 1st.
 - Include evaluation tests in the test_run for simplicity. 
 - Include global Huizinga curves as alternative to local Endendijk in build and reasonable default config.
+- Included setup_subnational_income_distribution to also setup initial subnational income distribution parameters for simulating migration decisions.
 - Move evaluation of hydrodynamics to seperate file.
 - Also calculate discharge metrics at daily frequency if only hourly data is available.
 - Added auto-update for build methods.
@@ -29,9 +30,8 @@
 - Update to Python 3.14.4.
 
 To support this version:
-- Run `setup_global_damage_model`: `geb update -b build.yml::setup_global_damage_model`.
-- Run `setup_local_damage_model`: `geb update -b build.yml::setup_local_damage_model`.
-- Included setup_subnational_income_distribution to also setup initial subnational income distribution parameters for simulating migration decisions.
+- Run `setup_flood_damage_model`: `geb update -b build.yml::setup_flood_damage_model`.
+- Run `setup_subnational_income_distribution`: `geb update -b build.yml::setup_subnational_income_distribution`.
 - Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
 
 # v1.0.0b19
