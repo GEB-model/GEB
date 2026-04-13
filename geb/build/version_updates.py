@@ -12,8 +12,8 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "dev": [
-        "[manual] Remove `setup_irrigation_sources` from your `build.yml.`",
+    "1.0.0b21": [
+        "[manual] Remove `setup_irrigation_sources` from your `build.yml`.",
     ],
     "1.0.0b20": [
         "[update-python;3.14.4]",
