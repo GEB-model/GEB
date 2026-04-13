@@ -1295,10 +1295,9 @@ class Crops(BuildModelBase):
                     assert reference is not None
                     crop_map = self.full_like(reference, fill_value=0, nodata=np.nan)
                 else:
-                    dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop_name}_{irrigation_type}"
-                    new_dataset_name = f"mirca_os_cropping_area_{year}_{resolution}_{crop_name}_{irrigation_type}"
-
-                    crop_map = self.data_catalog.fetch(new_dataset_name).read()
+                    crop_map = self.data_catalog.fetch(
+                        f"mirca_os_cropping_area_{year}_{resolution}_{crop_name}_{irrigation_type}"
+                    ).read()
 
                     crop_map = crop_map.isel(
                         get_window(
