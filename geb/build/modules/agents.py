@@ -7,19 +7,19 @@ from datetime import datetime
 from typing import Any, Literal
 
 import geopandas as gpd
-from shapely import union_all
 import numpy as np
 import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
+from shapely import union_all
 from tqdm import tqdm
-from geb.workflows.methods import get_utm_zone
 
 from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
 from geb.geb_types import TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
+from geb.workflows.methods import get_utm_zone
 from geb.workflows.raster import (
     clip_with_grid,
     pixels_to_coords,
