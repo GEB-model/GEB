@@ -90,7 +90,7 @@ def calculate_stream_length(
 
     # pit or river mouth -> no channel, so set stream length to 0
     stream_length = xr.where(
-        (d8_ldd != D8_RIVER_MOUTH) | (d8_ldd == D8_PIT), stream_length, 0
+        (d8_ldd != D8_RIVER_MOUTH) & (d8_ldd != D8_PIT), stream_length, 0
     )
     # vertical -> set stream length to cell height
     stream_length = xr.where(
