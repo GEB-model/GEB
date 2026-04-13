@@ -1,5 +1,12 @@
 # dev
 
+# v1.0.0b21
+- All agricultural insurances premiums and insured yields are now determined by a new insurer agent named "insurers". The adaptation itself is still within crop_farmers. For index and precipitation insurance functions have been added to estimate candidate spaces for the potential contracts have been added. These estimate strike, exit and rates from the index and income/loss data. Additional insurers functionalities can be added to this agent now. 
+- A hydrological year start parameter has been added. This is a simple variable under "general" in the model.yml that indicates which month of the year the hydrological year starts. The base variable is 1 (january). Crop_farmers, livestock_farmers, market reservoir_operators, waterbodies and insurers take yearly actions at the start of the hydrological year. 
+- setup_waterbodies has a new functionality where it can create reservoir command areas just based on the hydrology and reservoirs using the calculate_command_areas setting. 
+- Bug fix where unify_crop_variants did not work for farmers for crop rotations with more than 1 crop. 
+- self.var.adaptations is now a boolean array. Run `geb update -b build.yml::setup_farmer_crop_calendar` for it to become boolean. 
+
 # v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
 - Refactored setup farms from lowder and created a test. Non-lowder datasets are not supported anymore. This will be added back later in the simplified setup when it is required for a specific purpose.
