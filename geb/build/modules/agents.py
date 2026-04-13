@@ -13,7 +13,6 @@ import xarray as xr
 from dateutil.relativedelta import relativedelta
 from shapely import union_all
 from tqdm import tqdm
-from geb.workflows.methods import get_utm_zone
 
 from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
 from geb.build.methods import build_method
