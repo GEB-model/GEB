@@ -125,6 +125,34 @@ def test_get_irrigation_reservoir_release_zero_inflow() -> None:
     assert release[0] >= 0
 
 
+def test_get_irrigation_reservoir_release_zero_inflow_zero_demand() -> None:
+    """Test that zero long-term inflow and demand still yield finite releases."""
+    capacity = np.array([1000.0, 1000.0], dtype=np.float64)
+    storage_year_start = np.array([800.0, 800.0], dtype=np.float64)
+    long_term_monthly_inflow_m3 = np.array([0.0, 0.0], dtype=np.float32)
+    long_term_monthly_inflow_this_month_m3 = np.array([0.0, 0.0], dtype=np.float32)
+    current_irrigation_demand_m3 = np.array([0.0, 25.0], dtype=np.float32)
+    long_term_monthly_irrigation_demand_m3 = np.array([0.0, 0.0], dtype=np.float32)
+    alpha = np.array([0.85, 0.85], dtype=np.float32)
+    reservoir_m_factor = np.array([0.7, 0.7], dtype=np.float32)
+    n_monthly_substeps = 30
+
+    release = get_irrigation_reservoir_release(
+        capacity,
+        storage_year_start,
+        long_term_monthly_inflow_m3,
+        long_term_monthly_inflow_this_month_m3,
+        current_irrigation_demand_m3,
+        long_term_monthly_irrigation_demand_m3,
+        alpha,
+        reservoir_m_factor,
+        n_monthly_substeps,
+    )
+
+    np.testing.assert_allclose(release, np.zeros_like(release))
+    assert np.isfinite(release).all()
+
+
 def test_get_irrigation_reservoir_release_dominant_demand() -> None:
     """Test when irrigation demand is dominant (ratio > 1 - M)."""
     capacity = np.array([1000.0], dtype=np.float64)
