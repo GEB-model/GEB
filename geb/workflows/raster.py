@@ -1490,29 +1490,6 @@ def clip_region(
     return clipped_mask, *clipped_arrays
 
 
-# def create_dask_tiles(
-#     da: xr.DataArray,
-# ):
-#     transform = da.rio.transform(recalc=True)
-
-#     tiles = []
-#     y_offset = 0
-#     for y_chunk in da.chunksizes["y"]:
-#         tiles.append([])
-#         x_offset = 0
-#         for x_chunk in da.chunksizes["x"]:
-#             tiles[-1].append(
-#                 {
-#                     "transform": transform * Affine.translation(x_offset, y_offset),
-#                     "shape": (y_chunk, x_chunk),
-#                 }
-#             )
-#             x_offset += x_chunk
-#         y_offset += y_chunk
-
-#     return from_array(tiles, chunks=(1, 1))
-
-
 def rasterize_geometry(
     block: xr.DataArray,
     geometry: BaseGeometry,
