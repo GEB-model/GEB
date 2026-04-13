@@ -12,6 +12,7 @@ import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
+from geb.workflows.methods import get_utm_zone
 
 from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
 from geb.build.methods import build_method
@@ -1524,6 +1525,35 @@ class Agents(BuildModelBase):
         )
         return buildings_with_subbasin
 
+    def calculate_distance_parameters(self, buildings: gpd.GeoDataFrame):
+
+        rivers = gpd.read_parquet("input/" + self.files["geom"]["routing/rivers"])
+        coastline = gpd.read_parquet(
+            "input/" + self.files["geom"]["coastal/coastlines"]
+        )
+        region_centroid = self.region.union_all().centroid
+        utm_zone = get_utm_zone(region_centroid.x, region_centroid.y)
+        buildings_crs = buildings.crs
+
+        # Ensure same CRS (projected!)
+        buildings = buildings.to_crs(utm_zone)
+        rivers = rivers.to_crs(utm_zone)
+        coastline = coastline.to_crs(utm_zone)
+
+        # Distance to river
+        buildings["distance_to_river_m"] = buildings.sjoin_nearest(
+            rivers, how="left", distance_col="distance_to_river"
+        )["distance_to_river"].astype(np.int32)
+
+        # Distance to coastline
+        buildings["distance_to_coastline_m"] = buildings.sjoin_nearest(
+            coastline, how="left", distance_col="distance_to_coastline"
+        )["distance_to_coastline"].astype(np.int32)
+
+        # reproject back to original CRS
+        buildings = buildings.to_crs(buildings_crs)
+        return buildings
+
     @build_method(required=True)
     def setup_buildings(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
@@ -1534,6 +1564,7 @@ class Agents(BuildModelBase):
         )
         buildings = self.setup_building_reconstruction_costs(buildings)
         buildings = self.assign_subbasins_to_buildings(buildings)
+        buildings = self.calculate_distance_parameters(buildings)
 
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
