@@ -13,11 +13,12 @@ if TYPE_CHECKING:
 
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b21": [
+        "[manual] Remove `setup_irrigation_sources` from your `build.yml`.",
         "[manual] Run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.",
     ],
     "1.0.0b20": [
         "[update-python;3.14.4]",
-        "[manual] Add `setup_subnational_income_distribution` to your `build.yml`",
+        "[manual] Add `setup_subnational_income_distribution` to your `build.yml`.",
         "[manual] Run `setup_subnational_income_distribution`: `geb update -b build.yml::setup_subnational_income_distribution`.",
         "[manual] Add `setup_flood_damage_model` to your `build.yml`.",
         "[manual] Run `setup_flood_damage_model`: `geb update -b build.yml::setup_flood_damage_model`.",

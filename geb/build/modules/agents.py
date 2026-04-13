@@ -809,14 +809,17 @@ class Agents(BuildModelBase):
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 
-    @build_method(required=True)
-    def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
-        """Sets up the irrigation sources for GEB.
+    @build_method(required=False)
+    def setup_irrigation_sources(self, *args: Any, **kwargs: Any) -> None:
+        """Deprecated method for setting up irrigation sources.
 
         Args:
-            irrigation_sources: A dictionary mapping irrigation source names to their corresponding IDs.
+            *args: Positional arguments (not used).
+            **kwargs: Keyword arguments (not used).
         """
-        self.set_params(irrigation_sources, name="agents/farmers/irrigation_sources")
+        self.logger.warning(
+            "This method is deprecated and will be removed in future versions. Please remove it from your build sequence and set up irrigation sources directly in the model configuration."
+        )
 
     @build_method(depends_on=["set_time_range", "setup_economic_data"], required=False)
     def setup_irrigation_prices_by_reference_year(
@@ -1440,7 +1443,7 @@ class Agents(BuildModelBase):
         self.set_geom(buildings, name="assets/open_building_map")
 
     @build_method(required=True)
-    def setup_damage_model(self, region: str = "geul") -> None:
+    def setup_flood_damage_model(self, region: str = "geul") -> None:
         """This method sets up the damage functions for flood events for the specified region.
 
         It retrieves the damage functions from the data catalog, processes them, and saves them as

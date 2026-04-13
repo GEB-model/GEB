@@ -914,10 +914,10 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "gtsm": {
         "adapter": GTSM(
-            folder="gtsm",
+            folder="gtsm_mean_sea_level",
             local_version=1,
             filename="gtsm_mean_sea_level.zip",
-            cache="local",
+            cache="global",
         ),
         "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
         "source": {
