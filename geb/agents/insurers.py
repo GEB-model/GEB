@@ -11,7 +11,7 @@ import numpy.typing as npt
 from geb.geb_types import TwoDArrayFloat32
 from geb.workflows.raster import sample_from_map
 
-from ..store import DynamicArray
+from ..store import Bucket, DynamicArray
 from .crop_farmers import (
     INDEX_INSURANCE_ADAPTATION,
     PR_INSURANCE_ADAPTATION,
@@ -30,6 +30,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class InsurersVariables(Bucket):
+    """Variables for the CropFarmers agent."""
+
+    insured_yearly_income: DynamicArray
+    insurance_duration: int
+    GEV_pr_parameters: DynamicArray
+    avg_income_per_agent: npt.NDArray[np.floating]
+    adjusted_yearly_income_insured: DynamicArray
+
+
 class Insurers(AgentBaseClass):
     """This class is used to simulate the insurers.
 
@@ -37,6 +47,8 @@ class Insurers(AgentBaseClass):
         model: The GEB model.
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
+
+    var: InsurersVariables
 
     def __init__(self, model: GEBModel, agents: Agents) -> None:
         """Initialize the insurers agent.
@@ -126,10 +138,10 @@ class Insurers(AgentBaseClass):
                 )  # ensure no NaNs in data
 
     def government_premium_cap(self) -> np.ndarray:
-        """Compute per-farmer government premium cap based on income and crop mix.
+        """Compute per-farmer government premium cap in India based on income and crop mix.
 
         Farmers are grouped by well status. If all farmers in a group have
-        sugarcane (``crop_calendar[..., -1, 0] == 4``), the cap is 5% of mean
+        sugarcane (``crop_calendar[..., -1, 0] == 11``), the cap is 5% of mean
         income per m²; otherwise 2%. Caps are then scaled by each farmer's field
         size.
 
@@ -148,7 +160,7 @@ class Insurers(AgentBaseClass):
         for group_idx in range(n_groups):
             agent_indices = np.where(group_indices == group_idx)[0]
             sugarcane_check = np.all(
-                self.agents.crop_farmers.var.crop_calendar[agent_indices, -1, 0] == 4
+                self.agents.crop_farmers.var.crop_calendar[agent_indices, -1, 0] == 11
             )
             if sugarcane_check:
                 group_mean_cap[group_idx] = (

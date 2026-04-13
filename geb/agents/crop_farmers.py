@@ -262,7 +262,6 @@ class CropFarmersVariables(Bucket):
     adapted: DynamicArray
     cumulative_pr_during_growing_season: DynamicArray
     base_management_yield_ratio: DynamicArray
-    insurance_duration: int
     cumulative_SPEI_during_growing_season: DynamicArray
     cumulative_SPEI_count_during_growing_season: DynamicArray
     avg_income_per_agent: ArrayFloat64
@@ -502,9 +501,6 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_well"]["maintenance_factor"]
 
-        self.var.insurance_duration = self.model.config["agent_settings"]["insurers"][
-            "duration"
-        ]
         self.var.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1], dtype=np.int32)
 
         # Set water costs
@@ -3642,7 +3638,7 @@ class CropFarmers(AgentBaseClass):
             premiums: Annual premium per farmer for each
                 option; shape should broadcast with the per-option loop.
         """
-        loan_duration = self.var.insurance_duration
+        loan_duration = self.model.config["agent_settings"]["insurers"]["duration"]
         interest_rate = self.var.interest_rate.data
 
         # Determine the income of each farmer with or without insurance
