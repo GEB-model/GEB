@@ -18,7 +18,7 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.geb_types import ArrayBool, TwoDArrayInt32
+from geb.geb_types import ArrayBool, ArrayInt32, ArrayInt64, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     get_linear_indices,
@@ -1239,148 +1239,114 @@ class Crops(BuildModelBase):
         raise ValueError("This method is removed. You can remove it entirely.")
 
     def get_crop_area_fractions(
-        self, resolution: str = "5-arcminute"
+        self, year: int, resolution: str = "5-arcminute"
     ) -> tuple[xr.DataArray, xr.DataArray]:
         """Compute MIRCA crop area fractions and summarize per region.
 
         Args:
+            year: The year for which to compute crop area fractions.
             resolution: Resolution tag for plotting/output naming.
 
         Returns:
             A tuple containing two xarray DataArrays:
-            - The first DataArray contains the fraction of each crop to the total cropped area for each year.
-            - The second DataArray contains the fraction of irrigated area for each crop for each
+            - rainfed_crop_fraction: DataArray with dimensions (y, x, crop) representing the fraction of rainfed crop area for each crop.
+            - irrigated_crop_fraction: DataArray with dimensions (y, x, crop) representing the fraction of irrigated crop area for each crop.
         """
-        crops: list[str] = [
-            "Wheat",  # 0
-            "Maize",  # 1
-            "Rice",  # 2
-            "Barley",  # 3
-            "Rye",  # 4
-            "Millet",  # 5
-            "Sorghum",  # 6
-            "Soybeans",  # 7
-            "Sunflower",  # 8
-            "Potatoes",  # 9
-            "Cassava",  # 10
-            "Sugar_cane",  # 11
-            "Sugar_beet",  # 12
-            "Oil_palm",  # 13
-            "Rapeseed",  # 14
-            "Groundnuts",  # 15
-            "Others_perennial",  # 23
-            "Fodder",  # 24
-            "Others_annual",  # 25,
-        ]
+        crops: dict[str, int] = {
+            "Wheat": 0,
+            "Maize": 1,
+            "Rice": 2,
+            "Barley": 3,
+            "Rye": 4,
+            "Millet": 5,
+            "Sorghum": 6,
+            "Soybeans": 7,
+            "Sunflower": 8,
+            "Potatoes": 9,
+            "Cassava": 10,
+            "Sugar_cane": 11,
+            "Sugar_beet": 12,
+            "Oil_palm": 13,
+            "Rapeseed": 14,
+            "Groundnuts": 15,
+            "Pulses": 16,
+            "Citrus": 17,
+            "Date palms": 18,
+            "Grapes": 19,
+            "Cotton": 20,
+            "Cocoa": 21,
+            "Coffee": 22,
+            "Others_perennial": 23,
+            "Fodder": 24,
+            "Others_annual": 25,
+        }
+        missing_crops = ["Citrus", "Date palms", "Grapes", "Cotton", "Cocoa", "Coffee"]
 
-        years: list[str] = ["2000", "2005", "2010", "2015"]
         irrigation_types: list[str] = ["ir", "rf"]
 
-        # Initialize lists to collect DataArrays across years
-        fraction_da_list: list[xr.DataArray] = []
-        irrigated_fraction_da_list: list[xr.DataArray] = []
-
-        # Initialize a dictionary to store datasets
-        crop_data = {}
-
         # the datasets have slightly different grids, so we need to snap them to the same grid. We take the first one as reference and snap the others to it
-        first_crop_map_for_alignment = None
+        reference: None | xr.DataArray = None
 
-        for year in years:
-            crop_data[year] = {}
-            for crop in crops:
-                crop_data[year][crop] = {}
-                for irrigation in irrigation_types:
-                    dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
-                    new_dataset_name = f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
+        crop_maps_per_irrigation_type: dict[str, xr.DataArray] = {}
+        for irrigation_type in irrigation_types:
+            crop_maps: list[xr.DataArray] = []
+            for crop_name, crop_id in crops.items():
+                if crop_name in missing_crops:
+                    assert reference is not None
+                    crop_map = self.full_like(reference, fill_value=0, nodata=np.nan)
+                else:
+                    dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop_name}_{irrigation_type}"
+                    new_dataset_name = f"mirca_os_cropping_area_{year}_{resolution}_{crop_name}_{irrigation_type}"
 
                     crop_map = self.data_catalog.fetch(new_dataset_name).read()
 
                     crop_map = crop_map.isel(
-                        get_window(crop_map.x, crop_map.y, self.bounds, buffer=2)
-                    )
-
-                    crop_map = crop_map.fillna(0)
+                        get_window(
+                            crop_map.x, crop_map.y, self.bounds, buffer=100
+                        )  # use a very large buffer so that we use don't get edge effects in the interpolation
+                    ).compute()
 
                     # do the snapping unless it is the first dataset, then we take this one as reference for the others
                     # see above comment for more info
-                    if first_crop_map_for_alignment is None:
-                        first_crop_map_for_alignment = crop_map
+                    if reference is None:
+                        reference = crop_map.copy()
                     else:
-                        crop_map = snap_to_grid(crop_map, first_crop_map_for_alignment)
+                        crop_map = snap_to_grid(crop_map, reference)
 
-                    crop_data[year][crop][irrigation] = crop_map
+                    crop_map = interpolate_na_2d(crop_map)
+                    crop_map = crop_map.fillna(0)
 
-            # Initialize variables for total calculations
-            total_cropped_area = None
-            total_crop_areas = {}
+                crop_map = crop_map.isel(
+                    get_window(crop_map.x, crop_map.y, self.bounds, buffer=2)
+                )
 
-            # Calculate total crop areas and total cropped area
-            for crop in crops:
-                irrigated = crop_data[year][crop]["ir"]
-                rainfed = crop_data[year][crop]["rf"]
+                assert not np.isnan(crop_map.values).any()
 
-                total_crop = irrigated + rainfed
-                total_crop_areas[crop] = total_crop
+                crop_map.assign_coords(crop=crop_id)
 
-                if total_cropped_area is None:
-                    total_cropped_area = total_crop.copy()
-                else:
-                    total_cropped_area += total_crop
-
-            # Initialize lists to collect DataArrays for this year
-            fraction_list = []
-            irrigated_fraction_list = []
-
-            # Calculate the fraction of each crop to the total cropped area
-            for crop in crops:
-                fraction = total_crop_areas[crop] / total_cropped_area
-
-                # Assign 'crop' as a coordinate
-                fraction = fraction.assign_coords(crop=crop)
-
-                # Append to the list
-                fraction_list.append(fraction)
+                crop_maps.append(crop_map)
 
             # Concatenate the list of fractions into a single DataArray along the 'crop' dimension
-            fraction_da = xr.concat(fraction_list, dim="crop")
+            crop_map: xr.DataArray = xr.concat(crop_maps, dim="crop")
+            crop_maps_per_irrigation_type[irrigation_type] = crop_map
 
-            # Assign the 'year' coordinate and expand dimensions to include 'year'
-            fraction_da = fraction_da.assign_coords(year=year).expand_dims(dim="year")
+        crop_area_irrigated = crop_maps_per_irrigation_type["ir"].sum(dim="crop")
+        crop_area_rainfed = crop_maps_per_irrigation_type["rf"].sum(dim="crop")
+        total_crop_area = crop_area_irrigated + crop_area_rainfed
 
-            # Append to the list of all years
-            fraction_da_list.append(fraction_da)
-
-            # Calculate irrigated fractions for each crop and collect them
-            for crop in crops:
-                irrigated = crop_data[year][crop]["ir"].compute()
-                total_crop = total_crop_areas[crop]
-                irrigated_fraction = irrigated / total_crop
-
-                # Assign 'crop' as a coordinate
-                irrigated_fraction = irrigated_fraction.assign_coords(crop=crop)
-
-                # Append to the list
-                irrigated_fraction_list.append(irrigated_fraction)
-
-            # Concatenate the list of irrigated fractions into a single DataArray along the 'crop' dimension
-            irrigated_fraction_da = xr.concat(irrigated_fraction_list, dim="crop")
-
-            # Assign the 'year' coordinate and expand dimensions to include 'year'
-            irrigated_fraction_da = irrigated_fraction_da.assign_coords(
-                year=year
-            ).expand_dims(dim="year")
-
-            # Append to the list of all years
-            irrigated_fraction_da_list.append(irrigated_fraction_da)
-
-        # After processing all years, concatenate along the 'year' dimension
-        all_years_fraction_da = xr.concat(fraction_da_list, dim="year")
-        all_years_irrigated_fraction_da = xr.concat(
-            irrigated_fraction_da_list, dim="year"
+        assert (total_crop_area > 0).all(), (
+            "Total crop area must be greater than zero to compute fractions."
         )
 
-        return all_years_fraction_da, all_years_irrigated_fraction_da
+        rainfed_crop_fraction = (crop_maps_per_irrigation_type["rf"]) / total_crop_area
+        irrigated_crop_fraction = crop_maps_per_irrigation_type["ir"] / total_crop_area
+
+        assert np.allclose(
+            (rainfed_crop_fraction + irrigated_crop_fraction).sum(dim="crop"),
+            1.0,
+            atol=1e-5,
+        )
+        return rainfed_crop_fraction, irrigated_crop_fraction
 
     @build_method(depends_on=[], required=False)
     def setup_farmer_crop_calendar_multirun(
@@ -1586,16 +1552,13 @@ class Crops(BuildModelBase):
         """
         n_farmers = self.array["agents/farmers/region_id"].size
 
-        MIRCA_unit_grid = self.data_catalog.fetch("mirca2000_unit_grid").read()
+        MIRCA_unit_grid = (
+            self.data_catalog.fetch("mirca2000_unit_grid").read().astype(np.int32)
+        ).isel(band=0)
         assert isinstance(MIRCA_unit_grid, xr.DataArray)
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
-            {
-                **get_window(
-                    MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2
-                ),
-                **{"band": 0},
-            }
+            get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2)
         )
 
         crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = (
@@ -2094,208 +2057,160 @@ class Crops(BuildModelBase):
 
         Returns:
             A tuple of (farmer_crops, farmer_irrigated) arrays.
-
-        Raises:
-            ValueError: If no valid neighbor data is found while assigning crops.
         """
-        all_years_fraction_da, all_years_irrigated_fraction_da = (
-            self.get_crop_area_fractions()
+        rainfed_fraction, irrigated_fraction = self.get_crop_area_fractions(year)
+
+        n_farmers: int = farmer_mirca_units.size
+
+        # Prepare empty arrays for all farmers, to be filled in the loop below. Initialized with -1 for crops and False for irrigation.
+        farmer_crops = np.full(n_farmers, -1, dtype=np.int8)
+        farmer_irrigated = np.full(n_farmers, False, dtype=bool)
+
+        # We use a linear index to make the loops below more efficient. This also allows us to process
+        # the farmers in the same cell together, which is more efficient than processing them one by one.
+        linear_indices = get_linear_indices(rainfed_fraction)
+
+        # Reshape arrays to 2D (n_crops, n_cells) for easier indexing in the loop below
+        rainfed_fraction = rainfed_fraction.values.reshape(
+            rainfed_fraction.shape[0], -1
         )
-
-        crop_dict = {
-            "Wheat": 0,
-            "Maize": 1,
-            "Rice": 2,
-            "Barley": 3,
-            "Rye": 4,
-            "Millet": 5,
-            "Sorghum": 6,
-            "Soybeans": 7,
-            "Sunflower": 8,
-            "Potatoes": 9,
-            "Cassava": 10,
-            "Sugar_cane": 11,
-            "Sugar_beet": 12,
-            "Oil_palm": 13,
-            "Rapeseed": 14,
-            "Groundnuts": 15,
-            "Pulses": 16,
-            "Cotton": 20,
-            "Cocoa": 21,
-            "Coffee": 22,
-            "Others_perennial": 23,
-            "Fodder": 24,
-            "Others_annual": 25,
-        }
-
-        area_fraction_2000 = all_years_fraction_da.sel(year=str(year))
-        irrigated_fraction_2000 = all_years_irrigated_fraction_da.sel(year=str(year))
-        # Fill nas as there is no diff between 0 or na in code and can cause issues
-        area_fraction_2000 = area_fraction_2000.fillna(0)
-        irrigated_fraction_2000 = irrigated_fraction_2000.fillna(0)
-
-        crop_ids_in_dataarray = np.array(
-            [
-                crop_dict[crop_name]
-                for crop_name in area_fraction_2000.coords["crop"].values
-            ]
+        irrigated_fraction = irrigated_fraction.values.reshape(
+            irrigated_fraction.shape[0], -1
         )
+        MIRCA_unit_grid: ArrayInt32 = MIRCA_unit_grid.values.ravel()
 
-        mirca_crops_19_to_26 = np.full(26, -1, dtype=np.int32)
-        mirca_crops_19_to_26[crop_ids_in_dataarray] = np.arange(
-            len(crop_ids_in_dataarray)
-        )
-
-        grid_id_da = get_linear_indices(all_years_fraction_da)
-
-        ny, nx = area_fraction_2000.sizes["y"], area_fraction_2000.sizes["x"]
-
-        n_cells = grid_id_da.max().item()
-
-        farmer_cells = sample_from_map(
-            grid_id_da.values,
+        # Here, we extract the linear index for each farmer based on their location,
+        # which allows us to efficiently loop through each cell and assign crops to all farmers in that cell at once.
+        farmer_linear_indices: ArrayInt64 = sample_from_map(
+            linear_indices.values,
             farmer_locations,
-            grid_id_da.rio.transform(recalc=True).to_gdal(),
+            linear_indices.rio.transform(recalc=True).to_gdal(),
         )
 
-        crop_area_fractions = sample_from_map(
-            area_fraction_2000.values,
-            farmer_locations,
-            area_fraction_2000.rio.transform(recalc=True).to_gdal(),
-        )
-        crop_irrigated_fractions = sample_from_map(
-            irrigated_fraction_2000.values,
-            farmer_locations,
-            irrigated_fraction_2000.rio.transform(recalc=True).to_gdal(),
-        )
+        for linear_index in linear_indices.values.ravel():
+            farmers_cell_mask: ArrayBool = farmer_linear_indices == linear_index
+            n_farmer_in_cell: int = farmers_cell_mask.sum()
+            if n_farmer_in_cell == 0:
+                continue  # No farmers in this cell, skip
 
-        n_farmers = farmer_mirca_units.size
+            # Set type to np.float64 so that we can safely do normalization and don't run into
+            # issues with the fractions not summing to 1 due to rounding errors when they are in lower precision types.
+            farmer_crop_rainfed_fractions = rainfed_fraction[:, linear_index].astype(
+                np.float64
+            )
+            farmer_crop_irrigated_fractions = irrigated_fraction[
+                :, linear_index
+            ].astype(np.float64)
 
-        # Prepare empty crop arrays
-        farmer_crops = np.full(n_farmers, -1, dtype=np.int32)
-        farmer_irrigated = np.full(n_farmers, 0, dtype=np.bool_)
+            n_irrigating_farmers = round(
+                n_farmer_in_cell * farmer_crop_irrigated_fractions.sum()
+            )
+            n_rainfed_farmers = n_farmer_in_cell - n_irrigating_farmers
+            assert n_irrigating_farmers >= 0 and n_rainfed_farmers >= 0
 
-        for cell_idx in range(n_cells):
-            farmers_cell_mask = farmer_cells == cell_idx
-            nr_farmers_cell = np.count_nonzero(farmers_cell_mask)
-            if nr_farmers_cell == 0:
-                continue
+            MIRCA_unit_cell = MIRCA_unit_grid[linear_index]
 
-            crop_area_fraction = crop_area_fractions[farmer_cells == cell_idx][0]
-
-            MIRCA_unit_cell = MIRCA_unit_grid.values.ravel()[cell_idx]
+            # If given, map the MIRCA unit code to a different one (e.g. to fill in missing crop calendars with those from similar units)
             MIRCA_unit_cell = replace_crop_calendar_unit_code.get(
                 MIRCA_unit_cell, MIRCA_unit_cell
             )
 
             assert len(crop_calendar[MIRCA_unit_cell]) > 0, (
-                f"Error: No crop calendar found for cell {cell_idx} with MIRCA unit {MIRCA_unit_cell}."
+                f"Error: No crop calendar found for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
             )
 
-            available_crops = np.unique(
-                np.concat([crop for _, crop in crop_calendar[MIRCA_unit_cell]])[
-                    :, 0, ...
-                ]
+            available_crops: ArrayInt64 = np.concat(
+                [crop for _, crop in crop_calendar[MIRCA_unit_cell]]
+            )[:, 0, ...]
+            is_irrigated: ArrayInt64 = np.concat(
+                [crop for _, crop in crop_calendar[MIRCA_unit_cell]]
+            )[:, 1, ...]
+            crop_mask = available_crops != -1
+            available_crops = available_crops[crop_mask]
+            is_irrigated = is_irrigated[crop_mask].astype(
+                bool
+            )  # 1 is irrigated, 0 is rainfed
+
+            available_crops_irrigated = np.unique(available_crops[is_irrigated])
+            available_crops_rainfed = np.unique(available_crops[~is_irrigated])
+
+            # Remove crops that are not available for both rainfed and irrigated
+            available_crops_mask_rainfed = np.zeros_like(
+                farmer_crop_rainfed_fractions, dtype=bool
             )
-            available_crops = available_crops[available_crops != -1]
+            available_crops_mask_rainfed[available_crops] = True
+            farmer_crop_rainfed_fractions[~available_crops_mask_rainfed] = 0
 
-            if crop_area_fraction.sum() == 0:
-                # Expand the search radius until valid data is found
-                found_valid_neighbor = False
-                max_radius = max(nx, ny)  # Maximum possible radius
-                radius = 1
-                while not found_valid_neighbor and radius <= max_radius:
-                    neighbor_ids = get_neighbor_cell_ids_for_linear_indices(
-                        cell_idx, nx, ny, radius
-                    )
-                    for neighbor_id in neighbor_ids:
-                        if neighbor_id not in farmer_cells:
-                            continue
+            available_crops_mask_irrigated = np.zeros_like(
+                farmer_crop_irrigated_fractions, dtype=bool
+            )
+            available_crops_mask_irrigated[available_crops] = True
+            farmer_crop_irrigated_fractions[~available_crops_mask_irrigated] = 0
 
-                        neighbor_crop_area_fraction = crop_area_fractions[
-                            farmer_cells == neighbor_id
-                        ][0]
-                        if neighbor_crop_area_fraction.sum() != 0:
-                            # Found valid neighbor
-                            crop_area_fraction = neighbor_crop_area_fraction
-                            found_valid_neighbor = True
-                            break
-                    if not found_valid_neighbor:
-                        radius += 1  # Increase the search radius
-                if not found_valid_neighbor:
-                    # No valid data found even after expanding radius
-                    raise ValueError(
-                        f"No valid data found for cell {cell_idx} after searching up to radius {radius - 1}."
-                    )
-
-            # ensure fractions sum to 1
-            area_per_crop_rotation_26 = crop_area_fraction[mirca_crops_19_to_26]
-            area_per_crop_rotation_26[mirca_crops_19_to_26 == -1] = 0
-
-            available_crops_mask = np.zeros_like(area_per_crop_rotation_26, dtype=bool)
-            available_crops_mask[available_crops] = True
-            area_per_crop_rotation_26[~available_crops_mask] = 0
-
-            assert area_per_crop_rotation_26.sum() > 0, (
-                "Error: No crops available for this cell"
+            # Normalize the area fractions
+            farmer_crop_rainfed_fractions = (
+                farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
+            )
+            farmer_crop_irrigated_fractions = (
+                farmer_crop_irrigated_fractions / farmer_crop_irrigated_fractions.sum()
             )
 
-            # normalize the area fractions
-            area_per_crop_rotation_26 = (
-                area_per_crop_rotation_26 / area_per_crop_rotation_26.sum()
-            )
-
-            # discard crops with area smaller than minimum_area_ratio
-            area_per_crop_rotation_26[
-                area_per_crop_rotation_26 < minimum_area_ratio
+            # Discard crops with area smaller than minimum_area_ratio
+            farmer_crop_rainfed_fractions[
+                farmer_crop_rainfed_fractions < minimum_area_ratio
+            ] = 0
+            farmer_crop_irrigated_fractions[
+                farmer_crop_irrigated_fractions < minimum_area_ratio
             ] = 0
 
-            # normalize the area fractions again
-            area_per_crop_rotation_26 = (
-                area_per_crop_rotation_26 / area_per_crop_rotation_26.sum()
+            assert not farmer_crop_rainfed_fractions.sum() == 0, (
+                f"Error: All rainfed crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+            )
+            assert not farmer_crop_irrigated_fractions.sum() == 0, (
+                f"Error: All irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
             )
 
-            farmer_indices_in_cell = np.where(farmers_cell_mask)[0]
-            farmer_crop_rotations = np.random.choice(
-                area_per_crop_rotation_26.size,
-                size=len(farmer_indices_in_cell),
+            # Normalize the area fractions again after removing small crops
+            farmer_crop_rainfed_fractions = (
+                farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
+            )
+            farmer_crop_irrigated_fractions = (
+                farmer_crop_irrigated_fractions / farmer_crop_irrigated_fractions.sum()
+            )
+
+            # Choose crops for rainfed and irrigated farmers based on the fractions, then combine and shuffle them to assign to farmers in the cell
+            # TODO: Consider farm area here
+            rainfed_crop_choices = np.random.choice(
+                farmer_crop_rainfed_fractions.size,
+                size=n_rainfed_farmers,
                 replace=True,
-                p=area_per_crop_rotation_26,
+                p=farmer_crop_rainfed_fractions,
+            )
+            irrigated_crop_choices = np.random.choice(
+                farmer_crop_irrigated_fractions.size,
+                size=n_irrigating_farmers,
+                replace=True,
+                p=farmer_crop_irrigated_fractions,
+            )
+            crop_choices = np.concatenate(
+                [rainfed_crop_choices, irrigated_crop_choices]
+            )
+            is_irrigated_choices = np.concatenate(
+                [
+                    np.zeros(n_rainfed_farmers, dtype=bool),
+                    np.ones(n_irrigating_farmers, dtype=bool),
+                ]
             )
 
-            # assign to farmers
-            farmer_crops[farmer_indices_in_cell] = farmer_crop_rotations
+            # Shuffle the choices to avoid any ordering effects
+            # Crops and irrigation are shuffled together to maintain the correct pairing
+            shuffle_indices = np.random.permutation(len(crop_choices))
+            crop_choices = crop_choices[shuffle_indices]
+            is_irrigated_choices = is_irrigated_choices[shuffle_indices]
 
-            # Determine irrigating farmers
-            chosen_crops = np.unique(farmer_crop_rotations)
-
-            crop_irrigated_fraction_19 = crop_irrigated_fractions[
-                farmer_cells == cell_idx
-            ][0]
-            crop_irrigated_fraction_26 = crop_irrigated_fraction_19[
-                mirca_crops_19_to_26
-            ]
-            crop_irrigated_fraction_26[mirca_crops_19_to_26 == -1] = np.nan
-
-            for c in chosen_crops:
-                # Indices of farmers in the cell assigned to crop c
-                farmers_with_crop_c_in_cell = np.where(farmer_crop_rotations == c)[0]
-                N_c = len(farmers_with_crop_c_in_cell)
-                f_c = crop_irrigated_fraction_26[c]
-                if np.isnan(f_c) or f_c <= 0:
-                    continue  # No irrigation for this crop
-                N_irrigated = int(round(N_c * f_c))
-                if N_irrigated > 0:
-                    # Randomly select N_irrigated farmers from the N_c farmers
-                    irrigated_indices_in_cell = np.random.choice(
-                        farmers_with_crop_c_in_cell, size=N_irrigated, replace=False
-                    )
-                    # Get the overall farmer indices
-                    overall_farmer_indices = farmer_indices_in_cell[
-                        irrigated_indices_in_cell
-                    ]
-                    # Set irrigation status to True for these farmers
-                    farmer_irrigated[overall_farmer_indices] = True
+            # Finally assign to farmers
+            farmer_crops[farmers_cell_mask] = crop_choices
+            farmer_irrigated[farmers_cell_mask] = is_irrigated_choices
 
         assert not (farmer_crops == -1).any(), (
             "Error: some farmers have no crops assigned"
