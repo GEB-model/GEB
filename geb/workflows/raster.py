@@ -1063,7 +1063,7 @@ def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
         nodata: The nodata value to treat as missing.
 
     Returns:
-        A new DataArray with NaN values interpolated.
+        A new 2D NumPy array with missing values interpolated.
     """
     mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
 
