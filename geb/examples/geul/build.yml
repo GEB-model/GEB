@@ -177,10 +177,6 @@ setup_crop_prices:
 setup_flood_damage_model:
   region: global
 
-setup_subnational_income_distribution:
-
-setup_flood_damage_model:
-
 setup_forcing:
   forcing: ERA5
 
