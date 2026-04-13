@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 import geopandas as gpd
+from shapely import union_all
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -1425,30 +1426,68 @@ class Agents(BuildModelBase):
 
         return buildings
 
-    def calculate_distance_parameters(self, buildings: gpd.GeoDataFrame):
+    def calculate_distance_parameters(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Calculate distances from buildings to rivers and coastlines.
 
-        rivers = gpd.read_parquet("input/" + self.files["geom"]["routing/rivers"])
-        coastline = gpd.read_parquet(
+        Args:
+            buildings: Building geometries used to compute distances.
+
+        Returns:
+            Buildings with distance columns appended (meters).
+        """
+        rivers: gpd.GeoDataFrame = gpd.read_parquet(
+            "input/" + self.files["geom"]["routing/rivers"]
+        )
+        coastline: gpd.GeoDataFrame = gpd.read_parquet(
             "input/" + self.files["geom"]["coastal/coastlines"]
         )
         region_centroid = self.region.union_all().centroid
-        utm_zone = get_utm_zone(region_centroid.x, region_centroid.y)
+        utm_zone: str = get_utm_zone(region_centroid.x, region_centroid.y)
         buildings_crs = buildings.crs
+        buffer_distance_m: float = 50_000.0
 
         # Ensure same CRS (projected!)
         buildings = buildings.to_crs(utm_zone)
         rivers = rivers.to_crs(utm_zone)
         coastline = coastline.to_crs(utm_zone)
 
+        # Buffer rivers and coastlines to subset buildings for distance calculations.
+        rivers_buffer = union_all(rivers.geometry.buffer(buffer_distance_m))
+        coastline_buffer = union_all(coastline.geometry.buffer(buffer_distance_m))
+        within_buffer_mask = buildings.geometry.within(
+            rivers_buffer
+        ) | buildings.geometry.within(coastline_buffer)
+        buildings_in_buffer = buildings.loc[within_buffer_mask]
+
         # Distance to river
-        buildings["distance_to_river_m"] = buildings.sjoin_nearest(
-            rivers, how="left", distance_col="distance_to_river"
-        )["distance_to_river"].astype(np.int32)
+        buildings.loc[within_buffer_mask, "distance_to_river_m"] = (
+            buildings_in_buffer.sjoin_nearest(
+                rivers, how="left", distance_col="distance_to_river"
+            )["distance_to_river"].astype(np.int32)
+        )
 
         # Distance to coastline
-        buildings["distance_to_coastline_m"] = buildings.sjoin_nearest(
-            coastline, how="left", distance_col="distance_to_coastline"
-        )["distance_to_coastline"].astype(np.int32)
+        buildings.loc[within_buffer_mask, "distance_to_coastline_m"] = (
+            buildings_in_buffer.sjoin_nearest(
+                coastline, how="left", distance_col="distance_to_coastline"
+            )["distance_to_coastline"].astype(np.int32)
+        )
+
+        missing_distance_mask = (
+            buildings["distance_to_river_m"].isna()
+            | buildings["distance_to_coastline_m"].isna()
+        )
+        if missing_distance_mask.any():
+            # Set distances for buildings outside the buffer to the buffer size.
+            buffer_distance_int_m = np.int32(buffer_distance_m)
+            buildings.loc[missing_distance_mask, "distance_to_river_m"] = (
+                buffer_distance_int_m
+            )
+            buildings.loc[missing_distance_mask, "distance_to_coastline_m"] = (
+                buffer_distance_int_m
+            )
 
         # reproject back to original CRS
         buildings = buildings.to_crs(buildings_crs)
