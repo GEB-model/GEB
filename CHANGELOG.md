@@ -1,4 +1,9 @@
 # dev
+- Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
+- Remove setup_irrigation_sources from build process as it is not needed anymore.
+
+To support this version:
+- Remove `setup_irrigation_sources` from build.yml.
 
 # v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
