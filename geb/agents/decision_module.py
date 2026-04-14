@@ -10,6 +10,56 @@ class DecisionModule:
     """This class implements the decision module for drought adaptation."""
 
     @staticmethod
+    def calculate_riverine_amenity(x_j: float, GDP_i_t: float, phi_i: float) -> float:
+        """This function calculates the riverine amenity value for a given distance to the river.
+
+        The function is based on a piecewise linear function that decreases with distance from the river.
+        based on Tesselaar, M., Botzen, W.J.W., Tiggeloven, T. et al. Flood insurance is a driver of population growth in European floodplains. Nat Commun 14, 7483 (2023). https://doi.org/10.1038/s41467-023-43229-8
+
+        Args:
+            x_j: Distance to the river (m)
+            GDP_i_t: GDP of the household at time t
+            phi_i: Amenity parameter for the household
+
+        Returns:
+            Riverine amenity value
+        """
+        x_j *= 0.001  # convert to km
+        if x_j < 10:
+            value = 4000 - 150 * x_j
+        elif 10 < x_j < 25:
+            value = 2500 - 100 * (x_j - 10)
+        elif 25 < x_j < 50:
+            value = 1000 - 40 * (x_j - 25)
+        else:  # x_j >= 50
+            value = 0
+        return GDP_i_t * phi_i * value
+
+    @staticmethod
+    def calculate_coastal_amenity(x_j: float, GDP_i_t: float, phi_i: float) -> float:
+        """This function calculates the coastal amenity value for a given distance to the coast.
+
+        The function is based on a piecewise linear function that decreases with distance from the coast.
+        based on Tesselaar, M., Botzen, W.J.W., Tiggeloven, T. et al. Flood insurance is a driver of population growth in European floodplains. Nat Commun 14, 7483 (2023). https://doi.org/10.1038/s41467-023-43229-8
+
+        Args:
+            x_j: Distance to the coast (m)
+            GDP_i_t: GDP of the household at time t
+            phi_i: Amenity parameter for the household
+
+        Returns:
+            Coastal amenity value
+        """
+        x_j *= 0.001  # convert to km
+        if x_j < 100:
+            value = 5000 - 30 * x_j
+        elif 100 < x_j < 500:
+            value = 2000 - 5 * (x_j - 100)
+        else:  # x_j >= 500
+            value = 0
+        return GDP_i_t * phi_i * value
+
+    @staticmethod
     @njit(cache=True)
     def IterateThroughFloods(
         NPV_summed: np.ndarray,
