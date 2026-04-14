@@ -1220,7 +1220,7 @@ class Hydrography(BuildModelBase):
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             command_area_raster = rasterize_like(
-                gdf=command_areas,
+                gdf=command_areas_dissolved,
                 column="waterbody_id",
                 raster=self.grid["mask"],
                 nodata=-1,
@@ -1230,7 +1230,7 @@ class Hydrography(BuildModelBase):
             self.set_grid(command_area_raster, name="waterbodies/command_area")
 
             subcommand_area_raster = rasterize_like(
-                gdf=command_areas,
+                gdf=command_areas_dissolved,
                 column="waterbody_id",
                 raster=self.subgrid["mask"],
                 nodata=-1,

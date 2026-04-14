@@ -774,7 +774,7 @@ class Insurers(AgentBaseClass):
 
         insured_yearly_yield_ratio = insured_yearly_income / masked_potential_income
 
-        insured_yearly_yield_ratio = np.clip(insured_yearly_yield_ratio.data, 0, 1)
+        insured_yearly_yield_ratio = np.clip(insured_yearly_yield_ratio, 0, 1)
 
         insured_yield_probability_relation = (
             self.agents.crop_farmers.calculate_yield_spei_relation_group_lin(

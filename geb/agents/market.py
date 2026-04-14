@@ -162,7 +162,6 @@ class Market(AgentBaseClass):
                 "[PRICE DEBUG] production <= 0 crops:", bad, "values:", production[bad]
             )
 
-        print("Look into increasing yield and increasing price")
         for crop in range(self.var.production.shape[0]):
             prod = production[crop]
             if prod.sum() == 0:
