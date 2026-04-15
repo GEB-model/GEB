@@ -1484,6 +1484,9 @@ class SFINCSRootModel:
         # apply sea level rise adjustment if provided
         if sea_level_rise is not None and year is not None:
             # get sea level rise adjustment for the specified year without mutating
+            year = max(
+                [sea_level_rise.index.year.min(), year]
+            )  # ensure year is within bounds of the data
             # the original index (which may be reused elsewhere as a DatetimeIndex)
             year_mask = sea_level_rise.index.year == year  # ty:ignore[unresolved-attribute]
             if not year_mask.any():
