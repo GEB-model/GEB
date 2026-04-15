@@ -313,7 +313,7 @@ def test_spinup() -> None:
         for ID, river in outflow_rivers.iterrows():
             outflow_data: pd.DataFrame = read_table(
                 routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.parquet",
-            ).set_index("time")[f"river_outflow_hourly_m3_per_s_{ID}"]
+            )[f"river_outflow_hourly_m3_per_s_{ID}"]
 
             outflow_xy = river["hydrography_xy"][-1]
 
