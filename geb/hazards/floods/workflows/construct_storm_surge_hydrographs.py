@@ -114,7 +114,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
     df_event = {}
     df_event_spring = {}
 
-    for station in station_ids["station_id"]:
+    for station in station_ids.index.values:
         df_event[station] = {}
         df_event_spring[station] = {}
         waterlevelpd = waterlevels[int(station)]
@@ -429,11 +429,11 @@ def generate_surge_hydrograph(
         xx = (
             np.arange(-len(normalized_before_25) + 1, len(normalized_after_25_plot)) / 6
         )
-        if k == 0:
+        if k == 0 and make_plot:
             plt.plot(
                 xx, yy, linewidth=0.5, color="grey", alpha=0.5, label="storm surges"
             )
-        else:
+        elif k != 0 and make_plot:
             plt.plot(xx, yy, linewidth=0.5, color="grey", alpha=0.5)
 
         for l in df_before_peak.index.values:
