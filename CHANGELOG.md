@@ -2,6 +2,7 @@
 - Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
 - Remove setup_irrigation_sources from build process as it is not needed anymore.
 - Fix basin delineation for endorheic basins.
+- Reduce RAM usage of reading GTSM data.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
