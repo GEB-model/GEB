@@ -21,6 +21,7 @@ from zarr.codecs.numcodecs import (
 )
 
 from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
+from geb.hydrology.routing import get_upstream_represented_xys
 from geb.module import Module
 from geb.store import DynamicArray
 from geb.workflows.io import fast_rmtree, read_geom, write_table
@@ -461,8 +462,8 @@ def get_filters_and_compressors(
     and final compression ratio:
     - Floating-point types: BitRound (lossy precision reduction) followed by
       byte Shuffle (improves compressibility of mantissa bits) then ZstdCodec.
-      keepbits values are chosen to retain ~0.012 % relative error (float32/16)
-      or higher precision (float64).
+      keepbits values are chosen to retain ~0.01% relative error,
+      which is negligible for most applications.
     - Boolean: PackBits to pack 8 booleans per byte, then ZstdCodec.
     - All other types (integers, etc.): only ZstdCodec; Shuffle is omitted
       because unstructured integer data rarely benefits from byte-shuffling.
@@ -810,32 +811,11 @@ class Reporter:
 
                         outflow_reporters = {}
 
-                        def get_upstream_represented_xys(
-                            river_id: int,
-                        ) -> list[tuple[int, int]]:
-                            """Recursively find the nearest represented upstream rivers.
-
-                            Args:
-                                river_id: The ID of the river to find the upstream represented rivers for.
-
-                            Returns:
-                                A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
-                            """
-                            river = all_rivers.loc[river_id]
-                            if river["represented_in_grid"]:
-                                return [river["hydrography_xy"][-1]]
-
-                            upstream_rivers = all_rivers[
-                                all_rivers["downstream_ID"] == river_id
-                            ]
-                            xys = []
-                            for idx, _ in upstream_rivers.iterrows():
-                                xys.extend(get_upstream_represented_xys(idx))
-                            return xys
-
                         for river_ID, river in outflow_rivers.iterrows():
                             assert isinstance(river_ID, int)
-                            xys = get_upstream_represented_xys(river_ID)
+                            xys: list[tuple[int, int]] = get_upstream_represented_xys(
+                                river_ID, all_rivers
+                            )
                             for i, xy in enumerate(xys):
                                 # if there are multiple branches, we append a suffix to the name
                                 suffix = f"_{i}" if len(xys) > 1 else ""
