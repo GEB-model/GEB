@@ -429,11 +429,11 @@ def generate_surge_hydrograph(
         xx = (
             np.arange(-len(normalized_before_25) + 1, len(normalized_after_25_plot)) / 6
         )
-        if k == 0:
+        if k == 0 and make_plot:
             plt.plot(
                 xx, yy, linewidth=0.5, color="grey", alpha=0.5, label="storm surges"
             )
-        else:
+        elif k != 0 and make_plot:
             plt.plot(xx, yy, linewidth=0.5, color="grey", alpha=0.5)
 
         for l in df_before_peak.index.values:
