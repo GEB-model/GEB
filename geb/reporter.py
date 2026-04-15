@@ -611,8 +611,8 @@ def prepare_gridded_group(
     # Pre-allocate the writing buffer for the chunks
     config["_chunk_data"] = np.full(
         (lat.size, lon.size, time_chunk_size),
-        np.nan,
-        dtype=np.float32,
+        fill_value,
+        dtype=example_value.dtype,
     )
 
 
@@ -633,6 +633,9 @@ def prepare_agent_group(
         example_value: An example value to determine the data type.
         chunk_target_size_bytes: The target size of the chunk in bytes.
         compression_level: The compression level for the zarr array.
+
+    Raises:
+        ValueError: If the example value type is not recognized.
     """
     root_group = config["_root_group"]
 
@@ -651,7 +654,7 @@ def prepare_agent_group(
     time_group[:] = time
 
     # Determine chunk size and shape based on example value
-    if isinstance(example_value, (float, int)):
+    if isinstance(example_value, (float, int, bool)):
         shape = (time_group.size,)
         time_chunk_size = get_time_chunk_size(
             np.dtype(type(example_value)),
@@ -661,9 +664,16 @@ def prepare_agent_group(
         if isinstance(example_value, float):
             dtype_ = np.float32
             example_value = np.array(example_value, dtype=np.float32)
-        else:
+        elif isinstance(example_value, bool):
+            dtype_ = bool
+            example_value = np.array(example_value, dtype=bool)
+        elif isinstance(example_value, int):
             dtype_ = np.int32
             example_value = np.array(example_value, dtype=np.int32)
+        else:
+            raise ValueError(
+                f"Example value of type {type(example_value)} not recognized."
+            )
         time_chunk_size = min(time_chunk_size, time_group.size)
         chunks = (time_chunk_size,)
         array_dimensions = ["time"]
