@@ -3,6 +3,7 @@
 - Remove setup_irrigation_sources from build process as it is not needed anymore.
 - Fix basin delineation for endorheic basins.
 - Fix division by zero error for reservoirs that have no long term inflow.
+- Reduce RAM usage of reading GTSM data.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.

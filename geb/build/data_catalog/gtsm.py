@@ -233,39 +233,40 @@ class GTSM_timeseries(Adapter):
             if final_zarr_fp.exists():
                 continue
 
-            zip_fp = (
-                variable_dir
-                / f"reanalysis_{variable}_10min_{year_batch[0]}_{year_batch[-1]}.zip"
-            )
-            if not zip_fp.exists():
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_dir_path = Path(temp_dir)
+                zip_fp = (
+                    temp_dir_path
+                    / f"reanalysis_{variable}_10min_{year_batch[0]}_{year_batch[-1]}.zip"
+                )
                 self.logger.info(
                     f"Downloading GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]}"
                 )
                 request = self.construct_request(year_batch, variable)
                 self.download_data(request, str(zip_fp))
 
-            with zipfile.ZipFile(zip_fp, "r") as zip_ref:
-                nc_files = [
-                    Path(f"reanalysis_{name_to_check}_10min_{year}_{month:02d}_v3.nc")
-                    for month in range(1, 13)
-                    for year in year_batch
-                ]
+                with zipfile.ZipFile(zip_fp, "r") as zip_ref:
+                    nc_files = [
+                        Path(
+                            f"reanalysis_{name_to_check}_10min_{year}_{month:02d}_v3.nc"
+                        )
+                        for month in range(1, 13)
+                        for year in year_batch
+                    ]
 
-                self.logger.info(
-                    f"Processing GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]}"
-                )
-                self.logger.debug(
-                    f"Extracting and processing {len(nc_files)} netCDF files in batches. This will take a while but only has to be done once."
-                )
+                    self.logger.info(
+                        f"Processing GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]}"
+                    )
+                    self.logger.debug(
+                        f"Extracting and processing {len(nc_files)} netCDF files in batches. This will take a while but only has to be done once."
+                    )
 
-                station_chunksize = 1000
-                zarr_das: list[xr.DataArray] = []
-                for nc_file in tqdm.tqdm(nc_files):
-                    # decompress nc file to temporary file
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        temp_dir = Path(temp_dir)
-                        temp_nc_path = temp_dir / nc_file.name
-                        zip_ref.extract(str(nc_file), path=temp_dir)
+                    station_chunksize = 100
+                    zarr_das: list[xr.DataArray] = []
+                    for nc_file in tqdm.tqdm(nc_files):
+                        # decompress nc file to temporary file
+                        temp_nc_path = temp_dir_path / nc_file.name
+                        zip_ref.extract(str(nc_file), path=temp_dir_path)
 
                         da: xr.DataArray = xr.open_dataarray(
                             temp_nc_path, engine="netcdf4"
@@ -280,10 +281,6 @@ class GTSM_timeseries(Adapter):
                                 path=None,
                                 crs=4326,
                                 compression_level=1,
-                                shards={
-                                    "stations": len(da.stations) // station_chunksize
-                                    + 1
-                                },
                                 filters=filters,
                                 progress=False,
                             )
@@ -300,31 +297,28 @@ class GTSM_timeseries(Adapter):
                                 ),
                                 crs="EPSG:4326",
                             ).set_index("station_id")  # ty:ignore[invalid-assignment]
-                            # Keep a variable-local copy next to the cached data so each
-                            # variable directory is self-contained.
                             write_geom(
                                 station_locations,
                                 variable_station_locations_file,
                                 write_covering_bbox=True,
                             )
 
-                da: xr.DataArray = xr.concat(
-                    zarr_das, dim="time", combine_attrs="drop_conflicts"
-                ).chunk({"time": -1})
-                da.attrs["_FillValue"] = np.nan
+                    da_merged: xr.DataArray = xr.concat(
+                        zarr_das, dim="time", combine_attrs="drop_conflicts"
+                    ).chunk({"time": -1})
+                    da_merged.attrs["_FillValue"] = np.nan
 
-                self.logger.info(
-                    f"Writing merged GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]} to Zarr format. This will take a while but only has to be done once."
-                )
-                write_zarr(
-                    da,
-                    final_zarr_fp,
-                    crs=4326,
-                    compression_level=22,
-                    filters=filters,
-                )
-
-            zip_fp.unlink()
+                    self.logger.info(
+                        f"Writing merged GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]} to Zarr format. This will take a while but only has to be done once."
+                    )
+                    write_zarr(
+                        da_merged,
+                        final_zarr_fp,
+                        crs=4326,
+                        compression_level=22,
+                        filters=filters,
+                        shards={"stations": 20},
+                    )
 
         return self
 
@@ -419,11 +413,15 @@ class GTSM_timeseries(Adapter):
 
         das: list[xr.DataArray] = []
         for zarr_path in zarr_paths:
-            das.append(xr.open_dataarray(zarr_path, engine="zarr", chunks={"time": -1}))
+            das.append(
+                xr.open_dataarray(
+                    zarr_path, engine="zarr", chunks={"time": -1, "stations": 100}
+                )
+                .isel(stations=station_locations.index.values)
+                .compute()
+            )
 
-        da = xr.concat(das, dim="time", combine_attrs="drop_conflicts").sel(
-            stations=station_locations.index
-        )
+        da: xr.DataArray = xr.concat(das, dim="time")
 
         gtsm_data_region_pd: pd.DataFrame = da.to_pandas()
 

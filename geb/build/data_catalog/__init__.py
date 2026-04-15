@@ -899,7 +899,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     "gtsm_timeseries": {
         "adapter": GTSM_timeseries(
             folder="gtsm",
-            local_version=2,
+            local_version=3,
             filename="placeholder.zip",
             cache="global",
         ),
