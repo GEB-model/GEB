@@ -1468,12 +1468,13 @@ class SFINCSRootModel:
 
         # apply sea level rise adjustment if provided
         if sea_level_rise is not None and year is not None:
-            # get sea level rise adjustment for the specified year without mutating
-            year = max(
-                [sea_level_rise.index.year.min(), year]
-            )  # ensure year is within bounds of the data
-            # the original index (which may be reused elsewhere as a DatetimeIndex)
-            year_mask = sea_level_rise.index.year == year  # ty:ignore[unresolved-attribute]
+            available_years = sea_level_rise.index.year  # ty:ignore[unresolved-attribute]
+            min_available_year = available_years.min()
+            max_available_year = available_years.max()
+            # Clamp to the available sea level rise year range so out-of-range requests
+            # use the nearest supported year instead of failing with an empty selection.
+            year = min(max(year, min_available_year), max_available_year)
+            year_mask = available_years == year
             if not year_mask.any():
                 raise ValueError(f"No sea level rise data found for year {year}.")
             # select the first matching row; this results in a Series indexed by station ID
