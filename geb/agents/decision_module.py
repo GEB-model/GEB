@@ -51,13 +51,11 @@ class DecisionModule:
             Coastal amenity value
         """
         x_j *= 0.001  # convert to km
-        if x_j < 100:
-            value = 5000 - 30 * x_j
-        elif 100 < x_j < 500:
-            value = 2000 - 5 * (x_j - 100)
-        else:  # x_j >= 500
-            value = 0
-        return GDP_i_t * phi_i * value
+        x_arr = np.array([0, 0.5, 1, 10, 12], dtype=np.float32)
+        y_arr = np.array([0.6, 0.6, 0.1, 0.03, 0], dtype=np.float32)
+        amenity_value = np.interp(x_j, x_arr, y_arr)
+
+        return GDP_i_t * phi_i * amenity_value
 
     @staticmethod
     @njit(cache=True)
