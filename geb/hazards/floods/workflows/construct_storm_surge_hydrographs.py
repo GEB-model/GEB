@@ -114,7 +114,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
     df_event = {}
     df_event_spring = {}
 
-    for station in station_ids["station_id"]:
+    for station in station_ids.index.values:
         df_event[station] = {}
         df_event_spring[station] = {}
         waterlevelpd = waterlevels[int(station)]
