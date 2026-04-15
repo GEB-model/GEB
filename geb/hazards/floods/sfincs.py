@@ -168,7 +168,7 @@ class SFINCSRootModel:
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]],
         subbasins: gpd.GeoDataFrame,
         rivers: gpd.GeoDataFrame,
-        discharge: xr.DataArray,
+        discharge: pd.DataFrame,
         river_width_alpha: npt.NDArray[np.float32],
         river_width_beta: npt.NDArray[np.float32],
         mannings: xr.DataArray,
@@ -195,7 +195,7 @@ class SFINCSRootModel:
             DEMs: List of DEM datasets to use for the model. Should be a list of dictionaries with 'path' and 'name' keys.
             subbasins: A GeoDataFrame defining the subbasins of interest.
             rivers: A GeoDataFrame containing river segments.
-            discharge: An xarray DataArray containing discharge values for the rivers in m^3/s.
+            discharge: A pandas DataFrame containing discharge values for the rivers in m^3/s.
             river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
             river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
             mannings: A xarray DataArray of Manning's n values for the rivers.
@@ -1343,7 +1343,7 @@ class SFINCSRootModel:
 
     def estimate_discharge_for_return_periods(
         self,
-        discharge: xr.DataArray,
+        discharge: pd.DataFrame,
         rising_limb_hours: int = 72,
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
         p_value_threshold: float = 0.05,
@@ -1354,7 +1354,7 @@ class SFINCSRootModel:
         """Estimate discharge for specified return periods and create hydrographs.
 
         Args:
-            discharge: xr.DataArray containing the discharge data
+            discharge: pd.DataFrame containing the discharge data
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
             p_value_threshold: Anderson-Darling p-value threshold for threshold selection. Defaults to 0.05.
