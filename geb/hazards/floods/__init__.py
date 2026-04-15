@@ -279,7 +279,7 @@ class Floods(Module):
             subbasins=subbasins,
             DEMs=self.DEM_config,
             rivers=rivers,
-            discharge=self.discharge_spinup,
+            discharge_by_river=self.discharge_by_river_spinup,
             river_width_alpha=self.model.hydrology.grid.decompress(
                 self.model.hydrology.grid.var.river_width_alpha
             ),
@@ -636,7 +636,7 @@ class Floods(Module):
                     coastal=False,
                 )
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge=self.discharge_spinup,
+                    discharge_by_river=self.discharge_by_river_spinup,
                     return_periods=self.config["return_periods"],
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
@@ -763,7 +763,7 @@ class Floods(Module):
         )  # this is a deque, so it will automatically remove the oldest runoff
 
     @property
-    def discharge_spinup(self) -> pd.DataFrame:
+    def discharge_by_river_spinup(self) -> pd.DataFrame:
         """Open the discharge datasets from the model output folder.
 
         Returns:
@@ -772,11 +772,13 @@ class Floods(Module):
         Raises:
             ValueError: If there is not enough data available for reliable spinup.
         """
-        rivers: gpd.GeoDataFrame = self.model.hydrology.routing.get_active_rivers()
+        rivers: gpd.GeoDataFrame = (
+            self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
+        )
         discharge = pd.DataFrame()
         for river_id, river in rivers.iterrows():
             discharge[river_id] = read_table(
-                self.model.reporter.report_folder.parent
+                self.model.report_folder.parent
                 / "spinup"
                 / "hydrology.routing"
                 / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
@@ -784,6 +786,9 @@ class Floods(Module):
 
         start_time = discharge.index[0] + pd.DateOffset(years=10)
         discharge = discharge.loc[start_time:]
+
+        # set the frequency of the index
+        discharge.index.freq = pd.infer_freq(discharge.index)
 
         # make sure there is at least 20 years of data
         if (discharge.index[-1].year - discharge.index[0].year) < 20:

@@ -715,7 +715,7 @@ def prepare_agent_group(
 class Reporter:
     """This class is used to report data to disk."""
 
-    def __init__(self, model: GEBModel, clean: bool) -> None:
+    def __init__(self, model: GEBModel, report_folder: Path, clean: bool) -> None:
         """The constructor for the Reporter class.
 
         Loops over the reporter configuration and creates the necessary files and data structures,
@@ -733,6 +733,7 @@ class Reporter:
 
         Args:
             model: The GEB model instance.
+            report_folder: The folder where the reports will be saved.
             clean: If True, the report folder is cleaned at the start of the model run.
 
         Raises:
@@ -747,7 +748,7 @@ class Reporter:
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
-        self.report_folder = self.model.output_folder / "report" / self.model.run_name
+        self.report_folder = report_folder
         # optionally clean report model at start of run
         if clean and self.report_folder.exists():
             fast_rmtree(self.report_folder)
@@ -792,7 +793,9 @@ class Reporter:
                         )
                     elif module_name == "_outflow_points" and module_values is True:
                         routing = self.model.hydrology.routing
-                        outflow_rivers = routing.get_active_rivers()
+                        outflow_rivers = (
+                            routing.get_active_and_downstream_outflow_rivers()
+                        )
                         all_rivers = routing.rivers
 
                         outflow_reporters = {}

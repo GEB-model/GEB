@@ -69,9 +69,8 @@ from .workflows.outflow import create_outflow_in_mask
 from .workflows.utils import (
     create_hourly_hydrograph,
     export_rivers,
-    get_discharge_and_river_parameters_by_river,
     get_representative_river_points,
-    get_start_point,
+    get_river_parameters_by_river,
     make_relative_paths,
     read_flood_depth,
     run_sfincs_simulation,
@@ -168,7 +167,7 @@ class SFINCSRootModel:
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]],
         subbasins: gpd.GeoDataFrame,
         rivers: gpd.GeoDataFrame,
-        discharge: pd.DataFrame,
+        discharge_by_river: pd.DataFrame,
         river_width_alpha: npt.NDArray[np.float32],
         river_width_beta: npt.NDArray[np.float32],
         mannings: xr.DataArray,
@@ -195,7 +194,7 @@ class SFINCSRootModel:
             DEMs: List of DEM datasets to use for the model. Should be a list of dictionaries with 'path' and 'name' keys.
             subbasins: A GeoDataFrame defining the subbasins of interest.
             rivers: A GeoDataFrame containing river segments.
-            discharge: A pandas DataFrame containing discharge values for the rivers in m^3/s.
+            discharge_by_river: A pandas DataFrame containing discharge values for the rivers in m^3/s.
             river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
             river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
             mannings: A xarray DataArray of Manning's n values for the rivers.
@@ -487,14 +486,11 @@ class SFINCSRootModel:
                     get_representative_river_points(ID, self.rivers)
                 )
 
-            discharge_by_river, river_parameters = (
-                get_discharge_and_river_parameters_by_river(
-                    self.active_rivers.index.tolist(),
-                    river_representative_points,
-                    discharge=discharge,
-                    river_width_alpha=river_width_alpha,
-                    river_width_beta=river_width_beta,
-                )
+            river_parameters: pd.DataFrame = get_river_parameters_by_river(
+                self.active_rivers.index.tolist(),
+                river_representative_points,
+                river_width_alpha=river_width_alpha,
+                river_width_beta=river_width_beta,
             )
 
             # resample to daily frequency because this is the frequency for the river
@@ -1244,7 +1240,7 @@ class SFINCSRootModel:
     def assign_return_periods(
         self,
         rivers: gpd.GeoDataFrame,
-        discharge_dataframe: pd.DataFrame,
+        discharge_by_river: pd.DataFrame,
         return_periods: list[int | float],
         prefix: str = "Q",
         min_exceed: int = 30,
@@ -1268,7 +1264,7 @@ class SFINCSRootModel:
 
         Args:
             rivers: GeoDataFrame with river IDs that must be assigned a return period.
-            discharge_dataframe: Time series DataFrame with datetime index containing discharge data for all rivers (m³/s).
+            discharge_by_river: Time series DataFrame with datetime index containing discharge data for all rivers (m³/s).
             return_periods: List of return periods in years to compute return levels for.
             prefix: Column prefix for output return level columns. Defaults to "Q".
             min_exceed: Minimum number of exceedances required for reliable GPD fit. Defaults to 30.
@@ -1303,7 +1299,7 @@ class SFINCSRootModel:
             total=len(rivers),
             desc="Return period estimation",
         ):
-            discharge = discharge_dataframe[idx].dropna()
+            discharge = discharge_by_river[idx].dropna()
 
             # If all values are zero, assign zeros
             if (discharge < 1e-10).all():
@@ -1343,7 +1339,7 @@ class SFINCSRootModel:
 
     def estimate_discharge_for_return_periods(
         self,
-        discharge: pd.DataFrame,
+        discharge_by_river: pd.DataFrame,
         rising_limb_hours: int = 72,
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
         p_value_threshold: float = 0.05,
@@ -1354,7 +1350,7 @@ class SFINCSRootModel:
         """Estimate discharge for specified return periods and create hydrographs.
 
         Args:
-            discharge: pd.DataFrame containing the discharge data
+            discharge_by_river: pd.DataFrame containing the discharge data for each river.
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
             p_value_threshold: Anderson-Darling p-value threshold for threshold selection. Defaults to 0.05.
@@ -1371,17 +1367,6 @@ class SFINCSRootModel:
             ~self.active_rivers["is_downstream_outflow"]
         ].copy()
 
-        river_representative_points: list[list[tuple[int, int]]] = []
-        for ID in rivers_with_return_period.index:
-            river_representative_points.append(
-                get_representative_river_points(ID, rivers_with_return_period)
-            )
-
-        discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
-            rivers_with_return_period.index,
-            river_representative_points,
-            discharge=discharge,
-        )
         rivers_with_return_period = self.assign_return_periods(
             rivers_with_return_period,
             discharge_by_river,
@@ -1827,60 +1812,6 @@ class SFINCSSimulation:
             )
             plt.close(fig)
 
-    def set_forcing_from_grid(
-        self, nodes: gpd.GeoDataFrame, discharge_grid: xr.DataArray
-    ) -> None:
-        """Sets up discharge forcing for the SFINCS model from a gridded dataset.
-
-        Args:
-            nodes: A GeoDataFrame containing the locations of the discharge forcing points.
-            discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
-                Usually this is from a hydrological model.
-        """
-        nodes: gpd.GeoDataFrame = nodes.copy()
-        nodes["geometry"] = nodes["geometry"].apply(get_start_point)
-
-        river_representative_points = []
-        for ID in nodes.index:
-            river_representative_points.append(
-                get_representative_river_points(
-                    ID,
-                    nodes,
-                )
-            )
-
-        discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
-            nodes.index,
-            river_representative_points,
-            discharge=discharge_grid,
-        )
-
-        locations = nodes.to_crs(self.sfincs_model.crs)
-
-        self.set_discharge_forcing_from_nodes(
-            nodes=locations,
-            timeseries=discharge_by_river,
-        )
-
-    def set_headwater_forcing_from_grid(
-        self,
-        discharge_grid: xr.DataArray,
-    ) -> None:
-        """Sets up discharge forcing for the SFINCS model from a gridded dataset.
-
-        Args:
-            discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
-                Usually this is from a hydrological model.
-        """
-        # Load rivers from file and filter for headwater rivers
-        headwater_rivers: gpd.GeoDataFrame = self.root_model.rivers[
-            self.root_model.rivers["maxup"] == 0
-        ]
-        self.set_forcing_from_grid(
-            nodes=headwater_rivers,
-            discharge_grid=discharge_grid,
-        )
-
     def set_river_outflow_boundary_condition(self) -> None:
         """Sets up river outflow boundary condition for the SFINCS model.
 
@@ -1906,46 +1837,6 @@ class SFINCSSimulation:
                 gdf_locs=outflow_points,
                 df_ts=elevation_time_series_constant,
             )
-
-    def set_inflow_forcing_from_grid(
-        self,
-        discharge_grid: xr.DataArray,
-    ) -> None:
-        """Sets up discharge forcing for the SFINCS model from a gridded dataset.
-
-        Args:
-            discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
-                Usually this is from a hydrological model.
-        """
-        # Replicate the inflow_rivers property logic
-        non_headwater_rivers: gpd.GeoDataFrame = self.root_model.rivers[
-            self.root_model.rivers["maxup"] > 0
-        ]
-        non_outflow_basins: gpd.GeoDataFrame = non_headwater_rivers[
-            ~non_headwater_rivers["is_downstream_outflow"]
-        ]
-        upstream_branches_in_domain = np.unique(
-            self.root_model.rivers["downstream_ID"], return_counts=True
-        )
-
-        rivers_with_inflow = []
-        for idx, row in non_outflow_basins.iterrows():
-            downstream_ID = row["downstream_ID"]
-            if downstream_ID not in self.root_model.rivers.index:
-                continue
-            upstream_branches_count = upstream_branches_in_domain[1][
-                upstream_branches_in_domain[0] == downstream_ID
-            ][0]
-            if upstream_branches_count > 1:
-                rivers_with_inflow.append(idx)
-
-        inflow_rivers: gpd.GeoDataFrame = self.root_model.rivers[
-            self.root_model.rivers.index.isin(rivers_with_inflow)
-        ]
-        self.set_forcing_from_grid(
-            nodes=inflow_rivers,
-            discharge_grid=discharge_grid,
-        )
 
     def set_river_inflow(
         self, nodes: gpd.GeoDataFrame, timeseries: pd.DataFrame

@@ -1854,3 +1854,15 @@ class Routing(Module):
             & (~rivers["is_further_downstream_outflow"])
         ]
         return active_rivers.copy()
+
+    def get_active_and_downstream_outflow_rivers(self) -> gpd.GeoDataFrame:
+        """Get the rivers that are simulated (i.e., not downstream of the model region) and the downstream outflow rivers.
+
+        Returns:
+            A GeoDataFrame containing the active rivers and the downstream outflow rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        active_and_downstream_outflow_rivers = rivers[
+            ~rivers["is_further_downstream_outflow"]
+        ]
+        return active_and_downstream_outflow_rivers.copy()
