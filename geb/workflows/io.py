@@ -76,7 +76,7 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
         fp,
         engine="pyarrow",
         compression="zstd",
-        compression_level=9,
+        compression_level=22,
         row_group_size=max(min(10_000, len(df)), 1),
     )
 

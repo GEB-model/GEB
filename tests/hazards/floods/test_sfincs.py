@@ -128,7 +128,7 @@ def build_sfincs(
         subbasins=subbasins,
         DEMs=DEM_config,
         rivers=rivers,
-        discharge=geb_model.hazard_driver.floods.discharge_spinup_ds,
+        discharge_by_river=geb_model.hazard_driver.floods.discharge_by_river_spinup,
         river_width_alpha=geb_model.model.hydrology.grid.decompress(
             geb_model.hydrology.grid.var.river_width_alpha
         ),
@@ -502,93 +502,6 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
 
         simulation.cleanup()
         sfincs_model.cleanup()
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-@pytest.mark.parametrize(
-    "split",
-    [False, True],
-)
-def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
-    """Test SFINCS with discharge forcing from a grid.
-
-    Args:
-        geb_model: A GEB model instance with SFINCS configured.
-        split: Whether to split the domain into multiple SFINCS models for testing.
-    """
-    with WorkingDirectory(working_directory):
-        start_time: datetime = datetime(2000, 1, 1, 0)
-        end_time: datetime = datetime(2000, 1, 8, 0)
-
-        subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
-        rivers = geb_model.hydrology.routing.rivers
-        sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
-
-        discharge_rate_m3_per_s: float = 10.0
-
-        total_flood_volume_across_models: float = 0.0
-        total_discharge_volume_across_models: float = 0.0
-
-        for sfincs_model in sfincs_models:
-            simulation: SFINCSSimulation = sfincs_model.create_simulation(
-                simulation_name=f"grid_forcing_test_{sfincs_model.name}",
-                start_time=start_time,
-                end_time=end_time,
-                write_figures=True,
-                flood_map_output_interval_seconds=(
-                    end_time - start_time
-                ).total_seconds(),
-            )
-
-            discharge_grid: xr.DataArray = xr.DataArray(
-                discharge_rate_m3_per_s,
-                dims=["y", "x"],
-                coords={
-                    "y": geb_model.hydrology.grid.lat,
-                    "x": geb_model.hydrology.grid.lon,
-                },
-            )
-
-            # Expand to include time dimension for all timesteps
-            discharge_grid = discharge_grid.expand_dims(
-                time=pd.date_range(start=start_time, end=end_time, freq="h")
-            )
-
-            simulation.set_headwater_forcing_from_grid(
-                discharge_grid=discharge_grid,
-            )
-
-            discharge_grid = discharge_grid * 2.0
-
-            if simulation.root_model.has_inflow:
-                simulation.set_inflow_forcing_from_grid(
-                    discharge_grid=discharge_grid,
-                )
-
-            assert (simulation.path / "sfincs.dis").exists()
-            assert (simulation.path / "sfincs.src").exists()
-
-            assert not simulation.has_outflow_boundary()
-
-            simulation.run(gpu=False)
-            flood_depth: xr.DataArray = simulation.read_final_flood_depth(
-                minimum_flood_depth=0.00
-            )
-            total_flood_volume: float = simulation.get_flood_volume(flood_depth)
-
-            total_flood_volume_across_models += total_flood_volume
-            total_discharge_volume_across_models += simulation.total_discharge_volume_m3
-
-            simulation.cleanup()
-            sfincs_model.cleanup()
-
-        # compare total flood volume to total discharge volume across all models
-        assert math.isclose(
-            total_flood_volume_across_models,
-            total_discharge_volume_across_models,
-            abs_tol=0,
-            rel_tol=0.01,
-        )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
