@@ -574,10 +574,8 @@ class Floods(Module):
             model_name = "coastal_region"
 
             # load location and offset for coastal water level forcing
-            coastal_forcing_locations: gpd.GeoDataFrame = (
-                read_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
-                .rename(columns={"station_id": "stations"})
-                .set_index("stations")
+            coastal_forcing_locations: gpd.GeoDataFrame = read_geom(
+                self.model.files["geom"]["gtsm/stations_coast_rp"]
             )  # ty:ignore[invalid-assignment]
 
             coastal_offset = xr.open_dataarray(
