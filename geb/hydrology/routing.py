@@ -118,6 +118,29 @@ core_ldd.from_array = wrap_from_array_ldd
 core_d8.check_values = wrap_check_values_d8
 
 
+def get_upstream_represented_xys(
+    river_id: int, all_rivers: pd.DataFrame
+) -> list[tuple[int, int]]:
+    """Recursively find the nearest represented upstream rivers.
+
+    Args:
+        river_id: The ID of the river to find the upstream represented rivers for.
+        all_rivers: A DataFrame containing all rivers in the model, with columns "represented_in_grid", "hydrography_xy", and "downstream_ID".
+
+    Returns:
+        A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
+    """
+    river = all_rivers.loc[river_id]
+    if river["represented_in_grid"]:
+        return [river["hydrography_xy"][-1]]
+
+    upstream_rivers = all_rivers[all_rivers["downstream_ID"] == river_id]
+    xys = []
+    for idx, _ in upstream_rivers.iterrows():
+        xys.extend(get_upstream_represented_xys(idx, all_rivers))
+    return xys
+
+
 def get_river_width(
     alpha: ArrayFloat32,
     beta: ArrayFloat32,
@@ -1854,3 +1877,15 @@ class Routing(Module):
             & (~rivers["is_further_downstream_outflow"])
         ]
         return active_rivers.copy()
+
+    def get_active_and_downstream_outflow_rivers(self) -> gpd.GeoDataFrame:
+        """Get the rivers that are simulated (i.e., not downstream of the model region) and the downstream outflow rivers.
+
+        Returns:
+            A GeoDataFrame containing the active rivers and the downstream outflow rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        active_and_downstream_outflow_rivers = rivers[
+            ~rivers["is_further_downstream_outflow"]
+        ]
+        return active_and_downstream_outflow_rivers.copy()
