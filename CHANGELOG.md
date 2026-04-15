@@ -4,6 +4,10 @@
 - Fix basin delineation for endorheic basins.
 - Fix division by zero error for reservoirs that have no long term inflow.
 - Reduce RAM usage of reading GTSM data.
+- Table-like data is exported as parquet rather than csv (saves lots of space on disk).
+- Better compression of reported data. Most importantly, floats are now bitrounded with a maximum error of around 0.01%. In one test, the hourly discharge is now 168MB instead of 487MB.
+- In reported spatial data, the time dimension is now the last dimension. This allows for better compressability (because of spatial auto-correlation). If you make plots and read the data with xarray you likely won't notice. If you read the data in funky ways with numpy, you may need to adapt some scripts.
+- Report discharge for outflow points of all rivers instead of just the outflow at the end of the basin with _outflow_points is set to true in the report.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
