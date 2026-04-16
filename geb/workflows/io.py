@@ -66,36 +66,34 @@ def read_table(fp: Path, **kwargs: Any) -> pd.DataFrame:
     return pd.read_parquet(fp, engine="pyarrow", **kwargs)
 
 
-def write_table(df: pd.DataFrame, fp: Path, **kwargs: Any) -> None:
+def write_table(df: pd.DataFrame, fp: Path) -> None:
     """Save a pandas DataFrame to a parquet file.
 
     Args:
         df: The pandas DataFrame to save.
         fp: The path to the output parquet file.
-        kwargs: Additional keyword arguments to pass to `df.to_parquet`.
+
+    Raises:
+        ValueError: If the DataFrame contains unsupported column types.
     """
     table = pa.Table.from_pandas(df)
 
-    int_and_dt_cols = [
-        n
-        for n, t in zip(table.schema.names, table.schema.types)
-        if pa.types.is_integer(t) or pa.types.is_timestamp(t)
-    ]
-    bool_cols = [
-        n
-        for n, t in zip(table.schema.names, table.schema.types)
-        if pa.types.is_boolean(t)
-    ]
-    float_cols = [
-        n
-        for n, t in zip(table.schema.names, table.schema.types)
-        if pa.types.is_floating(t)
-    ]
-    dict_cols = [
-        n
-        for n, t in zip(table.schema.names, table.schema.types)
-        if pa.types.is_string(t) or pa.types.is_binary(t)
-    ]
+    int_and_dt_cols = []
+    bool_cols = []
+    float_cols = []
+    dict_cols = []
+
+    for n, t in zip(table.schema.names, table.schema.types):
+        if pa.types.is_integer(t) or pa.types.is_timestamp(t):
+            int_and_dt_cols.append(n)
+        elif pa.types.is_boolean(t):
+            bool_cols.append(n)
+        elif pa.types.is_floating(t):
+            float_cols.append(n)
+        elif pa.types.is_string(t) or pa.types.is_binary(t):
+            dict_cols.append(n)
+        else:
+            raise ValueError(f"Unsupported column type {t} for column {n}")
 
     # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
     column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
@@ -113,7 +111,7 @@ def write_table(df: pd.DataFrame, fp: Path, **kwargs: Any) -> None:
         column_encoding=column_encoding,
         use_byte_stream_split=float_cols,
         data_page_version="2.0",
-        row_group_size=len(table),  # Single row group for better compression
+        row_group_size=min(max(len(table), 1), 1_000_000),
         data_page_size=10_000_000,  # Larger page size for better compression
         write_page_index=False,  # Removes extra metadata overhead
         write_statistics=False,  # Removes min/max/null count storage
