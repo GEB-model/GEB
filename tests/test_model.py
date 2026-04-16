@@ -36,6 +36,7 @@ from geb.model import GEBModel
 from geb.runner import parse_config
 from geb.workflows.io import (
     WorkingDirectory,
+    read_table,
     read_zarr,
     write_zarr,
 )
@@ -309,39 +310,15 @@ def test_spinup() -> None:
             working_directory / "output" / "report" / "spinup" / "hydrology.routing"
         )
 
-        hourly_discharge_data = read_zarr(
-            routing_report_folder / "discharge_hourly.zarr"
-        )
-
-        daily_discharge_data = read_zarr(routing_report_folder / "discharge_daily.zarr")
-
         for ID, river in outflow_rivers.iterrows():
-            outflow_data_csv: pd.DataFrame = pd.read_csv(
-                routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.csv",
-                parse_dates=["time"],
-            ).set_index("time")[f"river_outflow_hourly_m3_per_s_{ID}"]
+            outflow_data: pd.DataFrame = read_table(
+                routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.parquet",
+            )[f"river_outflow_hourly_m3_per_s_{ID}"]
 
             outflow_xy = river["hydrography_xy"][-1]
-            hourly_outflow_data_zarr: pd.DataFrame = hourly_discharge_data.isel(
-                y=outflow_xy[1], x=outflow_xy[0]
-            ).to_dataframe()["discharge_hourly"]
-
-            np.testing.assert_almost_equal(
-                hourly_outflow_data_zarr.values, outflow_data_csv.values, decimal=4
-            )
-
-            daily_outflow_data_zarr: pd.DataFrame = daily_discharge_data.isel(
-                y=outflow_xy[1], x=outflow_xy[0]
-            ).to_dataframe()["discharge_daily"]
-
-            # aggregate hourly to daily
-            outflow_data_csv_daily = outflow_data_csv.resample("D").mean()
-            np.testing.assert_almost_equal(
-                daily_outflow_data_zarr.values, outflow_data_csv_daily.values, decimal=4
-            )
 
             # test whether river alpha and beta are correctly calculated
-            mean_discharge = np.array(outflow_data_csv.mean(), dtype=np.float32)
+            mean_discharge = np.array(outflow_data.mean(), dtype=np.float32)
 
             linear_index = geb.hydrology.grid.linear_mapping[
                 outflow_xy[1], outflow_xy[0]

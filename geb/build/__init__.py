@@ -1103,9 +1103,9 @@ def create_cluster_visualization_map(
     print("Dissolving clusters into merged boundaries...")
 
     # Use a colormap with very distinct colors
-    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))  # type: ignore[attr-defined]
+    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
     if len(clusters) > 20:
-        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))  # type: ignore[attr-defined]
+        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
 
     # Process clusters sequentially
     merged_cluster_data = []

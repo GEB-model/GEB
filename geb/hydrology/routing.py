@@ -118,6 +118,29 @@ core_ldd.from_array = wrap_from_array_ldd
 core_d8.check_values = wrap_check_values_d8
 
 
+def get_upstream_represented_xys(
+    river_id: int, all_rivers: pd.DataFrame
+) -> list[tuple[int, int]]:
+    """Recursively find the nearest represented upstream rivers.
+
+    Args:
+        river_id: The ID of the river to find the upstream represented rivers for.
+        all_rivers: A DataFrame containing all rivers in the model, with columns "represented_in_grid", "hydrography_xy", and "downstream_ID".
+
+    Returns:
+        A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
+    """
+    river = all_rivers.loc[river_id]
+    if river["represented_in_grid"]:
+        return [river["hydrography_xy"][-1]]
+
+    upstream_rivers = all_rivers[all_rivers["downstream_ID"] == river_id]
+    xys = []
+    for idx, _ in upstream_rivers.iterrows():
+        xys.extend(get_upstream_represented_xys(idx, all_rivers))
+    return xys
+
+
 def get_river_width(
     alpha: ArrayFloat32,
     beta: ArrayFloat32,
@@ -1196,7 +1219,7 @@ class Routing(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.ldd: ArrayUint8 = self.grid.load(
+        self.ldd: ArrayUint8 = self.grid.load2d(
             self.model.files["grid"]["routing/ldd"],
         )
 
@@ -1214,12 +1237,12 @@ class Routing(Module):
         )
         self.active_rivers = self.get_active_rivers()
 
-        self.river_ids = self.grid.load(
+        self.river_ids = self.grid.load2d(
             self.model.files["grid"]["routing/river_ids"],
         )
 
         if "routing/retention_basin_ids" in self.model.files["grid"]:
-            self.retention_basin_ids = self.grid.load(
+            self.retention_basin_ids = self.grid.load2d(
                 self.model.files["grid"]["routing/retention_basin_ids"],
             )
             self.retention_basin_data = read_table(
@@ -1317,11 +1340,11 @@ class Routing(Module):
         5. Initialize discharge variables and counters.
 
         """
-        self.grid.var.upstream_area = self.grid.load(
+        self.grid.var.upstream_area = self.grid.load2d(
             self.model.files["grid"]["routing/upstream_area_m2"]
         )
         if "routing/upstream_area_n_cells" in self.model.files["grid"]:
-            self.grid.var.upstream_area_n_cells = self.grid.load(
+            self.grid.var.upstream_area_n_cells = self.grid.load2d(
                 self.model.files["grid"]["routing/upstream_area_n_cells"]
             )
         else:
@@ -1332,13 +1355,13 @@ class Routing(Module):
 
         # Channel Manning's n
         self.grid.var.river_mannings = (
-            self.grid.load(self.model.files["grid"]["routing/mannings"])
+            self.grid.load2d(self.model.files["grid"]["routing/mannings"])
             * self.model.config["parameters"]["mannings_n_multiplier"]
         )
         assert (self.grid.var.river_mannings > 0).all()
 
         # Channel length [meters]
-        self.grid.var.river_length = self.grid.load(
+        self.grid.var.river_length = self.grid.load2d(
             self.model.files["grid"]["routing/river_length_m"]
         )
 
@@ -1352,7 +1375,7 @@ class Routing(Module):
         )
 
         # Channel bottom width [meters]
-        self.observed_average_river_width = self.grid.load(
+        self.observed_average_river_width = self.grid.load2d(
             self.model.files["grid"]["routing/river_width_m"]
         )
 
@@ -1366,7 +1389,7 @@ class Routing(Module):
         # Channel gradient (fraction, dy/dx)
         minimum_river_slope = 0.0001
         river_slope = np.maximum(
-            self.grid.load(self.model.files["grid"]["routing/river_slope_m_per_m"]),
+            self.grid.load2d(self.model.files["grid"]["routing/river_slope_m_per_m"]),
             minimum_river_slope,
         )
 
@@ -1854,3 +1877,15 @@ class Routing(Module):
             & (~rivers["is_further_downstream_outflow"])
         ]
         return active_rivers.copy()
+
+    def get_active_and_downstream_outflow_rivers(self) -> gpd.GeoDataFrame:
+        """Get the rivers that are simulated (i.e., not downstream of the model region) and the downstream outflow rivers.
+
+        Returns:
+            A GeoDataFrame containing the active rivers and the downstream outflow rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        active_and_downstream_outflow_rivers = rivers[
+            ~rivers["is_further_downstream_outflow"]
+        ]
+        return active_and_downstream_outflow_rivers.copy()
