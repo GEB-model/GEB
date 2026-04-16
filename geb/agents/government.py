@@ -174,7 +174,6 @@ class Government(AgentBaseClass):
             sorted_indices = suitable_indices[np.argsort(suitable_potentials)[::-1]]
 
             n_suitable = len(sorted_indices)
-            chunk_size = max(1, int(np.round(increment_fraction * n_suitable)))
 
             already_forest = hydrology.HRU.var.land_use_type == FOREST
             remaining = sorted_indices[~already_forest[sorted_indices]]
@@ -187,16 +186,19 @@ class Government(AgentBaseClass):
                 )
                 return
 
+            # chunk is 10% of what remains, not 10% of the fixed total
+            chunk_size = max(1, int(np.round(increment_fraction * len(remaining))))
             chunk_indices = remaining[:chunk_size]
             n_already = n_suitable - len(remaining)
             self.model.logger.info(
                 "Incremental reforestation: planting %d HRUs (rank %d–%d of %d "
-                "suitable; %d already forest).",
+                "suitable; %d already forest, %d remaining).",
                 len(chunk_indices),
                 n_already,
                 n_already + len(chunk_indices) - 1,
                 n_suitable,
                 n_already,
+                len(remaining),
             )
             suitability_HRU = np.zeros(suitability_HRU.shape[0], dtype=bool)
             suitability_HRU[chunk_indices] = True
