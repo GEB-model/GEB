@@ -1584,7 +1584,6 @@ class LandSurface(Module):
             for i in range(N_SOIL_LAYERS):
                 layer_data = cast(TwoDArrayFloat32, layers_data[i])
                 assert isinstance(layer_data, np.ndarray)
-                layer_data = layer_data
                 if np.isnan(layer_data[~self.HRU.mask]).any():
                     raise ValueError(
                         f"Found NaN values in soil layer data. This likely means that something went wrong with the "
