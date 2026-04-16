@@ -16,7 +16,7 @@ import tqdm
 import xarray as xr
 from zarr.codecs.numcodecs import FixedScaleOffset
 
-from geb.workflows.io import read_geom, write_geom, write_zarr
+from geb.workflows.io import read_geom, read_zarr, write_geom, write_zarr
 
 from .base import Adapter
 
@@ -416,9 +416,7 @@ class GTSM_timeseries(Adapter):
         das: list[xr.DataArray] = []
         for zarr_path in zarr_paths:
             das.append(
-                xr.open_dataarray(
-                    zarr_path, engine="zarr", chunks={"time": -1, "stations": 100}
-                )
+                read_zarr(zarr_path)
                 .isel(stations=station_locations.index.values)
                 .compute()
             )
