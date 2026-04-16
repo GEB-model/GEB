@@ -121,7 +121,12 @@ class Government(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
-        if self.model.current_timestep == 0 and self.config.get("plant_forest", False):
+        adaptation_enabled = self.config.get("adaptation", {}).get("enabled", False)
+        if (
+            self.model.current_timestep == 0
+            and self.config.get("plant_forest", False)
+            and not adaptation_enabled
+        ):
             self.prepare_modified_soil_maps_for_forest()
 
         self.adaptation()
@@ -202,6 +207,13 @@ class Government(AgentBaseClass):
             )
             suitability_HRU = np.zeros(suitability_HRU.shape[0], dtype=bool)
             suitability_HRU[chunk_indices] = True
+        else:
+            self.model.logger.info(
+                "Reforestation (all at once): planting %d suitable HRUs "
+                "(threshold %.2f).",
+                int(suitability_HRU.sum()),
+                threshold,
+            )
 
         land_use_type_before = hydrology.HRU.var.land_use_type.copy()
 
