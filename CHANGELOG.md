@@ -1,6 +1,7 @@
 # dev
 - Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
 - Remove setup_irrigation_sources from build process as it is not needed anymore.
+- Fix division by zero error for reservoirs that have no long term inflow.
 - Fix basin delineation for endorheic basins.
 - Table-like data is exported as parquet rather than csv (saves lots of space on disk).
 - Better compression of reported data. Most importantly, floats are now bitrounded with a maximum error of around 0.01%. In one test, the hourly discharge is now 168MB instead of 487MB.
