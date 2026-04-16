@@ -106,7 +106,6 @@ def build_model(
             config=Path(config),
             build_config=Path(build_config),
             working_directory=Path(working_directory),
-            data_provider=data_provider,
             continue_=continue_substep,
         )
         return "Model build completed."
@@ -139,7 +138,6 @@ def update_model(
             config=Path(config),
             build_config=Path(build_config),
             working_directory=Path(working_directory),
-            data_provider=data_provider,
         )
         return "Model updated."
     except Exception as e:

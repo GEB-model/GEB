@@ -285,7 +285,7 @@ def test_write_zarr_stores_per_shard_when_shards_are_configured(
     original_store_blocks = io_module._store_dask_array_blocks
 
     def store_blocks_spy(
-        source_array: dask.array.Array, store_target: object, progress: bool
+        source_array: dask.array.core.Array, store_target: object, progress: bool
     ) -> None:
         captured_numblocks["value"] = source_array.numblocks
         original_store_blocks(source_array, store_target, progress)

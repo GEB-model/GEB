@@ -6,7 +6,7 @@ import tempfile
 import zipfile
 from itertools import batched
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import cdsapi
 import geopandas as gpd
@@ -328,7 +328,9 @@ class GTSM_timeseries(Adapter):
 
         return self
 
-    def construct_request(self, year_batch: list[str], variable: str) -> dict[str, Any]:
+    def construct_request(
+        self, year_batch: Iterable[str], variable: str
+    ) -> dict[str, Any]:
         """Construct the API call dictionary for GTSM data retrieval.
 
         Args:

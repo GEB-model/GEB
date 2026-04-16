@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple, cast
 
 import numpy as np
 from numba import njit, prange  # noqa: F401
@@ -1513,7 +1513,7 @@ class LandSurface(Module):
             0.0, dtype=np.float32
         )
 
-        slope_m_per_m: ArrayFloat32 = self.hydrology.grid.load(
+        slope_m_per_m: ArrayFloat32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["landsurface/slope_m_per_m"]
         )
 
@@ -1522,7 +1522,7 @@ class LandSurface(Module):
             fn=None,
         )
 
-        hillslope_length_m: ArrayFloat32 = self.hydrology.grid.load(
+        hillslope_length_m: ArrayFloat32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["drainage/hillslope_length_m"]
         )
 
@@ -1530,19 +1530,15 @@ class LandSurface(Module):
             data=hillslope_length_m, fn=None
         )
 
-        leaf_area_index_forest = self.grid.compress(
-            read_grid(
-                self.model.files["other"]["vegetation/leaf_area_index_forest"],
-            )
+        leaf_area_index_forest = self.hydrology.grid.load3d(
+            self.model.files["other"]["vegetation/leaf_area_index_forest"]
         )
         self.HRU.var.leaf_area_index_forest = self.hydrology.to_HRU(
             data=leaf_area_index_forest, fn=None
         )
 
-        leaf_area_index_grassland_like = self.grid.compress(
-            read_grid(
-                self.model.files["other"]["vegetation/leaf_area_index_grassland_like"],
-            )
+        leaf_area_index_grassland_like = self.hydrology.grid.load3d(
+            self.model.files["other"]["vegetation/leaf_area_index_grassland_like"],
         )
         self.HRU.var.leaf_area_index_grassland_like = self.hydrology.to_HRU(
             data=leaf_area_index_grassland_like, fn=None
@@ -1584,9 +1580,11 @@ class LandSurface(Module):
                 (N_SOIL_LAYERS, self.HRU.compressed_size), np.nan, dtype=np.float32
             )
 
+            layers_data = read_grid(filepath, ndim=3, load=False)
             for i in range(N_SOIL_LAYERS):
-                layer_data = read_grid(filepath, layer=i)
-                assert layer_data.ndim == 2
+                layer_data = cast(TwoDArrayFloat32, layers_data[i])
+                assert isinstance(layer_data, np.ndarray)
+                layer_data = layer_data
                 if np.isnan(layer_data[~self.HRU.mask]).any():
                     raise ValueError(
                         f"Found NaN values in soil layer data. This likely means that something went wrong with the "
@@ -1773,14 +1771,14 @@ class LandSurface(Module):
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        crop_group_forest: ArrayFloat32 = self.hydrology.grid.load(
+        crop_group_forest: ArrayFloat32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["vegetation/crop_group_number_forest"]
         )
         self.HRU.var.crop_group_number_forest: ArrayFloat32 = self.hydrology.to_HRU(
             data=crop_group_forest
         )
 
-        crop_group_number_grassland_like: ArrayFloat32 = self.hydrology.grid.load(
+        crop_group_number_grassland_like: ArrayFloat32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["vegetation/crop_group_number_grassland_like"]
         )
         self.HRU.var.crop_group_number_grassland_like = self.hydrology.to_HRU(

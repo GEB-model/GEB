@@ -9,6 +9,7 @@
 - Use the reported time series tables instead of grid when setting up the SFINCS models and estimating return period values.
 - Do not report discharge grid data by default in example (saving lots of disk space). You can re-enable this manually when you need it.
 - Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
+- Fix all typing issues.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.

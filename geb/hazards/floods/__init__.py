@@ -404,15 +404,15 @@ class Floods(Module):
         forcing_grid: xr.DataArray = forcing_grid.rio.write_crs(self.model.crs)
 
         if self.config["forcing_method"] == "headwater_points":
-            simulation.set_headwater_forcing_from_grid(
+            simulation.set_headwater_forcing_from_grid(  # ty:ignore[unresolved-attribute]
                 discharge_grid=forcing_grid,
             )
 
         elif self.config["forcing_method"] == "accumulated_runoff":
-            river_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+            river_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
                 self.model.files["grid"]["routing/river_ids"], compress=False
             )
-            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
                 self.model.files["grid"]["routing/basin_ids"], compress=False
             )
             simulation.set_accumulated_runoff_forcing(
@@ -536,8 +536,7 @@ class Floods(Module):
             ]
 
             # use COMID as index and set unique index name for coastal region
-            low_elevation_coastal_zone_mask.index = [-1]
-            low_elevation_coastal_zone_mask.index.name = "COMID"
+            low_elevation_coastal_zone_mask.index = pd.Index([-1], name="COMID")
 
             # get initial_water_level for model domain
             initial_water_level = low_elevation_coastal_zone_mask[
@@ -577,7 +576,7 @@ class Floods(Module):
             # load location and offset for coastal water level forcing
             coastal_forcing_locations: gpd.GeoDataFrame = read_geom(
                 self.model.files["geom"]["gtsm/stations_coast_rp"]
-            )  # ty:ignore[invalid-assignment]
+            )
 
             coastal_offset = xr.open_dataarray(
                 self.model.files["other"][
