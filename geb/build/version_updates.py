@@ -21,10 +21,8 @@ VERSION_UPDATES: dict[str, list[str]] = {
     ],
     "1.0.0b20": [
         "[update-python;3.14.4]",
-        "[manual] Add `setup_subnational_income_distribution` to your `build.yml`.",
-        "[manual] Run `setup_subnational_income_distribution`: `geb update -b build.yml::setup_subnational_income_distribution`.",
-        "[manual] Add `setup_flood_damage_model` to your `build.yml`.",
-        "[manual] Run `setup_flood_damage_model`: `geb update -b build.yml::setup_flood_damage_model`.",
+        "[update-method;setup_subnational_income_distribution]",
+        "[update-method;setup_flood_damage_model]",
     ],
     "1.0.0b19": [
         "[create-file;build_complete.txt]",
@@ -65,6 +63,7 @@ def get_and_maybe_do_version_updates(
     perform_auto_update: bool = False,
     build_model: GEBModelBuild | None = None,
     methods: dict[str, Any] | None = None,
+    build_is_complete: bool = True,
 ) -> list[str]:
     """Get the version updates that need to be made to update from the stored version to the current version.
 
@@ -73,6 +72,8 @@ def get_and_maybe_do_version_updates(
         perform_auto_update: Whether to perform auto updates.
         build_model: The GEB model instance for building. Must be provided if perform_auto_update is True.
         methods: A dictionary of loaded methods from the build configuration. Must be provided if perform_auto_update is True.
+        build_is_complete: Whether the build has been fully completed. When False, `update-method`
+            entries are skipped because the method will be reached naturally during build continuation.
 
     Returns:
         A list of strings describing the updates that need to be made to update to the current version.
@@ -127,17 +128,29 @@ def get_and_maybe_do_version_updates(
                     if perform_auto_update:
                         assert methods is not None
                         assert build_model is not None
-                        update_method = getattr(build_model, method_name, None)
-                        if update_method is None:
-                            raise ValueError(
-                                f"Method {method_name} not found in geb.cli.update module"
+                        if not build_is_complete:
+                            # Build is still in progress; this method will be reached
+                            # naturally when the build continues, so skip here.
+                            build_model.logger.info(
+                                f"Skipping auto-update for '{method_name}': build not yet complete, "
+                                "method will run as part of the build continuation."
                             )
-
-                        build_model.logger.info(
-                            f"Performing auto-update for method {method_name}..."
-                        )
-
-                        update_method(**(methods[method_name] or {}))
+                        elif method_name not in methods:
+                            # Method not present in build.yml (e.g. optional method not
+                            # configured for this region); skip silently.
+                            build_model.logger.warning(
+                                f"Method '{method_name}' not found in build config; skipping auto-update."
+                            )
+                        else:
+                            update_method = getattr(build_model, method_name, None)
+                            if update_method is None:
+                                raise ValueError(
+                                    f"Method {method_name} not found on build model"
+                                )
+                            build_model.logger.info(
+                                f"Performing auto-update for method {method_name}..."
+                            )
+                            update_method(**(methods[method_name] or {}))
                     else:
                         updates_to_print.append(
                             f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."

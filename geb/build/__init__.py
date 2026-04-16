@@ -3325,15 +3325,35 @@ class GEBModel(
         # check if all completed methods are in the methods to run and if order is correct
         if continue_:
             methods_to_run = list(methods.keys())
-            for i, completed_method in enumerate(completed_methods):
+            # Filter out completed methods that are no longer in the build config;
+            # these were intentionally removed by a version update (e.g. a method
+            # that was deprecated). We warn rather than error so that
+            # `geb update-version && geb build --continue` works automatically.
+            active_completed_methods: list[str] = []
+            for completed_method in completed_methods:
                 if completed_method not in methods_to_run:
-                    raise ValueError(
-                        f"Cannot continue build: completed method {completed_method} not in methods to run. Restore the method or start a new build."
+                    self.logger.warning(
+                        f"Completed method '{completed_method}' is no longer in build config "
+                        "(likely removed by a version update); skipping."
                     )
-                if completed_method != methods_to_run[i]:
-                    raise ValueError(
-                        f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
-                    )
+                else:
+                    active_completed_methods.append(completed_method)
+            completed_methods = active_completed_methods
+
+            # Check that completed methods still appear in the same relative order
+            # in the current build config. New methods inserted between completed
+            # ones are allowed (they will run in their new position on continuation).
+            completed_set = set(completed_methods)
+            completed_in_methods_to_run = [
+                m for m in methods_to_run if m in completed_set
+            ]
+            if completed_in_methods_to_run != completed_methods:
+                raise ValueError(
+                    f"Cannot continue build: the relative order of previously completed "
+                    f"methods has changed. Previously completed: {completed_methods}. "
+                    f"Current order of those methods: {completed_in_methods_to_run}. "
+                    "Restore the method order or start a new build."
+                )
 
         build_run_started_at: datetime = datetime.now()
 
@@ -3458,6 +3478,7 @@ class GEBModel(
                 perform_auto_update=True,
                 build_model=self,
                 methods=methods,
+                build_is_complete=self.build_complete_path.exists(),
             )
             if updates_to_print_to_user:
                 self.logger.warning(
