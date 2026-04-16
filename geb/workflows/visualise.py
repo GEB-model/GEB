@@ -1,6 +1,6 @@
 """Functions for visualizing GEB model outputs."""
 
-from typing import Any
+from typing import Any, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -139,7 +139,7 @@ def plot_sunburst(
         )
 
     fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
+    renderer = fig.canvas.get_renderer()  # ty:ignore[unresolved-attribute]
 
     for seg in segments:
         level = seg["level"]
@@ -153,8 +153,8 @@ def plot_sunburst(
         r_mid = r_inner + level_width / 2
 
         # Define styles
-        fontsize = 8 if level > 0 else 9
-        style = dict(
+        fontsize: Literal[8, 9] = 8 if level > 0 else 9
+        style: dict[str, str | int] = dict(
             fontweight="bold" if level == 0 else "normal",
             fontsize=fontsize,
             color="white" if level < 1 else "black",
@@ -183,7 +183,7 @@ def plot_sunburst(
         placed = False
 
         # 1. Try Horizontal
-        t = ax.text(mid_angle, r_mid, label, rotation=0, **style)
+        t = ax.text(mid_angle, r_mid, label, rotation=0, **style)  # ty:ignore[invalid-argument-type]
         if check_fit(t, r_inner, r_outer, start, start + width):
             placed = True
         else:
@@ -194,7 +194,7 @@ def plot_sunburst(
             rot = np.degrees(mid_angle) - 90
             if 90 < rot <= 270:
                 rot -= 180
-            t = ax.text(mid_angle, r_mid, label, rotation=rot, **style)
+            t = ax.text(mid_angle, r_mid, label, rotation=rot, **style)  # ty:ignore[invalid-argument-type]
             if check_fit(t, r_inner, r_outer, start, start + width):
                 placed = True
             else:
@@ -205,7 +205,7 @@ def plot_sunburst(
             rot = np.degrees(mid_angle)
             if 90 < rot <= 270:
                 rot -= 180
-            t = ax.text(mid_angle, r_mid, label, rotation=rot, **style)
+            t = ax.text(mid_angle, r_mid, label, rotation=rot, **style)  # ty:ignore[invalid-argument-type]
             if check_fit(t, r_inner, r_outer, start, start + width):
                 placed = True
             else:

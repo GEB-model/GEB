@@ -8,7 +8,7 @@ general:
   start_time: 2000-01-01
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2024-12-30
+  end_time: 2023-12-30
   # end_time: 2030-01-01
   ###
   # start of the spinup time (YYYY-MM-DD).
@@ -47,19 +47,13 @@ report:
       varname: .runoff_m
       type: HRU
       function: weightednanmean
-  hydrology.routing:
-    discharge_daily:
-      varname: grid.var.discharge_m3_s
-      type: grid
-      function: null
-      format: zarr
-      single_file: true
-    discharge_hourly:
-      varname: grid.var.discharge_m3_s_per_substep
-      type: grid
-      function: null
-      format: zarr
-      single_file: true
+  # hydrology.routing:
+  #   discharge_hourly:
+  #     varname: grid.var.discharge_m3_s_per_substep
+  #     type: grid
+  #     function: null
+  #     format: zarr
+  #     single_file: true
   agents.crop_farmers:
     channel_abstraction_m3_by_farmer_mean:
       varname: var.channel_abstraction_m3_by_farmer

@@ -49,6 +49,7 @@ gadm_converter: dict[str, str] = {
     "Vaduz": "Valduz",
     "Luzern": "Lucerne",
     "St. Gallen": "Sankt Gallen",
+    "Balochistan": "Baluchistan",
     # Russia: oblasts whose base name differs from GADM (apostrophes, transliteration)
     # Simple "X Oblast" → "X" cases are handled automatically by canon() stripping
     # " Oblast"; only entries where the stripped name still doesn't match GADM are listed.

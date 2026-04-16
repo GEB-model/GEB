@@ -72,16 +72,16 @@ class GroundWater(Module):
         """Initialize groundwater model parameters and state variables."""
         # load hydraulic conductivity (md-1)
         self.grid.var.groundwater_hydraulic_conductivity_m_per_day = (
-            self.hydrology.grid.load(
+            self.hydrology.grid.load3d(
                 self.model.files["grid"]["groundwater/hydraulic_conductivity"],
             )
         )
 
-        self.grid.var.specific_yield = self.hydrology.grid.load(
+        self.grid.var.specific_yield = self.hydrology.grid.load3d(
             self.model.files["grid"]["groundwater/specific_yield"],
         )
 
-        self.grid.var.layer_boundary_elevation = self.hydrology.grid.load(
+        self.grid.var.layer_boundary_elevation = self.hydrology.grid.load3d(
             self.model.files["grid"]["groundwater/layer_boundary_elevation"],
         )
 
@@ -89,7 +89,7 @@ class GroundWater(Module):
         #     self.model.files["grid"]["groundwater/recession_coefficient"],
         # )
 
-        self.grid.var.elevation = self.hydrology.grid.load(
+        self.grid.var.elevation = self.hydrology.grid.load2d(
             self.model.files["grid"]["landsurface/elevation_m"]
         )
 
@@ -99,8 +99,8 @@ class GroundWater(Module):
         )
 
         def get_initial_head() -> npt.NDArray[np.float64]:
-            heads = self.hydrology.grid.load(
-                self.model.files["grid"]["groundwater/heads"], layer=None
+            heads = self.hydrology.grid.load3d(
+                self.model.files["grid"]["groundwater/heads"]
             ).astype(np.float64)  # modflow is an exception, it needs double precision
             heads = np.where(
                 ~np.isnan(heads),
