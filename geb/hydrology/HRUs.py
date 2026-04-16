@@ -283,8 +283,7 @@ class Grid(BaseVariables):
 
         self.scaling = 1
         mask, self.transform, self.crs = read_grid(
-            self.model.files["grid"]["mask"],
-            return_transform_and_crs=True,
+            self.model.files["grid"]["mask"], return_transform_and_crs=True, ndim=2
         )
         self.mask = mask.astype(bool)
         self.gt = self.transform.to_gdal()
@@ -308,8 +307,8 @@ class Grid(BaseVariables):
         assert math.isclose(self.transform.a, -self.transform.e)
         self.cell_size = self.transform.a
 
-        self.cell_area_uncompressed = cast(
-            TwoDArrayFloat32, read_grid(self.model.files["grid"]["cell_area"])
+        self.cell_area_uncompressed = read_grid(
+            self.model.files["grid"]["cell_area"], ndim=2
         )
 
         self.mask_flat = self.mask.ravel()
@@ -451,40 +450,45 @@ class Grid(BaseVariables):
         self.plot(self.decompress(array, fillvalue=fillvalue))
 
     @overload
-    def load(
-        self, filepath: Path, compress: Literal[True] = True, layer: int = 1
-    ) -> Array: ...
+    def load2d(self, filepath: Path, compress: Literal[True] = True) -> Array: ...
 
     @overload
-    def load(
-        self, filepath: Path, compress: Literal[True] = True, layer: None = None
-    ) -> TwoDArray: ...
+    def load2d(self, filepath: Path, compress: Literal[False] = False) -> TwoDArray: ...
 
-    @overload
-    def load(
-        self, filepath: Path, compress: Literal[False] = False, layer: int = 1
-    ) -> TwoDArray: ...
-
-    @overload
-    def load(
-        self, filepath: Path, compress: Literal[False] = False, layer: None = None
-    ) -> ThreeDArray: ...
-
-    def load(
-        self, filepath: Path, compress: bool = True, layer: int | None = None
-    ) -> Array | TwoDArray | ThreeDArray:
+    def load2d(self, filepath: Path, compress: bool = True) -> Array | TwoDArray:
         """Load array from disk.
 
         Args:
             filepath: Filepath of map.
             compress: Whether to compress array.
-            layer: Layer to load from file. If None, all layers are loaded. Defaults to None.
 
         Returns:
             array: Loaded array.
         """
-        data = read_grid(filepath, layer=layer, return_transform_and_crs=False)
-        assert isinstance(data, np.ndarray) and data.ndim in (2, 3)
+        data = read_grid(filepath, ndim=2, return_transform_and_crs=False)
+        if compress:
+            data = self.data.grid.compress(data)
+        return data
+
+    @overload
+    def load3d(self, filepath: Path, compress: Literal[True] = True) -> TwoDArray: ...
+
+    @overload
+    def load3d(
+        self, filepath: Path, compress: Literal[False] = False
+    ) -> ThreeDArray: ...
+
+    def load3d(self, filepath: Path, compress: bool = True) -> TwoDArray | ThreeDArray:
+        """Load array from disk.
+
+        Args:
+            filepath: Filepath of map.
+            compress: Whether to compress array.
+
+        Returns:
+            array: Loaded array.
+        """
+        data = read_grid(filepath, ndim=3, return_transform_and_crs=False)
         if compress:
             data = self.data.grid.compress(data)
         return data
@@ -585,19 +589,25 @@ class Grid(BaseVariables):
         return read_zarr(self.model.files["other"]["climate/gev_scale"])
 
     @property
-    def pr_gev_c(self) -> TwoDArrayFloat32:
+    def pr_gev_c(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
-        return read_grid(self.model.files["other"]["climate/pr_gev_c"])
+        return self.load2d(
+            self.model.files["other"]["climate/pr_gev_c"], compress=False
+        )
 
     @property
-    def pr_gev_loc(self) -> TwoDArrayFloat32:
+    def pr_gev_loc(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
-        return read_grid(self.model.files["other"]["climate/pr_gev_loc"])
+        return self.load2d(
+            self.model.files["other"]["climate/pr_gev_loc"], compress=False
+        )
 
     @property
-    def pr_gev_scale(self) -> TwoDArrayFloat32:
+    def pr_gev_scale(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
-        return read_grid(self.model.files["other"]["climate/pr_gev_scale"])
+        return self.load2d(
+            self.model.files["other"]["climate/pr_gev_scale"], compress=False
+        )
 
 
 class HRUVariables(Bucket):
@@ -756,7 +766,9 @@ class HRUs(BaseVariables):
             self.var.linear_mapping,
         ) = self.create_HRUs()
 
-        upstream_area = read_grid(self.model.files["grid"]["routing/upstream_area_m2"])
+        upstream_area = read_grid(
+            self.model.files["grid"]["routing/upstream_area_m2"], ndim=2
+        )
 
         self.var.nearest_river_grid_cell = determine_nearest_river_cell(
             upstream_area,
@@ -1012,7 +1024,7 @@ class HRUs(BaseVariables):
             linear_mapping: The index of the HRU to the subcell.
         """
         land_use_classes = read_grid(
-            self.model.files["subgrid"]["landsurface/land_use_classes"]
+            self.model.files["subgrid"]["landsurface/land_use_classes"], ndim=2
         )
         initial_size = (
             np.unique(self.data.farms).size + (self.data.grid.mask == 0).sum()
@@ -1319,7 +1331,9 @@ class Data:
         """
         self.model = model
 
-        self.farms = read_grid(self.model.files["subgrid"]["agents/farmers/farms"])
+        self.farms = read_grid(
+            self.model.files["subgrid"]["agents/farmers/farms"], ndim=2
+        )
 
         self.grid = Grid(self, model)
         self.HRU = HRUs(self, model)
@@ -1385,7 +1399,7 @@ class Data:
             output_data = np.empty(
                 (self.HRU.var.land_use_ratio.size, *data.shape[1:]), dtype=data.dtype
             )
-            for i in range(data.shape[1]):
+            for i in range(data.shape[1]):  # ty:ignore[index-out-of-bounds]
                 to_HRU(
                     data[:, i],
                     self.HRU.var.grid_to_HRU,

@@ -441,8 +441,8 @@ def _format_yearly_timeseries_axis(
         y_label: Y-axis label.
         draw_zero_line: Whether to add a horizontal zero reference line.
     """
-    year_start: pd.Timestamp = pd.Timestamp(year=year, month=1, day=1)
-    year_end: pd.Timestamp = pd.Timestamp(year=year, month=12, day=31, hour=23)
+    year_start: pd.Timestamp = pd.Timestamp(year=year, month=1, day=1)  # ty:ignore[invalid-assignment]
+    year_end: pd.Timestamp = pd.Timestamp(year=year, month=12, day=31, hour=23)  # ty:ignore[invalid-assignment]
     if draw_zero_line:
         axis.axhline(0, color="white", linewidth=0.8, linestyle="--")
     axis.set_xlim(mdates.date2num(year_start), mdates.date2num(year_end))

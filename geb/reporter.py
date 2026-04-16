@@ -1074,9 +1074,9 @@ class Reporter:
             # in case of no aggregation function, we write the data directly to zarr
             if config["function"] is None:
                 if type_ == "HRU":
-                    value: np.ndarray = self.hydrology.HRU.decompress(value)
+                    value = self.hydrology.HRU.decompress(value)
                 else:
-                    value: np.ndarray = self.hydrology.grid.decompress(value)
+                    value = self.hydrology.grid.decompress(value)
 
                 # in the first timestep, we create the array that will hold the actual data
                 if value.ndim == 3:
@@ -1153,8 +1153,6 @@ class Reporter:
                 if value.ndim == 2:
                     substeps: int = value.shape[0]
                     config["substeps"] = substeps
-                else:
-                    substeps: int = 1
 
                 function, *args = config["function"].split(",")
                 if function == "mean":
@@ -1204,7 +1202,7 @@ class Reporter:
                         raise ValueError(f"Unknown varname type {config['varname']}")
 
                     try:
-                        idx = linear_mapping[py, px]
+                        idx: int = linear_mapping[py, px]
                     except IndexError:
                         raise IndexError(
                             f"Coordinate ({px}, {py}) is outside the model domain, which has shape {linear_mapping.shape}."
@@ -1214,8 +1212,9 @@ class Reporter:
                             f"Coordinate ({px}, {py}) is not a valid cell."
                         )
 
+                    assert isinstance(value, np.ndarray)
                     # extract the value at that index
-                    value = value[..., idx]
+                    value = value[..., idx]  # ty:ignore[invalid-argument-type]
                 elif function in (
                     "weightedmean",
                     "weightednanmean",
@@ -1358,7 +1357,7 @@ class Reporter:
         zarr_array = group[name]
         assert isinstance(zarr_array, zarr.Array)
         # Create a slice tuple with Ellipsis for all dimensions except the target axis
-        selection = [slice(None)] * len(zarr_array.shape)
+        selection: list[slice | int] = [slice(None)] * len(zarr_array.shape)
         selection[axis] = chunk_index
         zarr_array.blocks[tuple(selection)] = buffer
 
