@@ -12,6 +12,7 @@
 - Do not report discharge grid data by default in example (saving lots of disk space). You can re-enable this manually when you need it.
 - Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
 - Fix all typing issues.
+- Enable better compression for any table-like data. Mostly targets GTSM data that is now better compressed.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.

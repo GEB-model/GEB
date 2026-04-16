@@ -23,7 +23,9 @@ from geb.workflows.io import (
     create_hash_from_parameters,
     get_window,
     read_hash,
+    read_table,
     write_hash,
+    write_table,
     write_zarr,
 )
 
@@ -1185,3 +1187,58 @@ def test_read_write_hash() -> None:
     hash_val = ""
     write_hash(hash_file, hash_val)
     assert read_hash(hash_file) == hash_val
+
+
+def test_write_table_roundtrip() -> None:
+    """Test write_table and read_table for various DataFrame configurations."""
+    # 1. Simple DataFrame with various types
+    df_simple = pd.DataFrame(
+        {
+            "int_col": [1, 2, 3],
+            "float_col": [1.1, 2.2, 3.3],
+            "bool_col": [True, False, True],
+            "string_col": ["a", "b", "c"],
+            "dt_col": pd.to_datetime(["2021-01-01", "2021-01-02", "2021-01-03"]),
+        }
+    )
+
+    fp = tmp_folder / "test_simple.parquet"
+    write_table(df_simple, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_simple, df_read)
+
+    # 2. DataFrame without index (index should be preserved if it's just a RangeIndex)
+    df_no_index = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    fp = tmp_folder / "test_no_index.parquet"
+    write_table(df_no_index, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_no_index, df_read)
+
+    # 3. DataFrame with named index
+    df_named_index = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    df_named_index.index.name = "my_index"
+    fp = tmp_folder / "test_named_index.parquet"
+    write_table(df_named_index, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_named_index, df_read)
+
+    # 4. DataFrame with MultiIndex
+    df_multi = pd.DataFrame(
+        {"val": [1, 2, 3, 4]},
+        index=pd.MultiIndex.from_tuples(
+            [("A", 1), ("A", 2), ("B", 1), ("B", 2)], names=["idx1", "idx2"]
+        ),
+    )
+    fp = tmp_folder / "test_multi.parquet"
+    write_table(df_multi, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_multi, df_read)
+
+    # 5. DataFrame with large amount of data to test row_group_size and page_size
+    df_large = pd.DataFrame(
+        {"a": np.random.randint(0, 100, size=1000), "b": np.random.random(size=1000)}
+    )
+    fp = tmp_folder / "test_large.parquet"
+    write_table(df_large, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_large, df_read)
