@@ -29,13 +29,12 @@ def get_resources(cluster_name):
     of available nodes for parallel scheduling.
     defq has MaxTime=7 days; build/run stay within that, spinup uses ivm-fat.
 
-    32 CPUs is chosen for spinup: GEB uses Numba TBB threading which scales
-    across all allocated cores. ivm-fat has node001 (64 CPUs) and node243
-    (128 CPUs), so 32 CPUs allows 2 and 4 concurrent spinup jobs per node
-    respectively (6 total), which fits within the QOS MaxJobsPU=8 limit.
-    Using 64 CPUs would drop concurrent capacity to just 3 jobs across both nodes.
+    64 CPUs chosen for spinup: land_surface_model is the dominant cost and
+    parallelises linearly with TBB threads up to memory-bandwidth saturation.
+    ivm-fat has node001 (64 CPUs, zen2) and node243 (128 CPUs, zen4).
+    64 CPUs fits both nodes and halves land_surface_model time vs 32 CPUs.
     """
-    return 120000, "defq,ivm,ivm-fat", 32, ""
+    return 120000, "defq,ivm,ivm-fat", 64, ""
 
 
 # defq MaxTime = 7 days (10080 min); build and run fit within 5 days.
@@ -94,7 +93,11 @@ rule build_cluster:
         # when multiple jobs share the same node.
         export NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK
         cd {params.cluster_dir}
-        geb build --continue &> {log}
+        # Ensure input data version matches the current GEB version before building.
+        # This auto-runs any run-update methods (e.g. new data setup steps added in
+        # version updates) so that --continue builds pick up new required data.
+        geb update-version &>> {log} || true
+        geb build --continue &>> {log}
         touch {output}
         """
 
@@ -123,6 +126,9 @@ rule spinup_cluster:
         # Setting PYTHONOPTIMIZE=1 is equivalent to `python -O`, which sets
         # __debug__=False and disables Numba BOUNDSCHECK (significant per-access overhead).
         export PYTHONOPTIMIZE=1
+        # Enable AVX/AVX-512 instructions. ivm-fat nodes (zen2/zen4) support AVX2/AVX-512
+        # and do not suffer from the frequency-throttling issue seen on some Intel CPUs.
+        export NUMBA_ENABLE_AVX=1
         cd {params.cluster_dir}
         # Ensure input data version matches the current GEB version before running.
         geb update-version &>> {log}
@@ -152,6 +158,7 @@ rule run_cluster:
         if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
         export NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK
         export PYTHONOPTIMIZE=1
+        export NUMBA_ENABLE_AVX=1
         cd {params.cluster_dir}
         geb run &> {log}
         touch {output}
