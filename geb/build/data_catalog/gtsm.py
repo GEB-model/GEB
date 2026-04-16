@@ -285,6 +285,7 @@ class GTSM_timeseries(Adapter):
                                 progress=False,
                             )
                         )
+                        temp_nc_path.unlink()  # delete the temporary nc file
 
                         if not variable_station_locations_file.exists():
                             station_locations: gpd.GeoDataFrame = gpd.GeoDataFrame(
@@ -416,9 +417,7 @@ class GTSM_timeseries(Adapter):
         das: list[xr.DataArray] = []
         for zarr_path in zarr_paths:
             das.append(
-                read_zarr(zarr_path)
-                .isel(stations=station_locations.index.values)
-                .compute()
+                read_zarr(zarr_path).sel(stations=station_locations.index).compute()
             )
 
         da: xr.DataArray = xr.concat(das, dim="time")
