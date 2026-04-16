@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from geb.hydrology.landcovers import FOREST
 from geb.workflows.io import read_geom
@@ -358,3 +359,226 @@ class Government(AgentBaseClass):
         print(
             f"Farmers removed: {len(unique_farmer_indices):,} ({farmers_before:,} → {crop_farmers.n:,})"
         )
+
+    def adaptation(self) -> None:
+        """Decide whether adaptation is needed and apply appropriate adaptation measures.
+
+        Checks if adaptation is enabled and if it is January 1st, then calculates EAD,
+        equity, and ecosystem indicators. If any thresholds are crossed, applies the corresponding
+        adaptation measures (building floodproofing, subsidies, or reforestation).
+        """
+        # something to specify that this should only run when adaptation is turned on in the config file
+        # should this step be skipped during spinup?
+        if "adaptation" not in self.config or not self.config["adaptation"].get(
+            "enabled", True
+        ):
+            return  # exits because adaptation is not (enabled) in the config file
+        if not (
+            self.model.current_time.month == 1 and self.model.current_time.day == 1
+        ):
+            return  # exits because it is not the first of January
+
+        # calculate the water risk, equity and ecosystem health for the current year (adaptation is enabled and it is january first)
+        EAD_value = self.calculate_EAD()  # this is defined by the EAD
+        equity_indicator_value = (
+            self.calculate_equity_indicator()
+        )  # this is defined by the exposure inequalty
+        ecosystem_indicator_value = (
+            self.calculate_ecosystem_indicator()
+        )  # this is defined by the ecosystem indicator
+
+        # Set the indicator value and the thresholds for the adaptation decision.
+        # but they should be defined in such a way that they trigger adaptation when threshold is crossed
+
+        thresholds = {
+            # defines the threshold --> value in current situation, threshold
+            "EAD": (EAD_value, self.config["adaptation"].get("EAD_threshold")),
+            "equity_indicator": (
+                equity_indicator_value,
+                self.config["adaptation"].get("equity_indicator_threshold"),
+            ),
+            "ecosystem_indicator": (
+                ecosystem_indicator_value,
+                self.config["adaptation"].get("ecosystem_indicator_threshold"),
+            ),
+        }
+
+        # if any of these the thresholds are crossed, we adapt the policies so a make a list of the thresholds that are crossed
+        triggered = [key for key, value in thresholds.items() if value[0] > value[1]]
+
+        # if one of the threshold is triggered something needs to be done
+        if triggered:
+            print(
+                f"Adaptation needed, the following thresholds are crossed: {triggered}"
+            )
+            self.apply_adaptation(
+                triggered
+            )  # we now know what has caused the need for adaptation, so now we move on and actually implement the adaptation through another function, what caused the trigger is passed to this function
+        else:
+            print(
+                "No adaptation needed, all thresholds are below the defined thresholds"
+            )
+
+    def calculate_EAD(self) -> None | float:
+        """Calculate the EAD for the current year.
+
+        Returns:
+         the expected annual damage in euros, which is calculated as the product of the probability of a  hazard occurring and the potential damage caused by that hazard.
+        """
+        # should also only be calculated if adaptation is turned on in the config file and it is the first of jan otherwise it is not needed
+        if "adaptation" not in self.config or not self.config["adaptation"].get(
+            "enabled", True
+        ):
+            return  # exit because adaptation is not enabled in the config file
+        if not (
+            self.model.current_time.month == 1 and self.model.current_time.day == 1
+        ):
+            return
+
+        households = self.agents.households
+        return_periods = households.return_periods
+
+        total_damage_per_rp = np.zeros(len(return_periods), dtype=np.float64)
+        for i, return_period in enumerate(return_periods):
+            flood_map = households.flood_maps[return_period]
+            total_damage_per_rp[i] = households.flood(
+                flood_map
+            )  # the flood function in household agent calculates the damages for all assets and land use types.
+
+        # sort ascending by return period so exceedance probability is descending
+        sorted_rp = np.argsort(return_periods)
+        exceedance_probabilities = 1.0 / return_periods[sorted_rp]
+        sorted_damages = total_damage_per_rp[sorted_rp]
+
+        EAD = np.trapezoid(sorted_damages, x=exceedance_probabilities)
+        return EAD
+
+    def calculate_equity_indicator(self) -> None | float:
+        # should also only be calculated if adaptation is turned on in the config file otherwise it is not needed
+        """Calculate the equity for the current year.
+
+        Returns:
+         the equity indicator value.
+        """
+        if "adaptation" not in self.config or not self.config["adaptation"].get(
+            "enabled", True
+        ):
+            return  # exit because adaptation is not enabled in the config file
+        if not (
+            self.model.current_time.month == 1 and self.model.current_time.day == 1
+        ):
+            return
+        # this is defined by the exposure inequalty
+        equity_index = 0.7  # this should become an actual calculation
+        return equity_index
+
+    def calculate_ecosystem_indicator(self) -> None | float:
+        # should also only be calculated if adaptation is turned on in the config file otherwise it is not needed
+        """Calculate the ecosystem health for the current year.
+
+        Returns:
+        the ecosystem indicator value.
+        """
+        if "adaptation" not in self.config or not self.config["adaptation"].get(
+            "enabled", True
+        ):
+            return  # exit because adaptation is not enabled in the config file
+        if not (
+            self.model.current_time.month == 1 and self.model.current_time.day == 1
+        ):
+            return
+
+        # assign values per landuse type (maybe store in dictionary) (what do we base this on, tbd find literature)
+        from geb.hydrology.landcovers import (
+            FOREST,
+            GRASSLAND_LIKE,
+            NON_PADDY_IRRIGATED,
+            OPEN_WATER,
+            PADDY_IRRIGATED,
+            SEALED,
+        )
+
+        values_per_land_use_type = {
+            FOREST: 1.0,  # highest ecosystem quality
+            GRASSLAND_LIKE: 0.7,
+            OPEN_WATER: 0.6,
+            PADDY_IRRIGATED: 0.3,
+            NON_PADDY_IRRIGATED: 0.3,
+            SEALED: 0.0,  # lowest ecosystem quality
+        }
+
+        # land use type per HRU and also area
+        land_use_type_per_HRU = self.model.hydrology.HRU.var.land_use_type
+        area_per_HRU = self.model.hydrology.HRU.var.cell_area
+
+        # multiply the values with the area of each land use type
+        # sum these
+        weighted_sum = sum(
+            np.sum(area_per_HRU[land_use_type_per_HRU == land_use_type]) * value
+            for land_use_type, value in values_per_land_use_type.items()
+        )
+
+        # divide by total catchment area
+        total_catchment_area = area_per_HRU.sum()
+        ecosystem_indicator = weighted_sum / total_catchment_area
+
+        return ecosystem_indicator
+
+    def apply_adaptation(self, triggered: list) -> None:
+        """Apply the adaptation measures decided in the adaptation function.
+
+        Args:
+            triggered: List of adaptation triggers that were activated.
+        """
+        if "adaptation" not in self.config or not self.config["adaptation"].get(
+            "enabled", True
+        ):
+            return  # exit because adaptation is not enabled in the config file
+        if not (
+            self.model.current_time.month == 1 and self.model.current_time.day == 1
+        ):
+            return  # exits because it is not the first of January
+
+        if "EAD" in triggered:
+            # the government decides which measure to apply based on what triggered the need for adaptation
+            # apply updating the building structure but this takes the number of households that are adapting as input so we fist need to define that
+            adaptation_fraction = self.config[
+                "adaptation"
+            ].get(
+                "adaptation_fraction", 0.1
+            )  # default to 10% of households adapting, otherwise specified in config file
+            # figure out which buildings are marked as flooded in this year
+            household_agents = self.agents.households
+            flooded_buildings_mask = set(
+                household_agents.buildings.loc[
+                    household_agents.buildings["flooded"] == True, "id"
+                ].astype(int)
+            )
+            # figure out which households are in these flooded buildings
+            households_in_flooded_buildings = np.where(
+                pd.Series(household_agents.var.building_id_of_household.data).isin(
+                    flooded_buildings_mask
+                )
+            )[0]
+            # the government decides who of those are adapting, we only pick a fraction as specified in the config file
+            n_to_adapt = int(len(households_in_flooded_buildings) * adaptation_fraction)
+            adapting_households_sample = np.random.choice(
+                households_in_flooded_buildings, size=n_to_adapt, replace=False
+            )
+            # use the function to floodproof the buildings of the households who are selected to adapt.
+            household_agents.update_building_adaptation_status(
+                adapting_households_sample
+            )
+            print(
+                f"the government adapted {n_to_adapt} of the {len(households_in_flooded_buildings)} households in the floodzone by floodproofing their buildings"
+            )
+
+        # if "equity_indicator" in triggered:
+        #     # apply subsidies" --> maybe we can change who the subsidies are applied to but idk if that would make it better
+        #     # this piece of code is still in Veerle's branch so can be uncommented when merged
+        #     self.provide_subsidies()
+
+        if "ecosystem_indicator" in triggered:
+            # apply reforestation --> to do: but maybe a percentage of the suitable areas instead of all suitable areas
+            # the threshold for the reforestation amount can be set in the config file under forest_reforestation_potential_threshold, set to 0.9 to convert only the top 10% suitable areas in the model.yml
+            self.prepare_modified_soil_maps_for_forest()
