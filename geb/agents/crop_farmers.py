@@ -1022,7 +1022,9 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
-        why_map: np.ndarray = read_grid(self.model.files["grid"]["groundwater/why_map"])
+        why_map = self.model.hydrology.grid.load2d(
+            self.model.files["grid"]["groundwater/why_map"], compress=False
+        )
 
         self.var.why_class[:] = sample_from_map(
             why_map, self.var.locations.data, self.grid.gt
@@ -5357,7 +5359,7 @@ class CropFarmers(AgentBaseClass):
         """
         # get elevation per farmer
         elevation_subgrid = read_grid(
-            self.model.files["subgrid"]["landsurface/elevation"],
+            self.model.files["subgrid"]["landsurface/elevation"], ndim=2
         )
         elevation_subgrid = np.nan_to_num(elevation_subgrid, copy=False, nan=0.0)
         decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)

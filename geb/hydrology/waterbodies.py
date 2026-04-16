@@ -31,7 +31,7 @@ from geb.geb_types import Array, ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows import balance_check
-from geb.workflows.io import read_geom, read_grid
+from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -356,7 +356,7 @@ class WaterBodies(Module):
 
         """
         # load lakes/reservoirs map with a single ID for each lake/reservoir
-        waterbody_id_unmapped: np.ndarray = self.grid.load(
+        waterbody_id_unmapped: np.ndarray = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"]
         )
         waterbody_outflow_points_original_ids = self.get_outflows(waterbody_id_unmapped)
@@ -521,11 +521,6 @@ class WaterBodies(Module):
         # has mulitple occurences in the same lake, this seems to happen
         # especially for very small lakes with a small drainage area.
         # In such cases, we take the outflow cell with the lowest elevation.
-        outflow_elevation = read_grid(
-            self.model.files["grid"]["landsurface/elevation_min_m"]
-        )
-        outflow_elevation = self.grid.compress(outflow_elevation)
-
         waterbody_outflow_points = np.where(
             upstream_area_n_cells == upstream_area_within_waterbodies,
             waterbody_id,
@@ -547,8 +542,8 @@ class WaterBodies(Module):
             # has mulitple occurences in the same lake, this seems to happen
             # especially for very small lakes with a small drainage area.
             # In such cases, we take the outflow cell with the lowest elevation.
-            outflow_elevation = self.grid.compress(
-                read_grid(self.model.files["grid"]["landsurface/elevation_min_m"])
+            outflow_elevation = self.hydrology.grid.load2d(
+                self.model.files["grid"]["landsurface/elevation_min_m"],
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:

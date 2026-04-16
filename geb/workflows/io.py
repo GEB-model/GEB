@@ -16,7 +16,7 @@ import warnings
 from collections.abc import Hashable
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Iterable, cast, overload
+from typing import Any, Iterable, Literal, cast, overload
 
 import dask.array
 import dask.tokenize
@@ -44,7 +44,6 @@ from zarr.errors import ZarrUserWarning
 from geb.geb_types import (
     ArrayDatetime64,
     ThreeDArray,
-    ThreeDArrayFloat32,
     TwoDArray,
     TwoDArrayFloat32,
 )
@@ -126,61 +125,122 @@ def write_array(
 
 @overload
 def read_grid(
-    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
-) -> ThreeDArray: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
-) -> tuple[ThreeDArray, Affine, str]: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[True] = True,
+    return_transform_and_crs: Literal[False] = False,
 ) -> TwoDArray: ...
 
 
 @overload
 def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[True] = True,
+    *,
+    return_transform_and_crs: Literal[True],
 ) -> tuple[TwoDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[True] = True,
+    return_transform_and_crs: Literal[False] = False,
+) -> ThreeDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[True] = True,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[ThreeDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[False] = False,
+    return_transform_and_crs: Literal[False] = False,
+) -> zarr.Array: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[False] = False,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[zarr.Array, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[False] = False,
+    return_transform_and_crs: Literal[False] = False,
+) -> zarr.Array: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[False] = False,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[zarr.Array, Affine, str]: ...
 
 
 def read_grid(
     filepath: Path,
-    layer: int | None = None,
+    ndim: Literal[2, 3],
+    load: bool = True,
     return_transform_and_crs: bool = False,
-) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
-    """Load a raster grid from a .tif or .zarr file.
+) -> (
+    TwoDArray
+    | ThreeDArray
+    | zarr.Array
+    | tuple[TwoDArray | ThreeDArray | zarr.Array, Affine, str]
+):
+    """Load a raster grid from .zarr file.
 
     Args:
-        filepath: The path to the .tif or .zarr file.
-        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is None.
+        filepath: The path of the .zarr file.
+        ndim: The expected number of dimensions of the raster data (2 or 3).
+        load: Whether to load the data into memory. If False, a zarr array will be returned instead of a numpy array. Default is True.
         return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
 
     Returns:
         The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
 
     Raises:
-        ValueError: If layer is specified but data is not 3-dimensional.
+        ValueError: If the loaded data does not have the expected number of dimensions.
     """
     store: zarr.storage.LocalStore = zarr.storage.LocalStore(filepath, read_only=True)
     group: zarr.Group = zarr.open_group(store, mode="r")
     data_array: zarr.Array | zarr.Group = group[filepath.stem]
+
     assert isinstance(data_array, zarr.Array)
-    if layer is not None:
-        if not data_array.ndim == 3:
-            raise ValueError("Data must be 3-dimensional to select a layer")
-        data = data_array[layer]
-    else:
+
+    if load:
         data = data_array[:]
-    assert isinstance(data, np.ndarray)
-    data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
-    if data.dtype == np.float64:
-        data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
-    assert data.ndim in (2, 3)
+        assert isinstance(data, np.ndarray)
+        data: TwoDArray | ThreeDArray = data  # ty:ignore[invalid-assignment]
+    else:
+        data = data_array
+        assert isinstance(data, zarr.Array)
+
+    if data.ndim != ndim:
+        raise ValueError(f"Expected data with {ndim} dimensions, but got {data.ndim}")
+
     if return_transform_and_crs:
         x_array: zarr.Array | zarr.Group = group["x"]
         assert isinstance(x_array, zarr.Array)

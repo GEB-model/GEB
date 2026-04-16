@@ -27,7 +27,7 @@ def get_error_cases() -> list[Path]:
 def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) -> None:
     """Test the land surface model with previous error cases."""
     # Set the global N_SOIL_LAYERS variable required by the numba function
-    landsurface_file.N_SOIL_LAYERS = 6
+    landsurface_file.N_SOIL_LAYERS = 6  # ty:ignore[unresolved-attribute]
 
     # Load the error case data
     with np.load(error_case_path) as data:
