@@ -25,6 +25,8 @@ import joblib
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyproj
 import rasterio
 import requests
@@ -64,19 +66,57 @@ def read_table(fp: Path, **kwargs: Any) -> pd.DataFrame:
     return pd.read_parquet(fp, engine="pyarrow", **kwargs)
 
 
-def write_table(df: pd.DataFrame, fp: Path) -> None:
+def write_table(df: pd.DataFrame, fp: Path, **kwargs: Any) -> None:
     """Save a pandas DataFrame to a parquet file.
 
     Args:
         df: The pandas DataFrame to save.
         fp: The path to the output parquet file.
+        kwargs: Additional keyword arguments to pass to `df.to_parquet`.
     """
-    df.to_parquet(
+    table = pa.Table.from_pandas(df)
+
+    int_and_dt_cols = [
+        n
+        for n, t in zip(table.schema.names, table.schema.types)
+        if pa.types.is_integer(t) or pa.types.is_timestamp(t)
+    ]
+    bool_cols = [
+        n
+        for n, t in zip(table.schema.names, table.schema.types)
+        if pa.types.is_boolean(t)
+    ]
+    float_cols = [
+        n
+        for n, t in zip(table.schema.names, table.schema.types)
+        if pa.types.is_floating(t)
+    ]
+    dict_cols = [
+        n
+        for n, t in zip(table.schema.names, table.schema.types)
+        if pa.types.is_string(t) or pa.types.is_binary(t)
+    ]
+
+    # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
+    column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
+
+    # Booleans use RLE (which includes bit-packing)
+    for col in bool_cols:
+        column_encoding[col] = "RLE"
+
+    pq.write_table(
+        table,
         fp,
-        engine="pyarrow",
         compression="zstd",
-        compression_level=22,
-        row_group_size=max(min(10_000, len(df)), 1),
+        compression_level=22,  # Higher level for better disk density
+        use_dictionary=dict_cols,
+        column_encoding=column_encoding,
+        use_byte_stream_split=float_cols,
+        data_page_version="2.0",
+        row_group_size=len(table),  # Single row group for better compression
+        data_page_size=10_000_000,  # Larger page size for better compression
+        write_page_index=False,  # Removes extra metadata overhead
+        write_statistics=False,  # Removes min/max/null count storage
     )
 
 
