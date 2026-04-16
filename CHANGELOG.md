@@ -2,6 +2,17 @@
 - Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
 - Remove setup_irrigation_sources from build process as it is not needed anymore.
 - Fix division by zero error for reservoirs that have no long term inflow.
+- Fix basin delineation for endorheic basins.
+- Table-like data is exported as parquet rather than csv (saves lots of space on disk).
+- Better compression of reported data. Most importantly, floats are now bitrounded with a maximum error of around 0.01%. In one test, the hourly discharge is now 168MB instead of 487MB.
+- In reported spatial data, the time dimension is now the last dimension. This allows for better compressibility (because of spatial auto-correlation). If you make plots and read the data with xarray you likely won't notice. If you read the data in funky ways with numpy, you may need to adapt some scripts.
+- Report discharge for outflow points of all rivers instead of just the outflow at the end of the basin with _outflow_points is set to true in the report.
+- Use the reported time series tables instead of grid when setting up the SFINCS models and estimating return period values.
+- Do not report discharge grid data by default in example (saving lots of disk space). You can re-enable this manually when you need it.
+- Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
+- Fix all typing issues.
+- Reduce RAM usage of reading GTSM data.
+- Enable better compression for any table-like data. Mostly targets GTSM data that is now better compressed.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.

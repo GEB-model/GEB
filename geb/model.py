@@ -492,8 +492,12 @@ class GEBModel(Module):
             self.hydrology.groundwater.initalize_modflow_model()
             self.hydrology.landsurface.set_global_variables()
 
+        self.report_folder = self.model.output_folder / "report" / self.model.run_name
+
         if create_reporter:
-            self.reporter = Reporter(self, clean=clean_report_folder)
+            self.reporter = Reporter(
+                self, self.report_folder, clean=clean_report_folder
+            )
 
     def step_to_end(self) -> None:
         """Run the model to the end of the simulation period."""

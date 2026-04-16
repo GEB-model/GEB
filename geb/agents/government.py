@@ -144,7 +144,7 @@ class Government(AgentBaseClass):
             else 0.5
         )
 
-        forest_potential = hydrology.grid.load(
+        forest_potential = hydrology.grid.load2d(
             self.model.files["grid"]["landsurface/forest_restoration_potential_ratio"]
         )
         suitability_grid = forest_potential >= threshold
