@@ -39,6 +39,19 @@ agent_settings:
       forest_restoration_potential_threshold: 0.8  # range 0–1
 ```
 
+```yaml
+# Incremental: plant 10% of suitable area per year, ranked by potential (highest first)
+agent_settings:
+  government:
+    plant_forest:
+      forest_restoration_potential_threshold: 0.5
+      increment_fraction: 0.1   # fraction of suitable area to plant per call (0–1)
+```
+
+In incremental mode all suitable HRUs (those meeting the threshold) are sorted by their `forest_restoration_potential_ratio` value in descending order. On each call the model skips HRUs already classified as FOREST (planted in previous years or originally forest) and plants the next `increment_fraction × n_suitable` HRUs. No manual step counter is needed — the function advances automatically each time it is called. When all suitable HRUs are already forest, a warning is logged and no action is taken.
+
+When used together with the adaptation pathway (see below), `prepare_modified_soil_maps_for_forest` is called every January 1st when the ecosystem indicator threshold is crossed, so the forest grows by one increment per year automatically.
+
 **2. Updating soil properties**
 
 For all HRUs marked as suitable, the model performs an in-memory update, replacing their soil properties with the mean values of existing forest HRUs in the domain. This ensures the converted areas behave hydrologically like forest from the start of the simulation. The following soil properties are updated:
@@ -66,6 +79,7 @@ A diagnostic figure (`reforestation_scenario.png`) is saved to `output/forest_pl
 |-----|------|---------|-------------|
 | `plant_forest` | `bool` or `dict` | `false` | Enable reforestation. Set to `true` or a config dict. |
 | `plant_forest.forest_restoration_potential_threshold` | `float` | `0.5` | Minimum suitability ratio for a cell to be converted (0–1). |
+| `plant_forest.increment_fraction` | `float` | `null` (disabled) | Fraction of suitable area to plant per call (e.g. `0.1` = 10%). When `null`, all suitable area is planted at once. Auto-advances on each call by skipping already-forested HRUs. |
 
 ---
 
