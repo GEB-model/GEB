@@ -124,6 +124,7 @@ class Government(AgentBaseClass):
         if self.model.current_timestep == 0 and self.config.get("plant_forest", False):
             self.prepare_modified_soil_maps_for_forest()
 
+        self.adaptation()
         self.set_irrigation_limit()
 
         self.report(locals())
@@ -179,7 +180,7 @@ class Government(AgentBaseClass):
             remaining = sorted_indices[~already_forest[sorted_indices]]
 
             if len(remaining) == 0:
-                logger.warning(
+                self.model.logger.warning(
                     "Incremental reforestation: all %d suitable HRUs are already "
                     "forest. No planting applied.",
                     n_suitable,
@@ -188,7 +189,7 @@ class Government(AgentBaseClass):
 
             chunk_indices = remaining[:chunk_size]
             n_already = n_suitable - len(remaining)
-            logger.info(
+            self.model.logger.info(
                 "Incremental reforestation: planting %d HRUs (rank %d–%d of %d "
                 "suitable; %d already forest).",
                 len(chunk_indices),
@@ -236,6 +237,11 @@ class Government(AgentBaseClass):
         hydrology.HRU.var.topwater_m[suitability_HRU] -= drawn
 
         self.remove_farmers_from_converted_forest_areas(suitability_HRU)
+
+        # Explicitly mark all planted HRUs as FOREST so that future calls to
+        # prepare_modified_soil_maps_for_forest can detect them via the
+        # already_forest check and advance to the next increment.
+        hydrology.HRU.var.land_use_type[suitability_HRU] = FOREST
 
         output_folder = self.model.output_folder / "forest_planting"
         output_folder.mkdir(parents=True, exist_ok=True)
@@ -404,7 +410,12 @@ class Government(AgentBaseClass):
         }
 
         # if any of these the thresholds are crossed, we adapt the policies so a make a list of the thresholds that are crossed
-        triggered = [key for key, value in thresholds.items() if value[0] > value[1]]
+        # skip indicators where the value or threshold is None (not yet implemented)
+        triggered = [
+            key
+            for key, value in thresholds.items()
+            if value[0] is not None and value[1] is not None and value[0] > value[1]
+        ]
 
         # if one of the threshold is triggered something needs to be done
         if triggered:
@@ -436,6 +447,9 @@ class Government(AgentBaseClass):
             return
 
         households = self.agents.households
+        if not hasattr(households, "flood"):
+            # households.flood() is not yet implemented; skip EAD calculation
+            return None
         return_periods = households.return_periods
 
         total_damage_per_rp = np.zeros(len(return_periods), dtype=np.float64)
