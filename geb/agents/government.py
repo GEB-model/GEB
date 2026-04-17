@@ -179,6 +179,11 @@ class Government(AgentBaseClass):
             sorted_indices = suitable_indices[np.argsort(suitable_potentials)[::-1]]
 
             n_suitable = len(sorted_indices)
+            if n_suitable == 0:
+                self.model.logger.warning(
+                    "Incremental reforestation: no suitable HRUs found. No planting applied."
+                )
+                return
 
             already_forest = hydrology.HRU.var.land_use_type == FOREST
             remaining = sorted_indices[~already_forest[sorted_indices]]
