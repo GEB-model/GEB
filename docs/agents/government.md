@@ -83,6 +83,51 @@ A diagnostic figure (`reforestation_scenario.png`) is saved to `output/forest_pl
 
 ---
 
+## Adaptation Pathway
+
+The adaptation pathway is an optional annual decision loop in which the government monitors three indicators and triggers adaptation measures when any threshold is crossed. It runs every January 1st during the simulation.
+
+**How it works**
+
+On each January 1st the government calculates:
+
+- **EAD** — Expected Annual Damage from flooding (€), integrated over the damage–exceedance probability curve.
+- **Equity indicator** — A measure of how evenly flood exposure is distributed across households (0–1, where 1 = perfect equality).
+- **Ecosystem indicator** — A measure of ecosystem health (0–1, where 1 = healthy).
+
+If any indicator exceeds its threshold, the corresponding adaptation measure is applied:
+
+| Indicator crossed | Measure applied |
+|---|---|
+| EAD > `EAD_threshold` | Floodproof buildings of a fraction of at-risk households |
+| Equity < `equity_indicator_threshold` | *(planned — subsidies)* |
+| Ecosystem < `ecosystem_indicator_threshold` | Plant one increment of forest (`prepare_modified_soil_maps_for_forest`) |
+
+**Configuration**
+
+```yaml
+agent_settings:
+  government:
+    adaptation:
+      enabled: true
+      EAD_threshold: 1000000          # in euros
+      equity_indicator_threshold: 0.5  # 0–1
+      ecosystem_indicator_threshold: 0.5  # 0–1
+      adaptation_fraction: 0.1        # fraction of at-risk households to floodproof per year
+```
+
+**Configuration reference**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `adaptation.enabled` | `bool` | `false` | Enable the adaptation pathway. |
+| `adaptation.EAD_threshold` | `float` | `1000000` | EAD (€) above which flood adaptation is triggered. |
+| `adaptation.equity_indicator_threshold` | `float` | `0.5` | Equity value below which equity adaptation is triggered. |
+| `adaptation.ecosystem_indicator_threshold` | `float` | `0.5` | Ecosystem health value below which reforestation is triggered. |
+| `adaptation.adaptation_fraction` | `float` | `0.1` | Fraction of at-risk households to floodproof per trigger (0–1). |
+
+---
+
 ### Policy
 
 *Coming soon.*
