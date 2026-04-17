@@ -14,11 +14,21 @@ import numpy as np
 import pandas as pd
 import tqdm
 import xarray as xr
-from zarr.codecs.numcodecs import FixedScaleOffset
+from zarr.codecs.numcodecs import Delta, FixedScaleOffset
 
 from geb.workflows.io import read_geom, read_zarr, write_geom, write_zarr
 
 from .base import Adapter
+
+gtsm_filters: list = [
+    FixedScaleOffset(
+        offset=0,
+        scale=1000,  # gtsm has a precision of 0.001, so multiplying by 1000 allows us to store as int16 without losing any precision
+        dtype="float32",  # float 32 is sufficient to store the data with the given scale and offset
+        astype="int16",  # int16 has sufficient range here. The int16 range of -32768 to 32767, so can store values from -32.768 to 32.767 with a scale of 1000, which is sufficient for the GTSM data
+    ),
+    Delta(dtype="int16", astype="int16"),
+]
 
 
 def _retrieve(request: dict[str, Any], output_path: str) -> None:
@@ -216,14 +226,6 @@ class GTSM_timeseries(Adapter):
             name_to_check = variable
 
         years = [str(year) for year in range(self.start_year, self.end_year + 1)]
-        filters: list = [
-            FixedScaleOffset(
-                offset=0,
-                scale=1000,  # gtsm has a precision of 0.001, so multiplying by 1000 allows us to store as int16 without losing any precision
-                dtype="float32",  # float 32 is sufficient to store the data with the given scale and offset
-                astype="int16",  # int16 has sufficient range here. The int16 range of -32768 to 32767, so can store values from -32.768 to 32.767 with a scale of 1000, which is sufficient for the GTSM data
-            ),
-        ]
 
         for year_batch in batched(years, 5):
             final_zarr_fp = (
@@ -281,7 +283,7 @@ class GTSM_timeseries(Adapter):
                                 path=None,
                                 crs=4326,
                                 compression_level=1,
-                                filters=filters,
+                                filters=gtsm_filters,
                                 progress=False,
                             )
                         )
@@ -317,7 +319,7 @@ class GTSM_timeseries(Adapter):
                         final_zarr_fp,
                         crs=4326,
                         compression_level=22,
-                        filters=filters,
+                        filters=gtsm_filters,
                         shards={"stations": 20},
                     )
 
@@ -377,7 +379,9 @@ class GTSM_timeseries(Adapter):
             variable: The variable to read from the GTSM data.
 
         Returns:
-            A tuple containing a pandas DataFrame with the GTSM time series data clipped to the specified bounds and a GeoDataFrame with station information.
+            A tuple containing:
+            - a xarray DataArray containing the GTSM data clipped to the specified bounds.
+            - a GeoDataFrame containing the station locations for the GTSM data clipped to the specified bounds.
 
         Raises:
             FileNotFoundError: If the station metadata for the requested variable
@@ -421,8 +425,7 @@ class GTSM_timeseries(Adapter):
             )
 
         da: xr.DataArray = xr.concat(das, dim="time")
+        da: xr.DataArray = da.chunk({"stations": 1, "time": -1})
 
-        gtsm_data_region_pd: pd.DataFrame = da.to_pandas()
-
-        assert isinstance(gtsm_data_region_pd, pd.DataFrame)
-        return gtsm_data_region_pd, station_locations
+        assert isinstance(da, xr.DataArray)
+        return da, station_locations

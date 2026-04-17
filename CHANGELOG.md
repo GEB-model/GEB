@@ -12,10 +12,14 @@
 - Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
 - Fix all typing issues.
 - Reduce RAM usage of reading GTSM data.
-- Enable better compression for any table-like data. Mostly targets GTSM data that is now better compressed.
+- Enable better compression for any table-like data.
+- Save GTSM data as zarr with fixedscaleoffset and delta compression. Also adapt GTSM readers in model accordingly.
+- Remove all local caching during build to save disk space.
+- Enable automatic delta compression of time coordinates in zarr files.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
+- Re-run `setup_gtsm_station_data`.
 
 # v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.

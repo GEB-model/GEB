@@ -183,8 +183,7 @@ class LandSurface(BuildModelBase):
 
         fabdem: xr.DataArray = self.data_catalog.fetch(
             "fabdem",
-            mask=potential_flood_area_with_buffer,
-        ).read()
+        ).read(mask=potential_flood_area_with_buffer)
 
         target: xr.DataArray = self.subgrid["mask"].chunk({"x": 5000, "y": 5000})
         assert target.rio.crs is not None, "target grid must have a crs"

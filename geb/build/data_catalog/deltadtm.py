@@ -24,7 +24,7 @@ import xarray as xr
 from shapely.geometry.base import BaseGeometry
 
 from geb.workflows.io import fetch_and_save
-from geb.workflows.raster import clip_with_geometry, convert_nodata
+from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
@@ -219,10 +219,4 @@ class DeltaDTM(Adapter):
             The downloaded DeltaDTM data.
         """
         da = self.unpack_and_merge_tiles(self.continents_to_download, self.tile_names)
-        da = clip_with_geometry(
-            da,
-            gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
-            all_touched=True,
-            drop=True,
-        )
         return da
