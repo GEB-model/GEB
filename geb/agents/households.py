@@ -149,7 +149,7 @@ class Households(AgentBaseClass):
             "floorspace",
             "occupancy",
             "height",
-            # "geometry",
+            "geometry",
             "x",
             "y",
             "NAME_1",
@@ -157,6 +157,7 @@ class Households(AgentBaseClass):
             "COST_STRUCTURAL_USD_SQM",
             "COST_NONSTRUCTURAL_USD_SQM",
             "COST_CONTENTS_USD_SQM",
+            #"TOTAL_AREA_SQM",
         ]
         self.buildings = read_table(
             self.model.files["geom"]["assets/open_building_map"],
@@ -591,14 +592,14 @@ class Households(AgentBaseClass):
 
         ### CARO BASED ON DAMAGE and BUILDING FOOTPRINT
 
-        # load household points (only in use for damagescanner, could be removed)
-        household_points = gpd.GeoDataFrame(
-            geometry=gpd.points_from_xy(
-                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
-            ),
-            crs="EPSG:4326",
-        )
-        self.var.household_points = household_points
+        # # load household points (only in use for damagescanner, could be removed)
+        # household_points = gpd.GeoDataFrame(
+        #     geometry=gpd.points_from_xy(
+        #         self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+        #     ),
+        #     crs="EPSG:4326",
+        # )
+        # self.var.household_points = household_points
 
         # buildings = self.buildings.copy()
 
@@ -606,7 +607,7 @@ class Households(AgentBaseClass):
         # household_points_copy["building_id"] = self.var.building_id_of_household
 
         # household_points_copy = household_points_copy.merge(
-        #     buildings[["id", "geometry", "occupancy"]],
+        #     buildings[["id", "geom", "occupancy"]],
         #     left_on="building_id",
         #     right_on="id",
         #     how="left",
@@ -621,8 +622,8 @@ class Households(AgentBaseClass):
         # ].area
 
         # self.var.household_building_area = DynamicArray(
-        #     household_points_copy["building_area"].values.astype(np.float32),
-        #     max_n=self.max_n,
+        #  household_points_copy["building_area"].values.astype(np.float32),
+        #     max_n=self.max_n
         # )
 
         # self.var.property_value = DynamicArray(
@@ -634,22 +635,91 @@ class Households(AgentBaseClass):
         # )
 
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
-        adaptation_costs = (
-            np.maximum(self.var.property_value.data * 0.05, 10_800)
-        ).astype(np.int64)
+        # adaptation_costs = (
+        #     np.maximum(self.var.property_value.data * 0.05, 10_800)
+        # ).astype(np.int64)
+        # self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
+
+        # loan_duration_w = self.model.config["agent_settings"]["households"][
+        #     "loan_duration_years_w"
+        # ]
+        # shutters_total = np.maximum(self.var.property_value.data * 0.02, 2_000).astype(
+        #     np.float32
+        # )
+        # # shutters_annual = shutters_total  # / np.float32(loan_duration_w)
+
+        # self.var.adaptation_costs_shutters = DynamicArray(
+        #     shutters_total, max_n=self.max_n
+        # )
+
+
+        #NEW CODE WITH RECONSTRUCTION VALUES
+        self.var.household_points = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",        
+        )
+
+        hh_bld_ids = pd.Series(self.var.building_id_of_household.data).astype("Int64")
+        unique_bld_ids = hh_bld_ids.dropna().astype(int).unique()
+
+        if unique_bld_ids.size > 0:
+            bld = read_geom(
+                self.model.files["geom"]["assets/open_building_map"],
+                filters=[("id", "in", unique_bld_ids)],
+                columns=["id","geometry","COST_STRUCTURAL_USD_SQM"]
+            )
+            projected_crs = bld.estimate_utm_crs()
+            bld_m = bld.to_crs(projected_crs)
+
+            bld["footprint_m2"] = bld_m.area.astype(np.float32)
+            bld["structural_value_usd"] = (
+                bld["footprint_m2"] * bld["COST_STRUCTURAL_USD_SQM"]   
+            ).astype(np.float32)
+
+            footprint_by_id = bld.set_index("id")["footprint_m2"]
+            value_by_id = bld.set_index("id")["structural_value_usd"]
+
+            hh_per_bld = hh_bld_ids.value_counts(dropna=True).astype(np.float32)
+            value_per_hh_by_id = value_by_id.divide(hh_per_bld, fill_value=0.0)
+
+            hh_footprint_m2 = (
+                footprint_by_id.reindex(hh_bld_ids).fillna(0.0).to_numpy(np.float32)
+            )
+            hh_structural_value_usd = (
+                value_per_hh_by_id.reindex(hh_bld_ids).fillna(0.0).to_numpy(np.float32)
+            )
+        else:
+            hh_footprint_m2 = np.zeros(self.n, dtype=np.float32)
+            hh_structural_value_usd = np.zeros(self.n, dtype=np.float32)
+
+        # buildings = self.buildings.copy()
+
+        # buildings = gpd.GeoDataFrame(
+        #     buildings,
+        #     geometry=gpd.points_from_xy(buildings["x"], buildings["y"]),
+        #     crs="EPSG:4326",
+        # )
+        # adaptation_costs = (
+        #     np.maximum(self.var.max_dam_buildings_structure *  self.var.household_building_area.data * 0.05, 10_800)
+        # ).astype(np.int64)
+        # self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
+
+        # loan_duration_w = self.model.config["agent_settings"]["households"]["loan_duration_years_w"]
+
+        # shutters_cost = np.maximum(self.var.max_dam_buildings_structure * self.var.household_building_area.data * 0.02, 2_000).astype(np.float32)
+        # self.var.adaptation_costs_shutters = DynamicArray(
+        #     shutters_cost, max_n=self.max_n
+        # )
+
+        self.var.household_building_area = DynamicArray(hh_footprint_m2, max_n=self.max_n)
+
+        adaptation_costs = np.maximum(hh_structural_value_usd * 0.05, 10_800).astype(np.int64)
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
 
-        loan_duration_w = self.model.config["agent_settings"]["households"][
-            "loan_duration_years_w"
-        ]
-        shutters_total = np.maximum(self.var.property_value.data * 0.02, 2_000).astype(
-            np.float32
-        )
-        # shutters_annual = shutters_total  # / np.float32(loan_duration_w)
-
-        self.var.adaptation_costs_shutters = DynamicArray(
-            shutters_total, max_n=self.max_n
-        )
+        shutters_cost = np.maximum(hh_structural_value_usd * 0.02, 2_000).astype(np.float32)
+        self.var.adaptation_costs_shutters = DynamicArray(shutters_cost, max_n=self.max_n)
 
         # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
         amenity_premiums = np.random.uniform(0, 0.2, self.n)

@@ -441,7 +441,7 @@ class GEBModel(Module):
 
     def _initialize(
         self,
-        create_reporter: bool, # CARO create_reporter: bool = False
+        create_reporter: bool, 
         current_time: datetime.datetime, #| None = None,
         n_timesteps: int, # = 0,
         timestep_length: datetime.timedelta | relativedelta, # = datetime.timedelta(days=1),
@@ -495,6 +495,7 @@ class GEBModel(Module):
 
         ## CARO
 
+        
         self.hazard_driver = HazardDriver(self)
 
         self.agents = Agents(self)
