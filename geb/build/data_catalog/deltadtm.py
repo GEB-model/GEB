@@ -131,9 +131,8 @@ class DeltaDTM(Adapter):
                 continents_to_download, tile_names, temp_dir
             )
             da = self._merge_tiles(extracted_paths)
-
-        da = convert_nodata(da, np.nan)
-        return da
+            da = convert_nodata(da, np.nan)
+            return da
 
     def _merge_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
         """Merge extracted DeltaDTM tiles into a single xarray DataArray.
