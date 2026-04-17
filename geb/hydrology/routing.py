@@ -1219,7 +1219,7 @@ class Routing(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.ldd: ArrayUint8 = self.grid.load(
+        self.ldd: ArrayUint8 = self.grid.load2d(
             self.model.files["grid"]["routing/ldd"],
         )
 
@@ -1237,12 +1237,12 @@ class Routing(Module):
         )
         self.active_rivers = self.get_active_rivers()
 
-        self.river_ids = self.grid.load(
+        self.river_ids = self.grid.load2d(
             self.model.files["grid"]["routing/river_ids"],
         )
 
         if "routing/retention_basin_ids" in self.model.files["grid"]:
-            self.retention_basin_ids = self.grid.load(
+            self.retention_basin_ids = self.grid.load2d(
                 self.model.files["grid"]["routing/retention_basin_ids"],
             )
             self.retention_basin_data = read_table(
@@ -1340,11 +1340,11 @@ class Routing(Module):
         5. Initialize discharge variables and counters.
 
         """
-        self.grid.var.upstream_area = self.grid.load(
+        self.grid.var.upstream_area = self.grid.load2d(
             self.model.files["grid"]["routing/upstream_area_m2"]
         )
         if "routing/upstream_area_n_cells" in self.model.files["grid"]:
-            self.grid.var.upstream_area_n_cells = self.grid.load(
+            self.grid.var.upstream_area_n_cells = self.grid.load2d(
                 self.model.files["grid"]["routing/upstream_area_n_cells"]
             )
         else:
@@ -1355,13 +1355,13 @@ class Routing(Module):
 
         # Channel Manning's n
         self.grid.var.river_mannings = (
-            self.grid.load(self.model.files["grid"]["routing/mannings"])
+            self.grid.load2d(self.model.files["grid"]["routing/mannings"])
             * self.model.config["parameters"]["mannings_n_multiplier"]
         )
         assert (self.grid.var.river_mannings > 0).all()
 
         # Channel length [meters]
-        self.grid.var.river_length = self.grid.load(
+        self.grid.var.river_length = self.grid.load2d(
             self.model.files["grid"]["routing/river_length_m"]
         )
 
@@ -1375,7 +1375,7 @@ class Routing(Module):
         )
 
         # Channel bottom width [meters]
-        self.observed_average_river_width = self.grid.load(
+        self.observed_average_river_width = self.grid.load2d(
             self.model.files["grid"]["routing/river_width_m"]
         )
 
@@ -1389,7 +1389,7 @@ class Routing(Module):
         # Channel gradient (fraction, dy/dx)
         minimum_river_slope = 0.0001
         river_slope = np.maximum(
-            self.grid.load(self.model.files["grid"]["routing/river_slope_m_per_m"]),
+            self.grid.load2d(self.model.files["grid"]["routing/river_slope_m_per_m"]),
             minimum_river_slope,
         )
 

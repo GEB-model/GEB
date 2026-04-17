@@ -22,7 +22,7 @@ from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.runner import parse_config, run_model_with_method
-from geb.workflows.io import WorkingDirectory, read_geom, read_grid, read_zarr
+from geb.workflows.io import WorkingDirectory, read_geom, read_zarr
 from geb.workflows.raster import rasterize_like
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -305,13 +305,13 @@ def test_accumulated_runoff(
         )
         runoff_m: xr.DataArray = runoff_m.rio.write_crs(4326)
 
-        river_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
+        river_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load2d(
             geb_model.files["grid"]["routing/river_ids"], compress=False
         )
-        basin_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
+        basin_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load2d(
             geb_model.files["grid"]["routing/basin_ids"], compress=False
         )
-        upstream_area = geb_model.hydrology.grid.load(
+        upstream_area = geb_model.hydrology.grid.load2d(
             geb_model.files["grid"]["routing/upstream_area_m2"], compress=False
         )
 
@@ -384,7 +384,9 @@ def test_accumulated_runoff(
             flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
             total_flood_volume = simulation.get_flood_volume(flood_depth)
 
-            basin_id_grid = read_grid(geb_model.files["grid"]["routing/basin_ids"])
+            basin_id_grid = geb_model.hydrology.grid.load2d(
+                geb_model.files["grid"]["routing/basin_ids"], compress=False
+            )
 
             valid_cells = np.isin(basin_id_grid, sfincs_model.rivers.index)
             region = sfincs_model.subbasins.to_crs(runoff_m.rio.crs)

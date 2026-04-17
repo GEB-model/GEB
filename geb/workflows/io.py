@@ -16,7 +16,7 @@ import warnings
 from collections.abc import Hashable
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Iterable, cast, overload
+from typing import Any, Iterable, Literal, cast, overload
 
 import dask.array
 import dask.tokenize
@@ -25,6 +25,8 @@ import joblib
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyproj
 import rasterio
 import requests
@@ -44,7 +46,6 @@ from zarr.errors import ZarrUserWarning
 from geb.geb_types import (
     ArrayDatetime64,
     ThreeDArray,
-    ThreeDArrayFloat32,
     TwoDArray,
     TwoDArrayFloat32,
 )
@@ -71,13 +72,49 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
     Args:
         df: The pandas DataFrame to save.
         fp: The path to the output parquet file.
+
+    Raises:
+        ValueError: If the DataFrame contains unsupported column types.
     """
-    df.to_parquet(
+    table = pa.Table.from_pandas(df)
+
+    int_and_dt_cols = []
+    bool_cols = []
+    float_cols = []
+    dict_cols = []
+
+    for n, t in zip(table.schema.names, table.schema.types):
+        if pa.types.is_integer(t) or pa.types.is_timestamp(t):
+            int_and_dt_cols.append(n)
+        elif pa.types.is_boolean(t):
+            bool_cols.append(n)
+        elif pa.types.is_floating(t):
+            float_cols.append(n)
+        elif pa.types.is_string(t) or pa.types.is_binary(t):
+            dict_cols.append(n)
+        else:
+            raise ValueError(f"Unsupported column type {t} for column {n}")
+
+    # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
+    column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
+
+    # Booleans use RLE (which includes bit-packing)
+    for col in bool_cols:
+        column_encoding[col] = "RLE"
+
+    pq.write_table(
+        table,
         fp,
-        engine="pyarrow",
         compression="zstd",
-        compression_level=22,
-        row_group_size=max(min(10_000, len(df)), 1),
+        compression_level=22,  # Higher level for better disk density
+        use_dictionary=dict_cols,
+        column_encoding=column_encoding,
+        use_byte_stream_split=float_cols,
+        data_page_version="2.0",
+        row_group_size=min(max(len(table), 1), 1_000_000),
+        data_page_size=10_000_000,  # Larger page size for better compression
+        write_page_index=False,  # Removes extra metadata overhead
+        write_statistics=False,  # Removes min/max/null count storage
     )
 
 
@@ -126,61 +163,122 @@ def write_array(
 
 @overload
 def read_grid(
-    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
-) -> ThreeDArray: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
-) -> tuple[ThreeDArray, Affine, str]: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[True] = True,
+    return_transform_and_crs: Literal[False] = False,
 ) -> TwoDArray: ...
 
 
 @overload
 def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[True] = True,
+    *,
+    return_transform_and_crs: Literal[True],
 ) -> tuple[TwoDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[True] = True,
+    return_transform_and_crs: Literal[False] = False,
+) -> ThreeDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[True] = True,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[ThreeDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[False] = False,
+    return_transform_and_crs: Literal[False] = False,
+) -> zarr.Array: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[False] = False,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[zarr.Array, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[False] = False,
+    return_transform_and_crs: Literal[False] = False,
+) -> zarr.Array: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[False] = False,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[zarr.Array, Affine, str]: ...
 
 
 def read_grid(
     filepath: Path,
-    layer: int | None = None,
+    ndim: Literal[2, 3],
+    load: bool = True,
     return_transform_and_crs: bool = False,
-) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
-    """Load a raster grid from a .tif or .zarr file.
+) -> (
+    TwoDArray
+    | ThreeDArray
+    | zarr.Array
+    | tuple[TwoDArray | ThreeDArray | zarr.Array, Affine, str]
+):
+    """Load a raster grid from .zarr file.
 
     Args:
-        filepath: The path to the .tif or .zarr file.
-        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is None.
+        filepath: The path of the .zarr file.
+        ndim: The expected number of dimensions of the raster data (2 or 3).
+        load: Whether to load the data into memory. If False, a zarr array will be returned instead of a numpy array. Default is True.
         return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
 
     Returns:
         The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
 
     Raises:
-        ValueError: If layer is specified but data is not 3-dimensional.
+        ValueError: If the loaded data does not have the expected number of dimensions.
     """
     store: zarr.storage.LocalStore = zarr.storage.LocalStore(filepath, read_only=True)
     group: zarr.Group = zarr.open_group(store, mode="r")
     data_array: zarr.Array | zarr.Group = group[filepath.stem]
+
     assert isinstance(data_array, zarr.Array)
-    if layer is not None:
-        if not data_array.ndim == 3:
-            raise ValueError("Data must be 3-dimensional to select a layer")
-        data = data_array[layer]
-    else:
+
+    if load:
         data = data_array[:]
-    assert isinstance(data, np.ndarray)
-    data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
-    if data.dtype == np.float64:
-        data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
-    assert data.ndim in (2, 3)
+        assert isinstance(data, np.ndarray)
+        data: TwoDArray | ThreeDArray = data  # ty:ignore[invalid-assignment]
+    else:
+        data = data_array
+        assert isinstance(data, zarr.Array)
+
+    if data.ndim != ndim:
+        raise ValueError(f"Expected data with {ndim} dimensions, but got {data.ndim}")
+
     if return_transform_and_crs:
         x_array: zarr.Array | zarr.Group = group["x"]
         assert isinstance(x_array, zarr.Array)

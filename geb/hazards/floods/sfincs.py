@@ -2041,12 +2041,10 @@ class SFINCSSimulation:
         )
 
         # accumulate generated discharge for each river cell
-        accumulated_generated_discharge_m3_per_s: TwoDArrayFloat64 = (
-            np.apply_along_axis(
-                func1d=lambda x: np.bincount(subbasins, weights=x),
-                axis=1,
-                arr=generated_discharge_m3_per_s.values[:, mask],
-            )
+        accumulated_generated_discharge_m3_per_s = np.apply_along_axis(
+            func1d=lambda x: np.bincount(subbasins, weights=x),
+            axis=1,
+            arr=generated_discharge_m3_per_s.values[:, mask],
         )
         assert (
             accumulated_generated_discharge_m3_per_s.shape[1] == river_ids_mapping.size
