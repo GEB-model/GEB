@@ -147,9 +147,12 @@ class Government(AgentBaseClass):
         chunk to plant based on current land use. Suitable HRUs are sorted by potential
         value (highest first); those already classified as FOREST (from previous years
         or the initial state) are skipped, and the next
-        ``increment_fraction * n_suitable`` HRUs are planted. Calling the function again
+        ``increment_fraction * remaining`` HRUs are planted. Calling the function again
         the following year therefore plants the next batch automatically — compatible
         with the annual adaptation pathway that calls this on every January 1st.
+
+        Raises:
+            ValueError: If ``increment_fraction`` is not in (0, 1].
         """
         hydrology = self.model.hydrology
         plant_forest_config = self.config.get("plant_forest", {})
@@ -567,6 +570,9 @@ class Government(AgentBaseClass):
 
         Args:
             triggered: List of adaptation triggers that were activated.
+
+        Raises:
+            ValueError: If ``adaptation_fraction`` is not in [0, 1].
         """
         if "adaptation" not in self.config or not self.config["adaptation"].get(
             "enabled", False
@@ -580,7 +586,9 @@ class Government(AgentBaseClass):
         if "EAD" in triggered:
             # the government decides which measure to apply based on what triggered the need for adaptation
             # apply updating the building structure but this takes the number of households that are adapting as input so we fist need to define that
-            adaptation_fraction = self.config["adaptation"].get(
+            adaptation_fraction = self.config[
+                "adaptation"
+            ].get(
                 "adaptation_fraction", 0.1
             )  # default to 10% of households adapting, otherwise specified in config file
             if not (0.0 <= adaptation_fraction <= 1.0):
