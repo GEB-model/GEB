@@ -169,10 +169,14 @@ class Government(AgentBaseClass):
         suitability_HRU = hydrology.to_HRU(data=suitability_grid).astype(bool)
 
         if increment_fraction is not None:
+            if not (0.0 < increment_fraction <= 1.0):
+                raise ValueError(
+                    f"increment_fraction must be between 0 and 1, got {increment_fraction}"
+                )
             # Sort suitable HRUs by potential value descending (best areas first).
             # Skip any already classified as FOREST (planted in prior years or
             # originally forest), then take the next chunk of
-            # increment_fraction * n_suitable HRUs.
+            # increment_fraction * remaining HRUs.
             forest_potential_HRU = hydrology.to_HRU(data=forest_potential)
             suitable_indices = np.where(suitability_HRU)[0]
             suitable_potentials = forest_potential_HRU[suitable_indices]
