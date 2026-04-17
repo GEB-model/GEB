@@ -74,8 +74,6 @@ class DeltaDTM(Adapter):
         # download the DeltaDTM tiles geopackage
         url_delta_dtm_tiles = "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/60a69899-2e67-4f9f-8761-3b57094acd12"
         self.root.mkdir(parents=True, exist_ok=True)
-        # with tempfile.TemporaryDirectory() as temp_dir_str:
-        #     temp_dir: Path = Path(temp_dir_str)
         filepath = self.root / "delta_dtm_tiles.gpkg"
         success = fetch_and_save(
             url=url_delta_dtm_tiles,
