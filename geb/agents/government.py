@@ -454,10 +454,14 @@ class Government(AgentBaseClass):
             )
 
     def calculate_EAD(self) -> None | float:
-        """Calculate the EAD for the current year.
+        """Calculate the expected annual damage (EAD) for the current year.
+
+        EAD is computed by integrating total flood damage over the exceedance
+        probability curve (trapezoid rule across return periods).
 
         Returns:
-         the expected annual damage in euros, which is calculated as the product of the probability of a  hazard occurring and the potential damage caused by that hazard.
+            EAD in euros, or None if adaptation is disabled, it is not January 1st,
+            or flood risk functionality is not available.
         """
         # should also only be calculated if adaptation is turned on in the config file and it is the first of jan otherwise it is not needed
         if "adaptation" not in self.config or not self.config["adaptation"].get(
