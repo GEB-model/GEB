@@ -1,6 +1,7 @@
 """Data adapter for GLOPOP-SG population data."""
 
 import gzip
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -18,28 +19,16 @@ from .base import Adapter
 class GLOPOP_SG(Adapter):
     """Adapter for GLOPOP-SG population data."""
 
-    def fetch(self, region: str, url: str) -> GLOPOP_SG:
+    def fetch(self, url: str) -> GLOPOP_SG:
         """Fetch data for a specific region.
 
         Args:
-            region: The GDL region code (e.g., 'AFG').
             url: Optional URL to override the default.
 
         Returns:
-            Self.
+            The GLOPOP_SG instance.
         """
-        tif_name = f"{region}_grid_nr.tif"
-        gz_name = f"synthpop_{region}_grid.dat.gz"
-
-        tif_path = self.root / tif_name
-        gz_path = self.root / gz_name
-
-        if tif_path.exists() and gz_path.exists():
-            return self
-
-        self._extract_from_remote(tif_name, tif_path, url)
-        self._extract_from_remote(gz_name, gz_path, url)
-
+        self.url = url
         return self
 
     def _extract_from_remote(self, filename: str, output_path: Path, url: str) -> None:
@@ -84,37 +73,36 @@ class GLOPOP_SG(Adapter):
     def read(self, region: str) -> tuple[pd.DataFrame, xr.DataArray]:
         """Read GLOPOP-SG data for a region.
 
+        Note:
+            Downloads the necessary files to a temporary directory since caching is disabled.
+
         Args:
             region: The GDL region code.
 
         Returns:
             Tuple of (DataFrame of population, DataArray of grid).
-
-        Raises:
-            ValueError: If the adapter is not initialized with a folder.
         """
-        if self.root is None:
-            raise ValueError("Generic adapter not initialized with a folder.")
+        tif_name = f"{region}_grid_nr.tif"
+        gz_name = f"synthpop_{region}_grid.dat.gz"
 
-        tif_path = self.root / f"{region}_grid_nr.tif"
-        gz_path = self.root / f"synthpop_{region}_grid.dat.gz"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tif_path = Path(tmpdir) / tif_name
+            gz_path = Path(tmpdir) / gz_name
 
-        GLOPOP_grid = rxr.open_rasterio(tif_path)
-        if isinstance(GLOPOP_grid, list):
-            GLOPOP_grid = GLOPOP_grid[0]
+            self._extract_from_remote(tif_name, tif_path, self.url)
+            self._extract_from_remote(gz_name, gz_path, self.url)
 
-        if not isinstance(GLOPOP_grid, xr.DataArray):
-            # If it is a Dataset, we might need to select a variable or convert.
-            # Usually rioxarray returns DataArray for single band tifs.
-            # If it's a Dataset, try converting or raising.
+            GLOPOP_grid = rxr.open_rasterio(tif_path)
+            if isinstance(GLOPOP_grid, list):
+                GLOPOP_grid = GLOPOP_grid[0]
+
             if isinstance(GLOPOP_grid, xr.Dataset):
-                # Convert to array if possible or take the first variable
                 GLOPOP_grid = GLOPOP_grid.to_array().squeeze()
 
-        assert isinstance(GLOPOP_grid, xr.DataArray)
+            GLOPOP_grid.load()  # Load into memory before cleaning up tif_path
 
-        with gzip.open(gz_path, "rb") as f:
-            GLOPOP_s = np.frombuffer(f.read(), dtype=np.int32)
+            with gzip.open(gz_path, "rb") as f:
+                GLOPOP_s = np.frombuffer(f.read(), dtype=np.int32)
 
         GLOPOP_s_attribute_names: list[str] = [
             "HID",

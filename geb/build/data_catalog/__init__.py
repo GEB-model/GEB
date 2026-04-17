@@ -866,8 +866,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": Fabdem(
             folder="fabdem",
             local_version=2,
-            filename="fabdem.zarr",
-            cache="local",
+            filename="placeholder.txt",
+            cache="global",
         ),
         "url": "https://data.bris.ac.uk/datasets/s5hqmjcdj8yo2ibzi9b4ew3sn",
         "source": {
@@ -977,7 +977,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": OpenBuildingMap(
             folder="open_building_map",
             local_version=2,
-            filename="open_building_map.parquet",
+            filename="placeholder.txt",
             cache="local",
         ),
         "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
@@ -1035,7 +1035,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             folder="glopop_sg",
             local_version=3,  # this is the third version of the dataset on Zenodo
             filename="placeholder",
-            cache="local",
+            cache="global",
         ),
         "url": "https://zenodo.org/records/17076088/files/GLOPOP-SG(update).zip?download=1",
         "source": {

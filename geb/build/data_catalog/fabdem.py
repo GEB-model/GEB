@@ -25,7 +25,7 @@ from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
 
-from geb.workflows.io import fetch_and_save, read_zarr, write_zarr
+from geb.workflows.io import fetch_and_save
 from geb.workflows.raster import clip_with_geometry, convert_nodata
 
 from .base import Adapter
@@ -595,60 +595,60 @@ class Fabdem(Adapter):
         assert isinstance(da, xr.DataArray)
         return da
 
-    def fetch(self, url: str, mask: BaseGeometry) -> Fabdem:
+    def fetch(self, url: str) -> Fabdem:
         """Download FABDEM tiles intersecting a mask.
 
         Args:
             url: Base URL of the FABDEM server.
-            mask: The geometry used to filter intersecting tiles.
+
 
         Returns:
             The Fabdem instance.
+        """
+        self.url = url
+        return self
+
+    def read(self, mask: BaseGeometry) -> xr.DataArray:
+        """Read the FABDEM data as an xarray DataArray.
+
+        Args:
+            mask: The geometry used to filter intersecting tiles.
+
+        Returns:
+            xarray DataArray with FABDEM data.
 
         Raises:
             RuntimeError: If no tiles could be downloaded.
         """
-        if not self.is_ready:
-            tiles: list[tuple[int, int]] = self._tiles_for_mask(mask)
+        tiles: list[tuple[int, int]] = self._tiles_for_mask(mask)
 
-            with tempfile.TemporaryDirectory() as temp_dir_str:
-                temp_dir: Path = Path(temp_dir_str)
-                results: list[Path] = []
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            temp_dir: Path = Path(temp_dir_str)
+            results: list[Path] = []
 
-                for lat_min, lon_min in tqdm(
-                    tiles, desc="Downloading FABDEM tiles", leave=False
-                ):
-                    tile_filename = self._compose_tile_filename(lat_min, lon_min)
-                    tile_url: str = f"{url}/{tile_filename}"
+            for lat_min, lon_min in tqdm(
+                tiles, desc="Downloading FABDEM tiles", leave=False
+            ):
+                tile_filename = self._compose_tile_filename(lat_min, lon_min)
+                tile_url: str = f"{self.url}/{tile_filename}"
 
-                    tif_paths: list[Path] = self._download_and_extract_tile(
-                        tile_url, temp_dir, tile_filename, mask
-                    )
-                    # Add all extracted TIF files (already filtered during extraction)
-                    results.extend(tif_paths)
-
-                if not results:
-                    raise RuntimeError("No FABDEM tiles could be downloaded.")
-
-                da: xr.DataArray = self._merge_fabdem_tiles(results)
-                # Clip to the mask and set data outside the mask to NaN
-                da = clip_with_geometry(
-                    da,
-                    gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
-                    all_touched=True,
-                    drop=False,
+                tif_paths: list[Path] = self._download_and_extract_tile(
+                    tile_url, temp_dir, tile_filename, mask
                 )
-                da = convert_nodata(da, np.nan)
+                # Add all extracted TIF files (already filtered during extraction)
+                results.extend(tif_paths)
 
-                write_zarr(da, self.path, crs=da.rio.crs)
+            if not results:
+                raise RuntimeError("No FABDEM tiles could be downloaded.")
 
-        return self
+            da: xr.DataArray = self._merge_fabdem_tiles(results)
+            # Clip to the mask and set data outside the mask to NaN
+            da = clip_with_geometry(
+                da,
+                gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
+                all_touched=True,
+                drop=False,
+            )
+            da = convert_nodata(da, np.nan)
 
-    def read(self) -> xr.DataArray:
-        """Read the FABDEM data as an xarray DataArray.
-
-        Returns:
-            xarray DataArray with FABDEM data.
-        """
-        da: xr.DataArray = read_zarr(self.path)
         return da

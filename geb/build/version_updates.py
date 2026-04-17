@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b21": [
         "[manual] Remove `setup_irrigation_sources` from your `build.yml`.",
+        "[update-method;setup_gtsm_station_data]",
     ],
     "1.0.0b20": [
         "[update-python;3.14.4]",
