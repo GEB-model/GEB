@@ -978,7 +978,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             folder="open_building_map",
             local_version=2,
             filename="placeholder.txt",
-            cache="local",
+            cache="global",
         ),
         "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
         "source": {

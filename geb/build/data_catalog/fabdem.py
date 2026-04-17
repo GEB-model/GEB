@@ -596,11 +596,10 @@ class Fabdem(Adapter):
         return da
 
     def fetch(self, url: str) -> Fabdem:
-        """Download FABDEM tiles intersecting a mask.
+        """Set the base URL for the FABDEM server and return the adapter instance.
 
         Args:
             url: Base URL of the FABDEM server.
-
 
         Returns:
             The Fabdem instance.

@@ -379,7 +379,9 @@ class GTSM_timeseries(Adapter):
             variable: The variable to read from the GTSM data.
 
         Returns:
-            A tuple containing a pandas DataFrame with the GTSM time series data clipped to the specified bounds and a GeoDataFrame with station information.
+            A tuple containing:
+            - a xarray DataArray containing the GTSM data clipped to the specified bounds.
+            - a GeoDataFrame containing the station locations for the GTSM data clipped to the specified bounds.
 
         Raises:
             FileNotFoundError: If the station metadata for the requested variable

@@ -105,7 +105,7 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
 
     # Estimate row group size to target ~100 MB per row group (uncompressed)
     # 100 MB / bytes per row
-    bytes_per_row: int = table.nbytes / max(len(table), 1)
+    bytes_per_row: int = table.nbytes // max(len(table), 1)
     target_row_group_size = int(100 * 1024 * 1024 / max(bytes_per_row, 1))
     target_row_group_size: int = min(target_row_group_size, len(table))
     target_row_group_size: int = max(target_row_group_size, 1)
@@ -121,8 +121,6 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
         data_page_version="2.0",
         row_group_size=target_row_group_size,
         data_page_size=10_000_000,  # Larger page size for better compression
-        write_page_index=True,  # Removes extra metadata overhead
-        write_statistics=True,  # Removes min/max/null count storage
     )
 
 
@@ -896,9 +894,9 @@ def write_zarr(
                     category=ZarrUserWarning,
                     message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
                 )
-                encoding["time"]["filters"] = Delta(
-                    dtype="i8", astype=dtype_to_encode_time
-                )
+                encoding["time"]["filters"] = [
+                    Delta(dtype="i8", astype=dtype_to_encode_time)
+                ]
 
         with warnings.catch_warnings():
             warnings.filterwarnings(
