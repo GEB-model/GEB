@@ -1,7 +1,5 @@
 """Dataset adapters for SUPERWELL data."""
 
-from __future__ import annotations
-
 import pandas as pd
 
 from geb.workflows.io import fetch_and_save

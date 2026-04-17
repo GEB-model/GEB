@@ -19,8 +19,6 @@ The class is intentionally lightweight: network interactions use
 division is guarded against zero area values.
 """
 
-from __future__ import annotations
-
 import os
 import tempfile
 import unicodedata
@@ -51,6 +49,7 @@ gadm_converter: dict[str, str] = {
     "Vaduz": "Valduz",
     "Luzern": "Lucerne",
     "St. Gallen": "Sankt Gallen",
+    "Balochistan": "Baluchistan",
 }
 
 

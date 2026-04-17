@@ -1,7 +1,5 @@
 """This module contains the Industry agent class for simulating industrial water demand in the GEB model."""
 
-from __future__ import annotations
-
 import calendar
 import datetime
 from typing import TYPE_CHECKING

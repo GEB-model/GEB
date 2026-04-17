@@ -21,8 +21,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -102,7 +100,7 @@ class WaterDemand(Module):
         This method initializes the reservoir command areas for the HRU grid.
         """
         subgrid_command_areas = read_grid(
-            self.model.files["subgrid"]["waterbodies/subcommand_areas"]
+            self.model.files["subgrid"]["waterbodies/subcommand_areas"], ndim=2
         )
         reservoir_command_areas = self.HRU.convert_subgrid_to_HRU(
             subgrid_command_areas,

@@ -6,6 +6,10 @@ from numba import njit
 from geb.geb_types import ArrayFloat32, Shape
 
 from ..landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
+from .energy import (
+    apply_rain_heat_advection,
+    get_temperature_and_frozen_fraction_from_enthalpy_scalar,
+)
 
 # TODO: Load this dynamically as global var (see model.py)
 N_SOIL_LAYERS: int = 6
@@ -469,7 +473,7 @@ def infiltration(
     saturated_hydraulic_conductivity_m_per_timestep: ArrayFloat32,
     groundwater_toplayer_conductivity_m_per_timestep: np.float32,
     land_use_type: np.int32,
-    soil_is_frozen: bool,
+    frozen_fraction_top_layer: np.float32,
     w: ArrayFloat32,
     topwater_m: np.float32,
     capillary_rise_from_groundwater_m: np.float32,
@@ -481,6 +485,10 @@ def infiltration(
     bubbling_pressure_cm: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
     lambda_pore_size_distribution: ArrayFloat32,
+    soil_enthalpy_top_layer_J_per_m2: np.float32 = np.float32(0.0),
+    solid_heat_capacity_top_layer_J_per_m2_K: np.float32 = np.float32(0.0),
+    rain_temperature_C: np.float32 = np.float32(0.0),
+    liquid_water_input_for_enthalpy_m: np.float32 = np.float32(0.0),
 ) -> tuple[
     np.float32,
     np.float32,
@@ -490,6 +498,7 @@ def infiltration(
     np.float32,
     np.float32,
     int,
+    np.float32,
 ]:
     """Simulates vertical transport of water in the soil for a single cell.
 
@@ -507,7 +516,7 @@ def infiltration(
         saturated_hydraulic_conductivity_m_per_timestep: Saturated hydraulic conductivity in each layer for the cell in m in this timestep, shape (N_SOIL_LAYERS,).
         groundwater_toplayer_conductivity_m_per_timestep: Groundwater top layer conductivity limiting recharge (m/timestep).
         land_use_type: Land use type for the cell.
-        soil_is_frozen: Boolean indicating if the soil is frozen.
+        frozen_fraction_top_layer: Frozen fraction of the top-layer water mass [0-1].
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
         capillary_rise_from_groundwater_m: Capillary rise from groundwater for the cell (m/timestep). If >0, percolation to groundwater is suppressed.
@@ -519,6 +528,13 @@ def infiltration(
         bubbling_pressure_cm: Bubbling pressure for each soil layer [cm], shape (N_SOIL_LAYERS,).
         soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
         lambda_pore_size_distribution: Van Genuchten parameter lambda for each soil layer, shape (N_SOIL_LAYERS,).
+        soil_enthalpy_top_layer_J_per_m2: Top-layer soil enthalpy relative to 0°C liquid water (J/m2).
+        solid_heat_capacity_top_layer_J_per_m2_K: Areal heat capacity of the top-layer solid soil fraction (J/m2/K).
+        rain_temperature_C: Temperature of liquid water entering the soil surface (C).
+        liquid_water_input_for_enthalpy_m: Newly added liquid water reaching the
+            top-soil thermal control volume during this timestep (m). This should
+            include rain and similar new surface inputs, but exclude pre-existing
+            ponded water so heat advection is not double counted.
 
     Returns:
         A tuple containing:
@@ -530,8 +546,11 @@ def infiltration(
             - wetting_front_suction_head_m: Updated wetting front suction head in meters.
             - wetting_front_moisture_deficit: Updated wetting front moisture deficit [-].
             - green_ampt_active_layer_idx: Updated active soil layer index.
+            - soil_enthalpy_top_layer_J_per_m2: Updated top-layer soil enthalpy (J/m2).
     """
-    if soil_is_frozen or land_use_type == SEALED or land_use_type == OPEN_WATER:
+    liquid_fraction_top_layer: np.float32 = np.float32(1.0) - frozen_fraction_top_layer
+
+    if land_use_type == SEALED or land_use_type == OPEN_WATER:
         # No infiltration allowed
         infiltration_amount: np.float32 = np.float32(0.0)
         direct_runoff: np.float32 = topwater_m
@@ -545,6 +564,7 @@ def infiltration(
             wetting_front_suction_head_m,
             wetting_front_moisture_deficit,
             green_ampt_active_layer_idx,
+            soil_enthalpy_top_layer_J_per_m2,
         )
 
     # Redistribution: If there is no water available for infiltration,
@@ -561,6 +581,9 @@ def infiltration(
     n_substeps: int = 6
     dt: np.float32 = np.float32(1.0) / np.float32(n_substeps)
     topwater_per_step: np.float32 = topwater_m / np.float32(n_substeps)
+    liquid_water_input_for_enthalpy_per_step_m: np.float32 = (
+        liquid_water_input_for_enthalpy_m / np.float32(n_substeps)
+    )
 
     # If starting with a new wetting front, calculate initial parameters
     if wetting_front_depth_m == np.float32(0.0):
@@ -590,6 +613,25 @@ def infiltration(
         current_layer_depth_limit += soil_layer_height_m[i]
 
     for _ in range(n_substeps):
+        soil_enthalpy_top_layer_J_per_m2 = apply_rain_heat_advection(
+            soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
+            liquid_water_input_m=liquid_water_input_for_enthalpy_per_step_m,
+            rain_temperature_C=max(rain_temperature_C, np.float32(0.0)),
+        )
+
+        _, substep_frozen_fraction_top_layer = (
+            get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                enthalpy_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
+                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+                water_content_m=w[0],
+                topwater_m=liquid_water_input_for_enthalpy_per_step_m,
+            )
+        )
+        liquid_fraction_top_layer = np.float32(1.0) - np.minimum(
+            np.maximum(substep_frozen_fraction_top_layer, np.float32(0.0)),
+            np.float32(1.0),
+        )
+
         # Check if the wetting front has moved into a new layer
         # and if so, update Green-Ampt parameters. Otherwise, keep existing parameters.
         # note that this assumes that the suction remains stable
@@ -655,6 +697,7 @@ def infiltration(
         infiltration_capacity_m_step = (
             potential_cumulative_infiltration - current_cumulative_infiltration
         )
+        infiltration_capacity_m_step *= liquid_fraction_top_layer
 
         # Calculate potential infiltration considering spatial variability of infiltration capacity
         (
@@ -767,6 +810,7 @@ def infiltration(
         wetting_front_suction_head_m,
         wetting_front_moisture_deficit,
         green_ampt_active_layer_idx,
+        soil_enthalpy_top_layer_J_per_m2,
     )
 
 

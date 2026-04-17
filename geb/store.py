@@ -1,7 +1,5 @@
 """Storage classes for model data."""
 
-from __future__ import annotations
-
 import pickle
 import shutil
 from collections import deque
@@ -387,7 +385,12 @@ class DynamicArray:
 
     def __setitem__(
         self,
-        key: int | slice | NDArray[np.integer] | NDArray[np.bool_],
+        key: int
+        | slice
+        | NDArray[np.integer]
+        | NDArray[np.bool_]
+        | tuple
+        | DynamicArray,
         value: Any,
     ) -> None:
         """

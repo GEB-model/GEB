@@ -132,7 +132,7 @@ It is also possible to update an already existing model by running the following
 geb update
 ```
 
-This assumes you have a "update.yml"-file in the working directory. The `update.yml`-file contains the name of functions that should be run to update the data. The functions are defined in the "geb" plugin of HydroMT. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
+This assumes you have a "update.yml"-file in the working directory. The `update.yml`-file contains the name of functions that should be run to update the data. The data will be updated in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model.
 
 For example to update the forcing data of the model, your "update.yml"-file could look like this, essentially a subset of the build.yml-file:
 
@@ -159,6 +159,16 @@ You can find more information about these and other options by running:
 ```bash
 geb update --help
 ```
+
+### GEB clean
+
+Removes all generated files (input, output, cache, logs) from a model directory, keeping only `model.yml`, `build.yml`, and `update.yml`. Run from inside the model directory:
+
+```bash
+geb clean
+```
+
+Works for both single-model and multi-basin (`geb init-multiple`) file structures. You will be prompted to confirm before anything is deleted. To skip the prompt (e.g. in scripts), use `--yes` / `-y`. To clean a non-default scenario, use `--scenario` / `-s`. See `geb clean --help` for all options.
 
 ### Running alternative scenarios (geb alter)
 

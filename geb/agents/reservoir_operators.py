@@ -1,7 +1,5 @@
 """Reservoir operator agents."""
 
-from __future__ import annotations
-
 import calendar
 from typing import TYPE_CHECKING
 
@@ -37,6 +35,118 @@ class ReservoirOperatorVariables:
     multi_year_monthly_usable_command_area_release_m3: ArrayFloat32
     hydrological_year_counter: int
     history_fill_index: int = RESERVOIR_MEMORY_YEARS
+
+
+def get_irrigation_reservoir_release(
+    capacity: ArrayFloat64,
+    storage_year_start: ArrayFloat64,
+    long_term_monthly_inflow_m3: ArrayFloat32,
+    long_term_monthly_inflow_this_month_m3: ArrayFloat32,
+    current_irrigation_demand_m3: ArrayFloat32,
+    long_term_monthly_irrigation_demand_m3: ArrayFloat32,
+    alpha: ArrayFloat32,
+    reservoir_M_factor: ArrayFloat32,
+    n_monthly_substeps: int,
+) -> ArrayFloat64:
+    """Computes release from irrigation reservoirs.
+
+    Based on:
+        Based on Shin et al. (2019)
+        https://doi.org/10.1029/2018WR023025
+        https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py.
+
+    Args:
+        capacity: The reservoir capacity [m3].
+        storage_year_start: The storage at the beginning of the hydrological year [m3].
+        long_term_monthly_inflow_m3: The long-term average inflow per month [m3].
+        long_term_monthly_inflow_this_month_m3: The long-term average inflow for the current month [m3].
+            e.g., if the current month is January, this is the long-term average inflow for January.
+        current_irrigation_demand_m3: The current irrigation demand for this timestep [m3].
+        long_term_monthly_irrigation_demand_m3: The long-term average irrigation demand per month [m3].
+        alpha: The reservoir capacity reduction factor [-].
+        reservoir_M_factor: The reservoir M factor [-].
+        n_monthly_substeps: The number of substeps in the current month [-].
+            If the method is called for daily timesteps, this is 30 for a 30-day month.
+            If the method is called with hourly timesteps, this is 30*24 for a 30-day month.
+
+    Returns:
+        The reservoir release for irrigation [m3].
+    """
+    # here the units don't matter as long as they are the same
+    ratio_long_term_demand_to_inflow: ArrayFloat32 = np.divide(
+        long_term_monthly_irrigation_demand_m3,
+        long_term_monthly_inflow_m3,
+        out=np.full_like(long_term_monthly_inflow_m3, np.inf, dtype=np.float32),
+        where=long_term_monthly_inflow_m3 > 0,
+    )
+    irrigation_dominant_reservoirs: ArrayBool = (
+        ratio_long_term_demand_to_inflow > 1.0 - reservoir_M_factor
+    )
+
+    provisional_release: ArrayFloat32 = np.full_like(capacity, np.nan, dtype=np.float32)
+
+    # equation 2a in Shin et al. (2019)
+    # if the irrigation demand is not dominant, this assumes there is sufficient
+    # water in the reservoir to meet the demand
+    long_term_inflow_irrigation_delta_m3: ArrayFloat32 = (
+        long_term_monthly_inflow_m3[~irrigation_dominant_reservoirs]
+        - long_term_monthly_irrigation_demand_m3[~irrigation_dominant_reservoirs]
+    )
+    provisional_release[~irrigation_dominant_reservoirs] = (
+        long_term_inflow_irrigation_delta_m3 / n_monthly_substeps
+        + current_irrigation_demand_m3[~irrigation_dominant_reservoirs]
+    )
+
+    long_term_demand_per_substep_m3: ArrayFloat32 = np.divide(
+        long_term_monthly_irrigation_demand_m3[irrigation_dominant_reservoirs],
+        n_monthly_substeps,
+        out=np.zeros_like(
+            long_term_monthly_irrigation_demand_m3[irrigation_dominant_reservoirs],
+            dtype=np.float32,
+        ),
+    )
+    dominant_demand_ratio: ArrayFloat32 = np.divide(
+        current_irrigation_demand_m3[irrigation_dominant_reservoirs],
+        long_term_demand_per_substep_m3,
+        out=np.zeros_like(long_term_demand_per_substep_m3, dtype=np.float32),
+        where=long_term_demand_per_substep_m3 > 0,
+    )
+    provisional_release[irrigation_dominant_reservoirs] = (
+        long_term_monthly_inflow_m3[irrigation_dominant_reservoirs]
+        / n_monthly_substeps
+        * (
+            reservoir_M_factor[irrigation_dominant_reservoirs]
+            + (1 - reservoir_M_factor[irrigation_dominant_reservoirs])
+            * dominant_demand_ratio
+        )
+    )  # equation 2b in Shin et al. (2019)
+
+    # Targeted monthly release (Shin et al., 2019)
+    total_annual_inflow_m3: ArrayFloat32 = long_term_monthly_inflow_m3 * np.float32(12)
+    ratio_capacity_to_total_inflow: ArrayFloat64 = np.divide(
+        capacity,
+        total_annual_inflow_m3,
+        out=np.full_like(capacity, np.inf, dtype=np.float64),
+        where=total_annual_inflow_m3 > 0,
+    )
+    # R in Shin et al. (2019). "As R varies from 0 to 1, the reservoir release changes
+    # from run-of-the-river flow to demand-controlled release.""
+    demand_controlled_release_ratio: ArrayFloat64 = np.minimum(
+        alpha * ratio_capacity_to_total_inflow, 1.0
+    )
+
+    # kᵣₗₛ [−], "the ratio between the initial storage at the
+    # beginning of the operational year (S0 [L3])
+    # and the long-term target storage (αC [L3])" (Shin et al., 2019)
+    release_coefficient: ArrayFloat64 = storage_year_start / (alpha * capacity)
+
+    final_release: ArrayFloat64 = (
+        demand_controlled_release_ratio * release_coefficient * provisional_release
+        + (1 - demand_controlled_release_ratio)
+        * long_term_monthly_inflow_this_month_m3
+        / n_monthly_substeps
+    )
+    return final_release
 
 
 class ReservoirOperators(AgentBaseClass):
@@ -389,7 +499,7 @@ class ReservoirOperators(AgentBaseClass):
         irrigation_reservoirs = self.var.reservoir_purpose == IRRIGATION_RESERVOIR
         if np.any(irrigation_reservoirs):
             provisional_reservoir_release_m3[irrigation_reservoirs] = (
-                self.get_irrigation_reservoir_release(
+                get_irrigation_reservoir_release(
                     self.capacity[irrigation_reservoirs],
                     self.var.storage_year_start[irrigation_reservoirs],
                     long_term_monthly_inflow_m3[irrigation_reservoirs],
@@ -397,6 +507,7 @@ class ReservoirOperators(AgentBaseClass):
                     irrigation_demand_m3[irrigation_reservoirs],
                     long_term_monthly_irrigation_demand_m3[irrigation_reservoirs],
                     self.var.alpha[irrigation_reservoirs],
+                    self.var.reservoir_M_factor[irrigation_reservoirs],
                     n_monthly_substeps,
                 )
             )
@@ -498,102 +609,6 @@ class ReservoirOperators(AgentBaseClass):
             usable_release_m3 = np.maximum(usable_release_m3, minimum_usable_release_m3)
             assert (usable_release_m3 >= minimum_usable_release_m3).all()
         return usable_release_m3, environmental_flow_release_m3
-
-    def get_irrigation_reservoir_release(
-        self,
-        capacity: ArrayFloat64,
-        storage_year_start: ArrayFloat64,
-        long_term_monthly_inflow_m3: ArrayFloat32,
-        long_term_monthly_inflow_this_month_m3: ArrayFloat32,
-        current_irrigation_demand_m3: ArrayFloat32,
-        long_term_monthly_irrigation_demand_m3: ArrayFloat32,
-        alpha: ArrayFloat32,
-        n_monthly_substeps: int,
-    ) -> ArrayFloat64:
-        """Computes release from irrigation reservoirs.
-
-        Based on:
-            Based on Shin et al. (2019)
-            https://doi.org/10.1029/2018WR023025
-            https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py.
-
-        Args:
-            capacity: The reservoir capacity [m3].
-            storage_year_start: The storage at the beginning of the hydrological year [m3].
-            long_term_monthly_inflow_m3: The long-term average inflow per month [m3].
-            long_term_monthly_inflow_this_month_m3: The long-term average inflow for the current month [m3].
-                e.g., if the current month is January, this is the long-term average inflow for January.
-            current_irrigation_demand_m3: The current irrigation demand for this timestep [m3].
-            long_term_monthly_irrigation_demand_m3: The long-term average irrigation demand per month [m3].
-            alpha: The reservoir capacity reduction factor [-].
-            n_monthly_substeps: The number of substeps in the current month [-].
-                If the method is called for daily timesteps, this is 30 for a 30-day month.
-                If the method is called with hourly timesteps, this is 30*24 for a 30-day month.
-
-        Returns:
-            The reservoir release for irrigation [m3].
-        """
-        ratio_long_term_demand_to_inflow: ArrayFloat32 = (
-            long_term_monthly_irrigation_demand_m3 / long_term_monthly_inflow_m3
-        )  # here the units don't matter as long as they are the same
-        irrigation_dominant_reservoirs: ArrayBool = (
-            ratio_long_term_demand_to_inflow > 1.0 - self.var.reservoir_M_factor
-        )
-
-        provisional_release: ArrayFloat32 = np.full_like(
-            capacity, np.nan, dtype=np.float32
-        )
-
-        # equation 2a in Shin et al. (2019)
-        # if the irrigation demand is not dominant, this assumes there is sufficient
-        # water in the reservoir to meet the demand
-        long_term_inflow_irrigation_delta_m3: ArrayFloat32 = (
-            long_term_monthly_inflow_m3[~irrigation_dominant_reservoirs]
-            - long_term_monthly_irrigation_demand_m3[~irrigation_dominant_reservoirs]
-        )
-        provisional_release[~irrigation_dominant_reservoirs] = (
-            long_term_inflow_irrigation_delta_m3 / n_monthly_substeps
-            + current_irrigation_demand_m3[~irrigation_dominant_reservoirs]
-        )
-
-        provisional_release[irrigation_dominant_reservoirs] = (
-            long_term_monthly_inflow_m3[irrigation_dominant_reservoirs]
-            / n_monthly_substeps
-            * (
-                self.var.reservoir_M_factor[irrigation_dominant_reservoirs]
-                + (1 - self.var.reservoir_M_factor[irrigation_dominant_reservoirs])
-                * current_irrigation_demand_m3[irrigation_dominant_reservoirs]
-                / (
-                    long_term_monthly_irrigation_demand_m3[
-                        irrigation_dominant_reservoirs
-                    ]
-                    / n_monthly_substeps
-                )
-            )
-        )  # equation 2b in Shin et al. (2019)
-
-        # Targeted monthly release (Shin et al., 2019)
-        ratio_capacity_to_total_inflow: ArrayFloat64 = capacity / (
-            long_term_monthly_inflow_m3 * 12
-        )
-        # R in Shin et al. (2019). "As R varies from 0 to 1, the reservoir release changes
-        # from run-of-the-river flow to demand-controlled release.""
-        demand_controlled_release_ratio: ArrayFloat64 = np.minimum(
-            alpha * ratio_capacity_to_total_inflow, 1.0
-        )
-
-        # kᵣₗₛ [−], "the ratio between the initial storage at the
-        # beginning of the operational year (S0 [L3])
-        # and the long-term target storage (αC [L3])" (Shin et al., 2019)
-        release_coefficient: ArrayFloat64 = storage_year_start / (alpha * capacity)
-
-        final_release: ArrayFloat64 = (
-            demand_controlled_release_ratio * release_coefficient * provisional_release
-            + (1 - demand_controlled_release_ratio)
-            * long_term_monthly_inflow_this_month_m3
-            / n_monthly_substeps
-        )
-        return final_release
 
     # def get_flood_control_reservoir_release(
     #     self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha

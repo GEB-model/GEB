@@ -1,7 +1,5 @@
 """This module contains the CropFarmers agent class for the GEB model."""
 
-from __future__ import annotations
-
 import calendar
 import copy
 import math
@@ -987,7 +985,9 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
-        why_map: np.ndarray = read_grid(self.model.files["grid"]["groundwater/why_map"])
+        why_map = self.model.hydrology.grid.load2d(
+            self.model.files["grid"]["groundwater/why_map"], compress=False
+        )
 
         self.var.why_class[:] = sample_from_map(
             why_map, self.var.locations.data, self.grid.gt
@@ -5364,7 +5364,9 @@ class CropFarmers(AgentBaseClass):
                     timer.finish_split("index insurance")
                 if self.pr_insurance_adaptation_active:
                     gev_params = self.var.GEV_pr_parameters.data
-                    strike_vals = np.round(np.arange(1500, 300, -100), 2)
+                    strike_vals = np.round(np.arange(1500, 300, -100), 2).astype(
+                        np.float32
+                    )
                     low, high, N = 0, 800, 10
                     u = np.linspace(0, 1, N)  # linear grid on [0,1]
                     s = 0.5 * (1 - np.cos(np.pi * u))
@@ -5751,7 +5753,7 @@ class CropFarmers(AgentBaseClass):
         """
         # get elevation per farmer
         elevation_subgrid = read_grid(
-            self.model.files["subgrid"]["landsurface/elevation"],
+            self.model.files["subgrid"]["landsurface/elevation"], ndim=2
         )
         elevation_subgrid = np.nan_to_num(elevation_subgrid, copy=False, nan=0.0)
         decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)

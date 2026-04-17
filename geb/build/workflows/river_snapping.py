@@ -1,7 +1,5 @@
 """This module contains functions for snapping points to the river network and visualizing the results."""
 
-from __future__ import annotations
-
 import warnings
 from pathlib import Path
 

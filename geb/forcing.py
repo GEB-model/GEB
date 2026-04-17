@@ -1,7 +1,5 @@
 """Module to handle climate forcing data."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -836,7 +834,9 @@ class Forcing(Module):
             model: model instance.
         """
         self.model = model
-        self.forcing_DEM = read_grid(model.files["other"]["climate/elevation_forcing"])
+        self.forcing_DEM = read_grid(
+            model.files["other"]["climate/elevation_forcing"], ndim=2
+        )
         self._initialize_loaders()
 
     def _initialize_loaders(self) -> None:

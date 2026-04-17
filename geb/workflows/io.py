@@ -1,13 +1,10 @@
 """I/O related functions and classes for the GEB project."""
 
-from __future__ import annotations
-
 import asyncio
 import bz2
 import datetime
 import hashlib
 import json
-import math
 import os
 import platform
 import shutil
@@ -17,17 +14,19 @@ import threading
 import time
 import warnings
 from collections.abc import Hashable
-from functools import partial
 from pathlib import Path
 from types import TracebackType
-from typing import Any, overload
+from typing import Any, Iterable, Literal, cast, overload
 
+import dask.array
 import dask.tokenize
 import geopandas as gpd
 import joblib
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyproj
 import rasterio
 import requests
@@ -37,7 +36,6 @@ import xarray as xr
 import yaml
 import zarr
 import zarr.storage
-from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
@@ -48,7 +46,6 @@ from zarr.errors import ZarrUserWarning
 from geb.geb_types import (
     ArrayDatetime64,
     ThreeDArray,
-    ThreeDArrayFloat32,
     TwoDArray,
     TwoDArrayFloat32,
 )
@@ -75,13 +72,49 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
     Args:
         df: The pandas DataFrame to save.
         fp: The path to the output parquet file.
+
+    Raises:
+        ValueError: If the DataFrame contains unsupported column types.
     """
-    df.to_parquet(
+    table = pa.Table.from_pandas(df)
+
+    int_and_dt_cols = []
+    bool_cols = []
+    float_cols = []
+    dict_cols = []
+
+    for n, t in zip(table.schema.names, table.schema.types):
+        if pa.types.is_integer(t) or pa.types.is_timestamp(t):
+            int_and_dt_cols.append(n)
+        elif pa.types.is_boolean(t):
+            bool_cols.append(n)
+        elif pa.types.is_floating(t):
+            float_cols.append(n)
+        elif pa.types.is_string(t) or pa.types.is_binary(t):
+            dict_cols.append(n)
+        else:
+            raise ValueError(f"Unsupported column type {t} for column {n}")
+
+    # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
+    column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
+
+    # Booleans use RLE (which includes bit-packing)
+    for col in bool_cols:
+        column_encoding[col] = "RLE"
+
+    pq.write_table(
+        table,
         fp,
-        engine="pyarrow",
         compression="zstd",
-        compression_level=9,
-        row_group_size=max(min(10_000, len(df)), 1),
+        compression_level=22,  # Higher level for better disk density
+        use_dictionary=dict_cols,
+        column_encoding=column_encoding,
+        use_byte_stream_split=float_cols,
+        data_page_version="2.0",
+        row_group_size=min(max(len(table), 1), 1_000_000),
+        data_page_size=10_000_000,  # Larger page size for better compression
+        write_page_index=False,  # Removes extra metadata overhead
+        write_statistics=False,  # Removes min/max/null count storage
     )
 
 
@@ -130,61 +163,122 @@ def write_array(
 
 @overload
 def read_grid(
-    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
-) -> ThreeDArray: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
-) -> tuple[ThreeDArray, Affine, str]: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[True] = True,
+    return_transform_and_crs: Literal[False] = False,
 ) -> TwoDArray: ...
 
 
 @overload
 def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[True] = True,
+    *,
+    return_transform_and_crs: Literal[True],
 ) -> tuple[TwoDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[True] = True,
+    return_transform_and_crs: Literal[False] = False,
+) -> ThreeDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[True] = True,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[ThreeDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[False] = False,
+    return_transform_and_crs: Literal[False] = False,
+) -> zarr.Array: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[False] = False,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[zarr.Array, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[False] = False,
+    return_transform_and_crs: Literal[False] = False,
+) -> zarr.Array: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[False] = False,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[zarr.Array, Affine, str]: ...
 
 
 def read_grid(
     filepath: Path,
-    layer: int | None = None,
+    ndim: Literal[2, 3],
+    load: bool = True,
     return_transform_and_crs: bool = False,
-) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
-    """Load a raster grid from a .tif or .zarr file.
+) -> (
+    TwoDArray
+    | ThreeDArray
+    | zarr.Array
+    | tuple[TwoDArray | ThreeDArray | zarr.Array, Affine, str]
+):
+    """Load a raster grid from .zarr file.
 
     Args:
-        filepath: The path to the .tif or .zarr file.
-        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is None.
+        filepath: The path of the .zarr file.
+        ndim: The expected number of dimensions of the raster data (2 or 3).
+        load: Whether to load the data into memory. If False, a zarr array will be returned instead of a numpy array. Default is True.
         return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
 
     Returns:
         The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
 
     Raises:
-        ValueError: If layer is specified but data is not 3-dimensional.
+        ValueError: If the loaded data does not have the expected number of dimensions.
     """
     store: zarr.storage.LocalStore = zarr.storage.LocalStore(filepath, read_only=True)
     group: zarr.Group = zarr.open_group(store, mode="r")
     data_array: zarr.Array | zarr.Group = group[filepath.stem]
+
     assert isinstance(data_array, zarr.Array)
-    if layer is not None:
-        if not data_array.ndim == 3:
-            raise ValueError("Data must be 3-dimensional to select a layer")
-        data = data_array[layer]
-    else:
+
+    if load:
         data = data_array[:]
-    assert isinstance(data, np.ndarray)
-    data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
-    if data.dtype == np.float64:
-        data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
-    assert data.ndim in (2, 3)
+        assert isinstance(data, np.ndarray)
+        data: TwoDArray | ThreeDArray = data  # ty:ignore[invalid-assignment]
+    else:
+        data = data_array
+        assert isinstance(data, zarr.Array)
+
+    if data.ndim != ndim:
+        raise ValueError(f"Expected data with {ndim} dimensions, but got {data.ndim}")
+
     if return_transform_and_crs:
         x_array: zarr.Array | zarr.Group = group["x"]
         assert isinstance(x_array, zarr.Array)
@@ -227,12 +321,15 @@ def read_geom(filepath: str | Path, **kwargs: Any) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath, **kwargs)
 
 
-def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
+def write_geom(
+    gdf: gpd.GeoDataFrame, filepath: Path, write_covering_bbox: bool = False
+) -> None:
     """Save a GeoDataFrame to a parquet file.
 
     Args:
         gdf: The GeoDataFrame to save.
         filepath: Path to the output parquet file.
+        write_covering_bbox: Whether to write the covering bounding box to the file.
     """
     gdf.to_parquet(
         filepath,
@@ -241,6 +338,7 @@ def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
         compression_level=9,
         row_group_size=max(min(10_000, len(gdf)), 1),
         schema_version="1.1.0",
+        write_covering_bbox=write_covering_bbox,
     )
 
 
@@ -507,55 +605,160 @@ def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
     return True
 
 
-def check_buffer_size(
-    da: xr.DataArray,
-    chunks_or_shards: dict[str, int],
-    max_buffer_size: int = 2147483647,
-) -> None:
-    """Check if the buffer size for the given chunks or shards is within the maximum allowed size.
+def _chunk_index_to_region(
+    chunk_structure: tuple[tuple[int, ...], ...],
+    block_index: tuple[int, ...],
+) -> tuple[slice, ...]:
+    """Convert a Dask block index into absolute array slices.
 
     Args:
-        da: The xarray DataArray to check.
-        chunks_or_shards: A dictionary with the chunk or shard sizes for each dimension.
-        max_buffer_size: The maximum allowed buffer size in bytes. Default is 2GB (2147483647 bytes).
+        chunk_structure: Chunk sizes for each array dimension.
+        block_index: Block index for each array dimension.
+
+    Returns:
+        The selection tuple describing the block position in the full array.
+    """
+    selection: list[slice] = []
+    for dimension_chunks, dimension_index in zip(
+        chunk_structure, block_index, strict=True
+    ):
+        start: int = sum(dimension_chunks[:dimension_index])
+        stop: int = start + dimension_chunks[dimension_index]
+        selection.append(slice(start, stop))
+    return tuple(selection)
+
+
+def _store_dask_array_blocks(
+    da: dask.array.core.Array,
+    store_target: Any,
+    progress: bool,
+    target_write_size_mb: int = 3000,
+) -> None:
+    """Store a Dask array into a Zarr target block by block.
+
+    Args:
+        da: Source Dask array whose existing block structure defines
+            the write granularity.
+        store_target: Writable Zarr target array.
+        progress: Whether to wrap the block iterator in a progress bar.
+        target_write_size_mb: Target size in megabytes for each write operation.
+    """
+    block_indices: Any = np.ndindex(*da.numblocks)
+
+    array_blocks = da.blocks
+
+    # the last chunk may be smaller than the specified chunk size,
+    # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
+    # This can be safely ignored in this context.
+    with np.errstate(invalid="ignore"):
+        stores: list = []
+        for block_index in block_indices:
+            region = _chunk_index_to_region(da.chunks, block_index)
+            block = array_blocks[block_index]
+            stores.append(
+                dask.array.store(
+                    block,
+                    store_target,
+                    regions=region,
+                    lock=False,
+                    compute=False,
+                    return_stored=False,
+                )
+            )
+
+        # target chunk size of around 3000MB, but at least 1 block
+        chunk_size: int = (
+            np.prod([da.chunks[i][0] for i in range(len(da.chunks))])
+            * da.dtype.itemsize
+        )
+        batch_size: int = max(1, target_write_size_mb * 1_000_000 // chunk_size)
+
+        batches: Iterable[int] = list(range(0, len(stores), batch_size))
+        if progress:
+            batches = tqdm(
+                batches,
+                total=int(np.ceil(len(stores) / batch_size)),
+                desc="Writing progress",
+                leave=False,
+            )
+
+        for i in batches:
+            batch = stores[i : i + batch_size]
+            dask.compute(*batch)
+
+
+def _normalize_shards(
+    chunk_spec: dict[str, int],
+    requested_shards: dict[str, int] | None,
+    dimension_sizes: dict[str, int],
+) -> dict[str, int] | None:
+    """Normalize shard sizes from chunk multiples to exact shard sizes.
+
+    Args:
+        chunk_spec: Chunk sizes for each array dimension.
+        requested_shards: Requested shard sizes expressed as the number of chunks
+            per shard for a subset of dimensions.
+        dimension_sizes: Full array size for each dimension.
+
+    Returns:
+        A complete shard specification using chunk-sized shards for unspecified
+        dimensions, or None when no sharding is requested. Each shard size is an
+        exact multiple of the chunk size for its dimension.
 
     Raises:
-        ValueError: If the buffer size exceeds the maximum allowed size.
+        ValueError: If a requested shard dimension does not exist.
+        ValueError: If a requested shard size is smaller than 1.
     """
-    buffer_size = (
-        np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
-    )
-    if buffer_size >= max_buffer_size:
+    if requested_shards is None:
+        return None
+
+    invalid_dimensions = sorted(set(requested_shards) - set(chunk_spec))
+    if invalid_dimensions:
         raise ValueError(
-            f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
+            f"Shard dimensions {invalid_dimensions} are not present in the array"
         )
+
+    shard_spec: dict[str, int] = chunk_spec.copy()
+    for dim_name, requested_shard_size in requested_shards.items():
+        if requested_shard_size < 1:
+            raise ValueError(
+                f"Shard size for dimension '{dim_name}' must be at least 1"
+            )
+
+        chunk_size: int = chunk_spec[dim_name]
+        dimension_size: int = dimension_sizes[dim_name]
+
+        requested_shard_size_in_elements: int = requested_shard_size * chunk_size
+        minimum_full_shard_size: int = (
+            (dimension_size + chunk_size - 1) // chunk_size
+        ) * chunk_size
+        shard_spec[dim_name] = min(
+            requested_shard_size_in_elements, minimum_full_shard_size
+        )
+
+    return shard_spec
 
 
 def write_zarr(
     da: xr.DataArray,
-    path: str | Path,
+    path: str | Path | None,
     crs: int | pyproj.CRS,
-    x_chunksize: int = 350,
-    y_chunksize: int = 350,
-    time_chunksize: int = 1,
-    time_chunks_per_shard: int | None = 30,
-    filters: list = [],
-    compression_level: int = 22,
+    shards: dict[str, int] | None = None,
+    filters: list | None = None,
+    compression_level: int = 18,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
 
     Args:
         da: The xarray DataArray to save.
-        path: The path to the zarr file.
+        path: The path to the zarr file. If None, the file will be saved to a temporary location.
         crs: The coordinate reference system to use.
-        x_chunksize: The chunk size for the x dimension. Default is 350.
-        y_chunksize: The chunk size for the y dimension. Default is 350.
-        time_chunksize: The chunk size for the time dimension. Default is 1.
-        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
-            to disable sharding.
+        shards: A dictionary with the number of chunks per shard for each
+            dimension. If provided, these will be used instead of chunk-sized
+            shards. Default is None.
         filters: A list of filters to apply. Default is [].
-        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 22.
+        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 18.
         progress: Whether to show a progress bar. Default is True.
 
     Returns:
@@ -564,11 +767,15 @@ def write_zarr(
     Raises:
         ValueError: If the DataArray has invalid dimensions or attributes.
         ValueError: If the DataArray dtype is float64.
+        ValueError: If shards contains an unknown dimension or non-positive size.
 
     """
     assert isinstance(da, xr.DataArray), "da must be an xarray DataArray"
     assert "longitudes" not in da.dims, "longitudes should be x"
     assert "latitudes" not in da.dims, "latitudes should be y"
+
+    if filters is None:
+        filters: list = []
 
     if "y" in da.dims and "x" in da.dims:
         assert da.dims[-2] == "y", "y should be the second last dimension"
@@ -593,101 +800,102 @@ def write_zarr(
             f"Fill value must be nan, not {da.attrs['_FillValue']}"
         )
 
-    path: Path = Path(path)
+    if path is None:
+        is_temporary_file = True
+        path: Path = Path(f"temp_{dask.tokenize.tokenize(da)}.zarr")
+    else:
+        path: Path = Path(path)
+        is_temporary_file = False
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(delete=not is_temporary_file) as tmp_dir:
         tmp_zarr = Path(tmp_dir) / path.name
 
         da.name = path.stem.split("/")[-1]
 
         da: xr.DataArray = da.drop_vars([v for v in da.coords if v not in da.dims])
-
-        chunks, shards = {}, None
-
-        # for non spatiotemporal dimensions we use existing chunk sizes
-        for dim in da.dims:
-            if dim not in ("x", "y", "time"):
-                chunks[dim] = (
-                    da.chunksizes[dim][0] if dim in da.chunksizes else da.sizes[dim]
-                )
-
         if "y" in da.dims and "x" in da.dims:
-            chunks.update(
-                {
-                    "y": min(y_chunksize, da.sizes["y"]),
-                    "x": min(x_chunksize, da.sizes["x"]),
-                }
-            )
             da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
-        if "time" in da.dims:
-            chunks.update({"time": min(time_chunksize, da.sizes["time"])})
-            if time_chunks_per_shard is not None:
-                shards = chunks.copy()
-                shards["time"] = min(
-                    time_chunks_per_shard * chunks["time"],
-                    (math.ceil(da.time.size / chunks["time"]))
-                    * chunks[
-                        "time"
-                    ],  # shard sizes must be an exact multiple of chunk sizes. Therefore, we round up the shard size to the nearest multiple of the chunk size that is greater than or equal to the desired shard size
-                )
+        chunk_spec: dict[str, int] = {}
+        for dim in da.dims:
+            dim_name = str(dim)
+            requested_chunk_size = (
+                da.chunksizes[dim_name][0]
+                if dim_name in da.chunksizes
+                else da.sizes[dim_name]
+            )
+            chunk_spec[dim_name] = min(requested_chunk_size, da.sizes[dim_name])
 
         compressor: ZstdCodec = ZstdCodec(
             level=compression_level,
         )
 
-        check_buffer_size(da, chunks_or_shards=shards if shards else chunks)
+        dimension_sizes: dict[str, int] = {
+            str(dim): da.sizes[str(dim)] for dim in da.dims
+        }
+        shard_spec = _normalize_shards(chunk_spec, shards, dimension_sizes)
 
-        da: xr.DataArray = da.chunk(shards if shards is not None else chunks)
+        # when sharding is enabled, the write block size is determined by the shard size, otherwise by the chunk size
+        write_block_spec: dict[str, int] = (
+            shard_spec if shard_spec is not None else chunk_spec
+        )
+
+        da = da.chunk(write_block_spec)
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
-        chunks = tuple(chunks[dim] for dim in da.dims)
+        storage_chunks = tuple(chunk_spec[str(dim)] for dim in da.dims)
 
         array_encoding: dict[str, Any] = {
             "compressors": (compressor,),
-            "chunks": chunks,
+            "chunks": storage_chunks,
             "filters": filters,
         }
 
-        if shards is not None:
-            shards = tuple(
-                (shards[dim] if dim in shards else getattr(da, str(dim)).size)
-                for dim in da.dims
-            )
-            array_encoding["shards"] = shards
+        if shard_spec is not None:
+            storage_shards = tuple(shard_spec[str(dim)] for dim in da.dims)
+            array_encoding["shards"] = storage_shards
 
         assert isinstance(da.name, str)
         encoding: dict[Hashable, dict[str, Any]] = {da.name: array_encoding}
         for coord in da.coords:
-            encoding[coord] = {"compressors": (compressor,)}
+            encoding[coord] = {
+                "compressors": (compressor,),
+                "chunks": (da.coords[coord].size,),
+            }
 
-        to_zarr_partial = partial(
-            da.to_zarr,
+        da.to_zarr(
             store=tmp_zarr,
             mode="w",
             encoding=encoding,
             zarr_format=3,
             consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
             write_empty_chunks=True,
+            compute=False,
         )
 
-        if progress:
-            # start writing after 10 seconds, and update every 0.1 seconds
-            with ProgressBar(
-                minimum=0.1,
-                dt=float(os.environ.get("GEB_OVERRIDE_PROGRESSBAR_DT", 0.1)),
-            ):
-                store = to_zarr_partial()
-        else:
-            store = to_zarr_partial()
+        # Open the target array in the Zarr store for writing
+        target = zarr.open_array(
+            store=tmp_zarr,
+            zarr_format=3,
+            path=da.name,
+            mode="r+",
+        )
+        store_target = cast(Any, target)
 
-        store.close()
+        # When sharding is enabled we rechunk the source data to the shard layout
+        # so each write call covers one shard instead of one storage chunk.
+        da = da.chunk(shard_spec) if shard_spec is not None else da
+        _store_dask_array_blocks(da.data, store_target, progress)
 
-        folder: Path = path.parent
-        folder.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            shutil.rmtree(path)
-        shutil.move(tmp_zarr, folder)
+        if not is_temporary_file:
+            folder: Path = path.parent
+            folder.mkdir(parents=True, exist_ok=True)
+
+            if path.exists():
+                shutil.rmtree(path)
+            shutil.move(tmp_zarr, folder)
+        if is_temporary_file:
+            path = tmp_zarr
 
     da_disk: xr.DataArray = read_zarr(path)
 
@@ -1593,7 +1801,9 @@ def fetch_and_save(
                 # Write to the temporary file
                 if show_progress:
                     total_size = int(response.headers.get("content-length", 0))
-                    progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+                    progress_bar = tqdm(
+                        total=total_size, unit="B", unit_scale=True, leave=False
+                    )
                     if decompress == "bz2":
                         decompressor = bz2.BZ2Decompressor()
                         for data in response.iter_content(chunk_size=chunk_size):
@@ -1720,7 +1930,7 @@ def create_hash_from_parameters(
             value = value.item()
         try:
             json.dumps(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             raise ValueError(f"Value {value} is not JSON serializable")
         return value
 

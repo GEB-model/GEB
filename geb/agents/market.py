@@ -1,7 +1,5 @@
 """This module contains the Market agent class for simulating market dynamics in the GEB model."""
 
-from __future__ import annotations
-
 import warnings
 from typing import TYPE_CHECKING
 
@@ -140,11 +138,8 @@ class Market(AgentBaseClass):
         start_idx = inflation["time"].index(
             self.model.config["general"]["spinup_time"].year
         )
-        end_idx = inflation["time"].index(self.model.config["general"]["end_time"].year)
         for region in inflation["data"]:
-            region_inflation = [1] + inflation["data"][region][
-                start_idx + 1 : end_idx + 1
-            ]
+            region_inflation = [1] + inflation["data"][region][start_idx + 1 : -1]
             self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
 
     def estimate_price_model(self) -> None:

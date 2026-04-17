@@ -16,7 +16,6 @@ from geb.workflows.raster import (
     convert_nodata,
     interpolate_na_2d,
     interpolate_na_along_dim,
-    pad_xy,
     rasterize_like,
     reclassify,
     repeat_grid,
@@ -24,7 +23,7 @@ from geb.workflows.raster import (
     resample_like,
 )
 
-from ..workflows.soilgrids import load_soilgrids
+from ..workflows.soilgrids import process_soilgrids
 from .base import BuildModelBase
 
 
@@ -73,7 +72,7 @@ class LandSurface(BuildModelBase):
         sub_cell_area.data = (
             repeat_grid(cell_area.data, self.subgrid_factor) / self.subgrid_factor**2
         )
-        self.set_subgrid(sub_cell_area, name="cell_area")
+        self.set_subgrid(sub_cell_area.chunk({"x": -1, "y": -1}), name="cell_area")
 
     @build_method(
         depends_on=[
@@ -89,13 +88,13 @@ class LandSurface(BuildModelBase):
                 "name": "fabdem",
                 "zmin": 0.001,
                 "coastal_zmin": 30.0,
-                "fill_depressions": True,
+                "fill_depressions": False,
             },
             {
                 "name": "delta_dtm",
                 "zmax": 30,
                 "zmin": 0.001,
-                "fill_depressions": True,
+                "fill_depressions": False,
                 "coastal_only": True,
             },
             {
@@ -116,7 +115,7 @@ class LandSurface(BuildModelBase):
             zmin_coastal: The minimum elevation where to use the DEM for coastal subbasins. Elevations below this value will be set to NaN.
             zmax: The maximum elevation where to use the DEM. Elevations above this value will be set to NaN.
             zmax_coastal: The maximum elevation where to use the DEM for coastal subbasins. Elevations above this value will be set to NaN.
-            fill_depressions: Whether to fill depressions in the DEM.
+            fill_depressions: Whether to fill depressions in the DEM. Default is False. Note that this may use a lot of memory for large DEMs.
             nodata: The nodata value in the DEM. Optional, only required if the DEM does not have a nodata value defined.
             crs: The CRS to set for custom DEMs when the file does not define one (EPSG code or CRS string).
             coastal_only: DEMs with this value set to True will be skipped if there are no coastal subbasins in the model.
@@ -172,9 +171,7 @@ class LandSurface(BuildModelBase):
 
             # Create low elevation coastal zone mask based on DeltaDTM
             low_elevation_coastal_zone = delta_dtm < 10
-            low_elevation_coastal_zone.values = (
-                low_elevation_coastal_zone.values.astype(np.float32)
-            )
+            low_elevation_coastal_zone = low_elevation_coastal_zone.astype(np.float32)
             self.set_other(
                 low_elevation_coastal_zone,
                 name="landsurface/low_elevation_coastal_zone",
@@ -189,11 +186,11 @@ class LandSurface(BuildModelBase):
             mask=potential_flood_area_with_buffer,
         ).read()
 
-        target: xr.DataArray = self.subgrid["mask"]
+        target: xr.DataArray = self.subgrid["mask"].chunk({"x": 5000, "y": 5000})
         assert target.rio.crs is not None, "target grid must have a crs"
 
         self.set_subgrid(
-            resample_chunked(fabdem, target, method="bilinear"),
+            resample_chunked(fabdem, target, method="nearest"),
             name="landsurface/elevation",
         )
 
@@ -272,7 +269,7 @@ class LandSurface(BuildModelBase):
                 )
 
             self.set_other(
-                DEM_raster,
+                DEM_raster.chunk({"x": 5000, "y": 5000}),
                 name=f"DEM/{DEM['name']}",
             )
             DEM["path"] = f"DEM/{DEM['name']}"
@@ -289,25 +286,12 @@ class LandSurface(BuildModelBase):
     ) -> None:
         """Sets up the (administrative) regions and land use data for GEB.
 
-        The regions can be used for multiple purposes, for example for creating the
-        agents in the model, assigning unique crop prices and other economic variables
-        per region and for aggregating the results.
-
         Args:
             region_database: The name of the region database to use. Default is 'GADM_level1'.
             unique_region_id: The name of a column in the region database that contains a unique region ID. Default is 'UID',
                 which is the unique identifier for the GADM database.
             ISO3_column: The name of a column in the region database that contains the ISO3 code for the region. Default is 'ISO3'.
             land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021'.
-
-        Notes:
-            This method sets up the regions and land use data for GEB. It first retrieves the region data from
-            the specified region database and sets it as a geometry in the model. It then pads the subgrid to cover the entire
-            region and retrieves the land use data from the ESA WorldCover dataset. The land use data is reprojected to the
-            padded subgrid and the region ID is rasterized onto the subgrid. The cell area for each region is calculated and
-            set as a grid in the model. The MERIT dataset is used to identify rivers, which are set as a grid in the model. The
-            land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
-            identified and set as a grid in the model.
         """
         regions: gpd.GeoDataFrame = (
             self.data_catalog.fetch(region_database)
@@ -343,39 +327,18 @@ class LandSurface(BuildModelBase):
 
         self.set_geom(regions, name="regions")
 
-        resolution_x, resolution_y = self.subgrid["mask"].rio.resolution()
-
-        regions_bounds: tuple[float, float, float, float] = self.geom[
-            "regions"
-        ].total_bounds
-        mask_bounds: tuple[float, float, float, float] = self.grid["mask"].rio.bounds(
-            recalc=True
+        subgrid_region_ids: xr.DataArray = rasterize_like(
+            gdf=self.geom["regions"],
+            column="region_id",
+            raster=self.subgrid["mask"],
+            dtype=np.int32,
+            nodata=-1,
+            all_touched=True,
         )
 
-        # The bounds should be set to a bit larger than the regions to avoid edge effects
-        # and also larger than the mask, to ensure that the entire grid is covered.
-        pad_minx = min(regions_bounds[0], mask_bounds[0]) - abs(resolution_x) / 2.0
-        pad_miny = min(regions_bounds[1], mask_bounds[1]) - abs(resolution_y) / 2.0
-        pad_maxx = max(regions_bounds[2], mask_bounds[2]) + abs(resolution_x) / 2.0
-        pad_maxy = max(regions_bounds[3], mask_bounds[3]) + abs(resolution_y) / 2.0
-
-        region_mask, region_subgrid_slice = pad_xy(
-            self.subgrid["mask"],
-            pad_minx,
-            pad_miny,
-            pad_maxx,
-            pad_maxy,
-            return_slice=True,
-            constant_values=1,
+        self.set_subgrid(
+            subgrid_region_ids, name="region_ids", shards={"x": 10, "y": 10}
         )
-        region_mask.attrs["_FillValue"] = None
-        region_mask = self.set_region_subgrid(region_mask, name="mask")
-
-        # Get the combined bounds of regions and subbasins to ensure coverage of both
-        buffer = 0.1
-
-        regions_bounds = self.geom["regions"].total_bounds
-        subbasins_bounds = self.geom["routing/subbasins"].total_bounds
 
         potential_flood_area_with_buffer = (
             self.geom["routing/subbasins"].union_all().buffer(0.1)
@@ -389,7 +352,7 @@ class LandSurface(BuildModelBase):
 
         land_use_classification_source: xr.DataArray = self.data_catalog.fetch(
             land_cover
-        ).read(self.geom["regions"].union_all().union(potential_flood_area_with_buffer))
+        ).read(potential_flood_area_with_buffer)
 
         land_use_classification_source_within_potential_flood_area = clip_with_geometry(
             land_use_classification_source,
@@ -398,37 +361,27 @@ class LandSurface(BuildModelBase):
             drop=True,
         )
 
-        self.set_other(
+        land_use_classification_source_within_potential_flood_area = self.set_other(
             land_use_classification_source_within_potential_flood_area,
             name="landcover/classification",
+            shards={"x": 10, "y": 10},
         )
 
-        land_use_classification_source_region_subgrid: xr.DataArray = resample_chunked(
-            land_use_classification_source,
-            region_mask,
+        land_use_classification_source_subgrid: xr.DataArray = resample_chunked(
+            land_use_classification_source_within_potential_flood_area,
+            self.subgrid["mask"].chunk({"x": 500, "y": 500}),
             method="nearest",
         )
 
-        subgrid_region_ids: xr.DataArray = rasterize_like(
-            gdf=self.geom["regions"],
-            column="region_id",
-            raster=region_mask,
-            dtype=np.int32,
-            nodata=-1,
-            all_touched=True,
+        land_use_classification_source_subgrid = self.set_subgrid(
+            land_use_classification_source_subgrid,
+            name="landcover/classification",
+            shards={"x": 5, "y": 5},
         )
-        self.set_region_subgrid(subgrid_region_ids, name="region_ids")
 
-        land_use_classification_source_subgrid = (
-            land_use_classification_source_region_subgrid.isel(region_subgrid_slice)
-        ).astype(np.int16)
-        land_use_classification_source_subgrid = xr.where(
-            ~self.subgrid["mask"], land_use_classification_source_subgrid, -1
-        )
         land_use_classes_subgrid = reclassify(
             land_use_classification_source_subgrid,
             remap_dict={
-                -1: np.int8(-1),  # outside of the model domain
                 0: np.int8(
                     5
                 ),  # map nodata in source to permanent water bodies, as these are mostly ocean in the land cover dataset
@@ -446,20 +399,24 @@ class LandSurface(BuildModelBase):
                 95: np.int8(5),  # mangroves
                 100: np.int8(1),  # moss and lichen
             },
+            method="lookup",
         )
+
         land_use_classes_subgrid.attrs["_FillValue"] = -1
         self.set_subgrid(land_use_classes_subgrid, name="landsurface/land_use_classes")
 
-        cultivated_land_full_region = xr.where(
-            land_use_classification_source_region_subgrid == 40,
+        cultivated_land_subgrid = xr.where(
+            land_use_classification_source_subgrid == 40,
             True,
             False,
+            keep_attrs=True,
+        )
+        cultivated_land_subgrid = cultivated_land_subgrid.rio.write_crs(
+            land_use_classification_source_subgrid.rio.crs
         )
 
-        cultivated_land_full_region.attrs["_FillValue"] = None
-        self.set_region_subgrid(
-            cultivated_land_full_region, name="landsurface/full_region_cultivated_land"
-        )
+        cultivated_land_subgrid.attrs["_FillValue"] = None
+        self.set_subgrid(cultivated_land_subgrid, name="landsurface/cultivated_land")
 
     @build_method(depends_on=[], required=False)
     def setup_land_use_parameters(
@@ -471,15 +428,46 @@ class LandSurface(BuildModelBase):
             "setup_land_use_parameters is removed, please remove it from your build configuration"
         )
 
-    @build_method(depends_on=[], required=False)
-    def setup_soil_parameters(self) -> None:
-        """Deprecated method for setting up soil parameters.
+    def _load_soilgrids_variable_by_layer(
+        self,
+        subgrid_mask: xr.DataArray,
+        variable_name: str,
+        conversion_factor: float,
+        soil_layer_names: list[str],
+    ) -> xr.DataArray:
+        """Load a SoilGrids variable for all configured soil layers.
 
-        Raises:
-            NotImplementedError: This method is removed; use setup_soil instead.
+        Args:
+            subgrid_mask: Target subgrid mask used to request SoilGrids data.
+            variable_name: SoilGrids variable name.
+            conversion_factor: Multiplier used to convert the source units to the
+                model units.
+            soil_layer_names: SoilGrids layer labels in top-to-bottom order.
+
+        Returns:
+            SoilGrids variable concatenated along the ``soil_layer`` dimension.
         """
-        raise NotImplementedError(
-            "setup_soil_parameters is removed; use setup_soil instead."
+        soilgrids_source = self.data_catalog.fetch("soilgridsv2")
+        soilgrids_layers: list[xr.DataArray] = []
+        for layer_name in soil_layer_names:
+            da = soilgrids_source.read(variable=variable_name, depth=layer_name)
+            da = da.astype(np.float32)
+            soilgrids_layers.append(
+                process_soilgrids(
+                    da=da,
+                    mask=subgrid_mask,
+                    region=self.region,
+                )
+            )
+
+        soil_layer_numbers: list[int] = list(range(1, len(soil_layer_names) + 1))
+        return (
+            xr.concat(
+                soilgrids_layers,
+                dim=xr.Variable("soil_layer", soil_layer_numbers),
+                compat="equals",
+            )
+            * conversion_factor
         )
 
     @build_method(depends_on=[], required=True)
@@ -513,35 +501,78 @@ class LandSurface(BuildModelBase):
         #     ),
         # )
 
-        soilgrids: xr.Dataset = load_soilgrids(
-            self.data_catalog, self.subgrid["mask"], self.region
-        )
-        self.set_subgrid(soilgrids["silt"], name="soil/silt_percentage")
-        self.set_subgrid(soilgrids["clay"], name="soil/clay_percentage")
-        self.set_subgrid(soilgrids["bdod"], name="soil/bulk_density_kg_per_dm3")
-        self.set_subgrid(soilgrids["soc"], name="soil/soil_organic_carbon_percentage")
-        self.set_subgrid(soilgrids["height"], name="soil/soil_layer_height_m")
+        subgrid_mask: xr.DataArray = self.subgrid["mask"]
+        soilgrids_conversion_factors: dict[str, float] = {
+            "silt": 0.1,  # g/kg -> g/100g (%)
+            "clay": 0.1,  # g/kg -> g/100g (%)
+            "bdod": 0.01,  # cg/cm³ -> gr/cm³
+            "soc": 0.01,  # dg/kg -> g/100g (%)
+        }
+        soilgrids_output_names: dict[str, str] = {
+            "silt": "soil/silt_percentage",
+            "clay": "soil/clay_percentage",
+            "bdod": "soil/bulk_density_kg_per_dm3",
+            "soc": "soil/soil_organic_carbon_percentage",
+        }
+        soil_layer_names: list[str] = [
+            "0-5cm",
+            "5-15cm",
+            "15-30cm",
+            "30-60cm",
+            "60-100cm",
+            "100-200cm",
+        ]
 
-        depth_to_bedrock_cm = self.data_catalog.fetch("soilgridsv1").read(
-            variable="BDTICM_M_250m_ll"
+        for variable_name, conversion_factor in soilgrids_conversion_factors.items():
+            soilgrids_variable: xr.DataArray = self._load_soilgrids_variable_by_layer(
+                subgrid_mask=subgrid_mask,
+                variable_name=variable_name,
+                conversion_factor=conversion_factor,
+                soil_layer_names=soil_layer_names,
+            )
+
+            soilgrids_variable: xr.DataArray = self.set_subgrid(
+                soilgrids_variable,
+                name=soilgrids_output_names[variable_name],
+            )
+
+        soil_layer_height_per_layer_m: xr.DataArray = xr.DataArray(
+            np.array((0.05, 0.10, 0.15, 0.30, 0.40, 1.00), dtype=np.float32),
+            dims=("soil_layer",),
+            coords={"soil_layer": soilgrids_variable["soil_layer"]},
+        )
+        soil_layer_height_m = soil_layer_height_per_layer_m.broadcast_like(
+            soilgrids_variable
+        )
+        soil_layer_height_m = soil_layer_height_m.chunk({"soil_layer": 1})
+        soil_layer_height_m.attrs["units"] = "m"
+        soil_layer_height_m.attrs["description"] = "Height of each soil layer"
+        soil_layer_height_m.attrs["_FillValue"] = np.nan
+        soil_layer_height_m = soil_layer_height_m.rio.write_crs(
+            soilgrids_variable.rio.crs
+        )
+
+        self.set_subgrid(soil_layer_height_m, name="soil/soil_layer_height_m")
+
+        # clean up memory
+        del soil_layer_height_m
+        del soilgrids_variable
+
+        depth_to_bedrock_cm = (
+            self.data_catalog.fetch("soilgridsv1")
+            .read(variable="BDTICM_M_250m_ll")
+            .astype(np.float32)
+        )
+        depth_to_bedrock_cm = process_soilgrids(
+            da=depth_to_bedrock_cm,
+            mask=subgrid_mask,
+            region=self.region,
         )
         assert isinstance(depth_to_bedrock_cm, xr.DataArray)
-        depth_to_bedrock_cm = depth_to_bedrock_cm.isel(
-            get_window(
-                depth_to_bedrock_cm.x,
-                depth_to_bedrock_cm.y,
-                self.bounds,
-                buffer=10,
-            ),
-        ).astype(np.float32)
-        depth_to_bedrock_cm: xr.DataArray = convert_nodata(depth_to_bedrock_cm, np.nan)
         depth_to_bedrock_m: xr.DataArray = (
             depth_to_bedrock_cm / 100
         )  # convert from cm to m
-        depth_to_bedrock_m: xr.DataArray = interpolate_na_2d(depth_to_bedrock_m)
-        depth_to_bedrock_m: xr.DataArray = resample_like(
-            depth_to_bedrock_m, soilgrids["silt"]
-        )
+
         self.set_subgrid(depth_to_bedrock_m, name="soil/depth_to_bedrock_m")
 
     @build_method(depends_on=[], required=True)

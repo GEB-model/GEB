@@ -9,18 +9,12 @@
 executor: slurm
 
 # Job management
-# 7 = cluster limit for concurrent jobs (excluding the coordinator job itself).
-# All 18 cluster jobs are submitted upfront; SLURM queues them and starts each
-# one as soon as a node becomes free.
-jobs: 7
+# Snakemake submits up to `jobs` jobs to SLURM simultaneously.
+# Jobs are excluded from small defq nodes (node003-015, ~257 GB) and distributed
+# freely across node001/002 (~1031 GB) and node243 (~773 GB) via --mem hints.
+jobs: 8
 max-jobs-per-second: 2
-max-status-checks-per-second: 0.5
-
-# ivm-fat has only one physical node (node243, 773 GB). Each job requests
-# 700 GB, so only 1 can run at a time. Enforced via the custom Snakemake
-# resource `ivm_fat_slots=1` declared in each rule.
-resources:
-  ivm_fat_slots: 1
+max-status-checks-per-second: 1
 
 # Resource defaults (overridden by rule-specific resources)
 default-resources:

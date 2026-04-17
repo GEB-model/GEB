@@ -1,7 +1,5 @@
 """Utilities to set up Australian water prices and drip irrigation prices."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 
@@ -129,7 +127,7 @@ class Agents(BaseAgents):
 
             # Map annual (year ended June) → monthly (2000-07 to 2004-06)
             def _fy_end_for_month(m: pd.Timestamp) -> pd.Timestamp:
-                return pd.Timestamp(
+                return pd.Timestamp(  # ty:ignore[invalid-return-type]
                     year=m.year if m.month <= 6 else m.year + 1, month=6, day=30
                 )
 
@@ -337,7 +335,7 @@ class Agents(BaseAgents):
 
                     out_data[region_id] = prices.tolist()
 
-            out["data"] = out_data
+            out["data"] = out_data  # ty:ignore[invalid-assignment]
             self.set_params(out, name=f"economics/{key}")
 
     def setup_drip_irrigation_prices_by_reference_year(
