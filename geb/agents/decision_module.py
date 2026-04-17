@@ -10,33 +10,55 @@ class DecisionModule:
     """This class implements the decision module for drought adaptation."""
 
     @staticmethod
-    def calculate_riverine_amenity(x_j: float, GDP_i_t: float, phi_i: float) -> float:
+    def calculate_riverine_amenity(
+        household_distance_to_river_m: float, GDP_i_t: float = 1, phi_i: float = 1
+    ) -> float:
         """This function calculates the riverine amenity value for a given distance to the river.
 
         The function is based on a piecewise linear function that decreases with distance from the river.
         based on Tesselaar, M., Botzen, W.J.W., Tiggeloven, T. et al. Flood insurance is a driver of population growth in European floodplains. Nat Commun 14, 7483 (2023). https://doi.org/10.1038/s41467-023-43229-8
 
         Args:
-            x_j: Distance to the river (m)
+            household_distance_to_river_m: Distance to the river (m)
             GDP_i_t: GDP of the household at time t
-            phi_i: Amenity parameter for the household
+            phi_i: Deviation of average national housing prices from the European average
 
         Returns:
             Riverine amenity value
         """
-        x_j *= 0.001  # convert to km
-        if x_j < 10:
-            value = 4000 - 150 * x_j
-        elif 10 < x_j < 25:
-            value = 2500 - 100 * (x_j - 10)
-        elif 25 < x_j < 50:
-            value = 1000 - 40 * (x_j - 25)
-        else:  # x_j >= 50
-            value = 0
-        return GDP_i_t * phi_i * value
+        amenity_values = np.full(
+            household_distance_to_river_m.shape, 0.0, dtype=np.float32
+        )
+        household_distance_to_river_m *= 0.001  # convert to km
+        amenity_values[household_distance_to_river_m < 10] = (
+            4000
+            - 150 * household_distance_to_river_m[household_distance_to_river_m < 10]
+        )
+        amenity_values[
+            (household_distance_to_river_m >= 10) & (household_distance_to_river_m < 25)
+        ] = 2500 - 100 * (
+            household_distance_to_river_m[
+                (household_distance_to_river_m >= 10)
+                & (household_distance_to_river_m < 25)
+            ]
+            - 10
+        )
+        amenity_values[
+            (household_distance_to_river_m >= 25) & (household_distance_to_river_m < 50)
+        ] = 1000 - 40 * (
+            household_distance_to_river_m[
+                (household_distance_to_river_m >= 25)
+                & (household_distance_to_river_m < 50)
+            ]
+            - 25
+        )
+        amenity_values[household_distance_to_river_m >= 50] = 0
+        return GDP_i_t * phi_i * amenity_values
 
     @staticmethod
-    def calculate_coastal_amenity(x_j: float, GDP_i_t: float, phi_i: float) -> float:
+    def calculate_coastal_amenity(
+        x_j: float, GDP_i_t: float = 1, phi_i: float = 1
+    ) -> float:
         """This function calculates the coastal amenity value for a given distance to the coast.
 
         The function is based on a piecewise linear function that decreases with distance from the coast.
@@ -45,7 +67,7 @@ class DecisionModule:
         Args:
             x_j: Distance to the coast (m)
             GDP_i_t: GDP of the household at time t
-            phi_i: Amenity parameter for the household
+            phi_i: Deviation of average national housing prices from the European average
 
         Returns:
             Coastal amenity value
@@ -483,6 +505,8 @@ class DecisionModule:
         expendature_cap: float,
         amenity_value: np.ndarray,
         amenity_weight: float | int,
+        household_distance_to_coastline_m: np.ndarray,
+        household_distance_to_river_m: np.ndarray,
         risk_perception: np.ndarray,
         expected_damages_adapt: np.ndarray,
         adaptation_costs: np.ndarray,
@@ -500,8 +524,10 @@ class DecisionModule:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
         # weigh amenities
-        amenity_value = amenity_value * amenity_weight
-
+        amenity_value = self.calculate_riverine_amenity(household_distance_to_river_m)
+        amenity_value += self.calculate_coastal_amenity(
+            household_distance_to_coastline_m
+        )
         # Ensure p floods is in increasing order
         indices = np.argsort(p_floods)
         expected_damages_adapt = expected_damages_adapt[indices]
