@@ -482,7 +482,7 @@ def generate_surge_hydrograph(
     if make_plot:
         plt.plot(
             -df_before_peak["mean"].values * (1 / 6),
-            df_before_peak.index.values,
+            df_before_peak.index.values,  # ty:ignore[invalid-argument-type]
             label="surge hydrograph",
             color="green",
             linewidth=3,

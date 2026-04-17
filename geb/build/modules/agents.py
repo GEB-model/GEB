@@ -508,7 +508,7 @@ class Agents(BuildModelBase):
                         "mean_disp_income": [disp_income.mean()],
                         "median_disp_income": [np.median(disp_income)],
                     },
-                    index=[code],
+                    index=pd.Index([code]),
                 )
             )
 
@@ -948,7 +948,7 @@ class Agents(BuildModelBase):
 
         # Iterate over each price type and calculate the prices across years for each region
         for price_type, initial_price in price_types.items():
-            prices_dict = {
+            prices_dict: dict[str, Any] = {
                 "time": list(range(start_year, end_year + 1)),
             }
             prices_dict_data: dict[str, list] = {}
@@ -990,7 +990,7 @@ class Agents(BuildModelBase):
 
         electricity_rates = self.data_catalog.fetch("gcam_electricity_rates").read()
 
-        electricity_rates_dict = {
+        electricity_rates_dict: dict[str, Any] = {
             "time": list(range(start_year, end_year + 1)),
         }
         electricity_rates_dict_data: dict[str, list] = {}
