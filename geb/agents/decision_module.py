@@ -13,6 +13,9 @@ class DecisionModule:
     def calculate_riverine_amenity(
         household_distance_to_river_m: float, GDP_i_t: float = 1, phi_i: float = 1
     ) -> float:
+    def calculate_riverine_amenity(
+        household_distance_to_river_m: float, GDP_i_t: float = 1, phi_i: float = 1
+    ) -> float:
         """This function calculates the riverine amenity value for a given distance to the river.
 
         The function is based on a piecewise linear function that decreases with distance from the river.
