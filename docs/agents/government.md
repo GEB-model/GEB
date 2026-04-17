@@ -48,9 +48,9 @@ agent_settings:
       increment_fraction: 0.1   # fraction of suitable area to plant per call (0–1)
 ```
 
-In incremental mode all suitable HRUs (those meeting the threshold) are sorted by their `forest_restoration_potential_ratio` value in descending order. On each call the model skips HRUs already classified as FOREST (planted in previous years or originally forest) and plants the next `increment_fraction × n_suitable` HRUs. No manual step counter is needed — the function advances automatically each time it is called. When all suitable HRUs are already forest, a warning is logged and no action is taken.
+In incremental mode all suitable HRUs (those meeting the threshold) are sorted by their `forest_restoration_potential_ratio` value in descending order. On each call the model skips HRUs already classified as FOREST (planted in previous years or originally forest) and plants the next `increment_fraction × remaining` HRUs. No manual step counter is needed — the function advances automatically each time it is called. When all suitable HRUs are already forest, a warning is logged and no action is taken.
 
-When used together with the adaptation pathway (see below), `prepare_modified_soil_maps_for_forest` is called every January 1st when the ecosystem indicator threshold is crossed, so the forest grows by one increment per year automatically.
+When used together with the adaptation pathway (see [Adaptation Pathway](#adaptation-pathway) below), `prepare_modified_soil_maps_for_forest` is called every January 1st when the ecosystem indicator threshold is crossed, so the forest grows by one increment per year automatically.
 
 **2. Updating soil properties**
 
