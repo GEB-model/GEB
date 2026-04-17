@@ -112,9 +112,11 @@ class Households(AgentBaseClass):
         )
         self.decision_module = DecisionModule()
 
+        self.load_objects()
+
+        self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
+
         if self.config["adapt"]:
-            self.load_objects()
-            self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
             self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
             self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
             if self.model.config["agent_settings"]["households"]["warning_response"]:
@@ -328,6 +330,14 @@ class Households(AgentBaseClass):
         # load household sizes
         sizes = read_array(self.model.files["array"]["agents/households/size"])
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
+
+        household_points = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",
+        )
+        self.var.household_points = household_points
 
         self.var.municipal_water_demand_per_capita_m3_baseline = read_array(
             self.model.files["array"][

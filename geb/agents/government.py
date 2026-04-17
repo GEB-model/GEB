@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -11,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from geb.hydrology.landcovers import FOREST
-from geb.workflows.io import read_geom
+from geb.workflows.io import read_geom, read_zarr
 
 from .general import AgentBaseClass
 
@@ -123,14 +124,19 @@ class Government(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
-        if self.model.current_timestep == 0 and self.config.get("plant_forest", False):
-            self.prepare_modified_soil_maps_for_forest()
+        # if self.model.current_timestep == 0 and self.config.get("plant_forest", False):
+        #     self.prepare_modified_soil_maps_for_forest()
 
         self.set_irrigation_limit()
 
+        self.adaptation()
+
+        if self.model.current_time >= self.model.run_end:
+            self.plot_indicators()
+
         self.report(locals())
 
-    def prepare_modified_soil_maps_for_forest(self) -> None:
+    def prepare_modified_soil_maps_for_forest(self) -> float:
         """Plant forest: update soil properties in memory and remove displaced farmers.
 
         Loads the forest restoration potential at grid scale, applies a threshold
@@ -138,6 +144,9 @@ class Government(AgentBaseClass):
         HRUs to suitable HRUs, saves a figure, and removes farmers from converted areas.
         The threshold is read from the config key ``forest_restoration_potential_threshold``
         and defaults to 0.5.
+
+        Returns:
+            converted area in m2
         """
         hydrology = self.model.hydrology
         plant_forest_config = self.config.get("plant_forest", {})
@@ -319,8 +328,6 @@ class Government(AgentBaseClass):
         equity, and ecosystem indicators. If any thresholds are crossed, applies the corresponding
         adaptation measures (building floodproofing, subsidies, or reforestation).
         """
-        # something to specify that this should only run when adaptation is turned on in the config file
-        # should this step be skipped during spinup?
         if "adaptation" not in self.config or not self.config["adaptation"].get(
             "enabled", True
         ):
@@ -329,8 +336,11 @@ class Government(AgentBaseClass):
             self.model.current_time.month == 1 and self.model.current_time.day == 1
         ):
             return  # exits because it is not the first of January
+        # maybe I should include something that it is only done when the model is running and not during spinup as we do not want adaptation in that period.
+        if self.model.in_spinup:
+            return None
 
-        # calculate the water risk, equity and ecosystem health for the current year (adaptation is enabled and it is january first)
+        # calculate the EAD, equity indicator value and ecosystem indicator value for the past year, before the adaptation decisions for this year are made.
         EAD_value = self.calculate_EAD()  # this is defined by the EAD
         equity_indicator_value = (
             self.calculate_equity_indicator()
@@ -338,6 +348,34 @@ class Government(AgentBaseClass):
         ecosystem_indicator_value = (
             self.calculate_ecosystem_indicator()
         )  # this is defined by the ecosystem indicator
+
+        indicator_values = {
+            "EAD": EAD_value,
+            "equity_indicator": equity_indicator_value,
+            "ecosystem_indicator": ecosystem_indicator_value,
+        }
+
+        # save the values for each year of the model run to a csv file so that we can plot the values over time later on
+        output_folder = self.model.output_folder / "adaptation"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        csv_file = output_folder / "adaptation_indicators_timeseries.csv"
+        write_header = not csv_file.exists()
+
+        with open(csv_file, "a", newline="") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=["year", "EAD", "equity_indicator", "ecosystem_indicator"]
+            )
+            if write_header:
+                writer.writeheader()
+
+            writer.writerow(
+                {
+                    "year": self.model.current_time.year,
+                    "EAD": EAD_value,
+                    "equity_indicator": equity_indicator_value,
+                    "ecosystem_indicator": ecosystem_indicator_value,
+                }
+            )
 
         # Set the indicator value and the thresholds for the adaptation decision.
         # but they should be defined in such a way that they trigger adaptation when threshold is crossed
@@ -355,8 +393,18 @@ class Government(AgentBaseClass):
             ),
         }
 
-        # if any of these the thresholds are crossed, we adapt the policies so a make a list of the thresholds that are crossed
-        triggered = [key for key, value in thresholds.items() if value[0] > value[1]]
+        # if any of these the thresholds are crossed, we adapt the policies. make a list of the thresholds that are crossed
+        triggered = []
+        if EAD_value > self.config["adaptation"].get("EAD_threshold"):
+            triggered.append("EAD")
+        if equity_indicator_value < self.config["adaptation"].get(
+            "equity_indicator_threshold"
+        ):
+            triggered.append("equity_indicator")
+        if ecosystem_indicator_value < self.config["adaptation"].get(
+            "ecosystem_indicator_threshold"
+        ):
+            triggered.append("ecosystem_indicator")
 
         # if one of the threshold is triggered something needs to be done
         if triggered:
@@ -364,7 +412,7 @@ class Government(AgentBaseClass):
                 f"Adaptation needed, the following thresholds are crossed: {triggered}"
             )
             self.apply_adaptation(
-                triggered
+                triggered, indicator_values
             )  # we now know what has caused the need for adaptation, so now we move on and actually implement the adaptation through another function, what caused the trigger is passed to this function
         else:
             print(
@@ -375,34 +423,36 @@ class Government(AgentBaseClass):
         """Calculate the EAD for the current year.
 
         Returns:
-         the expected annual damage in euros, which is calculated as the product of the probability of a  hazard occurring and the potential damage caused by that hazard.
-        """
-        # should also only be calculated if adaptation is turned on in the config file and it is the first of jan otherwise it is not needed
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
-        ):
-            return  # exit because adaptation is not enabled in the config file
-        if not (
-            self.model.current_time.month == 1 and self.model.current_time.day == 1
-        ):
-            return
+         the expected annual damage in euros, which is calculated as the product of the probability of a hazard occurring and the potential damage caused by that hazard.
 
+        Raises:
+            RuntimeError: If the household flood risk module is not available.
+        """
         households = self.agents.households
-        return_periods = households.return_periods
+        return_periods = np.array(
+            self.model.config["hazards"]["floods"]["return_periods"], dtype=float
+        )
+
+        if not hasattr(households, "flood_risk_module"):
+            raise RuntimeError("Household flood risk module is not available.")
 
         total_damage_per_rp = np.zeros(len(return_periods), dtype=np.float64)
+        flood_maps = {}
         for i, return_period in enumerate(return_periods):
-            flood_map = households.flood_maps[return_period]
-            total_damage_per_rp[i] = households.flood(
-                flood_map
-            )  # the flood function in household agent calculates the damages for all assets and land use types.
+            file_path = (
+                self.model.output_folder / "flood_maps" / f"{int(return_period)}.zarr"
+            )
+            flood_map = read_zarr(file_path)
+            total_damage_per_rp[i] = households.flood_risk_module.flood(flood_map)
 
-        # sort ascending by return period so exceedance probability is descending
-        sorted_rp = np.argsort(return_periods)
-        exceedance_probabilities = 1.0 / return_periods[sorted_rp]
-        sorted_damages = total_damage_per_rp[sorted_rp]
+        exceedance_probabilities = 1.0 / return_periods
 
-        EAD = np.trapezoid(sorted_damages, x=exceedance_probabilities)
+        sort_idx = np.argsort(exceedance_probabilities)
+
+        EAD = np.trapezoid(
+            total_damage_per_rp[sort_idx], x=exceedance_probabilities[sort_idx]
+        )
+        print(f"Calculated EAD: €{EAD}")
         return EAD
 
     def calculate_equity_indicator(self) -> None | float:
@@ -412,14 +462,6 @@ class Government(AgentBaseClass):
         Returns:
          the equity indicator value.
         """
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
-        ):
-            return  # exit because adaptation is not enabled in the config file
-        if not (
-            self.model.current_time.month == 1 and self.model.current_time.day == 1
-        ):
-            return
         # this is defined by the exposure inequalty
         equity_index = 0.7  # this should become an actual calculation
         return equity_index
@@ -431,15 +473,6 @@ class Government(AgentBaseClass):
         Returns:
         the ecosystem indicator value.
         """
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
-        ):
-            return  # exit because adaptation is not enabled in the config file
-        if not (
-            self.model.current_time.month == 1 and self.model.current_time.day == 1
-        ):
-            return
-
         # assign values per landuse type (maybe store in dictionary) (what do we base this on, tbd find literature)
         from geb.hydrology.landcovers import (
             FOREST,
@@ -459,7 +492,7 @@ class Government(AgentBaseClass):
             SEALED: 0.0,  # lowest ecosystem quality
         }
 
-        # land use type per HRU and also area
+        # land use type and area per HRU
         land_use_type_per_HRU = self.model.hydrology.HRU.var.land_use_type
         area_per_HRU = self.model.hydrology.HRU.var.cell_area
 
@@ -474,63 +507,124 @@ class Government(AgentBaseClass):
         total_catchment_area = area_per_HRU.sum()
         ecosystem_indicator = weighted_sum / total_catchment_area
 
+        print(f"Calculated ecosystem indicator: {ecosystem_indicator}")
         return ecosystem_indicator
 
-    def apply_adaptation(self, triggered: list) -> None:
+    def apply_adaptation(self, triggered: list, indicator_values: dict) -> None:
         """Apply the adaptation measures decided in the adaptation function.
 
         Args:
             triggered: List of adaptation triggers that were activated.
+            indicator_values: Dictionary containing the current values of all indicators.
         """
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
-        ):
-            return  # exit because adaptation is not enabled in the config file
-        if not (
-            self.model.current_time.month == 1 and self.model.current_time.day == 1
-        ):
-            return  # exits because it is not the first of January
+        # Only one adaptation measure is applied per year. When multiple indicators are
+        # triggered, the one with the largest relative exceedance (absolute distance from
+        # its threshold, expressed as a fraction of the threshold) is prioritised.
+        # EAD is bad when *above* its threshold → positive percentual difference.
+        # Equity/ecosystem indicators are bad when *below* their threshold → negative
+        # percentual difference.  Using abs() makes both directions comparable.
 
-        if "EAD" in triggered:
+        percentual_differences = {}
+        for indicator in triggered:
+            threshold = self.config["adaptation"].get(f"{indicator}_threshold")
+            percentual_differences[indicator] = (
+                (indicator_values[indicator] - threshold) / threshold
+            ) * 100
+
+            print(
+                f"Indicator percentual difference: {indicator} : {percentual_differences[indicator]:.4f}%"
+            )
+
+        # Select the indicator whose value deviates most from its threshold, regardless
+        # of direction (EAD exceeds upward; equity/ecosystem fall short downward).
+        indicator_to_adapt = max(
+            percentual_differences, key=lambda k: abs(percentual_differences[k])
+        )
+
+        if indicator_to_adapt == "EAD":
             # the government decides which measure to apply based on what triggered the need for adaptation
             # apply updating the building structure but this takes the number of households that are adapting as input so we fist need to define that
-            adaptation_fraction = self.config[
-                "adaptation"
-            ].get(
-                "adaptation_fraction", 0.1
-            )  # default to 10% of households adapting, otherwise specified in config file
+            household_adaptation_fraction = self.config["adaptation"].get(
+                "household_adaptation_fraction"
+            )  # specified in config file
             # figure out which buildings are marked as flooded in this year
-            household_agents = self.agents.households
+            households = self.agents.households
+
+            if "flooded" not in households.buildings.columns:
+                households.update_building_attributes()
+
             flooded_buildings_mask = set(
-                household_agents.buildings.loc[
-                    household_agents.buildings["flooded"] == True, "id"
+                households.buildings.loc[
+                    households.buildings["flooded"] == True, "id"
                 ].astype(int)
             )
             # figure out which households are in these flooded buildings
             households_in_flooded_buildings = np.where(
-                pd.Series(household_agents.var.building_id_of_household.data).isin(
+                pd.Series(households.var.building_id_of_household.data).isin(
                     flooded_buildings_mask
                 )
             )[0]
             # the government decides who of those are adapting, we only pick a fraction as specified in the config file
-            n_to_adapt = int(len(households_in_flooded_buildings) * adaptation_fraction)
+            n_to_adapt = int(
+                len(households_in_flooded_buildings) * household_adaptation_fraction
+            )
             adapting_households_sample = np.random.choice(
                 households_in_flooded_buildings, size=n_to_adapt, replace=False
             )
             # use the function to floodproof the buildings of the households who are selected to adapt.
-            household_agents.update_building_adaptation_status(
-                adapting_households_sample
-            )
+            households.update_building_adaptation_status(adapting_households_sample)
             print(
                 f"the government adapted {n_to_adapt} of the {len(households_in_flooded_buildings)} households in the floodzone by floodproofing their buildings"
             )
 
-        # if "equity_indicator" in triggered:
+        # if indicator_to_adapt == "equity_indicator":
         #     # apply subsidies" --> maybe we can change who the subsidies are applied to but idk if that would make it better
         #     # this piece of code is still in Veerle's branch so can be uncommented when merged
+        #      print ("the government adapted by providing subsidies to the most vulnerable households to reduce inequality")
         #     self.provide_subsidies()
 
-        if "ecosystem_indicator" in triggered:
+        if indicator_to_adapt == "ecosystem_indicator":
             # apply reforestation --> to do: but maybe a percentage of the suitable areas instead of all suitable areas
             # the threshold for the reforestation amount can be set in the config file under forest_reforestation_potential_threshold, set to 0.9 to convert only the top 10% suitable areas in the model.yml
-            self.prepare_modified_soil_maps_for_forest()
+            converted_area_m2 = self.prepare_modified_soil_maps_for_forest()
+            converted_area_km2 = converted_area_m2 / 1e6
+            print(
+                f"the government adapted by planting {converted_area_km2} km2 of forest in the most suitable areas to improve the ecosystem health"
+            )
+
+    def plot_indicators(self):
+        """Plot the evaluation criteria over the run time."""
+        csv_file = (
+            self.model.output_folder
+            / "adaptation"
+            / "adaptation_indicators_timeseries.csv"
+        )
+        df = pd.read_csv(csv_file)
+
+        fig, (ax1, ax2, ax3) = plt.subplots(3)
+        fig.suptitle("evaluation criteria over time")
+
+        ax1.plot(df["year"], df["EAD"])
+        ax1.set_ylabel("EAD (€)")
+        ax1.set_xlabel("Year")
+        ax1.set_title("Expected Annual Damage (€) over time")
+
+        ax2.plot(df["year"], df["equity_indicator"])
+        ax2.set_ylabel("Equity Indicator")
+        ax2.set_xlabel("Year")
+        ax2.set_title("Equity Indicator over time")
+
+        ax3.plot(df["year"], df["ecosystem_indicator"])
+        ax3.set_ylabel("Ecosystem Indicator")
+        ax3.set_xlabel("Year")
+        ax3.set_title("Ecosystem Indicator over time")
+
+        fig.tight_layout()
+        output_folder = self.model.output_folder / "adaptation"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        plt.savefig(
+            output_folder / "adaptation_indicators_over_time.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close()

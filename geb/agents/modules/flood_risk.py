@@ -589,6 +589,9 @@ class FloodRiskModule:
             )
 
             buildings["object_type"] = "building_unprotected"
+            # to avoid error when using the flood risk module with household adaptation set to false
+            buildings["protect_building"] = buildings["protect_building"].fillna(False)
+            buildings["protect_building"] = buildings["protect_building"].astype(bool)
 
             # Right now there is no condition to make the households protect their buildings outside of the warning response
             buildings.loc[buildings["protect_building"], "object_type"] = (
@@ -625,6 +628,7 @@ class FloodRiskModule:
         print(f"damages to building content are: {total_damages_content}")
 
         # Compute damages for buildings structure
+        buildings = buildings[buildings.geometry.notna()].copy()
         damages_buildings_structure: pd.Series = VectorScanner(
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
