@@ -121,10 +121,10 @@ class Government(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
-        adaptation_enabled = self.config.get("adaptation", {}).get("enabled", False)
+        adaptation_enabled = self.config["adaptation"]["enabled"]
         if (
             self.model.current_timestep == 0
-            and self.config.get("plant_forest", False)
+            and self.config["plant_forest"]
             and not adaptation_enabled
         ):
             self.prepare_modified_soil_maps_for_forest()
@@ -155,7 +155,7 @@ class Government(AgentBaseClass):
             ValueError: If ``increment_fraction`` is not in (0, 1].
         """
         hydrology = self.model.hydrology
-        plant_forest_config = self.config.get("plant_forest", {})
+        plant_forest_config = self.config["plant_forest"]
         if isinstance(plant_forest_config, dict):
             threshold = plant_forest_config.get(
                 "forest_restoration_potential_threshold", 0.5
@@ -401,9 +401,7 @@ class Government(AgentBaseClass):
         """
         # something to specify that this should only run when adaptation is turned on in the config file
         # should this step be skipped during spinup?
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", False
-        ):
+        if not self.config["adaptation"]["enabled"]:
             return  # exits because adaptation is not (enabled) in the config file
         if not (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
@@ -424,14 +422,14 @@ class Government(AgentBaseClass):
 
         thresholds = {
             # defines the threshold --> value in current situation, threshold
-            "EAD": (EAD_value, self.config["adaptation"].get("EAD_threshold")),
+            "EAD": (EAD_value, self.config["adaptation"]["EAD_threshold"]),
             "equity_indicator": (
                 equity_indicator_value,
-                self.config["adaptation"].get("equity_indicator_threshold"),
+                self.config["adaptation"]["equity_indicator_threshold"],
             ),
             "ecosystem_indicator": (
                 ecosystem_indicator_value,
-                self.config["adaptation"].get("ecosystem_indicator_threshold"),
+                self.config["adaptation"]["ecosystem_indicator_threshold"],
             ),
         }
 
@@ -467,9 +465,7 @@ class Government(AgentBaseClass):
             or flood risk functionality is not available.
         """
         # should also only be calculated if adaptation is turned on in the config file and it is the first of jan otherwise it is not needed
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", False
-        ):
+        if not self.config["adaptation"]["enabled"]:
             return  # exit because adaptation is not enabled in the config file
         if not (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
@@ -501,9 +497,7 @@ class Government(AgentBaseClass):
         Returns:
          the equity indicator value.
         """
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", False
-        ):
+        if not self.config["adaptation"]["enabled"]:
             return  # exit because adaptation is not enabled in the config file
         if not (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
@@ -520,9 +514,7 @@ class Government(AgentBaseClass):
         Returns:
         the ecosystem indicator value.
         """
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", False
-        ):
+        if not self.config["adaptation"]["enabled"]:
             return  # exit because adaptation is not enabled in the config file
         if not (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
@@ -574,9 +566,7 @@ class Government(AgentBaseClass):
         Raises:
             ValueError: If ``adaptation_fraction`` is not in [0, 1].
         """
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", False
-        ):
+        if not self.config["adaptation"]["enabled"]:
             return  # exit because adaptation is not enabled in the config file
         if not (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
@@ -586,11 +576,7 @@ class Government(AgentBaseClass):
         if "EAD" in triggered:
             # the government decides which measure to apply based on what triggered the need for adaptation
             # apply updating the building structure but this takes the number of households that are adapting as input so we fist need to define that
-            adaptation_fraction = self.config[
-                "adaptation"
-            ].get(
-                "adaptation_fraction", 0.1
-            )  # default to 10% of households adapting, otherwise specified in config file
+            adaptation_fraction = self.config["adaptation"]["adaptation_fraction"]
             if not (0.0 <= adaptation_fraction <= 1.0):
                 raise ValueError(
                     f"adaptation_fraction must be in [0, 1], got {adaptation_fraction}"
