@@ -24,7 +24,9 @@ To support this version:
 - Made numerous changes throughout the build to reduce memory usage. No content changes.
 - Set fill depressions to False by default in build. This option uses too much memory for large areas. If needed this can be build in again at the hydrodynamics stage.
 - Remove old data catalog entirely, and all references to it. Rename NewDataCatalog to DataCatalog.
-- fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
+- Fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
+- Add incremental reforestation: set `plant_forest.increment_fraction` (0–1) to plant a fraction of suitable HRUs per call, ranked by restoration potential. Auto-advances each call by skipping already-forested HRUs.
+- Add government adaptation pathway: set `agent_settings.government.adaptation.enabled: true` to trigger annual flood, equity, and ecosystem adaptation measures on January 1st based on configurable thresholds.
 - Optimize GTSM data catalog, now pre-processing to zarr files.
 - Improve CLI help so `geb evaluate --help` list the available evaluation methods.
 - Fix issue in the enthalpy calculations. Previously there would be 0 infiltration even when only part of the soil was frozen. In addition, rainfall that didn't infiltrate never warmed the soil (if soil is colder..) which led to situations with too much frozen soil, too much runoff and too much discharge in winters.
