@@ -155,6 +155,20 @@ class Households(AgentBaseClass):
         """Return the name of the agent type."""
         return "agents.households"
 
+    @property
+    def household_distance_to_river_m(self) -> np.ndarray:
+        return np.take(
+            np.array(self.buildings["distance_to_river_m"]),
+            self.var.building_id_of_household,
+        )
+
+    @property
+    def household_distance_to_coastline_m(self) -> np.ndarray:
+        return np.take(
+            np.array(self.buildings["distance_to_coastline_m"]),
+            self.var.building_id_of_household,
+        )
+
     def load_objects(self) -> None:
         """Load buildings, roads, and rail geometries from model files."""
         # Load buildings
@@ -165,6 +179,8 @@ class Households(AgentBaseClass):
             "COST_STRUCTURAL_USD_SQM",
             "COST_CONTENTS_USD_SQM",
             "COMID",
+            "distance_to_river_m",
+            "distance_to_coastline_m",
         ]
         self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
 
@@ -930,6 +946,8 @@ class Households(AgentBaseClass):
             income=self.var.income.data,
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
+            household_distance_to_coastline_m=self.household_distance_to_coastline_m,
+            household_distance_to_river_m=self.household_distance_to_river_m,
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
             expected_damages_adapt=damages_adapt,
@@ -948,6 +966,8 @@ class Households(AgentBaseClass):
             wealth=self.var.wealth.data,
             income=self.var.income.data,
             amenity_value=self.var.amenity_value.data,
+            household_distance_to_coastline_m=self.household_distance_to_coastline_m,
+            household_distance_to_river_m=self.household_distance_to_river_m,
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
             expected_damages=damages_do_not_adapt,
