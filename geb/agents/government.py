@@ -572,11 +572,13 @@ class Government(AgentBaseClass):
         if "EAD" in triggered:
             # the government decides which measure to apply based on what triggered the need for adaptation
             # apply updating the building structure but this takes the number of households that are adapting as input so we fist need to define that
-            adaptation_fraction = self.config[
-                "adaptation"
-            ].get(
+            adaptation_fraction = self.config["adaptation"].get(
                 "adaptation_fraction", 0.1
             )  # default to 10% of households adapting, otherwise specified in config file
+            if not (0.0 <= adaptation_fraction <= 1.0):
+                raise ValueError(
+                    f"adaptation_fraction must be in [0, 1], got {adaptation_fraction}"
+                )
             # figure out which buildings are marked as flooded in this year
             household_agents = self.agents.households
             flooded_buildings_mask = set(
@@ -591,7 +593,10 @@ class Government(AgentBaseClass):
                 )
             )[0]
             # the government decides who of those are adapting, we only pick a fraction as specified in the config file
-            n_to_adapt = int(len(households_in_flooded_buildings) * adaptation_fraction)
+            n_to_adapt = min(
+                int(len(households_in_flooded_buildings) * adaptation_fraction),
+                len(households_in_flooded_buildings),
+            )
             adapting_households_sample = np.random.choice(
                 households_in_flooded_buildings, size=n_to_adapt, replace=False
             )
