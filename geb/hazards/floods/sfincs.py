@@ -6,6 +6,7 @@ and read simulation results.
 
 """
 
+import json
 import logging
 import math
 import shutil
@@ -24,7 +25,7 @@ import rasterio
 import rasterio.features
 import xarray as xr
 from hydromt_sfincs import SfincsModel
-from hydromt_sfincs.workflows import burn_river_rect
+from hydromt_sfincs.workflows import burn_river_rect, river_source_points
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
 from pyproj import CRS
@@ -325,18 +326,21 @@ class SFINCSRootModel:
         if not crs.is_epsg_code:
             raise ValueError("CRS must be an EPSG code")
 
-        sf.setup_grid(
-            x0=geotransformation.c,
-            y0=geotransformation.f,
-            dx=geotransformation.a,
-            dy=geotransformation.e,
-            mmax=subbasins_burned.rio.width,
-            nmax=subbasins_burned.rio.height,
-            rotation=0.0,
-            epsg=crs.to_epsg(),
+        sf.setup_grid_from_region(
+            {"geom": self.subbasins}, res=100, rotated=False, crs="utm"
         )
-        if crs.is_geographic:
-            sf.setup_config(crsgeo=1)
+        # sf.setup_grid(
+        #     x0=geotransformation.c,
+        #     y0=geotransformation.f,
+        #     dx=geotransformation.a,
+        #     dy=geotransformation.e,
+        #     mmax=subbasins_burned.rio.width,
+        #     nmax=subbasins_burned.rio.height,
+        #     rotation=0.0,
+        #     epsg=crs.to_epsg(),
+        # )
+        # if crs.is_geographic:
+        #     sf.setup_config(crsgeo=1)
 
         # Copy DEMs to avoid modifying input
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = [
@@ -351,6 +355,18 @@ class SFINCSRootModel:
             DEM["reproj_method"] = "bilinear"
 
         sf.setup_dep(datasets_dep=DEMs)
+
+        # Re-rasterize subbasins onto the new UTM grid (setup_grid_from_region may have
+        # changed the resolution/CRS relative to the original geographic mask used in
+        # burn_and_align_subbasins, so subbasins_burned must be regenerated here).
+        subbasins_burned = rasterize_like(
+            gdf=self.subbasins.reset_index().to_crs(self.elevation.rio.crs),
+            column="COMID",
+            raster=self.elevation,
+            dtype=np.int32,
+            nodata=-1,
+            all_touched=True,
+        )
 
         # Remove rivers that are not represented in the grid and have no upstream rivers
         # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
@@ -367,14 +383,15 @@ class SFINCSRootModel:
         )
         del rivers
 
-        flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
-        sf.setup_mask_active(flood_plain, reset_mask=True)
+        # flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
+        sf.setup_mask_active(self.subbasins, reset_mask=True)
 
         self.rivers["outflow_elevation"] = np.nan
         self.rivers["outflow_point_xy"] = None
         self.rivers["is_outflow_boundary"] = False
 
         if coastal:
+            print("Setting up coastal boundary conditions...")
             # set zsini based on the minimum elevation
             assert isinstance(sf.config, dict)
             sf.config["zsini"] = initial_water_level  # ty: ignore[invalid-assignment]
@@ -403,58 +420,47 @@ class SFINCSRootModel:
                 all_touched=True,
             )
         else:
-            self.calculate_outflow_conditions(area=flood_plain)
+            print("Riverine flood")
             if setup_river_outflow_boundary:
-                outflow_points = self.rivers[self.rivers["is_outflow_boundary"]][
-                    "outflow_point_xy"
-                ]
-                outflow_points = gpd.GeoDataFrame(
-                    geometry=gpd.points_from_xy(
-                        outflow_points.apply(lambda xy: xy[0]),
-                        outflow_points.apply(lambda xy: xy[1]),
-                    ),
-                    crs=self.crs,
-                )
-                outflow_points = outflow_points.to_crs(self.utm_zone)
-                outflow_points.geometry = outflow_points.buffer(
-                    (self.outflow_boundary_width_m / 2) * 1.1
-                ).to_crs(self.crs)
-
-                sf.setup_mask_active(
-                    include_mask=outflow_points,
-                    all_touched=False,
-                    reset_mask=False,
+                sf.setup_river_outflow(
+                    rivers=self.rivers.to_crs(sf.crs),
+                    keep_rivers_geom=True,
+                    river_upa=0,
+                    river_len=0,
+                    btype="waterlevel",
                 )
 
-                # create polygon from mask
-                area = list(
-                    rasterio.features.shapes(
-                        self.mask,
-                        transform=self.mask.rio.transform(),
-                        connectivity=8,
-                        mask=self.mask,
+                outflow_points = river_source_points(
+                    gdf_riv=self.rivers.to_crs(sf.crs),
+                    gdf_mask=sf.region,
+                    src_type="outflow",
+                    buffer=sf.reggrid.dx,
+                    river_upa=0,
+                    river_len=0,
+                )
+                assert len(outflow_points) == 1, "Only one outflow point is expected"
+                assert outflow_points.crs == sf.crs, (
+                    "CRS of outflow_points does not match the model CRS"
+                )
+
+                outflow_points.to_file(
+                    self.path / "gis/outflow_points.gpkg", driver="GPKG"
+                )
+
+                x_coord = outflow_points.geometry.x.iloc[0]
+                y_coord = outflow_points.geometry.y.iloc[0]
+                elevation_value = sf.grid.dep.sel(
+                    x=x_coord, y=y_coord, method="nearest"
+                ).values.item()
+
+                if elevation_value is None or elevation_value <= 0:
+                    raise ValueError(
+                        f"Invalid outflow elevation ({elevation_value}), must be > 0"
                     )
-                )
-                area = gpd.GeoDataFrame.from_features(
-                    [
-                        {"geometry": geom, "properties": {"value": int(value)}}
-                        for geom, value in area
-                    ],
-                    crs=self.mask.rio.crs,
-                )
-                if len(area) > 1:
-                    # remove isolated cells by keeping only the largest polygon
-                    area["area"] = area.geometry.area
-                    area = area.sort_values("area", ascending=False).iloc[0:1]
-                    area = area.drop(columns=["area"])
-                    # raise ValueError(
-                    #     "Calculated outflow area is not a single polygon, cannot calculate outflow conditions"
-                    # )
 
-                self.calculate_outflow_conditions(area=area)
-
-                # must be performed BEFORE burning rivers.
-                self.setup_river_outflow_boundary()
+                outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
+                with open(outflow_elev_path, "w") as f:
+                    json.dump({"outflow_elevation": float(elevation_value)}, f)
 
         # We are only interested in flooding within the subbasins of interest.
         # This area of interest mask is used later to filter the flood maps.
@@ -553,13 +559,17 @@ class SFINCSRootModel:
                 "River Manning's n cannot be null"
             )
 
-            # only burn rivers that are wider than the grid size
-            rivers_to_burn: gpd.GeoDataFrame = rivers_to_burn[
-                rivers_to_burn["width"] > self.estimated_cell_size_m
-            ]
+            # # only burn rivers that are wider than the grid size
+            # rivers_to_burn: gpd.GeoDataFrame = rivers_to_burn[
+            #     rivers_to_burn["width"] > self.estimated_cell_size_m
+            # ]
 
             rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
+            print(f"Burning {len(rivers_to_burn)} rivers into the model grid...")
         else:
+            print(
+                "No active rivers in the model and no custom rivers to burn provided, skipping river burning..."
+            )
             rivers_to_burn = None
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
@@ -798,7 +808,12 @@ class SFINCSRootModel:
     def plot_rivers(self) -> None:
         """Plots the rivers and subbasins boundary and saves to file."""
         fig, ax = plt.subplots(figsize=(10, 10))
-        self.subbasins.boundary.plot(ax=ax, color="black")
+        target_crs = (
+            self.active_rivers.crs
+            if not self.active_rivers.empty
+            else self.elevation.rio.crs
+        )
+        self.subbasins.to_crs(target_crs).boundary.plot(ax=ax, color="black")
 
         # in coastal areas, there may be no active rivers
         if not self.active_rivers.empty:
@@ -1033,7 +1048,7 @@ class SFINCSRootModel:
             assert self.sfincs_model.grid_type == "regular"
             self.mask.values[outflow_mask] = SFINCS_WATER_LEVEL_BOUNDARY
 
-    def get_flood_plain(self, maximum_hand: float = 30.0) -> gpd.GeoDataFrame:
+    def get_flood_plain(self, maximum_hand: float = 30000000.0) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
 
         Uses a two-stage approach:
@@ -1049,7 +1064,7 @@ class SFINCSRootModel:
             The flood plain as a GeoDataFrame.
         """
         subbasin_raster = rasterize_like(
-            gdf=self.subbasins,
+            gdf=self.subbasins.to_crs(self.elevation.rio.crs),
             raster=self.elevation,
             dtype=np.uint8,
             nodata=0,
@@ -1881,28 +1896,40 @@ class SFINCSSimulation:
     def set_river_outflow_boundary_condition(self) -> None:
         """Sets up river outflow boundary condition for the SFINCS model.
 
-        We use the pre-calculated outflow elevations from the root model
-        to set constant water level boundary conditions at the river outflow points.
+        Reads the outflow point location and elevation saved during model build
+        and applies a constant water level boundary condition for the simulation period.
+
+        Raises:
+            AssertionError: If the outflow elevation or point is not set for a boundary river.
         """
-        outflow_points: gpd.GeoDataFrame = self.root_model.rivers[
-            ~self.root_model.rivers["outflow_point_xy"].isna()
-        ].copy()
-        if not outflow_points.empty:
-            outflow_points["geometry"] = outflow_points["outflow_point_xy"].apply(
-                lambda xy: Point(xy[0], xy[1])
-            )
-            outflow_points.index = range(1, len(outflow_points) + 1)
+        model_root: Path = self.root_path
 
-            # Create DataFrame with constant water level for each outflow point
-            elevation_time_series_constant: pd.DataFrame = pd.DataFrame(
-                data=outflow_points["outflow_elevation"].to_dict(),
-                index=pd.date_range(start=self.start_time, end=self.end_time, freq="h"),
+        outflow = gpd.read_file(model_root / "gis/outflow_points.gpkg")
+        assert len(outflow) == 1, "Only one outflow point is expected"
+
+        dem_json_path = model_root / "gis" / "outflow_elevation.json"
+        with open(dem_json_path, "r") as f:
+            dem_values = json.load(f)
+
+        elevation = dem_values.get("outflow_elevation", None)
+        if elevation is None or elevation <= 0:
+            raise AssertionError(
+                "Elevation should have a positive value to set up outflow waterlevel boundary"
             )
 
-            self.sfincs_model.set_forcing_1d(
-                gdf_locs=outflow_points,
-                df_ts=elevation_time_series_constant,
-            )
+        outflow_points = outflow.copy()
+        outflow_points["outflow_elevation"] = elevation
+        outflow_points.index = [1]
+
+        elevation_time_series_constant: pd.DataFrame = pd.DataFrame(
+            data=outflow_points["outflow_elevation"].to_dict(),
+            index=pd.date_range(start=self.start_time, end=self.end_time, freq="h"),
+        )
+
+        self.sfincs_model.set_forcing_1d(
+            gdf_locs=outflow_points,
+            df_ts=elevation_time_series_constant,
+        )
 
     def set_inflow_forcing_from_grid(
         self,
