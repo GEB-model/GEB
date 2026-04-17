@@ -390,7 +390,7 @@ class Government(AgentBaseClass):
         # something to specify that this should only run when adaptation is turned on in the config file
         # should this step be skipped during spinup?
         if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
+            "enabled", False
         ):
             return  # exits because adaptation is not (enabled) in the config file
         if not (
@@ -452,7 +452,7 @@ class Government(AgentBaseClass):
         """
         # should also only be calculated if adaptation is turned on in the config file and it is the first of jan otherwise it is not needed
         if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
+            "enabled", False
         ):
             return  # exit because adaptation is not enabled in the config file
         if not (
@@ -461,20 +461,17 @@ class Government(AgentBaseClass):
             return
 
         households = self.agents.households
-        if not hasattr(households, "flood"):
-            # households.flood() is not yet implemented; skip EAD calculation
+        if not hasattr(households, "flood_risk_module"):
             return None
         return_periods = households.return_periods
 
         total_damage_per_rp = np.zeros(len(return_periods), dtype=np.float64)
         for i, return_period in enumerate(return_periods):
             flood_map = households.flood_maps[return_period]
-            total_damage_per_rp[i] = households.flood(
-                flood_map
-            )  # the flood function in household agent calculates the damages for all assets and land use types.
+            total_damage_per_rp[i] = households.flood_risk_module.flood(flood_map)
 
-        # sort ascending by return period so exceedance probability is descending
-        sorted_rp = np.argsort(return_periods)
+        # sort by descending return period → ascending exceedance probability for trapezoid
+        sorted_rp = np.argsort(return_periods)[::-1]
         exceedance_probabilities = 1.0 / return_periods[sorted_rp]
         sorted_damages = total_damage_per_rp[sorted_rp]
 
@@ -489,7 +486,7 @@ class Government(AgentBaseClass):
          the equity indicator value.
         """
         if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
+            "enabled", False
         ):
             return  # exit because adaptation is not enabled in the config file
         if not (
@@ -508,7 +505,7 @@ class Government(AgentBaseClass):
         the ecosystem indicator value.
         """
         if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
+            "enabled", False
         ):
             return  # exit because adaptation is not enabled in the config file
         if not (
@@ -559,7 +556,7 @@ class Government(AgentBaseClass):
             triggered: List of adaptation triggers that were activated.
         """
         if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
+            "enabled", False
         ):
             return  # exit because adaptation is not enabled in the config file
         if not (
