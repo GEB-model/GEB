@@ -31,8 +31,6 @@ body:
         Please attach or paste the contents of your `model.yml` file.
         You can drag and drop the file directly into this text box.
       render: yaml
-    validations:
-      required: true
   - type: textarea
     id: build_yml
     attributes:
@@ -41,8 +39,6 @@ body:
         Please attach or paste the contents of your `build.yml` file.
         You can drag and drop the file directly into this text box.
       render: yaml
-    validations:
-      required: true
   - type: textarea
     id: logs
     attributes:
