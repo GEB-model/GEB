@@ -433,6 +433,94 @@ class Agents(BuildModelBase):
         )
         self.set_table(income_distributions_pd, "income/national_distribution")
 
+    @build_method(depends_on=["setup_income_distribution_parameters"], required=True)
+    def setup_subnational_income_distribution(
+        self,
+        skip_countries_ISO3: list[str] = [],
+    ) -> None:
+        """Set up subnational income distributions for GDL regions based on GLOPOP-S.
+
+        It combines wealth and income data from GLOPOP-S into a single index, assigns income
+        percentiles based on this index, and then uses the national income distribution parameters
+        to generate subnational income distributions for each GDL region. The resulting subnational
+        income distribution parameters are stored in the model table. These parameters can be used to
+        generate synthetic income distributions for each region, which can then be used in the model
+        to model migration decisions towards other regions.
+
+        Args:
+            skip_countries_ISO3: A list of ISO3 country codes to skip when setting up subnational income distributions.
+        Raises:
+            ValueError: If no regions are processed for subnational income distribution.
+        """
+        wealth_index_to_income_percentile = {
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
+            5: (80, 100),
+        }
+
+        national_dist = self.table["income/national_distribution"]
+
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+        results = []
+
+        for code in GDL_regions["GDLcode"]:
+            iso3 = code[:3]
+            self.logger.info(f"Processing {code}...")
+
+            if iso3 in skip_countries_ISO3:
+                self.logger.info(f"Skipping {iso3}")
+                continue
+
+            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg", region=code).read(
+                code
+            )
+
+            # combine wealth/income into one index
+            GLOPOP_S_region["wealth_index"] = (
+                GLOPOP_S_region[["WEALTH", "INCOME"]].sum(axis=1) + 1
+            )
+
+            # vectorized percentile assignment
+            GLOPOP_S_region["income_percentile"] = np.uint16(0)
+            for w, (low, high) in wealth_index_to_income_percentile.items():
+                mask = GLOPOP_S_region["wealth_index"] == w
+                GLOPOP_S_region.loc[mask, "income_percentile"] = np.random.randint(
+                    low, high, size=mask.sum()
+                )
+
+            # sanity check
+            assert (GLOPOP_S_region["income_percentile"] > 0).all()
+
+            disp_income = np.percentile(
+                np.asarray(national_dist[iso3]),
+                GLOPOP_S_region["income_percentile"],
+            )
+
+            results.append(
+                pd.DataFrame(
+                    {
+                        "mean_disp_income": [disp_income.mean()],
+                        "median_disp_income": [np.median(disp_income)],
+                    },
+                    index=[code],
+                )
+            )
+
+        # assert regions is not empty
+        if len(results) == 0:
+            raise ValueError(
+                "No regions to process for subnational income distribution"
+            )
+
+        self.set_table(
+            pd.concat(results),
+            name="income/subnational_distribution_parameters",
+        )
+
     @build_method(
         depends_on=["setup_regions_and_land_use", "set_time_range"], required=True
     )
@@ -721,14 +809,17 @@ class Agents(BuildModelBase):
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 
-    @build_method(required=True)
-    def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
-        """Sets up the irrigation sources for GEB.
+    @build_method(required=False)
+    def setup_irrigation_sources(self, *args: Any, **kwargs: Any) -> None:
+        """Deprecated method for setting up irrigation sources.
 
         Args:
-            irrigation_sources: A dictionary mapping irrigation source names to their corresponding IDs.
+            *args: Positional arguments (not used).
+            **kwargs: Keyword arguments (not used).
         """
-        self.set_params(irrigation_sources, name="agents/farmers/irrigation_sources")
+        self.logger.warning(
+            "This method is deprecated and will be removed in future versions. Please remove it from your build sequence and set up irrigation sources directly in the model configuration."
+        )
 
     @build_method(depends_on=["set_time_range", "setup_economic_data"], required=False)
     def setup_irrigation_prices_by_reference_year(
@@ -1330,6 +1421,7 @@ class Agents(BuildModelBase):
             raise ValueError(
                 f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
             )
+
         return buildings
 
     @build_method(required=True)
@@ -1349,6 +1441,61 @@ class Agents(BuildModelBase):
 
         # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
+
+    @build_method(required=True)
+    def setup_flood_damage_model(self, region: str = "geul") -> None:
+        """This method sets up the damage functions for flood events for the specified region.
+
+        It retrieves the damage functions from the data catalog, processes them, and saves them as
+        parquet files for use in the model.
+
+        Args:
+            region: The region for which to set up the damage functions. Default is 'geul', selecting
+                the damage model constructed by Endendijk. Other accepted region identifiers are determined by
+                the underlying 'global_flood_damage_model' dataset and include: europe, north america,
+                central&south america, asia, africa, oceania, and 'global'; representing the global average curves.
+        """
+        # clear model files for damage model to avoid issues with old files when changing region
+        for key in list(self.files["table"]):
+            if key.startswith("damage_model/"):
+                del self.files["table"][key]
+        for key in list(self.files["dict"]):
+            if key.startswith("damage_model/"):
+                del self.files["dict"][key]
+
+        if region == "geul":
+            parameters = self.data_catalog.fetch("geul_flood_damage_model").read()
+            for hazard, hazard_parameters in parameters.items():
+                for asset_type, asset_parameters in hazard_parameters.items():
+                    for component, asset_components in asset_parameters.items():
+                        curve = pd.DataFrame(
+                            asset_components["curve"],
+                            columns=np.array(["depth", "damage_ratio"]),
+                        )
+
+                        self.set_table(
+                            curve,
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/curve",
+                        )
+                        maximum_damage = {
+                            "maximum_damage": asset_components["maximum_damage"]
+                        }
+
+                        self.set_params(
+                            maximum_damage,
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/maximum_damage",
+                        )
+                return
+
+        damage_functions = self.data_catalog.fetch("global_flood_damage_model").read(
+            region=region
+        )
+        # save the cleaned dataframe as parquet
+        for damage_class, df_damage_class in damage_functions.items():
+            self.set_table(
+                df_damage_class,
+                name=f"damage_model/flood/{damage_class}/structure/curve",
+            )
 
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
@@ -1435,10 +1582,10 @@ class Agents(BuildModelBase):
 
         # create income percentile based on wealth index mapping
         wealth_index_to_income_percentile = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
             5: (80, 100),
         }
 

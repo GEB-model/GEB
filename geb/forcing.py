@@ -1,7 +1,5 @@
 """Module to handle climate forcing data."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, overload

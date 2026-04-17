@@ -1,7 +1,5 @@
 """Utilities for working with GTSM data in GEB."""
 
-from __future__ import annotations
-
 import os
 import shutil
 import tempfile
@@ -112,6 +110,8 @@ class GTSM(Adapter):
             bounds: A tuple of four floats representing the bounding box (min_x, min_y, max_x, max_y).
         Returns:
             An xarray DataArray containing the GTSM data clipped to the specified bounds.
+        Raises:
+            ValueError: If no data values are found for stations in the specified bounds.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             extract_path = temp_dir
@@ -142,6 +142,12 @@ class GTSM(Adapter):
 
         # use boolean indexing along the 'stations' dimension
         merged_data = merged_data.isel(stations=mask)
+
+        # assert that sea level contains data
+        if merged_data.mean_sea_level.isnull().any():
+            raise ValueError(
+                "No data values found for stations in the specified bounds. Check input data and bounds."
+            )
 
         return merged_data
 
@@ -314,7 +320,7 @@ class GTSM_timeseries(Adapter):
                     da,
                     final_zarr_fp,
                     crs=4326,
-                    compression_level=12,
+                    compression_level=22,
                     filters=filters,
                 )
 

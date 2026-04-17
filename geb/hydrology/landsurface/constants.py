@@ -10,8 +10,6 @@ Notes:
       temperature difference to the 0°C reference).
 """
 
-from __future__ import annotations
-
 import numpy as np
 
 # Densities

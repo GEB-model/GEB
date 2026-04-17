@@ -124,9 +124,17 @@ class Government(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
+        adaptation_enabled = self.config.get("adaptation", {}).get("enabled", False)
+        if (
+            self.model.current_timestep == 0
+            and self.config.get("plant_forest", False)
+            and not adaptation_enabled
+        ):
+            self.prepare_modified_soil_maps_for_forest()
         # if self.model.current_timestep == 0 and self.config.get("plant_forest", False):
         #     self.prepare_modified_soil_maps_for_forest()
 
+        self.adaptation()
         self.set_irrigation_limit()
 
         self.adaptation()
@@ -145,22 +153,80 @@ class Government(AgentBaseClass):
         The threshold is read from the config key ``forest_restoration_potential_threshold``
         and defaults to 0.5.
 
+        When ``increment_fraction`` is set, the model automatically determines which
+        chunk to plant based on current land use. Suitable HRUs are sorted by potential
+        value (highest first); those already classified as FOREST (from previous years
+        or the initial state) are skipped, and the next
+        ``increment_fraction * n_suitable`` HRUs are planted. Calling the function again
+        the following year therefore plants the next batch automatically — compatible
+        with the annual adaptation pathway that calls this on every January 1st.
+
         Returns:
             converted area in m2
         """
         hydrology = self.model.hydrology
         plant_forest_config = self.config.get("plant_forest", {})
-        threshold = (
-            plant_forest_config.get("forest_restoration_potential_threshold", 0.5)
-            if isinstance(plant_forest_config, dict)
-            else 0.5
-        )
+        if isinstance(plant_forest_config, dict):
+            threshold = plant_forest_config.get(
+                "forest_restoration_potential_threshold", 0.5
+            )
+            increment_fraction = plant_forest_config.get("increment_fraction", None)
+        else:
+            threshold = 0.5
+            increment_fraction = None
 
         forest_potential = hydrology.grid.load(
             self.model.files["grid"]["landsurface/forest_restoration_potential_ratio"]
         )
         suitability_grid = forest_potential >= threshold
         suitability_HRU = hydrology.to_HRU(data=suitability_grid).astype(bool)
+
+        if increment_fraction is not None:
+            # Sort suitable HRUs by potential value descending (best areas first).
+            # Skip any already classified as FOREST (planted in prior years or
+            # originally forest), then take the next chunk of
+            # increment_fraction * n_suitable HRUs.
+            forest_potential_HRU = hydrology.to_HRU(data=forest_potential)
+            suitable_indices = np.where(suitability_HRU)[0]
+            suitable_potentials = forest_potential_HRU[suitable_indices]
+            sorted_indices = suitable_indices[np.argsort(suitable_potentials)[::-1]]
+
+            n_suitable = len(sorted_indices)
+
+            already_forest = hydrology.HRU.var.land_use_type == FOREST
+            remaining = sorted_indices[~already_forest[sorted_indices]]
+
+            if len(remaining) == 0:
+                self.model.logger.warning(
+                    "Incremental reforestation: all %d suitable HRUs are already "
+                    "forest. No planting applied.",
+                    n_suitable,
+                )
+                return
+
+            # chunk is 10% of what remains, not 10% of the fixed total
+            chunk_size = max(1, int(np.round(increment_fraction * len(remaining))))
+            chunk_indices = remaining[:chunk_size]
+            n_already = n_suitable - len(remaining)
+            self.model.logger.info(
+                "Incremental reforestation: planting %d HRUs (rank %d–%d of %d "
+                "suitable; %d already forest, %d remaining).",
+                len(chunk_indices),
+                n_already,
+                n_already + len(chunk_indices) - 1,
+                n_suitable,
+                n_already,
+                len(remaining),
+            )
+            suitability_HRU = np.zeros(suitability_HRU.shape[0], dtype=bool)
+            suitability_HRU[chunk_indices] = True
+        else:
+            self.model.logger.info(
+                "Reforestation (all at once): planting %d suitable HRUs "
+                "(threshold %.2f).",
+                int(suitability_HRU.sum()),
+                threshold,
+            )
 
         land_use_type_before = hydrology.HRU.var.land_use_type.copy()
 
@@ -199,10 +265,15 @@ class Government(AgentBaseClass):
 
         self.remove_farmers_from_converted_forest_areas(suitability_HRU)
 
+        # Explicitly mark all planted HRUs as FOREST so that future calls to
+        # prepare_modified_soil_maps_for_forest can detect them via the
+        # already_forest check and advance to the next increment.
+        hydrology.HRU.var.land_use_type[suitability_HRU] = FOREST
+
         output_folder = self.model.output_folder / "forest_planting"
         output_folder.mkdir(parents=True, exist_ok=True)
         self._save_forest_planting_figure(
-            land_use_type_before, suitability_HRU, output_folder
+            land_use_type_before, suitability_HRU, output_folder, threshold
         )
 
     def _save_forest_planting_figure(
@@ -210,6 +281,7 @@ class Government(AgentBaseClass):
         land_use_type_before: np.ndarray,
         suitability_HRU: np.ndarray,
         output_folder: Path,
+        threshold: float = 0.5,
     ) -> None:
         """Save a 4-panel reforestation scenario figure."""
         hydrology = self.model.hydrology
@@ -258,7 +330,7 @@ class Government(AgentBaseClass):
             interpolation="nearest",
             extent=extent,
         )
-        axes[1, 0].set_title("Reforestation Suitability (50% threshold)")
+        axes[1, 0].set_title(f"Reforestation Suitability ({threshold:.0%} threshold)")
         catchment_gdf.boundary.plot(
             ax=axes[1, 0], color="black", linewidth=2, alpha=0.8
         )

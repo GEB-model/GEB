@@ -26,6 +26,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
     TwoDArrayInt64,
+    TwoDArrayUint8,
 )
 from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import (
@@ -46,7 +47,8 @@ D8_SOUTHEAST = 2
 D8_SOUTH = 4
 D8_SOUTHWEST = 8
 D8_WEST = 16
-D8_PIT = 0
+D8_RIVER_MOUTH = 0
+D8_PIT = 255
 D8_NODATA = 247
 
 
@@ -86,8 +88,10 @@ def calculate_stream_length(
         dims=is_stream.dims,
     )
 
-    # pit -> no channel, so set stream length to 0
-    stream_length = xr.where(d8_ldd != D8_PIT, stream_length, 0)
+    # pit or river mouth -> no channel, so set stream length to 0
+    stream_length = xr.where(
+        (d8_ldd != D8_RIVER_MOUTH) & (d8_ldd != D8_PIT), stream_length, 0
+    )
     # vertical -> set stream length to cell height
     stream_length = xr.where(
         ~((d8_ldd == D8_NORTH) | (d8_ldd == D8_SOUTH)),
@@ -233,9 +237,10 @@ def get_rivers_geometry(
     return rivers
 
 
-def extend_rivers_into_ocean(
+def extend_rivers_into_pits_and_set_pit_type(
     rivers: gpd.GeoDataFrame,
     flow_raster: FlwdirRaster,
+    ldd: TwoDArrayUint8,
 ) -> gpd.GeoDataFrame:
     """Extend rivers that end just before the ocean into the ocean.
 
@@ -246,6 +251,7 @@ def extend_rivers_into_ocean(
     Args:
         rivers: A GeoDataFrame containing the river lines.
         flow_raster: The flow raster to use for determining the downstream point.
+        ldd: The flow direction raster to use for determining the downstream point.
 
     Returns:
         A GeoDataFrame containing the extended river lines.
@@ -253,6 +259,8 @@ def extend_rivers_into_ocean(
     Raises:
         ValueError: If the distance between the river end point and the downstream point is too large.
     """
+    rivers["is_coastal"] = False
+
     resolution = abs(flow_raster.transform.a)
     for river_id, river in rivers.iterrows():
         # only select rivers that have no downstream river (i.e., end in ocean)
@@ -265,6 +273,18 @@ def extend_rivers_into_ocean(
 
             # find the linear index of the downstream point
             downstream_index = flow_raster.idxs_ds[cell_index]
+
+            downstream_pit_type = ldd.ravel()[downstream_index]
+            if downstream_pit_type == D8_PIT:
+                rivers.at[river_id, "is_coastal"] = (
+                    False  # is already set to False, but just to be explicit
+                )
+            elif downstream_pit_type == D8_RIVER_MOUTH:
+                rivers.at[river_id, "is_coastal"] = True
+            else:
+                raise ValueError(
+                    f"Did not find a pit downstream of the river end point, but found: {downstream_pit_type}"
+                )
 
             # get the lonlat of the downstream point
             downstream_lon, downstream_lat = flow_raster.xy(downstream_index)
@@ -1331,6 +1351,10 @@ class Hydrography(BuildModelBase):
         # sort by datetime index
         mean_sea_level_df = mean_sea_level_df.sort_index()
 
+        # we do not model receding sea levels, so enforce that the absolute mean sea level
+        # for each time step is at least as high as in the previous step, i.e. mean sea level is monotonically increasing
+        mean_sea_level_df = mean_sea_level_df.cummax(axis=0)
+
         # set table for model
         self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
 
@@ -1391,11 +1415,9 @@ class Hydrography(BuildModelBase):
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
         # remove stations that are not in coast_rp index
-        stations = stations[
-            stations["station_id"].astype(int).isin(coast_rp.index)
-        ].reset_index(drop=True)
+        stations = stations[stations.index.astype(int).isin(coast_rp.index)]
 
-        coast_rp = coast_rp.loc[stations["station_id"].astype(int)]
+        coast_rp = coast_rp.loc[stations.index]
         self.set_table(coast_rp, name="coast_rp")
 
         # also set stations (only those that are in coast_rp)

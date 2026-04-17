@@ -1,7 +1,5 @@
 """Implementation of the abstract base class for model components."""
 
-from __future__ import annotations
-
 import datetime
 from abc import ABC, abstractmethod
 from logging import Logger

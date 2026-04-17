@@ -1,4 +1,19 @@
 # dev
+- Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
+- Remove setup_irrigation_sources from build process as it is not needed anymore.
+- Fix basin delineation for endorheic basins.
+- Table-like data is exported as parquet rather than csv (saves lots of space on disk).
+- Better compression of reported data. Most importantly, floats are now bitrounded with a maximum error of around 0.01%. In one test, the hourly discharge is now 168MB instead of 487MB.
+- In reported spatial data, the time dimension is now the last dimension. This allows for better compressibility (because of spatial auto-correlation). If you make plots and read the data with xarray you likely won't notice. If you read the data in funky ways with numpy, you may need to adapt some scripts.
+- Report discharge for outflow points of all rivers instead of just the outflow at the end of the basin with _outflow_points is set to true in the report.
+- Use the reported time series tables instead of grid when setting up the SFINCS models and estimating return period values.
+- Do not report discharge grid data by default in example (saving lots of disk space). You can re-enable this manually when you need it.
+- Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
+
+To support this version:
+- Remove `setup_irrigation_sources` from build.yml.
+
+# v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
 - Refactored setup farms from lowder and created a test. Non-lowder datasets are not supported anymore. This will be added back later in the simplified setup when it is required for a specific purpose.
 - Write a custom zarr writer that is able to write chunked data and adapt all build methods to work with this.
@@ -14,7 +29,23 @@
 - For large scale (multiple basins) only: build stats are now written to CSV files under `build_memory_stats/<cluster>.csv`.  Individual files are made for each basin cluster. 
 - New command "geb clean" to reset and delete the data for a model, except the .yml files. Also works for multiple basin clusters/models. 
 - The buffer size check fuction (check_buffer_size) is removed as this caused errors but is redundant. 
- 
+- Fixes in water circle displaying.
+- Update format for custom river discharge time series. See geb/examples/geul/data/discharge_observations
+- Make full integration test, now checking discharge with observed discharge in the test_run.
+- Fix recent regression where water demand for households was set to 0 except on January 1st.
+- Include evaluation tests in the test_run for simplicity. 
+- Include global Huizinga curves as alternative to local Endendijk in build and reasonable default config.
+- Include setup_subnational_income_distribution to also set up initial subnational income distribution parameters for simulating migration decisions.
+- Move evaluation of hydrodynamics to seperate file.
+- Also calculate discharge metrics at daily frequency if only hourly data is available.
+- Added auto-update for build methods.
+- Improve memory usage of setup_soil (hopefully)
+- Update to Python 3.14.4.
+
+To support this version:
+- Add `setup_flood_damage_model` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_flood_damage_model`.
+- Add `setup_subnational_income_distribution` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_subnational_income_distribution`.
+- Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
 
 # v1.0.0b19
 - Add option for filling and raise out of bounds error for sample_from_map.
