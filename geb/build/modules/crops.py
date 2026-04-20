@@ -17,7 +17,6 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
-from geb.build import interpolate_na_along_dim
 from geb.build.methods import build_method
 from geb.geb_types import ArrayBool, ArrayInt32, ArrayInt64, ArrayUint8, TwoDArrayInt32
 from geb.workflows.io import get_window
@@ -25,6 +24,7 @@ from geb.workflows.raster import (
     get_linear_indices,
     get_neighbor_cell_ids_for_linear_indices,
     interpolate_na_2d,
+    interpolate_na_along_dim,
     pad_xy,
     sample_from_map,
     snap_to_grid,
@@ -1331,10 +1331,6 @@ class Crops(BuildModelBase):
                         )
                         crop_map = snap_to_grid(crop_map, reference)
 
-                crop_map = crop_map.isel(
-                    get_window(crop_map.x, crop_map.y, self.bounds, buffer=2)
-                )
-
                 crop_map = crop_map.assign_coords(crop=crop_id)
 
                 crop_maps.append(crop_map)
@@ -1348,8 +1344,8 @@ class Crops(BuildModelBase):
         # and set those to 0. Then we can interpolate the remaining missing values so
         # that we have a complete map of crop fractions.
 
-        # When there is crop for data for some crops in a cell, but not for others, we assume that the
-        # nan value, should actually be a 0
+        # When there is crop data for some crops in a cell, but not for others, we assume that the
+        # nan value should actually be 0.
         has_crops_data = ~(
             np.isnan(crop_maps_per_irrigation_type["ir"]).all(dim="crop")  # ty:ignore[no-matching-overload]
             & np.isnan(crop_maps_per_irrigation_type["rf"]).all(dim="crop")  # ty:ignore[no-matching-overload]
@@ -1410,6 +1406,21 @@ class Crops(BuildModelBase):
 
         rainfed_crop_fraction = rainfed_crop_fraction.rio.write_crs(4326)
         irrigated_crop_fraction = irrigated_crop_fraction.rio.write_crs(4326)
+
+        # reduce map to the area of interest, with a buffer of 2 cells to avoid edge effects
+        rainfed_crop_fraction = rainfed_crop_fraction.isel(
+            get_window(
+                rainfed_crop_fraction.x, rainfed_crop_fraction.y, self.bounds, buffer=2
+            )
+        )
+        irrigated_crop_fraction = irrigated_crop_fraction.isel(
+            get_window(
+                irrigated_crop_fraction.x,
+                irrigated_crop_fraction.y,
+                self.bounds,
+                buffer=2,
+            )
+        )
 
         assert np.allclose(
             (rainfed_crop_fraction + irrigated_crop_fraction).sum(dim="crop"),
