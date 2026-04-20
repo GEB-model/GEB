@@ -1067,7 +1067,7 @@ class fairSTREAMModel(GEBModel):
                 + 1,
             ),
             0,
-            dtype=np.bool_,
+            dtype=bool,
         )
 
         command_areas = self.subgrid["waterbodies/subcommand_areas"]

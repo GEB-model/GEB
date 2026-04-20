@@ -314,8 +314,8 @@ class CropFarmers(AgentBaseClass):
         self.redundancy = reduncancy
         self.decision_module = DecisionModule()
 
-        self.hydrological_year_start = self.model.config["general"][
-            "hydrological_year_start"
+        self.hydrological_year_start_month = self.model.config["general"][
+            "hydrological_year_start_month"
         ]
 
         self.inflation_rate = load_economic_data(
@@ -656,14 +656,15 @@ class CropFarmers(AgentBaseClass):
             0, self.var.crop_calendar_rotation_years
         )
 
-        if self.hydrological_year_start != 1:
-            month_to_day_index = np.array(
-                [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
-            )
-            month = self.hydrological_year_start
-            day_of_the_year = month_to_day_index[month - 1]
-            mask_annual_crops = self.var.crop_calendar[:, 0, 0] == 23
-            self.var.crop_calendar[mask_annual_crops, 0, 1] = day_of_the_year
+        # Here we change the planting date of annual crops to align with the first day of the hydrological year
+        # This does not affect the growth, as each stage has the same parameters
+        month_to_day_index = np.array(
+            [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+        )
+        month = self.hydrological_year_start_month
+        day_of_the_year = month_to_day_index[month - 1]
+        mask_annual_crops = self.var.crop_calendar[:, 0, 0] == 23
+        self.var.crop_calendar[mask_annual_crops, 0, 1] = day_of_the_year
 
         self.var.adaptations = DynamicArray(
             read_array(self.model.files["array"]["agents/farmers/adaptations"]),
@@ -695,11 +696,11 @@ class CropFarmers(AgentBaseClass):
         # Set how long the agents have adapted somewhere across the lifespan of farmers, would need to be a bit more realistic likely
         rng_wells = np.random.default_rng(17)
         self.var.time_adapted[
-            self.var.adaptations[:, WELL_ADAPTATION] == 1, WELL_ADAPTATION
+            self.var.adaptations[:, WELL_ADAPTATION], WELL_ADAPTATION
         ] = rng_wells.uniform(
             1,
             self.var.lifespan_well,
-            np.sum(self.var.adaptations[:, WELL_ADAPTATION] == 1),
+            np.sum(self.var.adaptations[:, WELL_ADAPTATION]),
         )
 
         # Initiate a number of arrays with Nan, zero or -1 values for variables that will be used during the model run.
@@ -935,7 +936,7 @@ class CropFarmers(AgentBaseClass):
         self.var.adaptations[
             self.var.irrigation_efficiency == self.var.irr_eff_sprinkler,
             IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-        ] = 1
+        ] = True
 
         self.var.return_fraction[
             self.var.irrigation_efficiency == self.var.irr_eff_sprinkler
@@ -943,14 +944,12 @@ class CropFarmers(AgentBaseClass):
 
         rng_drip = np.random.default_rng(70)
         self.var.time_adapted[
-            self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER] == 1,
+            self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER],
             IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
         ] = rng_drip.uniform(
             1,
             self.var.lifespan_irrigation,
-            np.sum(
-                self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER] == 1
-            ),
+            np.sum(self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER]),
         )
 
         self.var.mean_irrigation_efficiency = np.mean(self.var.irrigation_efficiency)
@@ -964,7 +963,7 @@ class CropFarmers(AgentBaseClass):
         )
         self.var.adaptations[:, FIELD_EXPANSION_ADAPTATION][
             self.var.fraction_irrigated_field >= 1
-        ] = 1
+        ] = True
 
         self.var.base_management_yield_ratio = DynamicArray(
             n=self.var.n,
@@ -1504,12 +1503,12 @@ class CropFarmers(AgentBaseClass):
     @property
     def surface_irrigated(self) -> DynamicArray:
         """Boolean mask of farmers that have surface-irrigation equipment."""
-        return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0
+        return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT].copy()
 
     @property
     def well_irrigated(self) -> DynamicArray:
         """Boolean mask of farmers that have a well adaptation."""
-        return self.var.adaptations[:, WELL_ADAPTATION] > 0
+        return self.var.adaptations[:, WELL_ADAPTATION].copy()
 
     @property
     def irrigated(self) -> DynamicArray:
@@ -2151,46 +2150,6 @@ class CropFarmers(AgentBaseClass):
             )
             actual_profit_per_field = actual_yield_per_field * crop_price_per_field
 
-            bad_mask = ~(actual_profit_per_field >= 0)
-            if np.any(bad_mask):
-                bad_idx = np.flatnonzero(bad_mask)
-
-                print("\n[HARVEST DEBUG] (actual_profit_per_field >= 0) violated.")
-                print(
-                    f"[HARVEST DEBUG] Offending harvested fields: {bad_idx.size} / {actual_profit_per_field.size}"
-                )
-                print(
-                    "[HARVEST DEBUG] Unique offending farmers:",
-                    np.unique(harvesting_farmer_fields[bad_mask]),
-                )
-                print(
-                    "[HARVEST DEBUG] Unique offending crops:",
-                    np.unique(harvested_crops[bad_mask]),
-                )
-                print(
-                    "[HARVEST DEBUG] Unique offending regions:",
-                    np.unique(region_id_per_harvested_field[bad_mask]),
-                )
-                print("Crop prices", crop_prices)
-                print(
-                    "\n[HARVEST DEBUG] Per-field details (harvested-field index space):"
-                )
-                for i in bad_idx:
-                    print(
-                        f"  - idx={i} | "
-                        f"farmer={int(harvesting_farmer_fields[i])} | "
-                        f"region={int(region_id_per_harvested_field[i])} | "
-                        f"crop={int(harvested_crops[i])} | "
-                        f"area_m2={harvested_area[i]:.6g} | "
-                        f"max_yield_kg_m2={max_yield_per_crop[i]:.6g} | "
-                        f"potential_yield_kg={potential_yield_per_field[i]:.6g} | "
-                        f"yield_ratio={yield_ratio_per_field[i]:.6g} | "
-                        f"actual_yield_kg={actual_yield_per_field[i]:.6g} | "
-                        f"price={crop_price_per_field[i]:.6g} | "
-                        f"potential_profit={potential_profit_per_field[i]:.6g} | "
-                        f"actual_profit={actual_profit_per_field[i]:.6g}"
-                    )
-
             assert (potential_profit_per_field > 0).all()
             assert (actual_profit_per_field >= 0).all()
 
@@ -2743,7 +2702,7 @@ class CropFarmers(AgentBaseClass):
         Computes the annual SPEI probability via the generalized extreme value (GEV)
         distribution, shifts historical arrays, and resets cumulative seasonal SPEI.
         """
-        assert self.model.current_time.month == self.hydrological_year_start
+        assert self.model.current_time.month == self.hydrological_year_start_month
 
         # calculate the SPEI probability using GEV parameters
         SPEI_probability = genextreme.sf(
@@ -2768,7 +2727,7 @@ class CropFarmers(AgentBaseClass):
 
     def save_yearly_pr(self) -> None:
         """Save and reset yearly precipitation totals per farmer."""
-        assert self.model.current_time.month == self.hydrological_year_start
+        assert self.model.current_time.month == self.hydrological_year_start_month
 
         shift_and_update(
             self.var.yearly_pr, self.var.cumulative_pr_during_growing_season
@@ -3194,7 +3153,11 @@ class CropFarmers(AgentBaseClass):
                 SEUT_adaptation_decision = np.zeros_like(initial_mask, dtype=bool)
                 SEUT_adaptation_decision[keep_idx] = True
 
-        # Protect against full loss of rotation
+        # Crop switching can cause certain rotations to disappear. As farmers
+        # need a comparison rotation to be able to switch to that rotation,
+        # rotations that are gone can not return. This function keeps one rotation within a
+        # meta group to keep the potential of that rotation to return later
+        # The "saved" farmer is the farmer with the lowest SEUT gain
         switch = SEUT_adaptation_decision.copy()
 
         # --- define metadata_id and rotation_id as in profits_SEUT_crops ---
@@ -3215,35 +3178,38 @@ class CropFarmers(AgentBaseClass):
         _, metadata_id = np.unique(metadata, axis=0, return_inverse=True)
 
         n_rot = rotation_id.max() + 1
-        cell_id = metadata_id * n_rot + rotation_id
-        n_cells = (metadata_id.max() + 1) * n_rot
+        group_rotation_id = metadata_id * n_rot + rotation_id
+        n_group_rotations = (metadata_id.max() + 1) * n_rot
 
-        cell_total = np.bincount(cell_id, minlength=n_cells)
-        cell_switched = np.bincount(
-            cell_id, weights=switch.astype(np.int32), minlength=n_cells
+        group_rotation_count = np.bincount(
+            group_rotation_id, minlength=n_group_rotations
+        )
+        group_rotation_switched_count = np.bincount(
+            group_rotation_id,
+            weights=switch.astype(np.int32),
+            minlength=n_group_rotations,
         ).astype(np.int32)
 
-        # Cells that would be wiped out (everyone in the cell switches)
-        cells_wiped = np.where((cell_total > 0) & (cell_switched == cell_total))[0]
+        # Rotations that would be wiped out (everyone in the cell switches)
+        lost_group_rotations = np.where(
+            (group_rotation_count > 0)
+            & (group_rotation_switched_count == group_rotation_count)
+        )[0]
 
         # Use per-farmer "gain" to choose whom to keep (undo switch for lowest gain)
         gain = best_option_SEUT - SEUT_do_nothing
 
-        for c in cells_wiped:
-            members = np.where(cell_id == c)[0]
+        for c in lost_group_rotations:
+            members = np.where(group_rotation_id == c)[0]
             switched_members = members[switch[members]]
             if switched_members.size == 0:
                 continue
 
-            # Keep one: undo switching for the farmer with smallest gain (least regret)
+            # Keep one and undo switching for the farmer with smallest gain (least regret)
             i_keep = switched_members[np.argmin(gain[switched_members])]
             switch[i_keep] = False
 
         SEUT_adaptation_decision = switch
-
-        mask = np.array([57, 244])
-        if np.any(SEUT_adaptation_decision[mask]):
-            pass
 
         new_id_final = new_id_temp[SEUT_adaptation_decision]
 
@@ -3323,7 +3289,7 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_well"]["loan_duration"]
 
-        adapted = self.var.adaptations[:, WELL_ADAPTATION] > 0
+        adapted = self.var.adaptations[:, WELL_ADAPTATION].copy()
 
         # Define extra constraints (farmers' wells must reach groundwater)
         well_reaches_groundwater = self.var.well_depth > groundwater_depth
@@ -3431,7 +3397,7 @@ class CropFarmers(AgentBaseClass):
 
         # Print the percentage of adapted households
         percentage_adapted = round(
-            np.sum(self.var.adaptations[:, WELL_ADAPTATION] > 0) / self.var.n * 100,
+            np.sum(self.var.adaptations[:, WELL_ADAPTATION]) / self.var.n * 100,
             2,
         )
         print(
@@ -3494,14 +3460,14 @@ class CropFarmers(AgentBaseClass):
         self.var.adaptations[
             self.var.irrigation_efficiency == self.var.irr_eff_sprinkler,
             IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-        ] = 1
+        ] = True
         self.var.adaptations[
             self.var.irrigation_efficiency == self.var.irr_eff_drip,
             IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
-        ] = 1
+        ] = True
 
         # To determine the benefit of irrigation, those who have above 90% irrigation efficiency have adapted
-        adapted = self.var.adaptations[:, adaptation_type] > 0
+        adapted = self.var.adaptations[:, adaptation_type].copy()
 
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # or who's never had access to irrigation water
@@ -3606,7 +3572,7 @@ class CropFarmers(AgentBaseClass):
 
         # Print the percentage of adapted households
         percentage_adapted = round(
-            np.sum(self.var.adaptations[:, adaptation_type] > 0)
+            np.sum(self.var.adaptations[:, adaptation_type])
             / len(self.var.adaptations[:, adaptation_type])
             * 100,
             2,
@@ -3676,7 +3642,7 @@ class CropFarmers(AgentBaseClass):
             expired_adaptations = (
                 self.var.time_adapted[:, adaptation_type] == loan_duration
             )
-            self.var.adaptations[expired_adaptations, adaptation_type] = 0
+            self.var.adaptations[expired_adaptations, adaptation_type] = False
             self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
         if len(adaptation_types) > 1:
@@ -3684,13 +3650,13 @@ class CropFarmers(AgentBaseClass):
 
             # Define extra constraints -- cant adapt another insurance type while having one before
             for t in adaptation_types:
-                test_array += (self.var.adaptations[:, t] > 0).astype(np.int8)
+                test_array += (self.var.adaptations[:, t]).astype(np.int8)
 
             extra_constraint = test_array < 1
             adapted = np.zeros_like(interest_rate, dtype=bool)
         else:
             extra_constraint = np.ones_like(interest_rate, dtype=bool)
-            adapted = (self.var.adaptations[:, adaptation_type] > 0).data
+            adapted = (self.var.adaptations[:, adaptation_type]).copy()
 
         for idx, adaptation_type in enumerate(adaptation_types):
             # Compute profits with index insurance
@@ -3762,7 +3728,7 @@ class CropFarmers(AgentBaseClass):
         chosen_option = np.argmax(SEUT_insurance_options, axis=1)
 
         for idx, adaptation_type in enumerate(adaptation_types):
-            adapted = self.var.adaptations[:, adaptation_type] > 0
+            adapted = self.var.adaptations[:, adaptation_type].copy()
             annual_cost = annual_cost_array[:, idx]
             adaptation_name = adaptation_names[idx]
 
@@ -3868,7 +3834,7 @@ class CropFarmers(AgentBaseClass):
         # SEUT_adaptation_decision = SEUT_adaptation_decision  # & intention_mask
 
         # Update the adaptation status
-        self.var.adaptations[SEUT_adaptation_decision, adaptation_type] = 1
+        self.var.adaptations[SEUT_adaptation_decision, adaptation_type] = True
 
         # Reset the timer for newly adapting farmers and update timers for others
         self.var.time_adapted[SEUT_adaptation_decision, adaptation_type] = 0
@@ -4538,7 +4504,7 @@ class CropFarmers(AgentBaseClass):
         expired_adaptations = (
             self.var.time_adapted[:, adaptation_type] == self.var.lifespan_well
         ) | additional_diffentiator_expiration
-        self.var.adaptations[expired_adaptations, adaptation_type] = 0
+        self.var.adaptations[expired_adaptations, adaptation_type] = False
         self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
         # Determine the IDS of the most similar group of yield
@@ -4929,7 +4895,7 @@ class CropFarmers(AgentBaseClass):
 
         ## yearly actions
         if (
-            self.model.current_time.month == self.hydrological_year_start
+            self.model.current_time.month == self.hydrological_year_start_month
             and self.model.current_time.day == 1
         ):
             if self.model.current_time.year > self.model.spinup_start.year:
@@ -4949,8 +4915,8 @@ class CropFarmers(AgentBaseClass):
                 self.save_yearly_pr()
 
             if self.config["ruleset"] == "no-irrigation":
-                self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] = 0
-                self.var.adaptations[:, WELL_ADAPTATION] = 0
+                self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] = False
+                self.var.adaptations[:, WELL_ADAPTATION] = False
 
             # Set yearly yield ratio based on the difference between saved actual and potential profit
             yearly_potential_income = np.where(
@@ -5099,7 +5065,7 @@ class CropFarmers(AgentBaseClass):
         timer.finish_split("planting")
 
         if (
-            self.model.current_time.month == self.hydrological_year_start
+            self.model.current_time.month == self.hydrological_year_start_month
             and self.model.current_time.day == 1
         ):
             advance_crop_rotation_year(

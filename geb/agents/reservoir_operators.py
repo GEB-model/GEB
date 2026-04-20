@@ -175,8 +175,8 @@ class ReservoirOperators(AgentBaseClass):
         )
         self.environmental_flow_requirement = 0.0
         self.water_conveyance_efficiency = 1.0
-        self.hydrological_year_start = self.model.config["general"][
-            "hydrological_year_start"
+        self.hydrological_year_start_month = self.model.config["general"][
+            "hydrological_year_start_month"
         ]
         if self.model.in_spinup:
             self.spinup()
@@ -678,7 +678,7 @@ class ReservoirOperators(AgentBaseClass):
         # thus crop calendars
         if (
             self.model.current_time.day == 1
-            and self.model.current_time.month == self.hydrological_year_start
+            and self.model.current_time.month == self.hydrological_year_start_month
         ):
             # in the second year, we want to discard the default data that was estimated
             # from external sources

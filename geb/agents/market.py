@@ -55,8 +55,8 @@ class Market(AgentBaseClass):
             if "market" in self.model.config["agent_settings"]
             else {}
         )
-        self.hydrological_year_start = self.model.config["general"][
-            "hydrological_year_start"
+        self.hydrological_year_start_month = self.model.config["general"][
+            "hydrological_year_start_month"
         ]
         if self.model.in_spinup:
             self.spinup()
@@ -155,12 +155,6 @@ class Market(AgentBaseClass):
             :,
             estimation_start_year:estimation_end_year,
         ]
-        if np.any(production <= 0):
-            # log(0) or log(negative) will explode/NaN
-            bad = np.where(production <= 0)[0]
-            print(
-                "[PRICE DEBUG] production <= 0 crops:", bad, "values:", production[bad]
-            )
 
         for crop in range(self.var.production.shape[0]):
             prod = production[crop]
@@ -218,7 +212,7 @@ class Market(AgentBaseClass):
                 :, self.year_index - 1
             ]  # for now taking the previous year, should be updated
             # Change 0s to 1 to prevent log(0) becoming infinite
-            production = np.where(production.data == 0, 1, production.data)
+            production[production == 0] = 1
             price_pred = np.exp(
                 1 * self.var.parameters[:, 0]
                 + self.production_influence_calibration_factor
@@ -317,17 +311,6 @@ class Market(AgentBaseClass):
         if (
             # run price model at the end of the spinup
             self.model.current_time == self.model.spinup_end and self.model.in_spinup
-            # or
-            # # and on 5-year anniversaries
-            # (
-            #     not self.model.in_spinup
-            #     and (self.model.current_time.year - self.model.run_start.year) % 5 == 0
-            #     and (
-            #         self.model.current_time.month == self.hydrological_year_start
-            #         and self.model.current_time.day == 1
-            #     )
-            #     and (self.model.current_time.year - self.model.run_start.year) >= 5
-            # )
         ):
             self.estimate_price_model()
 

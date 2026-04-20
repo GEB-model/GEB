@@ -67,8 +67,8 @@ class LiveStockFarmers(AgentBaseClass):
         self.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
-        self.hydrological_year_start = self.model.config["general"][
-            "hydrological_year_start"
+        self.hydrological_year_start_month = self.model.config["general"][
+            "hydrological_year_start_month"
         ]
         if self.model.in_spinup:
             self.spinup()
@@ -91,9 +91,7 @@ class LiveStockFarmers(AgentBaseClass):
             water_demand, dtype=np.float32
         )
         self.var.current_water_demand = water_demand
-        self.var.total_water_demand = (
-            self.var.current_water_demand + self.var.additional_water_allocation
-        )
+        self.var.total_water_demand = self.var.current_water_demand
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self) -> tuple[ArrayFloat32, np.float32]:
@@ -149,7 +147,7 @@ class LiveStockFarmers(AgentBaseClass):
             / self.HRU.var.cell_area
         )  # convert to m/day
 
-        efficiency: np.float32 = self.agents.crop_farmers.var.mean_irrigation_efficiency
+        efficiency: np.float32 = np.float32(1.0)
         water_demand = water_consumption / efficiency
         self.var.last_water_demand_update = self.model.current_time
         return water_demand, efficiency
@@ -167,7 +165,7 @@ class LiveStockFarmers(AgentBaseClass):
         """
         if (
             self.model.current_time.day == 1
-            and self.model.current_time.month == self.hydrological_year_start
+            and self.model.current_time.month == self.hydrological_year_start_month
         ):
             water_demand, efficiency = self.update_water_demand()
             self.var.current_water_demand = water_demand

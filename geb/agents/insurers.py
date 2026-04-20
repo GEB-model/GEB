@@ -1,7 +1,5 @@
 """This module contains the insurers agent class for GEB."""
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING
 
@@ -68,8 +66,8 @@ class Insurers(AgentBaseClass):
             self.HRU = model.hydrology.HRU
             self.grid = model.hydrology.grid
 
-        self.hydrological_year_start = self.model.config["general"][
-            "hydrological_year_start"
+        self.hydrological_year_start_month = self.model.config["general"][
+            "hydrological_year_start_month"
         ]
         self.traditional_insurance_adaptation_active = (
             not self.config["traditional_insurance"]["ruleset"] == "no-adaptation"
@@ -137,7 +135,7 @@ class Insurers(AgentBaseClass):
                     f"{i} contains NaN values"
                 )  # ensure no NaNs in data
 
-    def government_premium_cap(self) -> np.ndarray:
+    def government_premium_cap_india(self) -> np.ndarray:
         """Compute per-farmer government premium cap in India based on income and crop mix.
 
         Farmers are grouped by well status. If all farmers in a group have
@@ -146,7 +144,7 @@ class Insurers(AgentBaseClass):
         size.
 
         Returns:
-            numpy.ndarray: Premium cap per farmer.
+            Premium cap per farmer.
         """
         year_income_m2 = (
             self.agents.crop_farmers.var.yearly_income[:, 0]
@@ -186,8 +184,8 @@ class Insurers(AgentBaseClass):
         positive difference between that average and the realized income.
 
         Returns:
-            np.ndarray: Array shaped like ``yearly_income`` with per farmer-year
-                potential insured losses (``float32``). Masked years remain zero.
+            Array shaped like ``yearly_income`` with per farmer-year potential
+                insured losses (``float32``). Masked years remain zero.
         """
         # Calculating traditional pure premiums and Bühlmann-Straub parameters to get the credibility premium
         # Mask out unfilled years
@@ -230,8 +228,7 @@ class Insurers(AgentBaseClass):
             masked_income: Historical realized income for valid years.
 
         Returns:
-            npt.NDArray[np.floating]: Capped traditional insurance premium
-                per farmer.
+            Capped traditional insurance premium per farmer.
         """
         # Calculating traditional pure premiums and Bühlmann-Straub parameters to get the credibility premium
         # Calculate traditional loss
@@ -284,6 +281,7 @@ class Insurers(AgentBaseClass):
         self,
         insured_farmers_mask: DynamicArray,
         masked_income: npt.NDArray[np.floating],
+        historic_window_years: np.int8 = 7,
     ) -> npt.NDArray[np.floating]:
         """Compute historical traditional-insurance payouts and update state.
 
@@ -295,10 +293,11 @@ class Insurers(AgentBaseClass):
             insured_farmers_mask: Boolean mask indicating which farmers are insured
                 with traditional insurance.
             masked_income: Historical realized income for valid years.
+            historic_window_years: Historical window. 7 is used based on the PFMBY scheme
+                in India.
 
         Returns:
-            npt.NDArray[np.floating]: Historical traditional-insurance payouts per
-                farmer-year.
+            historical traditional-insurance payouts per farmer-year.
         """
         cumsum = np.cumsum(masked_income, axis=1, dtype=float)
 
@@ -306,12 +305,14 @@ class Insurers(AgentBaseClass):
         years = np.arange(T)
         thr_m = np.empty_like(masked_income, dtype=float)
 
-        first7 = years < 7
+        first7 = years < historic_window_years
         thr_m[:, first7] = cumsum[:, first7] / (years[first7] + 1)
 
-        if T > 7:
-            window_sum = cumsum[:, 7:] - cumsum[:, :-7]
-            thr_m[:, 7:] = window_sum / 7
+        if T > historic_window_years:
+            window_sum = (
+                cumsum[:, historic_window_years:] - cumsum[:, :-historic_window_years]
+            )
+            thr_m[:, historic_window_years:] = window_sum / historic_window_years
 
         thr_m = thr_m[:, ::-1]
 
@@ -366,9 +367,7 @@ class Insurers(AgentBaseClass):
                 and index data.
 
         Returns:
-            tuple[npt.NDArray[np.floating], npt.NDArray[np.floating],
-            npt.NDArray[np.floating], npt.NDArray[np.floating]]: Best strike,
-                best exit, best rate, and capped premium per farmer.
+            Best strike, best exit, best rate, and capped premium per farmer.
         """
         # Make a series of candidate insurance contracts and find the optimal contract
         # with the least basis risk considering past losses
@@ -448,8 +447,7 @@ class Insurers(AgentBaseClass):
             exit_half_width: Half-width around the exit center.
 
         Returns:
-            tuple[npt.NDArray[np.float64], npt.NDArray[np.float64],
-            npt.NDArray[np.float64]]: Candidate arrays for strike, exit, and rate.
+            Candidate arrays for strike, exit, and rate.
 
         Raises:
             ValueError: If the masked SPEI, income, and potential-income arrays do
@@ -581,8 +579,7 @@ class Insurers(AgentBaseClass):
             exit_half_width: Half-width around the exit center.
 
         Returns:
-            tuple[npt.NDArray[np.float64], npt.NDArray[np.float64],
-            npt.NDArray[np.float64]]: Candidate arrays for strike, exit, and rate.
+            Candidate arrays for strike, exit, and rate.
 
         Raises:
             ValueError: If the masked precipitation, income, and potential-income
@@ -683,7 +680,7 @@ class Insurers(AgentBaseClass):
             n_vals: Number of candidate values to return.
 
         Returns:
-            npt.NDArray[np.float64]: Descending candidate grid.
+           Descending candidate grid.
         """
         vals = center + np.linspace(half_width, -half_width, n_vals, dtype=np.float64)
         vals = np.round(vals / step) * step
@@ -721,8 +718,7 @@ class Insurers(AgentBaseClass):
                 and index data.
 
         Returns:
-            npt.NDArray[np.floating]: Per farmer-year payouts shaped like the
-                historical income array over all years.
+            Per farmer-year payouts shaped like the historical income array over all years.
         """
         # Determine what the index insurance would have paid out in the past
         spei_hist = self.agents.crop_farmers.var.yearly_SPEI.data[:, valid_years]
@@ -768,7 +764,7 @@ class Insurers(AgentBaseClass):
             masked_potential_income: Historical potential income for valid years.
 
         Returns:
-            npt.NDArray[np.floating]: Insured yield-index relation per farmer-year.
+            Insured yield-index relation per farmer-year.
         """
         insured_yearly_income = masked_income + potential_insured_loss
 
@@ -805,7 +801,7 @@ class Insurers(AgentBaseClass):
         and returns that product's premium and insured yield-probability relation.
 
         Returns:
-            TwoDArrayFloat32: Premium per farmer and the corresponding insured
+            Premium per farmer and the corresponding insured
                 yield-probability relation for the active insurance product.
 
         Raises:
@@ -827,7 +823,7 @@ class Insurers(AgentBaseClass):
         potential_insured_loss = self.potential_insured_loss()
 
         if self.config["government_premium_cap"]:
-            government_premium_cap = self.government_premium_cap()
+            government_premium_cap = self.government_premium_cap_india()
         else:
             government_premium_cap = np.full(self.agents.crop_farmers.var.n, np.inf)
 
@@ -913,8 +909,8 @@ class Insurers(AgentBaseClass):
             masked_potential_income: Historical potential income for valid years.
 
         Returns:
-            TwoDArrayFloat32: Premium per farmer and the insured
-                yield-probability relation under traditional insurance.
+            Premium per farmer and the insured yield-probability relation under
+                traditional insurance.
         """
         # Determine the potential (past and current) indemnity payments and
         # recalculate the probability-yield relation.
@@ -986,8 +982,8 @@ class Insurers(AgentBaseClass):
             masked_potential_income: Historical potential income for valid years.
 
         Returns:
-            TwoDArrayFloat32: Premium per farmer and the insured
-                yield-probability relation under SPEI-based index insurance.
+            Premium per farmer and the insured yield-probability relation under
+                SPEI-based index insurance.
         """
         gev_params = self.agents.crop_farmers.var.GEV_parameters.data
         strike_vals, exit_vals, rate_vals = (
@@ -1065,8 +1061,8 @@ class Insurers(AgentBaseClass):
             masked_potential_income: Historical potential income for valid years.
 
         Returns:
-            TwoDArrayFloat32: Premium per farmer and the insured
-                yield-probability relation under precipitation index insurance.
+            Premium per farmer and the insured yield-probability relation under
+                precipitation index insurance.
         """
         gev_params = self.var.GEV_pr_parameters.data
         strike_vals, exit_vals, rate_vals = self.estimate_pr_insurance_candidate_space(
@@ -1117,11 +1113,9 @@ class Insurers(AgentBaseClass):
         """This function is run each timestep."""
         # Yearly actions
         if (
-            self.model.current_time.month == self.hydrological_year_start
+            self.model.current_time.month == self.hydrological_year_start_month
             and self.model.current_time.day == 1
         ):
-            pass
-
             self.inflation_correction_export()
             shift_and_reset_matrix(self.var.insured_yearly_income)
 
