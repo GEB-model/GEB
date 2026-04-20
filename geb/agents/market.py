@@ -160,6 +160,15 @@ class Market(AgentBaseClass):
             prod = production[crop]
             if prod.sum() == 0:
                 continue
+            zero_mask = prod == 0
+            if zero_mask.any():
+                print(
+                    f"Production of crop {crop} is 0 for {zero_mask.sum()} entries. "
+                    "If few farmers are cultivating the crop it may be expected behavior, "
+                    "otherwise check for errors in harvest/planting."
+                    "Setting these values to 1.."
+                )
+                prod[zero_mask] = 1
             # Defining the independent variables (add a constant term for the intercept)
             X = sm.add_constant(np.log(prod))
 
@@ -212,7 +221,17 @@ class Market(AgentBaseClass):
                 :, self.year_index - 1
             ]  # for now taking the previous year, should be updated
             # Change 0s to 1 to prevent log(0) becoming infinite
-            production[production == 0] = 1
+            zero_mask = production == 0
+            if zero_mask.any():
+                zero_crop_indices = np.where(production == 0)[0]
+                for crop in zero_crop_indices:
+                    print(
+                        f"Production in region {region_idx} of crop {crop} is 0. "
+                        "Setting this value to 1. "
+                        "If few farmers are cultivating the crop it may be expected behavior, "
+                        "otherwise check for errors in harvest/planting."
+                    )
+                production[zero_crop_indices] = 1
             price_pred = np.exp(
                 1 * self.var.parameters[:, 0]
                 + self.production_influence_calibration_factor
