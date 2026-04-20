@@ -1036,7 +1036,7 @@ name = "eccodeslib"
 version = "2.46.2.19"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "eckitlib" },
+    { name = "eckitlib", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/90/3a3180b227e6483e80e6631e8630d8942fc8bfc66b8e6acd9f5549c537c6/eccodeslib-2.46.2.19-cp314-cp314-macosx_13_0_arm64.whl", hash = "sha256:d93146a2770d3169f91129193e995a0bd58ac933937e26909c65c347f36b94a6", size = 8900007, upload-time = "2026-04-01T12:20:31.911Z" },
@@ -1322,7 +1322,7 @@ wheels = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b20"
+version = "1.0.0b21"
 source = { editable = "." }
 dependencies = [
     { name = "cartopy" },

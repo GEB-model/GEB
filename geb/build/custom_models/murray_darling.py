@@ -1153,7 +1153,7 @@ class Agents(GEBModel):
 
             # Map annual (year ended June) → monthly (2000-07 to 2004-06)
             def _fy_end_for_month(m: pd.Timestamp) -> pd.Timestamp:
-                return pd.Timestamp(
+                return pd.Timestamp(  # ty:ignore[invalid-return-type]
                     year=m.year if m.month <= 6 else m.year + 1, month=6, day=30
                 )
 
@@ -1413,7 +1413,7 @@ class Agents(GEBModel):
 
                     dictionary["data"][region_id] = prices.tolist()
 
-            out["data"] = out_data
+            out["data"] = out_data  # ty:ignore[invalid-assignment]
             self.set_params(out, name=f"economics/{key}")
 
     @build_method(depends_on=["setup_economic_data"])

@@ -17,6 +17,7 @@ from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
+from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
 from geb.build.workflows.command_areas import derive_command_areas_from_routing
 from geb.build.workflows.river_snapping import snap_point_to_river_network
@@ -1348,7 +1349,12 @@ class Hydrography(BuildModelBase):
         gtsm_data_region, stations = self.data_catalog.fetch(
             "gtsm_timeseries", variable="total_water_level"
         ).read(bounds=self.bounds, variable="total_water_level")
-        self.set_table(gtsm_data_region, name="gtsm/waterlevels")
+        self.set_other(
+            gtsm_data_region,
+            name="gtsm/waterlevels",
+            filters=gtsm_filters,
+            shards={"stations": 100},
+        )
         self.set_geom(stations, name="gtsm/stations")
         self.logger.info("GTSM station waterlevels and geometries set")
 
@@ -1357,7 +1363,12 @@ class Hydrography(BuildModelBase):
         gtsm_data_region, _ = self.data_catalog.fetch(
             "gtsm_timeseries", variable="storm_surge_residual"
         ).read(bounds=self.bounds, variable="storm_surge_residual")
-        self.set_table(gtsm_data_region, name="gtsm/surge")
+        self.set_other(
+            gtsm_data_region,
+            name="gtsm/surge",
+            filters=gtsm_filters,
+            shards={"stations": 100},
+        )
         self.logger.info("GTSM station surge levels set")
 
     def setup_gtsm_sea_level_rise(self) -> None:

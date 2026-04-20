@@ -5,8 +5,10 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import shapely
 import xarray as xr
 from pyflwdir.dem import fill_depressions
+from shapely.ops import linemerge
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window, parse_and_set_zarr_CRS
@@ -160,8 +162,27 @@ class LandSurface(BuildModelBase):
                     DEM["zmax"] = DEM["coastal_zmax"]
 
             coastlines = self.geom["coastal/coastlines"]
+
+            # coastlines is a very complex geometry that can cause issues with clipping and masking operations
+            # therefore we take various steps to simplify
+            coastlines = gpd.GeoDataFrame(
+                geometry=shapely.set_precision(
+                    coastlines.geometry, grid_size=0.01, mode="keep_collapsed"
+                ),
+                crs=coastlines.crs,
+            )
+            coastlines = gpd.GeoDataFrame(
+                geometry=[linemerge(coastlines.geometry.union_all())],
+                crs=coastlines.crs,
+            )
+
+            # buffer coastlines with 0.2 degrees
+            coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+            coastlines_with_buffer = coastlines_with_buffer.union_all()
+
+            # merge the buffered coastlines with the potential flood area with buffer
             potential_flood_area_with_buffer = potential_flood_area_with_buffer.union(
-                coastlines.buffer(0.2).union_all()
+                coastlines_with_buffer
             )
 
             delta_dtm: xr.DataArray = self.data_catalog.fetch(
@@ -183,8 +204,7 @@ class LandSurface(BuildModelBase):
 
         fabdem: xr.DataArray = self.data_catalog.fetch(
             "fabdem",
-            mask=potential_flood_area_with_buffer,
-        ).read()
+        ).read(mask=potential_flood_area_with_buffer)
 
         target: xr.DataArray = self.subgrid["mask"].chunk({"x": 5000, "y": 5000})
         assert target.rio.crs is not None, "target grid must have a crs"

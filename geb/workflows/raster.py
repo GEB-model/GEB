@@ -865,8 +865,8 @@ def pad_xy(
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
-    return_slice: Literal[True] = True,
-) -> tuple[xr.DataArray, dict[str, slice]]: ...
+    return_slice: Literal[False] = False,
+) -> xr.DataArray: ...
 
 
 @overload
@@ -880,9 +880,9 @@ def pad_xy(
     | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
-    | None = None,
-    return_slice: Literal[False] = False,
-) -> xr.DataArray: ...
+    | None = ...,
+    return_slice: Literal[True] = ...,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
 
 
 def pad_xy(

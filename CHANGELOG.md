@@ -19,6 +19,24 @@
 - Bug fix where unify_crop_variants did not work for farmers for crop rotations with more than 1 crop. 
 - self.var.adaptations is now a boolean array. Run `geb update -b build.yml::setup_farmer_crop_calendar` for it to become boolean. 
 - setup_SPEI and setup_pr_GEV had issues with the grids not properly being assigned the actual GEV values. Rerun `geb update -b build.yml::setup_SPEI` and `geb update -b build.yml::setup_pr_GEV` to update
+- Fix division by zero error for reservoirs that have no long term inflow.
+- Fix basin delineation for endorheic basins.
+- Table-like data is exported as parquet rather than csv (saves lots of space on disk).
+- Better compression of reported data. Most importantly, floats are now bitrounded with a maximum error of around 0.01%. In one test, the hourly discharge is now 168MB instead of 487MB.
+- In reported spatial data, the time dimension is now the last dimension. This allows for better compressibility (because of spatial auto-correlation). If you make plots and read the data with xarray you likely won't notice. If you read the data in funky ways with numpy, you may need to adapt some scripts.
+- Report discharge for outflow points of all rivers instead of just the outflow at the end of the basin with _outflow_points is set to true in the report.
+- Use the reported time series tables instead of grid when setting up the SFINCS models and estimating return period values.
+- Do not report discharge grid data by default in example (saving lots of disk space). You can re-enable this manually when you need it.
+- Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
+- Fix all typing issues.
+- Reduce RAM usage of reading GTSM data.
+- Enable better compression for any table-like data.
+- Save GTSM data as zarr with fixedscaleoffset and delta compression. Also adapt GTSM readers in model accordingly.
+- Remove all local caching during build to save disk space.
+- Enable automatic delta compression of time coordinates in zarr files.
+- Reduce RAM usage for models with a complex coastline.
+- Fix for differently sized crop maps from MIRCA-OS that led to issues where maps in regions where some maps did not overlap.
+- Fix for interpolation of MIRCA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765))
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
@@ -28,6 +46,7 @@ To support this version:
 
 # v1.0.0b21
 
+- Re-run `setup_gtsm_station_data`.
 
 # v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
@@ -36,12 +55,14 @@ To support this version:
 - Made numerous changes throughout the build to reduce memory usage. No content changes.
 - Set fill depressions to False by default in build. This option uses too much memory for large areas. If needed this can be build in again at the hydrodynamics stage.
 - Remove old data catalog entirely, and all references to it. Rename NewDataCatalog to DataCatalog.
+- Fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
+- Add incremental reforestation: set `plant_forest.increment_fraction` (0–1) to plant a fraction of suitable HRUs per call, ranked by restoration potential. Auto-advances each call by skipping already-forested HRUs.
+- Add government adaptation pathway: set `agent_settings.government.adaptation.enabled: true` to trigger annual flood, equity, and ecosystem adaptation measures on January 1st based on configurable thresholds.
 - Optimize GTSM data catalog, now pre-processing to zarr files.
 - Improve CLI help so `geb evaluate --help` list the available evaluation methods.
 - Fix issue in the enthalpy calculations. Previously there would be 0 infiltration even when only part of the soil was frozen. In addition, rainfall that didn't infiltrate never warmed the soil (if soil is colder..) which led to situations with too much frozen soil, too much runoff and too much discharge in winters.
 - Made quite a few plots and exporters for the water balance plotting. Note that not all plots show a correct balance yet. This is highly likely not due to actual balance errors (they are checked in the running model) but because we don't yet plot the right variables. To be continued..
 - Remove support for include_spinup in the evalution. This option was supported sometimes and sometimes not, which led to silent ignores and general over complications. It is still possible to run the evaluate for the spinup (only) by using the run_name: `geb evaluate --run_name spinup`.
-- fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
 - For large scale (multiple basins) only: build stats are now written to CSV files under `build_memory_stats/<cluster>.csv`.  Individual files are made for each basin cluster. 
 - New command "geb clean" to reset and delete the data for a model, except the .yml files. Also works for multiple basin clusters/models. 
 - The buffer size check fuction (check_buffer_size) is removed as this caused errors but is redundant. 
