@@ -16,6 +16,8 @@
 - Save GTSM data as zarr with fixedscaleoffset and delta compression. Also adapt GTSM readers in model accordingly.
 - Remove all local caching during build to save disk space.
 - Enable automatic delta compression of time coordinates in zarr files.
+- Reduce RAM usage for models with a complex coastline.
+- Fix for differently sized crop maps from MIRCA-OS that led to issues where maps in regions where some maps did not overlap.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
