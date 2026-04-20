@@ -621,7 +621,7 @@ class Fabdem(Adapter):
         """
         tiles: list[tuple[int, int]] = self._tiles_for_mask(mask)
 
-        with tempfile.TemporaryDirectory() as temp_dir_str:
+        with tempfile.TemporaryDirectory(delete=False) as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             results: list[Path] = []
 

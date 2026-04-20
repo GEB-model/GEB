@@ -22,27 +22,33 @@ def get_resources(cluster_name):
     """Get SLURM resources for a cluster job.
 
     Memory profiling across all 17 European clusters (April 2026) shows that
-    setup_elevation dominates peak RSS at ~105 GB.  120 GB provides ~15 %
-    headroom above the observed peak. Most defq nodes have 252 GB RAM so they
-    handle the 120 GB request fine; the three 59 GB defq nodes will simply
-    never be assigned these jobs by SLURM. Including defq maximises the number
-    of available nodes for parallel scheduling.
+    setup_elevation dominates peak RSS at ~105 GB. 200 GB provides ~90 %
+    headroom above the observed peak, avoiding OOM on nodes with limited RAM.
     defq has MaxTime=7 days; build/run stay within that, spinup uses ivm-fat.
 
-    64 CPUs chosen for spinup: land_surface_model is the dominant cost and
-    parallelises linearly with TBB threads up to memory-bandwidth saturation.
-    ivm-fat has node001 (64 CPUs, zen2) and node243 (128 CPUs, zen4).
-    64 CPUs fits both nodes and halves land_surface_model time vs 32 CPUs.
+    CPU efficiency profiling shows spinup uses only ~1.4% CPU efficiency with
+    64 cores — the land surface model is memory-bandwidth bound, not compute
+    bound at high core counts. Spinup CPUs are therefore kept low (16) so that
+    more jobs can share the two ivm-fat nodes concurrently:
+      node001: 64 CPUs → 4 × 16-CPU jobs
+      node243: 128 CPUs → 8 × 16-CPU jobs
+    Build and run use 4 CPUs (mostly single-threaded I/O-bound work).
     """
-    return 120000, "defq,ivm,ivm-fat", 64, ""
+    mem_mb = 200000
+    cpus_build_run = 4
+    cpus_spinup = 16
+    partition = "defq,ivm,ivm-fat"
+    extra = ""
+    return mem_mb, partition, cpus_build_run, cpus_spinup, extra
 
 
 # defq MaxTime = 7 days (10080 min); build and run fit within 5 days.
-# ivm-fat has TIMELIMIT=infinite and QOS MaxWall is unset, so spinup jobs
-# will never be killed for time regardless of how long they run.
-RUNTIME_BUILD_MIN = 7200   # 5 days
-RUNTIME_SPINUP_MIN = 14400  # 10 days (advisory only; ivm-fat has no time limit)
-RUNTIME_RUN_MIN = 7200     # 5 days
+# ivm-fat has MaxTime=UNLIMITED, so spinup runtime is set to a large value (30
+# days) to prevent Snakemake's default-resources fallback from being applied as
+# seconds instead of minutes (plugin behaviour difference for default vs explicit).
+RUNTIME_BUILD_MIN = 7200    # 5 days
+RUNTIME_SPINUP_MIN = 43200  # 30 days (effectively unlimited on ivm-fat)
+RUNTIME_RUN_MIN = 7200      # 5 days
 
 
 # Dynamically discover cluster directories (run only once)
@@ -80,7 +86,7 @@ rule build_cluster:
         cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
-        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
+        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[4],
     shell:
         """
         # Route temp files to the per-job scratch directory so that large
@@ -114,18 +120,17 @@ rule spinup_cluster:
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=RUNTIME_SPINUP_MIN,
-        cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
-        # spinup can exceed defq's 7-day MaxTime, so restrict to ivm-fat only
+        cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[3],
+        # ivm-fat has MaxTime=UNLIMITED; runtime is set explicitly here to avoid
+        # Snakemake's default-resources fallback being applied as seconds instead
+        # of minutes, which would cap jobs at 3:12:00.
         slurm_partition="ivm-fat",
         slurm_account="ivm",
-        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
+        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[4],
     shell:
         """
         if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
         export NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK
-        # Setting PYTHONOPTIMIZE=1 is equivalent to `python -O`, which sets
-        # __debug__=False and disables Numba BOUNDSCHECK (significant per-access overhead).
-        export PYTHONOPTIMIZE=1
         # Enable AVX/AVX-512 instructions. ivm-fat nodes (zen2/zen4) support AVX2/AVX-512
         # and do not suffer from the frequency-throttling issue seen on some Intel CPUs.
         export NUMBA_ENABLE_AVX=1
@@ -152,12 +157,11 @@ rule run_cluster:
         cpus_per_task=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         slurm_account="ivm",
-        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[3],
+        slurm_extra=lambda wildcards: get_resources(wildcards.cluster)[4],
     shell:
         """
         if [ -d "/scratch/$SLURM_JOB_ID" ]; then export TMPDIR=/scratch/$SLURM_JOB_ID; fi
         export NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK
-        export PYTHONOPTIMIZE=1
         export NUMBA_ENABLE_AVX=1
         cd {params.cluster_dir}
         geb run &> {log}

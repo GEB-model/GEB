@@ -3322,16 +3322,20 @@ class GEBModel(
             build_method.read_progress(self.progress_path) if continue_ else []
         )
 
-        # check if all completed methods are in the methods to run and if order is correct
+        # Filter completed methods against the current build config.
         if continue_:
             methods_to_run = list(methods.keys())
-            # Filter out completed methods that are no longer in the build config;
-            # these were intentionally removed by a version update (e.g. a method
-            # that was deprecated). We warn rather than error so that
-            # `geb update-version && geb build --continue` works automatically.
+            # Convert to a set for O(1) lookup; order of execution always follows
+            # build.yml (the `methods` dict), not progress.txt. This means methods
+            # added in the middle of build.yml by a version update are simply run
+            # in their correct position on continuation, even if progress.txt was
+            # written in a different order during a previous partial run.
+            methods_to_run_set = set(methods_to_run)
             active_completed_methods: list[str] = []
             for completed_method in completed_methods:
-                if completed_method not in methods_to_run:
+                if completed_method not in methods_to_run_set:
+                    # Method was removed from build.yml (e.g. deprecated by a
+                    # version update). Warn so the user knows it was skipped.
                     self.logger.warning(
                         f"Completed method '{completed_method}' is no longer in build config "
                         "(likely removed by a version update); skipping."
@@ -3339,21 +3343,6 @@ class GEBModel(
                 else:
                     active_completed_methods.append(completed_method)
             completed_methods = active_completed_methods
-
-            # Check that completed methods still appear in the same relative order
-            # in the current build config. New methods inserted between completed
-            # ones are allowed (they will run in their new position on continuation).
-            completed_set = set(completed_methods)
-            completed_in_methods_to_run = [
-                m for m in methods_to_run if m in completed_set
-            ]
-            if completed_in_methods_to_run != completed_methods:
-                raise ValueError(
-                    f"Cannot continue build: the relative order of previously completed "
-                    f"methods has changed. Previously completed: {completed_methods}. "
-                    f"Current order of those methods: {completed_in_methods_to_run}. "
-                    "Restore the method order or start a new build."
-                )
 
         build_run_started_at: datetime = datetime.now()
 

@@ -1828,6 +1828,9 @@ class Routing(Module):
         else:
             routing_loss: np.float64 = np.float64(np.nan)
             total_inflow_m3 = np.float64(np.nan)
+            total_evaporation_in_rivers_m3: np.float64 = np.float64(np.nan)
+            total_waterbody_evaporation_m3: np.float64 = np.float64(np.nan)
+            total_outflow_at_pits_m3: np.float64 = np.float64(np.nan)
 
         self.report(locals())
 
