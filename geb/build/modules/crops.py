@@ -24,6 +24,7 @@ from geb.workflows.raster import (
     get_linear_indices,
     get_neighbor_cell_ids_for_linear_indices,
     interpolate_na_2d,
+    pad_xy,
     sample_from_map,
     snap_to_grid,
 )
@@ -1301,7 +1302,11 @@ class Crops(BuildModelBase):
 
                     crop_map = crop_map.isel(
                         get_window(
-                            crop_map.x, crop_map.y, self.bounds, buffer=100
+                            crop_map.x,
+                            crop_map.y,
+                            self.bounds,
+                            buffer=100,
+                            raise_on_buffer_out_of_bounds=False,
                         )  # use a very large buffer so that we use don't get edge effects in the interpolation
                     ).compute()
 
@@ -1310,6 +1315,16 @@ class Crops(BuildModelBase):
                     if reference is None:
                         reference = crop_map.copy()
                     else:
+                        # some maps are smaller than the reference, so we need to pad them
+                        # with np.nan values, so that they can be combined in one dataset.
+                        crop_map = pad_xy(
+                            crop_map,
+                            reference.x[0],
+                            reference.y[0],
+                            reference.x[-1],
+                            reference.y[-1],
+                            constant_values=np.nan,
+                        )
                         crop_map = snap_to_grid(crop_map, reference)
 
                     crop_map = interpolate_na_2d(crop_map)
