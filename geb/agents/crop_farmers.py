@@ -3701,7 +3701,7 @@ class CropFarmers(AgentBaseClass):
                 "risk_perception": self.var.risk_perception.data,
                 "total_annual_costs": total_annual_costs_m2.data,
                 "adaptation_costs": annual_cost_m2,
-                "adapted": adapted,
+                "adapted": adapted.data,
                 "time_adapted": self.var.time_adapted[:, adaptation_type].data,
                 "T": np.full(
                     self.var.n,
