@@ -17,7 +17,7 @@ body:
     id: steps
     attributes:
       label: Steps to Reproduce
-      description: Please provide the steps to reproduce the behavior. Include your build.yml and config.yml if useful.
+      description: Please provide the steps to reproduce the behavior. Include your build.yml and config.yml below if a model must be build to reproduce the issue.
       placeholder: |
         1. Run 'geb build' with config '...' (see attached config file)
         2. ...
@@ -28,7 +28,7 @@ body:
     attributes:
       label: model.yml
       description: |
-        Please attach or paste the contents of your `model.yml` file.
+        Please attach or paste the contents of your `model.yml` file if a model must be build to reproduce the issue.
         You can drag and drop the file directly into this text box.
       render: yaml
   - type: textarea
@@ -36,7 +36,7 @@ body:
     attributes:
       label: build.yml
       description: |
-        Please attach or paste the contents of your `build.yml` file.
+        Please attach or paste the contents of your `build.yml` file if a model must be build to reproduce the issue.
         You can drag and drop the file directly into this text box.
       render: yaml
   - type: textarea
