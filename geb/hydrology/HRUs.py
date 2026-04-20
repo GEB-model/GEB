@@ -594,23 +594,17 @@ class Grid(BaseVariables):
     @property
     def pr_gev_c(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
-        return self.load2d(
-            self.model.files["other"]["climate/pr_gev_c"], compress=False
-        )
+        return read_zarr(self.model.files["other"]["climate/pr_gev_c"])
 
     @property
     def pr_gev_loc(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
-        return self.load2d(
-            self.model.files["other"]["climate/pr_gev_loc"], compress=False
-        )
+        return read_zarr(self.model.files["other"]["climate/pr_gev_loc"])
 
     @property
     def pr_gev_scale(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
-        return self.load2d(
-            self.model.files["other"]["climate/pr_gev_scale"], compress=False
-        )
+        return read_zarr(self.model.files["other"]["climate/pr_gev_scale"])
 
 
 class HRUVariables(Bucket):
