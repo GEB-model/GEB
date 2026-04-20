@@ -18,6 +18,7 @@
 - Enable automatic delta compression of time coordinates in zarr files.
 - Reduce RAM usage for models with a complex coastline.
 - Fix for differently sized crop maps from MIRCA-OS that led to issues where maps in regions where some maps did not overlap.
+- Fix for interpolation of MICRA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765))
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
