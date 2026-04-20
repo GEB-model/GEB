@@ -1651,16 +1651,21 @@ class MultipleSFINCSSimulations:
         for simulation in self.simulations:
             simulation.run(ncpus=ncpus, gpu=gpu)
 
-    def read_max_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
+    def read_max_flood_depth(
+        self, minimum_flood_depth: float | int, split_coastal: bool
+    ) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
 
         Args:
             minimum_flood_depth: Minimum flood depth to consider in the output.
+            split_coastal: Whether to split the flood depth map into coastal and inland components.
 
         Returns:
             An xarray DataArray containing the maximum flood depth.
         """
         flood_depths: list[xr.DataArray] = []
+        if split_coastal:
+            coastal_flood_depths: list[xr.DataArray] = []
         for simulation in self.simulations:
             simulation_max_flood_depth: xr.DataArray = simulation.read_max_flood_depth(
                 minimum_flood_depth
@@ -1669,16 +1674,38 @@ class MultipleSFINCSSimulations:
             simulation_max_flood_depth = simulation_max_flood_depth.isel(
                 y=slice(None, None, -1)
             )
-            flood_depths.append(simulation_max_flood_depth)
+            if not split_coastal:
+                flood_depths.append(simulation_max_flood_depth)
+            elif split_coastal and simulation.is_coastal:
+                coastal_flood_depths.append(simulation_max_flood_depth)
+            elif split_coastal and not simulation.is_coastal:
+                flood_depths.append(simulation_max_flood_depth)
+        if not split_coastal:
+            rp_map: xr.DataArray = merge_arrays(flood_depths, method="max")
+            rp_map = rp_map.isel(
+                y=slice(None, None, -1)
+            )  # flip back to original orientation
 
-        rp_map: xr.DataArray = merge_arrays(flood_depths, method="max")
-        rp_map = rp_map.isel(
-            y=slice(None, None, -1)
-        )  # flip back to original orientation
+            assert rp_map.rio.crs is not None
 
-        assert rp_map.rio.crs is not None
+            return rp_map
+        else:
+            coastal_rp_map: xr.DataArray = merge_arrays(
+                coastal_flood_depths, method="max"
+            )
+            coastal_rp_map = coastal_rp_map.isel(
+                y=slice(None, None, -1)
+            )  # flip back to original orientation
 
-        return rp_map
+            inland_rp_map: xr.DataArray = merge_arrays(flood_depths, method="max")
+            inland_rp_map = inland_rp_map.isel(
+                y=slice(None, None, -1)
+            )  # flip back to original orientation
+
+            assert coastal_rp_map.rio.crs is not None
+            assert inland_rp_map.rio.crs is not None
+
+            return coastal_rp_map, inland_rp_map
 
     def cleanup(self) -> None:
         """Cleans up all simulation directories."""
