@@ -13,16 +13,21 @@
 - Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
 - Fix all typing issues.
 - Enable better compression for any table-like data. Mostly targets GTSM data that is now better compressed.
-
-To support this version:
-- Remove `setup_irrigation_sources` from build.yml.
-
-# v1.0.0b21
 - All agricultural insurances premiums and insured yields are now determined by a new insurer agent named "insurers". The adaptation itself is still within crop_farmers. For index and precipitation insurance functions have been added to estimate candidate spaces for the potential contracts have been added. These estimate strike, exit and rates from the index and income/loss data. Additional insurers functionalities can be added to this agent now. 
-- A hydrological year start parameter has been added. This is a simple variable under "general" in the model.yml that indicates which month of the year the hydrological year starts. The base variable is 1 (january). Crop_farmers, livestock_farmers, market reservoir_operators, waterbodies and insurers take yearly actions at the start of the hydrological year. 
+- A hydrological year start month parameter has been added. This is a simple variable under "general" in the model.yml that indicates which month of the year the hydrological year starts. The base variable is 1 (january). Crop_farmers, livestock_farmers, market reservoir_operators, waterbodies and insurers take yearly actions at the start of the hydrological year. 
 - setup_waterbodies has a new functionality where it can create reservoir command areas just based on the hydrology and reservoirs using the calculate_command_areas setting. 
 - Bug fix where unify_crop_variants did not work for farmers for crop rotations with more than 1 crop. 
 - self.var.adaptations is now a boolean array. Run `geb update -b build.yml::setup_farmer_crop_calendar` for it to become boolean. 
+- setup_SPEI and setup_pr_GEV had issues with the grids not properly being assigned the actual GEV values. Rerun `geb update -b build.yml::setup_SPEI` and `geb update -b build.yml::setup_pr_GEV` to update
+
+To support this version:
+- Remove `setup_irrigation_sources` from build.yml.
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.
+
+# v1.0.0b21
+
 
 # v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
