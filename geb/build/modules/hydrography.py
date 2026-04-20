@@ -18,6 +18,7 @@ from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
+from geb.build.workflows.command_areas import derive_command_areas_from_routing
 from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
     ArrayBool,
@@ -1264,198 +1265,19 @@ class Hydrography(BuildModelBase):
             )
 
         elif calculate_command_areas:
-
-            def downstream_chain(
-                start_id: int,
-                next_seg: dict[int, float],
-            ) -> list[int]:
-                """Build the downstream segment chain from a starting river segment.
-
-                Follow the ``downstream_ID`` links from a starting segment along
-                the main stem of the routing network.
-
-                Notes:
-                    The traversal stops when a missing downstream segment is
-                    encountered, when a segment is not present in the mapping, or
-                    when a cycle would occur.
-
-                Args:
-                    start_id: Identifier of the starting river segment.
-                    next_seg: Mapping from segment identifier to its direct
-                        downstream segment.
-
-                Returns:
-                    Ordered list of downstream segment identifiers, starting from
-                    the first downstream segment of ``start_id``.
-                """
-                chain: list[int] = []
-                current: int = start_id
-                seen: set[int] = set()  # avoid infinite loops in case of cycles
-
-                while True:
-                    nxt = next_seg.get(current, np.nan)
-                    # stop conditions:
-                    if pd.isna(nxt) or nxt not in next_seg or nxt in seen:
-                        break
-                    nxt_int = int(nxt)
-                    chain.append(nxt_int)
-                    seen.add(nxt_int)
-                    current = nxt_int
-
-                return chain
-
-            # Determine all downstream cells of rivers
-            rivers = self.geom["routing/rivers"]
-            next_seg = rivers["downstream_ID"].to_dict()
-            rivers["all_downstream_ids"] = [
-                downstream_chain(comid, next_seg) for comid in rivers.index
-            ]
-            # Determine waterbodies that are reservoirs
-            reservoir_mask = waterbodies["waterbody_type"] == 2
-            reservoirs = waterbodies[reservoir_mask]
-
-            if reservoirs.crs != rivers.crs:
-                reservoirs = reservoirs.to_crs(rivers.crs)
-
-            # add waterbody_id to rivers where they intersect a reservoir
-            rivers = gpd.sjoin(
-                rivers,
-                reservoirs[["waterbody_id", "geometry"]],
-                how="left",
-                predicate="intersects",
-            )
-            rivers = rivers.reset_index().rename(columns={"index": "COMID"})
-            # Attach volume_total for tie-breaking between multiple intersecting reservoirs
-            rivers = rivers.merge(
-                reservoirs[["waterbody_id", "volume_total"]],
-                on="waterbody_id",
-                how="left",
-            )
-            # If a river segment (COMID) appears multiple times, keep the row with the largest reservoir volume
-            rivers = rivers.sort_values(
-                "volume_total", ascending=False
-            ).drop_duplicates(subset="COMID", keep="first")
-            # Restore COMID as index and drop sjoin helper column
-            rivers = rivers.set_index("COMID").drop(columns=["index_right"])
-
-            # Columns to track state per segment
-            rivers["waterbody_id_propagated"] = np.nan
-            has_reservoir = rivers["waterbody_id"].notna()
-
-            # Loop from up to downstream and set all downstream river values with relevant reservoir id
-            rivers["n_downstream"] = rivers["all_downstream_ids"].str.len()
-            reservoir_segments = rivers[has_reservoir].sort_values(
-                "n_downstream",
-                ascending=False,  # upstream → downstream
-            )
-            wb_volume = reservoirs.set_index("waterbody_id")["volume_total"]
-            ratio_threshold = 3  # old must be 5 times bigger to be kept
-
-            for comid, row in reservoir_segments.iterrows():
-                wb_new = row["waterbody_id"]
-                vol_new = wb_volume.get(wb_new, np.nan)
-
-                # This segment + all its downstream segments
-                segs = [comid] + row["all_downstream_ids"]
-
-                for seg in segs:
-                    current_id = rivers.at[seg, "waterbody_id_propagated"]
-
-                    # If nothing assigned yet → just take this one
-                    if pd.isna(current_id):
-                        rivers.at[seg, "waterbody_id_propagated"] = wb_new
-                        continue
-
-                    # Look up old volume
-                    vol_old = wb_volume.get(current_id, np.nan)
-
-                    # If we don't know the old volume but know the new → overwrite
-                    if pd.isna(vol_old) and not pd.isna(vol_new):
-                        rivers.at[seg, "waterbody_id_propagated"] = wb_new
-                        continue
-
-                    # If we don't know the new volume → keep old
-                    if pd.isna(vol_new):
-                        continue
-
-                    # If old reservoir is at least threshold x bigger → keep old
-                    if vol_old >= ratio_threshold * vol_new:
-                        continue
-                    rivers.at[seg, "waterbody_id_propagated"] = wb_new
-
-            # map the reservoir ids to whole model cells
-            basin_ids = self.grid["routing/basin_ids"]
-            s_map = rivers["waterbody_id_propagated"]
-
-            mask_nans = ~np.isnan(s_map)
-            only_reservoir_rivers = s_map[
-                mask_nans
-            ]  # Series: index = COMID, value = wb_id (float)
-
             from geb.build import get_river_graph
 
-            river_graph = get_river_graph(self.new_data_catalog)
-            river_graph_rev = river_graph.reverse(copy=False)
-            max_upstream_hops = 30
+            river_graph = get_river_graph(self.data_catalog)
 
-            unique_wb_ids = only_reservoir_rivers.unique()
-            volumes_for_used = wb_volume.reindex(unique_wb_ids)
-            wb_ids_sorted = volumes_for_used.sort_values().index.to_list()
-
-            for wb_id in wb_ids_sorted:
-                comid_series = only_reservoir_rivers[only_reservoir_rivers == wb_id]
-                seed_comids = comid_series.index.to_list()
-
-                upstream_comids: set[int] = set()
-
-                for sid in seed_comids:
-                    if sid not in river_graph_rev:
-                        continue
-
-                    lengths = nx.single_source_shortest_path_length(
-                        river_graph_rev,
-                        sid,
-                        cutoff=max_upstream_hops,
-                    )
-
-                    upstream_comids |= {
-                        node for node, dist in lengths.items() if dist > 0
-                    }
-
-                for cid in upstream_comids:
-                    if cid in rivers.index and pd.isna(
-                        rivers.at[cid, "waterbody_id_propagated"]
-                    ):
-                        rivers.at[cid, "waterbody_id_propagated"] = wb_id
-
-            smap_extended = rivers["waterbody_id_propagated"]
-            flat_ids = basin_ids.values.ravel()
-            mapped_flat = smap_extended.reindex(flat_ids).to_numpy()
-            mapped_flat[np.isnan(mapped_flat)] = -1
-
-            # Map to grid and subgrid grids
-            mapped_reservoirs_grid = mapped_flat.reshape(basin_ids.shape).astype(
-                "int32"
+            command_areas, subcommand_areas = derive_command_areas_from_routing(
+                waterbodies=waterbodies,
+                rivers=self.geom["routing/rivers"],
+                basin_ids=self.grid["routing/basin_ids"],
+                grid_mask=self.grid["mask"],
+                subgrid_mask=self.subgrid["mask"],
+                subgrid_factor=self.subgrid_factor,
+                river_graph=river_graph,
             )
-            mapped_reservoirs_subgrid = mapped_reservoirs_grid.repeat(
-                self.subgrid_factor, axis=0
-            ).repeat(self.subgrid_factor, axis=1)
-
-            command_areas: xr.DataArray = self.full_like(
-                self.grid["mask"],
-                fill_value=-1,
-                nodata=-1,
-                dtype=np.int32,
-            )
-            subcommand_areas: xr.DataArray = self.full_like(
-                self.subgrid["mask"],
-                fill_value=-1,
-                nodata=-1,
-                dtype=np.int32,
-            )
-
-            command_areas.data = mapped_reservoirs_grid
-            subcommand_areas.data = mapped_reservoirs_subgrid
 
         else:
             command_areas: xr.DataArray = self.full_like(
