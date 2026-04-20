@@ -1319,10 +1319,10 @@ class Crops(BuildModelBase):
                         # with np.nan values, so that they can be combined in one dataset.
                         crop_map = pad_xy(
                             crop_map,
-                            reference.x[0],
-                            reference.y[0],
-                            reference.x[-1],
-                            reference.y[-1],
+                            reference.x[0].item(),
+                            reference.y[0].item(),
+                            reference.x[-1].item(),
+                            reference.y[-1].item(),
                             constant_values=np.nan,
                         )
                         crop_map = snap_to_grid(crop_map, reference)
