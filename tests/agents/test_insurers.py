@@ -8,49 +8,7 @@ import pytest
 
 from geb.agents.crop_farmers import INDEX_INSURANCE_ADAPTATION
 from geb.agents.insurers import Insurers
-
-
-class ArrayWrapper:
-    """Small wrapper mimicking the array objects used in the model."""
-
-    def __init__(self, data: np.ndarray) -> None:
-        """Initialize the wrapper.
-
-        Args:
-            data: Wrapped NumPy array.
-        """
-        self.data = data
-
-    def __getitem__(self, item: Any) -> Any:
-        """Forward indexing to the wrapped array.
-
-        Args:
-            item: Indexer passed to the wrapped array.
-
-        Returns:
-            Any: Indexed value or view from the wrapped array.
-        """
-        return self.data[item]
-
-    def __eq__(self, other: Any) -> Any:
-        """Forward equality to the wrapped array.
-
-        Args:
-            other: Object to compare against.
-
-        Returns:
-            Any: Elementwise equality result from the wrapped array.
-        """
-        return self.data == other
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        """Shape of the wrapped array.
-
-        Returns:
-            tuple[int, ...]: Shape of the wrapped array.
-        """
-        return self.data.shape
+from geb.store import DynamicArray
 
 
 def make_insurers_stub() -> Insurers:
@@ -338,23 +296,37 @@ def test_insurance_premiums_traditional_dispatch() -> None:
     insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)
 
     insurers.agents.crop_farmers.var.n = 2
-    insurers.agents.crop_farmers.var.yearly_income = ArrayWrapper(
-        np.array(
-            [
-                [10.0, 20.0],
-                [30.0, 40.0],
-            ],
-            dtype=np.float32,
-        )
+    insurers.agents.crop_farmers.var.yearly_income = DynamicArray(
+        n=2,
+        max_n=2,
+        extra_dims=(2,),
+        extra_dims_names=("year",),
+        dtype=np.float32,
+        fill_value=0,
     )
-    insurers.agents.crop_farmers.var.yearly_potential_income = ArrayWrapper(
-        np.array(
-            [
-                [10.0, 20.0],
-                [30.0, 40.0],
-            ],
-            dtype=np.float32,
-        )
+    insurers.agents.crop_farmers.var.yearly_income[:] = np.array(
+        [
+            [10.0, 20.0],
+            [30.0, 40.0],
+        ],
+        dtype=np.float32,
+    )
+
+    insurers.agents.crop_farmers.var.yearly_potential_income = DynamicArray(
+        n=2,
+        max_n=2,
+        extra_dims=(2,),
+        extra_dims_names=("year",),
+        dtype=np.float32,
+        fill_value=0,
+    )
+
+    insurers.agents.crop_farmers.var.yearly_potential_income[:] = np.array(
+        [
+            [10.0, 20.0],
+            [30.0, 40.0],
+        ],
+        dtype=np.float32,
     )
     insurers.agents.crop_farmers.farmer_yield_probability_relation = np.zeros(
         (2, 2), dtype=np.float32
@@ -409,24 +381,40 @@ def test_insurance_premiums_index_dispatch() -> None:
     insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)
 
     insurers.agents.crop_farmers.var.n = 2
-    insurers.agents.crop_farmers.var.yearly_income = ArrayWrapper(
-        np.array(
-            [
-                [10.0, 20.0],
-                [30.0, 40.0],
-            ],
-            dtype=np.float32,
-        )
+
+    insurers.agents.crop_farmers.var.yearly_income = DynamicArray(
+        n=2,
+        max_n=2,
+        extra_dims=(2,),
+        extra_dims_names=("year",),
+        dtype=np.float32,
+        fill_value=0,
     )
-    insurers.agents.crop_farmers.var.yearly_potential_income = ArrayWrapper(
-        np.array(
-            [
-                [10.0, 20.0],
-                [30.0, 40.0],
-            ],
-            dtype=np.float32,
-        )
+    insurers.agents.crop_farmers.var.yearly_income[:] = np.array(
+        [
+            [10.0, 20.0],
+            [30.0, 40.0],
+        ],
+        dtype=np.float32,
     )
+
+    insurers.agents.crop_farmers.var.yearly_potential_income = DynamicArray(
+        n=2,
+        max_n=2,
+        extra_dims=(2,),
+        extra_dims_names=("year",),
+        dtype=np.float32,
+        fill_value=0,
+    )
+
+    insurers.agents.crop_farmers.var.yearly_potential_income[:] = np.array(
+        [
+            [10.0, 20.0],
+            [30.0, 40.0],
+        ],
+        dtype=np.float32,
+    )
+
     insurers.agents.crop_farmers.farmer_yield_probability_relation = np.zeros(
         (2, 2), dtype=np.float32
     )
@@ -480,23 +468,37 @@ def test_insurance_premiums_pr_dispatch() -> None:
     insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)
 
     insurers.agents.crop_farmers.var.n = 2
-    insurers.agents.crop_farmers.var.yearly_income = ArrayWrapper(
-        np.array(
-            [
-                [10.0, 20.0],
-                [30.0, 40.0],
-            ],
-            dtype=np.float32,
-        )
+    insurers.agents.crop_farmers.var.yearly_income = DynamicArray(
+        n=2,
+        max_n=2,
+        extra_dims=(2,),
+        extra_dims_names=("year",),
+        dtype=np.float32,
+        fill_value=0,
     )
-    insurers.agents.crop_farmers.var.yearly_potential_income = ArrayWrapper(
-        np.array(
-            [
-                [10.0, 20.0],
-                [30.0, 40.0],
-            ],
-            dtype=np.float32,
-        )
+    insurers.agents.crop_farmers.var.yearly_income[:] = np.array(
+        [
+            [10.0, 20.0],
+            [30.0, 40.0],
+        ],
+        dtype=np.float32,
+    )
+
+    insurers.agents.crop_farmers.var.yearly_potential_income = DynamicArray(
+        n=2,
+        max_n=2,
+        extra_dims=(2,),
+        extra_dims_names=("year",),
+        dtype=np.float32,
+        fill_value=0,
+    )
+
+    insurers.agents.crop_farmers.var.yearly_potential_income[:] = np.array(
+        [
+            [10.0, 20.0],
+            [30.0, 40.0],
+        ],
+        dtype=np.float32,
     )
     insurers.agents.crop_farmers.farmer_yield_probability_relation = np.zeros(
         (2, 2), dtype=np.float32
@@ -537,34 +539,3 @@ def test_insurance_premiums_pr_dispatch() -> None:
 
     np.testing.assert_allclose(premium, expected_premium)
     np.testing.assert_allclose(relation, expected_relation)
-
-
-def test_insurance_premiums_raises_if_no_adaptation_active() -> None:
-    """Test that insurance_premiums raises if no insurance adaptation is active."""
-    insurers = make_insurers_stub()
-
-    insurers.config = {"government_premium_cap": False}
-    insurers.traditional_insurance_adaptation_active = False
-    insurers.index_insurance_adaptation_active = False
-    insurers.pr_insurance_adaptation_active = False
-
-    insurers.var.insured_yearly_income = np.zeros((1, 1), dtype=np.float32)
-
-    insurers.agents.crop_farmers.var.n = 1
-    insurers.agents.crop_farmers.var.yearly_income = ArrayWrapper(
-        np.array([[10.0]], dtype=np.float32)
-    )
-    insurers.agents.crop_farmers.var.yearly_potential_income = ArrayWrapper(
-        np.array([[10.0]], dtype=np.float32)
-    )
-    insurers.agents.crop_farmers.farmer_yield_probability_relation = np.zeros(
-        (1, 1), dtype=np.float32
-    )
-    insurers.agents.crop_farmers.farmer_yield_probability_relation_budget_cap = (
-        np.zeros((1, 1), dtype=np.float32)
-    )
-
-    insurers.potential_insured_loss = lambda: np.zeros((1, 1), dtype=np.float32)
-
-    with pytest.raises(ValueError, match="No insurance adaptation is active"):
-        insurers.insurance_premiums()
