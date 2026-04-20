@@ -2215,7 +2215,7 @@ class Crops(BuildModelBase):
             available_crops_irrigated = np.unique(available_crops[is_irrigated])
             available_crops_rainfed = np.unique(available_crops[~is_irrigated])
 
-            # Remove crops that are not available for neither rainfed nor irrigated
+            # Remove crops that are not available for either rainfed or irrigated
             available_crops_mask_rainfed = np.zeros_like(
                 farmer_crop_rainfed_fractions, dtype=bool
             )
