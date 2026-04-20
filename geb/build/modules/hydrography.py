@@ -1269,16 +1269,32 @@ class Hydrography(BuildModelBase):
 
             river_graph = get_river_graph(self.data_catalog)
 
-            command_areas, subcommand_areas = derive_command_areas_from_routing(
-                waterbodies=waterbodies,
-                rivers=self.geom["routing/rivers"],
-                basin_ids=self.grid["routing/basin_ids"],
-                grid_mask=self.grid["mask"],
-                subgrid_mask=self.subgrid["mask"],
-                subgrid_factor=self.subgrid_factor,
-                river_graph=river_graph,
+            mapped_reservoirs_grid, mapped_reservoirs_subgrid = (
+                derive_command_areas_from_routing(
+                    waterbodies=waterbodies,
+                    rivers=self.geom["routing/rivers"],
+                    basin_ids=self.grid["routing/basin_ids"],
+                    grid_mask=self.grid["mask"],
+                    subgrid_mask=self.subgrid["mask"],
+                    subgrid_factor=self.subgrid_factor,
+                    river_graph=river_graph,
+                )
             )
+            command_areas = self.full_like(
+                self.grid["mask"],
+                fill_value=-1,
+                nodata=-1,
+                dtype=np.int32,
+            )
+            command_areas.data = mapped_reservoirs_grid
 
+            subcommand_areas = self.full_like(
+                self.subgrid["mask"],
+                fill_value=-1,
+                nodata=-1,
+                dtype=np.int32,
+            )
+            subcommand_areas.data = mapped_reservoirs_subgrid
         else:
             command_areas: xr.DataArray = self.full_like(
                 self.grid["mask"],

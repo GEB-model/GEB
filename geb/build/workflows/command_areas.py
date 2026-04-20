@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from geb.geb_types import TwoDArrayInt32
 from geb.hydrology.waterbodies import RESERVOIR
 
 COMMAND_AREA_NODATA = -1
@@ -58,7 +59,7 @@ def derive_command_areas_from_routing(
     subgrid_mask: xr.DataArray,
     subgrid_factor: int,
     river_graph: nx.DiGraph,
-) -> tuple[xr.DataArray, xr.DataArray]:
+) -> tuple[TwoDArrayInt32, TwoDArrayInt32]:
     """Derive reservoir command-area rasters from the routing network.
 
     Reservoirs are used as command-area sources. River segments intersecting a
@@ -201,56 +202,4 @@ def derive_command_areas_from_routing(
         axis=1,
     )
 
-    command_areas = xr.full_like(
-        grid_mask,
-        fill_value=COMMAND_AREA_NODATA,
-        dtype=np.int32,
-    )
-    command_areas.data = mapped_reservoirs_grid
-
-    subcommand_areas = xr.full_like(
-        subgrid_mask,
-        fill_value=COMMAND_AREA_NODATA,
-        dtype=np.int32,
-    )
-    subcommand_areas.data = mapped_reservoirs_subgrid
-
-    return command_areas, subcommand_areas
-
-
-def get_command_areas_from_routing(
-    waterbodies: gpd.GeoDataFrame,
-    rivers: gpd.GeoDataFrame,
-    basin_ids: xr.DataArray,
-    grid_mask: xr.DataArray,
-    subgrid_mask: xr.DataArray,
-    subgrid_factor: int,
-    new_data_catalog: object,
-) -> tuple[xr.DataArray, xr.DataArray]:
-    """Wrapper that builds the river graph and derives command areas.
-
-    Args:
-        waterbodies: Waterbody geometries and attributes.
-        rivers: River routing geometries indexed by COMID.
-        basin_ids: Grid of routing basin identifiers matching river COMIDs.
-        grid_mask: Grid mask used to construct the output command-area raster.
-        subgrid_mask: Subgrid mask used to construct the output subcommand-area
-            raster.
-        subgrid_factor: Integer refinement factor between grid and subgrid.
-        new_data_catalog: Data catalog used to build the river graph.
-
-    Returns:
-        Tuple containing:
-            - command-area raster on the model grid
-            - command-area raster on the model subgrid
-    """
-    river_graph = get_river_graph(new_data_catalog)
-    return derive_command_areas_from_routing(
-        waterbodies=waterbodies,
-        rivers=rivers,
-        basin_ids=basin_ids,
-        grid_mask=grid_mask,
-        subgrid_mask=subgrid_mask,
-        subgrid_factor=subgrid_factor,
-        river_graph=river_graph,
-    )
+    return mapped_reservoirs_grid, mapped_reservoirs_subgrid
