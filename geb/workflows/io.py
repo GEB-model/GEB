@@ -40,6 +40,7 @@ from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.codecs import BloscCodec
+from zarr.codecs.numcodecs import Delta, _NumcodecsBytesBytesCodec
 from zarr.codecs.zstd import ZstdCodec
 from zarr.errors import ZarrUserWarning
 
@@ -76,12 +77,12 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
     Raises:
         ValueError: If the DataFrame contains unsupported column types.
     """
-    table = pa.Table.from_pandas(df)
+    table: pa.Table = pa.Table.from_pandas(df)
 
-    int_and_dt_cols = []
-    bool_cols = []
-    float_cols = []
-    dict_cols = []
+    int_and_dt_cols: list[str] = []
+    bool_cols: list[str] = []
+    float_cols: list[str] = []
+    dict_cols: list[str] = []
 
     for n, t in zip(table.schema.names, table.schema.types):
         if pa.types.is_integer(t) or pa.types.is_timestamp(t):
@@ -102,6 +103,13 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
     for col in bool_cols:
         column_encoding[col] = "RLE"
 
+    # Estimate row group size to target ~100 MB per row group (uncompressed)
+    # 100 MB / bytes per row
+    bytes_per_row: int = table.nbytes // max(len(table), 1)
+    target_row_group_size = int(100 * 1024 * 1024 / max(bytes_per_row, 1))
+    target_row_group_size: int = min(target_row_group_size, len(table))
+    target_row_group_size: int = max(target_row_group_size, 1)
+
     pq.write_table(
         table,
         fp,
@@ -111,10 +119,8 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
         column_encoding=column_encoding,
         use_byte_stream_split=float_cols,
         data_page_version="2.0",
-        row_group_size=min(max(len(table), 1), 1_000_000),
+        row_group_size=target_row_group_size,
         data_page_size=10_000_000,  # Larger page size for better compression
-        write_page_index=False,  # Removes extra metadata overhead
-        write_statistics=False,  # Removes min/max/null count storage
     )
 
 
@@ -746,6 +752,7 @@ def write_zarr(
     shards: dict[str, int] | None = None,
     filters: list | None = None,
     compression_level: int = 18,
+    pre_compressor: _NumcodecsBytesBytesCodec | None = None,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
@@ -759,6 +766,7 @@ def write_zarr(
             shards. Default is None.
         filters: A list of filters to apply. Default is [].
         compression_level: The level of compression for the ZSTD compressor (1-22). Default is 18.
+        pre_compressor: An optional compressor to apply before the main compressor. Default is None.
         progress: Whether to show a progress bar. Default is True.
 
     Returns:
@@ -846,10 +854,16 @@ def write_zarr(
         storage_chunks = tuple(chunk_spec[str(dim)] for dim in da.dims)
 
         array_encoding: dict[str, Any] = {
-            "compressors": (compressor,),
             "chunks": storage_chunks,
             "filters": filters,
         }
+        if pre_compressor is not None:
+            array_encoding["compressors"] = (
+                pre_compressor,
+                compressor,
+            )
+        else:
+            array_encoding["compressors"] = (compressor,)
 
         if shard_spec is not None:
             storage_shards = tuple(shard_spec[str(dim)] for dim in da.dims)
@@ -863,15 +877,42 @@ def write_zarr(
                 "chunks": (da.coords[coord].size,),
             }
 
-        da.to_zarr(
-            store=tmp_zarr,
-            mode="w",
-            encoding=encoding,
-            zarr_format=3,
-            consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
-            write_empty_chunks=True,
-            compute=False,
-        )
+        if "time" in da.coords:
+            # apply delta encoding to time coordinates, which are often more compressible with this encoding
+            maximum_difference = np.abs(np.diff(da.coords["time"])).max().item()
+            if maximum_difference > np.iinfo("i4").max:
+                dtype_to_encode_time = "i8"
+            elif maximum_difference > np.iinfo("i2").max:
+                dtype_to_encode_time = "i4"
+            elif maximum_difference > np.iinfo("i1").max:
+                dtype_to_encode_time = "i2"
+            else:
+                dtype_to_encode_time = "i1"
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=ZarrUserWarning,
+                    message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
+                )
+                encoding["time"]["filters"] = [
+                    Delta(dtype="i8", astype=dtype_to_encode_time)
+                ]
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=ZarrUserWarning,
+                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
+            )
+            da.to_zarr(
+                store=tmp_zarr,
+                mode="w",
+                encoding=encoding,
+                zarr_format=3,
+                consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
+                write_empty_chunks=True,
+                compute=False,
+            )
 
         # Open the target array in the Zarr store for writing
         target = zarr.open_array(

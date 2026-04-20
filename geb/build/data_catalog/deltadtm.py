@@ -24,7 +24,7 @@ import xarray as xr
 from shapely.geometry.base import BaseGeometry
 
 from geb.workflows.io import fetch_and_save
-from geb.workflows.raster import clip_with_geometry, convert_nodata
+from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
@@ -74,17 +74,15 @@ class DeltaDTM(Adapter):
         # download the DeltaDTM tiles geopackage
         url_delta_dtm_tiles = "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/60a69899-2e67-4f9f-8761-3b57094acd12"
         self.root.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory() as temp_dir_str:
-            temp_dir: Path = Path(temp_dir_str)
-            filepath = temp_dir / "delta_dtm_tiles.gpkg"
-            success = fetch_and_save(
-                url=url_delta_dtm_tiles,
-                file_path=filepath,
-            )
-            if not success:
-                raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
-            # load the geopackage
-            gdf_tiles = gpd.read_file(filepath)
+        filepath = self.root / "delta_dtm_tiles.gpkg"
+        success = fetch_and_save(
+            url=url_delta_dtm_tiles,
+            file_path=filepath,
+        )
+        if not success:
+            raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
+        # load the geopackage
+        gdf_tiles = gpd.read_file(filepath)
         # get the tiles that intersect with the model bounds, with a buffer (0.4 degrees)
         buffered_mask = mask.buffer(0.4)
         xmin, ymin, xmax, ymax = buffered_mask.bounds
@@ -138,9 +136,8 @@ class DeltaDTM(Adapter):
             # so data is not read until computed. Loading here ensures all tile data
             # is in memory before the temp directory (and its .tif files) is deleted.
             da = da.load()
-
-        da = convert_nodata(da, np.nan)
-        return da
+            da = convert_nodata(da, np.nan)
+            return da
 
     def _merge_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
         """Merge extracted DeltaDTM tiles into a single xarray DataArray.
@@ -224,10 +221,4 @@ class DeltaDTM(Adapter):
             The downloaded DeltaDTM data.
         """
         da = self.unpack_and_merge_tiles(self.continents_to_download, self.tile_names)
-        da = clip_with_geometry(
-            da,
-            gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
-            all_touched=True,
-            drop=True,
-        )
         return da

@@ -477,9 +477,7 @@ class Agents(BuildModelBase):
                 self.logger.info(f"Skipping {iso3}")
                 continue
 
-            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg", region=code).read(
-                code
-            )
+            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg").read(code)
 
             # combine wealth/income into one index
             GLOPOP_S_region["wealth_index"] = (
@@ -1511,11 +1509,9 @@ class Agents(BuildModelBase):
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
         # load region mask
         mask = self.region.union_all()
-        buildings = self.data_catalog.fetch(
-            "open_building_map",
+        buildings = self.data_catalog.fetch("open_building_map").read(
             geom=mask,
-            prefix="assets",
-        ).read()
+        )
         buildings = self.setup_building_reconstruction_costs(buildings)
 
         # reset id column to avoid issues with duplicate ids
@@ -1600,9 +1596,9 @@ class Agents(BuildModelBase):
         buildings["lat"] = centroids.y
 
         for _, GDL_region in GDL_regions.iterrows():
-            _, GLOPOP_GRID_region = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_region["GDLcode"]
-            ).read(GDL_region["GDLcode"])
+            _, GLOPOP_GRID_region = self.data_catalog.fetch("glopop-sg").read(
+                region=GDL_region["GDLcode"]
+            )
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
             # subset buildings to those within the GLOPOP_GRID_region
@@ -1716,7 +1712,7 @@ class Agents(BuildModelBase):
                 continue
 
             GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_code
+                "glopop-sg"
             ).read(GDL_code)
 
             # get size of household
@@ -1991,9 +1987,7 @@ class Agents(BuildModelBase):
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            GLOPOP_S_region, _ = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_region
-            ).read(GDL_region)
+            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg").read(GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(
