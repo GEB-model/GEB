@@ -104,92 +104,75 @@ def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:
     )
 
 
-@njit(cache=True)
 def to_grid(
     data: T_ArrayNumber,
-    grid_to_HRU: ArrayInt32,
+    HRU_to_grid: ArrayInt32,
     land_use_ratio: ArrayFloat32,
     fn: str = "weightedmean",
 ) -> T_ArrayNumber:
-    """Numba helper function to convert from HRU to grid.
+    """Convert HRU data to grid scale using vectorized numpy operations.
 
     Args:
         data: The HRU data to be converted (1D array).
-        grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-        land_use_ratio: Relative size of HRU to grid.
-        fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
+        HRU_to_grid: Array of size n_HRUs. Each value is the compressed grid cell index that the HRU belongs to.
+        land_use_ratio: Relative size of HRU to grid. Must sum to 1 per grid cell for `weightedmean`.
+        fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `weightedmean`, `sum`, `max` and `min`.
 
     Returns:
-        ouput_data: Data converted to grid.
+        output_data: Data converted to grid.
     """
-    output_data = np.empty(grid_to_HRU.size, dtype=data.dtype)
-
-    assert grid_to_HRU[0] != 0, (
-        "First value of grid_to_HRU cannot be 0. This would mean that the first HRU is empty."
-    )
-    assert grid_to_HRU[-1] == land_use_ratio.size, (
-        "The last value of grid_to_HRU must be equal to the size of land_use_ratio. Otherwise, the last HRU would not be used."
+    assert HRU_to_grid.size == land_use_ratio.size, (
+        "HRU_to_grid and land_use_ratio must have the same size."
     )
 
-    prev_index = 0
-    for i in range(grid_to_HRU.size):
-        cell_index = grid_to_HRU[i]
-        if fn == "weightedmean":
-            values = data[prev_index:cell_index]
-            weights = land_use_ratio[prev_index:cell_index]
-            output_data[i] = (values * weights).sum() / weights.sum()
-        elif fn == "weightednanmean":
-            values = data[prev_index:cell_index]
-            weights = land_use_ratio[prev_index:cell_index]
-            weights = weights[~np.isnan(values)]
-            values = values[~np.isnan(values)]
-            if values.size == 0:
-                output_data[i] = np.nan
-            else:
-                output_data[i] = (values * weights).sum() / weights.sum()
-        elif fn == "sum":
-            output_data[i] = np.sum(data[prev_index:cell_index])
-        elif fn == "nansum":
-            output_data[i] = np.nansum(data[prev_index:cell_index])
-        elif fn == "max":
-            output_data[i] = np.max(data[prev_index:cell_index])
-        elif fn == "nanmax":
-            output_data[i] = np.nanmax(data[prev_index:cell_index])
-        elif fn == "min":
-            output_data[i] = np.min(data[prev_index:cell_index])
-        elif fn == "nanmin":
-            output_data[i] = np.nanmin(data[prev_index:cell_index])
-        else:
-            raise NotImplementedError
-        prev_index = cell_index
-    return output_data  # ty:ignore[invalid-return-type]
+    n_grid_cells: int = int(HRU_to_grid.max()) + 1
+
+    if fn == "weightedmean":
+        # land_use_ratio sums to 1 per grid cell, so the weighted sum equals the weighted mean
+        return np.bincount(
+            HRU_to_grid, weights=data * land_use_ratio, minlength=n_grid_cells
+        )  # ty:ignore[invalid-return-type]
+    elif fn == "sum":
+        return np.bincount(HRU_to_grid, weights=data, minlength=n_grid_cells)  # ty:ignore[invalid-return-type]
+    elif fn == "max":
+        fill_value = (
+            -np.inf
+            if np.issubdtype(data.dtype, np.floating)
+            else np.iinfo(data.dtype).min  # ty:ignore[no-matching-overload]
+        )
+        output_data = np.full(n_grid_cells, fill_value, dtype=data.dtype)
+        np.maximum.at(output_data, HRU_to_grid, data)
+        return output_data  # ty:ignore[invalid-return-type]
+    elif fn == "min":
+        fill_value = (
+            np.inf
+            if np.issubdtype(data.dtype, np.floating)
+            else np.iinfo(data.dtype).max  # ty:ignore[no-matching-overload]
+        )
+        output_data = np.full(n_grid_cells, fill_value, dtype=data.dtype)
+        np.minimum.at(output_data, HRU_to_grid, data)
+        return output_data  # ty:ignore[invalid-return-type]
+    else:
+        raise NotImplementedError
 
 
-@njit(cache=True)
 def to_HRU(
     data: T_ArrayNumber,
-    grid_to_HRU: ArrayInt32,
-    output_data: T_ArrayNumber,
+    HRU_to_grid: ArrayInt32,
 ) -> T_ArrayNumber:
-    """Numba helper function to convert from grid to HRU.
+    """Convert grid data to HRU scale using fancy indexing.
+
+    Each HRU receives the value of its parent grid cell, identified by HRU_to_grid.
 
     Args:
-        data: The grid data to be converted.
-        grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-        output_data: Array to store the output data. Must be of size of the HRUs.
+        data: The grid data to be converted (1D array of compressed grid values).
+        HRU_to_grid: Array of size n_HRUs. Each value is the compressed grid cell index
+            that the HRU belongs to.
 
     Returns:
-        ouput_data: Data converted to HRUs.
+        output_data: Data converted to HRUs (1D array of size n_HRUs).
     """
-    assert grid_to_HRU[0] != 0
-    assert data.shape == grid_to_HRU.shape
-    prev_index = 0
-
-    for i in range(grid_to_HRU.size):
-        cell_index = grid_to_HRU[i]
-        output_data[prev_index:cell_index] = data[i]
-        prev_index = cell_index
-    return output_data
+    return data[HRU_to_grid]  # ty:ignore[invalid-return-type]
 
 
 class BaseVariables:
@@ -1370,42 +1353,21 @@ class Data:
         """
         assert not isinstance(data, list)
         if data.ndim == 1:
-            output_data = np.empty_like(self.HRU.var.land_use_ratio, dtype=data.dtype)
-            to_HRU(
-                data,
-                self.HRU.var.grid_to_HRU,
-                output_data=output_data,
-            )
+            output_data = to_HRU(data, self.HRU.var.HRU_to_grid)  # ty:ignore[invalid-argument-type]
         elif data.ndim == 2 and how == "first":
-            output_data = np.empty(
-                (self.HRU.var.land_use_ratio.size, *data.shape[1:]), dtype=data.dtype
-            )
-            for i in range(data.shape[1]):  # ty:ignore[index-out-of-bounds]
-                to_HRU(
-                    data[:, i],
-                    self.HRU.var.grid_to_HRU,
-                    output_data=output_data[:, i],
-                )
+            output_data = data[self.HRU.var.HRU_to_grid, :]
         elif data.ndim == 2 and how == "last":
-            output_data = np.empty(
-                (*data.shape[:-1], self.HRU.var.land_use_ratio.size), dtype=data.dtype
-            )
-            for i in range(data.shape[0]):
-                to_HRU(
-                    data[i, :],
-                    self.HRU.var.grid_to_HRU,
-                    output_data=output_data[i, :],
-                )
+            output_data = data[:, self.HRU.var.HRU_to_grid]
         else:
             raise NotImplementedError
-        return output_data
+        return output_data  # ty:ignore[invalid-return-type]
 
     def to_grid(self, *, HRU_data: np.ndarray, fn: str) -> np.ndarray:
         """Function to convert from HRUs to grid.
 
         Args:
             HRU_data: The HRU data to be converted (if set, varname cannot be set).
-            fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
+            fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `weightedmean`, `sum`, `max` and `min`.
 
         Returns:
             ouput_data: Data converted to grid units.
@@ -1419,7 +1381,7 @@ class Data:
         if HRU_data.ndim == 1:
             outdata = to_grid(
                 HRU_data,
-                self.HRU.var.grid_to_HRU,
+                self.HRU.var.HRU_to_grid,
                 self.HRU.var.land_use_ratio,
                 fn,
             )
@@ -1432,7 +1394,7 @@ class Data:
             for i in range(HRU_data.shape[0]):
                 output_data[i] = to_grid(
                     HRU_data[i],
-                    self.HRU.var.grid_to_HRU,
+                    self.HRU.var.HRU_to_grid,
                     self.HRU.var.land_use_ratio,
                     fn,
                 )
