@@ -140,7 +140,7 @@ def test_to_grid_unknown_fn(
         HRU_to_grid: The indexes that map each HRU to its parent grid cell.
         land_use_ratio: The land use ratio (of a grid cell) for each HRU.
     """
-    with pytest.raises(Exception):
+    with pytest.raises(NotImplementedError):
         to_grid(HRU_data, HRU_to_grid, land_use_ratio, fn="unknown")
 
 
