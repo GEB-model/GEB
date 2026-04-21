@@ -540,7 +540,7 @@ def _plot_outflow_discharge_timeseries(
         return 0
 
     outflow_files: list[Path] = sorted(
-        routing_dir.glob("river_outflow_hourly_m3_per_s_*.csv")
+        routing_dir.glob("river_outflow_hourly_m3_per_s_*.parquet")
     )
     if not outflow_files:
         print("No exported outflow time series found. Skipping outflow plots.")
@@ -555,7 +555,7 @@ def _plot_outflow_discharge_timeseries(
     run_folder: Path = report_folder / run_name
     frozen_fraction_path: Path = (
         run_folder / "hydrology.landsurface" / frozen_fraction_series_name
-    ).with_suffix(".csv")
+    ).with_suffix(".parquet")
     if frozen_fraction_path.exists():
         frozen_fraction_series = _read_evaluation_series_with_date_index(
             run_folder,
@@ -1349,15 +1349,15 @@ def _read_evaluation_series_with_date_index(
     module: str,
     name: str,
 ) -> pd.Series:
-    """Read an evaluation time series from a CSV file.
+    """Read an evaluation time series from a parquet file.
 
     Args:
         folder: Path to the report folder for one model run.
-        module: Name of the module subfolder containing the CSV file.
-        name: Name of the CSV file without the `.csv` suffix.
+        module: Name of the module subfolder containing the parquet file.
+        name: Name of the parquet file without the `.parquet` suffix.
 
     Returns:
-        Time-indexed series read from the CSV file.
+        Time-indexed series read from the parquet file.
     """
     series: pd.Series = pd.read_parquet(
         (folder / module / name).with_suffix(".parquet"),
