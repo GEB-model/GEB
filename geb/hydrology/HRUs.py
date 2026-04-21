@@ -128,12 +128,16 @@ def to_grid(
     n_grid_cells: int = int(HRU_to_grid.max()) + 1
 
     if fn == "weightedmean":
-        # land_use_ratio sums to 1 per grid cell, so the weighted sum equals the weighted mean
+        # np.bincount with weights accumulates in float64, so cast back to the
+        # input dtype to preserve the expected memory footprint and downstream dtype.
         return np.bincount(
             HRU_to_grid, weights=data * land_use_ratio, minlength=n_grid_cells
-        )  # ty:ignore[invalid-return-type]
+        ).astype(data.dtype, copy=False)  # ty:ignore[invalid-return-type]
     elif fn == "sum":
-        return np.bincount(HRU_to_grid, weights=data, minlength=n_grid_cells)  # ty:ignore[invalid-return-type]
+        # Keep dtype behavior consistent with the other aggregation modes.
+        return np.bincount(
+            HRU_to_grid, weights=data, minlength=n_grid_cells
+        ).astype(data.dtype, copy=False)  # ty:ignore[invalid-return-type]
     elif fn == "max":
         fill_value = (
             -np.inf
