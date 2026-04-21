@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b21": [
         "[manual] Remove `setup_irrigation_sources` from your `build.yml`.",
+        "[update-method;setup_farmer_crop_calendar] Run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.",
+        "[update-method;setup_SPEI] Run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.",
+        "[update-method;setup_pr_GEV] Run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.",
         "[update-method;setup_gtsm_station_data]",
     ],
     "1.0.0b20": [

@@ -38,8 +38,6 @@ setup_soil:
 setup_vegetation:
 
 setup_waterbodies:
-  command_areas: null
-  custom_reservoir_capacity: null
 
 setup_groundwater:
 
@@ -70,6 +68,7 @@ setup_farmer_crop_calendar:
   year: 2000
   reduce_crops: true
   replace_base: false
+  unify_variants: false
 
 setup_farmer_characteristics:
   interest_rate: 0.05
