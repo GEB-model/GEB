@@ -64,16 +64,14 @@ class Energy:
         colors = plt.get_cmap("viridis")(np.linspace(0, 1, 6))
         for layer in range(6):
             energy_balance_soil_layer_file = (
-                report_dir / f"_energy_balance_soil_temperature_layer_{layer}_C.csv"
+                report_dir / f"_energy_balance_soil_temperature_layer_{layer}_C.parquet"
             )
             if not energy_balance_soil_layer_file.exists():
                 raise FileNotFoundError(
                     f"Expected soil temperature file '{energy_balance_soil_layer_file.name}' not found."
                 )
 
-            df = pd.read_csv(
-                energy_balance_soil_layer_file, index_col=0, parse_dates=True
-            )
+            df = pd.read_parquet(energy_balance_soil_layer_file)
             df[f"_energy_balance_soil_temperature_layer_{layer}_C"].plot(
                 ax=ax, label=f"Layer {layer + 1}", color=colors[layer]
             )  # This will plot the time series of the soil temperature for this layer

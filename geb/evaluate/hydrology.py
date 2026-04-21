@@ -574,11 +574,7 @@ def _plot_outflow_discharge_timeseries(
 
     plots_created: int = 0
     for outflow_file in outflow_files:
-        outflow_series: pd.Series = pd.read_csv(
-            outflow_file,
-            index_col=0,
-            parse_dates=True,
-        ).squeeze()
+        outflow_series: pd.Series = pd.read_parquet(outflow_file).squeeze()
 
         if np.isnan(outflow_series.values).all():
             print(f"Outflow file {outflow_file.name} contains only NaN values.")
@@ -1084,11 +1080,11 @@ def create_validation_df(
         )
 
     # Construct the path to the individual station discharge file
-    station_file_name = f"discharge_hourly_m3_per_s_{ID}.csv"
+    station_file_name = f"discharge_hourly_m3_per_s_{ID}.parquet"
     station_file_path = routing_dir / station_file_name
 
     # Load the individual station discharge timeseries
-    simulated_discharge = pd.read_csv(station_file_path, index_col=0, parse_dates=True)[
+    simulated_discharge = pd.read_parquet(station_file_path)[
         f"discharge_hourly_m3_per_s_{ID}"
     ]
 
@@ -1363,10 +1359,9 @@ def _read_evaluation_series_with_date_index(
     Returns:
         Time-indexed series read from the CSV file.
     """
-    series: pd.Series = pd.read_csv(
-        (folder / module / name).with_suffix(".csv"),
-        index_col=0,
-        parse_dates=True,
+    series: pd.Series = pd.read_parquet(
+        (folder / module / name).with_suffix(".parquet"),
+        engine="pyarrow",
     )[name]
     return series
 
@@ -1375,12 +1370,12 @@ def _load_named_evaluation_series(
     folder: Path,
     series_specs: dict[str, tuple[str, str]],
 ) -> dict[str, pd.Series]:
-    """Load a named collection of evaluation time series from CSV files.
+    """Load a named collection of evaluation time series from parquet files.
 
     Args:
         folder: Path to the report folder for one model run.
         series_specs: Mapping from output name used by the caller to a tuple of
-            `(module, reported_name)` describing where the CSV series lives.
+            `(module, reported_name)` describing where the parquet series lives.
 
     Returns:
         Mapping of caller-defined series names to time-indexed pandas series.
@@ -2495,25 +2490,23 @@ class Hydrology:
         """
         folder = self.model.output_folder / "report" / run_name
 
-        def read_csv_with_date_index(
+        def read_parquet_with_date_index(
             folder: Path, module: str, name: str, skip_first_day: bool = True
         ) -> pd.Series:
-            """Read a CSV file with a date index.
+            """Read a PARQUET file with a date index.
 
             Args:
-                folder: Path to the folder containing the CSV file.
-                module: Name of the module (subfolder) containing the CSV file.
-                name: Name of the CSV file (without extension).
+                folder: Path to the folder containing the PARQUET file.
+                module: Name of the module (subfolder) containing the PARQUET file.
+                name: Name of the PARQUET file (without extension).
                 skip_first_day: Whether to skip the first day of the time series.
 
             Returns:
-                A pandas Series with the date index and the values from the CSV file.
+                A pandas Series with the date index and the values from the PARQUET file.
 
             """
-            df = pd.read_csv(
-                (folder / module / name).with_suffix(".csv"),
-                index_col=0,
-                parse_dates=True,
+            df = pd.read_parquet(
+                (folder / module / name).with_suffix(".parquet"),
             )[name]
 
             if skip_first_day:
@@ -2523,51 +2516,51 @@ class Hydrology:
 
         # because storage is the storage at the end of the timestep, we need to calculate the change
         # across the entire simulation period. For all other variables we do skip the first day.
-        storage = read_csv_with_date_index(
+        storage = read_parquet_with_date_index(
             folder, "hydrology", "_water_circle_storage", skip_first_day=False
         )
         storage_change = storage.iloc[-1] - storage.iloc[0]
 
-        rain = read_csv_with_date_index(
+        rain = read_parquet_with_date_index(
             folder, "hydrology.landsurface", "_water_circle_rain"
         ).sum()
-        snow = read_csv_with_date_index(
+        snow = read_parquet_with_date_index(
             folder, "hydrology.landsurface", "_water_circle_snow"
         ).sum()
 
-        domestic_water_loss = read_csv_with_date_index(
+        domestic_water_loss = read_parquet_with_date_index(
             folder, "hydrology.water_demand", "_water_circle_domestic_water_loss"
         ).sum()
-        industry_water_loss = read_csv_with_date_index(
+        industry_water_loss = read_parquet_with_date_index(
             folder, "hydrology.water_demand", "_water_circle_industry_water_loss"
         ).sum()
-        livestock_water_loss = read_csv_with_date_index(
+        livestock_water_loss = read_parquet_with_date_index(
             folder, "hydrology.water_demand", "_water_circle_livestock_water_loss"
         ).sum()
 
-        river_outflow = read_csv_with_date_index(
+        river_outflow = read_parquet_with_date_index(
             folder, "hydrology.routing", "_water_circle_river_outflow"
         ).sum()
 
-        transpiration = read_csv_with_date_index(
+        transpiration = read_parquet_with_date_index(
             folder, "hydrology.landsurface", "_water_circle_transpiration"
         ).sum()
-        bare_soil_evaporation = read_csv_with_date_index(
+        bare_soil_evaporation = read_parquet_with_date_index(
             folder, "hydrology.landsurface", "_water_circle_bare_soil_evaporation"
         ).sum()
-        open_water_evaporation = read_csv_with_date_index(
+        open_water_evaporation = read_parquet_with_date_index(
             folder, "hydrology.landsurface", "_water_circle_open_water_evaporation"
         ).sum()
-        interception_evaporation = read_csv_with_date_index(
+        interception_evaporation = read_parquet_with_date_index(
             folder, "hydrology.landsurface", "_water_circle_interception_evaporation"
         ).sum()
-        sublimation_or_deposition = read_csv_with_date_index(
+        sublimation_or_deposition = read_parquet_with_date_index(
             folder, "hydrology.landsurface", "_water_circle_sublimation_or_deposition"
         ).sum()
-        river_evaporation = read_csv_with_date_index(
+        river_evaporation = read_parquet_with_date_index(
             folder, "hydrology.routing", "_water_circle_river_evaporation"
         ).sum()
-        waterbody_evaporation = read_csv_with_date_index(
+        waterbody_evaporation = read_parquet_with_date_index(
             folder, "hydrology.routing", "_water_circle_waterbody_evaporation"
         ).sum()
 
