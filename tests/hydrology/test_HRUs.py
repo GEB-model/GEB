@@ -8,7 +8,11 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from geb.hydrology.HRUs import determine_nearest_river_cell, to_grid, to_HRU
+from geb.hydrology.HRUs import (
+    determine_nearest_river_cell,
+    to_grid,
+    to_HRU,
+)
 
 
 def test_determine_nearest_river_cell() -> None:
@@ -192,33 +196,15 @@ def test_to_grid(
 def test_to_HRU(
     grid_data: npt.NDArray[np.float32],
     grid_to_HRU: npt.NDArray[np.int32],
-    land_use_ratio: npt.NDArray[np.float32],
 ) -> None:
-    """Test the to_HRU function with various methods for going from grid to HRU.
+    """Test the to_HRU function for going from grid to HRU.
 
     Args:
         grid_data: Hypothetical data on the grid.
         grid_to_HRU: The indexes that map grid cells to HRUs.
-        land_use_ratio: The land use ratio (of a grid cell) for each HRU.
     """
-    data = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
-
-    out = np.zeros((*data.shape[:-1], land_use_ratio.size), dtype=data.dtype)
-    np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out),
-        data,
-    )
-    np.testing.assert_almost_equal(out, data)
-
-    data = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
-    np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out, fn=None), data
-    )
-    np.testing.assert_almost_equal(out, data)
-
-    data = np.array([1.0, 0.4, 0.8, 0.8, 0.6, 0.6, 0.6, 0.6, 0.6], dtype=np.float32)
-    np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out, fn="weightedsplit"),
-        data,
-    )
-    np.testing.assert_almost_equal(out, data)
+    expected = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
+    out = np.zeros(grid_to_HRU[-1], dtype=grid_data.dtype)
+    result = to_HRU(grid_data, grid_to_HRU, out)
+    np.testing.assert_almost_equal(result, expected)
+    np.testing.assert_almost_equal(out, expected)
