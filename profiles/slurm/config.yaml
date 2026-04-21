@@ -37,5 +37,6 @@ latency-wait: 30
 # Snakemake 9.x uses UUIDs as job names for reliable status tracking.
 # Rule+wildcard info is stored in the SLURM comment field instead.
 # View with: squeue -u $USER -o "%.10i %.10P %.10T %.12M %k"
-slurm-logdir: "logs/snakemake_logs"
+# slurm-logdir is passed explicitly via --slurm-logdir in snakemake_cluster.sh,
+# pointing to $GEB_ROOT/logs/snakemake_logs for all log types in one place.
 slurm-jobname-prefix: "geb"
