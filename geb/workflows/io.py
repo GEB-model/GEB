@@ -1874,10 +1874,7 @@ def fetch_and_save(
 
             except requests.RequestException as e:
                 # Log the error
-                if verbose:
-                    print(
-                        f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}"
-                    )
+                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
