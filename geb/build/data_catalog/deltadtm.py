@@ -126,7 +126,7 @@ class DeltaDTM(Adapter):
         Returns:
             Merged dataarray of the specified tiles.
         """
-        with tempfile.TemporaryDirectory() as temp_dir_str:
+        with tempfile.TemporaryDirectory(delete=False) as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             extracted_paths = self._unpack_tiles(
                 continents_to_download, tile_names, temp_dir
