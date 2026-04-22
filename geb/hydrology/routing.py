@@ -29,6 +29,7 @@ from geb.workflows.io import read_geom, read_table
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
+
 def get_upstream_represented_xys(
     river_id: int, all_rivers: pd.DataFrame
 ) -> list[tuple[int, int]]:
