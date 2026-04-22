@@ -38,7 +38,11 @@ from geb.geb_types import (
 )
 from geb.store import Bucket
 from geb.workflows.io import read_grid, read_zarr
-from geb.workflows.raster import compress, decompress_with_mask
+from geb.workflows.raster import (
+    compress,
+    decompress_with_mask,
+    interpolate_na_2d,
+)
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -548,38 +552,44 @@ class Grid(BaseVariables):
     @property
     def gev_c(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of SPEI for grid."""
-        return read_zarr(self.model.files["other"]["climate/gev_c"])
+        gev_grid = read_zarr(self.model.files["other"]["climate/gev_c"])
+        gev_grid_interpolated = interpolate_na_2d(gev_grid)
+        return gev_grid_interpolated
 
     @property
     def gev_loc(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of SPEI for grid."""
-        return read_zarr(self.model.files["other"]["climate/gev_loc"])
+        gev_grid = read_zarr(self.model.files["other"]["climate/gev_loc"])
+        gev_grid_interpolated = interpolate_na_2d(gev_grid)
+        return gev_grid_interpolated
 
     @property
     def gev_scale(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of SPEI for grid."""
-        return read_zarr(self.model.files["other"]["climate/gev_scale"])
+        gev_grid = read_zarr(self.model.files["other"]["climate/gev_scale"])
+        gev_grid_interpolated = interpolate_na_2d(gev_grid)
+        return gev_grid_interpolated
 
     @property
     def pr_gev_c(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
-        return self.load2d(
-            self.model.files["other"]["climate/pr_gev_c"], compress=False
-        )
+        gev_grid = read_zarr(self.model.files["other"]["climate/pr_gev_c"])
+        gev_grid_interpolated = interpolate_na_2d(gev_grid)
+        return gev_grid_interpolated
 
     @property
     def pr_gev_loc(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
-        return self.load2d(
-            self.model.files["other"]["climate/pr_gev_loc"], compress=False
-        )
+        gev_grid = read_zarr(self.model.files["other"]["climate/pr_gev_loc"])
+        gev_grid_interpolated = interpolate_na_2d(gev_grid)
+        return gev_grid_interpolated
 
     @property
     def pr_gev_scale(self) -> TwoDArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
-        return self.load2d(
-            self.model.files["other"]["climate/pr_gev_scale"], compress=False
-        )
+        gev_grid = read_zarr(self.model.files["other"]["climate/pr_gev_scale"])
+        gev_grid_interpolated = interpolate_na_2d(gev_grid)
+        return gev_grid_interpolated
 
 
 class HRUVariables(Bucket):
