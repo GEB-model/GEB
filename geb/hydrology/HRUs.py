@@ -38,7 +38,7 @@ from geb.geb_types import (
 )
 from geb.store import Bucket
 from geb.workflows.io import read_grid, read_zarr
-from geb.workflows.raster import compress, decompress_with_mask
+from geb.workflows.raster import compress, decompress_with_mask, interpolate_na_2d
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
