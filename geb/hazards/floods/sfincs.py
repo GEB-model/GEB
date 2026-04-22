@@ -1673,9 +1673,9 @@ class MultipleSFINCSSimulations:
             )
             if not split_coastal:
                 flood_depths.append(simulation_max_flood_depth)
-            elif split_coastal and simulation.is_coastal:
+            elif split_coastal and "coastal" in simulation.name.lower():
                 coastal_flood_depths.append(simulation_max_flood_depth)
-            elif split_coastal and not simulation.is_coastal:
+            elif split_coastal and not "coastal" in simulation.name.lower():
                 flood_depths.append(simulation_max_flood_depth)
         if not split_coastal:
             rp_map: xr.DataArray = merge_arrays(flood_depths, method="max")
