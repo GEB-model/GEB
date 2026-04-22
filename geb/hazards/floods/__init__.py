@@ -750,9 +750,7 @@ class Floods(Module):
                 )
                 write_zarr(
                     rp_map,
-                    self.model.output_folder
-                    / "flood_maps"
-                    / f"{return_period}_rp.zarr",
+                    self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
                     crs=rp_map.rio.crs,
                 )
 
