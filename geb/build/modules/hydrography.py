@@ -430,7 +430,15 @@ def get_SWORD_river_widths(
         """
         if reach_id == -1:  # when no SWORD reach is found
             return np.nan  # return NaN
-        return SWORD.loc[reach_id, "width"]
+        width: np.float64 = SWORD.loc[reach_id, "width"]
+        if width <= 0.0:
+            width = np.float64(np.nan)
+
+        assert pd.isna(width) or width > 0, (
+            f"Invalid river width {width} for SWORD reach ID {reach_id}"
+        )
+
+        return width
 
     SWORD_river_width = np.vectorize(lookup_river_width)(SWORD_reach_IDs)
     return SWORD_river_width
@@ -937,8 +945,8 @@ class Hydrography(BuildModelBase):
         )(COMID_IDs_raster.values).astype(np.float32)
 
         # check river with is positive where river is present
-        assert (river_width_data[COMID_IDs_raster.values != -1] > 0).all(), (
-            "River width should be positive where river is present"
+        assert ((river_width_data > 0) | np.isnan(river_width_data)).all(), (
+            "River width should be positive or nan"
         )
 
         river_width: xr.DataArray = self.full_like(
