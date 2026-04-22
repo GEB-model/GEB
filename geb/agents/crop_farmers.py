@@ -1486,12 +1486,6 @@ class CropFarmers(AgentBaseClass):
 
     @property
     def surface_irrigated(self) -> DynamicArray:
-    def channel_irrigating(self) -> np.ndarray:
-        """Farmers that have access to surface irrigation but not to reservoirs."""
-        return self.surface_irrigated & (~self.is_in_command_area)
-
-    @property
-    def surface_irrigated(self) -> DynamicArray:
         """Boolean mask of farmers that have surface-irrigation equipment."""
         return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT].copy()
 
