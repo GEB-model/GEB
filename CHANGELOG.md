@@ -38,6 +38,7 @@
 - Reduce RAM usage for models with a complex coastline.
 - Fix for differently sized crop maps from MIRCA-OS that led to issues where maps in regions where some maps did not overlap.
 - Fix for interpolation of MIRCA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765))
+- Update pyflwdir to 0.5.11, which has caching of numba functions. Also thus allows removing of custom cached functions in routing.py.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
