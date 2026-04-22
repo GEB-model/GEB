@@ -126,16 +126,12 @@ class DeltaDTM(Adapter):
         Returns:
             Merged dataarray of the specified tiles.
         """
-        with tempfile.TemporaryDirectory() as temp_dir_str:
+        with tempfile.TemporaryDirectory(delete=False) as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             extracted_paths = self._unpack_tiles(
                 continents_to_download, tile_names, temp_dir
             )
             da = self._merge_tiles(extracted_paths)
-            # Force a load: chunks={} makes rioxarray return a lazy dask array,
-            # so data is not read until computed. Loading here ensures all tile data
-            # is in memory before the temp directory (and its .tif files) is deleted.
-            da = da.load()
             da = convert_nodata(da, np.nan)
             return da
 
