@@ -927,9 +927,7 @@ class Hydrography(BuildModelBase):
         )
 
         valid_SWORD_widths = ~np.isnan(SWORD_river_widths)
-        valid_reach_lengths_m = np.where(
-            valid_SWORD_widths, SWORD_reach_lengths, 0
-        )
+        valid_reach_lengths_m = np.where(valid_SWORD_widths, SWORD_reach_lengths, 0)
         total_valid_reach_length_m = np.sum(valid_reach_lengths_m, axis=0)
         rivers_with_data = valid_SWORD_widths.any(axis=0) & (
             total_valid_reach_length_m > 0
