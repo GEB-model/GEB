@@ -38,7 +38,7 @@
 - Reduce RAM usage for models with a complex coastline.
 - Fix for differently sized crop maps from MIRCA-OS that led to issues where maps in regions where some maps did not overlap.
 - Fix for interpolation of MIRCA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765))
-- Make the example build.yml inherit from a new 'reasonable_default_build.yml', allowing seamsless updating unless custom settings are used.
+- Make the example build.yml inherit from a new 'reasonable_default_build.yml', allowing seamless updating unless custom settings are used.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
