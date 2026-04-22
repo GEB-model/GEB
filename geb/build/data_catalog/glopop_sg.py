@@ -85,7 +85,7 @@ class GLOPOP_SG(Adapter):
         tif_name = f"{region}_grid_nr.tif"
         gz_name = f"synthpop_{region}_grid.dat.gz"
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(delete=False) as tmpdir:
             tif_path = Path(tmpdir) / tif_name
             gz_path = Path(tmpdir) / gz_name
 
