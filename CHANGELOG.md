@@ -42,6 +42,7 @@
 - Fix for interpolation of MIRCA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765))
 - Make the example build.yml inherit from a new 'reasonable_default_build.yml', allowing seamless updating unless custom settings are used.
 - Update pyflwdir to 0.5.11, which has caching of numba functions. Also thus allows removing of custom cached functions in routing.py.
+- Fix bug where river widths could be negative in rare cases. This clearly raised an error in the model run, so it doesn't affect any model that ran normally ([#770](https://github.com/GEB-model/GEB/issues/770))
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
