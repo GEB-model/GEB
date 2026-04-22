@@ -43,7 +43,7 @@ dependencies = [
     "pandas>=2.3.0,<3.0.0", # we get some errors with pandas 3.0. Currently working on solving all warnings on 2.3 to make transition smooth. See: https://pandas.pydata.org/docs/dev/user_guide/migration.html
     "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
-    "pyflwdir>=0.5.9",
+    "pyflwdir>=0.5.11",
     "pyogrio>=0.9.0",
     "pyresample>=1.32.0",
     "pytest",
