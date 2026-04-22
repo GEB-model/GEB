@@ -926,14 +926,21 @@ class Hydrography(BuildModelBase):
             self.data_catalog, SWORD_reach_IDs
         )
 
-        rivers_with_data = (~np.isnan(SWORD_river_widths)).any(axis=0)
+        valid_SWORD_widths = ~np.isnan(SWORD_river_widths)
+        valid_reach_lengths_m = np.where(
+            valid_SWORD_widths, SWORD_reach_lengths, 0
+        )
+        total_valid_reach_length_m = np.sum(valid_reach_lengths_m, axis=0)
+        rivers_with_data = valid_SWORD_widths.any(axis=0) & (
+            total_valid_reach_length_m > 0
+        )
 
         rivers["width"] = np.nan
         rivers.loc[rivers_with_data, "width"] = (
-            np.nansum(SWORD_river_widths * SWORD_reach_lengths, axis=0)[
+            np.nansum(SWORD_river_widths * valid_reach_lengths_m, axis=0)[
                 rivers_with_data
             ]
-            / np.sum(SWORD_reach_lengths, axis=0)[rivers_with_data]
+            / total_valid_reach_length_m[rivers_with_data]
         )
 
         self.set_geom(rivers, name="routing/rivers")
