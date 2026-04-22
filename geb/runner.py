@@ -1087,6 +1087,8 @@ def update_version_fn(
     """
     _restart_if_needed(optimize=optimize, cores=cores)
 
+    config_parsed = parse_config(config)
+
     def update_version_operation(logger: logging.Logger, **kwargs: Any) -> None:
         parsed_build_config = parse_config(build_config)
         parsed_config = parse_config(config, schema=Config)

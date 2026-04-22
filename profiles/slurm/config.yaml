@@ -9,12 +9,12 @@
 executor: slurm
 
 # Job management
-# Snakemake submits up to `jobs` jobs to SLURM simultaneously.  Keeping this
-# at 2× the desired concurrency (8) ensures that as soon as a slot frees up
-# a new job is already queued and SLURM can schedule it immediately.
-jobs: 16
+# Snakemake submits up to `jobs` jobs to SLURM simultaneously.
+# Jobs are excluded from small defq nodes (node003-015, ~257 GB) and distributed
+# freely across node001/002 (~1031 GB) and node243 (~773 GB) via --mem hints.
+jobs: 8
 max-jobs-per-second: 2
-max-status-checks-per-second: 2
+max-status-checks-per-second: 1
 
 # Resource defaults (overridden by rule-specific resources)
 default-resources:
@@ -24,19 +24,13 @@ default-resources:
   slurm_partition: defq
   slurm_account: ivm
 
-# Auto-retry once on transient failures (node crash, short OOM spike, etc.)
-# without requiring manual Snakemake restarts.
-restart-times: 1
-
 rerun-incomplete: true
 keep-going: true
 printshellcmds: true
-# Reduce from 60 s so the next job is queued immediately after a slot frees.
-latency-wait: 30
+latency-wait: 60
 
 # Snakemake 9.x uses UUIDs as job names for reliable status tracking.
 # Rule+wildcard info is stored in the SLURM comment field instead.
 # View with: squeue -u $USER -o "%.10i %.10P %.10T %.12M %k"
-# slurm-logdir is passed explicitly via --slurm-logdir in snakemake_cluster.sh,
-# pointing to $GEB_ROOT/logs/snakemake_logs for all log types in one place.
+slurm-logdir: "logs/snakemake_logs"
 slurm-jobname-prefix: "geb"

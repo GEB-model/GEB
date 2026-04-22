@@ -3321,11 +3321,6 @@ class GEBModel(
         # Filter completed methods against the current build config.
         if continue_:
             methods_to_run = list(methods.keys())
-            # Convert to a set for O(1) lookup; order of execution always follows
-            # build.yml (the `methods` dict), not progress.txt. This means methods
-            # added in the middle of build.yml by a version update are simply run
-            # in their correct position on continuation, even if progress.txt was
-            # written in a different order during a previous partial run.
             methods_to_run_set = set(methods_to_run)
             active_completed_methods: list[str] = []
             for completed_method in completed_methods:
@@ -3463,7 +3458,6 @@ class GEBModel(
                 perform_auto_update=True,
                 build_model=self,
                 methods=methods,
-                build_is_complete=self.build_complete_path.exists(),
             )
             if updates_to_print_to_user:
                 self.logger.warning(

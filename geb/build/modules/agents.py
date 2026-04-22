@@ -1488,8 +1488,6 @@ class Agents(BuildModelBase):
                 f"{{\n{chr(10).join(lines)}\n}}"
             )
 
-        # Vectorised assignment: build a DataFrame from the exposure model
-        # keyed by NAME_1 and merge onto buildings in one step.
         exposure_df = pd.DataFrame.from_dict(exposure_model, orient="index")
         buildings = gpd.GeoDataFrame(buildings.join(exposure_df, on="NAME_1"))
         reconstruction_cost_columns = exposure_df.columns.tolist()

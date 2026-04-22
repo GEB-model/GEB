@@ -43,6 +43,8 @@
 - Make the example build.yml inherit from a new 'reasonable_default_build.yml', allowing seamless updating unless custom settings are used.
 - Update pyflwdir to 0.5.11, which has caching of numba functions. Also thus allows removing of custom cached functions in routing.py.
 - Fix bug where river widths could be negative in rare cases. This clearly raised an error in the model run, so it doesn't affect any model that ran normally ([#770](https://github.com/GEB-model/GEB/issues/770))
+- Fix bugs in DeltaDTM: 1) tiles were not found as a buffer was not present around the coastal mask 2) for large coastal regions, the tiles were deleted, solving [[#783](https://github.com/GEB-model/GEB/issues/783)]
+- Different updates to Global Exposure model (GEM), most importantly a detailed mapping of name changes between GEM and GADM 
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
