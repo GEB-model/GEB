@@ -104,107 +104,79 @@ def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:
     )
 
 
-@njit(cache=True)
 def to_grid(
     data: T_ArrayNumber,
-    grid_to_HRU: ArrayInt32,
+    HRU_to_grid: ArrayInt32,
     land_use_ratio: ArrayFloat32,
     fn: str = "weightedmean",
 ) -> T_ArrayNumber:
-    """Numba helper function to convert from HRU to grid.
+    """Convert HRU data to grid scale using vectorized numpy operations.
 
     Args:
         data: The HRU data to be converted (1D array).
-        grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-        land_use_ratio: Relative size of HRU to grid.
-        fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
+        HRU_to_grid: Array of size n_HRUs. Each value is the compressed grid cell index that the HRU belongs to.
+        land_use_ratio: Relative size of HRU to grid. Must sum to 1 per grid cell for `weightedmean`.
+        fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `weightedmean`, `sum`, `max` and `min`.
 
     Returns:
-        ouput_data: Data converted to grid.
+        output_data: Data converted to grid.
     """
-    output_data = np.empty(grid_to_HRU.size, dtype=data.dtype)
-
-    assert grid_to_HRU[0] != 0, (
-        "First value of grid_to_HRU cannot be 0. This would mean that the first HRU is empty."
-    )
-    assert grid_to_HRU[-1] == land_use_ratio.size, (
-        "The last value of grid_to_HRU must be equal to the size of land_use_ratio. Otherwise, the last HRU would not be used."
+    assert HRU_to_grid.size == land_use_ratio.size, (
+        "HRU_to_grid and land_use_ratio must have the same size."
     )
 
-    prev_index = 0
-    for i in range(grid_to_HRU.size):
-        cell_index = grid_to_HRU[i]
-        if fn == "weightedmean":
-            values = data[prev_index:cell_index]
-            weights = land_use_ratio[prev_index:cell_index]
-            output_data[i] = (values * weights).sum() / weights.sum()
-        elif fn == "weightednanmean":
-            values = data[prev_index:cell_index]
-            weights = land_use_ratio[prev_index:cell_index]
-            weights = weights[~np.isnan(values)]
-            values = values[~np.isnan(values)]
-            if values.size == 0:
-                output_data[i] = np.nan
-            else:
-                output_data[i] = (values * weights).sum() / weights.sum()
-        elif fn == "sum":
-            output_data[i] = np.sum(data[prev_index:cell_index])
-        elif fn == "nansum":
-            output_data[i] = np.nansum(data[prev_index:cell_index])
-        elif fn == "max":
-            output_data[i] = np.max(data[prev_index:cell_index])
-        elif fn == "nanmax":
-            output_data[i] = np.nanmax(data[prev_index:cell_index])
-        elif fn == "min":
-            output_data[i] = np.min(data[prev_index:cell_index])
-        elif fn == "nanmin":
-            output_data[i] = np.nanmin(data[prev_index:cell_index])
-        else:
-            raise NotImplementedError
-        prev_index = cell_index
-    return output_data  # ty:ignore[invalid-return-type]
+    n_grid_cells: int = int(HRU_to_grid.max()) + 1
 
-
-@njit(cache=True)
-def to_HRU(
-    data: T_ArrayNumber,
-    grid_to_HRU: ArrayInt32,
-    land_use_ratio: ArrayFloat32,
-    output_data: T_ArrayNumber,
-    fn: str | None = None,
-) -> T_ArrayNumber:
-    """Numba helper function to convert from grid to HRU.
-
-    Args:
-        data: The grid data to be converted.
-        grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-        land_use_ratio: Relative size of HRU to grid.
-        output_data: Array to store the output data. Must be of size of the HRUs.
-        fn: Name of function to apply to data. None if data should be directly inserted into HRUs - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
-
-    Returns:
-        ouput_data: Data converted to HRUs.
-    """
-    assert grid_to_HRU[0] != 0
-    assert grid_to_HRU[-1] == land_use_ratio.size
-    assert data.shape == grid_to_HRU.shape
-    prev_index = 0
-
-    if fn is None:
-        for i in range(grid_to_HRU.size):
-            cell_index = grid_to_HRU[i]
-            output_data[prev_index:cell_index] = data[i]
-            prev_index = cell_index
-    elif fn == "weightedsplit":
-        for i in range(grid_to_HRU.size):
-            cell_index = grid_to_HRU[i]
-            cell_sizes = land_use_ratio[prev_index:cell_index]
-            output_data[prev_index:cell_index] = data[i] / cell_sizes.sum() * cell_sizes
-            prev_index = cell_index
+    if fn == "weightedmean":
+        # np.bincount with weights accumulates in float64, so cast back to the
+        # input dtype to preserve the expected memory footprint and downstream dtype.
+        return np.bincount(
+            HRU_to_grid, weights=data * land_use_ratio, minlength=n_grid_cells
+        ).astype(data.dtype, copy=False)  # ty:ignore[invalid-return-type]
+    elif fn == "sum":
+        # Keep dtype behavior consistent with the other aggregation modes.
+        return np.bincount(HRU_to_grid, weights=data, minlength=n_grid_cells).astype(
+            data.dtype, copy=False
+        )  # ty:ignore[invalid-return-type]
+    elif fn == "max":
+        fill_value = (
+            -np.inf
+            if np.issubdtype(data.dtype, np.floating)
+            else np.iinfo(data.dtype).min  # ty:ignore[no-matching-overload]
+        )
+        output_data = np.full(n_grid_cells, fill_value, dtype=data.dtype)
+        np.maximum.at(output_data, HRU_to_grid, data)
+        return output_data  # ty:ignore[invalid-return-type]
+    elif fn == "min":
+        fill_value = (
+            np.inf
+            if np.issubdtype(data.dtype, np.floating)
+            else np.iinfo(data.dtype).max  # ty:ignore[no-matching-overload]
+        )
+        output_data = np.full(n_grid_cells, fill_value, dtype=data.dtype)
+        np.minimum.at(output_data, HRU_to_grid, data)
+        return output_data  # ty:ignore[invalid-return-type]
     else:
         raise NotImplementedError
 
-    return output_data
+
+def to_HRU(
+    data: T_ArrayNumber,
+    HRU_to_grid: ArrayInt32,
+) -> T_ArrayNumber:
+    """Convert grid data to HRU scale using fancy indexing.
+
+    Each HRU receives the value of its parent grid cell, identified by HRU_to_grid.
+
+    Args:
+        data: The grid data to be converted (1D array of compressed grid values).
+        HRU_to_grid: Array of size n_HRUs. Each value is the compressed grid cell index
+            that the HRU belongs to.
+
+    Returns:
+        output_data: Data converted to HRUs (1D array of size n_HRUs).
+    """
+    return data[HRU_to_grid]  # ty:ignore[invalid-return-type]
 
 
 class BaseVariables:
@@ -1270,49 +1242,49 @@ class HRUs(BaseVariables):
     def pr_kg_per_m2_per_s(self) -> TwoDArrayFloat32:
         """Get precipitation rate for HRUs in kg/m²/s."""
         pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.data.grid.pr_kg_per_m2_per_s
-        return self.data.to_HRU(data=pr_kg_per_m2_per_s, fn=None, how="first")
+        return self.data.to_HRU(data=pr_kg_per_m2_per_s, how="first")
 
     @property
     def ps_pascal(self) -> TwoDArrayFloat32:
         """Get surface pressure for HRUs in Pa."""
         ps_pascal: TwoDArrayFloat32 = self.data.grid.ps_pascal
-        return self.data.to_HRU(data=ps_pascal, fn=None, how="first")
+        return self.data.to_HRU(data=ps_pascal, how="first")
 
     @property
     def rlds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward longwave radiation for HRUs in W/m²."""
         rlds_W_per_m2: TwoDArrayFloat32 = self.data.grid.rlds_W_per_m2
-        return self.data.to_HRU(data=rlds_W_per_m2, fn=None, how="first")
+        return self.data.to_HRU(data=rlds_W_per_m2, how="first")
 
     @property
     def rsds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward shortwave radiation for HRUs in W/m²."""
         rsds_W_per_m2: TwoDArrayFloat32 = self.data.grid.rsds_W_per_m2
-        return self.data.to_HRU(data=rsds_W_per_m2, fn=None, how="first")
+        return self.data.to_HRU(data=rsds_W_per_m2, how="first")
 
     @property
     def tas_2m_K(self) -> TwoDArrayFloat32:
         """Get air temperature at 2m for HRUs in K."""
         tas_2m_K: TwoDArrayFloat32 = self.data.grid.tas_2m_K
-        return self.data.to_HRU(data=tas_2m_K, fn=None, how="first")
+        return self.data.to_HRU(data=tas_2m_K, how="first")
 
     @property
     def dewpoint_tas_2m_K(self) -> TwoDArrayFloat32:
         """Get dewpoint temperature at 2m for HRUs in K."""
         dewpoint_tas_2m_K: TwoDArrayFloat32 = self.data.grid.dewpoint_tas_2m_K
-        return self.data.to_HRU(data=dewpoint_tas_2m_K, fn=None, how="first")
+        return self.data.to_HRU(data=dewpoint_tas_2m_K, how="first")
 
     @property
     def wind_u10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get u-component of wind at 10m for HRUs in m/s."""
         wind_u10m_m_per_s: TwoDArrayFloat32 = self.data.grid.wind_u10m_m_per_s
-        return self.data.to_HRU(data=wind_u10m_m_per_s, fn=None, how="first")
+        return self.data.to_HRU(data=wind_u10m_m_per_s, how="first")
 
     @property
     def wind_v10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get v-component of wind at 10m for HRUs in m/s."""
         wind_v10m_m_per_s: TwoDArrayFloat32 = self.data.grid.wind_v10m_m_per_s
-        return self.data.to_HRU(data=wind_v10m_m_per_s, fn=None, how="first")
+        return self.data.to_HRU(data=wind_v10m_m_per_s, how="first")
 
 
 class Data:
@@ -1343,34 +1315,32 @@ class Data:
 
         Computes cell area for HRUs.
         """
-        self.HRU.var.cell_area = self.to_HRU(
-            data=self.grid.var.cell_area, fn="weightedsplit"
+        self.HRU.var.cell_area = (
+            self.to_HRU(data=self.grid.var.cell_area) * self.HRU.var.land_use_ratio
         )
 
     def to_HRU(
         self,
         *,
         data: T_OneorTwoDArray,
-        fn: str | None = None,
         how: Literal["first", "last"] = "last",
     ) -> T_OneorTwoDArray:
         """Function to convert from grid to HRU (Hydrologic Response Units).
 
-        This method is designed to transform spatial grid data into a format suitable for HRUs, which are used in to represent distinct areas with homogeneous land use, soil type, and management conditions.
+        This method is designed to transform spatial grid data into a format suitable for HRUs, which are used in to represent distinct areas with homogeneous land use, soil type, and management conditions. Each HRU within a grid cell receives the same value as its parent grid cell.
 
         Args:
-            data (array-like): The grid data to be converted. If this parameter is set, `varname` must not be provided. Data should be an array where each element corresponds to grid cell values.
-            fn (str or None): The name of the function to apply to the data before assigning it to HRUs. If `None`, the data is used as is. This is usually the case for variables that are independent of area, like temperature or precipitation fluxes. If 'weightedsplit', the data will be adjusted according to the ratios of land use within each HRU. This is important when dealing with variables that are area-dependent like precipitation or runoff volumes.
-            how (str): Whether the first or the last dimension found in the uncompressed array should be used intepreted as the dimension to be converted to HRU. This is relevant when the input data has more than 2 dimensions. For example, if the input data has shape (time, grid_cells), setting `how` to "first" will convert the grid_cells dimension to HRU, resulting in an output shape of (time, HRUs). Setting `how` to "last" will convert the time dimension to HRU, resulting in an output shape of (HRUs, time).
+            data: The grid data to be converted. Data should be an array where each element corresponds to grid cell values.
+            how: Whether the first or the last dimension found in the uncompressed array should be interpreted as the dimension to be converted to HRU. This is relevant when the input data has more than 2 dimensions. For example, if the input data has shape (time, grid_cells), setting `how` to "first" will convert the grid_cells dimension to HRU, resulting in an output shape of (time, HRUs). Setting `how` to "last" will convert the time dimension to HRU, resulting in an output shape of (HRUs, time).
 
         Returns:
-            output_data (array-like): Data converted to HRUs format. The structure and the type of the output depend on the input and the transformation function.
+            output_data: Data converted to HRUs format. The structure and the type of the output depend on the input.
 
         Example:
             Suppose we have an instance of a class with a grid property containing temperature data under the attribute name 'temperature'. To convert this grid-based temperature data into HRU format, we would use:
 
             ```python
-            temperature_HRU = instance.to_HRU(data=temperature, fn=None)
+            temperature_HRU = instance.to_HRU(data=temperature)
             ```
 
             This will fetch the temperature data from `instance.grid.temperature`, assigning the temperature to HRU within a grid cell. In other words, each HRU within a grid cell has the same temperature.
@@ -1378,54 +1348,27 @@ class Data:
             Another example, where want to plant forest in all HRUs with grassland within an area specified by a boolean mask.
 
             ```python
-            mask_HRU = instance.to_HRU(data=mask_grid, fn=None)
+            mask_HRU = instance.to_HRU(data=mask_grid)
             mask_HRU[land_use_type == grass_land_use_type] = False  # set all non-grassland HRUs to False
             ```
         """
         assert not isinstance(data, list)
         if data.ndim == 1:
-            output_data = np.empty_like(self.HRU.var.land_use_ratio, dtype=data.dtype)
-            to_HRU(
-                data,
-                self.HRU.var.grid_to_HRU,
-                self.HRU.var.land_use_ratio,
-                output_data=output_data,
-                fn=fn,
-            )
+            output_data = to_HRU(data, self.HRU.var.HRU_to_grid)  # ty:ignore[invalid-argument-type]
         elif data.ndim == 2 and how == "first":
-            output_data = np.empty(
-                (self.HRU.var.land_use_ratio.size, *data.shape[1:]), dtype=data.dtype
-            )
-            for i in range(data.shape[1]):  # ty:ignore[index-out-of-bounds]
-                to_HRU(
-                    data[:, i],
-                    self.HRU.var.grid_to_HRU,
-                    self.HRU.var.land_use_ratio,
-                    output_data=output_data[:, i],
-                    fn=fn,
-                )
+            output_data = data[self.HRU.var.HRU_to_grid, :]
         elif data.ndim == 2 and how == "last":
-            output_data = np.empty(
-                (*data.shape[:-1], self.HRU.var.land_use_ratio.size), dtype=data.dtype
-            )
-            for i in range(data.shape[0]):
-                to_HRU(
-                    data[i, :],
-                    self.HRU.var.grid_to_HRU,
-                    self.HRU.var.land_use_ratio,
-                    output_data=output_data[i, :],
-                    fn=fn,
-                )
+            output_data = data[:, self.HRU.var.HRU_to_grid]
         else:
             raise NotImplementedError
-        return output_data
+        return output_data  # ty:ignore[invalid-return-type]
 
     def to_grid(self, *, HRU_data: np.ndarray, fn: str) -> np.ndarray:
         """Function to convert from HRUs to grid.
 
         Args:
             HRU_data: The HRU data to be converted (if set, varname cannot be set).
-            fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
+            fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `weightedmean`, `sum`, `max` and `min`.
 
         Returns:
             ouput_data: Data converted to grid units.
@@ -1439,7 +1382,7 @@ class Data:
         if HRU_data.ndim == 1:
             outdata = to_grid(
                 HRU_data,
-                self.HRU.var.grid_to_HRU,
+                self.HRU.var.HRU_to_grid,
                 self.HRU.var.land_use_ratio,
                 fn,
             )
@@ -1452,7 +1395,7 @@ class Data:
             for i in range(HRU_data.shape[0]):
                 output_data[i] = to_grid(
                     HRU_data[i],
-                    self.HRU.var.grid_to_HRU,
+                    self.HRU.var.HRU_to_grid,
                     self.HRU.var.land_use_ratio,
                     fn,
                 )

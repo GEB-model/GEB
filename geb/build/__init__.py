@@ -2321,7 +2321,7 @@ class GEBModel(
 
         assert ldd_elevation.shape == ldd.shape == mask.shape
 
-        ldd_elevation = xr.where(
+        ldd_elevation: xr.DataArray = xr.where(
             mask,
             ldd_elevation,
             ldd_elevation.attrs["_FillValue"],

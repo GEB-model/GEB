@@ -936,6 +936,11 @@ class Hydrography(BuildModelBase):
             lambda ID: river_with_mapper.get(ID, np.nan)
         )(COMID_IDs_raster.values).astype(np.float32)
 
+        # check river with is positive where river is present
+        assert (river_width_data[COMID_IDs_raster.values != -1] > 0).all(), (
+            "River width should be positive where river is present"
+        )
+
         river_width: xr.DataArray = self.full_like(
             elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
