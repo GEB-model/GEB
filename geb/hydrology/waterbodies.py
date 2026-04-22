@@ -324,9 +324,7 @@ class WaterBodies(Module):
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
-        self.hydrological_year_start_month = self.model.config["general"][
-            "hydrological_year_start_month"
-        ]
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -825,8 +823,7 @@ class WaterBodies(Module):
         """Dynamic part set lakes and reservoirs for each year."""
         # if first timestep, or beginning of new year
         if self.model.current_timestep == 1 or (
-            self.model.current_time.month == self.hydrological_year_start_month
-            and self.model.current_time.day == 1
+            self.model.current_time.month == 1 and self.model.current_time.day == 1
         ):
             if self.hydrology.dynamic_waterbodies:
                 raise NotImplementedError("dynamic_waterbodies not implemented yet")
