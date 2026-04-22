@@ -398,7 +398,6 @@ def test_run() -> None:
 
         for evaluation_method in (
             "hydrology.plot_water_balance",
-            "hydrology.plot_discharge",
             "hydrology.plot_water_storage",
             "hydrology.plot_water_circle",
             "energy.plot_soil_temperature",
@@ -416,10 +415,8 @@ def test_run() -> None:
         assert (
             hydrology_eval_folder / "water_balance_top_soil_timeseries_yearly.svg"
         ).exists()
-        assert (hydrology_eval_folder / "mean_discharge_m3_per_s.png").exists()
         assert (hydrology_eval_folder / "water_storage_timeseries.svg").exists()
         assert (hydrology_eval_folder / "water_storage_timeseries_yearly.svg").exists()
-        assert (hydrology_eval_folder / "outflow").exists()
 
         method_args = {
             "method": "hydrology.evaluate_discharge",

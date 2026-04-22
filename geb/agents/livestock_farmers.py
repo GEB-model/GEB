@@ -67,7 +67,9 @@ class LiveStockFarmers(AgentBaseClass):
         self.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
-
+        self.hydrological_year_start_month = self.model.config["general"][
+            "hydrological_year_start_month"
+        ]
         if self.model.in_spinup:
             self.spinup()
 
@@ -85,7 +87,11 @@ class LiveStockFarmers(AgentBaseClass):
     def spinup(self) -> None:
         """Set initial water demand values during spinup."""
         water_demand, efficiency = self.update_water_demand()
+        self.var.additional_water_allocation = np.zeros_like(
+            water_demand, dtype=np.float32
+        )
         self.var.current_water_demand = water_demand
+        self.var.total_water_demand = self.var.current_water_demand
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self) -> tuple[ArrayFloat32, np.float32]:
@@ -158,11 +164,14 @@ class LiveStockFarmers(AgentBaseClass):
             - The current efficiency as a float.
         """
         if (
-            np.datetime64(self.model.current_time, "ns")
-            in self.livestock_water_consumption_ds.time
+            self.model.current_time.day == 1
+            and self.model.current_time.month == self.hydrological_year_start_month
         ):
             water_demand, efficiency = self.update_water_demand()
             self.var.current_water_demand = water_demand
+            self.var.total_water_demand = (
+                self.var.current_water_demand + self.var.additional_water_allocation
+            )
             self.var.current_efficiency = efficiency
 
         assert (
@@ -171,7 +180,7 @@ class LiveStockFarmers(AgentBaseClass):
             "Water demand has not been updated for over a year. "
             "Please check the livestock water demand datasets."
         )
-        return self.var.current_water_demand, self.var.current_efficiency
+        return self.var.total_water_demand, self.var.current_efficiency
 
     def step(self) -> None:
         """This function is run each timestep."""

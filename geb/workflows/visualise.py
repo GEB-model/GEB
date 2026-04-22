@@ -46,7 +46,7 @@ def plot_sunburst(
     # The original water_circle seems to sum up 'in' and 'out' and 'storage change'.
 
     def get_total_value(d: dict[str, Any] | float) -> float:
-        if isinstance(d, (int, float)):
+        if isinstance(d, (int, float, np.floating)):
             return float(d)
         total = 0.0
         for k, v in d.items():
