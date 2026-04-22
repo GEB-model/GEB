@@ -724,7 +724,9 @@ class Floods(Module):
                     crs=flood_depth_return_period.rio.crs,
                 )
             elif split_coastal:
-                coastal_flood_depth, inland_flood_depth = flood_depth_return_period
+                coastal_flood_depth, inland_flood_depth, rp_map = (
+                    flood_depth_return_period
+                )
                 if coastal and coastal_boundary_exclude_mask is not None:
                     coastal_flood_depth = coastal_flood_depth.rio.clip(
                         coastal_boundary_exclude_mask.geometry,
@@ -745,6 +747,13 @@ class Floods(Module):
                     / "flood_maps"
                     / f"{return_period}_inland.zarr",
                     crs=inland_flood_depth.rio.crs,
+                )
+                write_zarr(
+                    rp_map,
+                    self.model.output_folder
+                    / "flood_maps"
+                    / f"{return_period}_rp.zarr",
+                    crs=rp_map.rio.crs,
                 )
 
             # simulation.cleanup()
