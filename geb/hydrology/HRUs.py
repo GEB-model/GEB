@@ -135,9 +135,9 @@ def to_grid(
         ).astype(data.dtype, copy=False)  # ty:ignore[invalid-return-type]
     elif fn == "sum":
         # Keep dtype behavior consistent with the other aggregation modes.
-        return np.bincount(
-            HRU_to_grid, weights=data, minlength=n_grid_cells
-        ).astype(data.dtype, copy=False)  # ty:ignore[invalid-return-type]
+        return np.bincount(HRU_to_grid, weights=data, minlength=n_grid_cells).astype(
+            data.dtype, copy=False
+        )  # ty:ignore[invalid-return-type]
     elif fn == "max":
         fill_value = (
             -np.inf
