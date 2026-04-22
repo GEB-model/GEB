@@ -3306,10 +3306,6 @@ class GEBModel(
             validate_order: If True, validate the order of methods using the build_method decorator.
             record_progress: If True, record progress after each method.
             continue_: Continue previous build if it was interrupted or failed.
-
-        Raises:
-            ValueError: If continuing a build and completed methods are not in the methods to run
-                or if the order is incorrect.
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
