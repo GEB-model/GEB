@@ -37,9 +37,11 @@
 - Enable automatic delta compression of time coordinates in zarr files.
 - Reduce RAM usage for models with a complex coastline.
 - Fix for differently sized crop maps from MIRCA-OS that led to issues where maps in regions where some maps did not overlap.
-- Fix for interpolation of MIRCA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765)).
 - Several optimizations that make the model faster: faster grid-conversions, faster forcing interpolation.
 - Some fixes so that the evaluation functions read parquet files rather than the old csv files.
+- Fix for interpolation of MIRCA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765))
+- Make the example build.yml inherit from a new 'reasonable_default_build.yml', allowing seamless updating unless custom settings are used.
+- Update pyflwdir to 0.5.11, which has caching of numba functions. Also thus allows removing of custom cached functions in routing.py.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
