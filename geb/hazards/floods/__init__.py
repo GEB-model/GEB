@@ -748,6 +748,13 @@ class Floods(Module):
                     / f"{return_period}_inland.zarr",
                     crs=inland_flood_depth.rio.crs,
                 )
+                if coastal and coastal_boundary_exclude_mask is not None:
+                    rp_map = rp_map.rio.clip(
+                        coastal_boundary_exclude_mask.geometry,
+                        coastal_boundary_exclude_mask.crs,
+                        invert=False,
+                    )
+
                 write_zarr(
                     rp_map,
                     self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
