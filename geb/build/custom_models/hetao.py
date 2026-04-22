@@ -6,25 +6,24 @@ from typing import Any
 import pandas as pd
 
 from geb.build.methods import build_method
+from geb.build.modules.base import BuildModelBase
 
-from .. import GEBModel
 
-
-class Agents(GEBModel):
+class Hetao(BuildModelBase):
     """Build methods for agents in GEB, including hetao-specific logic."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize an Agents model.
+        """Initialize an Hetao model.
 
-        Forwards all arguments to the base ``GEBModel`` initializer.
+        Forwards all arguments to the base ``BuildModelBase`` initializer.
 
         Args:
-            *args: Positional arguments forwarded to ``GEBModel``.
-            **kwargs: Keyword arguments forwarded to ``GEBModel``.
+            *args: Positional arguments forwarded to ``BuildModelBase``.
+            **kwargs: Keyword arguments forwarded to ``BuildModelBase``.
         """
         super().__init__(*args, **kwargs)
 
-    @build_method(required=True, depends_on=["setup_economic_data"])
+    @build_method(required=True, depends_on=[])
     def setup_water_prices_hetao(
         self,
         start_year: int,

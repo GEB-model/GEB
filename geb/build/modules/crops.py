@@ -1226,7 +1226,7 @@ class Crops(BuildModelBase):
             translate_crop_names=translate_crop_names,
             adjust_currency=adjust_currency,
         )
-        self.set_dict(crop_prices, name="crops/crop_prices")
+        self.set_params(crop_prices, name="crops/crop_prices")
 
     @build_method(depends_on=[], required=False)
     def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:

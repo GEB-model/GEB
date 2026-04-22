@@ -175,7 +175,7 @@ class Agents(GEBModel):
 
             cultivation_costs["data"][str(region_id)] = region_dict
 
-        self.set_dict(cultivation_costs, name="crops/cultivation_costs")
+        self.set_params(cultivation_costs, name="crops/cultivation_costs")
 
     @build_method(depends_on=["setup_economic_data"])
     def setup_irrigation_efficiency_australia(
@@ -946,7 +946,7 @@ class Agents(GEBModel):
                     irrig_dict["data"][region_id] = s.tolist()
 
                 key_name = f"irrigation/{col}"
-                self.set_dict(irrig_dict, name=key_name)
+                self.set_params(irrig_dict, name=key_name)
 
         # Choose which trajectories to use for the model dictionaries:
         # build_and_store_dicts(expanded_linear_df)      # linear
@@ -1484,4 +1484,4 @@ class Agents(GEBModel):
 
             out["data"][region] = series.tolist()
 
-        self.set_dict(out, name=f"socioeconomics/{price_name}")
+        self.set_params(out, name=f"socioeconomics/{price_name}")

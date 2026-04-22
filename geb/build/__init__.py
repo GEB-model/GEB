@@ -57,6 +57,7 @@ from ..workflows.io import (
     read_zarr,
     write_zarr,
 )
+from .custom_models import Hetao
 from .modules import (
     Agents,
     Crops,
@@ -1938,7 +1939,7 @@ class DelayedReader(dict):
 
 
 class GEBModel(
-    Hydrography, Forcing, Crops, LandSurface, Agents, GroundWater, Observations
+    Hydrography, Forcing, Crops, LandSurface, Agents, GroundWater, Observations, Hetao
 ):
     """Main GEB model build class.
 
@@ -1971,6 +1972,7 @@ class GEBModel(
         Agents.__init__(self)
         GroundWater.__init__(self)
         Observations.__init__(self)
+        Hetao.__init__(self)
 
         self.root = root
         self.epsg = epsg
