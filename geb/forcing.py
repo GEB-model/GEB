@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 import numpy as np
 import numpy.typing as npt
 import xarray as xr
+from scipy.sparse import csr_matrix
 
 from geb.geb_types import (
     ArrayFloat32,
@@ -185,6 +186,29 @@ def generate_bilinear_interpolation_weights(
     return indices, weights
 
 
+def apply_bilinear_interpolation_weights(
+    interp_matrix: csr_matrix,
+    data: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Apply precomputed bilinear interpolation weights to a data array.
+
+    Performs the interpolation as a single sparse-dense matrix multiplication,
+    which avoids the large intermediate (N_target, 4, n_timesteps) array that
+    would result from fancy indexing.
+
+    Args:
+        interp_matrix: Precomputed CSR sparse matrix of shape
+            (n_target_cells, n_source_cells) containing the bilinear weights.
+            Typically built once from ``generate_bilinear_interpolation_weights``
+            output.
+        data: Source data array of shape (n_source_cells, n_timesteps).
+
+    Returns:
+        Interpolated array of shape (n_target_cells, n_timesteps).
+    """
+    return interp_matrix @ data
+
+
 def get_pressure_correction_factor(
     DEM: npt.NDArray[np.float32],
     g: float,
@@ -235,7 +259,7 @@ class ForcingLoader(ABC):
         )
         self.forcing_mask = self._load_forcing_mask()
 
-        self.indices, self.weights = generate_bilinear_interpolation_weights(
+        indices, weights = generate_bilinear_interpolation_weights(
             self.forcing_mask.x.values,
             self.forcing_mask.y.values,
             model.hydrology.grid.lon,
@@ -243,7 +267,17 @@ class ForcingLoader(ABC):
             mask=self.grid_mask,
             src_mask=self.forcing_mask.values,
         )
-        self.output_size: int = self.indices.shape[0]
+        self.output_size: int = indices.shape[0]
+
+        # Precompute sparse interpolation matrix so each call to interpolate()
+        # is a single sparse-dense matmul instead of fancy indexing + einsum.
+        n_source: int = int(self.forcing_mask.values.sum())
+        row_idx = np.repeat(np.arange(self.output_size, dtype=np.int32), 4)
+        self.interpolation_matrix: csr_matrix = csr_matrix(
+            (weights.ravel(), (row_idx, indices.ravel())),
+            shape=(self.output_size, n_source),
+            dtype=np.float32,
+        )
         self.xsize: int = model.hydrology.grid.lon.size
         self.ysize: int = model.hydrology.grid.lat.size
 
@@ -433,14 +467,9 @@ class ForcingLoader(ABC):
         Returns:
             The interpolated data array.
         """
-        # data has shape (n_active_cells, n_timesteps)
-        # the corner values must be gathered in the same order as the weights
-        corner_values = data[self.indices, :]  # (N_target, 4, n_timesteps)
-        interpolated = np.sum(
-            corner_values * self.weights[:, :, np.newaxis], axis=1
-        )  # Result is (N_target, n_timesteps)
-
-        return interpolated
+        # Sparse matmul avoids building the large (N_target, 4, n_timesteps)
+        # intermediate tensor from fancy indexing.
+        return apply_bilinear_interpolation_weights(self.interpolation_matrix, data)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate the data array.

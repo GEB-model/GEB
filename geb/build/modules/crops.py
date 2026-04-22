@@ -11,19 +11,22 @@ import xarray as xr
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
     INDEX_INSURANCE_ADAPTATION,
-    IRRIGATION_EFFICIENCY_ADAPTATION,
-    PERSONAL_INSURANCE_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+    IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
     PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
+    TRADITIONAL_INSURANCE_ADAPTATION,
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.geb_types import ArrayBool, ArrayInt32, ArrayInt64, TwoDArrayInt32
+from geb.geb_types import ArrayBool, ArrayInt32, ArrayInt64, ArrayUint8, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     get_linear_indices,
     get_neighbor_cell_ids_for_linear_indices,
     interpolate_na_2d,
+    interpolate_na_along_dim,
+    pad_xy,
     sample_from_map,
     snap_to_grid,
 )
@@ -1293,7 +1296,10 @@ class Crops(BuildModelBase):
             for crop_name, crop_id in crops.items():
                 if crop_name in missing_crops:
                     assert reference is not None
-                    crop_map = self.full_like(reference, fill_value=0, nodata=np.nan)
+                    # when crop is not available in MIRCA-OS, set to nan
+                    crop_map = self.full_like(
+                        reference, fill_value=np.nan, nodata=np.nan
+                    )
                 else:
                     crop_map = self.data_catalog.fetch(
                         f"mirca_os_cropping_area_{year}_{resolution}_{crop_name}_{irrigation_type}"
@@ -1301,7 +1307,11 @@ class Crops(BuildModelBase):
 
                     crop_map = crop_map.isel(
                         get_window(
-                            crop_map.x, crop_map.y, self.bounds, buffer=100
+                            crop_map.x,
+                            crop_map.y,
+                            self.bounds,
+                            buffer=100,
+                            raise_on_buffer_out_of_bounds=False,
                         )  # use a very large buffer so that we use don't get edge effects in the interpolation
                     ).compute()
 
@@ -1310,16 +1320,17 @@ class Crops(BuildModelBase):
                     if reference is None:
                         reference = crop_map.copy()
                     else:
+                        # some maps are smaller than the reference, so we need to pad them
+                        # with np.nan values, so that they can be combined in one dataset.
+                        crop_map = pad_xy(
+                            crop_map,
+                            reference.x[0].item(),
+                            reference.y[0].item(),
+                            reference.x[-1].item(),
+                            reference.y[-1].item(),
+                            constant_values=np.nan,
+                        )
                         crop_map = snap_to_grid(crop_map, reference)
-
-                    crop_map = interpolate_na_2d(crop_map)
-                    crop_map = crop_map.fillna(0)
-
-                crop_map = crop_map.isel(
-                    get_window(crop_map.x, crop_map.y, self.bounds, buffer=2)
-                )
-
-                assert not np.isnan(crop_map.values).any()
 
                 crop_map = crop_map.assign_coords(crop=crop_id)
 
@@ -1329,6 +1340,59 @@ class Crops(BuildModelBase):
             crop_map: xr.DataArray = xr.concat(crop_maps, dim="crop")
             crop_maps_per_irrigation_type[irrigation_type] = crop_map
 
+        # MIRCA does not make a distinction between no cropping and missing data.
+        # So we first need to find where specific crops are missing but others are defined,
+        # and set those to 0. Then we can interpolate the remaining missing values so
+        # that we have a complete map of crop fractions.
+
+        # When there is crop data for some crops in a cell, but not for others, we assume that the
+        # nan value should actually be 0.
+        has_crops_data = ~(
+            np.isnan(crop_maps_per_irrigation_type["ir"]).all(dim="crop")  # ty:ignore[no-matching-overload]
+            & np.isnan(crop_maps_per_irrigation_type["rf"]).all(dim="crop")  # ty:ignore[no-matching-overload]
+        )
+        crop_maps_per_irrigation_type["ir"] = xr.where(
+            has_crops_data, crop_maps_per_irrigation_type["ir"].fillna(0), np.nan
+        )
+        crop_maps_per_irrigation_type["rf"] = xr.where(
+            has_crops_data, crop_maps_per_irrigation_type["rf"].fillna(0), np.nan
+        )
+
+        # Then, we look at all cells again, and fill cells with no crops with nan, so that we can interpolate those later on.
+        # There are two cases where we want to do this:
+        # - ocean cells that have all nan data (and thus no crops)
+        # - cells that have crop data but sum to 0. We need some data here, and we want to fill it eventually with data from the closest cell
+        no_crops_data_in_total = (
+            crop_maps_per_irrigation_type["ir"].sum(dim="crop", skipna=True)
+            + crop_maps_per_irrigation_type["rf"].sum(dim="crop", skipna=True)
+            == 0
+        )
+        crop_maps_per_irrigation_type["ir"] = (
+            crop_maps_per_irrigation_type["ir"]
+            .where(~no_crops_data_in_total, np.nan)
+            .transpose("crop", "y", "x")
+        )
+        crop_maps_per_irrigation_type["rf"] = (
+            crop_maps_per_irrigation_type["rf"]
+            .where(~no_crops_data_in_total, np.nan)
+            .transpose("crop", "y", "x")
+        )
+
+        # then finally, all cells without crop data are interpolated using the nearest neighbor cell with crop data.
+        # Now we should have data everywhere.
+        crop_maps_per_irrigation_type["ir"] = interpolate_na_along_dim(
+            crop_maps_per_irrigation_type["ir"],
+            dim="crop",
+        )
+        crop_maps_per_irrigation_type["rf"] = interpolate_na_along_dim(
+            crop_maps_per_irrigation_type["rf"],
+            dim="crop",
+        )
+
+        # Ensure that we indeed have data everywhere (no nans, no cells with all zeros)
+        assert not np.isnan(crop_maps_per_irrigation_type["rf"].values).any()
+        assert not np.isnan(crop_maps_per_irrigation_type["ir"].values).any()
+
         crop_area_irrigated = crop_maps_per_irrigation_type["ir"].sum(dim="crop")
         crop_area_rainfed = crop_maps_per_irrigation_type["rf"].sum(dim="crop")
         total_crop_area = crop_area_irrigated + crop_area_rainfed
@@ -1337,8 +1401,27 @@ class Crops(BuildModelBase):
             "Total crop area must be greater than zero to compute fractions."
         )
 
+        # Normalize to get fractions
         rainfed_crop_fraction = (crop_maps_per_irrigation_type["rf"]) / total_crop_area
         irrigated_crop_fraction = crop_maps_per_irrigation_type["ir"] / total_crop_area
+
+        rainfed_crop_fraction = rainfed_crop_fraction.rio.write_crs(4326)
+        irrigated_crop_fraction = irrigated_crop_fraction.rio.write_crs(4326)
+
+        # reduce map to the area of interest, with a buffer of 2 cells to avoid edge effects
+        rainfed_crop_fraction = rainfed_crop_fraction.isel(
+            get_window(
+                rainfed_crop_fraction.x, rainfed_crop_fraction.y, self.bounds, buffer=2
+            )
+        )
+        irrigated_crop_fraction = irrigated_crop_fraction.isel(
+            get_window(
+                irrigated_crop_fraction.x,
+                irrigated_crop_fraction.y,
+                self.bounds,
+                buffer=2,
+            )
+        )
 
         assert np.allclose(
             (rainfed_crop_fraction + irrigated_crop_fraction).sum(dim="crop"),
@@ -1442,19 +1525,20 @@ class Crops(BuildModelBase):
                 n_farmers,
                 max(
                     [
+                        FIELD_EXPANSION_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+                        IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
+                        TRADITIONAL_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                         SURFACE_IRRIGATION_EQUIPMENT,
                         WELL_ADAPTATION,
-                        IRRIGATION_EFFICIENCY_ADAPTATION,
-                        FIELD_EXPANSION_ADAPTATION,
-                        PERSONAL_INSURANCE_ADAPTATION,
-                        INDEX_INSURANCE_ADAPTATION,
-                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
             ),
-            -1,
-            dtype=np.int32,
+            0,
+            dtype=np.bool_,
         )
 
         for i in range(n_cells):
@@ -1524,7 +1608,7 @@ class Crops(BuildModelBase):
 
                 adaptations[
                     farmer_indices_in_region, irrigation_equipment_per_farmer
-                ] = 1
+                ] = True
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
@@ -1533,6 +1617,7 @@ class Crops(BuildModelBase):
         self,
         year: int = 2000,
         reduce_crops: bool = False,
+        unify_variants: bool = False,
         replace_base: bool = False,
         minimum_area_ratio: float = 0.01,
         replace_crop_calendar_unit_code: dict = {},
@@ -1542,6 +1627,7 @@ class Crops(BuildModelBase):
         Args:
             year: Reference year (calendar year).
             reduce_crops: If True, reduce the number of crops per calendar based on area.
+            unify_variants: If True, make different cropping patterns of the same crop into one.
             replace_base: If True, replace base crop definitions with alternatives.
             minimum_area_ratio: Threshold for considering a crop present in a unit.
             replace_crop_calendar_unit_code: Optional mapping to replace MIRCA unit codes.
@@ -1844,29 +1930,40 @@ class Crops(BuildModelBase):
             return crop_calendar_per_farmer
 
         def unify_crop_variants(
-            crop_calendar_per_farmer: np.ndarray, target_crop: int
+            crop_calendar_per_farmer: np.ndarray,
+            target_crop: int,
         ) -> np.ndarray:
-            # Create a mask for all entries whose first value == target_crop
-            mask = crop_calendar_per_farmer[..., 0] == target_crop
+            """Replace all full rotation blocks for one crop by the most common block.
 
-            # If the crop does not appear at all, nothing to do
-            if not np.any(mask):
+            Assumes crop_calendar_per_farmer has shape:
+                (n_farmers, n_rotation_slots, 4)
+
+            and that the dominant crop of a block is stored in [0, 0].
+
+            Returns:
+                The updated crop calendar with only one crop rotation type per crop.
+            """
+            # Select full farmer blocks belonging to this dominant crop
+            block_mask = crop_calendar_per_farmer[:, 0, 0] == target_crop
+
+            if not np.any(block_mask):
                 return crop_calendar_per_farmer
 
-            # Extract only the rows/entries that match the target crop
-            crop_entries = crop_calendar_per_farmer[mask]
+            # Full 3D blocks, not individual rows
+            crop_blocks = crop_calendar_per_farmer[block_mask]
 
-            # Among these crop rows, find unique variants and their counts
-            # (axis=0 ensures we treat each row/entry as a unit)
+            # Count unique full-block variants
             unique_variants, variant_counts = np.unique(
-                crop_entries, axis=0, return_counts=True
+                crop_blocks,
+                axis=0,
+                return_counts=True,
             )
 
-            # The most common variant is the unique variant with the highest count
+            # Pick most frequent full rotation block
             most_common_variant = unique_variants[np.argmax(variant_counts)]
 
-            # Replace all the target_crop rows with the most common variant
-            crop_calendar_per_farmer[mask] = most_common_variant
+            # Replace all matching blocks with that dominant full block
+            crop_calendar_per_farmer[block_mask] = most_common_variant
 
             return crop_calendar_per_farmer
 
@@ -1962,6 +2059,14 @@ class Crops(BuildModelBase):
                 crop_calendar_per_farmer, most_common_check, replaced_value
             )
 
+            # Replace others_annual by potatoes as it has the most similar hydrological parameters
+            # Is replaced because others annual is difficult to parametrize (in terms of costs)
+            most_common_check = [POTATOES]
+            replaced_value = [OTHERS_ANNUAL]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
             unique_rows = np.unique(crop_calendar_per_farmer, axis=0)
             values = unique_rows[:, 0, 0]
             unique_values, counts = np.unique(values, return_counts=True)
@@ -1978,12 +2083,13 @@ class Crops(BuildModelBase):
                         == farmer_crop_calender.shape[0]
                     )
 
-            # duplicates = unique_values[counts > 1]
-            # if len(duplicates) > 0:
-            #     for duplicate in duplicates:
-            #         crop_calendar_per_farmer = unify_crop_variants(
-            #             crop_calendar_per_farmer, duplicate
-            #         )
+            if unify_variants:
+                duplicates = unique_values[counts > 1]
+                if len(duplicates) > 0:
+                    for duplicate in duplicates:
+                        crop_calendar_per_farmer = unify_crop_variants(
+                            crop_calendar_per_farmer, duplicate
+                        )
 
         check_crop_calendar(crop_calendar_per_farmer)
 
@@ -2133,7 +2239,7 @@ class Crops(BuildModelBase):
             available_crops_irrigated = np.unique(available_crops[is_irrigated])
             available_crops_rainfed = np.unique(available_crops[~is_irrigated])
 
-            # Remove crops that are not available for both rainfed and irrigated
+            # Remove crops that are not available for either rainfed or irrigated
             available_crops_mask_rainfed = np.zeros_like(
                 farmer_crop_rainfed_fractions, dtype=bool
             )
@@ -2146,55 +2252,70 @@ class Crops(BuildModelBase):
             available_crops_mask_irrigated[available_crops_irrigated] = True
             farmer_crop_irrigated_fractions[~available_crops_mask_irrigated] = 0
 
-            # Normalize the area fractions
-            farmer_crop_rainfed_fractions = (
-                farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
-            )
-            farmer_crop_irrigated_fractions = (
-                farmer_crop_irrigated_fractions / farmer_crop_irrigated_fractions.sum()
-            )
+            if n_rainfed_farmers > 0:
+                # Normalize the area fractions
+                farmer_crop_rainfed_fractions = (
+                    farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
+                )
+                # Discard crops with area smaller than minimum_area_ratio
+                farmer_crop_rainfed_fractions[
+                    farmer_crop_rainfed_fractions < minimum_area_ratio
+                ] = 0
 
-            # Discard crops with area smaller than minimum_area_ratio
-            farmer_crop_rainfed_fractions[
-                farmer_crop_rainfed_fractions < minimum_area_ratio
-            ] = 0
-            farmer_crop_irrigated_fractions[
-                farmer_crop_irrigated_fractions < minimum_area_ratio
-            ] = 0
+                assert not farmer_crop_rainfed_fractions.sum() == 0, (
+                    f"Error: All rainfed crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                )
+                # Normalize the area fractions again after removing small crops
+                farmer_crop_rainfed_fractions = (
+                    farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
+                )
 
-            assert not farmer_crop_rainfed_fractions.sum() == 0, (
-                f"Error: All rainfed crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
-            )
-            assert not farmer_crop_irrigated_fractions.sum() == 0, (
-                f"Error: All irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
-            )
+                # Choose crops for rainfed and irrigated farmers based on the fractions, then combine and shuffle them to assign to farmers in the cell
+                # TODO: Consider farm area here
+                rainfed_crop_choices: ArrayUint8 = np.random.choice(
+                    farmer_crop_rainfed_fractions.size,
+                    size=n_rainfed_farmers,
+                    replace=True,
+                    p=farmer_crop_rainfed_fractions,
+                ).astype(np.uint8)
+            else:
+                rainfed_crop_choices: ArrayUint8 = np.array([], dtype=np.uint8)
 
-            # Normalize the area fractions again after removing small crops
-            farmer_crop_rainfed_fractions = (
-                farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
-            )
-            farmer_crop_irrigated_fractions = (
-                farmer_crop_irrigated_fractions / farmer_crop_irrigated_fractions.sum()
-            )
+            if n_irrigating_farmers > 0:
+                # Normalize the area fractions
+                farmer_crop_irrigated_fractions = (
+                    farmer_crop_irrigated_fractions
+                    / farmer_crop_irrigated_fractions.sum()
+                )
 
-            # Choose crops for rainfed and irrigated farmers based on the fractions, then combine and shuffle them to assign to farmers in the cell
-            # TODO: Consider farm area here
-            rainfed_crop_choices = np.random.choice(
-                farmer_crop_rainfed_fractions.size,
-                size=n_rainfed_farmers,
-                replace=True,
-                p=farmer_crop_rainfed_fractions,
-            )
-            irrigated_crop_choices = np.random.choice(
-                farmer_crop_irrigated_fractions.size,
-                size=n_irrigating_farmers,
-                replace=True,
-                p=farmer_crop_irrigated_fractions,
-            )
-            crop_choices = np.concatenate(
+                # Discard crops with area smaller than minimum_area_ratio
+                farmer_crop_irrigated_fractions[
+                    farmer_crop_irrigated_fractions < minimum_area_ratio
+                ] = 0
+
+                assert not farmer_crop_irrigated_fractions.sum() == 0, (
+                    f"Error: All irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                )
+
+                farmer_crop_irrigated_fractions = (
+                    farmer_crop_irrigated_fractions
+                    / farmer_crop_irrigated_fractions.sum()
+                )
+
+                irrigated_crop_choices: ArrayUint8 = np.random.choice(
+                    farmer_crop_irrigated_fractions.size,
+                    size=n_irrigating_farmers,
+                    replace=True,
+                    p=farmer_crop_irrigated_fractions,
+                ).astype(np.uint8)
+
+            else:
+                irrigated_crop_choices: ArrayUint8 = np.array([], dtype=np.uint8)
+
+            crop_choices: ArrayUint8 = np.concatenate(
                 [rainfed_crop_choices, irrigated_crop_choices]
             )
-            is_irrigated_choices = np.concatenate(
+            is_irrigated_choices: ArrayBool = np.concatenate(
                 [
                     np.zeros(n_rainfed_farmers, dtype=bool),
                     np.ones(n_irrigating_farmers, dtype=bool),

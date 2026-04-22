@@ -8,6 +8,7 @@ import numpy as np
 from numba import njit, prange  # noqa: F401
 
 from geb.geb_types import (
+    ArrayBool,
     ArrayFloat32,
     ArrayFloat64,
     ArrayInt32,
@@ -21,7 +22,6 @@ from geb.workflows.io import read_grid
 
 from ..landcovers import PADDY_IRRIGATED, SEALED
 from .constants import (
-    L_FUSION_J_PER_KG,
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
 )
@@ -1290,7 +1290,7 @@ class LandSurface(Module):
         groundwater_toplayer_conductivity_m_per_day: ArrayFloat32 = (
             self.hydrology.to_HRU(
                 data=self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0],
-                fn=None,  # the top layer is the first groundwater layer
+                # the top layer is the first groundwater layer
             )
         )
         crop_group_number_per_group: ArrayFloat32 = (
@@ -1519,29 +1519,26 @@ class LandSurface(Module):
 
         self.HRU.var.slope_m_per_m = self.hydrology.to_HRU(
             data=slope_m_per_m,
-            fn=None,
         )
 
         hillslope_length_m: ArrayFloat32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["drainage/hillslope_length_m"]
         )
 
-        self.HRU.var.hillslope_length_m = self.hydrology.to_HRU(
-            data=hillslope_length_m, fn=None
-        )
+        self.HRU.var.hillslope_length_m = self.hydrology.to_HRU(data=hillslope_length_m)
 
         leaf_area_index_forest = self.hydrology.grid.load3d(
             self.model.files["other"]["vegetation/leaf_area_index_forest"]
         )
         self.HRU.var.leaf_area_index_forest = self.hydrology.to_HRU(
-            data=leaf_area_index_forest, fn=None
+            data=leaf_area_index_forest
         )
 
         leaf_area_index_grassland_like = self.hydrology.grid.load3d(
             self.model.files["other"]["vegetation/leaf_area_index_grassland_like"],
         )
         self.HRU.var.leaf_area_index_grassland_like = self.hydrology.to_HRU(
-            data=leaf_area_index_grassland_like, fn=None
+            data=leaf_area_index_grassland_like
         )
 
         self.HRU.var.interception_capacity_forest_m = (
@@ -1747,10 +1744,6 @@ class LandSurface(Module):
             )
         )
 
-        # Initialize enthalpy state from the initial diagnostic temperature.
-        # Water is stored as a depth per layer (m), so we convert it to an areal thermal mass.
-        latent_heat_fusion_volumetric_J_per_m3 = L_FUSION_J_PER_KG * RHO_WATER_KG_PER_M3
-
         water_depth_m: TwoDArrayFloat32 = self.HRU.var.water_content_m.copy()
         water_depth_m[0, :] += self.HRU.var.topwater_m
 
@@ -1936,17 +1929,6 @@ class LandSurface(Module):
 
         timer.finish_split("Input preparation")
 
-        pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s
-        pr_total_m3 = (
-            (
-                pr_kg_per_m2_per_s.astype(np.float64).mean(axis=1)
-                * self.HRU.var.cell_area
-            ).sum()  # kg/s
-            * 0.001  # to m3/s
-            * (24 * 3600.0)  # to m3/day
-        )
-        tas_2m_K = self.HRU.tas_2m_K
-
         (
             groundwater_abstraction_m3,
             channel_abstraction_m3,
@@ -1956,17 +1938,19 @@ class LandSurface(Module):
             actual_irrigation_consumption_m,
         ) = self.hydrology.water_demand.step(root_depth_m)
 
-        timer.finish_split("get_water_demand")
+        timer.finish_split("Water demand")
 
         # Obtain capillary rise for the HRUs
-        capillar_rise_m = self.hydrology.to_HRU(data=self.grid.var.capillar, fn=None)
+        capillar_rise_m: ArrayFloat32 = self.hydrology.to_HRU(
+            data=self.grid.var.capillar
+        )
         if capillar_rise_m.sum() > 0.0:
             raise NotImplementedError(
                 "Capillary rise is not implemented in the land surface model yet."
             )
 
         # TODO: pre-compute this once only
-        delta_z = (
+        delta_z: TwoDArrayFloat32 = (
             self.HRU.var.soil_layer_height_m[:-1, :]
             + self.HRU.var.soil_layer_height_m[1:, :]
         ) / 2
@@ -1975,6 +1959,10 @@ class LandSurface(Module):
         # This reflects the multi-year thermal inertia of the deep soil profile.
         averaging_period_days = np.float32(10.0 * 365.25)
         averaging_weight_alpha = np.float32(1.0) / averaging_period_days
+
+        # Load temperature at 2m as a proxy for deep soil temperature boundary condition, which is a common approach in land surface modeling.
+        tas_2m_K: TwoDArrayFloat32 = self.HRU.tas_2m_K
+
         self.HRU.var.deep_soil_temperature_C[:] = (
             self.HRU.var.deep_soil_temperature_C
             * (np.float32(1.0) - averaging_weight_alpha)
@@ -1985,6 +1973,8 @@ class LandSurface(Module):
         )
 
         timer.finish_split("Deep soil temperature update")
+
+        pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.HRU.pr_kg_per_m2_per_s
 
         land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(
             root_depth_m=root_depth_m,
@@ -1998,7 +1988,9 @@ class LandSurface(Module):
             deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
         )
+
         timer.finish_split("Prepare inputs for land surface model")
+
         (
             rain_m,
             snow_m,
@@ -2061,14 +2053,6 @@ class LandSurface(Module):
                 1:, :
             ],
             water_content_m=self.HRU.var.water_content_m[1:, :],
-        )
-        top_soil_frozen_fraction: ArrayFloat32 = get_frozen_fraction_from_enthalpy(
-            enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[0, :],
-            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
-                0, :
-            ],
-            water_content_m=self.HRU.var.water_content_m[0, :],
-            topwater_m=self.HRU.var.topwater_m,
         )
 
         if __debug__:
@@ -2187,20 +2171,15 @@ class LandSurface(Module):
                     f"Land surface enthalpy balance check failed at HRU index {enthalpy_imbalance_index}."
                 )
 
-        actual_evapotranspiration_m = (
+        actual_evapotranspiration_m: ArrayFloat32 = (
             interception_evaporation_m
             + open_water_evaporation_m
             + transpiration_m
             + bare_soil_evaporation_m
             + irrigation_loss_to_evaporation_m
         )
-        top_soil_evaporation_m: ArrayFloat32 = (
-            bare_soil_evaporation_m + open_water_evaporation_m
-        )
 
-        runoff_m_daily = runoff_m.sum(axis=1)
-
-        growing_crop_mask = self.HRU.var.crop_map != -1
+        growing_crop_mask: ArrayBool = self.HRU.var.crop_map != -1
 
         self.HRU.var.actual_evapotranspiration_crop_life[growing_crop_mask] += (
             actual_evapotranspiration_m[growing_crop_mask]
@@ -2225,14 +2204,40 @@ class LandSurface(Module):
             reference_evapotranspiration_grass_m, pr_kg_per_m2_per_s
         )
         self.model.agents.crop_farmers.save_pr(pr_kg_per_m2_per_s)
-        runoff_m = runoff_m.transpose()
-        interflow_m = interflow_m.transpose()
-        self.report(locals())
 
         timer.finish_split("Finalization")
 
+        top_soil_frozen_fraction: ArrayFloat32 = get_frozen_fraction_from_enthalpy(
+            enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[0, :],
+            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
+                0, :
+            ],
+            water_content_m=self.HRU.var.water_content_m[0, :],
+            topwater_m=self.HRU.var.topwater_m,
+        )
+
+        top_soil_evaporation_m: ArrayFloat32 = (
+            bare_soil_evaporation_m + open_water_evaporation_m
+        )
+        runoff_m_daily: ArrayFloat32 = runoff_m.sum(axis=1)
+        runoff_m: TwoDArrayFloat32 = runoff_m.transpose()
+        interflow_m: TwoDArrayFloat32 = interflow_m.transpose()
+
+        self.report(locals())
+
+        timer.finish_split("Reporting")
+
         if self.model.timing:
             self.model.logger.debug(timer)
+
+        pr_total_m3: np.float64 = (
+            (
+                pr_kg_per_m2_per_s.astype(np.float64).mean(axis=1)
+                * self.HRU.var.cell_area
+            ).sum()  # kg/s
+            * 0.001  # to m3/s
+            * (24 * 3600.0)  # to m3/day
+        )
 
         return (
             reference_evapotranspiration_water_m,

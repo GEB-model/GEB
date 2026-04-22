@@ -1,6 +1,25 @@
 # dev
+- Remove `ncpus` config option from SFINCS. CPU count is now always determined automatically from the SLURM environment or system.
 - Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
 - Remove setup_irrigation_sources from build process as it is not needed anymore.
+- Fix basin delineation for endorheic basins.
+- Fix division by zero error for reservoirs that have no long term inflow.
+- Reduce RAM usage of reading GTSM data.
+- Table-like data is exported as parquet rather than csv (saves lots of space on disk).
+- Better compression of reported data. Most importantly, floats are now bitrounded with a maximum error of around 0.01%. In one test, the hourly discharge is now 168MB instead of 487MB.
+- In reported spatial data, the time dimension is now the last dimension. This allows for better compressibility (because of spatial auto-correlation). If you make plots and read the data with xarray you likely won't notice. If you read the data in funky ways with numpy, you may need to adapt some scripts.
+- Report discharge for outflow points of all rivers instead of just the outflow at the end of the basin with _outflow_points is set to true in the report.
+- Use the reported time series tables instead of grid when setting up the SFINCS models and estimating return period values.
+- Do not report discharge grid data by default in example (saving lots of disk space). You can re-enable this manually when you need it.
+- Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
+- Fix all typing issues.
+- Enable better compression for any table-like data. Mostly targets GTSM data that is now better compressed.
+- All agricultural insurances premiums and insured yields are now determined by a new insurer agent named "insurers". The adaptation itself is still within crop_farmers. For index and precipitation insurance functions have been added to estimate candidate spaces for the potential contracts have been added. These estimate strike, exit and rates from the index and income/loss data. Additional insurers functionalities can be added to this agent now. 
+- A hydrological year start month parameter has been added. This is a simple variable under "general" in the model.yml that indicates which month of the year the hydrological year starts. The base variable is 1 (january). Crop_farmers, livestock_farmers, market reservoir_operators, waterbodies and insurers take yearly actions at the start of the hydrological year. 
+- setup_waterbodies has a new functionality where it can create reservoir command areas just based on the hydrology and reservoirs using the calculate_command_areas setting. 
+- Bug fix where unify_crop_variants did not work for farmers for crop rotations with more than 1 crop. 
+- self.var.adaptations is now a boolean array. Run `geb update -b build.yml::setup_farmer_crop_calendar` for it to become boolean. 
+- setup_SPEI and setup_pr_GEV had issues with the grids not properly being assigned the actual GEV values. Rerun `geb update -b build.yml::setup_SPEI` and `geb update -b build.yml::setup_pr_GEV` to update
 - Fix division by zero error for reservoirs that have no long term inflow.
 - Fix basin delineation for endorheic basins.
 - Table-like data is exported as parquet rather than csv (saves lots of space on disk).
@@ -16,9 +35,22 @@
 - Save GTSM data as zarr with fixedscaleoffset and delta compression. Also adapt GTSM readers in model accordingly.
 - Remove all local caching during build to save disk space.
 - Enable automatic delta compression of time coordinates in zarr files.
+- Reduce RAM usage for models with a complex coastline.
+- Fix for differently sized crop maps from MIRCA-OS that led to issues where maps in regions where some maps did not overlap.
+- Several optimizations that make the model faster: faster grid-conversions, faster forcing interpolation.
+- Some fixes so that the evaluation functions read parquet files rather than the old csv files.
+- Fix for interpolation of MIRCA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765))
+- Make the example build.yml inherit from a new 'reasonable_default_build.yml', allowing seamless updating unless custom settings are used.
+- Update pyflwdir to 0.5.11, which has caching of numba functions. Also thus allows removing of custom cached functions in routing.py.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.
+
+# v1.0.0b21
+
 - Re-run `setup_gtsm_station_data`.
 
 # v1.0.0b20
