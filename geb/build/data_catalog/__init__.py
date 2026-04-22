@@ -19,6 +19,7 @@ from .flood_damage_model import (
     GeulFloodDamageModel,
     GlobalFloodDamageModel,
 )
+from .windstorm_damage_model import FranceWindstormDamageModel
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
@@ -843,6 +844,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Huizinga et al. (2017)",
             "version": "1.0",
             "license": "CC BY 4.0",
+        },
+    },
+    "france_windstorm_damage_model": {
+        "adapter": FranceWindstormDamageModel(
+            folder=None,
+            local_version=None,
+            filename=None,
+            cache=None,
+        ),
+        "url": None,  # No direct URL available for local damage functions
+        "source": {
+            "name": "Windstorm Damage Functions",
+            "author": "Aznar-Siguan and Bresch (2019)",
+            "version": "1.0",
+            "license": "CC BY 4.0", # double check this, assuming from others
         },
     },
     "delta_dtm": {

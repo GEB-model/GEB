@@ -185,57 +185,6 @@ class Households(AgentBaseClass):
             # Load postal codes --
             # TODO: maybe move it to another function? (not really an object)
             self.postal_codes = read_geom(self.model.files["geom"]["postal_codes"])
-
-    # not in current main version
-    # def load_flood_maps(self) -> None:
-    #     self.return_periods = np.array(
-    #         self.model.config["hazards"]["flood"]["return_periods"]
-    #     )
-
-    #     flood_maps = {}
-    #     for return_period in self.return_periods:
-    #         file_path = (
-    #             self.model.output_folder / "flood_maps" / f"return_level_rp{return_period}.zarr"
-    #         )
-    #         flood_maps[return_period] = read_zarr(file_path)
-    #     self.flood_maps = flood_maps
-    # Modification
-    # def load_wind_maps(self):
-    #     """Load wind maps in this case for the 50 and 100 return periods.This maps are created separately and copied to the "wind_maps" folder.Creating the folder and copying the wind maps should be done manually."""
-    #     self.windstorm_return_periods = np.array(
-    #         self.model.config["hazards"]["windstorm"]["return_periods"]
-    #     )
-
-    #     debug_maps = bool(
-    #         self.model.config.get("hazards", {})
-    #         .get("windstorm", {})
-    #         .get("debug_maps", False)
-    #     )
-
-    #     windstorm_maps = {}
-    #     windstorm_path = self.model.output_folder / "wind_maps"
-    #     for return_period in self.windstorm_return_periods:
-    #         file_path = (
-    #             windstorm_path / f"return_level_rp{return_period}.tif"
-    #         )  # adjust to file name
-    #         windstorm_map = xr.open_dataarray(file_path, engine="rasterio")
-
-    #         if debug_maps:
-    #             try:
-    #                 crs = windstorm_map.rio.crs
-    #             except Exception:
-    #                 crs = None
-    #             print(
-    #                 "Loaded windstorm map: "
-    #                 f"rp={int(return_period)}, path={file_path}, "
-    #                 f"shape={tuple(windstorm_map.shape)}, crs={crs}"
-    #             )
-
-    #         windstorm_maps[return_period] = windstorm_map
-
-    #     self.windstorm_maps = windstorm_maps
-    #     # print("Wind maps loaded for return periods:", self.windstorm_return_periods)
-
     
 
     def construct_income_distribution(self) -> None:
@@ -369,18 +318,18 @@ class Households(AgentBaseClass):
             np.unique(self.var.building_id_of_household.data[household_adapting])
         ).dropna()
         building_id_of_household = building_id_of_household.astype(int).astype(str)
-        building_id_of_household["flood_proofed"] = True
+        building_id_of_household["adapted"] = True
         building_id_of_household = building_id_of_household.set_index(0)
 
-        # Add/Update the flood_proofed status in buildings based on OSM way IDs
-        self.buildings["flood_proofed"] = (
-            self.buildings["id"]
-            .astype(str)
-            .map(building_id_of_household["flood_proofed"])
+        if col_name not in self.buildings.columns:
+            self.buildings[col_name] = False  # Initialize column if it doesn't exist
+        
+        self.buildings[col_name] = (
+            (self.buildings["id"].astype(str).map(building_id_of_household["adapted"]))
+            .fillna(self.buildings[col_name])  # Keep existing value if not in adapting households
+            .astype(bool)  # Ensure boolean type    
         )
 
-        # Replace NaNs with False (i.e., buildings not in the adapting households list)
-        self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(False)
 
     def assign_household_attributes(self) -> None:
         """Household locations are already sampled from population map in GEBModel.setup_population().
@@ -589,74 +538,6 @@ class Households(AgentBaseClass):
         # assign income and wealth attributes
         self.assign_household_wealth_and_income()
 
-        # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
-        self.var.property_value = DynamicArray(
-            (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
-        )
-
-        ### CARO BASED ON DAMAGE and BUILDING FOOTPRINT
-
-        # # load household points (only in use for damagescanner, could be removed)
-        # household_points = gpd.GeoDataFrame(
-        #     geometry=gpd.points_from_xy(
-        #         self.var.locations.data[:, 0], self.var.locations.data[:, 1]
-        #     ),
-        #     crs="EPSG:4326",
-        # )
-        # self.var.household_points = household_points
-
-        # buildings = self.buildings.copy()
-
-        # household_points_copy = self.var.household_points.copy()
-        # household_points_copy["building_id"] = self.var.building_id_of_household
-
-        # household_points_copy = household_points_copy.merge(
-        #     buildings[["id", "geom", "occupancy"]],
-        #     left_on="building_id",
-        #     right_on="id",
-        #     how="left",
-        # )
-
-        # projected_crs = buildings.estimate_utm_crs()
-        # household_points_copy = household_points_copy.set_geometry("geometry_y")
-        # household_points_copy = household_points_copy.to_crs(projected_crs)
-
-        # household_points_copy["building_area"] = household_points_copy[
-        #     "geometry_y"
-        # ].area
-
-        # self.var.household_building_area = DynamicArray(
-        #  household_points_copy["building_area"].values.astype(np.float32),
-        #     max_n=self.max_n
-        # )
-
-        # self.var.property_value = DynamicArray(
-        #     (
-        #         self.var.household_building_area.data
-        #         * self.var.max_dam_buildings_structure
-        #     ).astype(np.int64),
-        #     max_n=self.max_n,
-        # )
-
-        # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
-        # adaptation_costs = (
-        #     np.maximum(self.var.property_value.data * 0.05, 10_800)
-        # ).astype(np.int64)
-        # self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
-
-        # loan_duration_w = self.model.config["agent_settings"]["households"][
-        #     "loan_duration_years_w"
-        # ]
-        # shutters_total = np.maximum(self.var.property_value.data * 0.02, 2_000).astype(
-        #     np.float32
-        # )
-        # # shutters_annual = shutters_total  # / np.float32(loan_duration_w)
-
-        # self.var.adaptation_costs_shutters = DynamicArray(
-        #     shutters_total, max_n=self.max_n
-        # )
-
-
         #NEW CODE WITH RECONSTRUCTION VALUES
         self.var.household_points = gpd.GeoDataFrame(
             geometry=gpd.points_from_xy(
@@ -697,25 +578,6 @@ class Households(AgentBaseClass):
         else:
             hh_footprint_m2 = np.zeros(self.n, dtype=np.float32)
             hh_structural_value_usd = np.zeros(self.n, dtype=np.float32)
-
-        # buildings = self.buildings.copy()
-
-        # buildings = gpd.GeoDataFrame(
-        #     buildings,
-        #     geometry=gpd.points_from_xy(buildings["x"], buildings["y"]),
-        #     crs="EPSG:4326",
-        # )
-        # adaptation_costs = (
-        #     np.maximum(self.var.max_dam_buildings_structure *  self.var.household_building_area.data * 0.05, 10_800)
-        # ).astype(np.int64)
-        # self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
-
-        # loan_duration_w = self.model.config["agent_settings"]["households"]["loan_duration_years_w"]
-
-        # shutters_cost = np.maximum(self.var.max_dam_buildings_structure * self.var.household_building_area.data * 0.02, 2_000).astype(np.float32)
-        # self.var.adaptation_costs_shutters = DynamicArray(
-        #     shutters_cost, max_n=self.max_n
-        # )
 
         self.var.household_building_area = DynamicArray(hh_footprint_m2, max_n=self.max_n)
 
@@ -1001,59 +863,56 @@ class Households(AgentBaseClass):
         """Update the risk perceptions of households based on the latest flood data."""
         self.var.years_since_last_windstorm.data += 1
 
-        # wind_cfg = self.model.config.get("hazards", {}).get("windstorm", {})
-        # adapt_to_actual_windstorms = bool(wind_cfg.get("adapt_to_actual_windstorms", True))
+        # # if adapt_to_actual_windstorms:
+        # if self.config["adapt_to_actual_windstorms"]:  # NEW
+        #     for event in self.windstorm_events:  # NEW
+        #         end: datetime = event["end_time"]  # NEW
 
-        # if adapt_to_actual_windstorms:
-        if self.config["adapt_to_actual_windstorms"]:  # NEW
-            for event in self.windstorm_events:  # NEW
-                end: datetime = event["end_time"]  # NEW
+        #         if self.model.current_time == end + timedelta(days=14):
+        #             windstorm_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.tif"
+        #             windstorm_map_path: Path = (
+        #                 self.model.output_folder / "wind_maps" / windstorm_map_name
+        #             )
 
-                if self.model.current_time == end + timedelta(days=14):
-                    windstorm_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.tif"
-                    windstorm_map_path: Path = (
-                        self.model.output_folder / "wind_maps" / windstorm_map_name
-                    )
+        #             windstorm_map: xr.DataArray = xr.open_dataarray(
+        #                 windstorm_map_path, engine="rasterio"
+        #             ).squeeze()
 
-                    windstorm_map: xr.DataArray = xr.open_dataarray(
-                        windstorm_map_path, engine="rasterio"
-                    ).squeeze()
+        #             buildings = self.buildings.copy()
+        #             buildings_proj = buildings.to_crs(windstorm_map.rio.crs)
 
-                    buildings = self.buildings.copy()
-                    buildings_proj = buildings.to_crs(windstorm_map.rio.crs)
+        #             xs = buildings_proj.geometry.centroid.x.values
+        #             ys = buildings_proj.geometry.centroid.y.values
 
-                    xs = buildings_proj.geometry.centroid.x.values
-                    ys = buildings_proj.geometry.centroid.y.values
+        #             speed = windstorm_map.interp(
+        #                 x=("points", xs), y=("points", ys)
+        #             ).values
+        #             speed = np.nan_to_num(speed, nan=0.0)
 
-                    speed = windstorm_map.interp(
-                        x=("points", xs), y=("points", ys)
-                    ).values
-                    speed = np.nan_to_num(speed, nan=0.0)
+        #             buildings_proj["windstorm_hit"] = speed > 30.0
 
-                    buildings_proj["windstorm_hit"] = speed > 30.0
+        #             windstorm_hit_building_ids = set(
+        #                 buildings_proj.loc[buildings_proj["windstorm_hit"], "id"]
+        #             )
 
-                    windstorm_hit_building_ids = set(
-                        buildings_proj.loc[buildings_proj["windstorm_hit"], "id"]
-                    )
+        #             hit_households = np.isin(
+        #                 self.var.building_id_of_household,
+        #                 list(windstorm_hit_building_ids),
+        #             )
 
-                    hit_households = np.isin(
-                        self.var.building_id_of_household,
-                        list(windstorm_hit_building_ids),
-                    )
+        #             self.var.years_since_last_windstorm.data[hit_households] = 0
 
-                    self.var.years_since_last_windstorm.data[hit_households] = 0
+        #             n_buildings = len(buildings_proj)
+        #             n_hit_buildings = buildings_proj["windstorm_hit"].sum()
+        #             n_hit_households = hit_households.sum()
 
-                    n_buildings = len(buildings_proj)
-                    n_hit_buildings = buildings_proj["windstorm_hit"].sum()
-                    n_hit_households = hit_households.sum()
-
-                    print(
-                        f"Windstorm hit buildings: {n_hit_buildings}/{n_buildings}, "
-                        f"Hit households: {n_hit_households}"
-                    )
-        else:
-            windstorm_household_indices = self.return_period_windstorm()
-            self.var.years_since_last_windstorm.data[windstorm_household_indices] = 0
+        #             print(
+        #                 f"Windstorm hit buildings: {n_hit_buildings}/{n_buildings}, "
+        #                 f"Hit households: {n_hit_households}"
+        #             )
+        # else:
+        windstorm_household_indices = self.return_period_windstorm()
+        self.var.years_since_last_windstorm.data[windstorm_household_indices] = 0
 
         self.var.risk_perception_windstorm.data = (
             self.var.risk_perc_w_max
@@ -2308,7 +2167,7 @@ class Households(AgentBaseClass):
 
         inc = self.var.income.data.astype(np.float32)
         w = self.var.wealth.data.astype(np.float32)
-        budget = 0.5 * inc * np.float32(exp_cap)  # + (0.1 * w * np.float32(exp_cap))
+        budget = 0.5 * inc * np.float32(exp_cap) + (0.1 * w * np.float32(exp_cap))
 
         flood_cost = self.var.adaptation_costs.data.astype(
             np.float32

@@ -2896,8 +2896,8 @@ class GEBModel(
             if "geoms" in files:
                 files["geom"] = files.pop("geoms", {})
 
-            for category in EXPECTED_FILE_LIBRARY_CATEGORIES:
-                files.setdefault(category, {})
+            # for category in EXPECTED_FILE_LIBRARY_CATEGORIES:
+            #     files.setdefault(category, {})
         return files
 
     def read_geom(self) -> None:
