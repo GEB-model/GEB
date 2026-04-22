@@ -117,7 +117,6 @@ nav:
     - Government: agents/government.md
     - Market: agents/market.md
     - Industry: agents/industry.md
-    - Insurers: agents/insurers.md
     - ODD protocol: agents/ODD/protocol.md
   - Hydrology:
     - Overview: hydrology/index.md

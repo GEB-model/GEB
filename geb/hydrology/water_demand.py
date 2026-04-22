@@ -216,9 +216,6 @@ class WaterDemand(Module):
             Irrigation loss to evaporation per HRU [m].
             Total water demand loss [m3].
             The actual irrigation consumption [m].
-
-        Raises:
-            ValueError: If reservoir abstraction doesn't fully deplete calculated volume.
         """
         timer: TimingModule = TimingModule("Water demand")
 
@@ -404,16 +401,10 @@ class WaterDemand(Module):
         self.withdraw(available_reservoir_storage_m3, reservoir_abstraction_m3_farmers)
         self.withdraw(available_groundwater_m3, groundwater_abstraction_m3_farmers)
 
-        reservoir_storage_tolerance_m3 = 10000
-        offending_mask = (
-            available_reservoir_storage_m3 >= reservoir_storage_tolerance_m3
+        assert (available_reservoir_storage_m3 < 1000).all(), (
+            "Reservoir storage should be empty after abstraction. "
+            f"Offending values: {available_reservoir_storage_m3[available_reservoir_storage_m3 >= 50]}"
         )
-        if offending_mask.any():
-            raise ValueError(
-                "Reservoir storage should be empty after abstraction. "
-                f"Found remaining storage >= {reservoir_storage_tolerance_m3} m3: "
-                f"{available_reservoir_storage_m3[offending_mask]}"
-            )
 
         timer.finish_split("Irrigation")
 
@@ -491,12 +482,6 @@ class WaterDemand(Module):
             )
         if self.model.timing:
             self.model.logger.debug(timer)
-
-        self.var.return_flow_m3_agents = np.bincount(
-            self.HRU.var.land_owners[self.HRU.var.land_owners != -1],
-            weights=return_flow_irrigation_m[self.HRU.var.land_owners != -1]
-            * self.HRU.var.cell_area[self.HRU.var.land_owners != -1],
-        )
 
         self.report(locals())
 

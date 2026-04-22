@@ -11,11 +11,10 @@ import xarray as xr
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
     INDEX_INSURANCE_ADAPTATION,
-    IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
-    IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
+    IRRIGATION_EFFICIENCY_ADAPTATION,
+    PERSONAL_INSURANCE_ADAPTATION,
     PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
-    TRADITIONAL_INSURANCE_ADAPTATION,
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
@@ -1525,20 +1524,19 @@ class Crops(BuildModelBase):
                 n_farmers,
                 max(
                     [
-                        FIELD_EXPANSION_ADAPTATION,
-                        INDEX_INSURANCE_ADAPTATION,
-                        IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
-                        IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-                        TRADITIONAL_INSURANCE_ADAPTATION,
-                        PR_INSURANCE_ADAPTATION,
                         SURFACE_IRRIGATION_EQUIPMENT,
                         WELL_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION,
+                        FIELD_EXPANSION_ADAPTATION,
+                        PERSONAL_INSURANCE_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
             ),
-            0,
-            dtype=np.bool_,
+            -1,
+            dtype=np.int32,
         )
 
         for i in range(n_cells):
@@ -1608,7 +1606,7 @@ class Crops(BuildModelBase):
 
                 adaptations[
                     farmer_indices_in_region, irrigation_equipment_per_farmer
-                ] = True
+                ] = 1
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
@@ -1617,7 +1615,6 @@ class Crops(BuildModelBase):
         self,
         year: int = 2000,
         reduce_crops: bool = False,
-        unify_variants: bool = False,
         replace_base: bool = False,
         minimum_area_ratio: float = 0.01,
         replace_crop_calendar_unit_code: dict = {},
@@ -1627,7 +1624,6 @@ class Crops(BuildModelBase):
         Args:
             year: Reference year (calendar year).
             reduce_crops: If True, reduce the number of crops per calendar based on area.
-            unify_variants: If True, make different cropping patterns of the same crop into one.
             replace_base: If True, replace base crop definitions with alternatives.
             minimum_area_ratio: Threshold for considering a crop present in a unit.
             replace_crop_calendar_unit_code: Optional mapping to replace MIRCA unit codes.
@@ -1930,40 +1926,29 @@ class Crops(BuildModelBase):
             return crop_calendar_per_farmer
 
         def unify_crop_variants(
-            crop_calendar_per_farmer: np.ndarray,
-            target_crop: int,
+            crop_calendar_per_farmer: np.ndarray, target_crop: int
         ) -> np.ndarray:
-            """Replace all full rotation blocks for one crop by the most common block.
+            # Create a mask for all entries whose first value == target_crop
+            mask = crop_calendar_per_farmer[..., 0] == target_crop
 
-            Assumes crop_calendar_per_farmer has shape:
-                (n_farmers, n_rotation_slots, 4)
-
-            and that the dominant crop of a block is stored in [0, 0].
-
-            Returns:
-                The updated crop calendar with only one crop rotation type per crop.
-            """
-            # Select full farmer blocks belonging to this dominant crop
-            block_mask = crop_calendar_per_farmer[:, 0, 0] == target_crop
-
-            if not np.any(block_mask):
+            # If the crop does not appear at all, nothing to do
+            if not np.any(mask):
                 return crop_calendar_per_farmer
 
-            # Full 3D blocks, not individual rows
-            crop_blocks = crop_calendar_per_farmer[block_mask]
+            # Extract only the rows/entries that match the target crop
+            crop_entries = crop_calendar_per_farmer[mask]
 
-            # Count unique full-block variants
+            # Among these crop rows, find unique variants and their counts
+            # (axis=0 ensures we treat each row/entry as a unit)
             unique_variants, variant_counts = np.unique(
-                crop_blocks,
-                axis=0,
-                return_counts=True,
+                crop_entries, axis=0, return_counts=True
             )
 
-            # Pick most frequent full rotation block
+            # The most common variant is the unique variant with the highest count
             most_common_variant = unique_variants[np.argmax(variant_counts)]
 
-            # Replace all matching blocks with that dominant full block
-            crop_calendar_per_farmer[block_mask] = most_common_variant
+            # Replace all the target_crop rows with the most common variant
+            crop_calendar_per_farmer[mask] = most_common_variant
 
             return crop_calendar_per_farmer
 
@@ -2059,14 +2044,6 @@ class Crops(BuildModelBase):
                 crop_calendar_per_farmer, most_common_check, replaced_value
             )
 
-            # Replace others_annual by potatoes as it has the most similar hydrological parameters
-            # Is replaced because others annual is difficult to parametrize (in terms of costs)
-            most_common_check = [POTATOES]
-            replaced_value = [OTHERS_ANNUAL]
-            crop_calendar_per_farmer = replace_crop(
-                crop_calendar_per_farmer, most_common_check, replaced_value
-            )
-
             unique_rows = np.unique(crop_calendar_per_farmer, axis=0)
             values = unique_rows[:, 0, 0]
             unique_values, counts = np.unique(values, return_counts=True)
@@ -2083,13 +2060,12 @@ class Crops(BuildModelBase):
                         == farmer_crop_calender.shape[0]
                     )
 
-            if unify_variants:
-                duplicates = unique_values[counts > 1]
-                if len(duplicates) > 0:
-                    for duplicate in duplicates:
-                        crop_calendar_per_farmer = unify_crop_variants(
-                            crop_calendar_per_farmer, duplicate
-                        )
+            # duplicates = unique_values[counts > 1]
+            # if len(duplicates) > 0:
+            #     for duplicate in duplicates:
+            #         crop_calendar_per_farmer = unify_crop_variants(
+            #             crop_calendar_per_farmer, duplicate
+            #         )
 
         check_crop_calendar(crop_calendar_per_farmer)
 

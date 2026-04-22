@@ -19,7 +19,6 @@ from shapely.geometry import LineString, shape
 from geb.build.data_catalog import DataCatalog
 from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
-from geb.build.workflows.command_areas import derive_command_areas_from_routing
 from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
     ArrayBool,
@@ -1135,47 +1134,31 @@ class Hydrography(BuildModelBase):
     def setup_waterbodies(
         self,
         command_areas: None | str = None,
-        calculate_command_areas: None | str = None,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
-        """Set up waterbodies, reservoirs, and command areas.
-
-        Configure waterbodies and their associated command areas for the model grid.
-        This includes rasterizing lake and reservoir identifiers, optionally
-        assigning command areas from preset data or by deriving them from the river
-        routing network, and updating reservoir storage capacities.
-
-        Notes:
-            If ``command_areas`` is provided, those geometries are used to
-            define reservoir command areas and mapped onto the model grid and
-            subgrid. If no preset command areas are provided but
-            ``calculate_command_areas`` is true, command areas are derived by
-            propagating reservoir influence along the routing network. If
-            ``custom_reservoir_capacity`` is provided, reservoir volumes are
-            overridden using that table.
+        """Sets up the waterbodies for GEB.
 
         Args:
-            command_areas: Identifier of the preset command area data in the
-                data catalog. If None, command areas can be calculated from the
-                routing network instead.
-            calculate_command_areas: Flag or identifier indicating that command areas
-                should be calculated based on the routing network. If false, command
-                areas are not calculated and default to a missing value.
-            custom_reservoir_capacity: Identifier of the custom reservoir capacity
-                data in the data catalog. If None, the default reservoir capacities
-                from the waterbody dataset are used. The table must have
-                ``waterbody_id`` as the index and a ``volume_total`` column defining
-                the reservoir capacity.
+            command_areas: The path to the command areas data in the data catalog. If None, command areas are not set up.
+            custom_reservoir_capacity: The path to the custom reservoir capacity data in the data catalog.
+                If None, the default reservoir capacity is used. The data should be a DataFrame with
+                'waterbody_id' as the index and 'volume_total' as the column for the reservoir capacity.
+
+        Notes:
+            This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
+            specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
+            grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
+            of the model with names of the form 'waterbodies/{grid_name}'.
+
+            The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
+            command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
+            databases. The relative area of each command area within the model region is calculated and set as a column in
+            the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
+            with any custom reservoir capacity data from the data catalog.
 
         Raises:
             ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
-            ValueError: If command_areas and calculate_command_areas are both provided.
         """
-        if command_areas and calculate_command_areas:
-            raise ValueError(
-                "command_areas and calculate_command_areas cannot both be provided. "
-                "Use either preset command areas or calculate them from the routing network."
-            )
         waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
             columns=[
@@ -1188,7 +1171,9 @@ class Hydrography(BuildModelBase):
             ],
         )
         # only select waterbodies that intersect with the region
-        waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
+        waterbodies: gpd.GeoDataFrame = waterbodies[
+            waterbodies.intersects(self.region.union_all())
+        ]
 
         hydrolakes_to_geb: dict[int, np.int32] = {
             1: np.int32(LAKE),
@@ -1240,14 +1225,14 @@ class Hydrography(BuildModelBase):
             command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
 
             # Set lakes with command area to reservoirs and reservoirs without command area to lakes
-            ids_with_command: set[int] = set(command_areas["waterbody_id"])
+            ids_with_command: set = set(command_areas["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
                 "waterbody_type",
             ] = RESERVOIR
 
             # Lastly remove command areas that have no associated water body
-            reservoir_ids: set[int] = set(
+            reservoir_ids: set = set(
                 waterbodies.loc[
                     waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
                 ]
@@ -1261,54 +1246,27 @@ class Hydrography(BuildModelBase):
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             command_area_raster = rasterize_like(
-                gdf=command_areas_dissolved,
+                gdf=command_areas,
                 column="waterbody_id",
                 raster=self.grid["mask"],
                 nodata=-1,
                 dtype=np.int32,
                 all_touched=True,
             )
+            self.set_grid(command_area_raster, name="waterbodies/command_area")
 
             subcommand_area_raster = rasterize_like(
-                gdf=command_areas_dissolved,
+                gdf=command_areas,
                 column="waterbody_id",
                 raster=self.subgrid["mask"],
                 nodata=-1,
                 dtype=np.int32,
                 all_touched=True,
             )
-
-        elif calculate_command_areas:
-            from geb.build import get_river_graph
-
-            river_graph = get_river_graph(self.data_catalog)
-
-            mapped_reservoirs_grid, mapped_reservoirs_subgrid = (
-                derive_command_areas_from_routing(
-                    waterbodies=waterbodies,
-                    rivers=self.geom["routing/rivers"],
-                    basin_ids=self.grid["routing/basin_ids"],
-                    grid_mask=self.grid["mask"],
-                    subgrid_mask=self.subgrid["mask"],
-                    subgrid_factor=self.subgrid_factor,
-                    river_graph=river_graph,
-                )
+            self.set_subgrid(
+                subcommand_area_raster, name="waterbodies/subcommand_areas"
             )
-            command_areas = self.full_like(
-                self.grid["mask"],
-                fill_value=-1,
-                nodata=-1,
-                dtype=np.int32,
-            )
-            command_areas.data = mapped_reservoirs_grid
 
-            subcommand_areas = self.full_like(
-                self.subgrid["mask"],
-                fill_value=-1,
-                nodata=-1,
-                dtype=np.int32,
-            )
-            subcommand_areas.data = mapped_reservoirs_subgrid
         else:
             command_areas: xr.DataArray = self.full_like(
                 self.grid["mask"],
@@ -1323,16 +1281,16 @@ class Hydrography(BuildModelBase):
                 dtype=np.int32,
             )
 
-        self.set_grid(command_areas, name="waterbodies/command_area")
-        self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
+            self.set_grid(command_areas, name="waterbodies/command_area")
+            self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
 
         if custom_reservoir_capacity:
             if custom_reservoir_capacity.endswith(".xlsx"):
-                custom_reservoir_capacity_df: pd.DataFrame = pd.read_excel(
+                custom_reservoir_capacity: pd.DataFrame = pd.read_excel(
                     custom_reservoir_capacity
                 )
             elif custom_reservoir_capacity.endswith(".csv"):
-                custom_reservoir_capacity_df: pd.DataFrame = pd.read_csv(
+                custom_reservoir_capacity: pd.DataFrame = pd.read_csv(
                     custom_reservoir_capacity
                 )
             else:
@@ -1340,12 +1298,12 @@ class Hydrography(BuildModelBase):
                     "custom_reservoir_capacity must be a .csv or .xlsx file"
                 )
 
-            custom_reservoir_capacity_df = custom_reservoir_capacity_df[
-                custom_reservoir_capacity_df.index != -1
+            custom_reservoir_capacity = custom_reservoir_capacity[
+                custom_reservoir_capacity.index != -1
             ]
 
             waterbodies.set_index("waterbody_id", inplace=True)
-            waterbodies.update(custom_reservoir_capacity_df)
+            waterbodies.update(custom_reservoir_capacity)
             waterbodies.reset_index(inplace=True)
 
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
