@@ -4,13 +4,12 @@ Evaluation utilities for the GEB model.
 Contains the Evaluate class which contains evaluation routines for model runs.
 """
 
-from __future__ import annotations
-
 from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .energy import Energy
+from .hydrodynamics import Hydrodynamics
 from .hydrology import Hydrology
 from .meteorological_forecasts import MeteorologicalForecasts
 
@@ -29,6 +28,7 @@ class Evaluate:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
         self.hydrology = Hydrology(model, self)
+        self.hydrodynamics = Hydrodynamics(model, self)
         self.energy = Energy(model, self)
         self.meteorological_forecasts = MeteorologicalForecasts(model, self)
 
@@ -37,7 +37,7 @@ class Evaluate:
         """Returns a list of available sub-evaluators."""
         return [
             attr
-            for attr, value in self.__dict__.items()
+            for attr, _ in self.__dict__.items()
             if not attr.startswith("_") and attr != "model"
         ]
 

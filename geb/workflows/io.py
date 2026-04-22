@@ -1,7 +1,5 @@
 """I/O related functions and classes for the GEB project."""
 
-from __future__ import annotations
-
 import asyncio
 import bz2
 import datetime
@@ -18,7 +16,7 @@ import warnings
 from collections.abc import Hashable
 from pathlib import Path
 from types import TracebackType
-from typing import Any, cast, overload
+from typing import Any, Iterable, Literal, cast, overload
 
 import dask.array
 import dask.tokenize
@@ -27,6 +25,8 @@ import joblib
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyproj
 import rasterio
 import requests
@@ -36,18 +36,17 @@ import xarray as xr
 import yaml
 import zarr
 import zarr.storage
-from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.codecs import BloscCodec
+from zarr.codecs.numcodecs import Delta, _NumcodecsBytesBytesCodec
 from zarr.codecs.zstd import ZstdCodec
 from zarr.errors import ZarrUserWarning
 
 from geb.geb_types import (
     ArrayDatetime64,
     ThreeDArray,
-    ThreeDArrayFloat32,
     TwoDArray,
     TwoDArrayFloat32,
 )
@@ -74,13 +73,54 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
     Args:
         df: The pandas DataFrame to save.
         fp: The path to the output parquet file.
+
+    Raises:
+        ValueError: If the DataFrame contains unsupported column types.
     """
-    df.to_parquet(
+    table: pa.Table = pa.Table.from_pandas(df)
+
+    int_and_dt_cols: list[str] = []
+    bool_cols: list[str] = []
+    float_cols: list[str] = []
+    dict_cols: list[str] = []
+
+    for n, t in zip(table.schema.names, table.schema.types):
+        if pa.types.is_integer(t) or pa.types.is_timestamp(t):
+            int_and_dt_cols.append(n)
+        elif pa.types.is_boolean(t):
+            bool_cols.append(n)
+        elif pa.types.is_floating(t):
+            float_cols.append(n)
+        elif pa.types.is_string(t) or pa.types.is_binary(t):
+            dict_cols.append(n)
+        else:
+            raise ValueError(f"Unsupported column type {t} for column {n}")
+
+    # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
+    column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
+
+    # Booleans use RLE (which includes bit-packing)
+    for col in bool_cols:
+        column_encoding[col] = "RLE"
+
+    # Estimate row group size to target ~100 MB per row group (uncompressed)
+    # 100 MB / bytes per row
+    bytes_per_row: int = table.nbytes // max(len(table), 1)
+    target_row_group_size = int(100 * 1024 * 1024 / max(bytes_per_row, 1))
+    target_row_group_size: int = min(target_row_group_size, len(table))
+    target_row_group_size: int = max(target_row_group_size, 1)
+
+    pq.write_table(
+        table,
         fp,
-        engine="pyarrow",
         compression="zstd",
-        compression_level=9,
-        row_group_size=max(min(10_000, len(df)), 1),
+        compression_level=22,  # Higher level for better disk density
+        use_dictionary=dict_cols,
+        column_encoding=column_encoding,
+        use_byte_stream_split=float_cols,
+        data_page_version="2.0",
+        row_group_size=target_row_group_size,
+        data_page_size=10_000_000,  # Larger page size for better compression
     )
 
 
@@ -129,61 +169,122 @@ def write_array(
 
 @overload
 def read_grid(
-    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
-) -> ThreeDArray: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
-) -> tuple[ThreeDArray, Affine, str]: ...
-
-
-@overload
-def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[True] = True,
+    return_transform_and_crs: Literal[False] = False,
 ) -> TwoDArray: ...
 
 
 @overload
 def read_grid(
-    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[True] = True,
+    *,
+    return_transform_and_crs: Literal[True],
 ) -> tuple[TwoDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[True] = True,
+    return_transform_and_crs: Literal[False] = False,
+) -> ThreeDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[True] = True,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[ThreeDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[False] = False,
+    return_transform_and_crs: Literal[False] = False,
+) -> zarr.Array: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[2] = 2,
+    load: Literal[False] = False,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[zarr.Array, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[False] = False,
+    return_transform_and_crs: Literal[False] = False,
+) -> zarr.Array: ...
+
+
+@overload
+def read_grid(
+    filepath: Path,
+    ndim: Literal[3],
+    load: Literal[False] = False,
+    *,
+    return_transform_and_crs: Literal[True],
+) -> tuple[zarr.Array, Affine, str]: ...
 
 
 def read_grid(
     filepath: Path,
-    layer: int | None = None,
+    ndim: Literal[2, 3],
+    load: bool = True,
     return_transform_and_crs: bool = False,
-) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
-    """Load a raster grid from a .tif or .zarr file.
+) -> (
+    TwoDArray
+    | ThreeDArray
+    | zarr.Array
+    | tuple[TwoDArray | ThreeDArray | zarr.Array, Affine, str]
+):
+    """Load a raster grid from .zarr file.
 
     Args:
-        filepath: The path to the .tif or .zarr file.
-        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is None.
+        filepath: The path of the .zarr file.
+        ndim: The expected number of dimensions of the raster data (2 or 3).
+        load: Whether to load the data into memory. If False, a zarr array will be returned instead of a numpy array. Default is True.
         return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
 
     Returns:
         The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
 
     Raises:
-        ValueError: If layer is specified but data is not 3-dimensional.
+        ValueError: If the loaded data does not have the expected number of dimensions.
     """
     store: zarr.storage.LocalStore = zarr.storage.LocalStore(filepath, read_only=True)
     group: zarr.Group = zarr.open_group(store, mode="r")
     data_array: zarr.Array | zarr.Group = group[filepath.stem]
+
     assert isinstance(data_array, zarr.Array)
-    if layer is not None:
-        if not data_array.ndim == 3:
-            raise ValueError("Data must be 3-dimensional to select a layer")
-        data = data_array[layer]
-    else:
+
+    if load:
         data = data_array[:]
-    assert isinstance(data, np.ndarray)
-    data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
-    if data.dtype == np.float64:
-        data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
-    assert data.ndim in (2, 3)
+        assert isinstance(data, np.ndarray)
+        data: TwoDArray | ThreeDArray = data  # ty:ignore[invalid-assignment]
+    else:
+        data = data_array
+        assert isinstance(data, zarr.Array)
+
+    if data.ndim != ndim:
+        raise ValueError(f"Expected data with {ndim} dimensions, but got {data.ndim}")
+
     if return_transform_and_crs:
         x_array: zarr.Array | zarr.Group = group["x"]
         assert isinstance(x_array, zarr.Array)
@@ -534,7 +635,10 @@ def _chunk_index_to_region(
 
 
 def _store_dask_array_blocks(
-    da: dask.array.core.Array, store_target: Any, progress: bool
+    da: dask.array.core.Array,
+    store_target: Any,
+    progress: bool,
+    target_write_size_mb: int = 3000,
 ) -> None:
     """Store a Dask array into a Zarr target block by block.
 
@@ -543,6 +647,7 @@ def _store_dask_array_blocks(
             the write granularity.
         store_target: Writable Zarr target array.
         progress: Whether to wrap the block iterator in a progress bar.
+        target_write_size_mb: Target size in megabytes for each write operation.
     """
     block_indices: Any = np.ndindex(*da.numblocks)
 
@@ -552,27 +657,40 @@ def _store_dask_array_blocks(
     # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
     # This can be safely ignored in this context.
     with np.errstate(invalid="ignore"):
-        stores = []
+        stores: list = []
         for block_index in block_indices:
             region = _chunk_index_to_region(da.chunks, block_index)
             block = array_blocks[block_index]
-
             stores.append(
                 dask.array.store(
                     block,
                     store_target,
                     regions=region,
                     lock=False,
-                    compute=False,  # Use compute=False to return a Dask object instead of executing
+                    compute=False,
                     return_stored=False,
                 )
             )
 
+        # target chunk size of around 3000MB, but at least 1 block
+        chunk_size: int = (
+            np.prod([da.chunks[i][0] for i in range(len(da.chunks))])
+            * da.dtype.itemsize
+        )
+        batch_size: int = max(1, target_write_size_mb * 1_000_000 // chunk_size)
+
+        batches: Iterable[int] = list(range(0, len(stores), batch_size))
         if progress:
-            with ProgressBar():
-                dask.compute(*stores)
-        else:
-            dask.compute(*stores)
+            batches = tqdm(
+                batches,
+                total=int(np.ceil(len(stores) / batch_size)),
+                desc="Writing progress",
+                leave=False,
+            )
+
+        for i in batches:
+            batch = stores[i : i + batch_size]
+            dask.compute(*batch)
 
 
 def _normalize_shards(
@@ -634,6 +752,7 @@ def write_zarr(
     shards: dict[str, int] | None = None,
     filters: list | None = None,
     compression_level: int = 18,
+    pre_compressor: _NumcodecsBytesBytesCodec | None = None,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
@@ -647,6 +766,7 @@ def write_zarr(
             shards. Default is None.
         filters: A list of filters to apply. Default is [].
         compression_level: The level of compression for the ZSTD compressor (1-22). Default is 18.
+        pre_compressor: An optional compressor to apply before the main compressor. Default is None.
         progress: Whether to show a progress bar. Default is True.
 
     Returns:
@@ -734,10 +854,16 @@ def write_zarr(
         storage_chunks = tuple(chunk_spec[str(dim)] for dim in da.dims)
 
         array_encoding: dict[str, Any] = {
-            "compressors": (compressor,),
             "chunks": storage_chunks,
             "filters": filters,
         }
+        if pre_compressor is not None:
+            array_encoding["compressors"] = (
+                pre_compressor,
+                compressor,
+            )
+        else:
+            array_encoding["compressors"] = (compressor,)
 
         if shard_spec is not None:
             storage_shards = tuple(shard_spec[str(dim)] for dim in da.dims)
@@ -751,15 +877,42 @@ def write_zarr(
                 "chunks": (da.coords[coord].size,),
             }
 
-        da.to_zarr(
-            store=tmp_zarr,
-            mode="w",
-            encoding=encoding,
-            zarr_format=3,
-            consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
-            write_empty_chunks=True,
-            compute=False,
-        )
+        if "time" in da.coords:
+            # apply delta encoding to time coordinates, which are often more compressible with this encoding
+            maximum_difference = np.abs(np.diff(da.coords["time"])).max().item()
+            if maximum_difference > np.iinfo("i4").max:
+                dtype_to_encode_time = "i8"
+            elif maximum_difference > np.iinfo("i2").max:
+                dtype_to_encode_time = "i4"
+            elif maximum_difference > np.iinfo("i1").max:
+                dtype_to_encode_time = "i2"
+            else:
+                dtype_to_encode_time = "i1"
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=ZarrUserWarning,
+                    message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
+                )
+                encoding["time"]["filters"] = [
+                    Delta(dtype="i8", astype=dtype_to_encode_time)
+                ]
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=ZarrUserWarning,
+                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
+            )
+            da.to_zarr(
+                store=tmp_zarr,
+                mode="w",
+                encoding=encoding,
+                zarr_format=3,
+                consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
+                write_empty_chunks=True,
+                compute=False,
+            )
 
         # Open the target array in the Zarr store for writing
         target = zarr.open_array(
@@ -1721,10 +1874,7 @@ def fetch_and_save(
 
             except requests.RequestException as e:
                 # Log the error
-                if verbose:
-                    print(
-                        f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}"
-                    )
+                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
@@ -1818,7 +1968,7 @@ def create_hash_from_parameters(
             value = value.item()
         try:
             json.dumps(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             raise ValueError(f"Value {value} is not JSON serializable")
         return value
 

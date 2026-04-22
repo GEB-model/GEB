@@ -5,7 +5,7 @@ general:
   end_time: 2024-12-30
   # start of the spinup time (YYYY-MM-DD).
   spinup_time: 2000-01-01
-  hydrological_year_start: 1
+  hydrological_year_start_month: 1
   input_folder: input/
   preprocessing_folder: preprocessing/
   output_folder: output/
@@ -69,6 +69,12 @@ hydrology:
 agent_settings:
   government:
     plant_forest: false  # default false. Enable (true) for forest planting policy for reforestation scenarios
+    adaptation:
+      enabled: false # default false. Enable (true) for government adaptation policy. 
+      EAD_threshold: 1000000  # in euros (currrently arbitrary)
+      equity_indicator_threshold: 0.5  # between 0 and 1, where 1 means perfect equality (currrently arbitrary)
+      ecosystem_indicator_threshold: 0.5  # between 0 and 1, where 1 means healthy ecosystem (currrently arbitrary)
+      adaptation_fraction: 0.1  # default to 10% of households adapting
   market:
     dynamic_market: false
     price_frequency: yearly
@@ -86,8 +92,21 @@ agent_settings:
           coef: -2.5
           max: 10
           min: 0.1
+  insurers:
+    duration: 1
+    seut_factor: 1
+    government_premium_cap: false
+    traditional_insurance: 
+      ruleset: no-adaptation
+      loading_rate: 0.3
+    index_insurance: 
+      ruleset: no-adaptation
+      loading_rate: 0.2
+    pr_insurance:
+      ruleset: no-adaptation
+      loading_rate: 0.2
   farmers:
-    ruleset: no-adaptation
+    ruleset: base
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
@@ -101,15 +120,6 @@ agent_settings:
       radius: 5000 # m
       size: 10 # nr of neighbors
     expected_utility:
-      insurance:
-        duration: 2
-        seut_factor: 1
-        personal_insurance: 
-          ruleset: no-adaptation
-        index_insurance: 
-          ruleset: no-adaptation
-        pr_insurance:
-          ruleset: no-adaptation
       crop_switching: 
         ruleset: no-adaptation
         loan_duration: 0
@@ -130,7 +140,7 @@ agent_settings:
         irr_eff_surface: 0.60
         irr_eff_sprinkler: 0.75
         irr_eff_drip:  0.95
-        efficiency_division: [0.5, 0.3, 0.2]   # ratio of different irrigation methods (surface, sprinkler, drip))
+        efficiency_division: [0.5, 0.5]   # ratio of different irrigation methods (surface, sprinkler)
       adaptation_well:
         ruleset: no-adaptation
         seut_factor: 1

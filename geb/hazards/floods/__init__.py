@@ -1,7 +1,5 @@
 """Class to setup, run, and post-process the SFINCS hydrodynamic model."""
 
-from __future__ import annotations
-
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -20,6 +18,7 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hazards.floods.workflows.utils import get_start_point
+from geb.hydrology.routing import get_upstream_represented_xys
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows.io import read_geom, read_table
@@ -281,7 +280,7 @@ class Floods(Module):
             subbasins=subbasins,
             DEMs=self.DEM_config,
             rivers=rivers,
-            discharge=self.discharge_spinup_ds,
+            discharge_by_river=self.discharge_by_river_spinup,
             river_width_alpha=self.model.hydrology.grid.decompress(
                 self.model.hydrology.grid.var.river_width_alpha
             ),
@@ -405,15 +404,15 @@ class Floods(Module):
         forcing_grid: xr.DataArray = forcing_grid.rio.write_crs(self.model.crs)
 
         if self.config["forcing_method"] == "headwater_points":
-            simulation.set_headwater_forcing_from_grid(
+            simulation.set_headwater_forcing_from_grid(  # ty:ignore[unresolved-attribute]
                 discharge_grid=forcing_grid,
             )
 
         elif self.config["forcing_method"] == "accumulated_runoff":
-            river_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+            river_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
                 self.model.files["grid"]["routing/river_ids"], compress=False
             )
-            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
                 self.model.files["grid"]["routing/basin_ids"], compress=False
             )
             simulation.set_accumulated_runoff_forcing(
@@ -480,7 +479,6 @@ class Floods(Module):
             )  # log the start of the simulation
 
             sfincs_simulation.run(
-                ncpus=self.config.get("SFINCS", {}).get("ncpus", "auto"),
                 gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
             )  # run the simulation
 
@@ -537,8 +535,7 @@ class Floods(Module):
             ]
 
             # use COMID as index and set unique index name for coastal region
-            low_elevation_coastal_zone_mask.index = [-1]
-            low_elevation_coastal_zone_mask.index.name = "COMID"
+            low_elevation_coastal_zone_mask.index = pd.Index([-1], name="COMID")
 
             # get initial_water_level for model domain
             initial_water_level = low_elevation_coastal_zone_mask[
@@ -576,11 +573,9 @@ class Floods(Module):
             model_name = "coastal_region"
 
             # load location and offset for coastal water level forcing
-            coastal_forcing_locations: gpd.GeoDataFrame = (
-                read_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
-                .rename(columns={"station_id": "stations"})
-                .set_index("stations")
-            )  # ty:ignore[invalid-assignment]
+            coastal_forcing_locations: gpd.GeoDataFrame = read_geom(
+                self.model.files["geom"]["gtsm/stations_coast_rp"]
+            )
 
             coastal_offset = xr.open_dataarray(
                 self.model.files["other"][
@@ -640,7 +635,7 @@ class Floods(Module):
                     coastal=False,
                 )
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge=self.discharge_spinup_ds,
+                    discharge_by_river=self.discharge_by_river_spinup,
                     return_periods=self.config["return_periods"],
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
@@ -708,7 +703,6 @@ class Floods(Module):
             simulation = MultipleSFINCSSimulations(simulations=simulations)
 
             simulation.run(
-                ncpus=self.config.get("SFINCS", {}).get("ncpus", "auto"),
                 gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
             )
             flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
@@ -767,34 +761,59 @@ class Floods(Module):
         )  # this is a deque, so it will automatically remove the oldest runoff
 
     @property
-    def discharge_spinup_ds(self) -> xr.DataArray:
+    def discharge_by_river_spinup(self) -> pd.DataFrame:
         """Open the discharge datasets from the model output folder.
 
         Returns:
-            The discharge data array after spinup period.
+            A pandas DataFrame containing the discharge time series for each river, indexed by timestamp.
 
         Raises:
             ValueError: If there is not enough data available for reliable spinup.
         """
-        da: xr.DataArray = read_zarr(
-            self.model.output_folder
-            / "report"
-            / "spinup"
-            / "hydrology.routing"
-            / "discharge_hourly.zarr"
+        rivers: gpd.GeoDataFrame = (
+            self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
         )
+        all_rivers = self.model.hydrology.routing.rivers
+        discharge = pd.DataFrame()
+        for river_id, river in rivers.iterrows():
+            assert isinstance(river_id, int)
+            xys: list[tuple[int, int]] = get_upstream_represented_xys(
+                river_id, all_rivers
+            )
+            if len(xys) == 1:
+                discharge[river_id] = read_table(
+                    self.model.report_folder.parent
+                    / "spinup"
+                    / "hydrology.routing"
+                    / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
+                )[f"river_outflow_hourly_m3_per_s_{river_id}"]
+            else:
+                for i in range(len(xys)):
+                    discharge_part = read_table(
+                        self.model.report_folder.parent
+                        / "spinup"
+                        / "hydrology.routing"
+                        / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
+                    )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
+                    if river_id not in discharge:
+                        discharge[river_id] = discharge_part
+                    else:
+                        discharge[river_id] += discharge_part
 
-        start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)
-        da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))
+        start_time = discharge.index[0] + pd.DateOffset(years=10)
+        discharge = discharge.loc[start_time:]
+
+        # set the frequency of the index
+        discharge.index.freq = pd.infer_freq(discharge.index)
 
         # make sure there is at least 20 years of data
-        if len(da.time) == 0 or len(da.time.groupby(da.time.dt.year).groups) < 20:
+        if (discharge.index[-1].year - discharge.index[0].year) < 20:
             raise ValueError(
                 """Not enough data available for reliable spinup, should be at least 20 years of data left.
                 Please run the model for at least 30 years (10 years of data is discarded)."""
             )
 
-        return da
+        return discharge
 
     @property
     def mannings(self) -> xr.DataArray:

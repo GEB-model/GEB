@@ -21,8 +21,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -102,7 +100,7 @@ class WaterDemand(Module):
         This method initializes the reservoir command areas for the HRU grid.
         """
         subgrid_command_areas = read_grid(
-            self.model.files["subgrid"]["waterbodies/subcommand_areas"]
+            self.model.files["subgrid"]["waterbodies/subcommand_areas"], ndim=2
         )
         reservoir_command_areas = self.HRU.convert_subgrid_to_HRU(
             subgrid_command_areas,
@@ -218,6 +216,9 @@ class WaterDemand(Module):
             Irrigation loss to evaporation per HRU [m].
             Total water demand loss [m3].
             The actual irrigation consumption [m].
+
+        Raises:
+            ValueError: If reservoir abstraction doesn't fully deplete calculated volume.
         """
         timer: TimingModule = TimingModule("Water demand")
 
@@ -403,15 +404,16 @@ class WaterDemand(Module):
         self.withdraw(available_reservoir_storage_m3, reservoir_abstraction_m3_farmers)
         self.withdraw(available_groundwater_m3, groundwater_abstraction_m3_farmers)
 
-        if not (available_reservoir_storage_m3 < 10000).all():
-            print(
-                "Reservoir storage should be empty after abstraction",
-                f"Offending values: {available_reservoir_storage_m3[available_reservoir_storage_m3 >= 50]}",
+        reservoir_storage_tolerance_m3 = 10000
+        offending_mask = (
+            available_reservoir_storage_m3 >= reservoir_storage_tolerance_m3
+        )
+        if offending_mask.any():
+            raise ValueError(
+                "Reservoir storage should be empty after abstraction. "
+                f"Found remaining storage >= {reservoir_storage_tolerance_m3} m3: "
+                f"{available_reservoir_storage_m3[offending_mask]}"
             )
-        # assert (available_reservoir_storage_m3 < 100000).all(), (
-        #     "Reservoir storage should be empty after abstraction. "
-        #     f"Offending values: {available_reservoir_storage_m3[available_reservoir_storage_m3 >= 50]}"
-        # )
 
         timer.finish_split("Irrigation")
 

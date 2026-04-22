@@ -1,7 +1,5 @@
 """Routing algorithms for river networks."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
@@ -10,7 +8,6 @@ import pandas as pd
 import pyflwdir
 import pyflwdir.core
 from numba import njit
-from pyflwdir import core, core_d8, core_ldd
 
 from geb.geb_types import (
     ArrayBool,
@@ -32,92 +29,28 @@ from geb.workflows.io import read_geom, read_table
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
-# Wrap pyflwdir core functions with @njit(cache=True) to enable Numba caching.
-# This significantly speeds up model initialization by caching the compiled versions
-# of these frequently-called functions. The original functions are already JIT-compiled
-# but don't have caching enabled.
 
-_upstream_matrix_orig = core.upstream_matrix
-_idxs_seq_orig = core.idxs_seq
-_from_array_ldd_orig = core_ldd.from_array
-_check_values_d8_orig = core_d8.check_values
-
-
-@njit(cache=True)
-def wrap_upstream_matrix(
-    idxs_ds: ArrayInt32, mv: np.int64 = core._mv
-) -> TwoDArrayInt32:
-    """Returns a 2D array with upstream cell indices for each cell.
-
-    The shape of the array is (idxs_ds.size, max number of upstream cells per cell).
+def get_upstream_represented_xys(
+    river_id: int, all_rivers: pd.DataFrame
+) -> list[tuple[int, int]]:
+    """Recursively find the nearest represented upstream rivers.
 
     Args:
-        idxs_ds: Linear index of next downstream cell.
-        mv: Missing value, default is -1.
+        river_id: The ID of the river to find the upstream represented rivers for.
+        all_rivers: A DataFrame containing all rivers in the model, with columns "represented_in_grid", "hydrography_xy", and "downstream_ID".
 
     Returns:
-        2D array with upstream cell indices for each cell.
+        A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
     """
-    return _upstream_matrix_orig(idxs_ds, mv=mv)
+    river = all_rivers.loc[river_id]
+    if river["represented_in_grid"]:
+        return [river["hydrography_xy"][-1]]
 
-
-@njit(cache=True)
-def wrap_idxs_seq(
-    idxs_ds: ArrayInt32, idxs_pit: ArrayInt32, mv: np.int64 = core._mv
-) -> ArrayInt32:
-    """Returns indices ordered from down- to upstream.
-
-    Args:
-        idxs_ds: Linear index of next downstream cell.
-        idxs_pit: Linear index of pit cells.
-        mv: Missing value, default is -1.
-
-    Returns:
-        Linear indices of valid cells ordered from down- to upstream.
-    """
-    return _idxs_seq_orig(idxs_ds, idxs_pit, mv=mv)
-
-
-@njit(cache=True)
-def wrap_from_array_ldd(
-    flwdir: TwoDArrayUint8, _mv: np.uint8 = core_ldd._mv, dtype: type = np.intp
-) -> tuple[ArrayInt32, ArrayInt32, int]:
-    """Convert 2D LDD data to 1D next downstream indices.
-
-    Args:
-        flwdir: 2D array with LDD data.
-        _mv: Missing value in LDD data.
-        dtype: Data type of the output indices.
-
-    Returns:
-        Tuple containing:
-            - Linear index of next downstream cell.
-            - Linear index of pit cells.
-            - Number of valid cells.
-    """
-    return _from_array_ldd_orig(flwdir, _mv=_mv, dtype=dtype)
-
-
-@njit(cache=True)
-def wrap_check_values_d8(
-    flwdir: TwoDArrayUint8, _all: ArrayUint8 = core_d8._all
-) -> bool:
-    """Check if values in D8 flow direction array are valid.
-
-    Args:
-        flwdir: 2D array with D8 flow direction data.
-        _all: Array with all valid D8 values.
-
-    Returns:
-        True if all values are valid, False otherwise.
-    """
-    return _check_values_d8_orig(flwdir, _all=_all)
-
-
-core.upstream_matrix = wrap_upstream_matrix
-core.idxs_seq = wrap_idxs_seq
-core_ldd.from_array = wrap_from_array_ldd
-core_d8.check_values = wrap_check_values_d8
+    upstream_rivers = all_rivers[all_rivers["downstream_ID"] == river_id]
+    xys = []
+    for idx, _ in upstream_rivers.iterrows():
+        xys.extend(get_upstream_represented_xys(idx, all_rivers))
+    return xys
 
 
 def get_river_width(
@@ -1198,7 +1131,7 @@ class Routing(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.ldd: ArrayUint8 = self.grid.load(
+        self.ldd: ArrayUint8 = self.grid.load2d(
             self.model.files["grid"]["routing/ldd"],
         )
 
@@ -1216,12 +1149,12 @@ class Routing(Module):
         )
         self.active_rivers = self.get_active_rivers()
 
-        self.river_ids = self.grid.load(
+        self.river_ids = self.grid.load2d(
             self.model.files["grid"]["routing/river_ids"],
         )
 
         if "routing/retention_basin_ids" in self.model.files["grid"]:
-            self.retention_basin_ids = self.grid.load(
+            self.retention_basin_ids = self.grid.load2d(
                 self.model.files["grid"]["routing/retention_basin_ids"],
             )
             self.retention_basin_data = read_table(
@@ -1319,11 +1252,11 @@ class Routing(Module):
         5. Initialize discharge variables and counters.
 
         """
-        self.grid.var.upstream_area = self.grid.load(
+        self.grid.var.upstream_area = self.grid.load2d(
             self.model.files["grid"]["routing/upstream_area_m2"]
         )
         if "routing/upstream_area_n_cells" in self.model.files["grid"]:
-            self.grid.var.upstream_area_n_cells = self.grid.load(
+            self.grid.var.upstream_area_n_cells = self.grid.load2d(
                 self.model.files["grid"]["routing/upstream_area_n_cells"]
             )
         else:
@@ -1334,13 +1267,13 @@ class Routing(Module):
 
         # Channel Manning's n
         self.grid.var.river_mannings = (
-            self.grid.load(self.model.files["grid"]["routing/mannings"])
+            self.grid.load2d(self.model.files["grid"]["routing/mannings"])
             * self.model.config["parameters"]["mannings_n_multiplier"]
         )
         assert (self.grid.var.river_mannings > 0).all()
 
         # Channel length [meters]
-        self.grid.var.river_length = self.grid.load(
+        self.grid.var.river_length = self.grid.load2d(
             self.model.files["grid"]["routing/river_length_m"]
         )
 
@@ -1354,7 +1287,7 @@ class Routing(Module):
         )
 
         # Channel bottom width [meters]
-        self.observed_average_river_width = self.grid.load(
+        self.observed_average_river_width = self.grid.load2d(
             self.model.files["grid"]["routing/river_width_m"]
         )
 
@@ -1368,7 +1301,7 @@ class Routing(Module):
         # Channel gradient (fraction, dy/dx)
         minimum_river_slope = 0.0001
         river_slope = np.maximum(
-            self.grid.load(self.model.files["grid"]["routing/river_slope_m_per_m"]),
+            self.grid.load2d(self.model.files["grid"]["routing/river_slope_m_per_m"]),
             minimum_river_slope,
         )
 
@@ -1856,3 +1789,15 @@ class Routing(Module):
             & (~rivers["is_further_downstream_outflow"])
         ]
         return active_rivers.copy()
+
+    def get_active_and_downstream_outflow_rivers(self) -> gpd.GeoDataFrame:
+        """Get the rivers that are simulated (i.e., not downstream of the model region) and the downstream outflow rivers.
+
+        Returns:
+            A GeoDataFrame containing the active rivers and the downstream outflow rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        active_and_downstream_outflow_rivers = rivers[
+            ~rivers["is_further_downstream_outflow"]
+        ]
+        return active_and_downstream_outflow_rivers.copy()

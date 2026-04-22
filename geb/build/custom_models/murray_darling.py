@@ -1,9 +1,5 @@
 """Utilities to set up Australian water prices and drip irrigation prices."""
 
-from __future__ import annotations
-
-import os
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -1155,42 +1151,19 @@ class Agents(GEBModel):
                 ]
             ].mean(axis=1)
 
-            if full_southern_mdb:
-                pivot_water_price_df["Australian Capital Territory"] = (
-                    pivot_water_price_df[
-                        [
-                            "NSW Murray Below",
-                            "NSW Murray Above",
-                            "NSW Murrumbidgee",
-                        ]
-                    ].mean(axis=1)
+            # Map annual (year ended June) → monthly (2000-07 to 2004-06)
+            def _fy_end_for_month(m: pd.Timestamp) -> pd.Timestamp:
+                return pd.Timestamp(  # ty:ignore[invalid-return-type]
+                    year=m.year if m.month <= 6 else m.year + 1, month=6, day=30
                 )
 
-            start_date = "2000-07-01"
-            end_date = "2004-06-30"
-            monthly_index = pd.date_range(start=start_date, end=end_date, freq="MS")
-
-            def find_year_ended_june_for_month(
-                ts: pd.Timestamp,
-            ) -> pd.Timestamp:
-                """Map a calendar month to the corresponding June-30 water year date.
-
-                Args:
-                    ts: Calendar month timestamp.
-
-                Returns:
-                    Timestamp representing the June 30 date of the water year.
-                """
-                if ts.month < 7:
-                    return pd.Timestamp(year=ts.year, month=6, day=30)
-                return pd.Timestamp(year=ts.year + 1, month=6, day=30)
-
-            df_list: list[pd.DataFrame] = []
-            for m in monthly_index:
-                match_date = find_year_ended_june_for_month(m)
-                if match_date in pivot_water_price_df.index:
-                    row_vals = pivot_water_price_df.loc[match_date]
-                    df_list.append(pd.DataFrame(row_vals).T.assign(time=m))
+            annual_monthly_index = pd.date_range("2000-07-01", "2004-06-30", freq="MS")
+            rows = []
+            for m in annual_monthly_index:
+                fy = _fy_end_for_month(m)
+                if fy in annual_price_pivot.index:
+                    vals = annual_price_pivot.loc[fy]
+                    rows.append(pd.DataFrame(vals).T.assign(time=m))
                 else:
                     df_list.append(
                         pd.DataFrame(
@@ -1440,7 +1413,8 @@ class Agents(GEBModel):
 
                     dictionary["data"][region_id] = prices.tolist()
 
-            self.set_dict(dictionary, name=f"socioeconomics/{dictionary_type}")
+            out["data"] = out_data  # ty:ignore[invalid-assignment]
+            self.set_params(out, name=f"economics/{key}")
 
     @build_method(depends_on=["setup_economic_data"])
     def setup_drip_irrigation_prices_by_reference_year(

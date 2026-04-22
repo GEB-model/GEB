@@ -17,7 +17,9 @@ from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
+from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
+from geb.build.workflows.command_areas import derive_command_areas_from_routing
 from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
     ArrayBool,
@@ -26,6 +28,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
     TwoDArrayInt64,
+    TwoDArrayUint8,
 )
 from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import (
@@ -46,7 +49,8 @@ D8_SOUTHEAST = 2
 D8_SOUTH = 4
 D8_SOUTHWEST = 8
 D8_WEST = 16
-D8_PIT = 0
+D8_RIVER_MOUTH = 0
+D8_PIT = 255
 D8_NODATA = 247
 
 
@@ -86,8 +90,10 @@ def calculate_stream_length(
         dims=is_stream.dims,
     )
 
-    # pit -> no channel, so set stream length to 0
-    stream_length = xr.where(d8_ldd != D8_PIT, stream_length, 0)
+    # pit or river mouth -> no channel, so set stream length to 0
+    stream_length = xr.where(
+        (d8_ldd != D8_RIVER_MOUTH) & (d8_ldd != D8_PIT), stream_length, 0
+    )
     # vertical -> set stream length to cell height
     stream_length = xr.where(
         ~((d8_ldd == D8_NORTH) | (d8_ldd == D8_SOUTH)),
@@ -233,9 +239,10 @@ def get_rivers_geometry(
     return rivers
 
 
-def extend_rivers_into_ocean(
+def extend_rivers_into_pits_and_set_pit_type(
     rivers: gpd.GeoDataFrame,
     flow_raster: FlwdirRaster,
+    ldd: TwoDArrayUint8,
 ) -> gpd.GeoDataFrame:
     """Extend rivers that end just before the ocean into the ocean.
 
@@ -246,6 +253,7 @@ def extend_rivers_into_ocean(
     Args:
         rivers: A GeoDataFrame containing the river lines.
         flow_raster: The flow raster to use for determining the downstream point.
+        ldd: The flow direction raster to use for determining the downstream point.
 
     Returns:
         A GeoDataFrame containing the extended river lines.
@@ -253,6 +261,8 @@ def extend_rivers_into_ocean(
     Raises:
         ValueError: If the distance between the river end point and the downstream point is too large.
     """
+    rivers["is_coastal"] = False
+
     resolution = abs(flow_raster.transform.a)
     for river_id, river in rivers.iterrows():
         # only select rivers that have no downstream river (i.e., end in ocean)
@@ -265,6 +275,18 @@ def extend_rivers_into_ocean(
 
             # find the linear index of the downstream point
             downstream_index = flow_raster.idxs_ds[cell_index]
+
+            downstream_pit_type = ldd.ravel()[downstream_index]
+            if downstream_pit_type == D8_PIT:
+                rivers.at[river_id, "is_coastal"] = (
+                    False  # is already set to False, but just to be explicit
+                )
+            elif downstream_pit_type == D8_RIVER_MOUTH:
+                rivers.at[river_id, "is_coastal"] = True
+            else:
+                raise ValueError(
+                    f"Did not find a pit downstream of the river end point, but found: {downstream_pit_type}"
+                )
 
             # get the lonlat of the downstream point
             downstream_lon, downstream_lat = flow_raster.xy(downstream_index)
@@ -408,7 +430,15 @@ def get_SWORD_river_widths(
         """
         if reach_id == -1:  # when no SWORD reach is found
             return np.nan  # return NaN
-        return SWORD.loc[reach_id, "width"]
+        width: np.float64 = SWORD.loc[reach_id, "width"]
+        if width <= 0.0:
+            width = np.float64(np.nan)
+
+        assert pd.isna(width) or width > 0, (
+            f"Invalid river width {width} for SWORD reach ID {reach_id}"
+        )
+
+        return width
 
     SWORD_river_width = np.vectorize(lookup_river_width)(SWORD_reach_IDs)
     return SWORD_river_width
@@ -896,16 +926,20 @@ class Hydrography(BuildModelBase):
             self.data_catalog, SWORD_reach_IDs
         )
 
-        rivers_with_data = (SWORD_reach_IDs != -1).any(axis=0)
+        valid_SWORD_widths = ~np.isnan(SWORD_river_widths)
+        valid_reach_lengths_m = np.where(valid_SWORD_widths, SWORD_reach_lengths, 0)
+        total_valid_reach_length_m = np.sum(valid_reach_lengths_m, axis=0)
+        rivers_with_data = valid_SWORD_widths.any(axis=0) & (
+            total_valid_reach_length_m > 0
+        )
 
+        rivers["width"] = np.nan
         rivers.loc[rivers_with_data, "width"] = (
-            np.nansum(SWORD_river_widths * SWORD_reach_lengths, axis=0)[
+            np.nansum(SWORD_river_widths * valid_reach_lengths_m, axis=0)[
                 rivers_with_data
             ]
-            / np.sum(SWORD_reach_lengths, axis=0)[rivers_with_data]
+            / total_valid_reach_length_m[rivers_with_data]
         )
-        # ensure that all rivers with a SWORD ID have a width
-        assert (~np.isnan(rivers["width"][rivers_with_data])).all()
 
         self.set_geom(rivers, name="routing/rivers")
 
@@ -913,6 +947,11 @@ class Hydrography(BuildModelBase):
         river_width_data: npt.NDArray[np.float32] = np.vectorize(
             lambda ID: river_with_mapper.get(ID, np.nan)
         )(COMID_IDs_raster.values).astype(np.float32)
+
+        # check river with is positive where river is present
+        assert ((river_width_data > 0) | np.isnan(river_width_data)).all(), (
+            "River width should be positive or nan"
+        )
 
         river_width: xr.DataArray = self.full_like(
             elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
@@ -1099,7 +1138,7 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_waterbodies(
         self,
-        preset_command_areas: None | str = None,
+        command_areas: None | str = None,
         calculate_command_areas: None | str = None,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
@@ -1111,16 +1150,16 @@ class Hydrography(BuildModelBase):
         routing network, and updating reservoir storage capacities.
 
         Notes:
-            If ``preset_command_areas`` is provided, those geometries are used to
+            If ``command_areas`` is provided, those geometries are used to
             define reservoir command areas and mapped onto the model grid and
             subgrid. If no preset command areas are provided but
-            ``calculate_command_areas`` is truth, command areas are derived by
+            ``calculate_command_areas`` is true, command areas are derived by
             propagating reservoir influence along the routing network. If
             ``custom_reservoir_capacity`` is provided, reservoir volumes are
             overridden using that table.
 
         Args:
-            preset_command_areas: Identifier of the preset command area data in the
+            command_areas: Identifier of the preset command area data in the
                 data catalog. If None, command areas can be calculated from the
                 routing network instead.
             calculate_command_areas: Flag or identifier indicating that command areas
@@ -1134,7 +1173,13 @@ class Hydrography(BuildModelBase):
 
         Raises:
             ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
+            ValueError: If command_areas and calculate_command_areas are both provided.
         """
+        if command_areas and calculate_command_areas:
+            raise ValueError(
+                "command_areas and calculate_command_areas cannot both be provided. "
+                "Use either preset command areas or calculate them from the routing network."
+            )
         waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
             columns=[
@@ -1183,25 +1228,23 @@ class Hydrography(BuildModelBase):
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
-        if preset_command_areas:
-            preset_command_areas: gpd.GeoDataFrame = gpd.read_file(
-                preset_command_areas, mask=self.region
+        if command_areas:
+            command_areas: gpd.GeoDataFrame = gpd.read_file(
+                command_areas, mask=self.region
             )
             assert isinstance(command_areas, gpd.GeoDataFrame)
-            preset_command_areas = preset_command_areas[
-                ~preset_command_areas["waterbody_id"].isnull()
+            command_areas = command_areas[
+                ~command_areas["waterbody_id"].isnull()
             ].reset_index(drop=True)
-            preset_command_areas["waterbody_id"] = preset_command_areas[
-                "waterbody_id"
-            ].astype(np.int32)
-
-            # Dissolve command areas with same reservoir
-            preset_command_areas = preset_command_areas.dissolve(
-                by="waterbody_id", as_index=False
+            command_areas["waterbody_id"] = command_areas["waterbody_id"].astype(
+                np.int32
             )
 
+            # Dissolve command areas with same reservoir
+            command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
+
             # Set lakes with command area to reservoirs and reservoirs without command area to lakes
-            ids_with_command: set[int] = set(preset_command_areas["waterbody_id"])
+            ids_with_command: set[int] = set(command_areas["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
                 "waterbody_type",
@@ -1213,8 +1256,8 @@ class Hydrography(BuildModelBase):
                     waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
                 ]
             )
-            command_areas_dissolved = preset_command_areas[
-                preset_command_areas["waterbody_id"].isin(reservoir_ids)
+            command_areas_dissolved = command_areas[
+                command_areas["waterbody_id"].isin(reservoir_ids)
             ].reset_index(drop=True)
 
             self.set_geom(command_areas_dissolved, name="waterbodies/command_areas")
@@ -1222,237 +1265,70 @@ class Hydrography(BuildModelBase):
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             command_area_raster = rasterize_like(
-                gdf=preset_command_areas,
+                gdf=command_areas_dissolved,
                 column="waterbody_id",
                 raster=self.grid["mask"],
                 nodata=-1,
                 dtype=np.int32,
                 all_touched=True,
             )
-            self.set_grid(command_area_raster, name="waterbodies/command_area")
 
             subcommand_area_raster = rasterize_like(
-                gdf=preset_command_areas,
+                gdf=command_areas_dissolved,
                 column="waterbody_id",
                 raster=self.subgrid["mask"],
                 nodata=-1,
                 dtype=np.int32,
                 all_touched=True,
             )
-            self.set_subgrid(
-                subcommand_area_raster, name="waterbodies/subcommand_areas"
+
+        elif calculate_command_areas:
+            from geb.build import get_river_graph
+
+            river_graph = get_river_graph(self.data_catalog)
+
+            mapped_reservoirs_grid, mapped_reservoirs_subgrid = (
+                derive_command_areas_from_routing(
+                    waterbodies=waterbodies,
+                    rivers=self.geom["routing/rivers"],
+                    basin_ids=self.grid["routing/basin_ids"],
+                    grid_mask=self.grid["mask"],
+                    subgrid_mask=self.subgrid["mask"],
+                    subgrid_factor=self.subgrid_factor,
+                    river_graph=river_graph,
+                )
+            )
+            command_areas = self.full_like(
+                self.grid["mask"],
+                fill_value=-1,
+                nodata=-1,
+                dtype=np.int32,
+            )
+            command_areas.data = mapped_reservoirs_grid
+
+            subcommand_areas = self.full_like(
+                self.subgrid["mask"],
+                fill_value=-1,
+                nodata=-1,
+                dtype=np.int32,
+            )
+            subcommand_areas.data = mapped_reservoirs_subgrid
+        else:
+            command_areas: xr.DataArray = self.full_like(
+                self.grid["mask"],
+                fill_value=-1,
+                nodata=-1,
+                dtype=np.int32,
+            )
+            subcommand_areas = self.full_like(
+                self.subgrid["mask"],
+                fill_value=-1,
+                nodata=-1,
+                dtype=np.int32,
             )
 
-        else:
-            if calculate_command_areas:
-
-                def downstream_chain(
-                    start_id: int,
-                    next_seg: dict[int, float],
-                ) -> list[int]:
-                    """Build the downstream segment chain from a starting river segment.
-
-                    Follow the ``downstream_ID`` links from a starting segment along
-                    the main stem of the routing network.
-
-                    Notes:
-                        The traversal stops when a missing downstream segment is
-                        encountered, when a segment is not present in the mapping, or
-                        when a cycle would occur.
-
-                    Args:
-                        start_id: Identifier of the starting river segment.
-                        next_seg: Mapping from segment identifier to its direct
-                            downstream segment.
-
-                    Returns:
-                        Ordered list of downstream segment identifiers, starting from
-                        the first downstream segment of ``start_id``.
-                    """
-                    chain: list[int] = []
-                    current: int = start_id
-                    seen: set[int] = set()  # avoid infinite loops in case of cycles
-
-                    while True:
-                        nxt = next_seg.get(current, np.nan)
-                        # stop conditions:
-                        if pd.isna(nxt) or nxt not in next_seg or nxt in seen:
-                            break
-                        nxt_int = int(nxt)
-                        chain.append(nxt_int)
-                        seen.add(nxt_int)
-                        current = nxt_int
-
-                    return chain
-
-                # Determine all downstream cells of rivers
-                rivers = self.geom["routing/rivers"]
-                next_seg = rivers["downstream_ID"].to_dict()
-                rivers["all_downstream_ids"] = [
-                    downstream_chain(comid, next_seg) for comid in rivers.index
-                ]
-                # Determine waterbodies that are reservoirs
-                reservoir_mask = waterbodies["waterbody_type"] == 2
-                reservoirs = waterbodies[reservoir_mask]
-
-                if reservoirs.crs != rivers.crs:
-                    reservoirs = reservoirs.to_crs(rivers.crs)
-
-                # add waterbody_id to rivers where they intersect a reservoir
-                rivers = gpd.sjoin(
-                    rivers,
-                    reservoirs[["waterbody_id", "geometry"]],
-                    how="left",
-                    predicate="intersects",
-                )
-                rivers = rivers.reset_index().rename(columns={"index": "COMID"})
-                # Attach volume_total for tie-breaking between multiple intersecting reservoirs
-                rivers = rivers.merge(
-                    reservoirs[["waterbody_id", "volume_total"]],
-                    on="waterbody_id",
-                    how="left",
-                )
-                # If a river segment (COMID) appears multiple times, keep the row with the largest reservoir volume
-                rivers = rivers.sort_values(
-                    "volume_total", ascending=False
-                ).drop_duplicates(subset="COMID", keep="first")
-                # Restore COMID as index and drop sjoin helper column
-                rivers = rivers.set_index("COMID").drop(columns=["index_right"])
-
-                # Columns to track state per segment
-                rivers["waterbody_id_propagated"] = np.nan
-                has_reservoir = rivers["waterbody_id"].notna()
-
-                # Loop from up to downstream and set all downstream river values with relevant reservoir id
-                rivers["n_downstream"] = rivers["all_downstream_ids"].str.len()
-                reservoir_segments = rivers[has_reservoir].sort_values(
-                    "n_downstream",
-                    ascending=False,  # upstream → downstream
-                )
-                wb_volume = reservoirs.set_index("waterbody_id")["volume_total"]
-                ratio_threshold = 3  # old must be 5 times bigger to be kept
-
-                for comid, row in reservoir_segments.iterrows():
-                    wb_new = row["waterbody_id"]
-                    vol_new = wb_volume.get(wb_new, np.nan)
-
-                    # This segment + all its downstream segments
-                    segs = [comid] + row["all_downstream_ids"]
-
-                    for seg in segs:
-                        current_id = rivers.at[seg, "waterbody_id_propagated"]
-
-                        # If nothing assigned yet → just take this one
-                        if pd.isna(current_id):
-                            rivers.at[seg, "waterbody_id_propagated"] = wb_new
-                            continue
-
-                        # Look up old volume
-                        vol_old = wb_volume.get(current_id, np.nan)
-
-                        # If we don't know the old volume but know the new → overwrite
-                        if pd.isna(vol_old) and not pd.isna(vol_new):
-                            rivers.at[seg, "waterbody_id_propagated"] = wb_new
-                            continue
-
-                        # If we don't know the new volume → keep old
-                        if pd.isna(vol_new):
-                            continue
-
-                        # If old reservoir is at least threshold x bigger → keep old
-                        if vol_old >= ratio_threshold * vol_new:
-                            continue
-                        rivers.at[seg, "waterbody_id_propagated"] = wb_new
-
-                # map the reservoir ids to whole model cells
-                basin_ids = self.grid["routing/basin_ids"]
-                s_map = rivers["waterbody_id_propagated"]
-
-                mask_nans = ~np.isnan(s_map)
-                only_reservoir_rivers = s_map[
-                    mask_nans
-                ]  # Series: index = COMID, value = wb_id (float)
-
-                from geb.build import get_river_graph
-
-                river_graph = get_river_graph(self.new_data_catalog)
-                river_graph_rev = river_graph.reverse(copy=False)
-                max_upstream_hops = 30
-
-                unique_wb_ids = only_reservoir_rivers.unique()
-                volumes_for_used = wb_volume.reindex(unique_wb_ids)
-                wb_ids_sorted = volumes_for_used.sort_values().index.to_list()
-
-                for wb_id in wb_ids_sorted:
-                    comid_series = only_reservoir_rivers[only_reservoir_rivers == wb_id]
-                    seed_comids = comid_series.index.to_list()
-
-                    upstream_comids: set[int] = set()
-
-                    for sid in seed_comids:
-                        if sid not in river_graph_rev:
-                            continue
-
-                        lengths = nx.single_source_shortest_path_length(
-                            river_graph_rev,
-                            sid,
-                            cutoff=max_upstream_hops,
-                        )
-
-                        upstream_comids |= {
-                            node for node, dist in lengths.items() if dist > 0
-                        }
-
-                    for cid in upstream_comids:
-                        if cid in rivers.index and pd.isna(
-                            rivers.at[cid, "waterbody_id_propagated"]
-                        ):
-                            rivers.at[cid, "waterbody_id_propagated"] = wb_id
-
-                smap_extended = rivers["waterbody_id_propagated"]
-                flat_ids = basin_ids.values.ravel()
-                mapped_flat = smap_extended.reindex(flat_ids).to_numpy()
-                mapped_flat[np.isnan(mapped_flat)] = -1
-
-                # Map to grid and subgrid grids
-                mapped_reservoirs_grid = mapped_flat.reshape(basin_ids.shape).astype(
-                    "int32"
-                )
-                mapped_reservoirs_subgrid = mapped_reservoirs_grid.repeat(
-                    self.subgrid_factor, axis=0
-                ).repeat(self.subgrid_factor, axis=1)
-
-                command_areas: xr.DataArray = self.full_like(
-                    self.grid["mask"],
-                    fill_value=-1,
-                    nodata=-1,
-                    dtype=np.int32,
-                )
-                subcommand_areas: xr.DataArray = self.full_like(
-                    self.subgrid["mask"],
-                    fill_value=-1,
-                    nodata=-1,
-                    dtype=np.int32,
-                )
-
-                command_areas.data = mapped_reservoirs_grid
-                subcommand_areas.data = mapped_reservoirs_subgrid
-            else:
-                command_areas: xr.DataArray = self.full_like(
-                    self.grid["mask"],
-                    fill_value=-1,
-                    nodata=-1,
-                    dtype=np.int32,
-                )
-                subcommand_areas: xr.DataArray = self.full_like(
-                    self.subgrid["mask"],
-                    fill_value=-1,
-                    nodata=-1,
-                    dtype=np.int32,
-                )
-
-            self.set_grid(command_areas, name="waterbodies/command_area")
-            self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
+        self.set_grid(command_areas, name="waterbodies/command_area")
+        self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
 
         if custom_reservoir_capacity:
             if custom_reservoir_capacity.endswith(".xlsx"):
@@ -1490,7 +1366,12 @@ class Hydrography(BuildModelBase):
         gtsm_data_region, stations = self.data_catalog.fetch(
             "gtsm_timeseries", variable="total_water_level"
         ).read(bounds=self.bounds, variable="total_water_level")
-        self.set_table(gtsm_data_region, name="gtsm/waterlevels")
+        self.set_other(
+            gtsm_data_region,
+            name="gtsm/waterlevels",
+            filters=gtsm_filters,
+            shards={"stations": 100},
+        )
         self.set_geom(stations, name="gtsm/stations")
         self.logger.info("GTSM station waterlevels and geometries set")
 
@@ -1499,7 +1380,12 @@ class Hydrography(BuildModelBase):
         gtsm_data_region, _ = self.data_catalog.fetch(
             "gtsm_timeseries", variable="storm_surge_residual"
         ).read(bounds=self.bounds, variable="storm_surge_residual")
-        self.set_table(gtsm_data_region, name="gtsm/surge")
+        self.set_other(
+            gtsm_data_region,
+            name="gtsm/surge",
+            filters=gtsm_filters,
+            shards={"stations": 100},
+        )
         self.logger.info("GTSM station surge levels set")
 
     def setup_gtsm_sea_level_rise(self) -> None:
@@ -1535,6 +1421,10 @@ class Hydrography(BuildModelBase):
         # sort by datetime index
         mean_sea_level_df = mean_sea_level_df.sort_index()
 
+        # we do not model receding sea levels, so enforce that the absolute mean sea level
+        # for each time step is at least as high as in the previous step, i.e. mean sea level is monotonically increasing
+        mean_sea_level_df = mean_sea_level_df.cummax(axis=0)
+
         # set table for model
         self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
 
@@ -1545,7 +1435,7 @@ class Hydrography(BuildModelBase):
         )
 
         # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
+        last_year = sea_level_rise_df.index.year.max()
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}
@@ -1595,11 +1485,9 @@ class Hydrography(BuildModelBase):
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
         # remove stations that are not in coast_rp index
-        stations = stations[
-            stations["station_id"].astype(int).isin(coast_rp.index)
-        ].reset_index(drop=True)
+        stations = stations[stations.index.astype(int).isin(coast_rp.index)]
 
-        coast_rp = coast_rp.loc[stations["station_id"].astype(int)]
+        coast_rp = coast_rp.loc[stations.index]
         self.set_table(coast_rp, name="coast_rp")
 
         # also set stations (only those that are in coast_rp)

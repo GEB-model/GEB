@@ -1,7 +1,5 @@
 """ECMWF data adapter module."""
 
-from __future__ import annotations
-
 import os
 from datetime import date, datetime
 from pathlib import Path

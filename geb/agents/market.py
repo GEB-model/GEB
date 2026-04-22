@@ -1,7 +1,5 @@
 """This module contains the Market agent class for simulating market dynamics in the GEB model."""
 
-from __future__ import annotations
-
 import warnings
 from typing import TYPE_CHECKING
 
@@ -57,8 +55,8 @@ class Market(AgentBaseClass):
             if "market" in self.model.config["agent_settings"]
             else {}
         )
-        self.hydrological_year_start = self.model.config["general"][
-            "hydrological_year_start"
+        self.hydrological_year_start_month = self.model.config["general"][
+            "hydrological_year_start_month"
         ]
         if self.model.in_spinup:
             self.spinup()
@@ -128,11 +126,8 @@ class Market(AgentBaseClass):
         start_idx = inflation["time"].index(
             self.model.config["general"]["spinup_time"].year
         )
-        end_idx = inflation["time"].index(self.model.config["general"]["end_time"].year)
         for region in inflation["data"]:
-            region_inflation = [1] + inflation["data"][region][
-                start_idx + 1 : end_idx + 1
-            ]
+            region_inflation = [1] + inflation["data"][region][start_idx + 1 : -1]
             self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
 
     def estimate_price_model(self) -> None:
@@ -160,18 +155,20 @@ class Market(AgentBaseClass):
             :,
             estimation_start_year:estimation_end_year,
         ]
-        if np.any(production <= 0):
-            # log(0) or log(negative) will explode/NaN
-            bad = np.where(production <= 0)[0]
-            print(
-                "[PRICE DEBUG] production <= 0 crops:", bad, "values:", production[bad]
-            )
 
-        print("Look into increasing yield and increasing price")
         for crop in range(self.var.production.shape[0]):
             prod = production[crop]
             if prod.sum() == 0:
                 continue
+            zero_mask = prod == 0
+            if zero_mask.any():
+                print(
+                    f"Production of crop {crop} is 0 for {zero_mask.sum()} entries. "
+                    "If few farmers are cultivating the crop it may be expected behavior, "
+                    "otherwise check for errors in harvest/planting."
+                    "Setting these values to 1.."
+                )
+                prod[zero_mask] = 1
             # Defining the independent variables (add a constant term for the intercept)
             X = sm.add_constant(np.log(prod))
 
@@ -224,7 +221,17 @@ class Market(AgentBaseClass):
                 :, self.year_index - 1
             ]  # for now taking the previous year, should be updated
             # Change 0s to 1 to prevent log(0) becoming infinite
-            production = np.where(production.data == 0, 1, production.data)
+            zero_mask = production == 0
+            if zero_mask.any():
+                zero_crop_indices = np.where(production == 0)[0]
+                for crop in zero_crop_indices:
+                    print(
+                        f"Production in region {region_idx} of crop {crop} is 0. "
+                        "Setting this value to 1. "
+                        "If few farmers are cultivating the crop it may be expected behavior, "
+                        "otherwise check for errors in harvest/planting."
+                    )
+                production[zero_crop_indices] = 1
             price_pred = np.exp(
                 1 * self.var.parameters[:, 0]
                 + self.production_influence_calibration_factor
@@ -323,17 +330,6 @@ class Market(AgentBaseClass):
         if (
             # run price model at the end of the spinup
             self.model.current_time == self.model.spinup_end and self.model.in_spinup
-            # or
-            # # and on 5-year anniversaries
-            # (
-            #     not self.model.in_spinup
-            #     and (self.model.current_time.year - self.model.run_start.year) % 5 == 0
-            #     and (
-            #         self.model.current_time.month == self.hydrological_year_start
-            #         and self.model.current_time.day == 1
-            #     )
-            #     and (self.model.current_time.year - self.model.run_start.year) >= 5
-            # )
         ):
             self.estimate_price_model()
 

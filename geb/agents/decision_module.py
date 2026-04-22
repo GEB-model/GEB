@@ -1,7 +1,5 @@
 """This module contains the DecisionModule class for handling decision-making processes in the GEB model."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import numpy as np
@@ -242,15 +240,19 @@ class DecisionModule:
         if sigma_arr.ndim == 0:
             sigma_arr = np.full(NPV_summed.shape[1], sigma_arr, dtype=np.float32)
 
-        # Compute EU with log limit at sigma ~ 1
+        # Compute EU with the log-utility limit at sigma ~ 1 without first
+        # evaluating the singular CRRA expression, which would create
+        # divide-by-zero warnings and temporary non-finite values.
         eps = 1e-6
         den = 1.0 - sigma_arr  # (n_agents,)
-        EU_crra = (NPV_summed ** den[None, :]) / den[None, :]  # (n_events, n_agents)
-
         sigma_is_one = np.abs(den) < eps
-        EU_crra[:, sigma_is_one] = np.log(NPV_summed[:, sigma_is_one])
+        sigma_is_not_one = ~sigma_is_one
 
-        EU_store = EU_crra
+        EU_store = np.empty_like(NPV_summed, dtype=np.float32)
+        EU_store[:, sigma_is_one] = np.log(NPV_summed[:, sigma_is_one])
+        EU_store[:, sigma_is_not_one] = (
+            NPV_summed[:, sigma_is_not_one] ** den[None, sigma_is_not_one]
+        ) / den[None, sigma_is_not_one]
 
         p_all_events = np.full((p_droughts.size + 3, n_agents), -1, dtype=np.float32)
 

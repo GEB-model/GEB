@@ -1,7 +1,5 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
-from __future__ import annotations
-
 import math
 from collections.abc import Generator, Hashable, Mapping
 from contextlib import contextmanager, nullcontext
@@ -867,8 +865,8 @@ def pad_xy(
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
-    return_slice: Literal[True] = True,
-) -> tuple[xr.DataArray, dict[str, slice]]: ...
+    return_slice: Literal[False] = False,
+) -> xr.DataArray: ...
 
 
 @overload
@@ -882,9 +880,9 @@ def pad_xy(
     | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
-    | None = None,
-    return_slice: Literal[False] = False,
-) -> xr.DataArray: ...
+    | None = ...,
+    return_slice: Literal[True] = ...,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
 
 
 def pad_xy(
@@ -1057,6 +1055,36 @@ def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArra
     return da
 
 
+def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
+    """Interpolate NaN values in a 2D numpy array using nearest neighbor interpolation.
+
+    Args:
+        arr: The input 2D array with NaN values.
+        nodata: The nodata value to treat as missing.
+
+    Returns:
+        A new 2D NumPy array with missing values interpolated.
+    """
+    mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
+
+    if not mask.any():
+        return arr
+    if mask.all():
+        return arr
+
+    y, x = np.indices(arr.shape)
+    known_x, known_y = x[~mask], y[~mask]
+    known_v = arr[~mask]
+    missing_x, missing_y = x[mask], y[mask]
+
+    filled_values = griddata(
+        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+    )
+    arr_filled = arr.copy()
+    arr_filled[mask] = filled_values
+    return arr_filled
+
+
 def interpolate_na_2d(
     da: xr.DataArray, buffer: int | tuple[int, int] = 0
 ) -> xr.DataArray:
@@ -1095,26 +1123,6 @@ def interpolate_na_2d(
         raise ValueError(
             "buffer must be a non-negative integer or a tuple of two non-negative integers"
         )
-
-    def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
-        mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
-
-        if not mask.any():
-            return arr
-        if mask.all():
-            return arr
-
-        y, x = np.indices(arr.shape)
-        known_x, known_y = x[~mask], y[~mask]
-        known_v = arr[~mask]
-        missing_x, missing_y = x[mask], y[mask]
-
-        filled_values = griddata(
-            (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
-        )
-        arr_filled = arr.copy()
-        arr_filled[mask] = filled_values
-        return arr_filled
 
     if da.chunks is None:
         filled_values = fillna_2d(np.asarray(da.data), nodata=nodata)
@@ -1480,29 +1488,6 @@ def clip_region(
             )
         )
     return clipped_mask, *clipped_arrays
-
-
-# def create_dask_tiles(
-#     da: xr.DataArray,
-# ):
-#     transform = da.rio.transform(recalc=True)
-
-#     tiles = []
-#     y_offset = 0
-#     for y_chunk in da.chunksizes["y"]:
-#         tiles.append([])
-#         x_offset = 0
-#         for x_chunk in da.chunksizes["x"]:
-#             tiles[-1].append(
-#                 {
-#                     "transform": transform * Affine.translation(x_offset, y_offset),
-#                     "shape": (y_chunk, x_chunk),
-#                 }
-#             )
-#             x_offset += x_chunk
-#         y_offset += y_chunk
-
-#     return from_array(tiles, chunks=(1, 1))
 
 
 def rasterize_geometry(

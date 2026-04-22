@@ -1,7 +1,5 @@
 """Utilities for working with Global Ocean Mean Dynamic Topography data in GEB."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import copernicusmarine

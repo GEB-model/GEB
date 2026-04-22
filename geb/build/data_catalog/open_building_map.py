@@ -12,8 +12,6 @@ Notes:
 
 """
 
-from __future__ import annotations
-
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -25,7 +23,7 @@ from pyquadkey2 import quadkey
 from shapely import geometry
 from tqdm import tqdm
 
-from geb.workflows.io import fetch_and_save, write_geom
+from geb.workflows.io import fetch_and_save
 
 from .base import Adapter
 
@@ -149,25 +147,41 @@ class OpenBuildingMap(Adapter):
     def fetch(
         self,
         url: str,
-        geom: geometry.polygon.Polygon,
-        prefix: str,
     ) -> OpenBuildingMap:
-        """Download OpenBuildingMap tiles intersecting a bbox.
+        """Fetch OpenBuildingMap data for a given region.
+
+        Note:
+            In this adapter, caching is disabled. fetch() simply returns self.
+            The actual downloading and extraction happens in read().
 
         Args:
             url: Base URL of the OpenStreetMap server.
-            geom: Polygon of the model region.
-            prefix: Prefix for the local storage path.
 
         Returns:
             The OpenBuildingMap instance.
+        """
+        self.url = url
+        return self
+
+    def read(
+        self,
+        geom: geometry.polygon.Polygon,
+    ) -> gpd.GeoDataFrame:
+        """Read the OpenBuildingMap data as a GeoDataFrame.
+
+        Note:
+            Since caching is disabled, this method downloads and processes
+            the data into memory directly.
+
+        Args:
+            geom: Polygon representing the model region.
+
+        Returns:
+            A GeoDataFrame with the buildings data.
 
         Raises:
             RuntimeError: If no buildings can be downloaded for the model region.
         """
-        if self.path.exists():
-            return self
-
         # get bounds for geom
         tiles: list = self._quadkeys_for_geom(geom=geom)
         with tempfile.TemporaryDirectory() as temp_dir_str:
@@ -176,7 +190,7 @@ class OpenBuildingMap(Adapter):
 
             for tile in tqdm(tiles, desc="Downloading OpenBuildingMap tiles"):
                 tile_filename = f"building.{tile}.gpkg.bz2"
-                tile_url: str = f"{url}/{tile_filename}"
+                tile_url: str = f"{self.url}/{tile_filename}"
 
                 gpkg_filename: Path = self._download_and_extract_tile(
                     tile_url, temp_dir, tile_filename
@@ -185,30 +199,13 @@ class OpenBuildingMap(Adapter):
                 buildings = self._extract_buildings_in_geom(gpkg_filename, geom)
                 if buildings is not None:
                     list_of_buildings_in_geom.append(buildings)
-        # concatenate all buildings
-        buildings_in_geom: gpd.GeoDataFrame = pd.concat(
-            list_of_buildings_in_geom, ignore_index=True
-        )  # ty:ignore[invalid-assignment]
 
         # raise error if no buildings are found in model region
         if len(list_of_buildings_in_geom) == 0:
             raise RuntimeError("No OpenBuildingMap features were found in model domain")
-        # write to file
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        write_geom(buildings_in_geom, self.path)
 
-        return self
-
-    def read(self, **kwargs: Any) -> gpd.GeoDataFrame:
-        """Read the OpenBuildingMap data as a GeoDataFrame.
-
-        Args:
-            **kwargs: Additional keyword arguments to pass to gpd.read_parquet.
-
-        Returns:
-            A GeoDataFrame with the GADM data.
-        """
-        gdf = Adapter.read(self, **kwargs)
+        # concatenate all buildings
+        gdf: gpd.GeoDataFrame = pd.concat(list_of_buildings_in_geom, ignore_index=True)  # ty:ignore[invalid-assignment]
 
         # add x and y columns for building centroids in EPSG:4326 (lon/lat)
         gdf["x"] = gdf.geometry.centroid.x
