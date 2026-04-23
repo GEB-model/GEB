@@ -45,6 +45,15 @@
 - Fix bug where river widths could be negative in rare cases. This clearly raised an error in the model run, so it doesn't affect any model that ran normally ([#770](https://github.com/GEB-model/GEB/issues/770))
 - Fix bugs in DeltaDTM: 1) tiles were not found as a buffer was not present around the coastal mask 2) for large coastal regions, the tiles were deleted, solving [[#783](https://github.com/GEB-model/GEB/issues/783)]
 - Different updates to Global Exposure model (GEM), most importantly a detailed mapping of name changes between GEM and GADM 
+- Fix bug where `insurance_active` tuple was always truthy; insurance check now uses `any(insurance_active)` in crop farmers (https://github.com/GEB-model/GEB/issues/790).
+- Fix wrong config key in `livestock_farmers.py`: was reading from `agent_settings.town_managers` instead of `agent_settings.livestock_farmers`. Since no config was actually used, this didn't have an effect on the model run.
+- Fix accounting bug in `get_current_storage()` where topwater was counted twice.
+- Replace `efficiency` [0–1] with explicit `return_flow` (m/day) in industry and livestock agents. The `to_grid` conversion for industry and livestock water demand is now performed inside `update_water_demand()`, so both agents return grid-scale arrays directly.
+- Speed up `to_grid` by parallelizing and simplifying because only weightedmean was used.
+- Split `get_current_storage()` into five sub-methods: `get_landsurface_storage_m3`, `get_overland_flow_buffer_storage_m3`, `get_routing_storage_m3`, `get_waterbodies_storage_m3`, `get_groundwater_storage_m3` for better profiling and clarity. Also sped up some of the functions using numba.
+- Cache `current_time` in `set_timestep()` to avoid recomputing date every call.
+- Make saving of store and finalization of reporting multithreaded.
+- Refactor `Reporter.process_value()` into helper methods (`_write_grid_hru_to_zarr`, `_apply_grid_hru_function`, `_write_agents_to_zarr`, `_apply_agent_function`) for better readability and profiling.
 
 To support this version:
 - Remove `setup_irrigation_sources` from build.yml.

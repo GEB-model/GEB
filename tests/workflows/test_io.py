@@ -22,14 +22,77 @@ from geb.workflows.io import (
     calculate_scaling,
     create_hash_from_parameters,
     get_window,
+    read_array,
     read_hash,
     read_table,
+    write_array,
     write_hash,
     write_table,
     write_zarr,
 )
 
 from ..testconfig import tmp_folder
+
+
+def test_write_array_roundtrip(tmp_path: Path) -> None:
+    """Test that write_array followed by read_array returns the original array.
+
+    Checks dtype preservation, shape, values, and that the array is stored as a
+    single chunk (non-chunked) equal to the array shape.
+    """
+    arr = np.array([1.0, 2.5, 3.75], dtype=np.float32)
+    fp = tmp_path / "test.array.zarr"
+
+    write_array(arr, fp)  # ty:ignore[invalid-argument-type]
+    result = read_array(fp)
+
+    assert result.dtype == arr.dtype
+    assert result.shape == arr.shape
+    np.testing.assert_array_equal(result, arr)
+
+    # Verify stored as a single chunk covering the whole array
+    z = zarr.open_array(fp, mode="r")
+    assert z.chunks == arr.shape
+
+
+def test_write_array_2d_roundtrip(tmp_path: Path) -> None:
+    """Test write_array / read_array roundtrip for a 2D array."""
+    arr = np.arange(12, dtype=np.int32).reshape(3, 4)
+    fp = tmp_path / "test2d.array.zarr"
+
+    write_array(arr, fp)  # ty:ignore[invalid-argument-type]
+    result = read_array(fp)
+
+    assert result.dtype == arr.dtype
+    assert result.shape == arr.shape
+    np.testing.assert_array_equal(result, arr)
+    z = zarr.open_array(fp, mode="r")
+    assert z.chunks == arr.shape
+
+
+def test_write_array_with_attributes(tmp_path: Path) -> None:
+    """Test that attributes are stored and retrieved correctly by write_array."""
+    arr = np.zeros(5, dtype=np.float32)
+    attrs = {"n": 3, "extra_dims_names": ["x", "y"]}
+    fp = tmp_path / "test_attrs.array.zarr"
+
+    write_array(arr, fp, attributes=attrs)  # ty:ignore[invalid-argument-type]
+    result, loaded_attrs = read_array(fp, return_attributes=True)
+
+    np.testing.assert_array_equal(result, arr)
+    assert loaded_attrs["n"] == 3
+    assert loaded_attrs["extra_dims_names"] == ["x", "y"]
+
+
+def test_write_array_overwrites_existing(tmp_path: Path) -> None:
+    """Test that write_array silently overwrites an existing file."""
+    fp = tmp_path / "overwrite.array.zarr"
+    write_array(np.array([1, 2, 3], dtype=np.float32), fp)  # ty:ignore[invalid-argument-type]
+    new_arr = np.array([9, 8], dtype=np.float32)
+    write_array(new_arr, fp)  # ty:ignore[invalid-argument-type]
+
+    result = read_array(fp)
+    np.testing.assert_array_equal(result, new_arr)
 
 
 def encode_decode(

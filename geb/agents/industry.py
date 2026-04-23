@@ -20,10 +20,10 @@ if TYPE_CHECKING:
 
 
 class IndustryVariables(Bucket):
-    """Variables for the LivestockFarmers agent."""
+    """Variables for the Industry agent."""
 
     current_water_demand: ArrayFloat32
-    current_efficiency: ArrayFloat32
+    current_return_flow: ArrayFloat32
     last_water_demand_update: datetime.datetime
 
 
@@ -82,29 +82,26 @@ class Industry(AgentBaseClass):
         return "agents.industry"
 
     def spinup(self) -> None:
-        """Set initial water demand and efficiency during spinup."""
-        water_demand, efficiency = self.update_water_demand()
+        """Set initial water demand and return flow during spinup."""
+        water_demand, water_return_flow = self.update_water_demand()
         self.var.current_water_demand = water_demand
-        self.var.current_efficiency = efficiency
+        self.var.current_return_flow = water_return_flow
 
     def update_water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
-        """Update the water demand for industry at the HRU level.
+        """Update the water demand for industry at the grid level.
 
         Returns:
             A tuple containing:
-            - The updated water demand (in m3/day).
-            - The updated efficiency [0-1].
+            - The updated water demand (m/day).
+            - The updated return flow (m/day).
         """
         if self.config.get("disable_water_demand", False):
             self.model.logger.info(
-                "[Industry] Water demand and efficiency set to 0 due to config setting."
+                "Industry Water demand and and return flow set to 0 due to config setting."
             )
-            zero_array = np.zeros(self.HRU.var.land_use_ratio.shape, dtype=float)
-            efficiency_grid = self.model.hydrology.to_grid(
-                HRU_data=zero_array, fn="max"
-            )
+            zero_array = self.grid.full_compressed(0, dtype=np.float32)
             self.var.last_water_demand_update = self.model.current_time
-            return zero_array, efficiency_grid
+            return zero_array, zero_array
 
         else:
             downscale_mask = self.model.hydrology.HRU.var.land_use_type != SEALED
@@ -173,19 +170,15 @@ class Industry(AgentBaseClass):
                 / self.HRU.var.cell_area
             )  # convert to m/day
 
-            efficiency = np.divide(
-                water_consumption,
-                water_demand,
-                out=np.zeros_like(water_consumption, dtype=float),
-                where=water_demand != 0,
-            )
+            water_consumption = self.model.hydrology.to_grid(HRU_data=water_consumption)
+            water_demand = self.model.hydrology.to_grid(HRU_data=water_demand)
+            water_return_flow = water_demand - water_consumption
+            # consumption can exceed demand per grid cell due to floating-point rounding
+            # in the weighted-mean aggregation; clip to ensure return flow stays non-negative
+            water_return_flow = np.maximum(water_return_flow, np.float32(0.0))
 
-            efficiency = self.model.hydrology.to_grid(HRU_data=efficiency, fn="max")
-
-            assert (efficiency <= 1).all()
-            assert (efficiency >= 0).all()
             self.var.last_water_demand_update = self.model.current_time
-            return water_demand, efficiency
+            return water_demand, water_return_flow
 
     def water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
         """Get the current water demand for industry at the HRU level.
@@ -195,16 +188,16 @@ class Industry(AgentBaseClass):
 
         Returns:
             A tuple containing:
-            - The current water demand (in m3/day).
-            - The current efficiency [0-1].
+            - The current water demand (m/day).
+            - The current return flow (m/day).
         """
         if (
             np.datetime64(self.model.current_time, "ns")
             in self.industry_water_consumption_ds.time
         ):
-            water_demand, efficiency = self.update_water_demand()
+            water_demand, current_return_flow = self.update_water_demand()
             self.var.current_water_demand = water_demand
-            self.var.current_efficiency = efficiency
+            self.var.current_return_flow = current_return_flow
 
         assert (
             self.model.current_time - self.var.last_water_demand_update
@@ -212,7 +205,7 @@ class Industry(AgentBaseClass):
             "Water demand has not been updated for over a year. "
             "Please check the industry water demand datasets."
         )
-        return self.var.current_water_demand, self.var.current_efficiency
+        return self.var.current_water_demand, self.var.current_return_flow
 
     def step(self) -> None:
         """This function is run each timestep."""

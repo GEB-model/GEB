@@ -2196,7 +2196,6 @@ class LandSurface(Module):
 
         reference_evapotranspiration_water_m = self.hydrology.to_grid(
             HRU_data=reference_evapotranspiration_water_m.transpose(),
-            fn="weightedmean",
         )
         assert (reference_evapotranspiration_water_m >= 0).all()
 

@@ -208,10 +208,12 @@ combine-as-imports = true
 convention = "google"
 
 [tool.pytest.ini_options]
-norecursedirs = [".venv", "build", "dist", "tmp*"]
+norecursedirs = [".venv", "dist", "tmp*"]
 testpaths = ["tests"]
 addopts = "--ignore=.venv"
 
 [tool.ty.rules]
 unresolved-attribute = "warn"
 
+[tool.ty.src]
+exclude = ["geb/build/custom_models/**"]

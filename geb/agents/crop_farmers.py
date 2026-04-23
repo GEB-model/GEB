@@ -275,6 +275,7 @@ class CropFarmersVariables(Bucket):
     adjusted_annual_loan_cost: DynamicArray
     adjusted_yearly_income: DynamicArray
     decision_horizon: DynamicArray
+    household_size: DynamicArray
 
 
 class CropFarmers(AgentBaseClass):
@@ -1086,6 +1087,12 @@ class CropFarmers(AgentBaseClass):
             fill_value=self.model.config["agent_settings"]["farmers"][
                 "expected_utility"
             ]["decisions"]["decision_horizon"],
+        )
+        self.var.household_size = DynamicArray(
+            n=self.var.n, max_n=self.var.max_n, dtype=np.int32, fill_value=-1
+        )
+        self.var.household_size[:] = read_array(
+            self.model.files["array"]["agents/farmers/household_size"]
         )
         self.var.cumulative_water_deficit_m3 = DynamicArray(
             n=self.var.n,
@@ -4974,12 +4981,12 @@ class CropFarmers(AgentBaseClass):
 
                 timer.finish_split("yield-spei relation")
 
-                insurance_active = (
+                insurance_active: tuple[bool, bool, bool] = (
                     self.traditional_insurance_adaptation_active,
                     self.index_insurance_adaptation_active,
                     self.pr_insurance_adaptation_active,
                 )
-                if insurance_active:
+                if any(insurance_active):
                     assert sum(insurance_active) <= 1, (
                         "Currently, only one insurance adaptation may be active at a time. Multiple can be enabled with some minor adjustments"
                     )
