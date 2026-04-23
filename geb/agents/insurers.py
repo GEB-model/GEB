@@ -877,6 +877,8 @@ class Insurers(AgentBaseClass):
             )
             return pr_premium, farmer_yield_probability_relation_insured_pr
 
+        return None
+
         msg = "No insurance adaptation is active."
         raise ValueError(msg)
 

@@ -91,57 +91,46 @@ def land_use_ratio() -> npt.NDArray[np.float32]:
 
 def test_to_grid(
     HRU_data: npt.NDArray[np.float32],
-    HRU_to_grid: npt.NDArray[np.int32],
+    grid_to_HRU: npt.NDArray[np.int32],
     land_use_ratio: npt.NDArray[np.float32],
 ) -> None:
-    """Test the to_grid function with various aggregation methods for going from HRU to grid.
+    """Test the to_grid function for going from HRU to grid using a weighted mean.
+
+    Tests both 1D (single timestep) and 2D (multiple timesteps) input shapes.
 
     Args:
         HRU_data: Hypothetical data on the HRUs.
-        HRU_to_grid: The indexes that map each HRU to its parent grid cell.
+        grid_to_HRU: Exclusive end index of each grid cell's HRUs.
         land_use_ratio: The land use ratio (of a grid cell) for each HRU.
     """
+    expected_1d = np.array([1.0, 3.2, 7.0], dtype=np.float32)
     np.testing.assert_almost_equal(
-        to_grid(HRU_data, HRU_to_grid, land_use_ratio),
-        np.array([1.0, 3.2, 7.0], dtype=np.float32),
-        decimal=1,
+        to_grid(HRU_data, grid_to_HRU, land_use_ratio),
+        expected_1d,
+        decimal=5,
     )
+
+    # 2D case: two timesteps stacked as rows (n_timesteps × n_HRUs)
+    HRU_data_2d = np.vstack([HRU_data, HRU_data * 2])
+    expected_2d = np.vstack([expected_1d, expected_1d * 2])
     np.testing.assert_almost_equal(
-        to_grid(HRU_data, HRU_to_grid, land_use_ratio, fn="weightedmean"),
-        np.array([1.0, 3.2, 7.0], dtype=np.float32),
-        decimal=1,
-    )
-    np.testing.assert_almost_equal(
-        to_grid(HRU_data, HRU_to_grid, land_use_ratio, fn="sum"),
-        np.array([1, 9, 35], dtype=np.float32),
-        decimal=1,
-    )
-    np.testing.assert_almost_equal(
-        to_grid(HRU_data, HRU_to_grid, land_use_ratio, fn="max"),
-        np.array([1, 4, 9], dtype=np.float32),
-        decimal=1,
-    )
-    np.testing.assert_almost_equal(
-        to_grid(HRU_data, HRU_to_grid, land_use_ratio, fn="min"),
-        np.array([1, 2, 5], dtype=np.float32),
-        decimal=1,
+        to_grid(HRU_data_2d, grid_to_HRU, land_use_ratio),
+        expected_2d,
+        decimal=5,
     )
 
 
-def test_to_grid_unknown_fn(
-    HRU_data: npt.NDArray[np.float32],
-    HRU_to_grid: npt.NDArray[np.int32],
-    land_use_ratio: npt.NDArray[np.float32],
-) -> None:
-    """Test that an unknown aggregation function raises NotImplementedError.
+@pytest.fixture
+def grid_to_HRU() -> npt.NDArray[np.int32]:
+    """Exclusive end index of each grid cell's HRUs in the sorted HRU array.
 
-    Args:
-        HRU_data: Hypothetical data on the HRUs.
-        HRU_to_grid: The indexes that map each HRU to its parent grid cell.
-        land_use_ratio: The land use ratio (of a grid cell) for each HRU.
+    grid_to_HRU[i] is the first HRU index that belongs to grid cell i+1,
+    i.e. the exclusive end of cell i's HRUs.
+
+    Returns:
+        Array of size n_grid_cells. Corresponds with other fixtures in this file.
     """
-    with pytest.raises(NotImplementedError):
-        to_grid(HRU_data, HRU_to_grid, land_use_ratio, fn="unknown")
+    return np.array([1, 4, 9], dtype=np.int32)
 
 
 @pytest.fixture
