@@ -1,5 +1,8 @@
 # dev
 
+# v1.0.0b22
+- Remove option to auto-fix build order (now build order should be much more consistent with `reasonable_default_build.yml`) and fix associated tests.
+
 # v1.0.0b21
 - Remove `ncpus` config option from SFINCS. CPU count is now always determined automatically from the SLURM environment or system.
 - Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.

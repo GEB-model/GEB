@@ -21,7 +21,6 @@ def validate_build_methods(
     tree: nx.DiGraph,
     methods: dict[str, Any],
     validate_order: bool = True,
-    fix_order_if_broken: bool = False,
     logger: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """Validate the methods in the dependency tree.
@@ -32,7 +31,6 @@ def validate_build_methods(
         tree: The dependency tree.
         methods: A dictionary of methods to validate.
         validate_order: If True, checks if methods depend on other methods that may come after them in the build file.
-        fix_order_if_broken: If True, will attempt to fix the order of methods if validate_order fails. Only used if validate_order is True.
         logger: Logger to use for logging validation messages.
 
     Returns:
@@ -76,96 +74,21 @@ def validate_build_methods(
                             "which is missing from the requested methods."
                         )
 
-        if fix_order_if_broken:
-            # Check if the current order is already valid
-            current_order_valid = True
-            processed_in_check = set()
-            for method in methods:
-                # 1 is the method itself, 2 is the method + direct dependencies
-                direct_deps = list(
-                    nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
-                )[:-1]
-                for dep in direct_deps:
-                    if (
-                        dep != method
-                        and dep in methods
-                        and dep not in processed_in_check
-                    ):
-                        current_order_valid = False
-                        break
-                if not current_order_valid:
-                    break
-                processed_in_check.add(method)
-
-            if not current_order_valid:
-                try:
-                    # Find the minimal set of reorderings.
-                    # We use a simple approach: find the first method that violates dependencies,
-                    # and move its missing dependencies just before it.
-                    # However, for a robust and deterministic "minimal" change,
-                    # we can use the fact that the user likely wants to keep their existing order
-                    # as much as possible.
-                    # We'll use a stable topological sort that respects the original order
-                    # where possible.
-                    subgraph = tree.subgraph(methods.keys())
-                    if not nx.is_directed_acyclic_graph(subgraph):
-                        raise ValueError(
-                            "Cannot fix order: cycle detected in requested methods."
-                        )
-
-                    changed_methods = set()
-
-                    # To minimize changes, we can iterate and "pull up" dependencies.
-                    new_order = list(methods.keys())
-                    changed = True
-                    while changed:
-                        changed = False
-                        for i in range(len(new_order)):
-                            method = new_order[i]
-                            deps = set(subgraph.predecessors(method))
-                            if not deps:
-                                continue
-
-                            # Find the last position of any dependency in the current order
-                            max_dep_idx = -1
-                            for dep in deps:
-                                dep_idx = new_order.index(dep)
-                                if dep_idx > max_dep_idx:
-                                    max_dep_idx = dep_idx
-
-                            # If the last dependency is after the current method, move the method after it
-                            if max_dep_idx > i:
-                                method_to_move = new_order.pop(i)
-                                new_order.insert(max_dep_idx, method_to_move)
-                                changed = True
-                                changed_methods.add(method_to_move)
-                                break
-
-                    methods = {node: methods[node] for node in new_order}
-
-                    if logger is not None:
-                        logger.warning(
-                            f"The provided method order was invalid and has been auto-fixed. Moved methods: {changed_methods}"
-                        )
-                        logger.info(f"New build method order: {list(methods.keys())}")
-                except nx.NetworkXUnfeasible:
-                    raise ValueError("Cannot fix order: dependencies are circular.")
-        else:
-            processed_methods = set()
-            for method in methods:
-                # 1 is the method itself, 2 is the method + direct dependencies
-                direct_dependencies = list(
-                    nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
-                )[:-1]
-                for direct_dependency in direct_dependencies:
-                    if direct_dependency == method:
-                        continue
-                    if direct_dependency not in processed_methods:
-                        raise ValueError(
-                            f"Method {method} depends on {direct_dependency}, "
-                            "which may come after this method in the build file or not be present at all."
-                        )
-                processed_methods.add(method)
+        processed_methods = set()
+        for method in methods:
+            # 1 is the method itself, 2 is the method + direct dependencies
+            direct_dependencies = list(
+                nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
+            )[:-1]
+            for direct_dependency in direct_dependencies:
+                if direct_dependency == method:
+                    continue
+                if direct_dependency not in processed_methods:
+                    raise ValueError(
+                        f"Method {method} depends on {direct_dependency}, "
+                        "which may come after this method in the build file or not be present at all."
+                    )
+            processed_methods.add(method)
 
     for method, args in methods.items():
         args_set = set(args) if args is not None else set()
