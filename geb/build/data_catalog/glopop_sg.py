@@ -137,7 +137,7 @@ class GLOPOP_SG(Adapter):
             print(region)
             print("17 columns")
         else:  # default to 16 columns
-            # reshapa data
+            # reshape data
             data_reshaped = np.reshape(GLOPOP_s, (n_attr, n_people)).transpose()
 
         df = pd.DataFrame(
