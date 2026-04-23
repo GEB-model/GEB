@@ -208,7 +208,7 @@ combine-as-imports = true
 convention = "google"
 
 [tool.pytest.ini_options]
-norecursedirs = [".venv", "build", "dist", "tmp*"]
+norecursedirs = [".venv", "dist", "tmp*"]
 testpaths = ["tests"]
 addopts = "--ignore=.venv"
 

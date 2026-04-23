@@ -275,6 +275,7 @@ class CropFarmersVariables(Bucket):
     adjusted_annual_loan_cost: DynamicArray
     adjusted_yearly_income: DynamicArray
     decision_horizon: DynamicArray
+    household_size: DynamicArray
 
 
 class CropFarmers(AgentBaseClass):
@@ -1086,6 +1087,12 @@ class CropFarmers(AgentBaseClass):
             fill_value=self.model.config["agent_settings"]["farmers"][
                 "expected_utility"
             ]["decisions"]["decision_horizon"],
+        )
+        self.var.household_size = DynamicArray(
+            n=self.var.n, max_n=self.var.max_n, dtype=np.int32, fill_value=-1
+        )
+        self.var.household_size[:] = read_array(
+            self.model.files["array"]["agents/farmers/household_size"]
         )
         self.var.cumulative_water_deficit_m3 = DynamicArray(
             n=self.var.n,
