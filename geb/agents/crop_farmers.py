@@ -2174,7 +2174,7 @@ class CropFarmers(AgentBaseClass):
                 weights=potential_profit_per_field,
                 minlength=self.var.n,
             )
-            self.var.seasonal_income_farmer = np.bincount(
+            self.var.seasonal_income_farmer[:] = np.bincount(
                 harvesting_farmer_fields,
                 weights=actual_profit_per_field,
                 minlength=self.var.n,
