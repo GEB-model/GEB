@@ -1042,6 +1042,9 @@ class GEBModel(Module):
             timestep: current model timestep
         """
         self._current_timestep = timestep
+        self._current_time = (
+            self.simulation_start + self.current_timestep * self.timestep_length
+        )
 
     @property
     def current_time(self) -> datetime.datetime:
@@ -1053,15 +1056,13 @@ class GEBModel(Module):
         Raises:
             AttributeError: If `timestep_length` or `simulation_start` are not initialized.
         """
-        # Defensive check: ensure required attributes are initialized
-        if not hasattr(self, "timestep_length") or not hasattr(
-            self, "simulation_start"
-        ):
+        try:
+            return self._current_time
+        except AttributeError as e:
             raise AttributeError(
-                "Cannot compute current_time: 'timestep_length' and/or 'simulation_start' are not initialized. "
-                "Ensure the model is fully initialized before accessing current_time."
-            )
-        return self.simulation_start + self.current_timestep * self.timestep_length
+                "Error computing current_time: " + str(e) + ". "
+                "This may be due to 'simulation_start' or 'timestep_length' not being properly initialized."
+            ) from e
 
     @property
     def name(self) -> str:
