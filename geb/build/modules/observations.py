@@ -268,7 +268,7 @@ class Observations(BuildModelBase):
             ]
             discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
-                self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
+                discharge_snapping_folder / "discharge_snapping.xlsx",
                 index=False,
             )
 
@@ -366,7 +366,7 @@ class Observations(BuildModelBase):
                     closest_point_coords=closest_point_coords,
                     closest_river_segment=closest_river_segment,
                     grid_pixel_xy=snap_results["snapped_grid_pixel_xy"],
-                    filename_prefix="snapping_discharge",
+                    filename_prefix="discharge_snapping",
                     point_label="Original gauge",
                     title=f"Upstream area grid and gauge snapping for {station_id}",
                 )
