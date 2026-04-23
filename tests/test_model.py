@@ -267,7 +267,7 @@ def test_profile_model_start() -> None:
         args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
-        args["profiling"] = True
+        args["profile_speed"] = True
         args["method_args"] = {
             "initialize_only": True,
         }
