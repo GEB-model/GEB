@@ -159,7 +159,7 @@ def write_array(
     arr: NDArrayLike,
     fp: Path,
     attributes: dict[str, Any] | None = None,
-    compression_level: int = 18,
+    compression_level: int = 5,
 ) -> None:
     """Save a numpy array to a .zarr file.
 
@@ -167,7 +167,7 @@ def write_array(
         arr: The numpy array to save.
         fp: The path to the output .zarr file.
         attributes: Optional dictionary of attributes to store with the array.
-        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 18.
+        compression_level: The level of compression for the ZSTD compressor (1-22). Default is 5.
     """
     # Store as a single chunk covering the whole array to avoid per-chunk overhead.
     # zarr v3 uses `codecs` instead of `compressor` for compression.
