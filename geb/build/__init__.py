@@ -2780,7 +2780,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["array"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            write_array(data, fp_with_root)
+            write_array(data, fp_with_root, compression_level=18)
 
         self.array[name] = fp_with_root
 
@@ -3313,9 +3313,7 @@ class GEBModel(
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        methods = build_method.validate_methods(
-            methods, validate_order=validate_order, fix_order_if_broken=True
-        )
+        methods = build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (

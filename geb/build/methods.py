@@ -53,7 +53,6 @@ def validate_build_methods(
 
     if validate_order:
         # Check if all dependencies are present in the requested methods.
-        # This must be done regardless of fix_order_if_broken.
         for method in methods:
             # 1 is the method itself, 2 is the method + direct dependencies
             direct_dependencies = list(
@@ -289,7 +288,6 @@ class _build_method:
         self,
         methods: dict[str, Any],
         validate_order: bool = True,
-        fix_order_if_broken: bool = False,
     ) -> dict[str, Any]:
         """Validate the methods in the dependency tree.
 
@@ -298,7 +296,6 @@ class _build_method:
         Args:
             methods: A dictionary of methods to validate.
             validate_order: If True, checks if methods depend on other methods that may come after them in the build file.
-            fix_order_if_broken: If True, will attempt to fix the order of methods if validate_order fails. Only used if validate_order is True.
 
         Returns:
             The input methods if validation passes.
@@ -309,7 +306,6 @@ class _build_method:
             self.tree,
             methods,
             validate_order=validate_order,
-            fix_order_if_broken=fix_order_if_broken,
             logger=active_logger,
         )
 
