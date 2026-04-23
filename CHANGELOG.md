@@ -86,6 +86,9 @@ To support this version:
 - Added auto-update for build methods.
 - Improve memory usage of setup_soil (hopefully)
 - Update to Python 3.14.4.
+- Fix variables that were not correctly set in optimized mode.
+- Assert that future sea level rise is monotonically increasing, or monotontically decreasing.
+- Catch more exceptions where names for regions between several datasets do not match.
 
 To support this version:
 - Add `setup_flood_damage_model` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_flood_damage_model`.
