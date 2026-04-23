@@ -1,4 +1,6 @@
 # dev
+
+# v1.0.0b21
 - Remove `ncpus` config option from SFINCS. CPU count is now always determined automatically from the SLURM environment or system.
 - Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
 - Remove setup_irrigation_sources from build process as it is not needed anymore.
@@ -56,14 +58,13 @@
 - Refactor `Reporter.process_value()` into helper methods (`_write_grid_hru_to_zarr`, `_apply_grid_hru_function`, `_write_agents_to_zarr`, `_apply_agent_function`) for better readability and profiling.
 
 To support this version:
-- Remove `setup_irrigation_sources` from build.yml.
+- First of all it is HIGHLY RECOMMENDED to remove your own build.yml and replace it with the one in the examples. See `geb/examples/geul/build.yml`. This build.yml inherits from a new `reasonable_default_build.yml` (see `geb/reasonable_default_build.yml`). This will drastrically reduce the number of manual updates you need to do in the future. If you made any changes to your `build.yml` relative to the example, you can only keep those methods in your `build.yml`, which will then override the default ones in the `reasonable_default_build.yml`. If you want to keep the current setup, you need to remove `setup_irrigation_sources` from build.yml.
+
+The following should be run automatically with `geb update-version`, but if you want to do this manually:
 - Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
 - Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
 - Re-run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.
-
-# v1.0.0b21
-
-- Re-run `setup_gtsm_station_data`.
+- Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data`.
 
 # v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
