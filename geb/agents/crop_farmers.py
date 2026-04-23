@@ -275,6 +275,7 @@ class CropFarmersVariables(Bucket):
     adjusted_annual_loan_cost: DynamicArray
     adjusted_yearly_income: DynamicArray
     decision_horizon: DynamicArray
+    household_size: DynamicArray
 
 
 class CropFarmers(AgentBaseClass):
@@ -437,7 +438,7 @@ class CropFarmers(AgentBaseClass):
                 "farmers"
             ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
         else:
-            self.water_price = load_economic_data(
+            self.water_price_dict = load_economic_data(
                 self.model.files["dict"]["socioeconomics/water_price"]
             )
 
@@ -1093,6 +1094,13 @@ class CropFarmers(AgentBaseClass):
                 "expected_utility"
             ]["decisions"]["decision_horizon"],
         )
+        self.var.household_size = DynamicArray(
+            n=self.var.n, max_n=self.var.max_n, dtype=np.int32, fill_value=-1
+        )
+        self.var.household_size[:] = read_array(
+            self.model.files["array"]["agents/farmers/household_size"]
+        )
+
         self.var.cumulative_water_deficit_m3 = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -1483,6 +1491,11 @@ class CropFarmers(AgentBaseClass):
     def is_in_command_area(self) -> np.ndarray:
         """Whether a farmer is in any command area."""
         return self.command_area != -1
+
+    @property
+    def channel_irrigating(self) -> np.ndarray:
+        """Farmers that have access to surface irrigation but not to reservoirs."""
+        return self.surface_irrigated & (~self.is_in_command_area)
 
     @property
     def surface_irrigated(self) -> DynamicArray:
@@ -4939,7 +4952,7 @@ class CropFarmers(AgentBaseClass):
                 self.crop_calendar_group,
                 (
                     self.is_in_command_area
-                    | self.channel_irrigated
+                    | self.channel_irrigating
                     | self.well_irrigated
                 ).data,
                 self.pr_class,
@@ -4969,7 +4982,7 @@ class CropFarmers(AgentBaseClass):
                     self.index_insurance_adaptation_active,
                     self.pr_insurance_adaptation_active,
                 )
-                if insurance_active:
+                if np.any(insurance_active):
                     assert sum(insurance_active) <= 1, (
                         "Currently, only one insurance adaptation may be active at a time. Multiple can be enabled with some minor adjustments"
                     )
