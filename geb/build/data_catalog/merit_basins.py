@@ -207,7 +207,7 @@ class MeritBasins(Adapter):
 
             # Use a temporary file to avoid partial writes in case of errors
             with tempfile.NamedTemporaryFile(
-                dir=self.path.parent, suffix=".parquet", delete=False
+                dir=self.path.parent, suffix=".parquet", delete=True
             ) as tmp_file:
                 tmp_path: Path = Path(tmp_file.name)
                 print(
