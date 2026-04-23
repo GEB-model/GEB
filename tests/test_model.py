@@ -447,6 +447,8 @@ def test_run() -> None:
         assert result["NSE"] > -0.49
         assert result["R"] > 0.41
 
+        print("Discharge evaluation results:", result)
+
         # method_args = {
         #     "method": "hydrodynamics.evaluate_hydrodynamics",
         # }
