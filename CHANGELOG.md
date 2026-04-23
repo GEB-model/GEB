@@ -43,6 +43,8 @@
 - Make the example build.yml inherit from a new 'reasonable_default_build.yml', allowing seamless updating unless custom settings are used.
 - Update pyflwdir to 0.5.11, which has caching of numba functions. Also thus allows removing of custom cached functions in routing.py.
 - Fix bug where river widths could be negative in rare cases. This clearly raised an error in the model run, so it doesn't affect any model that ran normally ([#770](https://github.com/GEB-model/GEB/issues/770))
+- Fix bugs in DeltaDTM: 1) tiles were not found as a buffer was not present around the coastal mask 2) for large coastal regions, the tiles were deleted, solving [[#783](https://github.com/GEB-model/GEB/issues/783)]
+- Different updates to Global Exposure model (GEM), most importantly a detailed mapping of name changes between GEM and GADM 
 - Fix bug where `insurance_active` tuple was always truthy; insurance check now uses `any(insurance_active)` in crop farmers (https://github.com/GEB-model/GEB/issues/790).
 - Fix wrong config key in `livestock_farmers.py`: was reading from `agent_settings.town_managers` instead of `agent_settings.livestock_farmers`. Since no config was actually used, this didn't have an effect on the model run.
 - Fix accounting bug in `get_current_storage()` where topwater was counted twice.
@@ -93,6 +95,9 @@ To support this version:
 - Added auto-update for build methods.
 - Improve memory usage of setup_soil (hopefully)
 - Update to Python 3.14.4.
+- Fix variables that were not correctly set in optimized mode.
+- Assert that future sea level rise is monotonically increasing, or monotontically decreasing.
+- Catch more exceptions where names for regions between several datasets do not match.
 
 To support this version:
 - Add `setup_flood_damage_model` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_flood_damage_model`.
