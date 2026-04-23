@@ -3474,6 +3474,11 @@ class CropFarmers(AgentBaseClass):
             efficiency,
             self.var.irr_eff_surface,
         )
+        self.var.return_fraction = np.where(
+            self.var.adaptations[:, adaptation_type],
+            return_fraction,
+            self.var.return_fraction_surface,
+        )
         # Determine the lower / higher water costs with a different efficiency
         yearly_water_costs_by_farmer = self.var.yearly_water_costs_by_farmer[
             :, TOTAL_IRRIGATION, :
