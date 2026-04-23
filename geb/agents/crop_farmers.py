@@ -3522,7 +3522,7 @@ class CropFarmers(AgentBaseClass):
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params: dict[str, Any] = {
             "loan_duration": loan_duration,
-            "expenditure_cap": within_budget,
+            "expenditure_cap": within_budget.data,
             "n_agents": self.var.n,
             "sigma": self.var.risk_aversion.data,
             "p_droughts": 1 / self.var.p_droughts[:-1],
@@ -3531,7 +3531,7 @@ class CropFarmers(AgentBaseClass):
             "profits_no_event_adaptation": profits_no_event_adaptation,
             "total_profits": total_profits,
             "risk_perception": self.var.risk_perception.data,
-            "total_annual_costs": total_annual_costs_m2,
+            "total_annual_costs": total_annual_costs_m2.data,
             "adaptation_costs": annual_cost_m2,
             "adapted": adapted.data,
             "time_adapted": self.var.time_adapted[:, adaptation_type].data,
