@@ -95,7 +95,7 @@ class LiveStockFarmers(AgentBaseClass):
         )
 
     def update_water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
-        """Update the water demand for livestock farmers at the HRU level.
+        """Update the water demand for livestock farmers at the grid level.
 
         Returns:
             A tuple containing:
@@ -147,14 +147,14 @@ class LiveStockFarmers(AgentBaseClass):
             / self.HRU.var.cell_area
         )  # convert to m/day
 
-        water_consumption = self.model.hydrology.to_grid(HRU_data=water_consumption)
+        water_demand = self.model.hydrology.to_grid(HRU_data=water_consumption)
         water_return_flow = self.grid.full_compressed(0, dtype=np.float32)
 
         self.var.last_water_demand_update = self.model.current_time
-        return water_consumption, water_return_flow
+        return water_demand, water_return_flow
 
     def water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
-        """Get the current water demand for livestock farmers at the HRU level.
+        """Get the current water demand for livestock farmers at the grid level.
 
         Updates the water demand at the start of each hydrological year.
         Otherwise, assumes the last known water demand.

@@ -152,7 +152,7 @@ class Hydrology(Data, Module):
         """Get the current water storage in the land surface components.
 
         Includes snow, liquid water in snow, interception, soil water content,
-        topwater, and the overland flow buffer. Uses float64 for accuracy.
+        and topwater. Uses float64 for accuracy.
 
         Returns:
             Total land surface water storage (m3).

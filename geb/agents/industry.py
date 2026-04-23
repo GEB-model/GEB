@@ -88,7 +88,7 @@ class Industry(AgentBaseClass):
         self.var.current_return_flow = water_return_flow
 
     def update_water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
-        """Update the water demand for industry at the HRU level.
+        """Update the water demand for industry at the grid level.
 
         Returns:
             A tuple containing:
@@ -173,6 +173,9 @@ class Industry(AgentBaseClass):
             water_consumption = self.model.hydrology.to_grid(HRU_data=water_consumption)
             water_demand = self.model.hydrology.to_grid(HRU_data=water_demand)
             water_return_flow = water_demand - water_consumption
+            # consumption can exceed demand per grid cell due to floating-point rounding
+            # in the weighted-mean aggregation; clip to ensure return flow stays non-negative
+            water_return_flow = np.maximum(water_return_flow, np.float32(0.0))
 
             self.var.last_water_demand_update = self.model.current_time
             return water_demand, water_return_flow

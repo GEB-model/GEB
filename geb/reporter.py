@@ -1250,7 +1250,9 @@ class Reporter:
 
         assert isinstance(value, (np.ndarray, DynamicArray))
         if value.size < value_store_array.shape[1]:
-            print("Padding array with NaNs or -1 - temporary solution")
+            self.model.logger.warning(
+                "Padding array with NaNs or -1 - temporary solution"
+            )
             value = np.pad(
                 value.data if isinstance(value, DynamicArray) else value,
                 (0, value_store_array.shape[1] - value.size),
