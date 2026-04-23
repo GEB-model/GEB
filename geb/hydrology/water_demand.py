@@ -264,11 +264,11 @@ class WaterDemand(Module):
         ) = self.model.agents.households.water_demand(household_demand_to_grid)
 
         timer.finish_split("Domestic")
-        industry_water_demand, industry_water_efficiency = (
+        industry_water_demand, industry_return_flow = (
             self.model.agents.industry.water_demand()
         )
         timer.finish_split("Industry")
-        livestock_water_demand, livestock_water_efficiency = (
+        livestock_water_demand, livestock_return_flow = (
             self.model.agents.livestock_farmers.water_demand()
         )
         timer.finish_split("Livestock")
@@ -334,9 +334,20 @@ class WaterDemand(Module):
         total_water_demand_loss_m3 += domestic_water_loss_m3
 
         # 2. industry (surface + ground)
-        industry_water_demand = self.hydrology.to_grid(
-            HRU_data=industry_water_demand, fn="weightedmean"
+        # Pre-compute the fraction of demand that is returned at full supply.
+        # If demand cannot be fully met, return flow is scaled by the same ratio
+        # so that consumption (= withdrawal - return flow) stays proportional.
+        industry_return_flow_fraction: npt.NDArray[np.float32] = np.zeros_like(
+            industry_water_demand
         )
+        np.divide(
+            industry_return_flow,
+            industry_water_demand,
+            out=industry_return_flow_fraction,
+            where=industry_water_demand > 0,
+        )
+        del industry_return_flow
+
         industry_water_demand_m3 = (
             industry_water_demand * self.hydrology.grid.var.cell_area
         )
@@ -348,9 +359,7 @@ class WaterDemand(Module):
         industry_withdrawal_m3 += self.withdraw(
             available_groundwater_m3, industry_water_demand_m3
         )  # withdraw from groundwater
-        industry_return_flow_m3 = industry_withdrawal_m3 * (
-            1 - industry_water_efficiency
-        )
+        industry_return_flow_m3 = industry_withdrawal_m3 * industry_return_flow_fraction
         industry_return_flow_m = industry_return_flow_m3 / self.grid.var.cell_area
 
         industry_water_loss_m3 = (
@@ -359,9 +368,18 @@ class WaterDemand(Module):
         total_water_demand_loss_m3 += industry_water_loss_m3
 
         # 3. livestock (surface)
-        livestock_water_demand = self.hydrology.to_grid(
-            HRU_data=livestock_water_demand, fn="weightedmean"
+        # Same proportional scaling of return flow as for industry.
+        livestock_return_flow_fraction: npt.NDArray[np.float32] = np.zeros_like(
+            livestock_water_demand
         )
+        np.divide(
+            livestock_return_flow,
+            livestock_water_demand,
+            out=livestock_return_flow_fraction,
+            where=livestock_water_demand > 0,
+        )
+        del livestock_return_flow
+
         livestock_water_demand_m3 = (
             livestock_water_demand * self.hydrology.grid.var.cell_area
         )
@@ -370,8 +388,8 @@ class WaterDemand(Module):
         livestock_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, livestock_water_demand_m3
         )  # withdraw from surface water
-        livestock_return_flow_m3 = livestock_withdrawal_m3 * (
-            1 - livestock_water_efficiency
+        livestock_return_flow_m3 = (
+            livestock_withdrawal_m3 * livestock_return_flow_fraction
         )
         livestock_return_flow_m = livestock_return_flow_m3 / self.grid.var.cell_area
 
@@ -449,7 +467,7 @@ class WaterDemand(Module):
         )
 
         return_flow = (
-            self.hydrology.to_grid(HRU_data=return_flow_irrigation_m, fn="weightedmean")
+            self.hydrology.to_grid(HRU_data=return_flow_irrigation_m)
             + domestic_return_flow_m
             + industry_return_flow_m
             + livestock_return_flow_m

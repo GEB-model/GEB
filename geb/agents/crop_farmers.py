@@ -4981,12 +4981,12 @@ class CropFarmers(AgentBaseClass):
 
                 timer.finish_split("yield-spei relation")
 
-                insurance_active = (
+                insurance_active: tuple[bool, bool, bool] = (
                     self.traditional_insurance_adaptation_active,
                     self.index_insurance_adaptation_active,
                     self.pr_insurance_adaptation_active,
                 )
-                if insurance_active:
+                if any(insurance_active):
                     assert sum(insurance_active) <= 1, (
                         "Currently, only one insurance adaptation may be active at a time. Multiple can be enabled with some minor adjustments"
                     )
