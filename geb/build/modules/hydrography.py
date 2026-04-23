@@ -1462,6 +1462,9 @@ class Hydrography(BuildModelBase):
         for station in sea_level_rise_df.columns:
             series = sea_level_rise_df[station]
             # check that the values are either monotonically increasing or decreasing
+            # There are some rare places where we see a slight decrease in sea level, for example
+            # in the Arctic, so we allow for both monotonically increasing and decreasing series,
+            # but we want to make sure that they are not fluctuating up and down.
             if not (series.is_monotonic_increasing or series.is_monotonic_decreasing):
                 raise ValueError(
                     f"Sea level rise data for station {station} is neither monotonically increasing nor monotonically decreasing after extrapolation."
