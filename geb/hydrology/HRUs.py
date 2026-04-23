@@ -178,11 +178,27 @@ def _to_grid_2d(
     return out
 
 
+@overload
 def to_grid(
     data: ArrayFloat32,
     grid_to_HRU: ArrayInt32,
     land_use_ratio: ArrayFloat32,
-) -> ArrayFloat32:
+) -> ArrayFloat32: ...
+
+
+@overload
+def to_grid(
+    data: TwoDArrayFloat32,
+    grid_to_HRU: ArrayInt32,
+    land_use_ratio: ArrayFloat32,
+) -> TwoDArrayFloat32: ...
+
+
+def to_grid(
+    data: ArrayFloat32 | TwoDArrayFloat32,
+    grid_to_HRU: ArrayInt32,
+    land_use_ratio: ArrayFloat32,
+) -> ArrayFloat32 | TwoDArrayFloat32:
     """Convert HRU data to grid scale using a weighted mean.
 
     HRUs within each grid cell are aggregated by computing the weighted sum
@@ -629,21 +645,21 @@ class Grid(BaseVariables):
         return gev_grid_interpolated
 
     @property
-    def pr_gev_c(self) -> TwoDArray:
+    def pr_gev_c(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
         gev_grid = read_zarr(self.model.files["other"]["climate/pr_gev_c"])
         gev_grid_interpolated = interpolate_na_2d(gev_grid)
         return gev_grid_interpolated
 
     @property
-    def pr_gev_loc(self) -> TwoDArray:
+    def pr_gev_loc(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
         gev_grid = read_zarr(self.model.files["other"]["climate/pr_gev_loc"])
         gev_grid_interpolated = interpolate_na_2d(gev_grid)
         return gev_grid_interpolated
 
     @property
-    def pr_gev_scale(self) -> TwoDArray:
+    def pr_gev_scale(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
         gev_grid = read_zarr(self.model.files["other"]["climate/pr_gev_scale"])
         gev_grid_interpolated = interpolate_na_2d(gev_grid)

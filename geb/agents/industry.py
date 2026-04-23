@@ -97,7 +97,7 @@ class Industry(AgentBaseClass):
         """
         if self.config.get("disable_water_demand", False):
             self.model.logger.info(
-                "[Industry] Water demand and efficiency set to 0 due to config setting."
+                "Industry Water demand and and return flow set to 0 due to config setting."
             )
             zero_array = self.grid.full_compressed(0, dtype=np.float32)
             self.var.last_water_demand_update = self.model.current_time
