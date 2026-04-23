@@ -215,3 +215,5 @@ addopts = "--ignore=.venv"
 [tool.ty.rules]
 unresolved-attribute = "warn"
 
+[tool.ty.src]
+exclude = ["geb/build/custom_models/**"]
