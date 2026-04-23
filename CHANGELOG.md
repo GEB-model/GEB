@@ -1,4 +1,5 @@
 # dev
+- Re-support running with yearly timestep (fix several small bugs with variables not being available).
 
 # v1.0.0b22
 - Remove option to auto-fix build order (now build order should be much more consistent with `reasonable_default_build.yml`) and fix associated tests.
