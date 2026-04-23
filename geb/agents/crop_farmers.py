@@ -4933,7 +4933,7 @@ class CropFarmers(AgentBaseClass):
 
             # create a unique index for each type of crop calendar that a farmer follows
             self.crop_calendar_group = np.unique(
-                self.var.crop_calendar[:, :, 0], axis=0, return_inverse=True
+                self.var.crop_calendar[:, :, :], axis=0, return_inverse=True
             )[1]
 
             self.blank_additional_differentiator = np.zeros(
