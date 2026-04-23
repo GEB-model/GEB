@@ -3511,10 +3511,10 @@ class CropFarmers(AgentBaseClass):
         within_budget = self.budget_check(total_annual_costs_m2)
 
         total_profits_adaptation = (
-            total_income_adaptation + energy_diff_m2 + water_diff_m2
+            total_income_adaptation + energy_diff_m2 + water_diff_m2.data
         )
         profits_no_event_adaptation = (
-            income_no_event_adaptation + energy_diff_m2 + water_diff_m2
+            income_no_event_adaptation + energy_diff_m2 + water_diff_m2.data
         )
         total_profits = total_income
         profits_no_event = income_no_event
