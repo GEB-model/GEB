@@ -3454,28 +3454,26 @@ class CropFarmers(AgentBaseClass):
             axis=1,
         )
 
-        self.var.adaptations[
-            self.var.irrigation_efficiency == self.var.irr_eff_sprinkler,
-            IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-        ] = True
-        self.var.adaptations[
-            self.var.irrigation_efficiency == self.var.irr_eff_drip,
-            IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
-        ] = True
-
         # To determine the benefit of irrigation, those who have above 90% irrigation efficiency have adapted
-        adapted = self.var.adaptations[:, adaptation_type].copy()
+        adapted_reset = self.var.adaptations[:, adaptation_type].copy()
 
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # or who's never had access to irrigation water
         self.reset_adaptation_status(
             farmer_yield_probability_relation=farmer_yield_probability_relation,
-            adapted=adapted,
-            additional_diffentiator_expiration=has_irrigation_access,
+            adapted=adapted_reset,
+            additional_diffentiator_expiration=~has_irrigation_access,
             additional_diffentiator_grouping=self.blank_additional_differentiator,
             adaptation_type=adaptation_type,
         )
 
+        adapted = self.var.adaptations[:, adaptation_type].copy()
+
+        self.var.irrigation_efficiency = np.where(
+            self.var.adaptations[:, adaptation_type],
+            efficiency,
+            self.var.irr_eff_surface,
+        )
         # Determine the lower / higher water costs with a different efficiency
         yearly_water_costs_by_farmer = self.var.yearly_water_costs_by_farmer[
             :, TOTAL_IRRIGATION, :
@@ -4473,7 +4471,7 @@ class CropFarmers(AgentBaseClass):
                 id_to_switch_to = find_most_similar_index(
                     yield_ratio_gain,
                     yield_ratios,
-                    adapted_agents,
+                    adapted_agents.data,
                 )
 
                 ids_to_switch_to[group_members] = id_to_switch_to
@@ -5012,10 +5010,10 @@ class CropFarmers(AgentBaseClass):
 
                         self.adapt_irrigation_efficiency(
                             self.farmer_yield_probability_relation,
-                            annual_cost_sprinkler,
-                            IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
-                            self.var.irr_eff_sprinkler,
-                            self.var.return_fraction_sprinkler,
+                            annual_cost_drip,
+                            IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+                            self.var.irr_eff_drip,
+                            self.var.return_fraction_drip,
                         )
 
                         self.var.mean_irrigation_efficiency = np.mean(
