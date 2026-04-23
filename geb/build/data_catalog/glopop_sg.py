@@ -85,7 +85,7 @@ class GLOPOP_SG(Adapter):
         tif_name = f"{region}_grid_nr.tif"
         gz_name = f"synthpop_{region}_grid.dat.gz"
 
-        with tempfile.TemporaryDirectory(delete=False) as tmpdir:
+        with tempfile.TemporaryDirectory() as tmpdir:
             tif_path = Path(tmpdir) / tif_name
             gz_path = Path(tmpdir) / gz_name
 
@@ -99,7 +99,9 @@ class GLOPOP_SG(Adapter):
             if isinstance(GLOPOP_grid, xr.Dataset):
                 GLOPOP_grid = GLOPOP_grid.to_array().squeeze()
 
-            GLOPOP_grid.load()  # Load into memory before cleaning up tif_path
+            GLOPOP_grid: xr.DataArray = (
+                GLOPOP_grid.load()
+            )  # Load into memory before cleaning up tif_path
 
             with gzip.open(gz_path, "rb") as f:
                 GLOPOP_s = np.frombuffer(f.read(), dtype=np.int32)
