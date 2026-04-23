@@ -56,6 +56,7 @@
 - Cache `current_time` in `set_timestep()` to avoid recomputing date every call.
 - Make saving of store and finalization of reporting multithreaded.
 - Refactor `Reporter.process_value()` into helper methods (`_write_grid_hru_to_zarr`, `_apply_grid_hru_function`, `_write_agents_to_zarr`, `_apply_agent_function`) for better readability and profiling.
+- Adapt `plot_discharge` in evaluate to work with timeseries instead of grid.
 
 To support this version:
 - First of all it is HIGHLY RECOMMENDED to remove your own build.yml and replace it with the one in the examples. See `geb/examples/geul/build.yml`. This build.yml inherits from a new `reasonable_default_build.yml` (see `geb/reasonable_default_build.yml`). This will drastrically reduce the number of manual updates you need to do in the future. If you made any changes to your `build.yml` relative to the example, you can only keep those methods in your `build.yml`, which will then override the default ones in the `reasonable_default_build.yml`. If you want to keep the current setup, you need to remove `setup_irrigation_sources` from build.yml.
