@@ -1609,6 +1609,7 @@ class Hydrography(BuildModelBase):
             raise ValueError(
                 "Inflow hydrograph contains missing values. "
                 "Set interpolate=True to interpolate missing values. "
+                "and extrapolate=True to back and forward fill "
                 "or fill missing values in the inflow hydrograph. "
                 "model start and end date: "
                 f"{self.start_date} to {self.end_date} "

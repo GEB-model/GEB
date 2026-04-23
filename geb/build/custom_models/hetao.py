@@ -23,7 +23,7 @@ class Hetao(BuildModelBase):
         """
         super().__init__(*args, **kwargs)
 
-    @build_method(required=True, depends_on=[])
+    @build_method(required=False, depends_on=[])
     def setup_water_prices_hetao(
         self,
         start_year: int,
@@ -142,7 +142,7 @@ class Hetao(BuildModelBase):
             fx = fx_map[max(fx_map.keys())]
         return float(value_cny) / float(fx) if fx else 0.0
 
-    @build_method(required=True, depends_on=["setup_economic_data"])
+    @build_method(required=False, depends_on=["setup_economic_data"])
     def setup_operation_costs_hetao(
         self,
         start_year: int,
@@ -221,7 +221,7 @@ class Hetao(BuildModelBase):
         self.set_params(out_sprinkler, name="socioeconomics/operation_cost_sprinkler")
         self.set_params(out_drip, name="socioeconomics/operation_cost_drip")
 
-    @build_method(required=True, depends_on=["setup_economic_data"])
+    @build_method(required=False, depends_on=["setup_economic_data"])
     def setup_capital_costs_hetao(
         self,
         start_year: int,
