@@ -1,5 +1,6 @@
 # dev
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
+- Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).
