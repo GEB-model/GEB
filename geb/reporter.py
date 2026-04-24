@@ -763,10 +763,10 @@ class Reporter:
             del self.model.config["report"]["_config"]
 
         # #MY ADDITION
-        # report_cfg = self.model.config.get("report")
-        # if report_cfg is None:
-        #     report_cfg = {}
-        #     self.model.config["report"] = report_cfg
+        report_cfg = self.model.config.get("report")
+        if report_cfg is None:
+            report_cfg = {}
+            self.model.config["report"] = report_cfg
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -791,6 +791,9 @@ class Reporter:
             to_delete: list[str] = []
             for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
+                    if module_values is False:
+                        to_delete.append(module_name)
+                        continue
                     if module_name == "_discharge_stations" and module_values is True:
                         stations = read_geom(
                             self.model.files["geom"][

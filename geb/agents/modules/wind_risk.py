@@ -327,7 +327,7 @@ class WindRiskModule:
             cost_m2 = features_pts["COST_STRUCTURAL_USD_SQM"].to_numpy(np.float32)
             features_pts["maximum_damage_structure"] = (cost_m2 * fp / max(cell_area_m2, 1e-6)).astype(np.float32)
     
-            print(f"No of buildings to scan for wind damages rp{rp}: {features_pts.shape[0]}")
+            #print(f"No of buildings to scan for wind damages rp{rp}: {features_pts.shape[0]}")
     
             damage_buildings = VectorScannerMultiCurves(
                 features=features_pts,

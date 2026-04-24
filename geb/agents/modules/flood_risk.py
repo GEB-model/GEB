@@ -437,7 +437,7 @@ class FloodRiskModule:
                 }
             )  # ty:ignore[invalid-assignment]
             
-            print(f"No of buildings to scan for flood damages rp{return_period}: {building_multicurve_renamed.shape[0]}")
+            #print(f"No of buildings to scan for flood damages rp{return_period}: {building_multicurve_renamed.shape[0]}")
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve_renamed,
                 hazard=flood_map,

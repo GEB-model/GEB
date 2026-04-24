@@ -40,6 +40,17 @@ class HouseholdVariables(Bucket):
     municipal_water_demand_per_capita_m3_baseline: ArrayFloat32
     water_demand_per_household_m3: ArrayFloat32
     income: DynamicArray
+    budget: DynamicArray
+    budget_used: DynamicArray
+    budget_ratio: DynamicArray 
+    over_budget_pre: DynamicArray   
+    over_budget_post: DynamicArray
+    dropped_flood: DynamicArray
+    dropped_shutters: DynamicArray
+    dropped_insurance: DynamicArray
+    suppressed_flood: DynamicArray
+    suppressed_shutters: DynamicArray
+    suppressed_insurance: DynamicArray
     building_id_of_household: DynamicArray
     household_building_area: DynamicArray
     wealth: DynamicArray
@@ -592,6 +603,19 @@ class Households(AgentBaseClass):
         self.var.amenity_value = DynamicArray(
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
+
+        # Budget diagnostics
+        self.var.budget = np.zeros(self.n, dtype=np.float32)
+        self.var.budget_used = np.zeros(self.n, dtype=np.float32)
+        self.var.budget_ratio = np.zeros(self.n, dtype=np.float32)
+        self.var.over_budget_pre = np.zeros(self.n, dtype=bool)
+        self.var.over_budget_post = np.zeros(self.n, dtype=bool)
+        self.var.dropped_flood = np.zeros(self.n, dtype=bool)
+        self.var.dropped_shutters = np.zeros(self.n, dtype=bool)
+        self.var.dropped_insurance = np.zeros(self.n, dtype=bool)
+        self.var.suppressed_flood = np.zeros(self.n, dtype=bool)
+        self.var.suppressed_shutters = np.zeros(self.n, dtype=bool)
+        self.var.suppressed_insurance = np.zeros(self.n, dtype=bool)
 
         self.model.logger.info(
             f"Household attributes assigned for {self.n} households with {self.population} people."
@@ -2120,47 +2144,47 @@ class Households(AgentBaseClass):
         self._last_premium_public = premium_public
 
         # CARO DEBUG: premium affordability
-        inc = self.var.income.data.astype(np.float32)
-        prem = np.asarray(premium, dtype=np.float32).reshape(-1)
-        print(
-            "[insurance] premium stats: "
-            f"min={float(np.min(prem)):.2f}, p50={float(np.median(prem)):.2f},"
-            f"p95={float(np.quantile(prem, 0.95)):.2f}, max={float(np.max(prem)):.2f}"
-        )
+        # inc = self.var.income.data.astype(np.float32)
+        # prem = np.asarray(premium, dtype=np.float32).reshape(-1)
+        # print(
+        #     "[insurance] premium stats: "
+        #     f"min={float(np.min(prem)):.2f}, p50={float(np.median(prem)):.2f},"
+        #     f"p95={float(np.quantile(prem, 0.95)):.2f}, max={float(np.max(prem)):.2f}"
+        # )
 
-        print(
-            f"[insurance] affordable frac (premium < income): {float(np.mean(prem < inc)):.4f}"
-        )
+        # print(
+        #     f"[insurance] affordable frac (premium < income): {float(np.mean(prem < inc)):.4f}"
+        # )
         # print(
         #     f"[insurance] mean premium/income (where income>0): {float(np.mean(prem[inc > 0] / inc[inc > 0])):.4f}"
         # )
-        mask = inc > 0
+        # mask = inc > 0
 
-        if np.any(mask):
-            ratio = prem[mask] / inc[mask]
-            print(f"[insurance] mean premium/income: {float(np.mean(ratio)):.4f}")
-        else:
-            print("[insurance] no positive income households")
+        # if np.any(mask):
+        #     ratio = prem[mask] / inc[mask]
+        #     print(f"[insurance] mean premium/income: {float(np.mean(ratio)):.4f}")
+        # else:
+        #     print("[insurance] no positive income households")
 
-        # CARO DEBUG: Income stats
-        def q(a, p):
-            return float(np.quantile(a[a > 0], p)) if np.any(a > 0) else float("nan")
+        # # CARO DEBUG: Income stats
+        # def q(a, p):
+        #     return float(np.quantile(a[a > 0], p)) if np.any(a > 0) else float("nan")
 
-        print(
-            "[income] stats: "
-            f"min={float(np.min(inc)):.2f}, p50={q(inc, 0.5):.2f}, p95={q(inc, 0.95):.2f}, max={float(np.max(inc)):.2f}"
-        )
-        print(
-            "[insurance] ratio stats (premium/income, income>0): "
-            f"p50={q(prem / inc, 0.5):.2f}, p95={q(prem / inc, 0.95):.2f}"
-        )
-        print(
-            f"[insurance] affordable frac (premium < income): {float(np.mean((inc > 0) & (prem < inc))):.4f}"
-        )
+        # print(
+        #     "[income] stats: "
+        #     f"min={float(np.min(inc)):.2f}, p50={q(inc, 0.5):.2f}, p95={q(inc, 0.95):.2f}, max={float(np.max(inc)):.2f}"
+        # )
+        # print(
+        #     "[insurance] ratio stats (premium/income, income>0): "
+        #     f"p50={q(prem / inc, 0.5):.2f}, p95={q(prem / inc, 0.95):.2f}"
+        # )
+        # print(
+        #     f"[insurance] affordable frac (premium < income): {float(np.mean((inc > 0) & (prem < inc))):.4f}"
+        # )
 
-        # ---------------------------------------------------------------------
+        
         # Shared affordability constraint across strategies (one income/wealth)
-        # ---------------------------------------------------------------------
+        
         exp_cap = (
             1.0  # currently hard-coded in your calls; consider pulling from config
         )
@@ -2212,18 +2236,6 @@ class Households(AgentBaseClass):
             if not np.any(over):
                 break
 
-            # if self.var.insurance_scheme == "catnat":
-            #     # Insurance is mandatory so only structural measures can be dropped when over budget
-
-            #     gains = np.stack([gain_flood, gain_shutters, np.full_like(gain_ins, -np.inf)], axis=1)
-            #     chosen = np.stack([choose_flood & (self.var.adapted.data == 0),
-            #                    choose_shutters & (self.var.adapted_shutters.data == 0), np.zeros_like(choose_ins)], axis=1)
-
-            # else:
-            #     # All three actions can be dropped when over budget
-            #     gains = np.stack([gain_flood, gain_shutters, gain_ins], axis=1)
-            #     chosen = np.stack([choose_flood & (self.var.adapted.data == 0),
-            #                    choose_shutters & (self.var.adapted_shutters.data == 0), choose_ins], axis=1)
             if self.var.insurance_scheme == "private":
                 # All three actions can be dropped when over budget
                 gains = np.stack([gain_flood, gain_shutters, gain_ins], axis=1)
@@ -2241,10 +2253,7 @@ class Households(AgentBaseClass):
             drop_f = over & (drop_idx == 0) & choose_flood
             drop_s = over & (drop_idx == 1) & choose_shutters
             
-            # if self.var.insurance_scheme == "catnat":
-            #     drop_i = np.zeros_like(drop_f)  # insurance cannot be dropped
-            # else:
-            #     drop_i = over & (drop_idx == 2) & choose_ins
+            
 
             if self.var.insurance_scheme == "private":
                 drop_i = over & (drop_idx == 2) & choose_ins
@@ -2256,76 +2265,106 @@ class Households(AgentBaseClass):
             choose_ins[drop_i] = False
 
         
-        # -----------------------------
+     
         # DEBUG: shared-cap diagnostics
-        # -----------------------------
+        
+        # pre_flood = gain_flood > 0
+        # pre_shut = gain_shutters > 0
+        # pre_ins = (EU_multirisk_insurance > EU_do_nothing
+        #            if self.var.insurance_scheme == "private"
+        #            else np.ones(self.n, dtype=bool))
+        # ## END NEW CODE
+
+        # pre_cost = (
+        #     pre_flood.astype(np.float32) * flood_cost
+        #     + pre_shut.astype(np.float32) * shutters_cost
+        #     + pre_ins.astype(np.float32) * prem_cost
+        # )
+        # post_cost = total_cost()
+
+        # over_pre = pre_cost > budget
+        # over_post = post_cost > budget
+
+        # drop_flood = pre_flood & ~choose_flood
+        # drop_shut = pre_shut & ~choose_shutters
+        # drop_ins = pre_ins & ~choose_ins
+        # dropped_any = drop_flood | drop_shut | drop_ins
+
+        # print(
+        #     "[shared cap] chosen (pre->post): "
+        #     f"flood={int(pre_flood.sum())}->{int(choose_flood.sum())}, "
+        #     f"shutters={int(pre_shut.sum())}->{int(choose_shutters.sum())}, "
+        #     f"ins={int(pre_ins.sum())}->{int(choose_ins.sum())}"
+        # )
+        # print(
+        #     "[shared cap] over-budget households (pre->post): "
+        #     f"{int(over_pre.sum())}->{int(over_post.sum())}"
+        # )
+        # print(
+        #     "[shared cap] dropped actions: "
+        #     f"flood={int(drop_flood.sum())}, shutters={int(drop_shut.sum())}, ins={int(drop_ins.sum())}"
+        # )
+        # if np.any(dropped_any):
+        #     ratio = pre_cost[dropped_any] / budget[dropped_any]
+        #     print(
+        #         "[shared cap] pre-cost/budget among affected: "
+        #         f"p50={float(np.median(ratio)):.2f}, p95={float(np.quantile(ratio, 0.95)):.2f}, max={float(np.max(ratio)):.2f}"
+        #     )
+
+        # ## CARO MORE DEBUG
+        # both_pre = pre_flood & pre_shut
+        # both_post = choose_flood & choose_shutters
+        # print(
+        #     f"[shared cap] overlap flood&shutters (pre->post): {int(both_pre.sum())}->{int(both_post.sum())}"
+        # )
+
+        # if np.any(dropped_any):
+        #     idx = dropped_any
+        #     print(
+        #         "[shared cap] affected median costs: "
+        #         f"flood={float(np.median(flood_cost[idx])):.0f}, "
+        #         f"shutters={float(np.median(shutters_cost[idx])):.0f}, "
+        #         f"insurance={float(np.median(premium)):.0f}, "
+        #         f"budget={float(np.median(budget[idx])):.0f}"
+        #     )
+
+        # Pre-constrint decisions
         pre_flood = gain_flood > 0
         pre_shut = gain_shutters > 0
-        pre_ins = (EU_multirisk_insurance > EU_do_nothing
-                   if self.var.insurance_scheme == "private"
-                   else np.ones(self.n, dtype=bool))
-        ## END NEW CODE
+        if self.var.insurance_scheme == "private":
+            pre_ins = EU_multirisk_insurance > EU_do_nothing
+        else:
+            pre_ins = np.ones(self.n, dtype=bool)
 
-        # pre_flood = EU_adapt > EU_do_not_adapt
-        # pre_shut = EU_adapt_shutters > EU_unprotected_w
-        # pre_ins = EU_multirisk_insurance > EU_do_nothing
-
+        # Compute pre-cost and budget
         pre_cost = (
             pre_flood.astype(np.float32) * flood_cost
             + pre_shut.astype(np.float32) * shutters_cost
-            + pre_ins.astype(np.float32) * prem_cost
+            + pre_ins.astype(np.float32) * prem_cost    
         )
+
+        self.var.budget[:] = budget
+        self.var.over_budget_pre[:] = (pre_cost > budget).astype(np.int32)
+
+        #Effects of budget constraint
         post_cost = total_cost()
 
-        over_pre = pre_cost > budget
-        over_post = post_cost > budget
+        self.var.budget_used[:] = post_cost
+        self.var.budget_ratio[:] = np.divide(post_cost, budget, out=np.zeros_like(post_cost), where=budget > 0)
 
+        self.var.over_budget_post[:] = (post_cost > budget).astype(np.int32)
+
+        # Dropped decisions
         drop_flood = pre_flood & ~choose_flood
         drop_shut = pre_shut & ~choose_shutters
         drop_ins = pre_ins & ~choose_ins
-        dropped_any = drop_flood | drop_shut | drop_ins
 
-        print(
-            "[shared cap] chosen (pre->post): "
-            f"flood={int(pre_flood.sum())}->{int(choose_flood.sum())}, "
-            f"shutters={int(pre_shut.sum())}->{int(choose_shutters.sum())}, "
-            f"ins={int(pre_ins.sum())}->{int(choose_ins.sum())}"
-        )
-        print(
-            "[shared cap] over-budget households (pre->post): "
-            f"{int(over_pre.sum())}->{int(over_post.sum())}"
-        )
-        print(
-            "[shared cap] dropped actions: "
-            f"flood={int(drop_flood.sum())}, shutters={int(drop_shut.sum())}, ins={int(drop_ins.sum())}"
-        )
-        if np.any(dropped_any):
-            ratio = pre_cost[dropped_any] / budget[dropped_any]
-            print(
-                "[shared cap] pre-cost/budget among affected: "
-                f"p50={float(np.median(ratio)):.2f}, p95={float(np.quantile(ratio, 0.95)):.2f}, max={float(np.max(ratio)):.2f}"
-            )
+        self.var.dropped_flood[:] = drop_flood.astype(np.int32)
+        self.var.dropped_shutters[:] = drop_shut.astype(np.int32)
+        self.var.dropped_insurance[:] = drop_ins.astype(np.int32)
 
-        ## CARO MORE DEBUG
-        both_pre = pre_flood & pre_shut
-        both_post = choose_flood & choose_shutters
-        print(
-            f"[shared cap] overlap flood&shutters (pre->post): {int(both_pre.sum())}->{int(both_post.sum())}"
-        )
 
-        if np.any(dropped_any):
-            idx = dropped_any
-            print(
-                "[shared cap] affected median costs: "
-                f"flood={float(np.median(flood_cost[idx])):.0f}, "
-                f"shutters={float(np.median(shutters_cost[idx])):.0f}, "
-                f"insurance={float(np.median(premium)):.0f}, "
-                f"budget={float(np.median(budget[idx])):.0f}"
-            )
-
-        # ---------------------------------------------------------------------
         # Execute strategy with reconciled choices
-        # ---------------------------------------------------------------------
         household_adapting_flood = np.where(choose_flood)[0]
         self.var.adapted[household_adapting_flood] = 1
         self.var.time_adapted[household_adapting_flood] += 1
@@ -2355,6 +2394,9 @@ class Households(AgentBaseClass):
         self.var.premium = premium
         self.var.premium_private = premium_private
         self.var.premium_public = premium_public
+
+        # Store trade-off data
+
 
         # self.buildings.to_file(
         #     "C:/Users/nxu279/GitHub/Data/buildings_adapted.gpkg", driver="GPKG"
@@ -2449,103 +2491,6 @@ class Households(AgentBaseClass):
 
         return damages_unprotected_w, damages_shutters_w
 
-    # def calculate_building_flood_damages(
-    #     self, verbose: bool = True, export_building_damages: bool = False
-    # ) -> tuple[np.ndarray, np.ndarray]:
-    #     """This function calculates the flood damages for the households in the model.
-
-    #     It iterates over the return periods and calculates the damages for each household
-    #     based on the flood maps and the building footprints.
-
-    #     Args:
-    #         verbose: Verbosity flag.
-    #         export_building_damages: Whether to export the building damages to parquet files.
-    #     Returns:
-    #         Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-    #     """
-    #     damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
-    #     damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
-
-    #     buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
-    #         self.flood_maps[self.return_periods[0]].rio.crs
-    #     )
-
-    #     # create a pandas data array for assigning damage to the agents:
-    #     agent_df = pd.DataFrame(
-    #         {"building_id_of_household": self.var.building_id_of_household}
-    #     )
-
-    #     # subset building to those exposed to flooding
-    #     buildings = buildings[buildings["flooded"]]
-
-    #     # only calculate damages for buildings with more than 0 occupant
-    #     buildings = buildings[buildings["n_occupants"] > 0]
-
-    #     for i, return_period in enumerate(self.return_periods):
-    #         flood_map: xr.DataArray = self.flood_maps[return_period]
-
-    #         building_multicurve = buildings.copy()
-    #         multi_curves = {
-    #             "damages_structure": self.buildings_structure_curve[
-    #                 "building_unprotected"
-    #             ],
-    #             "damages_content": self.buildings_content_curve["building_unprotected"],
-    #             "damages_structure_flood_proofed": self.buildings_structure_curve[
-    #                 "building_flood_proofed"
-    #             ],
-    #             "damages_content_flood_proofed": self.buildings_content_curve[
-    #                 "building_flood_proofed"
-    #             ],
-    #         }
-    #         damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
-    #             features=building_multicurve.rename(
-    #                 columns={
-    #                     "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-    #                     "COST_CONTENTS_USD_SQM": "maximum_damage_content",
-    #                 }
-    #             ),
-    #             hazard=flood_map,
-    #             multi_curves=multi_curves,
-    #         )
-
-    #         # sum structure and content damages
-    #         damage_buildings["damages"] = (
-    #             damage_buildings["damages_structure"]
-    #             + damage_buildings["damages_content"]
-    #         )
-    #         damage_buildings["damages_flood_proofed"] = (
-    #             damage_buildings["damages_structure_flood_proofed"]
-    #             + damage_buildings["damages_content_flood_proofed"]
-    #         )
-    #         # concatenate damages to building_multicurve
-    #         building_multicurve = pd.concat(
-    #             [building_multicurve, damage_buildings], axis=1
-    #         )
-
-    #         if export_building_damages:
-    #             fn_for_export = self.model.output_folder / "building_damages"
-    #             fn_for_export.mkdir(parents=True, exist_ok=True)
-    #             building_multicurve.to_parquet(
-    #                 self.model.output_folder
-    #                 / "building_damages"
-    #                 / f"building_damages_rp{return_period}_{self.model.current_time.year}.parquet"
-    #             )
-    #         building_multicurve = building_multicurve[
-    #             ["id", "damages", "damages_flood_proofed"]
-    #         ]
-    #         # merged["damage"] is aligned with agents
-    #         damages_do_not_adapt[i], damages_adapt[i] = self.assign_damages_to_agents(
-    #             agent_df,
-    #             building_multicurve,
-    #         )
-    #         if verbose:
-    #             print(
-    #                 f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
-    #             )
-    #             print(
-    #                 f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
-    #             )
-    #     return damages_do_not_adapt, damages_adapt
 
     def update_households_geodataframe_w_warning_variables(
         self, date_time: datetime
@@ -2619,400 +2564,6 @@ class Households(AgentBaseClass):
             / f"households_with_warning_parameters_{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
         )
 
-    # def calculate_building_wind_damages(
-    #     self, verbose: bool = True, export_building_damages: bool = False
-    # ) -> tuple[np.ndarray, np.ndarray]:
-    #     """This function calculates the windstorm damages for the households in the model.
-
-    #     It iterates over the return periods and calculates the damages for each household
-    #     based on the windstorm maps and the building footprints.
-
-    #     Args:
-    #         verbose: Verbosity flag.
-    #         export_building_damages: Whether to export the building damages to parquet files.
-    #     Returns:
-    #         Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-    #     """
-    #     damages_unprotected_w = np.zeros(
-    #         (self.windstorm_return_periods.size, self.n), np.float32
-    #     )
-    #     damages_adapt_w = np.zeros(
-    #         (self.windstorm_return_periods.size, self.n), np.float32
-    #     )
-
-    #     # CRS alignment
-    #     crs = self.flood_maps[self.return_periods[0]].rio.crs
-    #     windstorm_map_crs = {
-    #         rp: self.windstorm_maps[rp].rio.reproject(crs)
-    #         for rp in self.windstorm_return_periods
-    #     }
-
-    #     debug_damage_stats = bool(
-    #         self.model.config.get("hazards", {})
-    #         .get("windstorm", {})
-    #         .get("debug_damage_stats", False)
-    #     )
-
-    #     # create a pandas data array for assigning damage to the agents:
-    #     agent_df = pd.DataFrame(
-    #         {"building_id_of_household": self.var.building_id_of_household}
-    #     )
-
-    #     # subset building to those exposed to flooding (multi-hazard exposure)
-    #     buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(crs)
-
-    #     only_flooded_buildings = bool(
-    #         self.model.config.get("hazards", {})
-    #         .get("windstorm", {})
-    #         .get("only_flooded_buildings", True)
-    #     )
-    #     if only_flooded_buildings:
-    #         buildings = buildings[buildings["flooded"]]
-    #     # only calculate damages for buildings with more than 0 occupant
-    #     buildings = buildings[buildings["n_occupants"] > 0]
-
-    #     for i, return_period in enumerate(self.windstorm_return_periods):
-    #         wind_map = windstorm_map_crs[return_period]
-
-    #         wind_threshold = 27.01
-    #         wind_map_masked = wind_map.fillna(0.0)
-    #         mind_map_masked = wind_map_masked.where(
-    #             wind_map_masked >= wind_threshold, 0.0
-    #         )
-
-    #         building_multicurve = buildings.copy()
-
-    #         multi_curves = {
-    #             "damages_structure_unprotected": self.wind_buildings_structure_curve[
-    #                 "building_unprotected"
-    #             ],
-    #             "damages_structure_wind_shutters": self.wind_buildings_structure_curve[
-    #                 "building_window_shutters"
-    #             ],
-    #         }
-    #         damage_buildings: pd.Series = VectorScannerMultiCurves(
-    #             features=building_multicurve.rename(
-    #                 columns={"maximum_damage_m2": "maximum_damage"}
-    #             ),
-    #             hazard=wind_map_masked,
-    #             multi_curves=multi_curves,
-    #         )
-
-    #         damage_buildings["damages_unprotected"] = damage_buildings[
-    #             "damages_structure_unprotected"
-    #         ]
-    #         damage_buildings["damages_wind_shutters"] = damage_buildings[
-    #             "damages_structure_wind_shutters"
-    #         ]
-
-    #         building_multicurve = pd.concat(
-    #             [building_multicurve, damage_buildings], axis=1
-    #         )
-
-    #         # Damage_threshold = 0.001
-
-    #         # buildings_to_damage.loc[
-    #         #     buildings_to_damage["damages_unprotected"] < Damage_threshold,
-    #         #     "damages_unprotected",
-    #         # ] = 0.0
-
-    #         if export_building_damages:
-    #             fn_export = self.model.output_folder / "building_wind_damages"
-    #             fn_export.mkdir(parents=True, exist_ok=True)
-    #             building_multicurve.to_parquet(
-    #                 self.model.output_folder
-    #                 / "building_wind_damages"
-    #                 / f"building_wind_damages_rp{return_period}_{self.model.current_time.year}.parquet"
-    #             )
-    #         building_multicurve = building_multicurve[
-    #             ["id", "damages_unprotected", "damages_wind_shutters"]
-    #         ]
-    #         # merged["damage"] is aligned with agents
-    #         damages_unprotected_w[i], damages_adapt_w[i] = (
-    #             self.assign_wdamages_to_agents(
-    #                 agent_df,
-    #                 building_multicurve,
-    #             )
-    #         )
-
-    #         if debug_damage_stats:
-    #             unprot = damages_unprotected_w[i]
-    #             prot = damages_adapt_w[i]
-    #             # Keep this cheap: simple stats + non-zero fraction.
-    #             frac_nonzero = float(np.mean(unprot > 0))
-    #             print(
-    #                 "Wind damage stats "
-    #                 f"rp={int(return_period)}: "
-    #                 f"sum={float(unprot.sum()):.3e}, mean={float(np.mean(unprot)):.3e}, "
-    #                 f"p95={float(np.quantile(unprot, 0.95)):.3e}, max={float(np.max(unprot)):.3e}, "
-    #                 f"nonzero_frac={frac_nonzero:.3f}, "
-    #                 f"adapt_mean={float(np.mean(prot)):.3e}"
-    #             )
-    #         if verbose:
-    #             print(
-    #                 f"Wind Damages rp{return_period}: {round(damages_unprotected_w[i].sum() / 1e6)} million"
-    #             )
-    #             print(
-    #                 f"Wind Damages adapt rp{return_period}: {round(damages_adapt_w[i].sum() / 1e6)} million"
-    #             )
-    #     return damages_unprotected_w, damages_adapt_w
-
-    # def get_max_wind_at_buildings(
-    #     self, buildings_gdf: gpd.GeoDataFrame, wind_map: xr.DataArray
-    # ) -> np.ndarray:
-    #     """This function extracts the maximum wind speed at the location of each building.
-
-    #     Args:
-    #         buildings_gdf: GeoDataFrame containing building geometries.
-    #         wind_map: xarray DataArray containing the wind speed map.
-
-    #     Returns:
-    #         A numpy array containing the maximum wind speed at each building location.
-    #     """
-    #     # Extract the maximum wind speed at the location of each building
-    #     # by sampling the wind map at the building centroids
-    #     max_winds = []
-    #     for geom in buildings_gdf.geometry:
-    #         masked = wind_map.rio.clip([geom], buildings_gdf.crs, drop=False)
-    #         max_winds.append(float(masked.max()))
-
-    #     return np.array(max_winds)
-
-    # def flood(self, flood_depth: xr.DataArray) -> float:
-    #     """This function computes the damages for the assets and land use types in the model.
-
-    #     Args:
-    #         flood_depth: The flood map containing water levels for the flood event [m].
-
-    #     Returns:
-    #         The total flood damages for the event for all assets and land use types.
-
-    #     """
-    #     flood_depth: xr.DataArray = flood_depth.compute()
-
-    #     buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_depth.rio.crs)
-
-    #     household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
-    #         flood_depth.rio.crs
-    #     )
-
-    #     if self.model.config["agent_settings"]["households"]["warning_response"]:
-    #         # make sure household points and actions taken have the same length
-    #         assert len(household_points) == self.var.actions_taken.shape[0]
-
-    #         # add columns for protective actions
-    #         household_points["sandbags"] = False
-    #         household_points["elevated_possessions"] = False
-
-    #         # mark households that took protective actions
-    #         household_points.loc[
-    #             np.asarray(self.var.actions_taken)[:, 0] == 1, "elevated_possessions"
-    #         ] = True
-    #         household_points.loc[
-    #             np.asarray(self.var.actions_taken)[:, 1] == 1, "sandbags"
-    #         ] = True
-
-    #         # spatial join to get household attributes to buildings
-    #         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
-    #             buildings, household_points, how="left", exclusive=True
-    #         )
-
-    #         # Assign object types for buildings based on protective measures taken
-    #         buildings["object_type"] = "building_unprotected"  # reset
-    #         buildings.loc[buildings["elevated_possessions"], "object_type"] = (
-    #             "building_elevated_possessions"
-    #         )
-    #         buildings.loc[buildings["sandbags"], "object_type"] = (
-    #             "building_with_sandbags"
-    #         )
-    #         buildings.loc[
-    #             buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
-    #         ] = "building_all_forecast_based"
-    #         # TODO: need to move the update of the actions takens by households to outside the flood function
-
-    #         # Save the buildings with actions taken
-    #         buildings.to_parquet(
-    #             self.model.output_folder
-    #             / "action_maps"
-    #             / "buildings_with_protective_measures.geoparquet"
-    #         )
-
-    #         # Assign object types for buildings centroid based on protective measures taken
-    #         buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-    #         buildings_centroid["object_type"] = np.select(
-    #             [
-    #                 (
-    #                     buildings_centroid["elevated_possessions"]
-    #                     & buildings_centroid["sandbags"]
-    #                 ),
-    #                 buildings_centroid["elevated_possessions"],
-    #                 buildings_centroid["sandbags"],
-    #             ],
-    #             [
-    #                 "building_all_forecast_based",
-    #                 "building_elevated_possessions",
-    #                 "building_with_sandbags",
-    #             ],
-    #             default="building_unprotected",
-    #         )
-    #         buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-    #     if self.config["adapt"]:
-    #         household_points["building_id"] = (
-    #             self.var.building_id_of_household
-    #         )  # first assign building id to household points gdf
-    #         household_points = household_points.merge(
-    #             buildings[["id", "flood_proofed"]],
-    #             left_on="building_id",
-    #             right_on="id",
-    #             how="left",
-    #         )  # now merge to get flood proofed status
-
-    #         buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-
-    #         buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-    #         buildings["object_type"] = np.where(
-    #             buildings["flood_proofed"],
-    #             "building_flood_proofed",
-    #             "building_unprotected",
-    #         )
-
-    #         buildings_centroid["object_type"] = np.where(
-    #             buildings_centroid["flood_proofed"],
-    #             "building_protected",
-    #             "building_unprotected",
-    #         )
-
-    #     else:
-    #         household_points["protect_building"] = False
-
-    #         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
-    #             buildings, household_points, how="left", exclusive=True
-    #         )
-
-    #         buildings["object_type"] = "building_unprotected"
-
-    #         # Right now there is no condition to make the households protect their buildings outside of the warning response
-    #         buildings.loc[buildings["protect_building"], "object_type"] = (
-    #             "building_protected"
-    #         )
-
-    #         buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-    #         buildings_centroid["object_type"] = buildings_centroid[
-    #             "protect_building"
-    #         ].apply(lambda x: "building_protected" if x else "building_unprotected")
-    #         buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-    #     # Create the folder to save damage maps if it doesn't exist
-    #     damage_folder: Path = self.model.output_folder / "damage_maps"
-    #     damage_folder.mkdir(parents=True, exist_ok=True)
-
-    #     damages_buildings_content = VectorScanner(
-    #         features=buildings_centroid,
-    #         hazard=flood_depth,
-    #         vulnerability_curves=self.buildings_content_curve,
-    #     )
-
-    #     total_damages_content = damages_buildings_content.sum()
-
-    #     # save it to a gpkg file
-    #     gdf_content = buildings_centroid.copy()
-    #     gdf_content["damage"] = damages_buildings_content
-    #     category_name: str = "buildings_content"
-    #     filename: str = f"damage_map_{category_name}.gpkg"
-    #     gdf_content.to_file(damage_folder / filename, driver="GPKG")
-
-    #     print(f"damages to building content are: {total_damages_content}")
-
-    #     # Compute damages for buildings structure
-    #     damages_buildings_structure: pd.Series = VectorScanner(
-    #         features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
-    #         hazard=flood_depth,
-    #         vulnerability_curves=self.buildings_structure_curve,
-    #     )
-
-    #     total_damage_structure = damages_buildings_structure.sum()
-
-    #     print(f"damages to building structure are: {total_damage_structure}")
-
-    #     # save it to a gpkg file
-    #     gdf_structure = buildings.copy()
-    #     gdf_structure["damage"] = damages_buildings_structure
-    #     category_name: str = "buildings_structure"
-    #     filename: str = f"damage_map_{category_name}.gpkg"
-    #     gdf_structure.to_file(damage_folder / filename, driver="GPKG")
-
-    #     print(
-    #         f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
-    #     )
-
-    #     agriculture = from_landuse_raster_to_polygon(
-    #         self.HRU.decompress(self.HRU.var.land_owners != -1),
-    #         self.HRU.transform,
-    #         self.model.crs,
-    #     )
-    #     agriculture["object_type"] = "agriculture"
-    #     agriculture["maximum_damage"] = self.var.max_dam_agriculture_m2
-
-    #     agriculture = agriculture.to_crs(flood_depth.rio.crs)
-
-    #     damages_agriculture = VectorScanner(
-    #         features=agriculture,
-    #         hazard=flood_depth,
-    #         vulnerability_curves=self.var.agriculture_curve,
-    #     )
-    #     total_damages_agriculture = damages_agriculture.sum()
-    #     print(f"damages to agriculture are: {total_damages_agriculture}")
-
-    #     # Load landuse and make turn into polygons
-    #     forest = from_landuse_raster_to_polygon(
-    #         self.HRU.decompress(self.HRU.var.land_use_type == FOREST),
-    #         self.HRU.transform,
-    #         self.model.crs,
-    #     )
-    #     forest["object_type"] = "forest"
-    #     forest["maximum_damage"] = self.var.max_dam_forest_m2
-
-    #     forest = forest.to_crs(flood_depth.rio.crs)
-
-    #     damages_forest = VectorScanner(
-    #         features=forest,
-    #         hazard=flood_depth,
-    #         vulnerability_curves=self.var.forest_curve,
-    #     )
-    #     total_damages_forest = damages_forest.sum()
-    #     print(f"damages to forest are: {total_damages_forest}")
-
-    #     roads = self.roads.to_crs(flood_depth.rio.crs)
-    #     damages_roads = VectorScanner(
-    #         features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
-    #         hazard=flood_depth,
-    #         vulnerability_curves=self.var.road_curves,
-    #     )
-    #     total_damages_roads = damages_roads.sum()
-    #     print(f"damages to roads are: {total_damages_roads} ")
-
-    #     rail = self.rail.to_crs(flood_depth.rio.crs)
-    #     damages_rail = VectorScanner(
-    #         features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
-    #         hazard=flood_depth,
-    #         vulnerability_curves=self.var.rail_curve,
-    #     )
-    #     total_damages_rail = damages_rail.sum()
-    #     print(f"damages to rail are: {total_damages_rail}")
-
-    #     total_flood_damages = (
-    #         total_damage_structure
-    #         + total_damages_content
-    #         + total_damages_roads
-    #         + total_damages_rail
-    #         + total_damages_forest
-    #         + total_damages_agriculture
-    #     )
-    #     print(f"the total flood damages are: {total_flood_damages}")
-
-    #     return total_flood_damages
 
     def water_demand(
         self,

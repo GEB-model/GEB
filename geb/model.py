@@ -422,11 +422,11 @@ class GEBModel(Module):
         if self.simulate_hydrology:
             self.hydrology.step()
 
-        # self.hazard_driver.step()
+        self.hazard_driver.step()
 
         ## CARO
-        if getattr(self, "hazard_driver", None) is not None:
-            self.hazard_driver.step()
+        # if getattr(self, "hazard_driver", None) is not None:
+        #     self.hazard_driver.step()
         ## CARO
 
         self.report(locals())
@@ -585,7 +585,7 @@ class GEBModel(Module):
         """
         current_time: datetime.datetime = self.run_start
         end_time: datetime.datetime = self.run_end
-        self.config["report"] = {}
+        #self.config["report"] = {}
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
@@ -706,17 +706,17 @@ class GEBModel(Module):
         assert n_timesteps > 0, "End time is before or identical to start time"
 
         # turn off any reporting for the ABM
-        # self.config["report"] = {
-        #     "hydrology.routing": {
-        #         "discharge_daily": {
-        #             "varname": "grid.var.discharge_m3_s",
-        #             "type": "grid",
-        #             "function": None,
-        #             "format": "zarr",
-        #             "single_file": True,
-        #         }
-        #     }
-        # }
+        self.config["report"] = {
+            "hydrology.routing": {
+                "discharge_daily": {
+                    "varname": "grid.var.discharge_m3_s",
+                    "type": "grid",
+                    "function": None,
+                    "format": "zarr",
+                    "single_file": True,
+                }
+            }
+        }
 
         self.var: GEBModelVariables = cast(
             GEBModelVariables, self.store.create_bucket("var")

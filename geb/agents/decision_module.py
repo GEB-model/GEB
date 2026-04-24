@@ -688,9 +688,9 @@ class DecisionModule:
         NPV_summed = np.maximum(1, NPV_summed)
         if (NPV_summed == 1).any():
             n_negative = np.sum(NPV_summed == 1)
-            print(
-                f"[calcEU_adapt] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
-            )
+            #print(
+            #    f"[calcEU_adapt] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            #)
 
         # Calculate expected utility
         if sigma == 1:
@@ -783,9 +783,9 @@ class DecisionModule:
 
         if (NPV_summed == 1).any():
             n_negative = np.sum(NPV_summed == 1)
-            print(
-                f"[calcEU_do_nothing] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
-            )
+            # print(
+            #     f"[calcEU_do_nothing] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            # )
 
         # Calculate expected utility
         if sigma == 1:
@@ -899,9 +899,9 @@ class DecisionModule:
         NPV_summed = np.maximum(epsilon, NPV_summed)
         if (NPV_summed == epsilon).any():
             n_negative = np.sum(NPV_summed == epsilon)
-            print(
-                f"[CalcEU_adapt_windsotrm] Warning, {n_negative} negative NPVs in {geom_id}"
-            )
+            #print(
+            #    f"[CalcEU_adapt_windsotrm] Warning, {n_negative} negative NPVs in {geom_id}"
+            #)
 
         # Calculate expected utility
         if sigma == 1:
@@ -995,9 +995,9 @@ class DecisionModule:
 
         if (NPV_summed == epsilon).any():
             n_negative = np.sum(NPV_summed == epsilon)
-            print(
-                f"[calcEU_do_nothing_w] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
-            )
+            # print(
+            #     f"[calcEU_do_nothing_w] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            # )
 
         # Calculate expected utility
         if sigma == 1:
@@ -1440,11 +1440,10 @@ class DecisionModule:
         - public reinsurance layer
         - incentives for risk reduction
 
-        Returns
-        -------
-        premium_total
-        premium_reinsured
-        premium_private
+        Returns:
+                premium_total
+                premium_reinsured
+                premium_private
         """
         
         EAD_flood = self.calc_EAD(expected_damages_flood, p_flood)

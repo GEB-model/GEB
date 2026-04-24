@@ -83,6 +83,21 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
     float_cols = []
     dict_cols = []
 
+    null_cols = [
+        n
+        for n, t in zip(table.schema.names, table.schema.types)
+        if pa.types.is_null(t)
+    ]
+    if null_cols:
+        table = table.cast(
+            pa.schema(
+                [
+                    pa.field(f.name, pa.float64()) if f.name in null_cols else f
+                    for f in table.schema
+                ]
+            )
+        )
+
     for n, t in zip(table.schema.names, table.schema.types):
         if pa.types.is_integer(t) or pa.types.is_timestamp(t):
             int_and_dt_cols.append(n)
