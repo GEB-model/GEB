@@ -447,6 +447,9 @@ class Floods(Module):
         Args:
             start_time: The start time of the flood event.
             end_time: The end time of the flood event.
+
+        Raises:
+            FileNotFoundError: If `use_existing_flood_map` is true but no matching map is found.
         """
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         rivers = self.model.hydrology.routing.rivers
@@ -479,24 +482,99 @@ class Floods(Module):
                 f"Running SFINCS for {self.model.current_time}..."
             )  # log the start of the simulation
 
-            sfincs_simulation.run(
-                ncpus=self.config.get("SFINCS", {}).get("ncpus", "auto"),
-                gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
-            )  # run the simulation
+            # Optionally use an existing precomputed flood map instead of
+            # running SFINCS. Controlled by config keys under
+            # `hazards.floods`: `use_existing_flood_map` (bool) and
+            # `existing_flood_map_path` (optional str).
+            from pathlib import Path
 
-        flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
-            self.config["minimum_flood_depth"]
-        )  # read the flood depth results
+            use_existing = bool(self.config.get("use_existing_flood_maps", False))
+            print(use_existing)
+            # default filename produced by SFINCS simulations
+            default_filename = (
+                Path(self.model.output_folder)
+                / "flood_maps"
+                / (sfincs_simulation.name + ".zarr")
+            )
 
-        filename = (
-            self.model.output_folder / "flood_maps" / (sfincs_simulation.name + ".zarr")
-        )
+            if use_existing:
+                # Flood map filenames use start/end timestamps. The stored maps
+                # correspond to model data shifted by 10 days; match using
+                # (start_time - 10d) and (end_time - 10d).
+                flood_maps_root = Path(self.model.output_folder) / "flood_maps"
+                print("Using existing flood maps - skip running sfincs")
+                if not flood_maps_root.exists():
+                    raise FileNotFoundError(
+                        f"Flood maps folder does not exist: {flood_maps_root}"
+                    )
 
-        flood_depth: xr.DataArray = write_zarr(
-            da=flood_depth,
-            path=filename,
-            crs=flood_depth.rio.crs,
-        )  # save the flood depth to a zarr file
+                 # Direct match: exact filename
+                target = flood_maps_root / f"{sfincs_simulation.name}.zarr"
+                print(target)
+                if target.exists():
+                    print("target exists")
+                    flood_depth = read_zarr(target)
+                    # else:
+                    #     # Fallback: scan for zarrs and pick best match by timestamps
+                    #     import re
+
+                    #     timestamp_re = re.compile(r"(\d{8}T\d{6})")
+                    #     candidates: list[tuple[Path, datetime, datetime]] = []
+                    #     for p in flood_maps_root.rglob("*.zarr"):
+                    #         rel = p.relative_to(flood_maps_root).as_posix()
+                    #         matches = timestamp_re.findall(rel)
+                    #         if len(matches) >= 2:
+                    #             try:
+                    #                 t0 = datetime.strptime(matches[0], "%Y%m%dT%H%M%S")
+                    #                 t1 = datetime.strptime(matches[1], "%Y%m%dT%H%M%S")
+                    #                 candidates.append((p, t0, t1))
+                    #             except Exception:
+                    #                 continue
+
+                    #     chosen: Path | None = None
+                    #     # 1) exact adjusted start match
+                    #     for p, t0, t1 in candidates:
+                    #         if t0 == adj_start:
+                    #             chosen = p
+                    #             break
+                    #     # 2) within adjusted range
+                    #     if chosen is None:
+                    #         for p, t0, t1 in candidates:
+                    #             if t0 <= adj_start <= t1:
+                    #                 chosen = p
+                    #                 break
+                    #     # 3) nearest adjusted start time
+                    #     if chosen is None and candidates:
+                    #         candidates_sorted = sorted(
+                    #             candidates,
+                    #             key=lambda x: abs((x[1] - adj_start).total_seconds()),
+                    #         )
+                    #         chosen = candidates_sorted[0][0]
+
+                    if target is None:
+                        raise FileNotFoundError(
+                            f"No existing flood map found matching adjusted event {adj_start_str} - {adj_end_str} in {flood_maps_root}"
+                        )
+
+                    # flood_depth = read_zarr(chosen)
+            else:
+                sfincs_simulation.run(
+                    ncpus=self.config.get("SFINCS", {}).get("ncpus", "auto"),
+                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
+                )  # run the simulation
+
+                flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
+                    self.config["minimum_flood_depth"]
+                )  # read the flood depth results
+
+                filename = default_filename
+                filename.parent.mkdir(parents=True, exist_ok=True)
+
+                flood_depth: xr.DataArray = write_zarr(
+                    da=flood_depth,
+                    path=filename,
+                    crs=flood_depth.rio.crs,
+                )  # save the flood depth to a zarr file
 
         # This check is done to compute damages (using ERA5) only after multiverse is finished
         if self.model.multiverse_name is None:

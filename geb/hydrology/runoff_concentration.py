@@ -145,7 +145,12 @@ class RunoffConcentrator(Module):
         self.grid = hydrology.grid
 
         self.lag_time_hours: int = lag_time_hours
-        self.runoff_peak_hour: float = runoff_peak_hour
+        self.runoff_peak_hour: float = self.model.config["parameters"][
+            "runoff_peak_hour"
+        ]
+        self.model.logger.info(
+            f"Runoff peak hour set to {self.runoff_peak_hour} hours."
+        )
 
         # Check if lag time is sufficient to contain the triangular weighting of the entire day.
         # The base of the triangle is at 2 * peak_hour. The latest runoff comes at hour 24.

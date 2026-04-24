@@ -40,7 +40,7 @@ hazards:
       - 1000
     p_value_threshold: 0.05
     selection_strategy: first_significant
-    fixed_shape: 0.0 # set to 0 to force gumbel (Exponential), null to allow free distribution
+    fixed_shape: null # set to 0 to force gumbel (Exponential), null to allow free distribution
     SFINCS:
       gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
     detect_floods_from_discharge: false # If True, floods are detected based on discharge thresholds at a specific location.
@@ -95,7 +95,7 @@ agent_settings:
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
-    return_fraction: 0.5
+    return_fraction: 0.6464035490443651 #0.5 #
     social_network:
       radius: 5000 # m
       size: 10 # nr of neighbors
@@ -199,6 +199,7 @@ parameters:
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0
   variable_runoff_shape_beta: 0.0
+  runoff_peak_hour: 3.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

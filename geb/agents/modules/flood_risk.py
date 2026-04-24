@@ -62,6 +62,7 @@ class FloodRiskModule:
                 ]
             )["maximum_damage"]
         )
+        self.model.logger.warning(self.households.var.max_dam_buildings_structure)
         self.households.buildings["maximum_damage_m2"] = (
             self.households.var.max_dam_buildings_structure
         )
@@ -285,6 +286,76 @@ class FloodRiskModule:
             buildings_content_curve_adapted
         )
 
+        # load curves for dryproofing
+        self.households.buildings_structure_curve_dryproofed = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/structure_dryproofing/curve"
+            ]
+        )
+        self.households.buildings_structure_curve_dryproofed.set_index(
+            "severity", inplace=True
+        )
+        self.households.buildings_structure_curve_dryproofed = (
+            self.households.buildings_structure_curve_dryproofed.rename(
+                columns={"damage_ratio": "building_dryproofed"}
+            )
+        )
+        self.households.buildings_content_curve_dryproofed = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/content_dryproofing/curve"
+            ]
+        )
+        self.households.buildings_content_curve_dryproofed.set_index(
+            "severity", inplace=True
+        )
+        self.households.buildings_content_curve_dryproofed = (
+            self.households.buildings_content_curve_dryproofed.rename(
+                columns={"damage_ratio": "building_dryproofed"}
+            )
+        )
+
+        # load curves for wetproofing
+        self.households.buildings_structure_curve_wetproofed = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/structure_wetproofing/curve"
+            ]
+        )
+        self.households.buildings_structure_curve_wetproofed.set_index(
+            "severity", inplace=True
+        )
+        self.households.buildings_structure_curve_wetproofed = (
+            self.households.buildings_structure_curve_wetproofed.rename(
+                columns={"damage_ratio": "building_wetproofed"}
+            )
+        )
+        self.households.buildings_content_curve_wetproofed = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/flood/buildings/content_wetproofing/curve"
+            ]
+        )
+        self.households.buildings_content_curve_wetproofed.set_index(
+            "severity", inplace=True
+        )
+        self.households.buildings_content_curve_wetproofed = (
+            self.households.buildings_content_curve_wetproofed.rename(
+                columns={"damage_ratio": "building_wetproofed"}
+            )
+        )
+
+        # add dry and wet proofed curves to the main curves dataframe
+        self.households.buildings_structure_curve["building_dryproofed"] = (
+            self.households.buildings_structure_curve_dryproofed["building_dryproofed"]
+        )
+        self.households.buildings_structure_curve["building_wetproofed"] = (
+            self.households.buildings_structure_curve_wetproofed["building_wetproofed"]
+        )
+        self.households.buildings_content_curve["building_dryproofed"] = (
+            self.households.buildings_content_curve_dryproofed["building_dryproofed"]
+        )
+        self.households.buildings_content_curve["building_wetproofed"] = (
+            self.households.buildings_content_curve_wetproofed["building_wetproofed"]
+        )
+
         self.households.var.rail_curve = read_table(
             self.households.model.files["table"][
                 "damage_parameters/flood/rail/main/curve"
@@ -315,6 +386,12 @@ class FloodRiskModule:
         damages_adapt = np.zeros(
             (self.households.return_periods.size, self.households.n), np.float32
         )
+        damages_adapt_dryproofing = np.zeros(
+            (self.households.return_periods.size, self.households.n), np.float32
+        )
+        damages_adapt_wetproofing = np.zeros(
+            (self.households.return_periods.size, self.households.n), np.float32
+        )
 
         # create a pandas data array for assigning damage to the agents:
         agent_df = pd.DataFrame(
@@ -342,6 +419,19 @@ class FloodRiskModule:
 
             building_multicurve = building_geometries.copy()
 
+            building_multicurve["maximum_damage_structure_m2"] = (
+                self.households.var.max_dam_buildings_structure
+            )
+
+            buildings_copy = building_multicurve.copy()
+            projected_crs = buildings_copy.estimate_utm_crs()
+            buildings_copy = buildings_copy.to_crs(projected_crs)
+            building_multicurve["area_m2"] = buildings_copy.geometry.area
+            building_multicurve["maximum_damage_content_m2"] = (
+                self.households.var.max_dam_buildings_content
+                / building_multicurve["area_m2"]
+            )
+
             # Ensure building geometries are in the same CRS as the flood map, as the
             # damage scanner assumes aligned CRSs between vector and raster data.
             flood_crs = flood_map.rio.crs
@@ -362,12 +452,24 @@ class FloodRiskModule:
                 "damages_content_flood_proofed": self.households.buildings_content_curve[
                     "building_flood_proofed"
                 ],
+                "damages_structure_dryproofed": self.households.buildings_structure_curve[
+                    "building_dryproofed"
+                ],
+                "damages_content_dryproofed": self.households.buildings_content_curve[
+                    "building_dryproofed"
+                ],
+                "damages_structure_wetproofed": self.households.buildings_structure_curve[
+                    "building_wetproofed"
+                ],
+                "damages_content_wetproofed": self.households.buildings_content_curve[
+                    "building_wetproofed"
+                ],
             }
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
                     columns={
-                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
+                        "maximum_damage_structure_m2": "maximum_damage_structure",
+                        "maximum_damage_content_m2": "maximum_damage_content",
                     }
                 ),
                 hazard=flood_map,
@@ -383,6 +485,15 @@ class FloodRiskModule:
                 damage_buildings["damages_structure_flood_proofed"]
                 + damage_buildings["damages_content_flood_proofed"]
             )
+
+            damage_buildings["damages_dryproofed"] = (
+                damage_buildings["damages_structure_dryproofed"]
+                + damage_buildings["damages_content_dryproofed"]
+            )
+            damage_buildings["damages_wetproofed"] = (
+                damage_buildings["damages_structure_wetproofed"]
+                + damage_buildings["damages_content_wetproofed"]
+            )
             # concatenate damages to building_multicurve
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
@@ -397,14 +508,24 @@ class FloodRiskModule:
                     / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
                 )
             building_multicurve = building_multicurve[
-                ["id", "damages", "damages_flood_proofed"]
+                [
+                    "id",
+                    "damages",
+                    "damages_flood_proofed",
+                    "damages_dryproofed",
+                    "damages_wetproofed",
+                    "object_type",
+                ]
             ]
             # merged["damage"] is aligned with agents
-            damages_do_not_adapt[i], damages_adapt[i] = (
-                self.households.assign_damages_to_agents(
-                    agent_df,
-                    building_multicurve,
-                )
+            (
+                damages_do_not_adapt[i],
+                damages_adapt[i],
+                damages_adapt_dryproofing[i],
+                damages_adapt_wetproofing[i],
+            ) = self.households.assign_damages_to_agents(
+                agent_df,
+                building_multicurve,
             )
             if verbose:
                 print(
@@ -413,7 +534,18 @@ class FloodRiskModule:
                 print(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
-        return damages_do_not_adapt, damages_adapt
+                print(
+                    f"Damages adapt dryproofing rp{return_period}: {round(damages_adapt_dryproofing[i].sum() / 1e6)} million"
+                )
+                print(
+                    f"Damages adapt wetproofing rp{return_period}: {round(damages_adapt_wetproofing[i].sum() / 1e6)} million"
+                )
+        return (
+            damages_do_not_adapt,
+            damages_adapt,
+            damages_adapt_dryproofing,
+            damages_adapt_wetproofing,
+        )
 
     def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
@@ -626,7 +758,9 @@ class FloodRiskModule:
 
         # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
-            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
+            features=buildings.rename(
+                columns={"maximum_damage_m2": "maximum_damage_structure"}
+            ),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
             vulnerability_curves=self.households.buildings_structure_curve,
         )

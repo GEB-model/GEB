@@ -47,6 +47,7 @@ class HouseholdVariables(Bucket):
     building_id_of_household: DynamicArray
     education_level: DynamicArray
     evacuated: DynamicArray
+    expenditure_cap: float
     forest_curve: pd.DataFrame
     household_building_area: DynamicArray
     household_building_circumference: DynamicArray
@@ -370,6 +371,13 @@ class Households(AgentBaseClass):
             locations, max_n=self.max_n, extra_dims_names=["lonlat"]
         )
 
+        self.var.household_points = gpd.GeoDataFrame(
+            geometry=gpd.points_from_xy(
+                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
+            ),
+            crs="EPSG:4326",
+        )
+
         region_id = read_array(self.model.files["array"]["agents/households/region_id"])
         self.var.region_id = DynamicArray(region_id, max_n=self.max_n)
 
@@ -520,24 +528,10 @@ class Households(AgentBaseClass):
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
 
         # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
-        amenity_premiums = np.random.uniform(0, 0.2, self.n)
+        amenity_premiums = np.random.uniform(0, 0, self.n)
         self.var.amenity_value = DynamicArray(
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
-
-        self.model.logger.info(
-            f"Household attributes assigned for {self.n} households with {self.population} people."
-        )
-
-    def assign_households_to_postal_codes(self) -> None:
-        """This function associates the household points with their postal codes to get the correct geometry for the warning function."""
-        households = gpd.GeoDataFrame(
-            geometry=gpd.points_from_xy(
-                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
-            ),
-            crs="EPSG:4326",
-        )
-        self.var.household_points = household_points
 
         # We need the circumference of each house for dry-proofing costs
         buildings = self.buildings.copy()
@@ -612,10 +606,21 @@ class Households(AgentBaseClass):
         )
 
         # Dry floodproofing costs eur 2024 per meter of building circumference, article Aerts (2018)
-        self.var.total_adaptation_costs_dryproofing = (
-            901 * self.var.household_building_circumference.data
-        ).astype(np.int64)
+        # self.var.total_adaptation_costs_dryproofing = (
+        #     901 * self.var.household_building_circumference.data
+        # ).astype(np.int64)
+        dry_costs = self.model.config["agent_settings"]["households"][
+            "expected_utility"
+        ]["flood_risk_calculations"]["adaptation_financing"]["dry_proofing_costs"]
+        # Ensure scalar config values are expanded to per-household arrays for DynamicArray
+        if np.isscalar(dry_costs):
+            dry_costs_arr = np.full(self.n, int(dry_costs), dtype=np.int64)
+        else:
+            dry_costs_arr = np.asarray(dry_costs)
 
+        self.var.total_adaptation_costs_dryproofing = DynamicArray(
+            dry_costs_arr, max_n=self.max_n
+        )
         # Load adaptation financing parameters from config
         self.var.r_loan = self.model.config["agent_settings"]["households"][
             "expected_utility"
@@ -626,6 +631,7 @@ class Households(AgentBaseClass):
         self.var.expenditure_cap = self.model.config["agent_settings"]["households"][
             "expected_utility"
         ]["flood_risk_calculations"]["adaptation_financing"]["expenditure_cap"]
+        print(f"Expenditure cap is: {self.var.expenditure_cap}")
 
         annual_adaptation_costs_dryproofing: float = np.asarray(
             self.var.total_adaptation_costs_dryproofing.data
@@ -643,7 +649,12 @@ class Households(AgentBaseClass):
         )
 
         # initiate array with adaptation costs for wet-proofing, eur 2024 values, article Aerts (2018)
-        total_adaptation_costs_wetproofing: int = 27384
+        # total_adaptation_costs_wetproofing: int = 27384
+        total_adaptation_costs_wetproofing: int = self.model.config["agent_settings"][
+            "households"
+        ]["expected_utility"]["flood_risk_calculations"]["adaptation_financing"][
+            "wet_proofing_costs"
+        ]
         self.var.total_adaptation_costs_wetproofing_array = DynamicArray(
             np.full(self.n, total_adaptation_costs_wetproofing, np.int64),
             max_n=self.max_n,
@@ -1985,9 +1996,12 @@ class Households(AgentBaseClass):
         self.update_risk_perceptions()
 
         # calculate damages for adapting and not adapting households based on building footprints
-        damages_do_not_adapt, damages_adapt_dryproofing, damages_adapt_wetproofing = (
-            self.flood_risk_module.calculate_building_flood_damages()
-        )
+        (
+            damages_do_not_adapt,
+            damages_adapt,
+            damages_adapt_dryproofing,
+            damages_adapt_wetproofing,
+        ) = self.flood_risk_module.calculate_building_flood_damages()
 
         # calculate expected utilities
         EU_adapt_dryproofing = self.decision_module.calcEU_adapt_flood(
@@ -2443,26 +2457,34 @@ class Households(AgentBaseClass):
 
     def assign_damages_to_agents(
         self, agent_df: pd.DataFrame, buildings_with_damages: pd.DataFrame
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """This function assigns the building damages calculated by the vector scanner to the corresponding households.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Assign building damages (from vector scanner) to households.
 
         Args:
             agent_df: Pandas dataframe that contains the open building map building id assigned to each agent.
             buildings_with_damages: Pandas dataframe constructed by the vector scanner that contains the damages for each building.
         Returns:
-            Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing damage arrays for (unprotected buildings, dryproofed buildings, wetproofed buildings).
+            Tuple of numpy arrays: (damages_do_not_adapt, damages_adapt, damages_adapt_dryproofing, damages_adapt_wetproofing).
+            `damages_adapt` corresponds to the damage values for flood-proofed/protected buildings
+            if the column `damages_flood_proofed` exists in `buildings_with_damages`, otherwise it defaults
+            to the unprotected `damages` values.
         """
         merged = agent_df.merge(
             buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
             on="building_id_of_household",
             how="left",
         ).fillna(0)
+
         damages_do_not_adapt = merged["damages"].to_numpy()
+
+        damages_adapt = merged["damages_flood_proofed"].to_numpy()
+
         damages_adapt_dryproofing = merged["damages_dryproofed"].to_numpy()
         damages_adapt_wetproofing = merged["damages_wetproofed"].to_numpy()
 
         return (
             damages_do_not_adapt,
+            damages_adapt,
             damages_adapt_dryproofing,
             damages_adapt_wetproofing,
         )

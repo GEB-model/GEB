@@ -9,6 +9,151 @@ import pandas as pd
 from matplotlib.axes import Axes
 from scipy.signal import find_peaks
 from scipy.stats import genpareto, lmoment
+from scipy.stats import genextreme, gumbel_r
+import warnings
+
+
+def _compute_aic_bic(loglik: float, k: int, n: int) -> dict[str, float]:
+    """Compute AIC and BIC from log-likelihood, parameter count, and sample size.
+
+    Args:
+        loglik: Log-likelihood of the fitted model (scalar).
+        k: Number of estimated parameters.
+        n: Sample size.
+
+    Returns:
+        Dict with keys `AIC` and `BIC`.
+    """
+    aic = 2.0 * k - 2.0 * loglik
+    bic = math.log(max(1, n)) * k - 2.0 * loglik
+    return {"AIC": float(aic), "BIC": float(bic)}
+
+
+def fit_gev_mle(data: np.ndarray) -> dict[str, Any]:
+    """Fit a GEV (generalized extreme value) distribution by MLE and compute info criteria.
+
+    Uses `scipy.stats.genextreme`. Returns parameter estimates, log-likelihood,
+    AIC and BIC.
+
+    Args:
+        data: 1-D array of block maxima (or other samples) used for GEV fitting.
+
+    Returns:
+        Dictionary with keys: `model`, `params` (dict), `loglik`, `AIC`, `BIC`, `n`, `k`.
+    """
+    x = np.asarray(data, dtype=float)
+    if x.size < 1:
+        raise ValueError("Data must contain at least one observation for GEV fit.")
+
+    # scipy's genextreme.fit returns (c, loc, scale)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c, loc, scale = genextreme.fit(x)
+
+    logpdf = genextreme.logpdf(x, c, loc=loc, scale=scale)
+    loglik = float(np.sum(logpdf))
+    k = 3  # shape, loc, scale
+    n = x.size
+    ic = _compute_aic_bic(loglik, k, n)
+
+    return {
+        "model": "GEV",
+        "params": {"shape": float(c), "loc": float(loc), "scale": float(scale)},
+        "loglik": loglik,
+        "AIC": ic["AIC"],
+        "BIC": ic["BIC"],
+        "n": int(n),
+        "k": int(k),
+    }
+
+
+def fit_gumbel_mle(data: np.ndarray) -> dict[str, Any]:
+    """Fit a Gumbel distribution (fixed-shape GEV) by MLE and compute info criteria.
+
+    Uses `scipy.stats.gumbel_r` which corresponds to the Gumbel (extreme-value type I).
+
+    Args:
+        data: 1-D array of block maxima (or other samples) used for Gumbel fitting.
+
+    Returns:
+        Dictionary with same keys as `fit_gev_mle`.
+    """
+    x = np.asarray(data, dtype=float)
+    if x.size < 1:
+        raise ValueError("Data must contain at least one observation for Gumbel fit.")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        loc, scale = gumbel_r.fit(x)
+
+    logpdf = gumbel_r.logpdf(x, loc=loc, scale=scale)
+    loglik = float(np.sum(logpdf))
+    k = 2  # loc, scale (shape fixed)
+    n = x.size
+    ic = _compute_aic_bic(loglik, k, n)
+
+    return {
+        "model": "Gumbel",
+        "params": {"loc": float(loc), "scale": float(scale)},
+        "loglik": loglik,
+        "AIC": ic["AIC"],
+        "BIC": ic["BIC"],
+        "n": int(n),
+        "k": int(k),
+    }
+
+
+def compare_gev_and_gumbel(data: np.ndarray) -> pd.DataFrame:
+    """Fit GEV (free shape) and Gumbel (fixed-shape) and compare using AIC and BIC.
+
+    Returns a small `DataFrame` summarizing parameter estimates, log-likelihood,
+    AIC, BIC, ΔAIC, ΔBIC, and Akaike/BIC weights.
+
+    Args:
+        data: 1-D array of block maxima (or other independent maxima) to fit.
+
+    Returns:
+        pd.DataFrame indexed by model name with columns: `loglik`, `k`, `n`, `AIC`, `BIC`,
+        `dAIC`, `dBIC`, `Akaike_wt`, `BIC_wt`, and `params` (dict).
+    """
+    gev = fit_gev_mle(data)
+    gumb = fit_gumbel_mle(data)
+
+    df = pd.DataFrame([gev, gumb])
+    df = df.set_index("model")
+
+    # ΔAIC and ΔBIC relative to best (smallest) value
+    min_aic = df["AIC"].min()
+    min_bic = df["BIC"].min()
+    df["dAIC"] = df["AIC"] - min_aic
+    df["dBIC"] = df["BIC"] - min_bic
+
+    # Akaike weights
+    a_weights = np.exp(-0.5 * df["dAIC"].values)
+    a_weights = a_weights / np.sum(a_weights)
+    bic_weights = np.exp(-0.5 * df["dBIC"].values)
+    bic_weights = bic_weights / np.sum(bic_weights)
+    df["Akaike_wt"] = a_weights
+    df["BIC_wt"] = bic_weights
+
+    # Keep params as column for user inspection
+    df["params"] = df["params"]
+
+    # Reorder columns for readability
+    cols = [
+        "params",
+        "loglik",
+        "k",
+        "n",
+        "AIC",
+        "BIC",
+        "dAIC",
+        "dBIC",
+        "Akaike_wt",
+        "BIC_wt",
+    ]
+    return df[cols]
+
 
 from geb.geb_types import ArrayFloat64
 
@@ -859,3 +1004,120 @@ class ReturnPeriodModel:
         )
         plt.tight_layout()
         return fig
+
+    def compare_block_maxima_models(self, block: str = "YE") -> pd.DataFrame:
+        """Fit and compare GEV (free-shape) vs Gumbel (fixed-shape) on block maxima.
+
+        By default uses yearly maxima (`block="YE"`). Returns a DataFrame from
+        `compare_gev_and_gumbel` and stores it on `self.am_model_comparison`.
+
+        Args:
+            block: Resampling frequency for block maxima (pandas offset alias).
+
+        Returns:
+            pd.DataFrame with model comparison (AIC/BIC, weights, params).
+
+        Raises:
+            ValueError: If no block maxima are available for the chosen `block`.
+        """
+        # Extract block maxima (dropna)
+        am_series = self.series.resample(block).max().dropna()
+        if am_series.empty:
+            raise ValueError(f"No block maxima found for block='{block}'")
+
+        am_values = am_series.values.astype(float)
+
+        # Use the module-level comparison helper
+        comp_df = compare_gev_and_gumbel(am_values)
+
+        # Store on the object for later inspection
+        self.am_model_comparison = comp_df
+        return comp_df
+
+    def compare_pot_models(self) -> pd.DataFrame:
+        """Compare GPD fitted with free shape vs fixed-shape xi=0 (exponential tail).
+
+        Uses the de-clustered exceedances at the chosen threshold `self.u` and the
+        L-moments fits already used elsewhere in this module. Computes log-likelihoods
+        by evaluating the GPD log-PDF at the fitted parameters, then AIC/BIC and
+        Akaike/BIC weights.
+
+        Returns:
+            pd.DataFrame indexed by model name with columns: `params`, `loglik`, `k`, `n`,
+            `AIC`, `BIC`, `dAIC`, `dBIC`, `Akaike_wt`, `BIC_wt`.
+
+        Raises:
+            ValueError: If no exceedances are available at the chosen threshold `self.u`.
+        """
+        peaks_u = self.all_peaks[self.all_peaks > self.u]
+        y = np.sort(peaks_u - self.u)
+        n = y.size
+        if n < 1:
+            raise ValueError("No exceedances available for POT model comparison.")
+
+        # Fit using L-moments as elsewhere in this module
+        sigma_free, xi_free = fit_gpd_lmoments(y)
+        sigma_xi0, xi_xi0 = fit_gpd_lmoments(y, fixed_shape=0.0)
+
+        # Log-likelihoods using scipy genpareto (loc=0)
+        loglik_free = float(
+            np.sum(genpareto.logpdf(y, c=xi_free, loc=0.0, scale=sigma_free))
+        )
+        loglik_xi0 = float(
+            np.sum(genpareto.logpdf(y, c=xi_xi0, loc=0.0, scale=sigma_xi0))
+        )
+
+        k_free = 2
+        k_xi0 = 1
+
+        ic_free = _compute_aic_bic(loglik_free, k_free, n)
+        ic_xi0 = _compute_aic_bic(loglik_xi0, k_xi0, n)
+
+        rows = [
+            {
+                "model": "GPD_free",
+                "params": {"sigma": float(sigma_free), "xi": float(xi_free)},
+                "loglik": loglik_free,
+                "k": k_free,
+                "n": int(n),
+                "AIC": ic_free["AIC"],
+                "BIC": ic_free["BIC"],
+            },
+            {
+                "model": "GPD_xi0",
+                "params": {"sigma": float(sigma_xi0), "xi": float(xi_xi0)},
+                "loglik": loglik_xi0,
+                "k": k_xi0,
+                "n": int(n),
+                "AIC": ic_xi0["AIC"],
+                "BIC": ic_xi0["BIC"],
+            },
+        ]
+
+        df = pd.DataFrame(rows).set_index("model")
+        min_aic = df["AIC"].min()
+        min_bic = df["BIC"].min()
+        df["dAIC"] = df["AIC"] - min_aic
+        df["dBIC"] = df["BIC"] - min_bic
+
+        a_weights = np.exp(-0.5 * df["dAIC"].values)
+        a_weights = a_weights / np.sum(a_weights)
+        bic_weights = np.exp(-0.5 * df["dBIC"].values)
+        bic_weights = bic_weights / np.sum(bic_weights)
+        df["Akaike_wt"] = a_weights
+        df["BIC_wt"] = bic_weights
+
+        self.pot_model_comparison = df
+        cols = [
+            "params",
+            "loglik",
+            "k",
+            "n",
+            "AIC",
+            "BIC",
+            "dAIC",
+            "dBIC",
+            "Akaike_wt",
+            "BIC_wt",
+        ]
+        return df[cols]

@@ -90,11 +90,13 @@ def _plot_validation_return_periods(
         eval_plot_folder: Output directory for generated plots.
         frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
     """
-    return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
+    return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100, 200, 500, 1000]
 
     # Use first_significant strategy for consistent evaluation
     strategy = "first_significant"
-    fixed_shape = 0.0  # 0.0 is Gumbel distribution for better stability in validation
+    fixed_shape = (
+        0.0  # 0.0  # 0.0 is Gumbel distribution for better stability in validation
+    )
 
     obs_model = ReturnPeriodModel(
         series=validation_df["discharge_observations"],
@@ -114,6 +116,46 @@ def _plot_validation_return_periods(
         fixed_shape=fixed_shape,
         selection_strategy=strategy,
     )
+
+    # POT model comparison will follow
+    # Compare POT models (GPD free-shape vs xi=0) at the chosen threshold
+    try:
+        obs_comp = obs_model.compare_pot_models()
+        sim_comp = sim_model.compare_pot_models()
+
+        # Ensure eval folder exists
+        eval_plot_folder.mkdir(parents=True, exist_ok=True)
+
+        obs_comp.to_csv(
+            eval_plot_folder / f"return_period_pot_comparison_observed_{station_id}.csv"
+        )
+        sim_comp.to_csv(
+            eval_plot_folder
+            / f"return_period_pot_comparison_simulated_{station_id}.csv"
+        )
+
+        def _best_models_text(df: pd.DataFrame) -> str:
+            aic_best = df["dAIC"].idxmin()
+            bic_best = df["dBIC"].idxmin()
+            aic_wt = df.loc[aic_best, "Akaike_wt"]
+            bic_wt = df.loc[bic_best, "BIC_wt"]
+            return (
+                f"AIC_best: {aic_best} (weight={aic_wt:.3f})\n"
+                f"BIC_best: {bic_best} (weight={bic_wt:.3f})\n"
+            )
+
+        summary_text = (
+            f"Observed POT model comparison (threshold u={obs_model.u:.2f}):\n"
+            f"{_best_models_text(obs_comp)}\n"
+            f"Simulated POT model comparison (threshold u={sim_model.u:.2f}):\n"
+            f"{_best_models_text(sim_comp)}\n"
+        )
+        (
+            eval_plot_folder / f"return_period_pot_comparison_summary_{station_id}.txt"
+        ).write_text(summary_text)
+    except Exception:
+        # Non-fatal: comparison is auxiliary. Continue plotting even if comparison fails.
+        pass
 
     # Create a large composite figure:
     # Top row: Combined return level fit (wide)
