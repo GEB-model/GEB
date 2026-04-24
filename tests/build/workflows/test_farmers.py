@@ -18,6 +18,8 @@ from geb.workflows.raster import (
     rasterize_like,
 )
 
+from ...testconfig import IN_GITHUB_ACTIONS
+
 LOWDER_SIZE_CLASS_BOUNDARIES_M2: dict[str, tuple[float, float]] = {
     "< 1 Ha": (0.0, 10_000.0),
     "1 - 2 Ha": (10_000.0, 20_000.0),
@@ -143,6 +145,7 @@ def test_create_farm_distributions_for_all_lowder_regions() -> None:
     assert processed_iso3
 
 
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_fetch_field_boundaries() -> None:
     """Fetch field boundaries."""
     logger = logging.getLogger("test_fetch_field_boundaries")
@@ -216,4 +219,3 @@ def test_fetch_field_boundaries() -> None:
 
     raster_ids_after = set(unique_values_after.tolist())
     assert raster_ids_after.issubset(field_ids)
-    pass
