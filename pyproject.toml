@@ -96,6 +96,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 
+[project.urls]
+Documentation = "https://docs.geb.sh"
+Repository = "https://github.com/GEB-model/GEB"
+Issues = "https://github.com/GEB-model/GEB/issues"
+
 [tool.uv]
 required-environments = [
     "sys_platform == 'linux'",
