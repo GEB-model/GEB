@@ -1348,9 +1348,9 @@ class LandSurface(Module):
             crop_group_grassland_like=self.HRU.var.crop_group_number_grassland_like,
             crop_group_number_per_group=crop_group_number_per_group,
             minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
-            interflow_multiplier=self.model.config["parameters"][
-                "interflow_multiplier"
-            ],
+            interflow_multiplier=np.float32(
+                self.model.config["parameters"]["interflow_multiplier"]
+            ),
             deep_soil_temperature_C=deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
         )
@@ -1991,6 +1991,9 @@ class LandSurface(Module):
 
         timer.finish_split("Prepare inputs for land surface model")
 
+        import time
+
+        t0 = time.time()
         (
             rain_m,
             snow_m,
@@ -2022,6 +2025,10 @@ class LandSurface(Module):
             top_soil_percolation_to_layer_2_m,
             top_soil_transpiration_m,
         ) = land_surface_model(**land_surface_inputs._asdict())
+        t1 = time.time()
+        self.model.logger.debug(
+            f"Land surface model execution time: {t1 - t0:.4f} seconds"
+        )
 
         timer.finish_split("Land surface model")
 
