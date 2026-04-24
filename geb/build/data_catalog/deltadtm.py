@@ -28,7 +28,7 @@ from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
-available_continents = {
+available_continents: dict[str, str] = {
     "Africa.zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/22ffa027-184b-4f67-9979-c182f3dfb1ab",
     "Antarctica.zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/ca957a40-34fa-41eb-b101-e45d1ccbd890",
     "Asia.zip": "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/672eba4c-1334-44c6-8119-8879ded25912",
@@ -59,88 +59,110 @@ class DeltaDTM(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def get_tiles_for_mask(self, mask: BaseGeometry) -> tuple[list[str], list[str]]:
+    def get_tiles_for_mask(
+        self, mask: BaseGeometry
+    ) -> tuple[gpd.GeoDataFrame, list[str]]:
         """Get the DeltaDTM tiles that intersect with the mask, with a buffer. This function uses the DeltaDTM tiles geopackage.
 
         Args:
             mask: The geometry used to filter intersecting tiles.
+
         Returns:
             A tuple containing:
-                - A list of tile filenames that intersect with the mask.
+                - A GeoDataFrame of the tiles that intersect with the mask.
                 - A list of continent ZIP filenames to download.
+
         Raises:
             RuntimeError: If the DeltaDTM tiles geopackage cannot be downloaded.
         """
         # download the DeltaDTM tiles geopackage
         url_delta_dtm_tiles = "https://data.4tu.nl/file/1da2e70f-6c4d-4b03-86bd-b53e789cc629/60a69899-2e67-4f9f-8761-3b57094acd12"
         self.root.mkdir(parents=True, exist_ok=True)
-        filepath = self.root / "delta_dtm_tiles.gpkg"
-        success = fetch_and_save(
-            url=url_delta_dtm_tiles,
-            file_path=filepath,
-        )
-        if not success:
-            raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
-        # load the geopackage
-        gdf_tiles = gpd.read_file(filepath)
-        # get the tiles that intersect with the model bounds, with a buffer (0.4 degrees)
-        buffered_mask = mask.buffer(0.4)
-        xmin, ymin, xmax, ymax = buffered_mask.bounds
-        tiles_in_bounds = gdf_tiles.cx[xmin:xmax, ymin:ymax]
-        tile_names = tiles_in_bounds["tile"].tolist()
-
-        # continents(s) to download tiles for
-        continents_to_download = tiles_in_bounds["zipfile"].unique().tolist()
-
-        return tile_names, continents_to_download
-
-    def download_deltadtm(self, continents_to_download: list[str]) -> None:
-        """Download DeltaDTM tiles for the specified continents.
-
-        Args:
-            continents_to_download: List of continent ZIP filenames to download.
-        Raises:
-            RuntimeError: If downloading any of the continent ZIP files fails.
-        """
-        for continent in continents_to_download:
-            url = available_continents[continent]
-            zip_path = self._construct_filepath(continent[:-4])
+        filepath: Path = self.root / "delta_dtm_tiles.gpkg"
+        if not filepath.exists():
             success = fetch_and_save(
-                url=url,
-                file_path=zip_path,
+                url=url_delta_dtm_tiles,
+                file_path=filepath,
             )
             if not success:
-                raise RuntimeError(
-                    f"Failed to download DeltaDTM continent ZIP: {continent}"
-                )
+                raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
 
-    def unpack_and_merge_tiles(
-        self, continents_to_download: list[str], tile_names: list[str]
-    ) -> xr.DataArray:
-        """Unpack and merge DeltaDTM tiles into a single dataarray.
+        # load the geopackage
+        all_tiles: gpd.GeoDataFrame = gpd.read_file(filepath)
+
+        # get the tiles that intersect with the model bounds, with a buffer (0.4 degrees)
+        buffered_mask = mask.buffer(0.4)
+
+        xmin, ymin, xmax, ymax = buffered_mask.bounds
+        tiles_in_bounds = all_tiles.cx[xmin:xmax, ymin:ymax]
+
+        # continents(s) to download tiles for
+        continents_to_download: list[str] = tiles_in_bounds["zipfile"].unique().tolist()
+
+        return tiles_in_bounds, continents_to_download
+
+    def fetch(self, mask: BaseGeometry, url: str | None = None) -> DeltaDTM:
+        """Fetch DeltaDTM tiles for the specified mask.
 
         Args:
-            continents_to_download: List of continent ZIP filenames to extract from.
-            tile_names: List of tile filenames to unpack and merge.
+            mask: The geometry used to filter intersecting tiles.
+            url: URL to download DeltaDTM data from. Defaults to None.
 
         Returns:
-            Merged dataarray of the specified tiles.
-        """
-        with tempfile.TemporaryDirectory(delete=False) as temp_dir_str:
-            temp_dir: Path = Path(temp_dir_str)
-            extracted_paths = self._unpack_tiles(
-                continents_to_download, tile_names, temp_dir
-            )
-            da = self._merge_tiles(extracted_paths)
+            The DeltaDTM adapter instance with the downloaded data.
 
+        Raises:
+            RuntimeError: If the DeltaDTM tiles cannot be downloaded or extracted.
+        """
+        _, self.continents_to_download = self.get_tiles_for_mask(mask=mask)
+
+        for zip_name in self.continents_to_download:
+            # Check if we already unpacked this zip
+            placeholder = self.root / f".{zip_name}.unpacked"
+            if placeholder.exists():
+                continue
+
+            url: str = available_continents[zip_name]
+
+            # Download and extract the zip file using a temporary directory for cleanup
+            with tempfile.TemporaryDirectory() as tmpdir_str:
+                tmpdir = Path(tmpdir_str)
+                temp_zip_path = tmpdir / zip_name
+
+                success = fetch_and_save(url=url, file_path=temp_zip_path)
+                if not success:
+                    raise RuntimeError(f"Failed to download DeltaDTM zip: {zip_name}")
+
+                # Unpack the zip file
+                with zipfile.ZipFile(temp_zip_path, "r") as zf:
+                    zf.extractall(path=self.root)
+
+            # Create placeholder to remember it was unpacked
+            placeholder.touch()
+
+        return self
+
+    def read(self, mask: BaseGeometry) -> xr.DataArray:
+        """Read and merge the downloaded DeltaDTM tiles.
+
+        Args:
+            mask: The geometry used to filter intersecting tiles.
+
+        Returns:
+            The merged DeltaDTM data.
+        """
+        tiles_in_bounds, _ = self.get_tiles_for_mask(mask=mask)
+        tile_names: list[str] = tiles_in_bounds["tile"].tolist()
+        tile_paths: list[Path] = [self.root / tile_name for tile_name in tile_names]
+        da: xr.DataArray = self._merge_tiles(tile_paths)
         da = convert_nodata(da, np.nan)
         return da
 
     def _merge_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
-        """Merge extracted DeltaDTM tiles into a single xarray DataArray.
+        """Merge DeltaDTM tiles into a single xarray DataArray.
 
         Args:
-            tile_paths: List of paths to the extracted tile files.
+            tile_paths: List of paths to the tile files.
 
         Returns:
             Merged dataset of the specified tiles.
@@ -148,7 +170,7 @@ class DeltaDTM(Adapter):
         das: list[xr.DataArray] = [
             rxr.open_rasterio(path, chunks={}) for path in tile_paths
         ]  # ty: ignore[invalid-assignment]
-        das = [da.sel(band=1) for da in das]
+        das: list[xr.DataArray] = [da.sel(band=1) for da in das]
         da = xr.combine_by_coords(
             das,
             fill_value=das[0].rio.nodata,
@@ -158,64 +180,4 @@ class DeltaDTM(Adapter):
             data_vars="all",
         )
         assert isinstance(da, xr.DataArray)
-        return da
-
-    def _unpack_tiles(
-        self, continents_to_download: list[str], tile_names: list[str], temp_dir: Path
-    ) -> list[Path]:
-        """Unpack and merge DeltaDTM tiles into a single xarray Dataset.
-
-        Args:
-            continents_to_download: List of continent ZIP filenames to extract from.
-            tile_names: List of tile filenames to unpack and merge.
-            temp_dir: Temporary directory to extract tiles into.
-        Returns:
-            Merged dataset of the specified tiles.
-        """
-        extracted_paths: list[Path] = []
-        for continent in continents_to_download:
-            zip_path = self._construct_filepath(continent[:-4])
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                for tile_name in tile_names:
-                    if tile_name in zip_ref.namelist():
-                        zip_ref.extract(tile_name, path=temp_dir)
-                        extracted_paths.append(temp_dir / tile_name)
-        return extracted_paths
-
-    def _construct_filepath(self, continent: str) -> Path:
-        """Construct the file path for a given continent ZIP file.
-
-        Args:
-            continent: The continent ZIP filename.
-        Returns:
-            The constructed file path for the continent ZIP file.
-
-        """
-        return Path(str(self.path).format(continent))
-
-    def fetch(self, mask: BaseGeometry, url: str | None = None) -> DeltaDTM:
-        """Fetch DeltaDTM tiles for the specified mask.
-
-        Args:
-            mask: The geometry used to filter intersecting tiles.
-            url: URL to download DeltaDTM data from. Defaults to None.
-        Returns:
-            The DeltaDTM adapter instance with the downloaded data.
-        """
-        self.tile_names, self.continents_to_download = self.get_tiles_for_mask(
-            mask=mask
-        )
-        self.download_deltadtm(self.continents_to_download)
-        return self
-
-    def read(self, mask: BaseGeometry) -> xr.DataArray:
-        """Read and unpack the downloaded DeltaDTM data, masking it to the project geometry.
-
-        Args:
-            mask: The geometry used to filter intersecting tiles. If None, no masking is applied
-
-        Returns:
-            The downloaded DeltaDTM data.
-        """
-        da = self.unpack_and_merge_tiles(self.continents_to_download, self.tile_names)
         return da

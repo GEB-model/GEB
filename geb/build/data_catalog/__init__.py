@@ -863,7 +863,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "delta_dtm": {
         "adapter": DeltaDTM(
-            folder="delta_dtm",
+            folder="deltadtm",
             local_version=1,
             filename="{}.zip",
             cache="global",
