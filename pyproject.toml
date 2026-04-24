@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build>=0.10.9,<0.11.0"]
+requires = ["uv_build>=0.11.5,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b22"
+version = "1.0.0b23"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -87,14 +87,20 @@ dependencies = [
 ]
 requires-python = ">=3.14.4, <3.15"
 readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Hydrology",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
 ]
+
+[project.urls]
+Documentation = "https://docs.geb.sh"
+Repository = "https://github.com/GEB-model/GEB"
+Issues = "https://github.com/GEB-model/GEB/issues"
 
 [tool.uv]
 required-environments = [
