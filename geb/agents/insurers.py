@@ -789,7 +789,7 @@ class Insurers(AgentBaseClass):
         """
         self.var.adjusted_yearly_income_insured = (
             self.agents.crop_farmers.var.yearly_income
-            / self.agents.crop_farmers.cumulative_inflation[..., None]
+            / self.agents.crop_farmers.var.cumulative_inflation[..., None]
         )
 
     def insurance_premiums(self) -> tuple[npt.NDArray[np.floating], TwoDArrayFloat32]:

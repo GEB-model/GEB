@@ -99,7 +99,9 @@ class GLOPOP_SG(Adapter):
             if isinstance(GLOPOP_grid, xr.Dataset):
                 GLOPOP_grid = GLOPOP_grid.to_array().squeeze()
 
-            GLOPOP_grid.load()  # Load into memory before cleaning up tif_path
+            GLOPOP_grid: xr.DataArray = (
+                GLOPOP_grid.load()
+            )  # Load into memory before cleaning up tif_path
 
             with gzip.open(gz_path, "rb") as f:
                 GLOPOP_s = np.frombuffer(f.read(), dtype=np.int32)
@@ -127,16 +129,18 @@ class GLOPOP_SG(Adapter):
         total = GLOPOP_s.size
         n_people = total // n_attr
 
-        try:
-            # reshapa data
-            data_reshaped = np.reshape(GLOPOP_s, (n_attr, n_people)).transpose()
-        except ValueError:
+        countries_with_17_columns = ["COD", "IRN", "KWT", "MKD", "THA"]
+        # check if string of region contains any of the country codes with 17 columns (SHOULD BE FIXED BY MARIJN IN NEW GLOPOP VERSION)
+        if any(code in region for code in countries_with_17_columns):  # 17 columns
             n_columns = 17
             n_people = GLOPOP_s.size // n_columns
             data_reshaped = np.reshape(GLOPOP_s, (n_columns, n_people)).transpose()
             data_reshaped = np.hstack((data_reshaped[:, :-2], data_reshaped[:, -1:]))
             print(region)
             print("17 columns")
+        else:  # default to 16 columns
+            # reshape data
+            data_reshaped = np.reshape(GLOPOP_s, (n_attr, n_people)).transpose()
 
         df = pd.DataFrame(
             data_reshaped,

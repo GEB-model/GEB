@@ -1,5 +1,6 @@
 """Routing algorithms for river networks."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
@@ -28,6 +29,40 @@ from geb.workflows.io import read_geom, read_table
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
+
+
+def read_discharge_per_river(
+    folder: Path, rivers: gpd.GeoDataFrame, all_rivers: pd.DataFrame
+) -> pd.DataFrame:
+    """Read the discharge for each river from the output files.
+
+    Args:
+        folder: The folder where the discharge files are stored.
+        rivers: A GeoDataFrame containing the rivers in the model, with columns "is_downstream_outflow", "is_upstream_of_downstream_basin", and "hydrography_xy".
+        all_rivers: A DataFrame containing all rivers in the model, with columns "represented_in_grid", "hydrography_xy", and "downstream_ID".
+
+    Returns:
+        A DataFrame with the discharge for each river, with columns "discharge_m3_per_s" and "hydrography_xy".
+    """
+    discharge = pd.DataFrame()
+    for river_id in rivers.index:
+        assert isinstance(river_id, int)
+        xys: list[tuple[int, int]] = get_upstream_represented_xys(river_id, all_rivers)
+        if len(xys) == 1:
+            discharge[river_id] = read_table(
+                folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
+            )[f"river_outflow_hourly_m3_per_s_{river_id}"]
+        else:
+            for i in range(len(xys)):
+                discharge_part = read_table(
+                    folder / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
+                )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
+                if river_id not in discharge:
+                    discharge[river_id] = discharge_part
+                else:
+                    discharge[river_id] += discharge_part
+
+    return discharge
 
 
 def get_upstream_represented_xys(
@@ -1740,6 +1775,9 @@ class Routing(Module):
         else:
             routing_loss: np.float64 = np.float64(np.nan)
             total_inflow_m3 = np.float64(np.nan)
+            total_evaporation_in_rivers_m3: np.float64 = np.float64(np.nan)
+            total_waterbody_evaporation_m3: np.float64 = np.float64(np.nan)
+            total_outflow_at_pits_m3: np.float64 = np.float64(np.nan)
 
         self.report(locals())
 

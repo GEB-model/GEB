@@ -3,6 +3,7 @@
 import pickle
 import shutil
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
@@ -1151,45 +1152,60 @@ class Bucket:
         )
         super().__setattr__(name, value)
 
-    def save(self, path: Path) -> None:
-        """Save the bucket data to disk.
+    def _save_item(self, path: Path, name: str, value: Any) -> None:
+        """Save a single bucket item to disk.
 
-        Can then be loaded back with `load`.
+        Args:
+            path: Directory path for the bucket.
+            name: Attribute name of the item.
+            value: The value to save.
+
+        Raises:
+            ValueError: If the value type is not supported for saving.
+        """
+        if isinstance(value, DynamicArray):
+            value.save(path / name)
+        elif isinstance(value, np.ndarray):
+            write_array(value, (path / name).with_suffix(".array.zarr"))
+        elif isinstance(value, gpd.GeoDataFrame):
+            write_geom(value, (path / name).with_suffix(".geoparquet"))
+        elif isinstance(value, pd.DataFrame):
+            write_table(value, (path / name).with_suffix(".parquet"))
+        elif isinstance(value, (list, dict, float, int, str, datetime)):
+            if isinstance(value, np.generic):
+                value = (
+                    value.item()
+                )  # If it's a numpy scalar, convert to native Python type
+            write_params(value, (path / name).with_suffix(".yml"))
+        elif isinstance(value, np.generic):
+            np.save((path / name).with_suffix(".npy"), value)
+        elif isinstance(value, deque):
+            # TODO: Remove this option when we use the BMI of SFINCS and deques
+            # are no longer needed.
+            with open((path / name).with_suffix(".pkl"), "wb") as f:
+                pickle.dump(value, f)
+        else:
+            raise ValueError(f"Cannot save value of type {type(value)} for {name}")
+
+    def save(self, path: Path, executor: ThreadPoolExecutor) -> list[Future]:
+        """Submit all bucket items for saving and return the resulting futures.
+
+        Does not wait for completion; the caller is responsible for collecting
+        the returned futures. Can then be loaded back with `load`.
 
         Args:
             path: The location where the data should be saved. Must be a directory.
+            executor: A shared ThreadPoolExecutor to submit write tasks to.
 
-        Raises:
-            ValueError: If a value type is not supported for saving.
+        Returns:
+            List of futures, one per item, that resolve when writing is complete.
         """
         path.mkdir(parents=True, exist_ok=True)
-        for name, value in self.__dict__.items():
-            # do not save the validator itself
-            if name == "_validator":
-                continue
-            if isinstance(value, DynamicArray):
-                value.save(path / name)
-            elif isinstance(value, np.ndarray):
-                write_array(value, (path / name).with_suffix(".array.zarr"))
-            elif isinstance(value, gpd.GeoDataFrame):
-                write_geom(value, (path / name).with_suffix(".geoparquet"))
-            elif isinstance(value, pd.DataFrame):
-                write_table(value, (path / name).with_suffix(".parquet"))
-            elif isinstance(value, (list, dict, float, int, str, datetime)):
-                if isinstance(value, np.generic):
-                    value = (
-                        value.item()
-                    )  # If it's a numpy scalar, convert to native Python type
-                write_params(value, (path / name).with_suffix(".yml"))
-            elif isinstance(value, np.generic):
-                np.save((path / name).with_suffix(".npy"), value)
-            elif isinstance(value, deque):
-                # TODO: Remove this option when we use the BMI of SFINCS and deques
-                # are no longer needed.
-                with open((path / name).with_suffix(".pkl"), "wb") as f:
-                    pickle.dump(value, f)
-            else:
-                raise ValueError(f"Cannot save value of type {type(value)} for {name}")
+        return [
+            executor.submit(self._save_item, path, name, value)
+            for name, value in self.__dict__.items()
+            if name != "_validator"  # do not save the validator itself
+        ]
 
     def load(self, path: Path) -> Bucket:
         """Load the bucket data from disk to the Bucket instance.
@@ -1304,9 +1320,14 @@ class Store:
             path: Path = self.path
 
         shutil.rmtree(path, ignore_errors=True)
-        for name, bucket in self.buckets.items():
-            self.model.logger.debug(f"Saving {name}")
-            bucket.save(path / name)
+        with ThreadPoolExecutor() as executor:
+            futures: list[Future] = []
+            for name, bucket in self.buckets.items():
+                self.model.logger.debug(f"Saving {name}")
+                futures.extend(bucket.save(path / name, executor))
+            for future in as_completed(futures):
+                # re-raise any exception from the worker thread
+                future.result()
 
     def load(self, path: None | Path = None, omit: None | str = None) -> None:
         """Load the store data from disk into the model.

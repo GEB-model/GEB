@@ -677,7 +677,8 @@ class ReservoirOperators(AgentBaseClass):
         # this could also maybe be determined based on the start of the irrigation season
         # thus crop calendars
         if (
-            self.model.current_time.day == 1
+            self.model.simulate_hydrology
+            and self.model.current_time.day == 1
             and self.model.current_time.month == self.hydrological_year_start_month
         ):
             # in the second year, we want to discard the default data that was estimated

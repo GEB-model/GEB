@@ -276,6 +276,7 @@ class CropFarmersVariables(Bucket):
     adjusted_yearly_income: DynamicArray
     decision_horizon: DynamicArray
     household_size: DynamicArray
+    cumulative_inflation: DynamicArray
 
 
 class CropFarmers(AgentBaseClass):
@@ -1116,6 +1117,13 @@ class CropFarmers(AgentBaseClass):
             extra_dims_names=("day",),
             dtype=np.float32,
             fill_value=0,
+        )
+
+        self.var.cumulative_inflation = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
         )
 
         self.var.field_indices_by_farmer = DynamicArray(
@@ -2166,7 +2174,7 @@ class CropFarmers(AgentBaseClass):
                 weights=potential_profit_per_field,
                 minlength=self.var.n,
             )
-            self.var.seasonal_income_farmer = np.bincount(
+            self.var.seasonal_income_farmer[:] = np.bincount(
                 harvesting_farmer_fields,
                 weights=actual_profit_per_field,
                 minlength=self.var.n,
@@ -4735,7 +4743,7 @@ class CropFarmers(AgentBaseClass):
 
         # Adjust for inflation in separate array for export
         # Calculate the cumulative inflation from the start year to the current year for each farmer
-        self.cumulative_inflation = np.prod(
+        self.var.cumulative_inflation[:] = np.prod(
             [
                 self.get_value_per_farmer_from_region_id(
                     self.inflation_rate, datetime(year, 1, 1)
@@ -4749,11 +4757,12 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.adjusted_annual_loan_cost = (
-            self.var.all_loans_annual_cost / self.cumulative_inflation[..., None, None]
+            self.var.all_loans_annual_cost
+            / self.var.cumulative_inflation[..., None, None]
         )
 
         self.var.adjusted_yearly_income = (
-            self.var.yearly_income / self.cumulative_inflation[..., None]
+            self.var.yearly_income / self.var.cumulative_inflation[..., None]
         )
 
     def get_value_per_farmer_from_region_id(
@@ -4981,12 +4990,12 @@ class CropFarmers(AgentBaseClass):
 
                 timer.finish_split("yield-spei relation")
 
-                insurance_active = (
+                insurance_active: tuple[bool, bool, bool] = (
                     self.traditional_insurance_adaptation_active,
                     self.index_insurance_adaptation_active,
                     self.pr_insurance_adaptation_active,
                 )
-                if insurance_active:
+                if any(insurance_active):
                     assert sum(insurance_active) <= 1, (
                         "Currently, only one insurance adaptation may be active at a time. Multiple can be enabled with some minor adjustments"
                     )
