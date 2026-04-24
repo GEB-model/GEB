@@ -88,13 +88,13 @@ class DeltaDTM(Adapter):
                 raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
 
         # load the geopackage
-        gdf_tiles: gpd.GeoDataFrame = gpd.read_file(filepath)
+        all_tiles: gpd.GeoDataFrame = gpd.read_file(filepath)
 
         # get the tiles that intersect with the model bounds, with a buffer (0.4 degrees)
         buffered_mask = mask.buffer(0.4)
 
         xmin, ymin, xmax, ymax = buffered_mask.bounds
-        tiles_in_bounds = gdf_tiles.cx[xmin:xmax, ymin:ymax]
+        tiles_in_bounds = all_tiles.cx[xmin:xmax, ymin:ymax]
 
         # continents(s) to download tiles for
         continents_to_download: list[str] = tiles_in_bounds["zipfile"].unique().tolist()
