@@ -1,5 +1,5 @@
 # dev
-- Add documentation, repository, and issue tracker links to `pyproject.toml`.
+- Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797).
 - Re-support running with yearly timestep (fix several small bugs with variables not being available).
 - Add `create_plots` to `setup_discharge_observations`. This is because the plots are quite large and take long to generate. Default is false.
 
