@@ -99,7 +99,7 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
     return lambda_s
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def calculate_soil_thermal_conductivity_from_frozen_fraction(
     thermal_conductivity_solid_W_per_m_K: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
@@ -186,7 +186,7 @@ def calculate_soil_thermal_conductivity_from_frozen_fraction(
     return lambda_total
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def calculate_net_radiation_flux(
     shortwave_radiation_W_per_m2: np.float32,
     longwave_radiation_W_per_m2: np.float32,
@@ -261,7 +261,7 @@ def calculate_net_radiation_flux(
     return net_flux_W, conductance_W_per_m2_K
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def calculate_sensible_heat_flux(
     soil_temperature_C: np.float32,
     air_temperature_K: np.float32,
@@ -496,7 +496,7 @@ def get_temperature_and_frozen_fraction_from_enthalpy_scalar(
     return temperature_C, frozen_fraction
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_phase_state(
     enthalpy_J_per_m2: np.float32,
     latent_heat_areal_J_per_m2: np.float32,
@@ -556,7 +556,7 @@ def get_phase_state(
     return temperature_C, np.float32(1.0), alpha, beta
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def apply_evaporative_cooling(
     soil_enthalpy_top_layer_J_per_m2: np.float32,
     evaporation_m: np.float32,
@@ -592,7 +592,7 @@ def apply_evaporative_cooling(
     return soil_enthalpy_top_layer_J_per_m2 - energy_loss_J_per_m2
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def apply_rain_heat_advection(
     soil_enthalpy_top_layer_J_per_m2: np.float32,
     liquid_water_input_m: np.float32,
@@ -811,6 +811,30 @@ def solve_soil_enthalpy_column(
 
     inv_dt = np.float32(1.0) / timestep_seconds
 
+    # Snow thermal conductance depends only on snow_water_equivalent_m which is
+    # constant across Newton iterations.
+    if snow_water_equivalent_m > np.float64(0.0):
+        (
+            _,
+            snow_depth_m,
+            snow_thermal_conductivity_W_per_m_K,
+        ) = calculate_snow_thermal_properties(snow_water_equivalent_m)
+
+        # Very thin residual snow can otherwise produce unrealistically large
+        # conductive coupling and destabilize the float32 tridiagonal solve.
+        # We mirror the 1 cm lower bound already used in the snow temperature
+        # update so that trace snow still insulates weakly rather than acting as
+        # an almost-zero-thickness conductive sheet.
+        effective_snow_depth_m: np.float32 = max(
+            np.float32(snow_depth_m), np.float32(0.01)
+        )
+        conductance_distance_m: np.float32 = effective_snow_depth_m * np.float32(0.5)
+        snow_conductance_W_per_m2_K = (
+            snow_thermal_conductivity_W_per_m_K / conductance_distance_m
+        )
+    else:
+        snow_conductance_W_per_m2_K = np.float32(0.0)
+
     for iteration_index in range(MAX_ITERATIONS):
         # Derive temperature, frozen fraction, and linearization T ≈ alpha*H + beta
         surface_temperature_guess_C = np.float32(np.nan)
@@ -836,27 +860,6 @@ def solve_soil_enthalpy_column(
         if snow_water_equivalent_m > np.float64(0.0):
             net_radiation_flux_W_per_m2 = np.float32(0.0)
             derivative_net_radiation_W_per_m2_K = np.float32(0.0)
-
-            (
-                _,
-                snow_depth_m,
-                snow_thermal_conductivity_W_per_m_K,
-            ) = calculate_snow_thermal_properties(snow_water_equivalent_m)
-
-            # Very thin residual snow can otherwise produce unrealistically large
-            # conductive coupling and destabilize the float32 tridiagonal solve.
-            # We mirror the 1 cm lower bound already used in the snow temperature
-            # update so that trace snow still insulates weakly rather than acting as
-            # an almost-zero-thickness conductive sheet.
-            effective_snow_depth_m: np.float32 = max(
-                np.float32(snow_depth_m), np.float32(0.01)
-            )
-            conductance_distance_m: np.float32 = effective_snow_depth_m * np.float32(
-                0.5
-            )
-            snow_conductance_W_per_m2_K = (
-                snow_thermal_conductivity_W_per_m_K / conductance_distance_m
-            )
 
             sensible_heat_flux_W_per_m2 = snow_conductance_W_per_m2_K * (
                 snow_temperature_C - surface_temperature_guess_C
