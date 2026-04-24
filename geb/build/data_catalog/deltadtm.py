@@ -123,7 +123,7 @@ class DeltaDTM(Adapter):
             url: str = available_continents[zip_name]
 
             # Download and extract the zip file using a temporary directory for cleanup
-            with tempfile.TemporaryDirectory(dir=self.root) as tmpdir_str:
+            with tempfile.TemporaryDirectory() as tmpdir_str:
                 tmpdir = Path(tmpdir_str)
                 temp_zip_path = tmpdir / zip_name
 
