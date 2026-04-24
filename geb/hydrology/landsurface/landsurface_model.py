@@ -106,7 +106,7 @@ def map_date_to_dekad(dt: datetime) -> int:
     return dekadal_index
 
 
-@njit(parallel=True, cache=True, fastmath=False)
+@njit(parallel=True, cache=True, fastmath=True)
 def land_surface_model(
     land_use_type: ArrayInt32,
     slope_m_per_m: ArrayFloat32,
@@ -327,7 +327,8 @@ def land_surface_model(
 
     # Pre-allocate work buffers for solve_soil_enthalpy_column per cell to avoid NRT allocations in the hot loop.
     # We allocate them for each cell in the prange loop to avoid cross-thread interference.
-    n_soil_layers = soil_enthalpy_J_per_m2.shape[0]
+    # After transposing to cell-major layout, layers are on axis 1.
+    n_soil_layers = soil_enthalpy_J_per_m2.shape[1]
 
     for i in prange(slope_m_per_m.size):  # ty: ignore[not-iterable]
         # Pre-allocate cell-local buffers
@@ -357,6 +358,8 @@ def land_surface_model(
         liquid_water_in_snow_m_cell = liquid_water_in_snow_m[i]
         snow_temperature_C_cell = snow_temperature_C[i]
 
+        # bottom_layer is invariant across hourly substeps.
+        bottom_layer = N_SOIL_LAYERS - 1
         for hour in range(24):
             # Climate values for current hour (contigous access [i, hour])
             tas_2m_K_val = tas_2m_K[i, hour]
@@ -375,7 +378,7 @@ def land_surface_model(
             )  # Wind speed at 10m height
 
             soil_enthalpy_before_solver_J_per_m2: np.float32 = soil_enthalpy_J_per_m2[
-                :, i
+                i, :
             ].sum()
 
             (
@@ -383,16 +386,16 @@ def land_surface_model(
                 soil_heat_flux_W_per_m2_cell,
                 frozen_fractions_cell,
             ) = solve_soil_enthalpy_column(
-                soil_enthalpies_J_per_m2=soil_enthalpy_J_per_m2[:, i],
-                layer_thicknesses_m=soil_layer_height[:, i],
-                bulk_density_kg_per_dm3=bulk_density_kg_per_dm3[:, i],
-                solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[:, i],
+                soil_enthalpies_J_per_m2=soil_enthalpy_J_per_m2[i, :],
+                layer_thicknesses_m=soil_layer_height[i, :],
+                bulk_density_kg_per_dm3=bulk_density_kg_per_dm3[i, :],
+                solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[i, :],
                 thermal_conductivity_solid_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
-                    :, i
+                    i, :
                 ],
-                water_content_saturated_m=water_content_saturated_m[:, i],
-                sand_percentage=sand_percentage[:, i],
-                water_content_m=water_content_m[:, i],
+                water_content_saturated_m=water_content_saturated_m[i, :],
+                sand_percentage=sand_percentage[i, :],
+                water_content_m=water_content_m[i, :],
                 shortwave_radiation_W_per_m2=rsds_W_per_m2_val,
                 longwave_radiation_W_per_m2=rlds_W_per_m2_val,
                 air_temperature_K=tas_2m_K_val,
@@ -423,10 +426,10 @@ def land_surface_model(
                 enthalpies_current_iteration=enthalpies_current_iteration,
             )
 
-            soil_enthalpy_J_per_m2[:, i] = soil_enthalpy_J_per_m2_cell_updated
+            soil_enthalpy_J_per_m2[i, :] = soil_enthalpy_J_per_m2_cell_updated
 
             soil_boundary_enthalpy_flux_J_per_m2[i] += (
-                soil_enthalpy_J_per_m2[:, i].sum()
+                soil_enthalpy_J_per_m2[i, :].sum()
                 - soil_enthalpy_before_solver_J_per_m2
             )
 
@@ -552,8 +555,8 @@ def land_surface_model(
             open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
 
             groundwater_rise = rise_from_groundwater(
-                w=water_content_m[:, i],
-                ws=water_content_saturated_m[:, i],
+                w=water_content_m[i, :],
+                ws=water_content_saturated_m[i, :],
                 capillary_rise_from_groundwater=capillar_rise_m[i],
             )
             if land_use_type[i] == PADDY_IRRIGATED:
@@ -575,7 +578,7 @@ def land_surface_model(
             )
             soil_is_frozen = top_layer_frozen_fraction > np.float32(0.0)
             soil_enthalpy_before_rain_advection_J_per_m2: np.float32 = (
-                soil_enthalpy_J_per_m2[0, i]
+                soil_enthalpy_J_per_m2[i, 0]
             )
 
             (
@@ -587,19 +590,19 @@ def land_surface_model(
                 wetting_front_suction_head_m[i],
                 wetting_front_moisture_deficit[i],
                 green_ampt_active_layer_idx[i],
-                soil_enthalpy_J_per_m2[0, i],
+                soil_enthalpy_J_per_m2[i, 0],
             ) = infiltration(
-                ws=water_content_saturated_m[:, i],
-                wres=water_content_residual_m[:, i],
+                ws=water_content_saturated_m[i, :],
+                wres=water_content_residual_m[i, :],
                 saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
-                    :, i
+                    i, :
                 ],
                 groundwater_toplayer_conductivity_m_per_timestep=groundwater_toplayer_conductivity_m_per_hour[
                     i
                 ],
                 land_use_type=land_use_type[i],
                 frozen_fraction_top_layer=top_layer_frozen_fraction,
-                w=water_content_m[:, i],
+                w=water_content_m[i, :],
                 topwater_m=topwater_m[i],
                 capillary_rise_from_groundwater_m=capillar_rise_m[i],
                 wetting_front_depth_m=wetting_front_depth_m[i],
@@ -607,12 +610,12 @@ def land_surface_model(
                 wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
                 green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
                 variable_runoff_shape_beta=variable_runoff_shape_beta[i],
-                bubbling_pressure_cm=bubbling_pressure_cm[:, i],
-                soil_layer_height_m=soil_layer_height[:, i],
-                lambda_pore_size_distribution=lambda_pore_size_distribution[:, i],
-                soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0, i],
+                bubbling_pressure_cm=bubbling_pressure_cm[i, :],
+                soil_layer_height_m=soil_layer_height[i, :],
+                lambda_pore_size_distribution=lambda_pore_size_distribution[i, :],
+                soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
                 solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                    0, i
+                    i, 0
                 ],
                 rain_temperature_C=tas_C,
                 liquid_water_input_for_enthalpy_m=liquid_water_input_for_enthalpy_m,
@@ -621,26 +624,24 @@ def land_surface_model(
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
             top_soil_infiltration_m[i] += infiltration_amount
             rain_advection_enthalpy_flux_J_per_m2[i] += (
-                soil_enthalpy_J_per_m2[0, i]
+                soil_enthalpy_J_per_m2[i, 0]
                 - soil_enthalpy_before_rain_advection_J_per_m2
             )
-
-            bottom_layer = N_SOIL_LAYERS - 1
 
             psi: np.float32
             unsaturated_hydraulic_conductivity_m_per_hour: np.float32
             psi, unsaturated_hydraulic_conductivity_m_per_hour = (
                 get_soil_water_flow_parameters(
-                    w=water_content_m[bottom_layer, i],
-                    wres=water_content_residual_m[bottom_layer, i],
-                    ws=water_content_saturated_m[bottom_layer, i],
+                    w=water_content_m[i, bottom_layer],
+                    wres=water_content_residual_m[i, bottom_layer],
+                    ws=water_content_saturated_m[i, bottom_layer],
                     lambda_pore_size_distribution=lambda_pore_size_distribution[
-                        bottom_layer, i
+                        i, bottom_layer
                     ],
                     saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
-                        bottom_layer, i
+                        i, bottom_layer
                     ],
-                    bubbling_pressure_cm=bubbling_pressure_cm[bottom_layer, i],
+                    bubbling_pressure_cm=bubbling_pressure_cm[i, bottom_layer],
                 )
             )
 
@@ -663,11 +664,11 @@ def land_surface_model(
                 # Limit flux by available water in the bottom layer
                 bottom_layer_temperature_C, bottom_layer_frozen_fraction = (
                     get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[bottom_layer, i],
+                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, bottom_layer],
                         solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                            bottom_layer, i
+                            i, bottom_layer
                         ],
-                        water_content_m=water_content_m[bottom_layer, i],
+                        water_content_m=water_content_m[i, bottom_layer],
                     )
                 )
                 liquid_fraction_bottom_layer = np.float32(1.0) - np.minimum(
@@ -678,8 +679,8 @@ def land_surface_model(
                     np.float32(0.0),
                     liquid_fraction_bottom_layer
                     * (
-                        water_content_m[bottom_layer, i]
-                        - water_content_residual_m[bottom_layer, i]
+                        water_content_m[i, bottom_layer]
+                        - water_content_residual_m[i, bottom_layer]
                     ),
                 )
                 flux = min(flux, available_water_source)
@@ -694,27 +695,27 @@ def land_surface_model(
                     * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
                     * bottom_advected_temperature_C
                 )
-                soil_enthalpy_J_per_m2[bottom_layer, i] -= (
+                soil_enthalpy_J_per_m2[i, bottom_layer] -= (
                     groundwater_recharge_enthalpy_loss_J_per_m2_hour
                 )
                 groundwater_recharge_enthalpy_loss_J_per_m2[i] += (
                     groundwater_recharge_enthalpy_loss_J_per_m2_hour
                 )
-                water_content_m[bottom_layer, i] -= flux
-                water_content_m[bottom_layer, i] = max(
-                    water_content_m[bottom_layer, i],
-                    water_content_residual_m[bottom_layer, i],
+                water_content_m[i, bottom_layer] -= flux
+                water_content_m[i, bottom_layer] = max(
+                    water_content_m[i, bottom_layer],
+                    water_content_residual_m[i, bottom_layer],
                 )
                 groundwater_recharge_m[i] += flux
 
             # Calculate interflow from bottom layer
             interflow_cell_hour: np.float32 = get_interflow(
-                w=water_content_m[bottom_layer, i],
-                wfc=water_content_field_capacity_m[bottom_layer, i],
-                ws=water_content_saturated_m[bottom_layer, i],
-                soil_layer_height_m=soil_layer_height[bottom_layer, i],
+                w=water_content_m[i, bottom_layer],
+                wfc=water_content_field_capacity_m[i, bottom_layer],
+                ws=water_content_saturated_m[i, bottom_layer],
+                soil_layer_height_m=soil_layer_height[i, bottom_layer],
                 saturated_hydraulic_conductivity_m_per_hour=saturated_hydraulic_conductivity_m_per_hour[
-                    bottom_layer, i
+                    i, bottom_layer
                 ],
                 slope_m_per_m=slope_m_per_m[i],
                 hillslope_length_m=hillslope_length_m[i],
@@ -725,11 +726,11 @@ def land_surface_model(
             # remove the corresponding sensible enthalpy exported with the liquid outflow.
             bottom_layer_temperature_C, bottom_layer_frozen_fraction = (
                 get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                    enthalpy_J_per_m2=soil_enthalpy_J_per_m2[bottom_layer, i],
+                    enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, bottom_layer],
                     solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                        bottom_layer, i
+                        i, bottom_layer
                     ],
-                    water_content_m=water_content_m[bottom_layer, i],
+                    water_content_m=water_content_m[i, bottom_layer],
                 )
             )
             liquid_fraction_bottom_layer = np.float32(1.0) - np.minimum(
@@ -737,8 +738,8 @@ def land_surface_model(
                 np.float32(1.0),
             )
             max_liquid_outflow_bottom_layer = liquid_fraction_bottom_layer * (
-                water_content_m[bottom_layer, i]
-                - water_content_residual_m[bottom_layer, i]
+                water_content_m[i, bottom_layer]
+                - water_content_residual_m[i, bottom_layer]
             )
             interflow_cell_hour = min(
                 interflow_cell_hour,
@@ -755,14 +756,14 @@ def land_surface_model(
                 * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
                 * bottom_layer_advected_temperature_C
             )
-            soil_enthalpy_J_per_m2[bottom_layer, i] -= (
+            soil_enthalpy_J_per_m2[i, bottom_layer] -= (
                 interflow_enthalpy_loss_J_per_m2_hour
             )
             interflow_enthalpy_loss_J_per_m2[i] += interflow_enthalpy_loss_J_per_m2_hour
-            water_content_m[bottom_layer, i] -= interflow_cell_hour
-            water_content_m[bottom_layer, i] = max(
-                water_content_m[bottom_layer, i],
-                water_content_residual_m[bottom_layer, i],
+            water_content_m[i, bottom_layer] -= interflow_cell_hour
+            water_content_m[i, bottom_layer] = max(
+                water_content_m[i, bottom_layer],
+                water_content_residual_m[i, bottom_layer],
             )
 
             psi_layer_below = psi
@@ -774,16 +775,16 @@ def land_surface_model(
             for layer in range(N_SOIL_LAYERS - 2, -1, -1):
                 psi, unsaturated_hydraulic_conductivity_m_per_hour = (
                     get_soil_water_flow_parameters(
-                        w=water_content_m[layer, i],
-                        wres=water_content_residual_m[layer, i],
-                        ws=water_content_saturated_m[layer, i],
+                        w=water_content_m[i, layer],
+                        wres=water_content_residual_m[i, layer],
+                        ws=water_content_saturated_m[i, layer],
                         lambda_pore_size_distribution=lambda_pore_size_distribution[
-                            layer, i
+                            i, layer
                         ],
                         saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
-                            layer, i
+                            i, layer
                         ],
-                        bubbling_pressure_cm=bubbling_pressure_cm[layer, i],
+                        bubbling_pressure_cm=bubbling_pressure_cm[i, layer],
                     )
                 )
 
@@ -803,7 +804,7 @@ def land_surface_model(
                     # which means that we use the hydraulic conductivity of the layer
                     # that the flux is coming from.
                     flux_gradient_term: np.float32 = -(
-                        (psi_layer_below - psi) / delta_z[layer, i] - np.float32(1.0)
+                        (psi_layer_below - psi) / delta_z[i, layer] - np.float32(1.0)
                     )
 
                     # if the flux gradient term is positive, the flux is going downwards
@@ -825,8 +826,8 @@ def land_surface_model(
 
                     # Limit flux by the minimum saturated hydraulic conductivity of the two layers
                     min_saturated_hydraulic_conductivity_m_per_hour = min(
-                        saturated_hydraulic_conductivity_m_per_hour[layer, i],
-                        saturated_hydraulic_conductivity_m_per_hour[layer + 1, i],
+                        saturated_hydraulic_conductivity_m_per_hour[i, layer],
+                        saturated_hydraulic_conductivity_m_per_hour[i, layer + 1],
                     )
                     flux = min(flux, min_saturated_hydraulic_conductivity_m_per_hour)
 
@@ -840,7 +841,7 @@ def land_surface_model(
                     # Limit flux by available water in source and storage capacity of sink
                     remaining_storage_capacity_sink = max(
                         np.float32(0.0),
-                        water_content_saturated_m[sink, i] - water_content_m[sink, i],
+                        water_content_saturated_m[i, sink] - water_content_m[i, sink],
                     )
                     topwater_layer_source = (
                         topwater_m[i] if source == 0 else np.float32(0.0)
@@ -849,11 +850,11 @@ def land_surface_model(
                     # Limit redistribution to the unfrozen (liquid) fraction of the source water.
                     source_temperature_C, frozen_fraction_source = (
                         get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[source, i],
+                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, source],
                             solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                                source, i
+                                i, source
                             ],
-                            water_content_m=water_content_m[source, i],
+                            water_content_m=water_content_m[i, source],
                             topwater_m=topwater_layer_source,
                         )
                     )
@@ -866,8 +867,8 @@ def land_surface_model(
                         np.float32(0.0),
                         liquid_fraction_source
                         * (
-                            water_content_m[source, i]
-                            - water_content_residual_m[source, i]
+                            water_content_m[i, source]
+                            - water_content_residual_m[i, source]
                         ),
                     )
 
@@ -881,8 +882,8 @@ def land_surface_model(
                         top_soil_rise_from_layer_2_m[i] += flux
 
                     # Update water content in source and sink layers
-                    water_content_m[source, i] -= flux
-                    water_content_m[sink, i] += flux
+                    water_content_m[i, source] -= flux
+                    water_content_m[i, sink] += flux
 
                     # Apply advective heat transport between soil layers using enthalpy.
                     # We transfer sensible heat carried by moving liquid water.
@@ -896,17 +897,17 @@ def land_surface_model(
                         * advected_water_temperature_C
                     )
 
-                    soil_enthalpy_J_per_m2[source, i] -= energy_transfer_J_per_m2
-                    soil_enthalpy_J_per_m2[sink, i] += energy_transfer_J_per_m2
+                    soil_enthalpy_J_per_m2[i, source] -= energy_transfer_J_per_m2
+                    soil_enthalpy_J_per_m2[i, sink] += energy_transfer_J_per_m2
 
                     # Ensure water content stays within physical bounds
-                    water_content_m[sink, i] = min(
-                        water_content_m[sink, i],
-                        water_content_saturated_m[sink, i],
+                    water_content_m[i, sink] = min(
+                        water_content_m[i, sink],
+                        water_content_saturated_m[i, sink],
                     )
-                    water_content_m[source, i] = max(
-                        water_content_m[source, i],
-                        water_content_residual_m[source, i],
+                    water_content_m[i, source] = max(
+                        water_content_m[i, source],
+                        water_content_residual_m[i, source],
                     )
 
                 psi_layer_below = psi
@@ -915,12 +916,12 @@ def land_surface_model(
                 )
 
                 interflow_cell_hour: np.float32 = get_interflow(
-                    w=water_content_m[layer, i],
-                    wfc=water_content_field_capacity_m[layer, i],
-                    ws=water_content_saturated_m[layer, i],
-                    soil_layer_height_m=soil_layer_height[layer, i],
+                    w=water_content_m[i, layer],
+                    wfc=water_content_field_capacity_m[i, layer],
+                    ws=water_content_saturated_m[i, layer],
+                    soil_layer_height_m=soil_layer_height[i, layer],
                     saturated_hydraulic_conductivity_m_per_hour=saturated_hydraulic_conductivity_m_per_hour[
-                        layer, i
+                        i, layer
                     ],
                     slope_m_per_m=slope_m_per_m[i],
                     hillslope_length_m=hillslope_length_m[i],
@@ -930,11 +931,11 @@ def land_surface_model(
                 # Limit interflow to liquid water and remove exported sensible enthalpy.
                 layer_temperature_C, layer_frozen_fraction = (
                     get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[layer, i],
+                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, layer],
                         solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                            layer, i
+                            i, layer
                         ],
-                        water_content_m=water_content_m[layer, i],
+                        water_content_m=water_content_m[i, layer],
                         topwater_m=topwater_m[i] if layer == 0 else np.float32(0.0),
                     )
                 )
@@ -942,7 +943,7 @@ def land_surface_model(
                     np.maximum(layer_frozen_fraction, np.float32(0.0)), np.float32(1.0)
                 )
                 max_liquid_outflow_layer = liquid_fraction_layer * (
-                    water_content_m[layer, i] - water_content_residual_m[layer, i]
+                    water_content_m[i, layer] - water_content_residual_m[i, layer]
                 )
                 interflow_cell_hour = min(
                     interflow_cell_hour, max(np.float32(0.0), max_liquid_outflow_layer)
@@ -956,30 +957,30 @@ def land_surface_model(
                     * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
                     * layer_advected_temperature_C
                 )
-                soil_enthalpy_J_per_m2[layer, i] -= (
+                soil_enthalpy_J_per_m2[i, layer] -= (
                     interflow_enthalpy_loss_J_per_m2_hour
                 )
                 interflow_enthalpy_loss_J_per_m2[i] += (
                     interflow_enthalpy_loss_J_per_m2_hour
                 )
-                water_content_m[layer, i] -= interflow_cell_hour
-                water_content_m[layer, i] = max(
-                    water_content_m[layer, i],
-                    water_content_residual_m[layer, i],
+                water_content_m[i, layer] -= interflow_cell_hour
+                water_content_m[i, layer] = max(
+                    water_content_m[i, layer],
+                    water_content_residual_m[i, layer],
                 )
 
             # soil moisture is updated in place
             water_content_before_transpiration_m: TwoDArrayFloat32 = water_content_m[
-                :, i
+                i, :
             ].copy()
             topwater_before_transpiration_m: np.float32 = topwater_m[i]
 
             transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
                 soil_is_frozen=soil_is_frozen,
-                wwp_m=water_content_wilting_point_m[:, i],
-                wfc_m=water_content_field_capacity_m[:, i],
-                wres_m=water_content_residual_m[:, i],
-                soil_layer_height_m=soil_layer_height[:, i],
+                wwp_m=water_content_wilting_point_m[i, :],
+                wfc_m=water_content_field_capacity_m[i, :],
+                wres_m=water_content_residual_m[i, :],
+                soil_layer_height_m=soil_layer_height[i, :],
                 land_use_type=land_use_type[i],
                 root_depth_m=root_depth_m[i],
                 crop_map=crop_map[i],
@@ -988,7 +989,7 @@ def land_surface_model(
                 potential_transpiration_m=potential_transpiration_m_cell_hour,
                 reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour_cell,
                 crop_group_number_per_group=crop_group_number_per_group,
-                w_m=water_content_m[:, i],
+                w_m=water_content_m[i, :],
                 topwater_m=topwater_m[i],
                 minimum_effective_root_depth_m=minimum_effective_root_depth_m,
             )
@@ -998,16 +999,16 @@ def land_surface_model(
                 transpired_from_layer_m: np.float32 = max(
                     np.float32(0.0),
                     water_content_before_transpiration_m[layer]
-                    - water_content_m[layer, i],
+                    - water_content_m[i, layer],
                 )
                 if transpired_from_layer_m > np.float32(0.0):
                     if layer == 0:
                         top_soil_transpiration_m[i] += transpired_from_layer_m
                     layer_temperature_C, _ = (
                         get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[layer, i],
+                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, layer],
                             solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                                layer, i
+                                i, layer
                             ],
                             water_content_m=water_content_before_transpiration_m[layer],
                             topwater_m=(
@@ -1024,7 +1025,7 @@ def land_surface_model(
                         * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
                         * advected_temperature_C
                     )
-                    soil_enthalpy_J_per_m2[layer, i] -= enthalpy_export_J_per_m2
+                    soil_enthalpy_J_per_m2[i, layer] -= enthalpy_export_J_per_m2
                     transpiration_enthalpy_loss_J_per_m2[i] += enthalpy_export_J_per_m2
 
             transpired_from_topwater_m: np.float32 = max(
@@ -1033,9 +1034,9 @@ def land_surface_model(
             if transpired_from_topwater_m > np.float32(0.0):
                 top_layer_temperature_C, _ = (
                     get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[0, i],
+                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
                         solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                            0, i
+                            i, 0
                         ],
                         water_content_m=water_content_before_transpiration_m[0],
                         topwater_m=topwater_before_transpiration_m,
@@ -1050,7 +1051,7 @@ def land_surface_model(
                     * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
                     * topwater_advected_temperature_C
                 )
-                soil_enthalpy_J_per_m2[0, i] -= topwater_enthalpy_export_J_per_m2
+                soil_enthalpy_J_per_m2[i, 0] -= topwater_enthalpy_export_J_per_m2
                 transpiration_enthalpy_loss_J_per_m2[i] += (
                     topwater_enthalpy_export_J_per_m2
                 )
@@ -1064,34 +1065,34 @@ def land_surface_model(
                 land_use_type=land_use_type[i],
                 potential_direct_evaporation_m=potential_direct_evaporation_m,
                 open_water_evaporation_m=open_water_evaporation_m_cell_hour,
-                w_m=water_content_m[:, i],
-                wres_m=water_content_residual_m[:, i],
-                wfc_m=water_content_field_capacity_m[:, i],
+                w_m=water_content_m[i, :],
+                wres_m=water_content_residual_m[i, :],
+                wfc_m=water_content_field_capacity_m[i, :],
                 unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity_m_per_hour,
             )
             bare_soil_evaporation[i] += bare_soil_evaporation_m_cell_hour
 
             _, frozen_fraction_top_layer = (
                 get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                    enthalpy_J_per_m2=soil_enthalpy_J_per_m2[0, i],
-                    solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0, i],
-                    water_content_m=water_content_m[0, i],
+                    enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
+                    solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[i, 0],
+                    water_content_m=water_content_m[i, 0],
                     topwater_m=topwater_m[i],
                 )
             )
 
             soil_enthalpy_before_evaporative_cooling_J_per_m2: np.float32 = (
-                soil_enthalpy_J_per_m2[0, i]
+                soil_enthalpy_J_per_m2[i, 0]
             )
-            soil_enthalpy_J_per_m2[0, i] = apply_evaporative_cooling(
-                soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0, i],
+            soil_enthalpy_J_per_m2[i, 0] = apply_evaporative_cooling(
+                soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
                 evaporation_m=bare_soil_evaporation_m_cell_hour
                 + open_water_evaporation_m_cell_hour,
                 frozen_fraction_top_layer=frozen_fraction_top_layer,
             )
             evaporative_cooling_enthalpy_loss_J_per_m2[i] += (
                 soil_enthalpy_before_evaporative_cooling_J_per_m2
-                - soil_enthalpy_J_per_m2[0, i]
+                - soil_enthalpy_J_per_m2[i, 0]
             )
 
         snow_water_equivalent_m[i] = snow_water_equivalent_m_cell
@@ -1303,17 +1304,31 @@ class LandSurface(Module):
             land_use_type=self.HRU.var.land_use_type,
             slope_m_per_m=self.HRU.var.slope_m_per_m,
             hillslope_length_m=self.HRU.var.hillslope_length_m,
-            water_content_m=self.HRU.var.water_content_m,
-            water_content_residual_m=self.HRU.var.water_content_residual_m,
-            water_content_wilting_point_m=self.HRU.var.water_content_wilting_point_m,
-            water_content_field_capacity_m=self.HRU.var.water_content_field_capacity_m,
-            water_content_saturated_m=self.HRU.var.water_content_saturated_m,
-            soil_enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2,
-            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
-            solid_thermal_conductivity_W_per_m_K=self.HRU.var.solid_thermal_conductivity_W_per_m_K,
-            sand_percentage=self.HRU.var.sand_percentage,
+            water_content_m=np.ascontiguousarray(self.HRU.var.water_content_m.T),
+            water_content_residual_m=np.ascontiguousarray(
+                self.HRU.var.water_content_residual_m.T
+            ),
+            water_content_wilting_point_m=np.ascontiguousarray(
+                self.HRU.var.water_content_wilting_point_m.T
+            ),
+            water_content_field_capacity_m=np.ascontiguousarray(
+                self.HRU.var.water_content_field_capacity_m.T
+            ),
+            water_content_saturated_m=np.ascontiguousarray(
+                self.HRU.var.water_content_saturated_m.T
+            ),
+            soil_enthalpy_J_per_m2=np.ascontiguousarray(
+                self.HRU.var.soil_enthalpy_J_per_m2.T
+            ),
+            solid_heat_capacity_J_per_m2_K=np.ascontiguousarray(
+                self.HRU.var.solid_heat_capacity_J_per_m2_K.T
+            ),
+            solid_thermal_conductivity_W_per_m_K=np.ascontiguousarray(
+                self.HRU.var.solid_thermal_conductivity_W_per_m_K.T
+            ),
+            sand_percentage=np.ascontiguousarray(self.HRU.var.sand_percentage.T),
             delta_z=delta_z,
-            soil_layer_height=self.HRU.var.soil_layer_height_m,
+            soil_layer_height=np.ascontiguousarray(self.HRU.var.soil_layer_height_m.T),
             root_depth_m=root_depth_m,
             topwater_m=self.HRU.var.topwater_m,
             variable_runoff_shape_beta=self.HRU.var.variable_runoff_shape_beta,
@@ -1336,14 +1351,22 @@ class LandSurface(Module):
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             capillar_rise_m=capillar_rise_m,
             groundwater_toplayer_conductivity_m_per_day=groundwater_toplayer_conductivity_m_per_day,
-            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
-            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+            saturated_hydraulic_conductivity_m_per_s=np.ascontiguousarray(
+                self.HRU.var.saturated_hydraulic_conductivity_m_per_s.T
+            ),
+            bulk_density_kg_per_dm3=np.ascontiguousarray(
+                self.HRU.var.bulk_density_kg_per_dm3.T
+            ),
             wetting_front_depth_m=self.HRU.var.wetting_front_depth_m,
             wetting_front_suction_head_m=self.HRU.var.wetting_front_suction_head_m,
             wetting_front_moisture_deficit=self.HRU.var.wetting_front_moisture_deficit,
             green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
-            lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-            bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
+            lambda_pore_size_distribution=np.ascontiguousarray(
+                self.HRU.var.lambda_pore_size_distribution.T
+            ),
+            bubbling_pressure_cm=np.ascontiguousarray(
+                self.HRU.var.bubbling_pressure_cm.T
+            ),
             crop_group_forest=self.HRU.var.crop_group_number_forest,
             crop_group_grassland_like=self.HRU.var.crop_group_number_grassland_like,
             crop_group_number_per_group=crop_group_number_per_group,
@@ -1402,7 +1425,9 @@ class LandSurface(Module):
                 if val.ndim == 1:
                     sliced_fields[field] = val[index : index + 1]
                 elif val.ndim == 2:
-                    sliced_fields[field] = val[:, index : index + 1]
+                    # Inputs are in cell-major layout [num_cells, N_LAYERS] or
+                    # time-major layout [num_cells, 24]; cell axis is 0.
+                    sliced_fields[field] = val[index : index + 1, :]
                 else:
                     sliced_fields[field] = val
             else:
@@ -1411,13 +1436,20 @@ class LandSurface(Module):
         land_surface_inputs = LandSurfaceInputs(**sliced_fields)
 
         error_inputs: LandSurfaceInputs = land_surface_inputs._replace(
-            water_content_m=water_content_m_prev[:, index : index + 1],
+            # water_content_m_prev and soil_enthalpy_J_per_m2_prev are still in
+            # layer-major layout [N_LAYERS, num_cells] (from self.HRU.var.*), so
+            # transpose the cell slice to get [1, N_LAYERS].
+            water_content_m=np.ascontiguousarray(
+                water_content_m_prev[:, index : index + 1].T
+            ),
             topwater_m=topwater_m_prev[index : index + 1],
             snow_water_equivalent_m=snow_water_equivalent_prev[index : index + 1],
             liquid_water_in_snow_m=liquid_water_in_snow_prev[index : index + 1],
             snow_temperature_C=snow_temperature_C_prev[index : index + 1],
             interception_storage_m=interception_storage_prev[index : index + 1],
-            soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2_prev[:, index : index + 1],
+            soil_enthalpy_J_per_m2=np.ascontiguousarray(
+                soil_enthalpy_J_per_m2_prev[:, index : index + 1].T
+            ),
             deep_soil_temperature_C=deep_soil_temperature_C_prev[index : index + 1],
             wetting_front_depth_m=wetting_front_depth_prev[index : index + 1],
             wetting_front_suction_head_m=wetting_front_suction_head_prev[
@@ -1950,10 +1982,15 @@ class LandSurface(Module):
             )
 
         # TODO: pre-compute this once only
-        delta_z: TwoDArrayFloat32 = (
-            self.HRU.var.soil_layer_height_m[:-1, :]
-            + self.HRU.var.soil_layer_height_m[1:, :]
-        ) / 2
+        # Transpose to cell-major layout (num_cells, N_SOIL_LAYERS-1) for
+        # cache-efficient access inside the land surface kernel.
+        delta_z: TwoDArrayFloat32 = np.ascontiguousarray(
+            (
+                self.HRU.var.soil_layer_height_m[:-1, :]
+                + self.HRU.var.soil_layer_height_m[1:, :]
+            ).T
+            / 2
+        )
 
         # Update deep soil temperature boundary condition using a 10-year Exponential Moving Average.
         # This reflects the multi-year thermal inertia of the deep soil profile.
@@ -2025,6 +2062,16 @@ class LandSurface(Module):
             top_soil_percolation_to_layer_2_m,
             top_soil_transpiration_m,
         ) = land_surface_model(**land_surface_inputs._asdict())
+
+        # Write back cell-major copies to the layer-major model state.
+        # TODO: Remove these copy-backs once the model state is stored in
+        # cell-major layout throughout.
+        np.copyto(self.HRU.var.water_content_m, land_surface_inputs.water_content_m.T)
+        np.copyto(
+            self.HRU.var.soil_enthalpy_J_per_m2,
+            land_surface_inputs.soil_enthalpy_J_per_m2.T,
+        )
+
         t1 = time.time()
         self.model.logger.debug(
             f"Land surface model execution time: {t1 - t0:.4f} seconds"
