@@ -21,10 +21,9 @@
 
 """Hydrology submodule for the GEB model. Holds all hydrology related submodules."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
+import numba
 import numpy as np
 
 from geb.geb_types import TwoDArrayFloat32 as TwoDArrayFloat32
@@ -42,6 +41,81 @@ from .waterbodies import WaterBodies
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
+
+
+@numba.njit(cache=True, parallel=True)
+def _sum_landsurface_storage(
+    snow_water_equivalent_m: np.ndarray,
+    liquid_water_in_snow_m: np.ndarray,
+    interception_storage_m: np.ndarray,
+    water_content_m: np.ndarray,
+    topwater_m: np.ndarray,
+    cell_area: np.ndarray,
+) -> np.float64:
+    """Fused parallel kernel summing all land-surface water stores.
+
+    Performs a single pass over HRUs, accumulating directly in float64,
+    which avoids the multiple temporary float64 arrays that numpy would
+    allocate with chained arithmetic.
+
+    Args:
+        snow_water_equivalent_m: Snow water equivalent per HRU (m).
+        liquid_water_in_snow_m: Liquid water held in the snowpack per HRU (m).
+        interception_storage_m: Interception storage per HRU (m).
+        water_content_m: Soil water content per layer and HRU, shape
+            ``(n_layers, n_hru)`` (m). NaN values are ignored.
+        topwater_m: Ponded topwater per HRU (m).
+        cell_area: Area of each HRU (m2).
+
+    Returns:
+        Total land-surface water storage (m3).
+    """
+    n_hru = snow_water_equivalent_m.shape[0]
+    n_layers = water_content_m.shape[0]
+    total = np.float64(0.0)
+    for i in numba.prange(n_hru):  # ty:ignore[not-iterable]
+        soil_water = np.float64(0.0)
+        for layer in range(n_layers):
+            wc = water_content_m[layer, i]
+            if not np.isnan(wc):
+                soil_water += np.float64(wc)
+        hru_storage = (
+            np.float64(snow_water_equivalent_m[i])
+            + np.float64(liquid_water_in_snow_m[i])
+            + np.float64(interception_storage_m[i])
+            + soil_water
+            + np.float64(topwater_m[i])
+        ) * np.float64(cell_area[i])
+        total += hru_storage
+    return total
+
+
+@numba.njit(cache=True, parallel=True)
+def _sum_overland_flow_buffer_storage(
+    overland_flow_buffer: np.ndarray,
+    cell_area: np.ndarray,
+) -> np.float64:
+    """Fused parallel kernel summing the overland flow buffer storage.
+
+    Sums over substep layers and multiplies by cell area in a single pass,
+    avoiding the temporary float64 copy that numpy would allocate.
+
+    Args:
+        overland_flow_buffer: Overland flow buffer, shape ``(n_substeps, n_grid)`` (m).
+        cell_area: Area of each grid cell (m2).
+
+    Returns:
+        Total overland flow buffer storage (m3).
+    """
+    n_substeps = overland_flow_buffer.shape[0]
+    n_grid = overland_flow_buffer.shape[1]
+    total = np.float64(0.0)
+    for i in numba.prange(n_grid):  # ty:ignore[not-iterable]
+        cell_sum = np.float64(0.0)
+        for s in range(n_substeps):
+            cell_sum += np.float64(overland_flow_buffer[s, i])
+        total += cell_sum * np.float64(cell_area[i])
+    return total
 
 
 class Hydrology(Data, Module):
@@ -74,6 +148,80 @@ class Hydrology(Data, Module):
         self.hillslope_erosion = HillSlopeErosion(self.model, self)
         self.runoff_concentrator = RunoffConcentrator(self.model, self)
 
+    def get_landsurface_storage_m3(self) -> np.float64:
+        """Get the current water storage in the land surface components.
+
+        Includes snow, liquid water in snow, interception, soil water content,
+        and topwater. Uses float64 for accuracy.
+
+        Returns:
+            Total land surface water storage (m3).
+        """
+        return _sum_landsurface_storage(
+            self.HRU.var.snow_water_equivalent_m,
+            self.HRU.var.liquid_water_in_snow_m,
+            self.HRU.var.interception_storage_m,
+            self.HRU.var.water_content_m,
+            self.HRU.var.topwater_m,
+            self.HRU.var.cell_area,
+        )
+
+    def get_overland_flow_buffer_storage_m3(self) -> np.float64:
+        """Get the current water storage in the overland flow buffer.
+
+        Uses float64 for accuracy.
+
+        Returns:
+            Total overland flow buffer storage (m3).
+        """
+        return _sum_overland_flow_buffer_storage(
+            self.grid.var.overland_flow_buffer,
+            self.grid.var.cell_area,
+        )
+
+    def get_routing_storage_m3(self) -> np.float64:
+        """Get the current water storage in the river routing network.
+
+        Uses float64 for accuracy.
+
+        Returns:
+            Total river routing water storage (m3).
+        """
+        return (
+            (
+                self.routing.router.get_total_storage(
+                    self.grid.var.discharge_in_rivers_m3_s_substep,
+                    self.grid.var.river_storage_alpha,
+                    self.grid.var.river_storage_beta,
+                )
+                .astype(np.float64)
+                .sum()
+            )
+            + self.grid.var.retention_basin_storage_m3.astype(
+                np.float64
+            ).sum()  # retention basins are considered part of the hydrological system, as they can store water and affect the water balance
+        )
+
+    def get_waterbodies_storage_m3(self) -> np.float64:
+        """Get the current water storage in lakes and reservoirs.
+
+        Uses float64 for accuracy.
+
+        Returns:
+            Total water body storage (m3).
+        """
+        return self.waterbodies.var.storage.astype(np.float64).sum()
+
+    def get_groundwater_storage_m3(self) -> np.float64:
+        """Get the current water storage in the groundwater system.
+
+        Uses float64 for accuracy.
+
+        Returns:
+            Total groundwater storage (m3).
+        """
+        return self.groundwater.groundwater_content_m3.astype(np.float64).sum()
+
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.
 
@@ -81,39 +229,14 @@ class Hydrology(Data, Module):
         is used, the storage can be under- or overestimated due to rounding errors.
 
         Returns:
-            The total water storage in the hydrological system in cubic meters.
+            The total water storage in the hydrological system (m3).
         """
         return (
-            (
-                (
-                    self.HRU.var.snow_water_equivalent_m.astype(np.float64)
-                    + self.HRU.var.liquid_water_in_snow_m.astype(np.float64)
-                    + self.HRU.var.interception_storage_m.astype(np.float64)
-                    + np.nansum(self.HRU.var.water_content_m.astype(np.float64), axis=0)
-                    + self.HRU.var.topwater_m.astype(np.float64)
-                )
-                * self.HRU.var.cell_area
-            ).sum()
-            + (
-                self.HRU.var.topwater_m.astype(np.float64) * self.HRU.var.cell_area
-            ).sum()
-            + self.routing.router.get_total_storage(
-                self.grid.var.discharge_in_rivers_m3_s_substep,
-                self.grid.var.river_storage_alpha,
-                self.grid.var.river_storage_beta,
-            )
-            .astype(np.float64)
-            .sum()
-            + self.waterbodies.var.storage.astype(np.float64).sum()
-            + self.groundwater.groundwater_content_m3.astype(np.float64).sum()
-            # + self.runoff_concentrator.overland_runoff_storage_end_m3.astype(np.float64)
-            + self.grid.var.retention_basin_storage_m3.astype(
-                np.float64
-            ).sum()  # retention basins are considered part of the hydrological system, as they can store water and affect the water balance
-            + (
-                self.grid.var.overland_flow_buffer.astype(np.float64)
-                * self.grid.var.cell_area
-            ).sum()
+            self.get_landsurface_storage_m3()
+            + self.get_overland_flow_buffer_storage_m3()
+            + self.get_routing_storage_m3()
+            + self.get_waterbodies_storage_m3()
+            + self.get_groundwater_storage_m3()
         )
 
     def step(self) -> None:
@@ -151,11 +274,9 @@ class Hydrology(Data, Module):
         if __debug__:
             influx += pr_total_m3
 
-        interflow_m = self.to_grid(HRU_data=interflow_m, fn="weightedmean")
-        overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m, fn="weightedmean")
-        groundwater_recharge_m = self.to_grid(
-            HRU_data=groundwater_recharge_m, fn="weightedmean"
-        )
+        interflow_m = self.to_grid(HRU_data=interflow_m)
+        overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m)
+        groundwater_recharge_m = self.to_grid(HRU_data=groundwater_recharge_m)
 
         if self.model.config["hazards"]["floods"]["simulate"]:
             self.model.hazard_driver.floods.save_runoff_m(overland_runoff_m)

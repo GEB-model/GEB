@@ -1,9 +1,5 @@
 """This module contains the classes and functions processing observational data during model building."""
 
-from __future__ import annotations
-
-import os
-from io import StringIO
 from pathlib import Path
 
 import geopandas as gpd
@@ -22,31 +18,20 @@ from geb.workflows.timeseries import regularize_discharge_timeseries
 from .base import BuildModelBase
 
 
-def process_station_data(
-    station: str, Q_station_path: Path, dt_format: str
-) -> tuple[pd.DataFrame, tuple[float, float]]:
+def process_station_data(Q_station: pd.DataFrame, station_path: Path) -> pd.DataFrame:
     """Parse and preprocess a station CSV read into a DataFrame.
 
     Args:
-        station: Filename or identifier of the station (used in error messages).
-        Q_station_path: Raw station DataFrame where the first row contains coordinates and data starts at row index `startrow`.
-        dt_format: Datetime format string for parsing the date column.
+        Q_station: A DataFrame read with
+        station_path: The path to the station file.
 
     Returns:
-        A tuple with the cleaned station DataFrame indexed by time and a tuple with station (lon, lat) as floats.
+        The cleaned station DataFrame indexed by time.
 
     Raises:
         ValueError: If the processed station DataFrame does not contain exactly one data column (expected 'Q'),
                     or if the first row does not contain exactly two coordinates (longitude and latitude) that can be parsed as floats.
     """
-    Q_station = Q_station_path.read_text().splitlines()
-    lon_str, lat_str = Q_station[0].split(",")
-    station_coords = (float(lon_str), float(lat_str))
-
-    Q_station = pd.read_csv(
-        StringIO("\n".join(Q_station[2:])), delimiter=",", index_col=0, parse_dates=True
-    )
-
     Q_station["Q"] = Q_station["Q"].astype(np.float32)  # convert to float
 
     Q_station = regularize_discharge_timeseries(
@@ -64,7 +49,7 @@ def process_station_data(
         Q_station = Q_station.resample("D", label="left").mean()
     elif Q_station.index.freq > pd.Timedelta(days=1):  # ty:ignore[unresolved-attribute]
         raise ValueError(
-            f"Time step of station {station} is larger than 1 day. Please ensure the time step is hourly or daily."
+            f"Time step of station {station_path} is larger than 1 day. Please ensure the time step is hourly or daily."
         )
     else:
         pass  # keep original frequency if it's already hourly or daily
@@ -76,13 +61,8 @@ def process_station_data(
 
     # checks
     if Q_station.shape[1] != 1:
-        raise ValueError(f"File {station} does not have 1 column")
-
-    if len(station_coords) != 2:
-        raise ValueError(
-            f"File {station} does not have 2 coordinates. .csv files of discharge stations should have the coordinates in the first row of the file"
-        )
-    return Q_station, (station_coords[0], station_coords[1])
+        raise ValueError(f"File {station_path} does not have 1 column")
+    return Q_station
 
 
 class Observations(BuildModelBase):
@@ -98,17 +78,24 @@ class Observations(BuildModelBase):
         max_uparea_difference_ratio: float = 0.3,
         max_spatial_difference_degrees: float = 0.1,
         custom_river_stations: str | None = None,
+        create_plots: bool = False,
     ) -> None:
         """setup_discharge_observations is responsible for setting up discharge observations from the discharge observations dataset.
 
         It clips discharge observations to the basin area, and snaps the discharge observations locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in the discharge observations.
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
-        Additional stations can be added as csv files in the custom_stations folder in the GEB data catalog.
+        Additional stations can be added from a custom folder containing station files in either CSV or Parquet format.
+        Custom station filenames must follow the format ``lon_lat+station_name.ext``, where ``lon`` and ``lat`` are the station coordinates in degrees and ``ext`` is either ``.csv`` or ``.parquet``.
+        CSV files must contain a datetime index column and a ``Q`` discharge column. Parquet files must contain a ``datetime`` column and a ``Q`` discharge column.
 
         Args:
             max_uparea_difference_ratio: The maximum allowed difference in upstream area between the discharge observations station and the GEB river segment, as a ratio of the discharge observations upstream area. Default is 0.3 (30%).
             max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the discharge observations station and the GEB river segment. Default is 0.1 degrees.
-            custom_river_stations: Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
+            custom_river_stations: Path to a folder containing custom river station files in ``.csv`` or ``.parquet`` format. Coordinates and station name are read from the filename using the ``lon_lat+station_name.ext`` convention. Default is None, which means no custom stations are used.
+            create_plots: Whether to create plots of the snapping results for each station. Default is False.
+
+        Raises:
+            ValueError: If a custom station file has an unsupported format or contains discharge data with an unsupported time step.
         """
         # load data
         upstream_area_grid = self.grid[
@@ -124,8 +111,8 @@ class Observations(BuildModelBase):
         discharge_observations = self.data_catalog.fetch("GRDC").read()
 
         # create folders
-        snapping_discharge_folder = Path(self.report_dir) / "snapping_discharge"
-        snapping_discharge_folder.mkdir(parents=True, exist_ok=True)
+        discharge_snapping_folder: Path = Path(self.report_dir) / "discharge_snapping"
+        discharge_snapping_folder.mkdir(parents=True, exist_ok=True)
 
         # Initialize discharge observation DataFrames
         obs_hourly = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
@@ -173,57 +160,85 @@ class Observations(BuildModelBase):
         daily_ids = set(obs_daily.columns.tolist())
 
         if custom_river_stations is not None:
-            for station in os.listdir(Path(self.root).parent / custom_river_stations):
-                if not station.endswith(".csv"):
-                    continue
+            custom_river_stations: Path = Path(custom_river_stations)
+            if not custom_river_stations.exists():
+                self.logger.warning(
+                    f"Custom river stations folder {custom_river_stations} does not exist. Skipping custom stations."
+                )
+            else:
+                for station_path in custom_river_stations.iterdir():
+                    if station_path.suffix == ".csv":
+                        Q_station: pd.DataFrame = pd.read_csv(
+                            station_path,
+                            delimiter=",",
+                            index_col=0,
+                            parse_dates=True,
+                        )
+                    elif station_path.suffix == ".parquet":
+                        Q_station: pd.DataFrame = pd.read_parquet(
+                            station_path
+                        ).set_index("datetime")
+                    elif station_path.suffix in (".txt", ".md"):
+                        self.logger.info(
+                            f"Ignoring file {station_path} in custom river stations folder, as it is not a .csv or .parquet file."
+                        )
+                        continue  # ignore txt files (e.g., README)
+                    else:
+                        raise ValueError(
+                            f"Unsupported file format for station {station_path}. Only .csv and .parquet are supported."
+                        )
 
-                station_name = station[:-4]
-                Q_station_path = (
-                    Path(self.root).parent / Path(custom_river_stations) / station
-                )
+                    station_name: str
+                    lonlat_str: str
+                    lonlat_str, station_name = station_path.stem.split("+", 1)
+                    lon_lat: list[str] = lonlat_str.split("_", maxsplit=1)
+                    assert len(lon_lat) == 2, (
+                        f"Filename {station_path} does not contain valid coordinates. Expected format: 'lon_lat+stationname.csv'"
+                    )
+                    lon_lat: tuple[float, float] = (
+                        float(lon_lat[0]),
+                        float(lon_lat[1]),
+                    )
 
-                Q_station, station_coords = process_station_data(
-                    station,
-                    Q_station_path,
-                    dt_format="%Y-%m-%d %H:%M:%S",
-                )
+                    Q_station = process_station_data(Q_station, station_path)
 
-                # Assign a unique ID for custom stations
-                station_id = int(
-                    max(obs_metadata["discharge_observations_station_ID"].max(), 0) + 1
-                )
+                    # Assign a unique ID for custom stations
+                    station_id = int(
+                        max(obs_metadata["discharge_observations_station_ID"].max(), 0)
+                        + 1
+                    )
 
-                # Add metadata
-                new_meta = pd.DataFrame(
-                    [
-                        {
-                            "discharge_observations_station_ID": station_id,
-                            "discharge_observations_station_name": station_name,
-                            "x": station_coords[0],
-                            "y": station_coords[1],
-                            "discharge_observations_upstream_area_m2": np.nan,  # Not provided in basic CSV
-                            "discharge_observations_river_name": "Unknown",
-                        }
-                    ]
-                )
-                new_meta_gdf = gpd.GeoDataFrame(
-                    new_meta,
-                    geometry=gpd.points_from_xy(
-                        [station_coords[0]], [station_coords[1]]
-                    ),
-                    crs="EPSG:4326",
-                )
-                obs_metadata = pd.concat(
-                    [obs_metadata, new_meta_gdf], ignore_index=True
-                )
+                    # Add metadata
+                    new_meta = pd.DataFrame(
+                        [
+                            {
+                                "discharge_observations_station_ID": station_id,
+                                "discharge_observations_station_name": station_name,
+                                "x": lon_lat[0],
+                                "y": lon_lat[1],
+                                "discharge_observations_upstream_area_m2": np.nan,  # Not provided in basic CSV
+                                "discharge_observations_river_name": "Unknown",
+                            }
+                        ]
+                    )
+                    new_meta_gdf = gpd.GeoDataFrame(
+                        new_meta,
+                        geometry=gpd.points_from_xy([lon_lat[0]], [lon_lat[1]]),
+                        crs="EPSG:4326",
+                    )
+                    obs_metadata = pd.concat(
+                        [obs_metadata, new_meta_gdf], ignore_index=True
+                    )
 
-                # Add data to the correct DataFrame
-                if Q_station.index.to_series().diff().median() <= pd.Timedelta(hours=1):
-                    obs_hourly[station_id] = Q_station["Q"]
-                    hourly_ids.add(station_id)
-                else:
-                    obs_daily[station_id] = Q_station["Q"]
-                    daily_ids.add(station_id)
+                    # Add data to the correct DataFrame
+                    if Q_station.index.to_series().diff().median() <= pd.Timedelta(
+                        hours=1
+                    ):
+                        obs_hourly[station_id] = Q_station["Q"]
+                        hourly_ids.add(station_id)
+                    else:
+                        obs_daily[station_id] = Q_station["Q"]
+                        daily_ids.add(station_id)
 
         # Filter metadata by region
         obs_metadata = obs_metadata[
@@ -253,7 +268,7 @@ class Observations(BuildModelBase):
             ]
             discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
-                self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
+                discharge_snapping_folder / "discharge_snapping.xlsx",
                 index=False,
             )
 
@@ -341,19 +356,20 @@ class Observations(BuildModelBase):
                 }
             )
 
-            plot_snapping(
-                point_id=station_id,
-                output_folder=self.report_dir / "snapping_discharge",
-                rivers=rivers,
-                upstream_area=upstream_area_grid,
-                original_coords=station_coords,
-                closest_point_coords=closest_point_coords,
-                closest_river_segment=closest_river_segment,
-                grid_pixel_xy=snap_results["snapped_grid_pixel_xy"],
-                filename_prefix="snapping_discharge",
-                point_label="Original gauge",
-                title=f"Upstream area grid and gauge snapping for {station_id}",
-            )
+            if create_plots:
+                plot_snapping(
+                    point_id=station_id,
+                    output_folder=discharge_snapping_folder,
+                    rivers=rivers,
+                    upstream_area=upstream_area_grid,
+                    original_coords=station_coords,
+                    closest_point_coords=closest_point_coords,
+                    closest_river_segment=closest_river_segment,
+                    grid_pixel_xy=snap_results["snapped_grid_pixel_xy"],
+                    filename_prefix="discharge_snapping",
+                    point_label="Original gauge",
+                    title=f"Upstream area grid and gauge snapping for {station_id}",
+                )
 
         self.logger.info("Discharge snapping done for all stations")
 
@@ -361,7 +377,7 @@ class Observations(BuildModelBase):
 
         # save to excel and parquet files
         discharge_snapping_df.to_excel(
-            self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
+            discharge_snapping_folder / "discharge_snapping.xlsx",
             index=False,
         )  # save the dataframe to an excel file
 

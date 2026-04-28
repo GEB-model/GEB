@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
 from pandas.errors import SettingWithCopyWarning
+from zarr.errors import ZarrUserWarning
 
 from geb.workflows.io import fetch_and_save
 
@@ -32,7 +33,7 @@ load_dotenv()
 
 # Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
 if Path("/research/BETA-IVM-HPC/GEB").exists():
-    os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/data_catalog/"
+    os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/datacatalog/"
     os.environ["SFINCS_CONTAINER"] = os.getenv(
         "SFINCS_CONTAINER",
         "/ada-software/containers/sfincs-cpu-v2.3.0-mt-Faber-Release.sif",
@@ -101,7 +102,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
             import tarfile
 
             with tarfile.open(tbb_path / tbb_compressed_file, "r:gz") as tar:
-                tar.extractall(path=tbb_path)
+                tar.extractall(path=tbb_path, filter="data")
         elif tbb_compressed_file.endswith(".zip"):
             import zipfile
 
@@ -176,5 +177,7 @@ pd.set_option("future.no_silent_downcasting", True)
 
 # we don't want to miss any runtime warnings, as they can indicate potential issues in the code, so we also raise them as errors
 warnings.simplefilter(action="error", category=RuntimeWarning)
+
+warnings.simplefilter(action="ignore", category=ZarrUserWarning)
 
 faulthandler.enable()

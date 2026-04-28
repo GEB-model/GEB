@@ -1,5 +1,6 @@
 """Data catalog for predefined datasets in GEB."""
 
+import logging
 from typing import Any
 
 from .aquastat import AQUASTAT
@@ -14,19 +15,22 @@ from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .field_boundaries import FieldBoundaries
+from .flood_damage_model import (
+    GeulFloodDamageModel,
+    GlobalFloodDamageModel,
+)
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
-from .global_ocean_mean_dynamic_topography import (
-    GlobalOceanMeanDynamicTopography as GlobalOceanMeanDynamicTopography,
-)
+from .global_ocean_mean_dynamic_topography import GlobalOceanMeanDynamicTopography
 from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
-from .gtsm import GTSM
+from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
@@ -224,6 +228,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "10.1016/j.worlddev.2015.10.041",
             "license": "CC BY-NC-ND 4.0",
             "url": "https://doi.org/10.1016/j.worlddev.2015.10.041",
+        },
+    },
+    "field_boundaries": {
+        "adapter": FieldBoundaries(
+            folder="field_boundaries",
+            local_version=1,
+            filename="field_boundaries.parquet",
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/14229033/files/field_boundaries.parquet?download=1",
+        "source": {
+            "name": "EU field boundaries",
+            "author": "Matej Batič et al. (2024), Planet Labs",
+            "license": "Commercial",
+            "url": "https://medium.com/sentinel-hub/automatic-field-delineation-new-release-1c2938399f0",
         },
     },
     "gebco": {
@@ -811,9 +830,40 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 4.0 or ODbL 1.0",
         },
     },
+    "geul_flood_damage_model": {
+        "adapter": GeulFloodDamageModel(
+            folder=None,
+            local_version=None,
+            filename=None,
+            cache=None,
+        ),
+        "url": None,  # No direct URL available for local damage functions
+        "source": {
+            "name": "Flood Depth-Damage Functions for the Geul River Basin",
+            "author": "Endendijk et al. (2023)",
+            "version": "1.0",
+            "license": "CC BY 4.0",
+            "doi": "https://doi.org/10.1029/2022WR034192",
+        },
+    },
+    "global_flood_damage_model": {
+        "adapter": GlobalFloodDamageModel(
+            folder="global_flood_damage_model",
+            local_version=1,
+            filename="huizinga2017.xlsx",
+            cache="global",
+        ),
+        "url": "https://publications.jrc.ec.europa.eu/repository/bitstream/JRC105688/copy_of_global_flood_depth-damage_functions__30102017.xlsx",
+        "source": {
+            "name": "Global Flood Depth-Damage Functions",
+            "author": "Huizinga et al. (2017)",
+            "version": "1.0",
+            "license": "CC BY 4.0",
+        },
+    },
     "delta_dtm": {
         "adapter": DeltaDTM(
-            folder="delta_dtm",
+            folder="deltadtm",
             local_version=1,
             filename="{}.zip",
             cache="global",
@@ -832,16 +882,16 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": Fabdem(
             folder="fabdem",
             local_version=2,
-            filename="fabdem.zarr",
-            cache="local",
+            filename="placeholder.txt",
+            cache="global",
         ),
-        "url": "https://data.bris.ac.uk/datasets/s5hqmjcdj8yo2ibzi9b4ew3sn",
+        "url": "https://huggingface.co/datasets/links-ads/fabdem-v12/raw/main/stac_catalog/catalog.json",
         "source": {
             "name": "FABDEM",
             "author": "Hawker et al. (2022)",
             "version": "1-2",
             "license": "CC BY-NC-SA 4.0",
-            "url": "https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7",
+            "url": "https://huggingface.co/datasets/links-ads/fabdem-v12",
             "paper_doi": "10.1088/1748-9326/ac4d4f",
         },
     },
@@ -862,12 +912,28 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "https://doi.org/10.48670/moi-00150",
         },
     },
+    "gtsm_timeseries": {
+        "adapter": GTSM_timeseries(
+            folder="gtsm",
+            local_version=2,
+            filename="placeholder.zip",
+            cache="global",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
+        "source": {
+            "name": "Global Tide and Storm Surge Model (GTSM)",
+            "author": "Muis et al. (2022)",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.24381/cds.a6d42d60",
+            "paper_doi": "10.5281/zenodo.8314503",
+        },
+    },
     "gtsm": {
         "adapter": GTSM(
-            folder="gtsm",
+            folder="gtsm_mean_sea_level",
             local_version=1,
             filename="gtsm_mean_sea_level.zip",
-            cache="local",
+            cache="global",
         ),
         "url": "https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download",
         "source": {
@@ -927,8 +993,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": OpenBuildingMap(
             folder="open_building_map",
             local_version=2,
-            filename="open_building_map.parquet",
-            cache="local",
+            filename="placeholder.txt",
+            cache="global",
         ),
         "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
         "source": {
@@ -985,7 +1051,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             folder="glopop_sg",
             local_version=3,  # this is the third version of the dataset on Zenodo
             filename="placeholder",
-            cache="local",
+            cache="global",
         ),
         "url": "https://zenodo.org/records/17076088/files/GLOPOP-SG(update).zip?download=1",
         "source": {
@@ -1080,12 +1146,15 @@ data_catalog: dict[str, dict[str, Any]] = {
 }
 
 
-class NewDataCatalog:
+class DataCatalog:
     """The GEB data catalog for accessing predefined datasets."""
 
-    def __init__(self) -> None:
+    def __init__(self, logger: logging.Logger) -> None:
         """Initialize the data catalog with predefined entries."""
         self.catalog = data_catalog
+        for name, entry in self.catalog.items():
+            adapter = entry["adapter"]
+            adapter.logger = logger
 
     def fetch(self, name: str, *args: Any, **kwargs: Any) -> Adapter:
         """Get a data catalog entry by name.

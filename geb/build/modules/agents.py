@@ -1,10 +1,10 @@
 """Module containing build methods for the agents for GEB."""
 
-import math
+import difflib
 import unicodedata
 import warnings
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import geopandas as gpd
 import numpy as np
@@ -13,12 +13,12 @@ import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 
+from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
-from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.geb_types import TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
-    calculate_cell_area_m2,
     clip_with_grid,
     pixels_to_coords,
     sample_from_map,
@@ -29,7 +29,7 @@ from ..workflows.conversions import (
     TRADE_REGIONS,
     setup_donor_countries,
 )
-from ..workflows.farmers import create_farms, get_farm_distribution
+from ..workflows.farmers import create_farm_distributions, create_farms
 from .base import BuildModelBase
 
 
@@ -435,6 +435,92 @@ class Agents(BuildModelBase):
         )
         self.set_table(income_distributions_pd, "income/national_distribution")
 
+    @build_method(depends_on=["setup_income_distribution_parameters"], required=True)
+    def setup_subnational_income_distribution(
+        self,
+        skip_countries_ISO3: list[str] = [],
+    ) -> None:
+        """Set up subnational income distributions for GDL regions based on GLOPOP-S.
+
+        It combines wealth and income data from GLOPOP-S into a single index, assigns income
+        percentiles based on this index, and then uses the national income distribution parameters
+        to generate subnational income distributions for each GDL region. The resulting subnational
+        income distribution parameters are stored in the model table. These parameters can be used to
+        generate synthetic income distributions for each region, which can then be used in the model
+        to model migration decisions towards other regions.
+
+        Args:
+            skip_countries_ISO3: A list of ISO3 country codes to skip when setting up subnational income distributions.
+        Raises:
+            ValueError: If no regions are processed for subnational income distribution.
+        """
+        wealth_index_to_income_percentile = {
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
+            5: (80, 100),
+        }
+
+        national_dist = self.table["income/national_distribution"]
+
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+        results = []
+
+        for code in GDL_regions["GDLcode"]:
+            iso3 = code[:3]
+            self.logger.info(f"Processing {code}...")
+
+            if iso3 in skip_countries_ISO3:
+                self.logger.info(f"Skipping {iso3}")
+                continue
+
+            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg").read(code)
+
+            # combine wealth/income into one index
+            GLOPOP_S_region["wealth_index"] = (
+                GLOPOP_S_region[["WEALTH", "INCOME"]].sum(axis=1) + 1
+            )
+
+            # vectorized percentile assignment
+            GLOPOP_S_region["income_percentile"] = np.uint16(0)
+            for w, (low, high) in wealth_index_to_income_percentile.items():
+                mask = GLOPOP_S_region["wealth_index"] == w
+                GLOPOP_S_region.loc[mask, "income_percentile"] = np.random.randint(
+                    low, high, size=mask.sum()
+                )
+
+            # sanity check
+            assert (GLOPOP_S_region["income_percentile"] > 0).all()
+
+            disp_income = np.percentile(
+                np.asarray(national_dist[iso3]),
+                GLOPOP_S_region["income_percentile"],
+            )
+
+            results.append(
+                pd.DataFrame(
+                    {
+                        "mean_disp_income": [disp_income.mean()],
+                        "median_disp_income": [np.median(disp_income)],
+                    },
+                    index=pd.Index([code]),
+                )
+            )
+
+        # assert regions is not empty
+        if len(results) == 0:
+            raise ValueError(
+                "No regions to process for subnational income distribution"
+            )
+
+        self.set_table(
+            pd.concat(results),
+            name="income/subnational_distribution_parameters",
+        )
+
     @build_method(
         depends_on=["setup_regions_and_land_use", "set_time_range"], required=True
     )
@@ -723,14 +809,17 @@ class Agents(BuildModelBase):
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 
-    @build_method(required=True)
-    def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
-        """Sets up the irrigation sources for GEB.
+    @build_method(required=False)
+    def setup_irrigation_sources(self, *args: Any, **kwargs: Any) -> None:
+        """Deprecated method for setting up irrigation sources.
 
         Args:
-            irrigation_sources: A dictionary mapping irrigation source names to their corresponding IDs.
+            *args: Positional arguments (not used).
+            **kwargs: Keyword arguments (not used).
         """
-        self.set_params(irrigation_sources, name="agents/farmers/irrigation_sources")
+        self.logger.warning(
+            "This method is deprecated and will be removed in future versions. Please remove it from your build sequence and set up irrigation sources directly in the model configuration."
+        )
 
     @build_method(depends_on=["set_time_range", "setup_economic_data"], required=False)
     def setup_irrigation_prices_by_reference_year(
@@ -857,7 +946,7 @@ class Agents(BuildModelBase):
 
         # Iterate over each price type and calculate the prices across years for each region
         for price_type, initial_price in price_types.items():
-            prices_dict = {
+            prices_dict: dict[str, Any] = {
                 "time": list(range(start_year, end_year + 1)),
             }
             prices_dict_data: dict[str, list] = {}
@@ -899,7 +988,7 @@ class Agents(BuildModelBase):
 
         electricity_rates = self.data_catalog.fetch("gcam_electricity_rates").read()
 
-        electricity_rates_dict = {
+        electricity_rates_dict: dict[str, Any] = {
             "time": list(range(start_year, end_year + 1)),
         }
         electricity_rates_dict_data: dict[str, list] = {}
@@ -1022,34 +1111,10 @@ class Agents(BuildModelBase):
 
         Args:
             farmers: A DataFrame containing the farmer data.
-
-        Notes:
-            This method sets up the farmers data for GEB. It first retrieves the region data from the
-            `regions` and `subgrid` grids. It then creates a `farms` grid with the same shape as the
-            `region_subgrid` grid, with a value of -1 for each cell.
-
-            For each region, the method clips the `cultivated_land` grid to the region and creates farms for the region using
-            the `create_farms` function, using these farmlands as well as the dataframe of farmer agents. The resulting farms
-            whose IDs correspondd to the IDs in the farmer dataframe are added to the `farms` grid for the region.
-
-            The method then removes any farms that are outside the study area by using the `region_mask` grid. It then remaps
-            the farmer IDs to a contiguous range of integers starting from 0.
-
-            The resulting farms data is set as agents data in the model with names of the form 'agents/farmers/farms'. The
-            crop names are mapped to IDs using the `crop_name_to_id` dictionary that was previously created. The resulting
-            crop IDs are stored in the `season_#_crop` columns of the `farmers` DataFrame.
-
-            If `irrigation_sources` is provided, the method sets the `irrigation_source` column of the `farmers` DataFrame to
-            the corresponding IDs.
-
-            Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
-            with names of the form 'agents/farmers/{column}'.
         """
         regions: gpd.GeoDataFrame = self.geom["regions"]
-        region_ids: xr.DataArray = self.region_subgrid["region_ids"]
-        full_region_cultivated_land: xr.DataArray = self.region_subgrid[
-            "landsurface/full_region_cultivated_land"
-        ]
+        region_ids: xr.DataArray = self.subgrid["region_ids"]
+        cultivated_land: xr.DataArray = self.subgrid["landsurface/cultivated_land"]
 
         farms: xr.DataArray = self.full_like(
             region_ids, fill_value=-1, nodata=-1, dtype=np.int32
@@ -1058,9 +1123,7 @@ class Agents(BuildModelBase):
             region: xr.DataArray = region_ids == region_id
             region_clip, bounds = clip_with_grid(region, region)
 
-            cultivated_land_region: xr.DataArray = full_region_cultivated_land.isel(
-                bounds
-            )
+            cultivated_land_region: xr.DataArray = cultivated_land.isel(bounds)
             cultivated_land_region: xr.DataArray = xr.where(
                 region_clip, x=cultivated_land_region, y=False, keep_attrs=True
             )
@@ -1070,7 +1133,7 @@ class Agents(BuildModelBase):
             farms_region: TwoDArrayInt32 = create_farms(
                 farmers_region,
                 cultivated_land_region_values,
-                farm_size_key="area_n_cells",
+                farm_size_key="farm_size_cells",
             )
             assert (
                 farms_region.min() >= -1
@@ -1080,62 +1143,22 @@ class Agents(BuildModelBase):
             )
             farms: xr.DataArray = farms.compute()
 
-        farmers: pd.DataFrame = farmers.drop("area_n_cells", axis=1)
-
-        cut_farms: ArrayInt32 = np.unique(
-            xr.where(
-                self.region_subgrid["mask"],
-                farms.copy().values,
-                -1,
-                keep_attrs=True,
-            )
-        )
-        cut_farm_indices: ArrayInt32 = cut_farms[cut_farms != -1]
+        farmers: pd.DataFrame = farmers.drop("farm_size_cells", axis=1)
 
         assert farms.min() >= -1  # -1 is nodata value, all farms should be positive
-        subgrid_farms: xr.DataArray = farms.sel(
-            x=slice(self.subgrid["mask"].x[0], self.subgrid["mask"].x[-1]),
-            y=slice(self.subgrid["mask"].y[0], self.subgrid["mask"].y[-1]),
-        )
+        assert farms.max().item() == len(farmers) - 1
 
-        subgrid_farms_in_study_area: xr.DataArray = xr.where(
-            np.isin(subgrid_farms, cut_farm_indices), -1, subgrid_farms, keep_attrs=True
-        )
-        farmers: pd.DataFrame = farmers[~farmers.index.isin(cut_farm_indices)]
-
-        remap_farmer_ids: ArrayInt32 = np.full(
-            farmers.index.max() + 2, -1, dtype=np.int32
-        )  # +1 because 0 is also a farm, +1 because no farm is -1, set to -1 in next step
-        remap_farmer_ids[farmers.index] = np.arange(len(farmers))
-        subgrid_farms_in_study_area = remap_farmer_ids[
-            subgrid_farms_in_study_area.values
-        ]
-
-        farmers: pd.DataFrame = farmers.reset_index(drop=True)
-
-        assert np.setdiff1d(np.unique(subgrid_farms_in_study_area), -1).size == len(
-            farmers
-        )
-        assert farmers.iloc[-1].name == subgrid_farms_in_study_area.max()
-
-        subgrid_farms_in_study_area_: xr.DataArray = self.full_like(
-            self.subgrid["mask"],
-            fill_value=-1,
-            nodata=-1,
-            dtype=np.int32,
-        )
-        subgrid_farms_in_study_area_[:] = subgrid_farms_in_study_area
-
-        self.set_subgrid(subgrid_farms_in_study_area_, name="agents/farmers/farms")
-        self.set_array(farmers.index.values, name="agents/farmers/id")
+        self.set_subgrid(farms, name="agents/farmers/farms")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    @build_method(depends_on=["setup_regions_and_land_use"], required=True)
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "setup_cell_area"], required=True
+    )
     def setup_create_farms(
         self,
         region_id_column: str = "region_id",
         country_iso3_column: str = "ISO3",
-        data_source: str = "lowder",
+        data_source: Literal["lowder"] = "lowder",
         size_class_boundaries: dict[str, tuple[int | float, int | float]] | None = None,
     ) -> None:
         """Sets up the farmers for GEB.
@@ -1153,117 +1176,85 @@ class Agents(BuildModelBase):
             data_source: The source of the farm size data. Default is 'lowder', which uses the Lowder et al. (2016) dataset.
             size_class_boundaries: The boundaries for the size classes of farms. For the Lowder et al. (2016) dataset, this must be None
                 because the boundaries are defined in the dataset itself.
-
-        Raises:
-            ValueError: If the data_source is 'lowder' and size_class_boundaries is not None.
-            ValueError: If the data_source is not 'lowder' and size_class_boundaries is None.
-            ValueError: If required data is missing in the data sources.
         """
-        if data_source == "lowder":
-            assert size_class_boundaries is None, (
-                "size_class_boundaries must be None when using Lowder et al. (2016) dataset"
-            )
-            size_class_boundaries = {
-                "< 1 Ha": (0, 10000),
-                "1 - 2 Ha": (10000, 20000),
-                "2 - 5 Ha": (20000, 50000),
-                "5 - 10 Ha": (50000, 100000),
-                "10 - 20 Ha": (100000, 200000),
-                "20 - 50 Ha": (200000, 500000),
-                "50 - 100 Ha": (500000, 1000000),
-                "100 - 200 Ha": (1000000, 2000000),
-                "200 - 500 Ha": (2000000, 5000000),
-                "500 - 1000 Ha": (5000000, 10000000),
-                "> 1000 Ha": (10000000, np.inf),
-            }
-        else:
-            assert size_class_boundaries is not None
+        assert data_source == "lowder", (
+            "Currently, only the Lowder et al. (2016) dataset is supported as data source for farm sizes"
+        )
+        assert size_class_boundaries is None, (
+            "size_class_boundaries must be None when using Lowder et al. (2016) dataset"
+        )
+        size_class_boundaries = {
+            "< 1 Ha": (0, 10000),
+            "1 - 2 Ha": (10000, 20000),
+            "2 - 5 Ha": (20000, 50000),
+            "5 - 10 Ha": (50000, 100000),
+            "10 - 20 Ha": (100000, 200000),
+            "20 - 50 Ha": (200000, 500000),
+            "50 - 100 Ha": (500000, 1000000),
+            "100 - 200 Ha": (1000000, 2000000),
+            "200 - 500 Ha": (2000000, 5000000),
+            "500 - 1000 Ha": (5000000, 10000000),
+            "> 1000 Ha": (10000000, np.inf),
+        }
 
-        cultivated_land = self.region_subgrid[
-            "landsurface/full_region_cultivated_land"
+        cultivated_land: xr.DataArray = self.subgrid[
+            "landsurface/cultivated_land"
         ].compute()
         assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
-        region_ids = self.region_subgrid["region_ids"].compute()
-
-        region_subgrid_cell_area = self.full_like(
-            self.region_subgrid["mask"],
-            fill_value=np.nan,
-            nodata=np.nan,
-            dtype=np.float32,
-        )
-
-        height, width = region_subgrid_cell_area.shape
-        region_subgrid_cell_area.data = calculate_cell_area_m2(
-            region_subgrid_cell_area.rio.transform(recalc=True),
-            height,
-            width,
-        )
+        region_ids: xr.DataArray = self.subgrid["region_ids"].compute()
+        cell_area: xr.DataArray = self.subgrid["cell_area"].compute()
 
         regions_shapes = self.geom["regions"]
-        if data_source == "lowder":
-            assert country_iso3_column in regions_shapes.columns, (
-                f"Region database must contain {country_iso3_column} column"
-            )
+        assert country_iso3_column in regions_shapes.columns, (
+            f"Region database must contain {country_iso3_column} column"
+        )
 
-            farm_sizes_per_region = self.data_catalog.fetch(
-                "lowder_farm_size_distribution"
-            ).read()
+        farm_sizes_per_region = self.data_catalog.fetch(
+            "lowder_farm_size_distribution"
+        ).read()
 
-            # Remove countries with average farm size below subgrid resolution in smallest class
-            subgrid_cell_area_ha: float = (1e6 / (self.subgrid_factor**2)) / 1e4
-            subgrid_cell_area_ha *= 0.95  # substract 5 %, just so that Lithuania stays inside the dataset. No problems there, as the subgrid is not exactly 1km2 (but smaller due to high latitude)
-            countries_to_remove: list[str] = []
+        # Remove countries with average farm size below subgrid resolution in smallest class
+        subgrid_cell_area_ha: float = (1e6 / (self.subgrid_factor**2)) / 1e4
+        subgrid_cell_area_ha *= 0.95  # substract 5 %, just so that Lithuania stays inside the dataset. No problems there, as the subgrid is not exactly 1km2 (but smaller due to high latitude)
+        countries_to_remove: list[str] = []
 
-            for iso3, country_data in farm_sizes_per_region.groupby(
-                "ISO3"
-            ):  # start removal of countries with small farms
-                holdings = country_data[
-                    country_data["Holdings/ agricultural area"] == "Holdings"
-                ]
-                area = country_data[
-                    country_data["Holdings/ agricultural area"]
-                    == "Agricultural area (Ha)"
-                ]
+        for iso3, country_data in farm_sizes_per_region.groupby(
+            "ISO3"
+        ):  # start removal of countries with small farms
+            holdings = country_data[
+                country_data["Holdings/ agricultural area"] == "Holdings"
+            ]
+            area = country_data[
+                country_data["Holdings/ agricultural area"] == "Agricultural area (Ha)"
+            ]
 
-                if len(holdings) == 1 and len(area) == 1:
-                    n_holdings = (
-                        holdings["< 1 Ha"]
-                        .replace("..", np.nan)
-                        .astype(np.float64)
-                        .iloc[0]
-                    )
-                    area_ha = (
-                        area["< 1 Ha"].replace("..", np.nan).astype(np.float64).iloc[0]
-                    )
-
-                    if pd.notna(n_holdings) and n_holdings > 0 and pd.notna(area_ha):
-                        if (area_ha / n_holdings) < subgrid_cell_area_ha:
-                            countries_to_remove.append(iso3)
-
-            if countries_to_remove:
-                self.logger.warning(
-                    f"Removed {len(countries_to_remove)} countries with avg farm size < {subgrid_cell_area_ha:.2f} ha: {countries_to_remove}"
+            if len(holdings) == 1 and len(area) == 1:
+                n_holdings = (
+                    holdings["< 1 Ha"].replace("..", np.nan).astype(np.float64).iloc[0]
                 )
-                farm_sizes_per_region = farm_sizes_per_region[
-                    ~farm_sizes_per_region["ISO3"].isin(countries_to_remove)
-                ]
+                area_ha = (
+                    area["< 1 Ha"].replace("..", np.nan).astype(np.float64).iloc[0]
+                )
 
-            farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
-            farm_size_donor_country = setup_donor_countries(
-                self.data_catalog,
-                self.geom["global_countries"],
-                farm_countries_list,
-                alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
+                if pd.notna(n_holdings) and n_holdings > 0 and pd.notna(area_ha):
+                    if (area_ha / n_holdings) < subgrid_cell_area_ha:
+                        countries_to_remove.append(iso3)
+
+        if countries_to_remove:
+            self.logger.warning(
+                f"Removed {len(countries_to_remove)} countries with avg farm size < {subgrid_cell_area_ha:.2f} ha: {countries_to_remove}"
             )
-        else:
-            # load data source
-            farm_sizes_per_region = pd.read_excel(
-                data_source["farm_size"], index_col=(0, 1, 2)
-            )
-            n_farms_per_region = pd.read_excel(
-                data_source["n_farms"],
-                index_col=(0, 1, 2),
-            )
+            farm_sizes_per_region = farm_sizes_per_region[
+                ~farm_sizes_per_region["ISO3"].isin(countries_to_remove)
+            ]
+
+        farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
+        farm_size_donor_country = setup_donor_countries(
+            self.data_catalog,
+            self.geom["global_countries"],
+            farm_countries_list,
+            alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
+        )
 
         all_agents = []
 
@@ -1271,382 +1262,61 @@ class Agents(BuildModelBase):
 
         for i, (_, region) in enumerate(regions_shapes.iterrows()):
             UID = region[region_id_column]
-            if data_source == "lowder":
-                ISO3 = region[country_iso3_column]
+            ISO3 = region[country_iso3_column]
+            self.logger.info(
+                f"Processing region ({i + 1}/{len(regions_shapes)}) with ISO3 {ISO3}"
+            )
+
+            if ISO3 in farm_size_donor_country.keys():
+                ISO3 = farm_size_donor_country[ISO3]
                 self.logger.info(
-                    f"Processing region ({i + 1}/{len(regions_shapes)}) with ISO3 {ISO3}"
+                    f"Missing farm sizes for {region[country_iso3_column]}, using donor country {ISO3}"
                 )
-
-                if ISO3 in farm_size_donor_country.keys():
-                    ISO3 = farm_size_donor_country[ISO3]
-                    self.logger.info(
-                        f"Missing farm sizes for {region[country_iso3_column]}, using donor country {ISO3}"
-                    )
-            else:
-                state, district, tehsil = (
-                    region["state_name"],
-                    region["district_n"],
-                    region["sub_dist_1"],
-                )
-
             cultivated_land_region_total_cells = (
                 ((region_ids == UID) & (cultivated_land)).sum().compute()
-            )
+            ).item()
 
             # in the later corrections, it is important that the total cultivated land is
             # quite precise, so we first convert to float64 before summing
-            total_cultivated_land_area_lu: np.float64 = (
-                (((region_ids == UID) & (cultivated_land)) * region_subgrid_cell_area)
+            cultivated_land_area_region_m2: np.float64 = (
+                (((region_ids == UID) & (cultivated_land)) * cell_area)
                 .astype(np.float64)
                 .sum()
                 .compute()
+                .item()
             )
             if (
-                total_cultivated_land_area_lu == 0
+                cultivated_land_area_region_m2 == 0
             ):  # when no agricultural area, just continue as there will be no farmers. Also avoiding some division by 0 errors.
                 continue
 
             # in later corrections, it is important that the average subgrid area is quite precise,
             # so we first convert to float64 before calculating the mean
             average_subgrid_area_region: np.float64 = (
-                region_subgrid_cell_area.where(
-                    ((region_ids == UID) & (cultivated_land))
-                )
+                cell_area.where(((region_ids == UID) & (cultivated_land)))
                 .astype(np.float64)
                 .mean()
                 .compute()
                 .item()
             )
 
-            if data_source == "lowder":
-                region_farm_sizes = farm_sizes_per_region.loc[
-                    (farm_sizes_per_region["ISO3"] == ISO3)
-                ].drop(["Country", "Census Year", "Total"], axis=1)
-                assert len(region_farm_sizes) == 2, (
-                    f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {ISO3}"
-                )
-
-                # Extract holdings and agricultural area data
-                region_n_holdings = (
-                    region_farm_sizes.loc[
-                        region_farm_sizes["Holdings/ agricultural area"] == "Holdings"
-                    ]
-                    .iloc[0]
-                    .drop(["Holdings/ agricultural area", "ISO3"])
-                    .replace("..", np.nan)
-                    .astype(np.float64)
-                )
-                agricultural_area_db_ha = (
-                    region_farm_sizes.loc[
-                        region_farm_sizes["Holdings/ agricultural area"]
-                        == "Agricultural area (Ha)"
-                    ]
-                    .iloc[0]
-                    .drop(["Holdings/ agricultural area", "ISO3"])
-                    .replace("..", np.nan)
-                    .astype(np.float64)
-                )
-
-                # Calculate average sizes for each bin
-                average_sizes = {}
-                for bin_name in agricultural_area_db_ha.index:
-                    bin_name = bin_name.strip()
-                    if bin_name.startswith("<"):
-                        # For '< 1 Ha', average is 0.5 Ha
-                        average_size = 0.5
-                    elif bin_name.startswith(">"):
-                        # For '> 1000 Ha', assume average is 1500 Ha
-                        average_size = 1500
-                    else:
-                        # For ranges like '5 - 10 Ha', calculate the midpoint
-                        try:
-                            min_size, max_size = bin_name.replace("Ha", "").split("-")
-                            min_size = float(min_size.strip())
-                            max_size = float(max_size.strip())
-                            average_size = (min_size + max_size) / 2
-                        except ValueError:
-                            # Default average size if parsing fails
-                            average_size = 1
-                    average_sizes[bin_name] = average_size
-
-                # Convert average sizes to a pandas Series
-                average_sizes_series = pd.Series(average_sizes)
-
-                # Handle cases where entries are zero or missing
-                agricultural_area_db_ha_zero_or_nan = (
-                    agricultural_area_db_ha.isnull() | (agricultural_area_db_ha == 0)
-                )
-                region_n_holdings_zero_or_nan = region_n_holdings.isnull() | (
-                    region_n_holdings == 0
-                )
-
-                if agricultural_area_db_ha_zero_or_nan.all():
-                    # All entries in agricultural_area_db_ha are zero or NaN
-                    if not region_n_holdings_zero_or_nan.all():
-                        # Calculate agricultural_area_db_ha using average sizes and region_n_holdings
-                        region_n_holdings = region_n_holdings.fillna(1).replace(0, 1)
-                        agricultural_area_db_ha = (
-                            average_sizes_series * region_n_holdings
-                        )
-                    else:
-                        raise ValueError(
-                            "Cannot calculate agricultural_area_db_ha: both datasets are zero or missing."
-                        )
-                elif region_n_holdings_zero_or_nan.all():
-                    # All entries in region_n_holdings are zero or NaN
-                    if not agricultural_area_db_ha_zero_or_nan.all():
-                        # Calculate region_n_holdings using agricultural_area_db_ha and average sizes
-                        agricultural_area_db_ha = agricultural_area_db_ha.fillna(
-                            1
-                        ).replace(0, 1)
-                        region_n_holdings = (
-                            agricultural_area_db_ha / average_sizes_series
-                        )
-                    else:
-                        raise ValueError(
-                            "Cannot calculate region_n_holdings: both datasets are zero or missing."
-                        )
-                else:
-                    # if one of the datasets has amount of holdings but agricultural area is missing: calculate agricultural area by # holdings * average size
-                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(
-                        average_sizes_series * region_n_holdings
-                    )
-                    # if you have agri area but no holdings: calculate holdings by agri area / average size
-                    region_n_holdings = region_n_holdings.fillna(
-                        agricultural_area_db_ha / average_sizes_series
-                    )
-
-                # delete classes with no holdings
-                agricultural_area_db_ha = agricultural_area_db_ha[region_n_holdings > 0]
-                region_n_holdings = region_n_holdings[region_n_holdings > 0]
-
-                def correct_farm_size_data(
-                    agricultural_area_db_ha: pd.Series,
-                    region_n_holdings: pd.Series,
-                    size_class_boundaries: dict,
-                    ISO3: str,
-                    tolerance: float = 0.3,
-                ) -> pd.Series:
-                    """Checks if agricultural area is consistent with farm size class boundaries. If not, it corrects the data.
-
-                    Args:
-                        agricultural_area_db_ha: Agricultural area in hectares per size class.
-                        region_n_holdings: Number of holdings per size class.
-                        size_class_boundaries: Dictionary mapping size class names to (min, max) boundaries in m².
-                        ISO3: ISO3 country code for the region.
-                        tolerance: Tolerance for validation (default: 0.3 = 30%).
-
-                    Returns:
-                        Corrected agricultural area data as a pandas Series.
-                    """
-                    for size_class in agricultural_area_db_ha.index:
-                        actual_area = agricultural_area_db_ha.loc[size_class]
-
-                        # Get the size class boundaries for validation
-                        min_size_ha, max_size_ha = size_class_boundaries[size_class]
-                        # Convert from m² to ha
-                        min_size_ha = min_size_ha / 10000
-                        max_size_ha = (
-                            max_size_ha / 10000 if max_size_ha != np.inf else np.inf
-                        )
-
-                        # Calculate expected area range based on class boundaries
-                        min_expected_area = (
-                            region_n_holdings.loc[size_class] * min_size_ha
-                        )
-                        max_expected_area = (
-                            region_n_holdings.loc[size_class] * max_size_ha
-                        )
-
-                        # Check if actual area falls within reasonable bounds
-                        if not (
-                            min_expected_area * (1 - tolerance)
-                            <= actual_area
-                            <= max_expected_area * (1 + tolerance)
-                        ):
-                            # Correct farmsize data by adjusting to the nearest valid boundary
-                            self.logger.warning(
-                                f"farm sizes correction for: {ISO3} - Size class '{size_class}' area ({actual_area:.2f} ha) "
-                                f"outside expected range [{min_expected_area * (1 - tolerance):.2f}, "
-                                f"{max_expected_area * (1 + tolerance):.2f}] ha. Correcting..."
-                            )
-
-                            corrected_area = (
-                                actual_area.copy()
-                            )  # Initialize with current value
-
-                            if max_expected_area != np.inf:
-                                # corrected area is average of min and max expected area
-                                corrected_area = (
-                                    min_expected_area + max_expected_area
-                                ) / 2
-                            else:
-                                # If max is infinite, just set to min expected area
-                                corrected_area = min_expected_area.copy()
-
-                            self.logger.info(
-                                f"corrected agri area from {actual_area:.2f} ha to {corrected_area:.2f} ha for size class '{size_class}' in {ISO3}"
-                            )
-
-                            # Apply the correction if it changed
-                            if corrected_area != actual_area:
-                                agricultural_area_db_ha[size_class] = corrected_area
-
-                    return agricultural_area_db_ha
-
-                # Validate that holdings * average farm size approximately equals agricultural area
-
-                correct_farm_size_data(
-                    agricultural_area_db_ha,
-                    region_n_holdings,
-                    size_class_boundaries,
-                    ISO3,
-                )
-
-                # Calculate total agricultural area in square meters
-                agricultural_area_db = (
-                    agricultural_area_db_ha * 10000
-                )  # Convert Ha to m^2
-
-                # Calculate region farm sizes (in m2)
-                region_farm_sizes = agricultural_area_db / region_n_holdings
-
-            else:
-                region_farm_sizes = farm_sizes_per_region.loc[(state, district, tehsil)]
-                region_n_holdings = n_farms_per_region.loc[(state, district, tehsil)]
-                agricultural_area_db = region_farm_sizes * region_n_holdings
-
-            total_cultivated_land_area_db = agricultural_area_db.sum()
-
-            n_cells_per_size_class = pd.Series(0.0, index=region_n_holdings.index)
-
-            for size_class in agricultural_area_db.index:
-                if (
-                    region_n_holdings[size_class] > 0
-                ):  # if no holdings, no need to calculate
-                    region_n_holdings[size_class] = region_n_holdings[size_class] * (
-                        total_cultivated_land_area_lu / total_cultivated_land_area_db
-                    )
-                    n_cells_per_size_class.loc[size_class] = (
-                        region_n_holdings[size_class]
-                        * region_farm_sizes[size_class]
-                        / average_subgrid_area_region
-                    ).item()
-                    assert not np.isnan(n_cells_per_size_class.loc[size_class])
-            assert math.isclose(
+            region_farm_sizes = farm_sizes_per_region.loc[
+                (farm_sizes_per_region["ISO3"] == ISO3)
+            ].drop(["Country", "Census Year", "Total"], axis=1)
+            assert len(region_farm_sizes) == 2, (
+                f"Found {len(region_farm_sizes) / 2} region_farm_sizes for {ISO3}"
+            )
+            region_agents: pd.DataFrame = create_farm_distributions(
+                region_farm_sizes,
+                size_class_boundaries,
+                cultivated_land_area_region_m2,
+                average_subgrid_area_region,
                 cultivated_land_region_total_cells,
-                n_cells_per_size_class.sum().item(),
-                abs_tol=1,
-            ), (
-                f"{cultivated_land_region_total_cells}, {n_cells_per_size_class.sum().item()}"
+                UID,
+                ISO3,
+                self.logger,
             )
 
-            whole_cells_per_size_class = (n_cells_per_size_class // 1).astype(int)
-            leftover_cells_per_size_class = n_cells_per_size_class % 1
-            whole_cells = whole_cells_per_size_class.sum()
-            n_missing_cells = cultivated_land_region_total_cells - whole_cells
-            assert n_missing_cells <= len(agricultural_area_db)
-
-            index = list(
-                zip(
-                    leftover_cells_per_size_class.index,
-                    leftover_cells_per_size_class % 1,
-                )
-            )
-            n_cells_to_add = sorted(index, key=lambda x: x[1], reverse=True)[
-                : n_missing_cells.compute().item()
-            ]
-            whole_cells_per_size_class.loc[[p[0] for p in n_cells_to_add]] += 1
-
-            region_agents = []
-            for size_class in whole_cells_per_size_class.index:
-                # if no cells for this size class, just continue
-                if whole_cells_per_size_class.loc[size_class] == 0:
-                    continue
-
-                number_of_agents_size_class = round(
-                    region_n_holdings[size_class].item()
-                )
-                # if there is agricultural land, but there are no agents rounded down, we assume there is one agent
-                if (
-                    number_of_agents_size_class == 0
-                    and whole_cells_per_size_class[size_class] > 0
-                ):
-                    number_of_agents_size_class = 1
-
-                min_size_m2, max_size_m2 = size_class_boundaries[size_class]
-                if max_size_m2 in (np.inf, "inf", "infinity", "Infinity"):
-                    max_size_m2 = region_farm_sizes[size_class] * 2
-
-                min_size_cells = int(min_size_m2 / average_subgrid_area_region)
-                min_size_cells = max(
-                    min_size_cells, 1
-                )  # farm can never be smaller than one cell
-                max_size_cells = (
-                    int(max_size_m2 / average_subgrid_area_region) - 1
-                )  # otherwise they overlap with next size class
-                mean_cells_per_agent = int(
-                    region_farm_sizes[size_class] / average_subgrid_area_region
-                )
-
-                assert mean_cells_per_agent >= 1, (
-                    f"Mean cells per agent must be at least 1, but got {mean_cells_per_agent}, consider increasing the number of subgrids"
-                )
-
-                if (
-                    mean_cells_per_agent < min_size_cells
-                    or mean_cells_per_agent > max_size_cells
-                ):  # there must be an error in the data, thus assume centred
-                    mean_cells_per_agent = (min_size_cells + max_size_cells) // 2
-
-                population = pd.DataFrame(index=range(number_of_agents_size_class))
-
-                offset = (
-                    whole_cells_per_size_class[size_class]
-                    - number_of_agents_size_class * mean_cells_per_agent
-                )  # high offset means that there are relatively too many agents for the available agricultural area derived from the land use map (total_cultivated_land_area_lu)
-
-                if (
-                    number_of_agents_size_class * mean_cells_per_agent + offset
-                    < min_size_cells * number_of_agents_size_class
-                ):
-                    min_size_cells = (
-                        number_of_agents_size_class * mean_cells_per_agent + offset
-                    ) // number_of_agents_size_class
-                if (
-                    number_of_agents_size_class * mean_cells_per_agent + offset
-                    > max_size_cells * number_of_agents_size_class
-                ):
-                    max_size_cells = (
-                        number_of_agents_size_class * mean_cells_per_agent + offset
-                    ) // number_of_agents_size_class + 1
-
-                n_farms_size_class, farm_sizes_size_class = get_farm_distribution(
-                    number_of_agents_size_class,
-                    min_size_cells,
-                    max_size_cells,
-                    mean_cells_per_agent,
-                    offset,
-                    self.logger,
-                )
-
-                assert n_farms_size_class.sum() == number_of_agents_size_class
-                assert (farm_sizes_size_class >= 1).all()
-                assert (
-                    n_farms_size_class * farm_sizes_size_class
-                ).sum() == whole_cells_per_size_class[size_class]
-                farm_sizes = farm_sizes_size_class.repeat(n_farms_size_class)
-                np.random.shuffle(farm_sizes)
-                population["area_n_cells"] = farm_sizes
-                region_agents.append(population)
-
-                assert (
-                    population["area_n_cells"].sum()
-                    == whole_cells_per_size_class[size_class]
-                )
-
-            region_agents = pd.concat(region_agents, ignore_index=True)
-            region_agents["region_id"] = UID
             all_agents.append(region_agents)
 
         farmers = pd.concat(all_agents, ignore_index=True)
@@ -1655,17 +1325,42 @@ class Agents(BuildModelBase):
     def canon(self, string_to_normalize: str) -> str:
         """Canonicalizes a string by normalizing it to ASCII and stripping whitespace.
 
+        Some characters (e.g. Polish Ł/ł) do not decompose to ASCII via NFKD
+        and would be silently dropped, causing mismatches (e.g. "Łódź" → "odz").
+        These are mapped to their closest ASCII equivalents first.
+
+        Trailing administrative suffixes such as " Oblast" are also stripped so
+        that GEM names like "Leningrad Oblast" and GADM names like "Leningrad"
+        both normalise to the same key regardless of which side carries the suffix.
+
         Args:
             string_to_normalize: The string to canonicalize.
         Returns:
             The canonicalized string.
         """
-        return (
-            unicodedata.normalize("NFKD", string_to_normalize)
+        # æ/Æ are ligatures that NFKD cannot expand to two ASCII characters
+        # (one-to-one only); substitute before normalization.
+        s = string_to_normalize.replace("æ", "ae").replace("Æ", "Ae")
+        # ı (U+0131, Turkish dotless i) and Ł/ł/Ø/ø/Ð/ð have no NFKD
+        # decomposition to ASCII; map them explicitly before normalisation.
+        _non_decomposable = str.maketrans("ŁłØøÐð\u0131", "LlOoDdi")
+        s = s.translate(_non_decomposable)
+        s = (
+            unicodedata.normalize("NFKD", s)
             .encode("ascii", "ignore")
             .decode("ascii")
             .strip()
         )
+        # Normalise ALL-CAPS strings (e.g. GEM Turkey uses "ADANA", GADM uses
+        # "Adana") so that both sides produce the same canon key.
+        if s.isupper():
+            s = s.title()
+        # Strip the trailing " oblast" suffix (case-insensitive) so that GEM
+        # names like "Leningrad Oblast" and GADM names like "Leningrad" both
+        # resolve to the same key without manually enumerating every oblast.
+        if s.lower().endswith(" oblast"):
+            s = s[: -len(" oblast")]
+        return s
 
     def setup_building_reconstruction_costs(
         self, buildings: gpd.GeoDataFrame
@@ -1677,8 +1372,8 @@ class Agents(BuildModelBase):
         Returns:
             A GeoDataFrame with reconstruction costs assigned to each building.
         Raises:
-            ValueError: If a region in GADM level 1 is not found in the global exposure model or
-                        if some buildings do not have reconstruction costs assigned.
+            ValueError: If one or more GADM level-1 regions cannot be matched
+                to the global exposure model, or if some buildings do not have reconstruction costs assigned.
         """
         # load GADM level 1 within model domain (older version for compatibility with global exposure model)
         gadm_level1 = self.data_catalog.fetch("gadm_28").read(
@@ -1727,30 +1422,84 @@ class Agents(BuildModelBase):
 
         # Iterate over unique admin-1 region names to avoid redundant checks and assignments
         buildings["NAME_1"] = buildings["NAME_1"].apply(self.canon)
-        for name_1 in gadm_level1["NAME_1"].dropna().unique():
-            # clean up name
-            name_1 = self.canon(name_1)
-            # check if region is in global exposure model
-            if name_1 not in global_exposure_model:
-                raise ValueError(
-                    f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
-                )
-            exposure_model_region = global_exposure_model[name_1]
-            for reconstruction_type in exposure_model_region:
-                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
-                    float(exposure_model_region[reconstruction_type])
-                )
-        # assert all buildings have reconstruction costs assigned (i.e., no null values in the reconstruction cost columns)
-        reconstruction_cost_columns = list(exposure_model_region.keys())
-        if buildings[reconstruction_cost_columns].isnull().any().any():
-            # get NAME_1 values for buildings with null reconstruction costs
-            buildings_with_null_costs = buildings[
-                buildings[reconstruction_cost_columns].isnull().any(axis=1)
+
+        # Separate proxy-country averages (stored by read()) from per-region data.
+        # These are used as fallbacks for aliased territories and must not appear
+        # as real region keys.
+        country_averages: dict[str, dict[str, float]] = {
+            k.removeprefix("_country_avg_"): v
+            for k, v in global_exposure_model.items()
+            if k.startswith("_country_avg_")
+        }
+        exposure_model: dict[str, dict[str, float]] = {
+            k: v
+            for k, v in global_exposure_model.items()
+            if not k.startswith("_country_avg_")
+        }
+
+        gadm_names: list[str] = [
+            self.canon(n) for n in gadm_level1["NAME_1"].dropna().unique()
+        ]
+        missing: set[str] = {n for n in gadm_names if n not in exposure_model}
+
+        # For regions from aliased territories (e.g. Faroe Islands districts
+        # proxied to Denmark) their GADM NAME_1 values won't appear in the proxy
+        # CSV; fall back to the proxy country's national average.
+        for n in sorted(missing.copy()):
+            name_0_series = gadm_level1.loc[
+                gadm_level1["NAME_1"].apply(self.canon) == n, "NAME_0"
             ]
-            missing_name_1_values = buildings_with_null_costs["NAME_1"].unique()
-            raise ValueError(
-                f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
+            if name_0_series.empty:
+                continue
+            proxy = gem_country_name_aliases.get(
+                self.canon(name_0_series.iloc[0].replace(" ", "_")),
+                self.canon(name_0_series.iloc[0].replace(" ", "_")),
             )
+            if proxy in country_averages:
+                exposure_model[n] = country_averages[proxy]
+                warnings.warn(
+                    f"GADM region '{n}' not found in GEM; using national average for '{proxy}'.",
+                    stacklevel=2,
+                )
+                missing.discard(n)
+
+        if missing:
+            region_keys = list(exposure_model)
+
+            def _candidates(name: str) -> list[str]:
+                return difflib.get_close_matches(name, region_keys, n=3, cutoff=0.6)
+
+            lines: list[str] = []
+            for n in sorted(missing):
+                hits = _candidates(n)
+                suggestion = f'"{hits[0]}"' if hits else "???"
+                lines.append(
+                    f'    {suggestion}: "{n}",'
+                    + (
+                        f"  # also consider: {', '.join(hits)}"
+                        if hits
+                        else "  # no close match — check GEM CSV manually"
+                    )
+                )
+            raise ValueError(
+                f"{len(missing)} GADM region(s) could not be matched to the global exposure model.\n"
+                f"Add the correct entries to gadm_converter in\n"
+                f"geb/build/data_catalog/global_exposure_model.py:\n\n"
+                f"{{\n{chr(10).join(lines)}\n}}"
+            )
+
+        exposure_df = pd.DataFrame.from_dict(exposure_model, orient="index")
+        buildings = gpd.GeoDataFrame(buildings.join(exposure_df, on="NAME_1"))
+        reconstruction_cost_columns = exposure_df.columns.tolist()
+        if buildings[reconstruction_cost_columns].isnull().any().any():
+            missing_regions = buildings.loc[
+                buildings[reconstruction_cost_columns].isnull().any(axis=1), "NAME_1"
+            ].unique()
+            raise ValueError(
+                f"Buildings in {missing_regions} have no reconstruction costs. "
+                f"Check the global exposure model and region names."
+            )
+
         return buildings
 
     @build_method(required=True)
@@ -1758,11 +1507,9 @@ class Agents(BuildModelBase):
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
         # load region mask
         mask = self.region.union_all()
-        buildings = self.data_catalog.fetch(
-            "open_building_map",
+        buildings = self.data_catalog.fetch("open_building_map").read(
             geom=mask,
-            prefix="assets",
-        ).read()
+        )
         buildings = self.setup_building_reconstruction_costs(buildings)
 
         # reset id column to avoid issues with duplicate ids
@@ -1770,6 +1517,61 @@ class Agents(BuildModelBase):
 
         # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
+
+    @build_method(required=True)
+    def setup_flood_damage_model(self, region: str = "geul") -> None:
+        """This method sets up the damage functions for flood events for the specified region.
+
+        It retrieves the damage functions from the data catalog, processes them, and saves them as
+        parquet files for use in the model.
+
+        Args:
+            region: The region for which to set up the damage functions. Default is 'geul', selecting
+                the damage model constructed by Endendijk. Other accepted region identifiers are determined by
+                the underlying 'global_flood_damage_model' dataset and include: europe, north america,
+                central&south america, asia, africa, oceania, and 'global'; representing the global average curves.
+        """
+        # clear model files for damage model to avoid issues with old files when changing region
+        for key in list(self.files["table"]):
+            if key.startswith("damage_model/"):
+                del self.files["table"][key]
+        for key in list(self.files["dict"]):
+            if key.startswith("damage_model/"):
+                del self.files["dict"][key]
+
+        if region == "geul":
+            parameters = self.data_catalog.fetch("geul_flood_damage_model").read()
+            for hazard, hazard_parameters in parameters.items():
+                for asset_type, asset_parameters in hazard_parameters.items():
+                    for component, asset_components in asset_parameters.items():
+                        curve = pd.DataFrame(
+                            asset_components["curve"],
+                            columns=np.array(["depth", "damage_ratio"]),
+                        )
+
+                        self.set_table(
+                            curve,
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/curve",
+                        )
+                        maximum_damage = {
+                            "maximum_damage": asset_components["maximum_damage"]
+                        }
+
+                        self.set_params(
+                            maximum_damage,
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/maximum_damage",
+                        )
+                return
+
+        damage_functions = self.data_catalog.fetch("global_flood_damage_model").read(
+            region=region
+        )
+        # save the cleaned dataframe as parquet
+        for damage_class, df_damage_class in damage_functions.items():
+            self.set_table(
+                df_damage_class,
+                name=f"damage_model/flood/{damage_class}/structure/curve",
+            )
 
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
@@ -1792,9 +1594,9 @@ class Agents(BuildModelBase):
         buildings["lat"] = centroids.y
 
         for _, GDL_region in GDL_regions.iterrows():
-            _, GLOPOP_GRID_region = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_region["GDLcode"]
-            ).read(GDL_region["GDLcode"])
+            _, GLOPOP_GRID_region = self.data_catalog.fetch("glopop-sg").read(
+                region=GDL_region["GDLcode"]
+            )
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
             # subset buildings to those within the GLOPOP_GRID_region
@@ -1831,7 +1633,7 @@ class Agents(BuildModelBase):
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
         single_household_per_building: bool = False,
-        redundancy_array_size: int = 20e6,
+        redundancy_array_size: int = 20_000_000,
     ) -> None:
         """New method to set up household characteristics for agents using GLOPOP-S data. This method is still under development and may not be fully functional.
 
@@ -1856,10 +1658,10 @@ class Agents(BuildModelBase):
 
         # create income percentile based on wealth index mapping
         wealth_index_to_income_percentile = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
             5: (80, 100),
         }
 
@@ -1908,7 +1710,7 @@ class Agents(BuildModelBase):
                 continue
 
             GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_code
+                "glopop-sg"
             ).read(GDL_code)
 
             # get size of household
@@ -2056,9 +1858,9 @@ class Agents(BuildModelBase):
                 .values
             )
             region_ids = sample_from_map(
-                self.region_subgrid["region_ids"].values,
+                self.subgrid["region_ids"].values,
                 locations,
-                self.region_subgrid["region_ids"].rio.transform(recalc=True).to_gdal(),
+                self.subgrid["region_ids"].rio.transform(recalc=True).to_gdal(),
             )
 
             # subset to only include households with a region (some buildings are located outside land masks)
@@ -2115,7 +1917,7 @@ class Agents(BuildModelBase):
         Args:
             maximum_age: The maximum age for the head of household. Default is 85.
         """
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
         # get farmer locations
@@ -2183,9 +1985,7 @@ class Agents(BuildModelBase):
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            GLOPOP_S_region, _ = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_region
-            ).read(GDL_region)
+            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg").read(GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(
@@ -2422,7 +2222,7 @@ class Agents(BuildModelBase):
         Args:
             interest_rate: The interest rate. Value between 0 and 1. Default is 0.05.
         """
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
 
         preferences_global = self.create_behavioural_parameters()
         preferences_global.rename(

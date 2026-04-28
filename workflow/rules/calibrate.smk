@@ -95,7 +95,7 @@ def get_progress_message(wildcards, action):
     path = Path(RUNS_DIR)
     n_params = len(list(path.glob(f"{gen}_*/parameters.yml")))
     n_init = len(list(path.glob(f"{gen}_*/init.done")))
-    n_altered = len(list(path.glob(f"{gen}_*/altered.done")))
+    n_altered = len(list(path.glob(f"{gen}_*/input/build_complete.txt")))
     n_params_set = len(list(path.glob(f"{gen}_*/params_set.done")))
     n_spinup = len(list(path.glob(f"{gen}_*/spinup.done")))
     n_run = len(list(path.glob(f"{gen}_*/run.done")))

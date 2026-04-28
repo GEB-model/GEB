@@ -6,25 +6,93 @@ from datetime import datetime
 from pathlib import Path
 from time import sleep, time
 
+import dask.array
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 import zarr.storage
 from zarr.codecs.numcodecs import FixedScaleOffset
 
+import geb.workflows.io as io_module
 from geb.workflows.io import (
     AsyncGriddedForcingReader,
     calculate_scaling,
     create_hash_from_parameters,
     get_window,
+    read_array,
     read_hash,
+    read_table,
+    write_array,
     write_hash,
+    write_table,
     write_zarr,
 )
 
 from ..testconfig import tmp_folder
+
+
+def test_write_array_roundtrip(tmp_path: Path) -> None:
+    """Test that write_array followed by read_array returns the original array.
+
+    Checks dtype preservation, shape, values, and that the array is stored as a
+    single chunk (non-chunked) equal to the array shape.
+    """
+    arr = np.array([1.0, 2.5, 3.75], dtype=np.float32)
+    fp = tmp_path / "test.array.zarr"
+
+    write_array(arr, fp)  # ty:ignore[invalid-argument-type]
+    result = read_array(fp)
+
+    assert result.dtype == arr.dtype
+    assert result.shape == arr.shape
+    np.testing.assert_array_equal(result, arr)
+
+    # Verify stored as a single chunk covering the whole array
+    z = zarr.open_array(fp, mode="r")
+    assert z.chunks == arr.shape
+
+
+def test_write_array_2d_roundtrip(tmp_path: Path) -> None:
+    """Test write_array / read_array roundtrip for a 2D array."""
+    arr = np.arange(12, dtype=np.int32).reshape(3, 4)
+    fp = tmp_path / "test2d.array.zarr"
+
+    write_array(arr, fp)  # ty:ignore[invalid-argument-type]
+    result = read_array(fp)
+
+    assert result.dtype == arr.dtype
+    assert result.shape == arr.shape
+    np.testing.assert_array_equal(result, arr)
+    z = zarr.open_array(fp, mode="r")
+    assert z.chunks == arr.shape
+
+
+def test_write_array_with_attributes(tmp_path: Path) -> None:
+    """Test that attributes are stored and retrieved correctly by write_array."""
+    arr = np.zeros(5, dtype=np.float32)
+    attrs = {"n": 3, "extra_dims_names": ["x", "y"]}
+    fp = tmp_path / "test_attrs.array.zarr"
+
+    write_array(arr, fp, attributes=attrs)  # ty:ignore[invalid-argument-type]
+    result, loaded_attrs = read_array(fp, return_attributes=True)
+
+    np.testing.assert_array_equal(result, arr)
+    assert loaded_attrs["n"] == 3
+    assert loaded_attrs["extra_dims_names"] == ["x", "y"]
+
+
+def test_write_array_overwrites_existing(tmp_path: Path) -> None:
+    """Test that write_array silently overwrites an existing file."""
+    fp = tmp_path / "overwrite.array.zarr"
+    write_array(np.array([1, 2, 3], dtype=np.float32), fp)  # ty:ignore[invalid-argument-type]
+    new_arr = np.array([9, 8], dtype=np.float32)
+    write_array(new_arr, fp)  # ty:ignore[invalid-argument-type]
+
+    result = read_array(fp)
+    np.testing.assert_array_equal(result, new_arr)
 
 
 def encode_decode(
@@ -201,6 +269,110 @@ def test_io() -> None:
     da.attrs["_FillValue"] = np.nan
 
     write_zarr(da, tmp_folder / "test.zarr", crs=4326)
+
+
+def test_write_zarr_uses_shards_as_chunk_multiples() -> None:
+    """Test that shard values are interpreted as multiples of the chunk size.
+
+    Verifies that the public shards argument expresses the number of chunks per
+    shard for each dimension and that the stored Zarr metadata reflects the
+    resulting absolute shard shape.
+    """
+    x = np.linspace(-4, 4, 9)
+    y = np.linspace(7, 0, 8)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 2, "y": 3},
+        progress=False,
+    )
+
+    zarr_array = zarr.open_array(
+        store=tmp_folder / "test.zarr",
+        zarr_format=3,
+        path="test",
+        mode="r",
+    )
+
+    assert zarr_array.chunks == (2, 3)
+    assert zarr_array.shards == (6, 6)
+
+
+def test_write_zarr_rounds_shards_up_to_chunk_multiple() -> None:
+    """Test that shard metadata stays aligned to full chunk multiples.
+
+    Verifies that when a requested shard would otherwise be clipped by the array
+    extent, the stored shard size is rounded up to the smallest full chunk
+    multiple that still covers the dimension.
+    """
+    x = np.linspace(-3.5, 3.5, 8)
+    y = np.linspace(4, 0, 5)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 4, "y": 4},
+        progress=False,
+    )
+
+    zarr_array = zarr.open_array(
+        store=tmp_folder / "test.zarr",
+        zarr_format=3,
+        path="test",
+        mode="r",
+    )
+
+    assert zarr_array.chunks == (2, 3)
+    assert zarr_array.shards == (6, 9)
+
+
+def test_write_zarr_stores_per_shard_when_shards_are_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that write_zarr switches the source write granularity to shards.
+
+    Verifies that enabling sharding causes the block-wise write loop to operate
+    on shard-sized source blocks rather than storage-chunk-sized source blocks.
+    """
+    captured_numblocks: dict[str, tuple[int, ...]] = {}
+
+    original_store_blocks = io_module._store_dask_array_blocks
+
+    def store_blocks_spy(
+        source_array: dask.array.core.Array, store_target: object, progress: bool
+    ) -> None:
+        captured_numblocks["value"] = source_array.numblocks
+        original_store_blocks(source_array, store_target, progress)
+
+    monkeypatch.setattr(io_module, "_store_dask_array_blocks", store_blocks_spy)
+
+    x = np.linspace(-4, 4, 9)
+    y = np.linspace(7, 0, 8)
+    values = np.arange(x.size * y.size, dtype=np.float32).reshape(y.size, x.size)
+
+    da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
+    da.attrs["_FillValue"] = np.nan
+
+    write_zarr(
+        da.chunk({"x": 3, "y": 2}),
+        tmp_folder / "test.zarr",
+        crs=4326,
+        shards={"x": 2, "y": 3},
+        progress=False,
+    )
+
+    assert captured_numblocks["value"] == (2, 2)
 
 
 def test_get_window() -> None:
@@ -1078,3 +1250,58 @@ def test_read_write_hash() -> None:
     hash_val = ""
     write_hash(hash_file, hash_val)
     assert read_hash(hash_file) == hash_val
+
+
+def test_write_table_roundtrip() -> None:
+    """Test write_table and read_table for various DataFrame configurations."""
+    # 1. Simple DataFrame with various types
+    df_simple = pd.DataFrame(
+        {
+            "int_col": [1, 2, 3],
+            "float_col": [1.1, 2.2, 3.3],
+            "bool_col": [True, False, True],
+            "string_col": ["a", "b", "c"],
+            "dt_col": pd.to_datetime(["2021-01-01", "2021-01-02", "2021-01-03"]),
+        }
+    )
+
+    fp = tmp_folder / "test_simple.parquet"
+    write_table(df_simple, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_simple, df_read)
+
+    # 2. DataFrame without index (index should be preserved if it's just a RangeIndex)
+    df_no_index = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    fp = tmp_folder / "test_no_index.parquet"
+    write_table(df_no_index, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_no_index, df_read)
+
+    # 3. DataFrame with named index
+    df_named_index = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    df_named_index.index.name = "my_index"
+    fp = tmp_folder / "test_named_index.parquet"
+    write_table(df_named_index, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_named_index, df_read)
+
+    # 4. DataFrame with MultiIndex
+    df_multi = pd.DataFrame(
+        {"val": [1, 2, 3, 4]},
+        index=pd.MultiIndex.from_tuples(
+            [("A", 1), ("A", 2), ("B", 1), ("B", 2)], names=["idx1", "idx2"]
+        ),
+    )
+    fp = tmp_folder / "test_multi.parquet"
+    write_table(df_multi, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_multi, df_read)
+
+    # 5. DataFrame with large amount of data to test row_group_size and page_size
+    df_large = pd.DataFrame(
+        {"a": np.random.randint(0, 100, size=1000), "b": np.random.random(size=1000)}
+    )
+    fp = tmp_folder / "test_large.parquet"
+    write_table(df_large, fp)
+    df_read = read_table(fp)
+    pd.testing.assert_frame_equal(df_large, df_read)

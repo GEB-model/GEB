@@ -1,7 +1,5 @@
 """Forcing data processing and plotting methods for GEB."""
 
-from __future__ import annotations
-
 import math
 import re
 import warnings
@@ -62,8 +60,7 @@ def _stack_forcing_variable(
     da, bounds = clip_with_grid(da, mask)
     mask = mask.isel(bounds)
 
-    if "_FillValue" in da.attrs:
-        da = interpolate_na_along_dim(da)
+    da = interpolate_na_along_dim(da)
 
     da = da.stack(idxs=("y", "x"))
     da = da.isel(idxs=mask.stack(idxs=("y", "x")).values)
@@ -595,22 +592,6 @@ def plot_timeline(
     )
 
 
-def get_chunk_size(da: xr.DataArray) -> int:
-    """Calculate the optimal chunk size for the given xarray DataArray based on the target size.
-
-    Args:
-        da: The xarray DataArray for which to calculate the chunk size.
-
-    Returns:
-        The calculated chunk size in bytes.
-    """
-    size = (
-        math.prod([chunks[0] for dim, chunks in da.chunksizes.items()])
-        * da.dtype.itemsize
-    )
-    return size
-
-
 class Forcing(BuildModelBase):
     """Contains methods to download and process climate forcing data for GEB."""
 
@@ -754,24 +735,35 @@ class Forcing(BuildModelBase):
                 ),
             ]
 
+        time_chunksize: int = 100_000_000 // (
+            math.prod(
+                [chunks[0] for dim, chunks in da.chunksizes.items() if dim != "time"]
+            )
+            * da.dtype.itemsize
+        )  # aim for chunks of around 100 MB
+        # make chunk size divisible by 24 to ensure that we don't split days across chunks for daily data
+        # as needed by the model.
+        time_chunksize = (time_chunksize // 24) * 24
+        time_chunksize = max(
+            24, time_chunksize
+        )  # ensure at least 24 time steps per chunk
+        da = da.chunk({"time": time_chunksize})
+
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
                 category=ZarrUserWarning,
                 message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
             )
-            # the last chunk may be smaller than the specified chunk size,
-            # which can cause a RuntimeWarning when using FixedScaleOffset with astype.
-            # This can be safely ignored in this context.
-            with np.errstate(invalid="ignore"):
-                da: xr.DataArray = self.set_other(
-                    da,
-                    name=name,
-                    filters=filters,
-                    time_chunks_per_shard=int(1e8 / get_chunk_size(da)),
-                    time_chunksize=da.chunksizes["time"][0],
-                    **kwargs,
-                )
+            da: xr.DataArray = self.set_other(
+                da,
+                name=name,
+                filters=filters,
+                shards={
+                    "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
+                },
+                **kwargs,
+            )
 
         if create_plots:
             plot_forcing(mask, self.geom["mask"], self.report_dir, da, name)
@@ -1133,7 +1125,7 @@ class Forcing(BuildModelBase):
             bounds=self.grid["mask"].rio.bounds(recalc=True),
         )
 
-        pr_hourly: xr.DataArray = era5_loader(variable="tp").chunk({"time": 7 * 24})
+        pr_hourly: xr.DataArray = era5_loader(variable="tp")
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
         )  # convert from m/hr to kg/m2/s
@@ -1159,15 +1151,15 @@ class Forcing(BuildModelBase):
         assert (geopotential.x.values == climate_grid.x.values).all()
         assert (geopotential.y.values == climate_grid.y.values).all()
 
-        tas: xr.DataArray = era5_loader("t2m").chunk({"time": 7 * 24})
+        tas: xr.DataArray = era5_loader("t2m")
         self.set_tas_2m_K(tas, create_plots=create_plots)
 
-        dew_point_tas: xr.DataArray = era5_loader("d2m").chunk({"time": 7 * 24})
+        dew_point_tas: xr.DataArray = era5_loader("d2m")
         self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
 
         rsds: xr.DataArray = (
             era5_loader("ssrd") / 3600  # convert from J/m2/(per timestep) to W/m2
-        ).chunk({"time": 7 * 24})  # surface_solar_radiation_downwards
+        )  # surface_solar_radiation_downwards
         self.set_rsds_W_per_m2(rsds, create_plots=create_plots)
 
         # surface_thermal_radiation_downwards
@@ -1176,13 +1168,13 @@ class Forcing(BuildModelBase):
         )  # convert from J/m2/(per timestep) to W/m2
         self.set_rlds_W_per_m2(rlds, create_plots=create_plots)
 
-        pressure: xr.DataArray = era5_loader("sp").chunk({"time": 7 * 24})
+        pressure: xr.DataArray = era5_loader("sp")
         self.set_ps_pascal(pressure, create_plots=create_plots)
 
-        u_wind: xr.DataArray = era5_loader("u10").chunk({"time": 7 * 24})
+        u_wind: xr.DataArray = era5_loader("u10")
         self.set_wind_10m_m_per_s(u_wind, direction="u", create_plots=create_plots)
 
-        v_wind: xr.DataArray = era5_loader("v10").chunk({"time": 7 * 24})
+        v_wind: xr.DataArray = era5_loader("v10")
         self.set_wind_10m_m_per_s(v_wind, direction="v", create_plots=create_plots)
 
         elevation_forcing = (geopotential / 9.81).astype(np.float32)
@@ -1360,7 +1352,7 @@ class Forcing(BuildModelBase):
             ),  # chunk in spatial blocks for efficient SPEI calculation
             name="tmp_water_budget_file",
             time_chunksize=water_budget.time.size,
-            time_chunks_per_shard=None,
+            shards=None,
         ) as water_budget:
             # We set freq to None, so that the input frequency is used (no recalculating)
             # this means that we can calculate SPEI much more efficiently, as it is not
@@ -1401,7 +1393,6 @@ class Forcing(BuildModelBase):
                 SPEI,
                 name="tmp_spei_file",
                 time_chunksize=10,
-                time_chunks_per_shard=None,
             ) as SPEI:
                 self.set_SPEI(
                     SPEI,
@@ -1427,10 +1418,23 @@ class Forcing(BuildModelBase):
                 # to ensure they are saved on the regular model grid.
                 grid_mask = self.other["climate/pr_kg_per_m2_per_s_mask"]
                 for param in ["c", "loc", "scale"]:
+                    values_1d = GEV.sel(dparams=param).values.astype(np.float32)
+                    mask_2d = grid_mask.values.astype(bool)
+
+                    assert values_1d.ndim == 1
+                    assert np.count_nonzero(mask_2d) == len(values_1d)
+
+                    out = np.full(mask_2d.shape, np.nan, dtype=np.float32)
+                    out[mask_2d] = values_1d
+
                     param_da = self.full_like(
-                        grid_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+                        grid_mask,
+                        fill_value=np.nan,
+                        nodata=np.nan,
+                        dtype=np.float32,
                     )
-                    param_da.values[grid_mask.values] = GEV.sel(dparams=param).values
+                    param_da.values = out
+
                     self.set_other(param_da, name=f"climate/gev_{param}")
 
     @build_method(depends_on=["setup_forcing"], required=True)
@@ -1443,22 +1447,17 @@ class Forcing(BuildModelBase):
             self.other["climate/pr_kg_per_m2_per_s"] * 3600
         )  # convert to mm/hour
 
-        self.logger.info("Calculating yearly maximum monthly precipitation ")
+        self.logger.info("Calculating yearly total precipitation")
         # with ProgressBar():
-        # Calculate monthly totals and then yearly max.
-        pr_yearly_max = (
-            pr.resample(time="MS")  # MS = Month Start
-            .sum(method="blockwise")
-            .resample(time="YS")  # YS = Year Start
-            .max(method="blockwise")
+        pr_yearly_total = (
+            pr.resample(time="YS").sum(method="blockwise")  # YS = Year Start
         ).compute()
 
         self.logger.info(
-            "Calculating GEV parameters for yearly maximum monthly precipitation"
+            "Calculating GEV parameters for low annual precipitation totals using Y = -X"
         )
-        # with ProgressBar():
         gev_pr = xcistats.fit(
-            pr_yearly_max,
+            -pr_yearly_total,
             dist="genextreme",
         ).compute()
 
@@ -1466,10 +1465,22 @@ class Forcing(BuildModelBase):
         # to ensure they are saved on the regular model grid.
         grid_mask = self.other["climate/pr_kg_per_m2_per_s_mask"]
         for param in ["c", "loc", "scale"]:
-            param_da: xr.DataArray = self.full_like(
-                grid_mask, np.nan, nodata=np.nan, dtype=np.float32
+            values_1d = gev_pr.sel(dparams=param).values.astype(np.float32)
+            mask_2d = grid_mask.values.astype(bool)
+
+            assert values_1d.ndim == 1
+            assert np.count_nonzero(mask_2d) == len(values_1d)
+
+            out = np.full(mask_2d.shape, np.nan, dtype=np.float32)
+            out[mask_2d] = values_1d
+
+            param_da = self.full_like(
+                grid_mask,
+                fill_value=np.nan,
+                nodata=np.nan,
+                dtype=np.float32,
             )
-            param_da.values[grid_mask.values] = gev_pr.sel(dparams=param).values
+            param_da.values = out
             self.set_other(param_da, name=f"climate/pr_gev_{param}")
 
     @build_method(depends_on=["set_ssp", "set_time_range"], required=True)

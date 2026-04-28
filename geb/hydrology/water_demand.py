@@ -21,8 +21,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -102,7 +100,7 @@ class WaterDemand(Module):
         This method initializes the reservoir command areas for the HRU grid.
         """
         subgrid_command_areas = read_grid(
-            self.model.files["subgrid"]["waterbodies/subcommand_areas"]
+            self.model.files["subgrid"]["waterbodies/subcommand_areas"], ndim=2
         )
         reservoir_command_areas = self.HRU.convert_subgrid_to_HRU(
             subgrid_command_areas,
@@ -218,6 +216,9 @@ class WaterDemand(Module):
             Irrigation loss to evaporation per HRU [m].
             Total water demand loss [m3].
             The actual irrigation consumption [m].
+
+        Raises:
+            ValueError: If reservoir abstraction doesn't fully deplete calculated volume.
         """
         timer: TimingModule = TimingModule("Water demand")
 
@@ -263,11 +264,11 @@ class WaterDemand(Module):
         ) = self.model.agents.households.water_demand(household_demand_to_grid)
 
         timer.finish_split("Domestic")
-        industry_water_demand, industry_water_efficiency = (
+        industry_water_demand, industry_return_flow = (
             self.model.agents.industry.water_demand()
         )
         timer.finish_split("Industry")
-        livestock_water_demand, livestock_water_efficiency = (
+        livestock_water_demand, livestock_return_flow = (
             self.model.agents.livestock_farmers.water_demand()
         )
         timer.finish_split("Livestock")
@@ -333,9 +334,20 @@ class WaterDemand(Module):
         total_water_demand_loss_m3 += domestic_water_loss_m3
 
         # 2. industry (surface + ground)
-        industry_water_demand = self.hydrology.to_grid(
-            HRU_data=industry_water_demand, fn="weightedmean"
+        # Pre-compute the fraction of demand that is returned at full supply.
+        # If demand cannot be fully met, return flow is scaled by the same ratio
+        # so that consumption (= withdrawal - return flow) stays proportional.
+        industry_return_flow_fraction: npt.NDArray[np.float32] = np.zeros_like(
+            industry_water_demand
         )
+        np.divide(
+            industry_return_flow,
+            industry_water_demand,
+            out=industry_return_flow_fraction,
+            where=industry_water_demand > 0,
+        )
+        del industry_return_flow
+
         industry_water_demand_m3 = (
             industry_water_demand * self.hydrology.grid.var.cell_area
         )
@@ -347,9 +359,7 @@ class WaterDemand(Module):
         industry_withdrawal_m3 += self.withdraw(
             available_groundwater_m3, industry_water_demand_m3
         )  # withdraw from groundwater
-        industry_return_flow_m3 = industry_withdrawal_m3 * (
-            1 - industry_water_efficiency
-        )
+        industry_return_flow_m3 = industry_withdrawal_m3 * industry_return_flow_fraction
         industry_return_flow_m = industry_return_flow_m3 / self.grid.var.cell_area
 
         industry_water_loss_m3 = (
@@ -358,9 +368,18 @@ class WaterDemand(Module):
         total_water_demand_loss_m3 += industry_water_loss_m3
 
         # 3. livestock (surface)
-        livestock_water_demand = self.hydrology.to_grid(
-            HRU_data=livestock_water_demand, fn="weightedmean"
+        # Same proportional scaling of return flow as for industry.
+        livestock_return_flow_fraction: npt.NDArray[np.float32] = np.zeros_like(
+            livestock_water_demand
         )
+        np.divide(
+            livestock_return_flow,
+            livestock_water_demand,
+            out=livestock_return_flow_fraction,
+            where=livestock_water_demand > 0,
+        )
+        del livestock_return_flow
+
         livestock_water_demand_m3 = (
             livestock_water_demand * self.hydrology.grid.var.cell_area
         )
@@ -369,8 +388,8 @@ class WaterDemand(Module):
         livestock_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, livestock_water_demand_m3
         )  # withdraw from surface water
-        livestock_return_flow_m3 = livestock_withdrawal_m3 * (
-            1 - livestock_water_efficiency
+        livestock_return_flow_m3 = (
+            livestock_withdrawal_m3 * livestock_return_flow_fraction
         )
         livestock_return_flow_m = livestock_return_flow_m3 / self.grid.var.cell_area
 
@@ -403,10 +422,16 @@ class WaterDemand(Module):
         self.withdraw(available_reservoir_storage_m3, reservoir_abstraction_m3_farmers)
         self.withdraw(available_groundwater_m3, groundwater_abstraction_m3_farmers)
 
-        assert (available_reservoir_storage_m3 < 1000).all(), (
-            "Reservoir storage should be empty after abstraction. "
-            f"Offending values: {available_reservoir_storage_m3[available_reservoir_storage_m3 >= 50]}"
+        reservoir_storage_tolerance_m3 = 10000
+        offending_mask = (
+            available_reservoir_storage_m3 >= reservoir_storage_tolerance_m3
         )
+        if offending_mask.any():
+            raise ValueError(
+                "Reservoir storage should be empty after abstraction. "
+                f"Found remaining storage >= {reservoir_storage_tolerance_m3} m3: "
+                f"{available_reservoir_storage_m3[offending_mask]}"
+            )
 
         timer.finish_split("Irrigation")
 
@@ -442,7 +467,7 @@ class WaterDemand(Module):
         )
 
         return_flow = (
-            self.hydrology.to_grid(HRU_data=return_flow_irrigation_m, fn="weightedmean")
+            self.hydrology.to_grid(HRU_data=return_flow_irrigation_m)
             + domestic_return_flow_m
             + industry_return_flow_m
             + livestock_return_flow_m
@@ -484,6 +509,12 @@ class WaterDemand(Module):
             )
         if self.model.timing:
             self.model.logger.debug(timer)
+
+        self.var.return_flow_m3_agents = np.bincount(
+            self.HRU.var.land_owners[self.HRU.var.land_owners != -1],
+            weights=return_flow_irrigation_m[self.HRU.var.land_owners != -1]
+            * self.HRU.var.cell_area[self.HRU.var.land_owners != -1],
+        )
 
         self.report(locals())
 

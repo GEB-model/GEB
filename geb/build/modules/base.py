@@ -1,7 +1,5 @@
 """Implementation of the abstract base class for model components."""
 
-from __future__ import annotations
-
 import datetime
 from abc import ABC, abstractmethod
 from logging import Logger
@@ -12,11 +10,10 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
-from hydromt import DataCatalog
 
 if TYPE_CHECKING:
     from geb.build import DelayedReader
-    from geb.build.data_catalog import NewDataCatalog
+    from geb.build.data_catalog import DataCatalog
 
 
 class BuildModelBase(ABC):
@@ -44,18 +41,6 @@ class BuildModelBase(ABC):
     @abstractmethod
     def subgrid(self, value: xr.Dataset) -> None:
         """Abstract setter for subgrid data."""
-        pass
-
-    @property
-    @abstractmethod
-    def region_subgrid(self) -> xr.Dataset:
-        """Abstract property for region_subgrid data."""
-        pass
-
-    @subgrid.setter
-    @abstractmethod
-    def region_subgrid(self, value: xr.Dataset) -> None:
-        """Abstract setter for region_subgrid data."""
         pass
 
     @property
@@ -132,25 +117,13 @@ class BuildModelBase(ABC):
 
     @property
     @abstractmethod
-    def old_data_catalog(self) -> DataCatalog:
-        """Abstract property for data catalog."""
-        pass
-
-    @old_data_catalog.setter
-    @abstractmethod
-    def data_catalog(self, value: DataCatalog) -> None:
-        """Abstract setter for data catalog."""
-        pass
-
-    @property
-    @abstractmethod
-    def data_catalog(self) -> NewDataCatalog:
+    def data_catalog(self) -> DataCatalog:
         """Abstract property for data catalog."""
         pass
 
     @data_catalog.setter
     @abstractmethod
-    def data_catalog(self, value: NewDataCatalog) -> None:
+    def data_catalog(self, value: DataCatalog) -> None:
         """Abstract setter for data catalog."""
         pass
 
@@ -189,18 +162,19 @@ class BuildModelBase(ABC):
         pass
 
     @abstractmethod
-    def set_grid(self, data: xr.DataArray, name: str) -> xr.DataArray:
+    def set_grid(self, data: xr.DataArray, name: str, **kwargs: Any) -> xr.DataArray:
         """Abstract method to set grid data."""
         pass
 
     @abstractmethod
-    def set_subgrid(self, data: xr.DataArray, name: str) -> xr.DataArray:
+    def set_subgrid(
+        self,
+        data: xr.DataArray,
+        name: str,
+        write: bool = True,
+        **kwargs: Any,
+    ) -> xr.DataArray:
         """Abstract method to set subgrid data."""
-        pass
-
-    @abstractmethod
-    def set_region_subgrid(self, data: xr.DataArray, name: str) -> xr.DataArray:
-        """Abstract method to set region subgrid."""
         pass
 
     @abstractmethod

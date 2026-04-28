@@ -197,7 +197,7 @@ def test_infiltration() -> None:
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     saturated_hydraulic_conductivity = np.full_like(w, np.float32(0.01))
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
-    soil_is_frozen = False
+    frozen_fraction_top_layer = np.float32(0.0)
     topwater = np.float32(0.005)
 
     w_pre = w.copy()
@@ -212,13 +212,14 @@ def test_infiltration() -> None:
         _,
         _,
         _,
+        _,
     ) = infiltration(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w,
         topwater,
         np.float32(0.0),  # capillary_rise_from_groundwater_m
@@ -242,10 +243,15 @@ def test_infiltration() -> None:
     # Check that soil water increased
     assert np.sum(w) > np.sum(w_pre)
 
-    # Test case 2: Frozen soil - no infiltration
-    w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+    # Test case 2: Fully frozen top layer with no new liquid heat input.
+    # Use an enthalpy state that is consistent with a fully frozen thin top layer,
+    # otherwise the default zero-enthalpy fallback represents unfrozen conditions.
+    w = np.array([0.002, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     topwater = np.float32(0.005)
-    soil_is_frozen = True
+    frozen_fraction_top_layer = np.float32(1.0)
+    topwater_pre = topwater
+    soil_enthalpy_top_layer_J_per_m2 = np.float32(-700000.0)
+    solid_heat_capacity_top_layer_J_per_m2_K = np.float32(100000.0)
 
     (
         updated_topwater,
@@ -256,13 +262,61 @@ def test_infiltration() -> None:
         _,
         _,
         _,
+        _,
     ) = infiltration(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
+        w,
+        topwater,
+        np.float32(0.0),  # capillary_rise_from_groundwater_m
+        np.float32(0.0),
+        np.float32(0.1),  # wetting_front_suction_head_m
+        np.float32(0.1),  # wetting_front_moisture_deficit
+        np.int32(0),
+        np.float32(0.1),
+        bub_arr,
+        h_arr,
+        lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
+        solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+        rain_temperature_C=np.float32(0.0),
+        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+    )
+
+    # No infiltration on a fully frozen top layer without advected heat input.
+    assert infiltration_amount < np.float32(1e-8)
+    assert groundwater_recharge == 0.0
+    # All water should go to direct runoff
+    assert abs(direct_runoff - topwater_pre) < 1e-6
+
+    # Test case 3: Partially frozen soil - reduced but nonzero infiltration
+    w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+    topwater = np.float32(0.005)
+    frozen_fraction_top_layer = np.float32(0.5)
+    land_use_type = np.int32(NON_PADDY_IRRIGATED)
+    topwater_pre = topwater
+
+    (
+        updated_topwater,
+        direct_runoff,
+        groundwater_recharge,
+        infiltration_amount,
+        wetting_front,
+        _,
+        _,
+        _,
+        _,
+    ) = infiltration(
+        ws,
+        np.zeros_like(ws),
+        saturated_hydraulic_conductivity,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        land_use_type,
+        frozen_fraction_top_layer,
         w,
         topwater,
         np.float32(0.0),  # capillary_rise_from_groundwater_m
@@ -276,17 +330,17 @@ def test_infiltration() -> None:
         lam_arr,
     )
 
-    # No infiltration on frozen soil
-    assert infiltration_amount == 0.0
+    assert infiltration_amount > 0.0
+    assert infiltration_amount < topwater_pre
     assert groundwater_recharge == 0.0
-    # All water should go to direct runoff
-    assert direct_runoff == topwater_pre
+    assert abs(infiltration_amount + direct_runoff - topwater_pre) < 1e-6
 
-    # Test case 3: Sealed area - no infiltration
-    w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+    # Test case 4: Warm liquid input can thaw a fully frozen top layer across substeps.
+    w = np.array([0.002, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     topwater = np.float32(0.005)
-    soil_is_frozen = False
-    land_use_type = np.int32(SEALED)
+    frozen_fraction_top_layer = np.float32(1.0)
+    soil_enthalpy_top_layer_J_per_m2 = np.float32(-700000.0)
+    solid_heat_capacity_top_layer_J_per_m2_K = np.float32(100000.0)
 
     (
         updated_topwater,
@@ -297,13 +351,101 @@ def test_infiltration() -> None:
         _,
         _,
         _,
+        updated_soil_enthalpy_top_layer_J_per_m2,
+    ) = infiltration(
+        ws,
+        np.zeros_like(ws),
+        saturated_hydraulic_conductivity,
+        np.float32(0.0),
+        np.int32(NON_PADDY_IRRIGATED),
+        frozen_fraction_top_layer,
+        w,
+        topwater,
+        np.float32(0.0),
+        np.float32(0.0),
+        np.float32(0.1),
+        np.float32(0.1),
+        np.int32(0),
+        np.float32(0.1),
+        bub_arr,
+        h_arr,
+        lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
+        solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+        rain_temperature_C=np.float32(20.0),
+        liquid_water_input_for_enthalpy_m=topwater,
+    )
+
+    assert infiltration_amount > 0.0
+    assert groundwater_recharge == 0.0
+    assert updated_soil_enthalpy_top_layer_J_per_m2 > soil_enthalpy_top_layer_J_per_m2
+    assert abs(infiltration_amount + direct_runoff - topwater) < 1e-6
+
+    # Test case 5: Existing ponded water should not be reheated when there is no new liquid input.
+    w = np.array([0.002, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+    topwater = np.float32(0.005)
+    initial_enthalpy_J_per_m2 = np.float32(-100000.0)
+
+    (
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        updated_enthalpy_without_new_input_J_per_m2,
+    ) = infiltration(
+        ws,
+        np.zeros_like(ws),
+        saturated_hydraulic_conductivity,
+        np.float32(0.0),
+        np.int32(NON_PADDY_IRRIGATED),
+        np.float32(0.0),
+        w,
+        topwater,
+        np.float32(0.0),
+        np.float32(0.0),
+        np.float32(0.1),
+        np.float32(0.1),
+        np.int32(0),
+        np.float32(0.1),
+        bub_arr,
+        h_arr,
+        lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=initial_enthalpy_J_per_m2,
+        solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+        rain_temperature_C=np.float32(20.0),
+        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+    )
+
+    assert updated_enthalpy_without_new_input_J_per_m2 == initial_enthalpy_J_per_m2
+
+    # Test case 6: Sealed area - no infiltration
+    w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+    topwater = np.float32(0.005)
+    frozen_fraction_top_layer = np.float32(0.0)
+    land_use_type = np.int32(SEALED)
+    topwater_pre = topwater
+
+    (
+        updated_topwater,
+        direct_runoff,
+        groundwater_recharge,
+        infiltration_amount,
+        wetting_front,
+        _,
+        _,
+        _,
+        _,
     ) = infiltration(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w,
         topwater,
         np.float32(0.0),  # capillary_rise_from_groundwater_m
@@ -323,10 +465,10 @@ def test_infiltration() -> None:
     # All water should go to direct runoff
     assert direct_runoff == topwater_pre
 
-    # Test case 4: Zero topwater
+    # Test case 7: Zero topwater
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     topwater = np.float32(0.0)
-    soil_is_frozen = False
+    frozen_fraction_top_layer = np.float32(0.0)
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
 
     (
@@ -338,13 +480,14 @@ def test_infiltration() -> None:
         _,
         _,
         _,
+        _,
     ) = infiltration(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w,
         topwater,
         np.float32(0.0),  # capillary_rise_from_groundwater_m
@@ -365,11 +508,12 @@ def test_infiltration() -> None:
     # Soil water unchanged
     assert np.allclose(w, np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32))
 
-    # Test case 5: Open water - no infiltration
+    # Test case 8: Open water - no infiltration
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     topwater = np.float32(0.005)
-    soil_is_frozen = False
+    frozen_fraction_top_layer = np.float32(0.0)
     land_use_type = np.int32(OPEN_WATER)
+    topwater_pre = topwater
 
     (
         updated_topwater,
@@ -380,13 +524,14 @@ def test_infiltration() -> None:
         _,
         _,
         _,
+        _,
     ) = infiltration(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w,
         topwater,
         np.float32(0.0),  # capillary_rise_from_groundwater_m
@@ -406,10 +551,10 @@ def test_infiltration() -> None:
     # All water should go to direct runoff
     assert direct_runoff == topwater_pre
 
-    # Test case 6: Paddy irrigated with ponding allowance
+    # Test case 9: Paddy irrigated with ponding allowance
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     topwater = np.float32(0.1)  # More than ponding allowance
-    soil_is_frozen = False
+    frozen_fraction_top_layer = np.float32(0.0)
     land_use_type = np.int32(PADDY_IRRIGATED)
 
     (
@@ -421,13 +566,14 @@ def test_infiltration() -> None:
         _,
         _,
         _,
+        _,
     ) = infiltration(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w,
         topwater,
         np.float32(0.0),  # capillary_rise_from_groundwater_m
@@ -449,13 +595,13 @@ def test_infiltration() -> None:
     expected_runoff = max(0.0, remaining_after_infil - 0.05)
     assert abs(direct_runoff - expected_runoff) < 1e-6
 
-    # Test case 7: Soil layers at different saturation levels
+    # Test case 10: Soil layers at different saturation levels
     ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
     w = np.array(
         [0.3, 0.3, 0.1, 0.1, 0.1, 0.1], dtype=np.float32
     )  # Top layers saturated
     topwater = np.float32(0.005)
-    soil_is_frozen = False
+    frozen_fraction_top_layer = np.float32(0.0)
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
 
     w_pre = w.copy()
@@ -468,13 +614,14 @@ def test_infiltration() -> None:
         _,
         _,
         _,
+        _,
     ) = infiltration(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w,
         topwater,
         np.float32(0.0),  # capillary_rise_from_groundwater_m
@@ -527,13 +674,14 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         _,
         _,
         _,
+        _,
     ) = infiltration.py_func(
         ws,
         wres,
         saturated_hydraulic_conductivity,
         groundwater_toplayer_conductivity_m_per_timestep,
         np.int32(NON_PADDY_IRRIGATED),
-        False,
+        np.float32(0.0),
         w,
         topwater_m,
         np.float32(0.0),
@@ -565,13 +713,14 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         _,
         _,
         _,
+        _,
     ) = infiltration.py_func(
         ws,
         wres,
         saturated_hydraulic_conductivity,
         groundwater_toplayer_conductivity_m_per_timestep,
         np.int32(NON_PADDY_IRRIGATED),
-        False,
+        np.float32(0.0),
         w,
         topwater_m,
         np.float32(0.001),
@@ -761,7 +910,7 @@ def test_infiltration_variable_runoff_integration() -> None:
     )  # 50% saturation
     saturated_hydraulic_conductivity = np.full_like(w, np.float32(10.0))  # High Ksat
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
-    soil_is_frozen = False
+    frozen_fraction_top_layer = np.float32(0.0)
     topwater = np.float32(10.0)  # 10mm rain
 
     # Run infiltration using .py_func to use the python implementation with the updated global
@@ -778,13 +927,13 @@ def test_infiltration_variable_runoff_integration() -> None:
     h_arr = np.full_like(ws, 0.1)  # Assume layer height
     lam_arr = np.full_like(ws, 0.5)
 
-    _, runoff_variable, _, infil_variable, _, _, _, _ = infiltration.py_func(
+    _, runoff_variable, _, infil_variable, _, _, _, _, _ = infiltration.py_func(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w_variable,
         topwater,
         np.float32(0.0),
@@ -818,7 +967,7 @@ def test_infiltration_variable_capacity_limit() -> None:
     saturated_hydraulic_conductivity = np.full_like(w, np.float32(2.0))
 
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
-    soil_is_frozen = False
+    frozen_fraction_top_layer = np.float32(0.0)
     topwater = np.float32(10.0)
     variable_runoff_shape_beta = np.float32(0.4)
 
@@ -829,13 +978,13 @@ def test_infiltration_variable_capacity_limit() -> None:
 
     # Run infiltration using .py_func
     # Use a copy of w to prevent inplace modification affecting subsequent tests
-    _, runoff, _, infiltration_amount, _, _, _, _ = infiltration.py_func(
+    _, runoff, _, infiltration_amount, _, _, _, _, _ = infiltration.py_func(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity,
         np.float32(0.0),
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w.copy(),
         topwater,
         np.float32(0.0),
@@ -873,13 +1022,13 @@ def test_infiltration_variable_capacity_limit() -> None:
     saturated_hydraulic_conductivity_low = np.full_like(w, np.float32(0.5))
     topwater_high = np.float32(50.0)
 
-    _, runoff_high, _, infiltration_amount_high, _, _, _, _ = infiltration.py_func(
+    _, runoff_high, _, infiltration_amount_high, _, _, _, _, _ = infiltration.py_func(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_low,
         np.float32(0.0),
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w.copy(),  # Use a fresh copy of w (10.0, 50.0, ...)
         topwater_high,
         np.float32(0.0),
@@ -911,13 +1060,13 @@ def test_infiltration_variable_capacity_limit() -> None:
 
     # Verify that if Ksat is high, infiltration is higher
     saturated_hydraulic_conductivity_high = np.full_like(w, np.float32(20.0))
-    _, runoff_high, _, infiltration_amount_high, _, _, _, _ = infiltration.py_func(
+    _, runoff_high, _, infiltration_amount_high, _, _, _, _, _ = infiltration.py_func(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_high,
         np.float32(0.0),
         land_use_type,
-        soil_is_frozen,
+        frozen_fraction_top_layer,
         w,
         topwater,
         np.float32(0.0),

@@ -1,7 +1,5 @@
 """Adapter for COAST-RP datasets."""
 
-from __future__ import annotations
-
 from geb.workflows.io import fetch_and_save
 
 from .base import Adapter

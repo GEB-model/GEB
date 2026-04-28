@@ -1,9 +1,8 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
-from __future__ import annotations
-
 import datetime
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -13,12 +12,20 @@ import pandas as pd
 import zarr.storage
 from dateutil.relativedelta import relativedelta
 from xarray.backends.zarr import FillValueCoder
+from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import ZstdCodec
+from zarr.codecs.numcodecs import (
+    BitRound,
+    PackBits,
+    Shuffle,
+    _NumcodecsArrayArrayCodec,
+)
 
 from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
+from geb.hydrology.routing import get_upstream_represented_xys
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.workflows.io import fast_rmtree, read_geom
+from geb.workflows.io import fast_rmtree, read_geom, write_table
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
@@ -103,7 +110,7 @@ WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
     },
 }
 
-WATER_BALANCE_REPORT_CONFIG = {
+WATER_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology": {
         "_water_balance_storage": {
             "varname": ".current_storage",
@@ -145,6 +152,11 @@ WATER_BALANCE_REPORT_CONFIG = {
             "type": "HRU",
             "function": "weightedsum",
         },
+        "_water_balance_potential_evapotranspiration": {
+            "varname": ".potential_evapotranspiration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
         "_water_balance_sublimation_or_deposition": {
             "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
@@ -152,6 +164,51 @@ WATER_BALANCE_REPORT_CONFIG = {
         },
         "_water_balance_interflow": {
             "varname": ".interflow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_storage": {
+            "varname": "HRU.var.water_content_m[0]",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_precipitation": {
+            "varname": ".rain_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_snow": {
+            "varname": ".snow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_runoff": {
+            "varname": ".runoff_m_daily",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_evaporation": {
+            "varname": ".top_soil_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_infiltration": {
+            "varname": ".top_soil_infiltration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_rise_from_layer_2": {
+            "varname": ".top_soil_rise_from_layer_2_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_percolation_to_layer_2": {
+            "varname": ".top_soil_percolation_to_layer_2_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_top_soil_transpiration": {
+            "varname": ".top_soil_transpiration_m",
             "type": "HRU",
             "function": "weightedsum",
         },
@@ -186,7 +243,52 @@ WATER_BALANCE_REPORT_CONFIG = {
     },
 }
 
-ENERGY_BALANCE_REPORT_CONFIG = {
+WATER_STORAGE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
+    "hydrology.landsurface": {
+        "_water_storage_soil_water_content_layer_0_m": {
+            "varname": "HRU.var.water_content_m[0]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_1_m": {
+            "varname": "HRU.var.water_content_m[1]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_2_m": {
+            "varname": "HRU.var.water_content_m[2]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_3_m": {
+            "varname": "HRU.var.water_content_m[3]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_4_m": {
+            "varname": "HRU.var.water_content_m[4]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_water_storage_soil_water_content_layer_5_m": {
+            "varname": "HRU.var.water_content_m[5]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+    },
+}
+
+OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
+    "hydrology.landsurface": {
+        "_outflow_plot_top_soil_frozen_fraction": {
+            "varname": ".top_soil_frozen_fraction",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+    },
+}
+
+ENERGY_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology.landsurface": {
         "_energy_balance_soil_temperature_layer_0_C": {
             "varname": ".soil_temperature_C[0]",
@@ -351,6 +453,56 @@ def create_time_array(
     return time_array
 
 
+def get_filters_and_compressors(
+    dtype: np.dtype,
+    compression_level: int,
+) -> tuple[list[_NumcodecsArrayArrayCodec], list[BytesBytesCodec]]:
+    """Select zarr filters and compressors appropriate for a given dtype.
+
+    The chosen pipeline balances precision loss, byte-shuffle efficiency,
+    and final compression ratio:
+    - Floating-point types: BitRound (lossy precision reduction) followed by
+      byte Shuffle (improves compressibility of mantissa bits) then ZstdCodec.
+      keepbits values are chosen to retain ~0.01% relative error,
+      which is negligible for most applications.
+    - Boolean: PackBits to pack 8 booleans per byte, then ZstdCodec.
+    - All other types (integers, etc.): only ZstdCodec; Shuffle is omitted
+      because unstructured integer data rarely benefits from byte-shuffling.
+
+    Args:
+        dtype: NumPy dtype of the array to be stored.
+        compression_level: Zstd compression level (1 = fast, 22 = best).
+
+    Returns:
+        filters: Array-to-array codecs applied before byte conversion.
+        compressors: Bytes-to-bytes codecs applied after filters, always
+            ending with ZstdCodec at the given compression level.
+    """
+    filters: list[_NumcodecsArrayArrayCodec]
+    compressors: list[BytesBytesCodec]
+    if dtype == bool:
+        filters = [PackBits()]
+        compressors = []
+    elif np.issubdtype(dtype, np.float64):
+        # keepbits=14 retains ~0.006% relative error; Shuffle exploits
+        # the repetitive byte patterns in rounded mantissa bits
+        filters = [BitRound(keepbits=14)]
+        compressors = [Shuffle(elementsize=8)]
+    elif np.issubdtype(dtype, np.float32):
+        # keepbits=13 retains ~0.012% relative error
+        filters = [BitRound(keepbits=13)]
+        compressors = [Shuffle(elementsize=4)]
+    elif np.issubdtype(dtype, np.float16):
+        # keepbits=10 retains ~0.098% relative error
+        filters = [BitRound(keepbits=10)]
+        compressors = [Shuffle(elementsize=2)]
+    else:
+        filters = []
+        compressors = []
+    compressors.append(ZstdCodec(level=compression_level))
+    return filters, compressors
+
+
 def prepare_gridded_group(
     name: str,
     config: dict,
@@ -359,7 +511,7 @@ def prepare_gridded_group(
     crs: str,
     example_value: np.ndarray[Any],
     time: ArrayInt64,
-    chunk_size: int,
+    time_chunk_size: int,
     compression_level: int,
 ) -> None:
     """Create a zarr group for gridded data.
@@ -372,7 +524,7 @@ def prepare_gridded_group(
         crs: The coordinate reference system in WKT format.
         example_value: An example value to determine the data type.
         time: The time array.
-        chunk_size: The size of the time chunk.
+        time_chunk_size: The size of the time chunk.
         compression_level: The compression level for the zarr array.
     """
     root_group = config["_root_group"]
@@ -429,35 +581,40 @@ def prepare_gridded_group(
     if encoded_fill_value is not None:
         attributes["_FillValue"] = encoded_fill_value
 
+    filters, compressors = get_filters_and_compressors(
+        example_value.dtype, compression_level
+    )
+
     # Create the variable array
     variable_data: zarr.Array[Any] = root_group.create_array(
         name,
         shape=(
-            time_group.size,
             lat.size,
             lon.size,
+            time_group.size,
         ),
         chunks=(
-            chunk_size,
             lat.size,
             lon.size,
+            time_chunk_size,
         ),
         dtype=example_value.dtype,
-        compressors=(
-            ZstdCodec(
-                level=compression_level,
-            ),
-        ),
+        compressors=compressors,
+        filters=filters,
         fill_value=fill_value,
-        dimension_names=["time", "y", "x"],
+        dimension_names=[
+            "y",
+            "x",
+            "time",
+        ],
         attributes=attributes,
     )
 
     # Pre-allocate the writing buffer for the chunks
     config["_chunk_data"] = np.full(
-        (chunk_size, lat.size, lon.size),
-        np.nan,
-        dtype=np.float32,
+        (lat.size, lon.size, time_chunk_size),
+        fill_value,
+        dtype=example_value.dtype,
     )
 
 
@@ -478,6 +635,9 @@ def prepare_agent_group(
         example_value: An example value to determine the data type.
         chunk_target_size_bytes: The target size of the chunk in bytes.
         compression_level: The compression level for the zarr array.
+
+    Raises:
+        ValueError: If the example value type is not recognized.
     """
     root_group = config["_root_group"]
 
@@ -496,9 +656,9 @@ def prepare_agent_group(
     time_group[:] = time
 
     # Determine chunk size and shape based on example value
-    if isinstance(example_value, (float, int)):
+    if isinstance(example_value, (float, int, bool)):
         shape = (time_group.size,)
-        chunk_size = get_time_chunk_size(
+        time_chunk_size = get_time_chunk_size(
             np.dtype(type(example_value)),
             1,
             target_size_bytes=chunk_target_size_bytes,
@@ -506,29 +666,34 @@ def prepare_agent_group(
         if isinstance(example_value, float):
             dtype_ = np.float32
             example_value = np.array(example_value, dtype=np.float32)
-        else:
+        elif isinstance(example_value, bool):
+            dtype_ = bool
+            example_value = np.array(example_value, dtype=bool)
+        elif isinstance(example_value, int):
             dtype_ = np.int32
             example_value = np.array(example_value, dtype=np.int32)
-        chunk_size = min(chunk_size, time_group.size)
-        chunks = (chunk_size,)
-        compressors = None
+        else:
+            raise ValueError(
+                f"Example value of type {type(example_value)} not recognized."
+            )
+        time_chunk_size = min(time_chunk_size, time_group.size)
+        chunks = (time_chunk_size,)
         array_dimensions = ["time"]
     else:
         shape = (time_group.size, example_value.size)
         dtype_ = example_value.dtype
-        chunk_size = get_time_chunk_size(
+        time_chunk_size = get_time_chunk_size(
             np.dtype(example_value.dtype),
             example_value.size,
             target_size_bytes=chunk_target_size_bytes,
         )
-        chunk_size = min(chunk_size, time_group.size)
-        chunks = (chunk_size, example_value.size)
-        compressors = (
-            ZstdCodec(
-                level=compression_level,
-            ),
-        )
+        time_chunk_size = min(time_chunk_size, time_group.size)
+        chunks = (time_chunk_size, example_value.size)
         array_dimensions = ["time", "agents"]
+
+    filters, compressors = get_filters_and_compressors(
+        np.dtype(dtype_), compression_level
+    )
 
     fill_value, encoded_fill_value = get_fill_value(example_value)
     attributes = {
@@ -544,6 +709,7 @@ def prepare_agent_group(
         shape=shape,
         chunks=chunks,
         dtype=dtype_,
+        filters=filters,
         compressors=compressors,
         fill_value=fill_value,
         dimension_names=array_dimensions,
@@ -551,15 +717,17 @@ def prepare_agent_group(
     )
     # Pre-allocate the writing buffer for the chunks
     if isinstance(example_value, (float, int)):
-        config["_chunk_data"] = np.full((chunk_size,), fill_value)
+        config["_chunk_data"] = np.full((time_chunk_size,), fill_value)
     else:
-        config["_chunk_data"] = np.full((chunk_size, example_value.size), fill_value)
+        config["_chunk_data"] = np.full(
+            (time_chunk_size, example_value.size), fill_value
+        )
 
 
 class Reporter:
     """This class is used to report data to disk."""
 
-    def __init__(self, model: GEBModel, clean: bool) -> None:
+    def __init__(self, model: GEBModel, report_folder: Path, clean: bool) -> None:
         """The constructor for the Reporter class.
 
         Loops over the reporter configuration and creates the necessary files and data structures,
@@ -577,6 +745,7 @@ class Reporter:
 
         Args:
             model: The GEB model instance.
+            report_folder: The folder where the reports will be saved.
             clean: If True, the report folder is cleaned at the start of the model run.
 
         Raises:
@@ -591,7 +760,7 @@ class Reporter:
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
-        self.report_folder = self.model.output_folder / "report" / self.model.run_name
+        self.report_folder = report_folder
         # optionally clean report model at start of run
         if clean and self.report_folder.exists():
             fast_rmtree(self.report_folder)
@@ -636,37 +805,18 @@ class Reporter:
                         )
                     elif module_name == "_outflow_points" and module_values is True:
                         routing = self.model.hydrology.routing
-                        outflow_rivers = routing.outflow_rivers
+                        outflow_rivers = (
+                            routing.get_active_and_downstream_outflow_rivers()
+                        )
                         all_rivers = routing.rivers
 
                         outflow_reporters = {}
 
-                        def get_upstream_represented_xys(
-                            river_id: int,
-                        ) -> list[tuple[int, int]]:
-                            """Recursively find the nearest represented upstream rivers.
-
-                            Args:
-                                river_id: The ID of the river to find the upstream represented rivers for.
-
-                            Returns:
-                                A list of tuples containing the grid pixel coordinates of the nearest represented upstream rivers.
-                            """
-                            river = all_rivers.loc[river_id]
-                            if river["represented_in_grid"]:
-                                return [river["hydrography_xy"][-1]]
-
-                            upstream_rivers = all_rivers[
-                                all_rivers["downstream_ID"] == river_id
-                            ]
-                            xys = []
-                            for idx, _ in upstream_rivers.iterrows():
-                                xys.extend(get_upstream_represented_xys(idx))
-                            return xys
-
                         for river_ID, river in outflow_rivers.iterrows():
                             assert isinstance(river_ID, int)
-                            xys = get_upstream_represented_xys(river_ID)
+                            xys: list[tuple[int, int]] = get_upstream_represented_xys(
+                                river_ID, all_rivers
+                            )
                             for i, xy in enumerate(xys):
                                 # if there are multiple branches, we append a suffix to the name
                                 suffix = f"_{i}" if len(xys) > 1 else ""
@@ -682,6 +832,10 @@ class Reporter:
                             report_config,
                             {"hydrology.routing": outflow_reporters},
                         )
+                        report_config = multi_level_merge(
+                            report_config,
+                            OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
+                        )
                     elif module_name == "_water_circle":
                         if module_values is True:
                             report_config = multi_level_merge(
@@ -693,6 +847,12 @@ class Reporter:
                             report_config = multi_level_merge(
                                 report_config,
                                 WATER_BALANCE_REPORT_CONFIG,
+                            )
+                    elif module_name == "_water_storage":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                WATER_STORAGE_REPORT_CONFIG,
                             )
                     elif module_name == "_energy_balance":
                         if module_values is True:
@@ -786,27 +946,26 @@ class Reporter:
             KeyError: If the variable is not found in the local variables or module attributes.
             AttributeError: If the attribute is not found in the module.
         """
+        current_time = self.model.current_time
+        current_timestep = self.model.current_timestep
         # here we return None if the value is not to be reported on this timestep
         if "frequency" in config:
             if config["frequency"] == "initial":
-                if self.model.current_timestep != 0:
+                if current_timestep != 0:
                     return None
             elif config["frequency"] == "final":
-                if self.model.current_timestep != self.model.n_timesteps - 1:
+                if current_timestep != self.model.n_timesteps - 1:
                     return None
             elif "every" in config["frequency"]:
                 every = config["frequency"]["every"]
                 if every == "year":
                     month = config["frequency"]["month"]
                     day = config["frequency"]["day"]
-                    if (
-                        self.model.current_time.month != month
-                        or self.model.current_time.day != day
-                    ):
+                    if current_time.month != month or current_time.day != day:
                         return None
                 elif every == "month":
                     day = config["frequency"]["day"]
-                    if self.model.current_time.day != day:
+                    if current_time.day != day:
                         return None
                 elif every == "day":
                     pass
@@ -855,6 +1014,299 @@ class Reporter:
 
         self.process_value(module_name, name, value, config)
 
+    def _write_grid_hru_to_zarr(
+        self,
+        module_name: str,
+        name: str,
+        value: np.ndarray,
+        config: dict,
+        type_: str,
+    ) -> None:
+        """Write a grid or HRU array directly to a zarr store without aggregation.
+
+        Decompresses the compressed array and appends it to the zarr buffer,
+        flushing a full chunk to disk when the buffer is full.
+
+        Args:
+            module_name: Name of the module to which the value belongs.
+            name: Name of the variable being written.
+            value: The compressed 1-D (or 2-D with substeps) spatial array.
+            config: Reporter configuration dict for this variable (mutated in-place
+                to track zarr store, index, and buffer).
+            type_: Either ``"grid"`` or ``"HRU"``.
+        """
+        if type_ == "HRU":
+            value = self.hydrology.HRU.decompress(value)
+        else:
+            value = self.hydrology.grid.decompress(value)
+
+        # in the first timestep, we create the array that will hold the actual data
+        if value.ndim == 3:
+            substeps: int = value.shape[0]
+            # move time axis to the end, so that we can write the data to zarr in chunks along the time axis
+            value = np.moveaxis(value, 0, -1)
+        else:
+            substeps: int = 1
+            value = np.expand_dims(value, axis=-1)
+
+        if config["_index"] == 0:  # first time writing data
+            if config["type"] == "HRU":
+                raster = self.hydrology.HRU
+            else:
+                raster = self.hydrology.grid
+
+            time = create_time_array(
+                start=self.model.simulation_start,
+                end=self.model.simulation_end,
+                timestep=self.model.timestep_length,
+                conf=config,
+                substeps=substeps,
+            )
+
+            time_chunk_size: int = get_time_chunk_size(
+                value.dtype,
+                raster.lat.size,
+                raster.lon.size,
+                target_size_bytes=self.config["chunk_target_size_bytes"],
+            )
+            time_chunk_size = min(time_chunk_size, time.size)
+
+            # ensure chunk size is multiple of substeps
+            time_chunk_size = max(time_chunk_size // substeps, 1) * substeps
+
+            assert isinstance(raster.crs, str)
+            prepare_gridded_group(
+                name,
+                config,
+                raster.lon,
+                raster.lat,
+                raster.crs,
+                value,
+                time,
+                time_chunk_size=time_chunk_size,
+                compression_level=self.config["compression_level"],
+            )
+
+        root_group = config["_root_group"]
+
+        buffer = config["_chunk_data"]
+        chunk_size: int = buffer.shape[-1]
+
+        # Calculate the index in the buffer
+        start_index = config["_index"] % chunk_size
+        end_index = start_index + substeps
+
+        # Write the values to the buffer
+        buffer[..., start_index:end_index] = value
+
+        # If the buffer is full, flush it to disk
+        if end_index == chunk_size:
+            chunk_index = config["_index"] // chunk_size
+            self._flush_chunk_data(root_group, name, buffer, chunk_index, axis=2)
+
+        config["_index"] += substeps
+
+    def _apply_grid_hru_function(
+        self,
+        module_name: str,
+        name: str,
+        value: np.ndarray,
+        config: dict,
+        type_: str,
+    ) -> np.ndarray:
+        """Apply a spatial aggregation function to a grid or HRU array.
+
+        Args:
+            module_name: Name of the module to which the value belongs.
+            name: Name of the variable.
+            value: The compressed spatial array.
+            config: Reporter configuration dict for this variable (mutated in-place
+                to record substep count when present).
+            type_: Either ``"grid"`` or ``"HRU"``.
+
+        Returns:
+            The aggregated value (scalar or 1-D array of substep values).
+
+        Raises:
+            ValueError: If the function name is not recognised.
+            IndexError: If a sampled coordinate lies outside the model domain.
+        """
+        # in the first timestep, we create the array that will hold the actual data
+        if value.ndim == 2:
+            substeps: int = value.shape[0]
+            config["substeps"] = substeps
+
+        function, *args = config["function"].split(",")
+        if function == "mean":
+            return np.mean(value, axis=-1)
+        elif function == "nanmean":
+            return np.nanmean(value, axis=-1)
+        elif function == "sum":
+            return np.sum(value, axis=-1)
+        elif function == "nansum":
+            return np.nansum(value, axis=-1)
+        elif function in ("sample_xy", "sample_lonlat"):
+            # for sample_xy, args are pixel coordinates, which we
+            # first need to convert to their pixel index in x and y
+            if function == "sample_lonlat":
+                if type_ == "grid":
+                    gt: tuple[float, float, float, float, float, float] = (
+                        self.model.hydrology.grid.gt
+                    )
+                elif type_ == "HRU":
+                    gt = self.hydrology.HRU.gt
+                else:
+                    raise ValueError(f"Unknown varname type {config['varname']}")
+                px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
+            else:
+                # for sample_xy, args are pixel indices
+                px: int = int(args[0])
+                py: int = int(args[1])
+
+            # both for the grid and HRU, the data is stored efficiently, so that
+            # all data is in a 1D array, and we need to map the pixel coordinates
+            # to the index in that 1D array
+            # therefore, we first get the linear mapping and use that to get the index
+            # then we extract the value at that index
+            if type_ == "grid":
+                linear_mapping: TwoDArrayInt32 = self.hydrology.grid.linear_mapping
+            elif type_ == "HRU":
+                linear_mapping = self.hydrology.HRU.linear_mapping
+            else:
+                raise ValueError(f"Unknown varname type {config['varname']}")
+
+            try:
+                idx: int = linear_mapping[py, px]
+            except IndexError:
+                raise IndexError(
+                    f"Coordinate ({px}, {py}) is outside the model domain, which has shape {linear_mapping.shape}."
+                )
+            if idx == -1:
+                raise IndexError(f"Coordinate ({px}, {py}) is not a valid cell.")
+
+            # extract the value at that index
+            return value[..., idx]
+        elif function in (
+            "weightedmean",
+            "weightednanmean",
+            "weightedsum",
+            "weightednansum",
+        ):
+            if type_ == "HRU":
+                cell_area = self.hydrology.HRU.var.cell_area
+            else:
+                cell_area = self.hydrology.grid.var.cell_area
+            if function == "weightedmean":
+                return np.average(value, weights=cell_area, axis=-1)
+            elif function == "weightednanmean":
+                return np.nansum(value * cell_area, axis=-1) / np.sum(cell_area)
+            elif function == "weightedsum":
+                return np.sum(value * cell_area, axis=-1)
+            elif function == "weightednansum":
+                return np.nansum(value * cell_area, axis=-1)
+
+        raise ValueError(f"Function {function} not recognized")
+
+    def _write_agents_to_zarr(
+        self,
+        module_name: str,
+        name: str,
+        value: np.ndarray | DynamicArray,
+        config: dict,
+    ) -> None:
+        """Write an agent array directly to a zarr store without aggregation.
+
+        Initialises the zarr group on the first call, then appends each
+        timestep's agent values to the buffer, flushing a full chunk to disk
+        when the buffer is full.
+
+        Args:
+            module_name: Name of the module to which the value belongs.
+            name: Name of the variable being written.
+            value: Array of per-agent values for the current timestep.
+            config: Reporter configuration dict for this variable (mutated in-place
+                to track zarr store, index, and buffer).
+        """
+        if config["_index"] == 0:
+            time = create_time_array(
+                start=self.model.simulation_start,
+                end=self.model.simulation_end,
+                timestep=self.model.timestep_length,
+                conf=config,
+            )
+
+            prepare_agent_group(
+                name,
+                config,
+                time,
+                value,  # ty:ignore[invalid-argument-type]
+                self.config["chunk_target_size_bytes"],
+                self.config["compression_level"],
+            )
+
+        root_group = config["_root_group"]
+        value_store_array = root_group[name]
+        assert isinstance(value_store_array, zarr.Array)
+
+        assert isinstance(value, (np.ndarray, DynamicArray))
+        if value.size < value_store_array.shape[1]:
+            self.model.logger.warning(
+                "Padding array with NaNs or -1 - temporary solution"
+            )
+            value = np.pad(
+                value.data if isinstance(value, DynamicArray) else value,
+                (0, value_store_array.shape[1] - value.size),
+                mode="constant",
+                constant_values=get_fill_value(value)[0] or False,
+            )
+
+        buffer = config["_chunk_data"]
+        chunk_size: int = buffer.shape[0]
+
+        # Calculate the index in the buffer
+        index = config["_index"] % chunk_size
+        buffer[index, ...] = value
+
+        # If the buffer is full, flush it to disk
+        if index + 1 == chunk_size:
+            chunk_index = config["_index"] // chunk_size
+            self._flush_chunk_data(root_group, name, buffer, chunk_index, axis=0)
+
+        config["_index"] += 1
+
+    def _apply_agent_function(
+        self,
+        module_name: str,
+        name: str,
+        value: np.ndarray | DynamicArray,
+        config: dict,
+    ) -> np.ndarray | float:
+        """Apply a scalar aggregation function over all agents.
+
+        Args:
+            module_name: Name of the module to which the value belongs.
+            name: Name of the variable.
+            value: Array of per-agent values for the current timestep.
+            config: Reporter configuration dict for this variable.
+
+        Returns:
+            A single aggregated scalar value.
+
+        Raises:
+            ValueError: If the function name is not recognised.
+        """
+        function, *args = config["function"].split(",")
+        if function == "mean":
+            return np.mean(value)
+        elif function == "nanmean":
+            return np.nanmean(value)
+        elif function == "sum":
+            return np.sum(value)
+        elif function == "nansum":
+            return np.nansum(value)
+        else:
+            raise ValueError(f"Function {function} not recognized")
+
     def process_value(
         self,
         module_name: str,
@@ -873,7 +1325,6 @@ class Reporter:
         Raises:
             ValueError: If the function is not recognized,
                 or if the variable type is not recognized.
-            IndexError: If the coordinate is in sample_lon_lat is outside the model domain.
         """
         type_: str | None = config.get("type", None)
         if type_ is None:
@@ -912,226 +1363,21 @@ class Reporter:
                     error += f" grid id size {grid_size}. Did you mean to set type to 'grid' instead of 'HRU'?"
                 raise ValueError(error)
 
-            # in case of no aggregation function, we write the data directly to zarr
             if config["function"] is None:
-                if type_ == "HRU":
-                    value: np.ndarray = self.hydrology.HRU.decompress(value)
-                else:
-                    value: np.ndarray = self.hydrology.grid.decompress(value)
-
-                # in the first timestep, we create the array that will hold the actual data
-                if value.ndim == 3:
-                    substeps: int = value.shape[0]
-                else:
-                    substeps: int = 1
-
-                if config["_index"] == 0:  # first time writing data
-                    if config["type"] == "HRU":
-                        raster = self.hydrology.HRU
-                    else:
-                        raster = self.hydrology.grid
-
-                    time = create_time_array(
-                        start=self.model.simulation_start,
-                        end=self.model.simulation_end,
-                        timestep=self.model.timestep_length,
-                        conf=config,
-                        substeps=substeps,
-                    )
-
-                    chunk_size: int = get_time_chunk_size(
-                        value.dtype,
-                        raster.lat.size,
-                        raster.lon.size,
-                        target_size_bytes=self.config["chunk_target_size_bytes"],
-                    )
-                    chunk_size: int = min(chunk_size, time.size)
-
-                    # ensure chunk size is multiple of substeps
-                    chunk_size: int = max(chunk_size // substeps, 1) * substeps
-
-                    assert isinstance(raster.crs, str)
-                    prepare_gridded_group(
-                        name,
-                        config,
-                        raster.lon,
-                        raster.lat,
-                        raster.crs,
-                        value,
-                        time,
-                        chunk_size,
-                        self.config["compression_level"],
-                    )
-
-                root_group = config["_root_group"]
-
-                buffer = config["_chunk_data"]
-                chunk_size: int = buffer.shape[0]
-
-                # Calculate the index in the buffer
-                start_index = config["_index"] % chunk_size
-                end_index = start_index + substeps
-                buffer[start_index:end_index, ...] = value
-
-                # If the buffer is full, flush it to disk
-                if end_index == chunk_size:
-                    chunk_index = config["_index"] // chunk_size
-                    self._flush_chunk_data(root_group, name, buffer, chunk_index)
-
-                config["_index"] += substeps
+                self._write_grid_hru_to_zarr(module_name, name, value, config, type_)
                 return
             else:
-                # in the first timestep, we create the array that will hold the actual data
-                if value.ndim == 2:
-                    substeps: int = value.shape[0]
-                    config["substeps"] = substeps
-                else:
-                    substeps: int = 1
-
-                function, *args = config["function"].split(",")
-                if function == "mean":
-                    value = np.mean(value, axis=-1)
-                elif function == "nanmean":
-                    value = np.nanmean(value, axis=-1)
-                elif function == "sum":
-                    value = np.sum(value, axis=-1)
-                elif function == "nansum":
-                    value = np.nansum(value, axis=-1)
-                elif function in ("sample_xy", "sample_lonlat"):
-                    # for sample_xy, args are pixel coordinates, which we
-                    # first need to convert to their pixel index in x and y
-                    if function == "sample_lonlat":
-                        if type_ == "grid":
-                            gt: tuple[float, float, float, float, float, float] = (
-                                self.model.hydrology.grid.gt
-                            )
-                        elif type_ == "HRU":
-                            gt: tuple[float, float, float, float, float, float] = (
-                                self.hydrology.HRU.gt
-                            )
-                        else:
-                            raise ValueError(
-                                f"Unknown varname type {config['varname']}"
-                            )
-                        px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
-                    else:
-                        # for sample_xy, args are pixel indices
-                        px: int = int(args[0])
-                        py: int = int(args[1])
-
-                    # both for the grid and HRU, the data is stored efficiently, so that
-                    # all data is in a 1D array, and we need to map the pixel coordinates
-                    # to the index in that 1D array
-                    # therefore, we first get the linear mapping and use that to get the index
-                    # then we extract the value at that index
-                    if type_ == "grid":
-                        linear_mapping: TwoDArrayInt32 = (
-                            self.hydrology.grid.linear_mapping
-                        )
-                    elif type_ == "HRU":
-                        linear_mapping: TwoDArrayInt32 = (
-                            self.hydrology.HRU.linear_mapping
-                        )
-                    else:
-                        raise ValueError(f"Unknown varname type {config['varname']}")
-
-                    try:
-                        idx = linear_mapping[py, px]
-                    except IndexError:
-                        raise IndexError(
-                            f"Coordinate ({px}, {py}) is outside the model domain, which has shape {linear_mapping.shape}."
-                        )
-                    if idx == -1:
-                        raise IndexError(
-                            f"Coordinate ({px}, {py}) is not a valid cell."
-                        )
-
-                    # extract the value at that index
-                    value = value[..., idx]
-                elif function in (
-                    "weightedmean",
-                    "weightednanmean",
-                    "weightedsum",
-                    "weightednansum",
-                ):
-                    if type_ == "HRU":
-                        cell_area = self.hydrology.HRU.var.cell_area
-                    else:
-                        cell_area = self.hydrology.grid.var.cell_area
-                    if function == "weightedmean":
-                        value = np.average(value, weights=cell_area, axis=-1)
-                    elif function == "weightednanmean":
-                        value = np.nansum(value * cell_area, axis=-1) / np.sum(
-                            cell_area
-                        )
-                    elif function == "weightedsum":
-                        value = np.sum(value * cell_area, axis=-1)
-                    elif function == "weightednansum":
-                        value = np.nansum(value * cell_area, axis=-1)
-
-                else:
-                    raise ValueError(f"Function {function} not recognized")
+                value = self._apply_grid_hru_function(
+                    module_name, name, value, config, type_
+                )
 
         elif type_ == "agents":
+            assert isinstance(value, (np.ndarray, DynamicArray))
             if config["function"] is None:
-                if config["_index"] == 0:
-                    time = create_time_array(
-                        start=self.model.simulation_start,
-                        end=self.model.simulation_end,
-                        timestep=self.model.timestep_length,
-                        conf=config,
-                    )
-
-                    prepare_agent_group(
-                        name,
-                        config,
-                        time,
-                        value,
-                        self.config["chunk_target_size_bytes"],
-                        self.config["compression_level"],
-                    )
-
-                root_group = config["_root_group"]
-                value_store_array = root_group[name]
-                assert isinstance(value_store_array, zarr.Array)
-
-                assert isinstance(value, (np.ndarray, DynamicArray))
-                if value.size < value_store_array.shape[0]:
-                    print("Padding array with NaNs or -1 - temporary solution")
-                    value = np.pad(
-                        value.data if isinstance(value, DynamicArray) else value,
-                        (0, value_store_array.shape[0] - value.size),
-                        mode="constant",
-                        constant_values=get_fill_value(value)[0] or False,
-                    )
-
-                buffer = config["_chunk_data"]
-                chunk_size: int = buffer.shape[0]
-
-                # Calculate the index in the buffer
-                index = config["_index"] % chunk_size
-                buffer[index, ...] = value
-
-                # If the buffer is full, flush it to disk
-                if index + 1 == chunk_size:
-                    chunk_index = config["_index"] // chunk_size
-                    self._flush_chunk_data(root_group, name, buffer, chunk_index)
-
-                config["_index"] += 1
-
+                self._write_agents_to_zarr(module_name, name, value, config)
                 return
             else:
-                function, *args = config["function"].split(",")
-                if function == "mean":
-                    value = np.mean(value)
-                elif function == "nanmean":
-                    value = np.nanmean(value)
-                elif function == "sum":
-                    value = np.sum(value)
-                elif function == "nansum":
-                    value = np.nansum(value)
-                else:
-                    raise ValueError(f"Function {function} not recognized")
+                value = self._apply_agent_function(module_name, name, value, config)
 
         elif type_ == "scalar":
             pass  # no processing needed for scalar values
@@ -1147,6 +1393,8 @@ class Reporter:
         if name not in self.variables[module_name]:
             self.variables[module_name][name] = []
 
+        current_time = self.model.current_time
+
         if "substeps" in config:
             assert isinstance(value, np.ndarray)
             assert len(value) == config["substeps"], (
@@ -1155,7 +1403,7 @@ class Reporter:
             self.variables[module_name][name].extend(
                 [
                     (
-                        self.model.current_time
+                        current_time
                         + i * self.model.timestep_length / config["substeps"],
                         v,
                     )
@@ -1163,10 +1411,15 @@ class Reporter:
                 ]
             )
         else:
-            self.variables[module_name][name].append((self.model.current_time, value))
+            self.variables[module_name][name].append((current_time, value))
 
     def _flush_chunk_data(
-        self, group: zarr.Group, name: str, buffer: np.ndarray, chunk_index: int
+        self,
+        group: zarr.Group,
+        name: str,
+        buffer: np.ndarray,
+        chunk_index: int,
+        axis: int,
     ) -> None:
         """Flush a specific chunk for grid/HRU variables.
 
@@ -1178,52 +1431,95 @@ class Reporter:
             name: The name of the variable.
             buffer: The buffer containing the data to flush.
             chunk_index: The index of the chunk to flush.
+            axis: The time axis along which to flush the data.
         """
         zarr_array = group[name]
         assert isinstance(zarr_array, zarr.Array)
-        zarr_array.blocks[chunk_index, ...] = buffer
+        # Create a slice tuple with Ellipsis for all dimensions except the target axis
+        selection: list[slice | int] = [slice(None)] * len(zarr_array.shape)
+        selection[axis] = chunk_index
+        zarr_array.blocks[tuple(selection)] = buffer
 
     def finalize(self) -> None:
-        """At the end of the model run, all previously collected data is reported to disk."""
+        """At the end of the model run, all previously collected data is reported to disk.
+
+        Raises:
+            ValueError: If the variable type is not recognized.
+        """
         # If no data has been collected, we return
         if self.model.config["report"] is None:
             self.model.logger.info("No report configuration found. No data to report.")
             return
 
-        # Flush any remaining buffers
-        for module_name, configs in self.model.config["report"].items():
-            for name, config in configs.items():
-                if "function" in config and config["function"] is None:
-                    chunk_time_size: int = config["_chunk_data"].shape[0]
-                    buffer_end: int = config["_index"] % chunk_time_size
-                    if buffer_end == 0:
-                        continue  # nothing to flush
-                    chunk_index: int = config["_index"] // chunk_time_size
-                    self._flush_chunk_data(
-                        group=config["_root_group"],
-                        name=name,
-                        buffer=config["_chunk_data"][:buffer_end, ...],
-                        chunk_index=chunk_index,
-                    )
+        with ThreadPoolExecutor() as executor:
+            futures = []
 
-        # Export all scalar and aggregated variables to CSV
-        for module_name, variables in self.variables.items():
-            for name, values in variables.items():
-                if self.model.config["report"][module_name][name][
-                    "type"
-                ] == "scalar" or (
-                    self.model.config["report"][module_name][name]["function"]
-                    is not None
-                ):
-                    # if the variable is a scalar or has an aggregation function, we report
-                    df = pd.DataFrame.from_records(
-                        values, columns=["time", name], index="time"
-                    )
+            # Flush any remaining buffers
+            for module_name, configs in self.model.config["report"].items():
+                for name, config in configs.items():
+                    if "function" in config and config["function"] is None:
+                        if config["type"] == "agents":
+                            chunk_time_size: int = config["_chunk_data"].shape[0]
+                        elif config["type"] in ("grid", "HRU"):
+                            chunk_time_size: int = config["_chunk_data"].shape[-1]
+                        else:
+                            raise ValueError(
+                                f"Unknown type {config['type']} for variable {module_name}.{name}"
+                            )
 
-                    folder = self.report_folder / module_name
-                    folder.mkdir(parents=True, exist_ok=True)
+                        buffer_end: int = config["_index"] % chunk_time_size
+                        if buffer_end == 0:
+                            continue  # nothing to flush
+                        if config["type"] == "agents":
+                            axis = 0
+                            buffer = config["_chunk_data"][:buffer_end, ...]
+                        elif config["type"] in ("grid", "HRU"):
+                            axis = 2
+                            buffer = config["_chunk_data"][..., :buffer_end]
+                        else:
+                            raise ValueError(
+                                f"Unknown type {config['type']} for variable {module_name}.{name}"
+                            )
 
-                    df.to_csv(folder / (name + ".csv"))
+                        chunk_index: int = config["_index"] // chunk_time_size
+
+                        futures.append(
+                            executor.submit(
+                                self._flush_chunk_data,
+                                group=config["_root_group"],
+                                name=name,
+                                buffer=buffer,
+                                chunk_index=chunk_index,
+                                axis=axis,
+                            )
+                        )
+
+            # Export all scalar and aggregated variables to parquet files
+            for module_name, variables in self.variables.items():
+                for name, values in variables.items():
+                    if self.model.config["report"][module_name][name][
+                        "type"
+                    ] == "scalar" or (
+                        self.model.config["report"][module_name][name]["function"]
+                        is not None
+                    ):
+                        # if the variable is a scalar or has an aggregation function, we report
+                        df = pd.DataFrame.from_records(
+                            values, columns=["time", name], index="time"
+                        )
+
+                        folder = self.report_folder / module_name
+                        folder.mkdir(parents=True, exist_ok=True)
+
+                        futures.append(
+                            executor.submit(
+                                write_table, df, folder / (name + ".parquet")
+                            )
+                        )
+
+            for future in as_completed(futures):
+                # re-raise any exception from the worker thread
+                future.result()
 
     def report(
         self, module: Module, local_variables: dict[str, Any], module_name: str

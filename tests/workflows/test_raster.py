@@ -419,6 +419,32 @@ def test_interpolate_na_2d() -> None:
     assert result.coords.equals(da.coords)
 
 
+def test_interpolate_na_2d_chunked_with_buffer() -> None:
+    """Test chunked interpolation with overlap across chunk boundaries."""
+    data = np.array(
+        [
+            [1.0, 2.0, 3.0, 4.0],
+            [5.0, 6.0, 7.0, 8.0],
+            [9.0, 10.0, np.nan, np.nan],
+            [13.0, 14.0, np.nan, np.nan],
+        ],
+        dtype=np.float32,
+    )
+    da = xr.DataArray(
+        data,
+        dims=["y", "x"],
+        coords={"y": [0, 1, 2, 3], "x": [0, 1, 2, 3]},
+        attrs={"_FillValue": np.nan},
+    )
+
+    expected = interpolate_na_2d(da)
+    result = interpolate_na_2d(da.chunk({"y": 2, "x": 2}), buffer=(1, 1)).compute()
+
+    assert np.allclose(result.values, expected.values, equal_nan=True)
+    assert result.dims == da.dims
+    assert result.coords.equals(da.coords)
+
+
 def test_interpolate_na_along_dim() -> None:
     """Test the interpolate_na_along_dim function."""
     # Create a 3D array (time, y, x) with NaNs in spatial dims
@@ -502,6 +528,39 @@ def test_interpolate_na_2d_integer_fillvalue() -> None:
     assert not np.any(result.values == -9999)
     assert result.dims == da.dims
     assert result.coords.equals(da.coords)
+
+
+def test_interpolate_na_2d_invalid_buffer() -> None:
+    """Test that interpolate_na_2d rejects invalid overlap settings."""
+    data = np.array([[1.0, 2.0], [3.0, np.nan]], dtype=np.float32)
+    da = xr.DataArray(
+        data,
+        dims=["y", "x"],
+        coords={"y": [0, 1], "x": [0, 1]},
+        attrs={"_FillValue": np.nan},
+    )
+
+    with pytest.raises(ValueError, match="buffer"):
+        interpolate_na_2d(da, buffer=-1)
+
+
+def test_interpolate_na_2d_buffer_larger_than_array() -> None:
+    """Test that oversized overlap buffers are capped for small chunked arrays."""
+    data = np.array(
+        [[1.0, 2.0, np.nan], [4.0, np.nan, 6.0], [7.0, 8.0, 9.0]],
+        dtype=np.float32,
+    )
+    da = xr.DataArray(
+        data,
+        dims=["y", "x"],
+        coords={"y": [0, 1, 2], "x": [0, 1, 2]},
+        attrs={"_FillValue": np.nan},
+    )
+
+    expected = interpolate_na_2d(da)
+    result = interpolate_na_2d(da.chunk({"y": 2, "x": 2}), buffer=1000).compute()
+
+    assert np.allclose(result.values, expected.values, equal_nan=True)
 
 
 def test_interpolate_na_along_dim_missing_fillvalue() -> None:
@@ -875,6 +934,7 @@ def test_clip_with_geometry(dask: bool) -> None:
         data,
         coords={"y": y, "x": x},
         dims=("y", "x"),
+        attrs={"_FillValue": np.nan},
     )
     da.rio.write_crs("EPSG:4326", inplace=True)
     da.rio.set_spatial_dims("x", "y", inplace=True)

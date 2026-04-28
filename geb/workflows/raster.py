@@ -1,14 +1,12 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
-from __future__ import annotations
-
 import math
-import tempfile
 from collections.abc import Generator, Hashable, Mapping
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Literal, cast, overload
 
+import dask.array as dask_array
 import geopandas as gpd
 import numba
 import numpy as np
@@ -867,8 +865,8 @@ def pad_xy(
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
-    return_slice: Literal[True] = True,
-) -> tuple[xr.DataArray, dict[str, slice]]: ...
+    return_slice: Literal[False] = False,
+) -> xr.DataArray: ...
 
 
 @overload
@@ -882,9 +880,9 @@ def pad_xy(
     | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
-    | None = None,
-    return_slice: Literal[False] = False,
-) -> xr.DataArray: ...
+    | None = ...,
+    return_slice: Literal[True] = ...,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
 
 
 def pad_xy(
@@ -1057,39 +1055,99 @@ def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArra
     return da
 
 
-def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
+def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
+    """Interpolate NaN values in a 2D numpy array using nearest neighbor interpolation.
+
+    Args:
+        arr: The input 2D array with NaN values.
+        nodata: The nodata value to treat as missing.
+
+    Returns:
+        A new 2D NumPy array with missing values interpolated.
+    """
+    mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
+
+    if not mask.any():
+        return arr
+    if mask.all():
+        return arr
+
+    y, x = np.indices(arr.shape)
+    known_x, known_y = x[~mask], y[~mask]
+    known_v = arr[~mask]
+    missing_x, missing_y = x[mask], y[mask]
+
+    filled_values = griddata(
+        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+    )
+    arr_filled = arr.copy()
+    arr_filled[mask] = filled_values
+    return arr_filled
+
+
+def interpolate_na_2d(
+    da: xr.DataArray, buffer: int | tuple[int, int] = 0
+) -> xr.DataArray:
     """Interpolate NaN values in a 2D DataArray using nearest neighbor interpolation.
 
     Args:
         da: The input DataArray with dimensions ('y', 'x').
+        buffer: Overlap depth in cells used when processing Dask chunks. The
+            effective overlap is capped per axis to the raster extent so large
+            requested buffers remain valid for small arrays. If a tuple is
+            provided, it is interpreted as ``(buffer_y, buffer_x)``.
 
     Returns:
         A new DataArray with NaN values interpolated.
 
     Raises:
         ValueError: If '_FillValue' attribute is missing.
+        ValueError: If ``buffer`` is not a non-negative integer or a tuple of
+            two non-negative integers.
     """
     if "_FillValue" not in da.attrs:
         raise ValueError("DataArray must have '_FillValue' attribute")
 
     nodata = da.attrs["_FillValue"]
 
-    mask = np.isnan(da.values) if np.isnan(nodata) else da.values == nodata
+    if isinstance(buffer, int):
+        if buffer < 0:
+            raise ValueError("buffer must be non-negative")
+        buffer_y: int = buffer
+        buffer_x: int = buffer
+    elif isinstance(buffer, tuple) and len(buffer) == 2:
+        buffer_y, buffer_x = buffer
+        if not all(isinstance(value, int) and value >= 0 for value in buffer):
+            raise ValueError("buffer values must be non-negative integers")
+    else:
+        raise ValueError(
+            "buffer must be a non-negative integer or a tuple of two non-negative integers"
+        )
 
-    if not mask.any():
-        return da
+    if da.chunks is None:
+        filled_values = fillna_2d(np.asarray(da.data), nodata=nodata)
+        result = da.copy(data=filled_values)
+        result.attrs = da.attrs.copy()
+        return result
 
-    y, x = np.indices(da.values.shape)
-    known_x, known_y = x[~mask], y[~mask]
-    known_v = da.values[~mask]
-    missing_x, missing_y = x[mask], y[mask]
+    overlap_depth: dict[int, int] = {
+        0: min(buffer_y, max(da.sizes["y"] - 1, 0)),
+        1: min(buffer_x, max(da.sizes["x"] - 1, 0)),
+    }
 
-    filled_values = griddata(
-        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+    filled_data = dask_array.map_overlap(
+        fillna_2d,
+        da.data,
+        depth=overlap_depth,
+        boundary="none",
+        trim=True,
+        dtype=da.dtype,
+        nodata=nodata,
     )
-    da_filled = da.copy()
-    da_filled.values[mask] = filled_values
-    return da_filled
+
+    result = da.copy(data=filled_data)
+    result.attrs = da.attrs.copy()
+    return result
 
 
 def resample_like(
@@ -1432,29 +1490,6 @@ def clip_region(
     return clipped_mask, *clipped_arrays
 
 
-# def create_dask_tiles(
-#     da: xr.DataArray,
-# ):
-#     transform = da.rio.transform(recalc=True)
-
-#     tiles = []
-#     y_offset = 0
-#     for y_chunk in da.chunksizes["y"]:
-#         tiles.append([])
-#         x_offset = 0
-#         for x_chunk in da.chunksizes["x"]:
-#             tiles[-1].append(
-#                 {
-#                     "transform": transform * Affine.translation(x_offset, y_offset),
-#                     "shape": (y_chunk, x_chunk),
-#                 }
-#             )
-#             x_offset += x_chunk
-#         y_offset += y_chunk
-
-#     return from_array(tiles, chunks=(1, 1))
-
-
 def rasterize_geometry(
     block: xr.DataArray,
     geometry: BaseGeometry,
@@ -1520,20 +1555,16 @@ def clip_with_geometry(
             "Geometry must be in the same CRS as the DataArray to use clip_with_geometry"
         )
 
+    if da.rio.nodata is None:
+        raise ValueError(
+            "DataArray must have nodata value defined to use clip_with_geometry"
+        )
+
     if da.chunks:
         if drop is True:
             xmin, ymin, xmax, ymax = gdf.geometry.total_bounds
             da = da.rio.clip_box(xmin, ymin, xmax, ymax, crs=gdf.crs)
 
-        # tiles = create_dask_tiles(da)
-        # rasterized = map_blocks(
-        #     rasterize_geometry,
-        #     gdf.geometry.union_all(),
-        #     tiles,
-        #     chunks=(da.chunks[0], da.chunks[1]),
-        #     dtype=bool,
-        #     all_touched=all_touched,
-        # )
         rasterized = da.map_blocks(
             rasterize_geometry,
             args=[gdf.geometry.union_all(), all_touched],
@@ -1620,11 +1651,9 @@ def get_neighbor_cell_ids_for_linear_indices(
 @contextmanager
 def create_temp_zarr(
     da: xr.DataArray,
-    name: str = "temp",
-    x_chunksize: int = 350,
-    y_chunksize: int = 350,
-    time_chunksize: int = 1,
-    time_chunks_per_shard: int | None = 30,
+    name: str = "tmp",
+    shards: dict[str, int] | None = None,
+    **kwargs: Any,
 ) -> Generator[xr.DataArray, None, None]:
     """Create a DataArray to a temporary Zarr file with specified chunks.
 
@@ -1634,10 +1663,8 @@ def create_temp_zarr(
     Args:
         da: The DataArray to create.
         name: Name suffix for the temporary file.
-        x_chunksize: Chunk size for x dimension.
-        y_chunksize: Chunk size for y dimension.
-        time_chunksize: Chunk size for time dimension.
-        time_chunks_per_shard: Time chunks per shard.
+        shards: Optional dictionary specifying sharding for dimensions, e.g. {"time": 30}.
+        **kwargs: Additional keyword arguments to pass to `write_zarr`.
 
     Yields:
         The created DataArray opened from the temporary Zarr file.
@@ -1648,20 +1675,15 @@ def create_temp_zarr(
     if da.rio.crs is None:
         raise ValueError("DataArray must have a CRS defined to use create_temp_zarr")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir) / f"{name}.zarr"
-        temp_da = write_zarr(
-            da,
-            tmp_path,
-            crs=da.rio.crs,
-            x_chunksize=x_chunksize,
-            y_chunksize=y_chunksize,
-            time_chunksize=time_chunksize,
-            time_chunks_per_shard=time_chunks_per_shard,
-            progress=True,
-            compression_level=1,
-        )
-        yield temp_da
+    temp_da = write_zarr(
+        da,
+        path=None,
+        crs=da.rio.crs,
+        progress=True,
+        compression_level=1,
+        shards=shards,
+    )
+    yield temp_da
 
 
 def rechunk_zarr_file(
@@ -1696,7 +1718,7 @@ def rechunk_zarr_file(
         shards = None
     elif how == "space-optimized":
         x_chunk, y_chunk, time_chunk = 350, 350, 1
-        shards = 30
+        shards = {"time": 30}
     elif how == "balanced":
         x_chunk, y_chunk, time_chunk = 50, 50, 50
         shards = None
@@ -1713,12 +1735,8 @@ def rechunk_zarr_file(
             "Creating intermediate rechunked Zarr with 50x50 spatial chunks and 50 time chunks..."
         )
         ctx = create_temp_zarr(
-            da,
+            da.chunk({"x": 50, "y": 50, "time": 50}),
             name="intermediate",
-            x_chunksize=50,
-            y_chunksize=50,
-            time_chunksize=50,
-            time_chunks_per_shard=None,
         )
     else:
         # No intermediate step, directly rechunk from source to target
@@ -1730,12 +1748,9 @@ def rechunk_zarr_file(
             f"Rechunking Zarr with strategy '{how}' (x_chunk={x_chunk}, y_chunk={y_chunk}, time_chunk={time_chunk}, shards={shards})..."
         )
         write_zarr(
-            source_da,
+            source_da.chunk({"x": x_chunk, "y": y_chunk, "time": time_chunk}),
             output_path,
             crs=da.rio.crs,
-            x_chunksize=x_chunk,
-            y_chunksize=y_chunk,
-            time_chunksize=time_chunk,
-            time_chunks_per_shard=shards,
+            shards=shards,
             progress=True,
         )

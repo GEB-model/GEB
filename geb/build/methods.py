@@ -10,6 +10,7 @@ from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import networkx as nx
+import pandas as pd
 
 __all__: list[str] = ["build_method"]
 
@@ -20,7 +21,6 @@ def validate_build_methods(
     tree: nx.DiGraph,
     methods: dict[str, Any],
     validate_order: bool = True,
-    fix_order_if_broken: bool = False,
     logger: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """Validate the methods in the dependency tree.
@@ -31,7 +31,6 @@ def validate_build_methods(
         tree: The dependency tree.
         methods: A dictionary of methods to validate.
         validate_order: If True, checks if methods depend on other methods that may come after them in the build file.
-        fix_order_if_broken: If True, will attempt to fix the order of methods if validate_order fails. Only used if validate_order is True.
         logger: Logger to use for logging validation messages.
 
     Returns:
@@ -54,7 +53,6 @@ def validate_build_methods(
 
     if validate_order:
         # Check if all dependencies are present in the requested methods.
-        # This must be done regardless of fix_order_if_broken.
         for method in methods:
             # 1 is the method itself, 2 is the method + direct dependencies
             direct_dependencies = list(
@@ -75,96 +73,21 @@ def validate_build_methods(
                             "which is missing from the requested methods."
                         )
 
-        if fix_order_if_broken:
-            # Check if the current order is already valid
-            current_order_valid = True
-            processed_in_check = set()
-            for method in methods:
-                # 1 is the method itself, 2 is the method + direct dependencies
-                direct_deps = list(
-                    nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
-                )[:-1]
-                for dep in direct_deps:
-                    if (
-                        dep != method
-                        and dep in methods
-                        and dep not in processed_in_check
-                    ):
-                        current_order_valid = False
-                        break
-                if not current_order_valid:
-                    break
-                processed_in_check.add(method)
-
-            if not current_order_valid:
-                try:
-                    # Find the minimal set of reorderings.
-                    # We use a simple approach: find the first method that violates dependencies,
-                    # and move its missing dependencies just before it.
-                    # However, for a robust and deterministic "minimal" change,
-                    # we can use the fact that the user likely wants to keep their existing order
-                    # as much as possible.
-                    # We'll use a stable topological sort that respects the original order
-                    # where possible.
-                    subgraph = tree.subgraph(methods.keys())
-                    if not nx.is_directed_acyclic_graph(subgraph):
-                        raise ValueError(
-                            "Cannot fix order: cycle detected in requested methods."
-                        )
-
-                    changed_methods = set()
-
-                    # To minimize changes, we can iterate and "pull up" dependencies.
-                    new_order = list(methods.keys())
-                    changed = True
-                    while changed:
-                        changed = False
-                        for i in range(len(new_order)):
-                            method = new_order[i]
-                            deps = set(subgraph.predecessors(method))
-                            if not deps:
-                                continue
-
-                            # Find the last position of any dependency in the current order
-                            max_dep_idx = -1
-                            for dep in deps:
-                                dep_idx = new_order.index(dep)
-                                if dep_idx > max_dep_idx:
-                                    max_dep_idx = dep_idx
-
-                            # If the last dependency is after the current method, move the method after it
-                            if max_dep_idx > i:
-                                method_to_move = new_order.pop(i)
-                                new_order.insert(max_dep_idx, method_to_move)
-                                changed = True
-                                changed_methods.add(method_to_move)
-                                break
-
-                    methods = {node: methods[node] for node in new_order}
-
-                    if logger is not None:
-                        logger.warning(
-                            f"The provided method order was invalid and has been auto-fixed. Moved methods: {changed_methods}"
-                        )
-                        logger.info(f"New build method order: {list(methods.keys())}")
-                except nx.NetworkXUnfeasible:
-                    raise ValueError("Cannot fix order: dependencies are circular.")
-        else:
-            processed_methods = set()
-            for method in methods:
-                # 1 is the method itself, 2 is the method + direct dependencies
-                direct_dependencies = list(
-                    nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
-                )[:-1]
-                for direct_dependency in direct_dependencies:
-                    if direct_dependency == method:
-                        continue
-                    if direct_dependency not in processed_methods:
-                        raise ValueError(
-                            f"Method {method} depends on {direct_dependency}, "
-                            "which may come after this method in the build file or not be present at all."
-                        )
-                processed_methods.add(method)
+        processed_methods = set()
+        for method in methods:
+            # 1 is the method itself, 2 is the method + direct dependencies
+            direct_dependencies = list(
+                nx.dfs_postorder_nodes(tree.reverse(), method, depth_limit=2)
+            )[:-1]
+            for direct_dependency in direct_dependencies:
+                if direct_dependency == method:
+                    continue
+                if direct_dependency not in processed_methods:
+                    raise ValueError(
+                        f"Method {method} depends on {direct_dependency}, "
+                        "which may come after this method in the build file or not be present at all."
+                    )
+            processed_methods.add(method)
 
     for method, args in methods.items():
         args_set = set(args) if args is not None else set()
@@ -200,6 +123,9 @@ class _build_method:
         self.required_methods: set[str] = set()
         self.time_taken: dict[str, float] = {}
         self.peak_memory_usage: dict[str, int] = {}
+        # Track what has already been written to the stats spreadsheet so
+        # incremental calls to write_build_stats never produce duplicate rows.
+        self._methods_written_to_stats: set[str] = set()
 
     def _resolve_logger(
         self, call_args: tuple[Any, ...] | None = None
@@ -362,7 +288,6 @@ class _build_method:
         self,
         methods: dict[str, Any],
         validate_order: bool = True,
-        fix_order_if_broken: bool = False,
     ) -> dict[str, Any]:
         """Validate the methods in the dependency tree.
 
@@ -371,7 +296,6 @@ class _build_method:
         Args:
             methods: A dictionary of methods to validate.
             validate_order: If True, checks if methods depend on other methods that may come after them in the build file.
-            fix_order_if_broken: If True, will attempt to fix the order of methods if validate_order fails. Only used if validate_order is True.
 
         Returns:
             The input methods if validation passes.
@@ -382,7 +306,6 @@ class _build_method:
             self.tree,
             methods,
             validate_order=validate_order,
-            fix_order_if_broken=fix_order_if_broken,
             logger=active_logger,
         )
 
@@ -490,13 +413,136 @@ class _build_method:
             self.time_taken.items(), key=lambda item: item[1], reverse=False
         )
 
+        active_logger.info("Build method time statistics:")
         for method, time_taken in sorted_by_time:
             percentage: float = (time_taken / total_time) * 100
             active_logger.info(
                 f"Method {method} took {time_taken:.2f} seconds ({percentage:.1f}%) and had peak memory usage of {self.peak_memory_usage[method] / 1024 / 1024:.2f} MB."
             )
 
+        sorted_by_memory = sorted(
+            self.peak_memory_usage.items(), key=lambda item: item[1], reverse=False
+        )
+
+        active_logger.info("Build method memory usage statistics:")
+        for method, memory_usage in sorted_by_memory:
+            percentage: float = (
+                memory_usage / max(self.peak_memory_usage.values())
+            ) * 100
+            active_logger.info(
+                f"Method {method} had peak memory usage of {memory_usage / 1024 / 1024:.2f} MB ({percentage:.1f}%) and took {self.time_taken[method]:.2f} seconds."
+            )
+
         active_logger.info(f"Total time taken: {total_time:.2f} seconds.")
+        if self.peak_memory_usage:
+            active_logger.info(
+                f"Max memory usage: {max(self.peak_memory_usage.values()) / 1024 / 1024:.2f} MB."
+            )
+
+    def _directory_size_bytes(self, directory_path: Path) -> int:
+        """Calculate total file size in a directory tree.
+
+        Args:
+            directory_path: Directory path to measure.
+
+        Returns:
+            Total size of regular files in bytes.
+        """
+        if not directory_path.exists() or not directory_path.is_dir():
+            return 0
+
+        total_size_bytes: int = 0
+        for file_path in directory_path.rglob("*"):
+            if file_path.is_file():
+                total_size_bytes += file_path.stat().st_size
+        return total_size_bytes
+
+    def write_build_stats(
+        self,
+        stats_path: Path,
+        cluster_name: str,
+        run_timestamp: Any,
+        cluster_dir: Path,
+    ) -> None:
+        """Append new per-method build stats to a per-cluster CSV file.
+
+        Each cluster writes to its own CSV file (one file per cluster) so that
+        parallel Snakemake jobs never contend on the same file.  The write uses
+        an crash-robust pattern (write to a temporary file, then rename) to avoid
+        partial/corrupt output even if the process is killed mid-write.
+
+        This function is intentionally incremental. It only writes methods that
+        have not yet been written to the current process so repeated calls
+        after each method do not create duplicate rows.
+
+        Args:
+            stats_path: Path to the CSV file where build stats are stored.
+                Should be unique per cluster (e.g.
+                ``build_memory_stats/<cluster>.csv``).
+            cluster_name: Name of the cluster/scenario group.
+            run_timestamp: Timestamp representing the start of the current
+                build run.
+            cluster_dir: Directory whose subdirectories are measured for
+                on-disk size.
+        """
+        methods_to_write: list[str] = [
+            method_name
+            for method_name in self.time_taken
+            if method_name not in self._methods_written_to_stats
+        ]
+        if not methods_to_write:
+            return
+
+        # We report the physical footprint of generated folders so partial build
+        # progress can be inspected even when a long run crashes.
+        input_dir_size_bytes: int = self._directory_size_bytes(cluster_dir / "input")
+        base_dir_size_bytes: int = self._directory_size_bytes(cluster_dir / "base")
+
+        run_timestamp_str: str = str(run_timestamp)
+        rows: list[dict[str, Any]] = []
+        for method_name in methods_to_write:
+            rows.append(
+                {
+                    "run_timestamp": run_timestamp_str,
+                    "cluster_name": cluster_name,
+                    "method": method_name,
+                    "duration_seconds": round(self.time_taken.get(method_name, 0.0), 6),
+                    "peak_memory_megabytes": round(
+                        self.peak_memory_usage.get(method_name, 0) / 1024 / 1024,
+                        6,
+                    ),
+                    "input_directory_gigabytes": round(
+                        input_dir_size_bytes / (1024**3),
+                        6,
+                    ),
+                    "base_directory_gigabytes": round(
+                        base_dir_size_bytes / (1024**3),
+                        6,
+                    ),
+                }
+            )
+
+        new_rows_df = pd.DataFrame(rows)
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Read existing rows for this cluster (if any) and concatenate.
+        if stats_path.exists():
+            existing_rows_df = pd.read_csv(stats_path)
+            combined_rows_df = pd.concat(
+                [existing_rows_df, new_rows_df],
+                ignore_index=True,
+            )
+        else:
+            combined_rows_df = new_rows_df
+
+        # crash-robust write: write to a temporary file in the same directory, then
+        # rename.  On POSIX this is an atomic operation, preventing corruption
+        # if the process is interrupted.
+        tmp_path = stats_path.with_suffix(".csv.tmp")
+        combined_rows_df.to_csv(tmp_path, index=False)
+        tmp_path.rename(stats_path)
+
+        self._methods_written_to_stats.update(methods_to_write)
 
     @property
     def methods(self) -> list[str]:

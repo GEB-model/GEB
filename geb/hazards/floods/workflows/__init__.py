@@ -1,7 +1,5 @@
 """Various utility functions for flood hazard workflows."""
 
-from __future__ import annotations
-
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt

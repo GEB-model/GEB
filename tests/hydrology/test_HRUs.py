@@ -8,7 +8,11 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from geb.hydrology.HRUs import determine_nearest_river_cell, to_grid, to_HRU
+from geb.hydrology.HRUs import (
+    determine_nearest_river_cell,
+    to_grid,
+    to_HRU,
+)
 
 
 def test_determine_nearest_river_cell() -> None:
@@ -73,29 +77,6 @@ def HRU_data() -> npt.NDArray[np.float32]:
 
 
 @pytest.fixture
-def HRU_data_with_nan() -> npt.NDArray[np.float32]:
-    """Test data for data that could be on the HRUs used in GEB, with a NaN value.
-
-    Returns:
-        An array with hypothetical HRU data including a NaN. Corresponds with other fixutes in this file.
-    """
-    return np.array([1, np.nan, 3, 4, 5, 6, 7, 8, 9], dtype=np.float32)
-
-
-@pytest.fixture
-def grid_to_HRU() -> npt.NDArray[np.int32]:
-    """The indexes that map grid cells to HRUs.
-
-    Each value maps to the index of the first unit of the next cell.
-
-    Returns:
-        Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-            Corresponds with other fixutes in this file.
-    """
-    return np.array([1, 4, 9], dtype=np.int32)
-
-
-@pytest.fixture
 def land_use_ratio() -> npt.NDArray[np.float32]:
     """The land use ratio for each HRU, as a fraction of the grid cell.
 
@@ -110,115 +91,71 @@ def land_use_ratio() -> npt.NDArray[np.float32]:
 
 def test_to_grid(
     HRU_data: npt.NDArray[np.float32],
-    HRU_data_with_nan: npt.NDArray[np.float32],
     grid_to_HRU: npt.NDArray[np.int32],
     land_use_ratio: npt.NDArray[np.float32],
 ) -> None:
-    """Test the to_grid function with various aggregation methods for going from HRU to grid.
+    """Test the to_grid function for going from HRU to grid using a weighted mean.
+
+    Tests both 1D (single timestep) and 2D (multiple timesteps) input shapes.
 
     Args:
         HRU_data: Hypothetical data on the HRUs.
-        HRU_data_with_nan: Hypothetical data on the HRUs with a NaN value.
-        grid_to_HRU: The indexes that map grid cells to HRUs.
+        grid_to_HRU: Exclusive end index of each grid cell's HRUs.
         land_use_ratio: The land use ratio (of a grid cell) for each HRU.
     """
+    expected_1d = np.array([1.0, 3.2, 7.0], dtype=np.float32)
     np.testing.assert_almost_equal(
         to_grid(HRU_data, grid_to_HRU, land_use_ratio),
-        np.array([1.0, 3.2, 7.0], dtype=np.float32),
-        decimal=1,
+        expected_1d,
+        decimal=5,
     )
+
+    # 2D case: two timesteps stacked as rows (n_timesteps × n_HRUs)
+    HRU_data_2d = np.vstack([HRU_data, HRU_data * 2])
+    expected_2d = np.vstack([expected_1d, expected_1d * 2])
     np.testing.assert_almost_equal(
-        to_grid(
-            HRU_data,
-            grid_to_HRU,
-            land_use_ratio,
-            fn="weightedmean",
-        ),
-        np.array([1.0, 3.2, 7.0], dtype=np.float32),
-        decimal=1,
+        to_grid(HRU_data_2d, grid_to_HRU, land_use_ratio),
+        expected_2d,
+        decimal=5,
     )
-    np.testing.assert_almost_equal(
-        to_grid(
-            HRU_data_with_nan,
-            grid_to_HRU,
-            land_use_ratio,
-            fn="weightednanmean",
-        ),
-        np.array([1.0, 3.5, 7.0], dtype=np.float32),
-        decimal=1,
-    )
-    np.testing.assert_almost_equal(
-        to_grid(
-            HRU_data,
-            grid_to_HRU,
-            land_use_ratio,
-            fn="sum",
-        ),
-        np.array([1, 9, 35], dtype=np.float32),
-        decimal=1,
-    )
-    np.testing.assert_almost_equal(
-        to_grid(
-            HRU_data_with_nan,
-            grid_to_HRU,
-            land_use_ratio,
-            fn="nansum",
-        ),
-        np.array([1, 7, 35], dtype=np.float32),
-        decimal=1,
-    )
-    np.testing.assert_almost_equal(
-        to_grid(
-            HRU_data,
-            grid_to_HRU,
-            land_use_ratio,
-            fn="max",
-        ),
-        np.array([1, 4, 9], dtype=np.float32),
-        decimal=1,
-    )
-    np.testing.assert_almost_equal(
-        to_grid(
-            HRU_data,
-            grid_to_HRU,
-            land_use_ratio,
-            fn="min",
-        ),
-        np.array([1, 2, 5], dtype=np.float32),
-        decimal=1,
-    )
+
+
+@pytest.fixture
+def grid_to_HRU() -> npt.NDArray[np.int32]:
+    """Exclusive end index of each grid cell's HRUs in the sorted HRU array.
+
+    grid_to_HRU[i] is the first HRU index that belongs to grid cell i+1,
+    i.e. the exclusive end of cell i's HRUs.
+
+    Returns:
+        Array of size n_grid_cells. Corresponds with other fixtures in this file.
+    """
+    return np.array([1, 4, 9], dtype=np.int32)
+
+
+@pytest.fixture
+def HRU_to_grid() -> npt.NDArray[np.int32]:
+    """The indexes that map HRUs to grid cells.
+
+    Each value is the compressed grid cell index that the HRU belongs to.
+
+    Returns:
+        Array of size n_HRUs mapping each HRU to its parent grid cell.
+            Corresponds with other fixtures in this file.
+    """
+    return np.array([0, 1, 1, 1, 2, 2, 2, 2, 2], dtype=np.int32)
 
 
 def test_to_HRU(
     grid_data: npt.NDArray[np.float32],
-    grid_to_HRU: npt.NDArray[np.int32],
-    land_use_ratio: npt.NDArray[np.float32],
+    HRU_to_grid: npt.NDArray[np.int32],
 ) -> None:
-    """Test the to_HRU function with various methods for going from grid to HRU.
+    """Test the to_HRU function for going from grid to HRU.
 
     Args:
         grid_data: Hypothetical data on the grid.
-        grid_to_HRU: The indexes that map grid cells to HRUs.
-        land_use_ratio: The land use ratio (of a grid cell) for each HRU.
+        HRU_to_grid: The indexes that map HRUs to grid cells.
     """
-    data = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
-
-    out = np.zeros((*data.shape[:-1], land_use_ratio.size), dtype=data.dtype)
-    np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out),
-        data,
-    )
-    np.testing.assert_almost_equal(out, data)
-
-    data = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
-    np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out, fn=None), data
-    )
-    np.testing.assert_almost_equal(out, data)
-
-    data = np.array([1.0, 0.4, 0.8, 0.8, 0.6, 0.6, 0.6, 0.6, 0.6], dtype=np.float32)
-    np.testing.assert_almost_equal(
-        to_HRU(grid_data, grid_to_HRU, land_use_ratio, out, fn="weightedsplit"),
-        data,
-    )
-    np.testing.assert_almost_equal(out, data)
+    expected = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
+    result = to_HRU(grid_data, HRU_to_grid)
+    np.testing.assert_almost_equal(result, expected)

@@ -27,7 +27,7 @@ def get_error_cases() -> list[Path]:
 def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) -> None:
     """Test the land surface model with previous error cases."""
     # Set the global N_SOIL_LAYERS variable required by the numba function
-    landsurface_file.N_SOIL_LAYERS = 6
+    landsurface_file.N_SOIL_LAYERS = 6  # ty:ignore[unresolved-attribute]
 
     # Load the error case data
     with np.load(error_case_path) as data:
@@ -86,7 +86,15 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         out_interflow_h_loss,
         out_gw_recharge_h_loss,
         out_transpiration_h_loss,
+        _,
+        out_top_soil_rise_from_layer_2_m,
+        _,
+        out_top_soil_transpiration_m,
     ) = results
+
+    assert np.all(out_top_soil_rise_from_layer_2_m >= 0.0)
+    assert np.all(out_top_soil_transpiration_m >= 0.0)
+    assert np.all(out_top_soil_transpiration_m <= out_transpiration_m + 1e-6)
 
     # Perform water balance check
     post_water_content_m = inputs["water_content_m"]

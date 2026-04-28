@@ -1,10 +1,8 @@
 """Data adapter for GLOPOP-SG population data."""
 
-from __future__ import annotations
-
 import gzip
+import io
 import zipfile
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -20,102 +18,82 @@ from .base import Adapter
 class GLOPOP_SG(Adapter):
     """Adapter for GLOPOP-SG population data."""
 
-    def fetch(self, region: str, url: str) -> GLOPOP_SG:
+    def fetch(self, url: str) -> GLOPOP_SG:
         """Fetch data for a specific region.
 
         Args:
-            region: The GDL region code (e.g., 'AFG').
             url: Optional URL to override the default.
 
         Returns:
-            Self.
+            The GLOPOP_SG instance.
         """
-        tif_name = f"{region}_grid_nr.tif"
-        gz_name = f"synthpop_{region}_grid.dat.gz"
-
-        tif_path = self.root / tif_name
-        gz_path = self.root / gz_name
-
-        if tif_path.exists() and gz_path.exists():
-            return self
-
-        self._extract_from_remote(tif_name, tif_path, url)
-        self._extract_from_remote(gz_name, gz_path, url)
-
+        self.url = url
         return self
 
-    def _extract_from_remote(self, filename: str, output_path: Path, url: str) -> None:
-        """Extract a single file from the remote ZIP to the output path.
+    def _extract_from_remote_to_memory(self, filename: str, url: str) -> io.BytesIO:
+        """Extract a single file from the remote ZIP into memory.
+
+        Args:
+            filename: The name of the file within the ZIP archive.
+            url: URL of the remote ZIP archive.
+
+        Returns:
+            A BytesIO object containing the file data.
 
         Raises:
             FileNotFoundError: If the file is not found in the remote zip.
         """
-        if output_path.exists():
-            return
-
-        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
-        try:
-            with zipfile.ZipFile(RemoteFile(url), "r") as zf:
-                try:
-                    file_info = zf.getinfo(filename)
-                    file_size = file_info.file_size
-                    with (
-                        zf.open(filename) as source,
-                        open(temp_path, "wb") as target,
-                        tqdm(
-                            total=file_size,
-                            unit="B",
-                            unit_scale=True,
-                            desc=f"Downloading {filename}",
-                        ) as pbar,
-                    ):
-                        while True:
-                            chunk = source.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            target.write(chunk)
-                            pbar.update(len(chunk))
-                except KeyError:
-                    raise FileNotFoundError(f"{filename} not found in remote zip.")
-            temp_path.rename(output_path)
-        except Exception:
-            if temp_path.exists():
-                temp_path.unlink()
-            raise
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(RemoteFile(url), "r") as zf:
+            try:
+                file_info = zf.getinfo(filename)
+                file_size = file_info.file_size
+                with (
+                    zf.open(filename) as source,
+                    tqdm(
+                        total=file_size,
+                        unit="B",
+                        unit_scale=True,
+                        desc=f"Downloading {filename}",
+                    ) as pbar,
+                ):
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        buffer.write(chunk)
+                        pbar.update(len(chunk))
+            except KeyError:
+                raise FileNotFoundError(f"{filename} not found in remote zip.")
+        buffer.seek(0)
+        return buffer
 
     def read(self, region: str) -> tuple[pd.DataFrame, xr.DataArray]:
         """Read GLOPOP-SG data for a region.
+
+        Note:
+            Downloads the necessary files directly into memory.
 
         Args:
             region: The GDL region code.
 
         Returns:
             Tuple of (DataFrame of population, DataArray of grid).
-
-        Raises:
-            ValueError: If the adapter is not initialized with a folder.
         """
-        if self.root is None:
-            raise ValueError("Generic adapter not initialized with a folder.")
+        tif_name = f"{region}_grid_nr.tif"
+        gz_name = f"synthpop_{region}_grid.dat.gz"
 
-        tif_path = self.root / f"{region}_grid_nr.tif"
-        gz_path = self.root / f"synthpop_{region}_grid.dat.gz"
+        # Download tif and gz into memory
+        tif_buffer = self._extract_from_remote_to_memory(tif_name, self.url)
+        gz_buffer = self._extract_from_remote_to_memory(gz_name, self.url)
 
-        GLOPOP_grid = rxr.open_rasterio(tif_path)
-        if isinstance(GLOPOP_grid, list):
-            GLOPOP_grid = GLOPOP_grid[0]
-
-        if not isinstance(GLOPOP_grid, xr.DataArray):
-            # If it is a Dataset, we might need to select a variable or convert.
-            # Usually rioxarray returns DataArray for single band tifs.
-            # If it's a Dataset, try converting or raising.
-            if isinstance(GLOPOP_grid, xr.Dataset):
-                # Convert to array if possible or take the first variable
-                GLOPOP_grid = GLOPOP_grid.to_array().squeeze()
-
+        # Open raster from buffer
+        GLOPOP_grid = rxr.open_rasterio(tif_buffer)
         assert isinstance(GLOPOP_grid, xr.DataArray)
+        GLOPOP_grid: xr.DataArray = GLOPOP_grid.load()
 
-        with gzip.open(gz_path, "rb") as f:
+        # Open gz from buffer
+        with gzip.open(gz_buffer, "rb") as f:
             GLOPOP_s = np.frombuffer(f.read(), dtype=np.int32)
 
         GLOPOP_s_attribute_names: list[str] = [
@@ -141,16 +119,18 @@ class GLOPOP_SG(Adapter):
         total = GLOPOP_s.size
         n_people = total // n_attr
 
-        try:
-            # reshapa data
-            data_reshaped = np.reshape(GLOPOP_s, (n_attr, n_people)).transpose()
-        except ValueError:
+        countries_with_17_columns = ["COD", "IRN", "KWT", "MKD", "THA"]
+        # check if string of region contains any of the country codes with 17 columns (SHOULD BE FIXED BY MARIJN IN NEW GLOPOP VERSION)
+        if any(code in region for code in countries_with_17_columns):  # 17 columns
             n_columns = 17
             n_people = GLOPOP_s.size // n_columns
             data_reshaped = np.reshape(GLOPOP_s, (n_columns, n_people)).transpose()
             data_reshaped = np.hstack((data_reshaped[:, :-2], data_reshaped[:, -1:]))
             print(region)
             print("17 columns")
+        else:  # default to 16 columns
+            # reshape data
+            data_reshaped = np.reshape(GLOPOP_s, (n_attr, n_people)).transpose()
 
         df = pd.DataFrame(
             data_reshaped,
