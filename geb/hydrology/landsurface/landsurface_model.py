@@ -155,8 +155,8 @@ def land_surface_model(
     wetting_front_suction_head_m: ArrayFloat32,
     wetting_front_moisture_deficit: ArrayFloat32,
     green_ampt_active_layer_idx: ArrayInt32,
-    lambda_pore_size_distribution: ArrayFloat32,
-    bubbling_pressure_cm: ArrayFloat32,
+    lambda_pore_size_distribution: TwoDArrayFloat32,
+    bubbling_pressure_cm: TwoDArrayFloat32,
     crop_group_number: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
     interflow_multiplier: np.float32,
@@ -1259,7 +1259,7 @@ def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
     padded_fields: dict = {}
     for field in inputs._fields:
         val = getattr(inputs, field)
-        if isinstance(val, np.ndarray) and val.shape[0] == num_cells:
+        if isinstance(val, np.ndarray) and val.ndim >= 1 and val.shape[0] == num_cells:
             if val.ndim == 1:
                 padded: np.ndarray = np.empty(num_cells + pad_size, dtype=val.dtype)
                 padded[:num_cells] = val

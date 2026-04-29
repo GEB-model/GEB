@@ -689,7 +689,6 @@ def solve_soil_enthalpy_column(
             - Updated enthalpies (J/m2).
             - Soil heat flux (W/m2).
             - Frozen fractions (0-1).
-            - Net enthalpy change over the timestep (J/m2), for energy balance diagnostics.
     """
     n_soil_layers = len(soil_enthalpies_J_per_m2)
 
@@ -1014,16 +1013,6 @@ def solve_soil_enthalpy_column(
             ],
         )
         frozen_fractions_final[layer_idx] = frozen_fraction
-
-    # Compute the net enthalpy change for the caller's energy-balance diagnostic.
-    # To close the balance, the returned flux must represent the total energy
-    # net exchange that caused the enthalpy to change.
-    net_enthalpy_change_J_per_m2: np.float32 = np.float32(0.0)
-    for layer_idx in range(n_soil_layers):
-        net_enthalpy_change_J_per_m2 += (
-            enthalpies_current_iteration[layer_idx]
-            - enthalpies_at_start_of_timestep[layer_idx]
-        )
 
     return (
         enthalpies_current_iteration,
