@@ -1,4 +1,10 @@
 # dev
+- Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
+- Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
+
+# v1.0.0b23
+- Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).
+- Update license specification in `pyproject.toml` to follow PEP 639.
 - Re-support running with yearly timestep (fix several small bugs with variables not being available).
 - Add `create_plots` to `setup_discharge_observations`. This is because the plots are quite large and take long to generate. Default is false.
 

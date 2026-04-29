@@ -15,6 +15,7 @@ from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .field_boundaries import FieldBoundaries
 from .flood_damage_model import (
     GeulFloodDamageModel,
     GlobalFloodDamageModel,
@@ -227,6 +228,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "10.1016/j.worlddev.2015.10.041",
             "license": "CC BY-NC-ND 4.0",
             "url": "https://doi.org/10.1016/j.worlddev.2015.10.041",
+        },
+    },
+    "field_boundaries": {
+        "adapter": FieldBoundaries(
+            folder="field_boundaries",
+            local_version=1,
+            filename="field_boundaries.parquet",
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/14229033/files/field_boundaries.parquet?download=1",
+        "source": {
+            "name": "EU field boundaries",
+            "author": "Matej Batič et al. (2024), Planet Labs",
+            "license": "Commercial",
+            "url": "https://medium.com/sentinel-hub/automatic-field-delineation-new-release-1c2938399f0",
         },
     },
     "gebco": {
@@ -847,7 +863,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "delta_dtm": {
         "adapter": DeltaDTM(
-            folder="delta_dtm",
+            folder="deltadtm",
             local_version=1,
             filename="{}.zip",
             cache="global",
