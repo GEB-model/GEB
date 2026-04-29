@@ -121,23 +121,36 @@ def _calculate_soil_thermal_conductivity_scalar(
     Returns:
         Total soil thermal conductivity [W/(m·K)].
     """
-    Sr = max(np.float32(1e-5), min(degree_of_saturation, np.float32(1.0)))
-    rho_bulk = bulk_density_kg_per_dm3 * np.float32(1000.0)
-    lambda_dry = (np.float32(0.135) * rho_bulk + np.float32(64.7)) / (
+    Sr: np.float32 = max(np.float32(1e-5), min(degree_of_saturation, np.float32(1.0)))
+    rho_bulk: np.float32 = bulk_density_kg_per_dm3 * np.float32(1000.0)
+    lambda_dry: np.float32 = (np.float32(0.135) * rho_bulk + np.float32(64.7)) / (
         RHO_MINERAL_KG_PER_M3 - np.float32(0.947) * rho_bulk
     )
-    ff = max(np.float32(0.0), min(frozen_fraction, np.float32(1.0)))
-    p = porosity
-    lam_s = thermal_conductivity_solid_W_per_m_K
-    lambda_sat_unfrozen = lam_s ** (np.float32(1.0) - p) * LAMBDA_WATER**p
-    lambda_sat_frozen = lam_s ** (np.float32(1.0) - p) * LAMBDA_ICE**p
-    log10_sr = np.log10(Sr)
+    frozen_fraction: np.float32 = max(
+        np.float32(0.0), min(frozen_fraction, np.float32(1.0))
+    )
+    lambda_sat_unfrozen: np.float32 = (
+        thermal_conductivity_solid_W_per_m_K ** (np.float32(1.0) - porosity)
+        * LAMBDA_WATER**porosity
+    )
+    lambda_sat_frozen: np.float32 = (
+        thermal_conductivity_solid_W_per_m_K ** (np.float32(1.0) - porosity)
+        * LAMBDA_ICE**porosity
+    )
+    log10_sr: np.float32 = np.log10(Sr)
     if sand_percentage > np.float32(40.0):
-        Ke_unfrozen = max(np.float32(0.0), np.float32(0.7) * log10_sr + np.float32(1.0))
+        Ke_unfrozen: np.float32 = max(
+            np.float32(0.0), np.float32(0.7) * log10_sr + np.float32(1.0)
+        )
     else:
-        Ke_unfrozen = max(np.float32(0.0), log10_sr + np.float32(1.0))
-    Ke = ff * Sr + (np.float32(1.0) - ff) * Ke_unfrozen
-    lambda_sat = lambda_sat_frozen**ff * lambda_sat_unfrozen ** (np.float32(1.0) - ff)
+        Ke_unfrozen: np.float32 = max(np.float32(0.0), log10_sr + np.float32(1.0))
+    Ke: np.float32 = (
+        frozen_fraction * Sr + (np.float32(1.0) - frozen_fraction) * Ke_unfrozen
+    )
+    lambda_sat: np.float32 = (
+        lambda_sat_frozen** frozen_fraction
+        * lambda_sat_unfrozen ** (np.float32(1.0) - frozen_fraction)
+    )
     return Ke * (lambda_sat - lambda_dry) + lambda_dry
 
 
@@ -729,7 +742,7 @@ def solve_soil_enthalpy_column(
     # Compute thermal conductances with a scalar per-layer loop, avoiding the three
     # intermediate array allocations (porosity, degree_of_saturation, conductivities)
     # that the vectorised path would create on every solve call.
-    lambda_lower = _calculate_soil_thermal_conductivity_scalar(
+    lambda_lower: np.float32 = _calculate_soil_thermal_conductivity_scalar(
         thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K[0],
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3[0],
         porosity=water_content_saturated_m[0] / layer_thicknesses_m[0],
@@ -738,8 +751,8 @@ def solve_soil_enthalpy_column(
         frozen_fraction=frozen_fraction_for_conductivity[0],
     )
     for layer_idx in range(n_soil_layers - 1):
-        lambda_upper = lambda_lower
-        lambda_lower = _calculate_soil_thermal_conductivity_scalar(
+        lambda_upper: np.float32 = lambda_lower
+        lambda_lower: np.float32 = _calculate_soil_thermal_conductivity_scalar(
             thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K[
                 layer_idx + 1
             ],
