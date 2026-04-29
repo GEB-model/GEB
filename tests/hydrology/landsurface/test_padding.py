@@ -163,36 +163,31 @@ def error_case_path() -> Path:
 
 
 def test_padding_identity(error_case_path: Path) -> None:
-    """Outputs with SIMD padding are bit-identical to unpadded results.
+    """Padding is transparent: trimmed outputs match the aligned-reference run.
 
-    Uses float32 throughout (the common production dtype).  Constructs a
-    non-multiple-of-16 cell count to guarantee that padding actually fires.
+    The kernel now iterates in blocks of 16 and requires ``num_cells`` to be a
+    multiple of 16.  This test verifies that calling the kernel on ``N`` cells
+    that were padded to the next multiple of 16 by ``_pad_hru_arrays`` produces
+    the same first ``N`` outputs as calling the kernel directly on ``N_aligned``
+    cells tiled from the same single-cell fixture (which is already a multiple
+    of 16 and therefore an exact match to what padding produces).
     """
     landsurface_module.N_SOIL_LAYERS = 6  # type: ignore[attr-defined]
 
-    # 5 cells is deliberately not a multiple of 16 so _pad_hru_arrays pads.
+    # 5 cells: deliberately not a multiple of 16 so _pad_hru_arrays pads to 16.
     num_cells = 5
-    inputs_unpadded = _load_and_tile(error_case_path, num_cells)
-    inputs_padded_base = _deep_copy_inputs(inputs_unpadded)
+    padded_size = 16  # _pad_hru_arrays pads 5 → 16; used as reference tile size
 
-    # Build a LandSurfaceInputs so we can call _pad_hru_arrays.
-    padded_nt = _pad_hru_arrays(LandSurfaceInputs(**inputs_padded_base))
-    assert padded_nt.slope_m_per_m.shape[0] % 16 == 0, (
-        "_pad_hru_arrays did not pad to a multiple of 16"
+    # --- padded path: tile 5, pad to 16, run, trim to 5 ---
+    inputs_padded_base = _load_and_tile(error_case_path, num_cells)
+    padded_nt = _pad_hru_arrays(
+        LandSurfaceInputs(**_deep_copy_inputs(inputs_padded_base))
     )
-    assert padded_nt.slope_m_per_m.shape[0] > num_cells, (
-        "_pad_hru_arrays should have increased the cell count"
+    assert padded_nt.slope_m_per_m.shape[0] == padded_size, (
+        f"Expected padding to produce {padded_size} cells, "
+        f"got {padded_nt.slope_m_per_m.shape[0]}"
     )
-
-    # Run unpadded
-    results_unpadded = land_surface_model(**inputs_unpadded)
-
-    # Run padded (a fresh independent copy so in-place mutations don't alias)
-    padded_inputs_for_run = _deep_copy_inputs(inputs_padded_base)
-    padded_nt_run = _pad_hru_arrays(LandSurfaceInputs(**padded_inputs_for_run))
-    results_padded_raw = land_surface_model(**padded_nt_run._asdict())
-
-    # Trim padded outputs to the original cell count for comparison.
+    results_padded_raw = land_surface_model(**padded_nt._asdict())
     results_padded = [
         r[:num_cells]
         if isinstance(r, np.ndarray) and r.ndim == 1
@@ -202,30 +197,48 @@ def test_padding_identity(error_case_path: Path) -> None:
         for r in results_padded_raw
     ]
 
-    for idx, (unpad, pad) in enumerate(zip(results_unpadded, results_padded)):
-        if not isinstance(unpad, np.ndarray):
+    # --- reference path: tile directly to 16 (already aligned), run ---
+    # All 16 cells are identical copies of cell 0, which is exactly the content
+    # that _pad_hru_arrays places in the padding region.  The two kernel inputs
+    # are therefore bit-for-bit identical, so all 16 output elements should
+    # match, and in particular the first 5.  We keep ref_nt so that post-run
+    # in-place mutations are accessible for comparison.
+    ref_nt = LandSurfaceInputs(
+        **_deep_copy_inputs(_load_and_tile(error_case_path, padded_size))
+    )
+    results_ref = land_surface_model(**ref_nt._asdict())
+
+    for idx, (ref, pad) in enumerate(zip(results_ref, results_padded)):
+        if not isinstance(ref, np.ndarray):
             continue
-        assert np.array_equal(unpad, pad), (
-            f"Output {idx} differs between padded and unpadded runs.\n"
-            f"  max abs diff = {np.abs(unpad.astype(np.float64) - pad.astype(np.float64)).max()}"
+        ref_trimmed = ref[:num_cells] if ref.ndim == 1 else ref[:num_cells, :]
+        assert np.array_equal(ref_trimmed, pad), (
+            f"Output {idx} differs between reference and padded runs.\n"
+            f"  max abs diff = {np.abs(ref_trimmed.astype(np.float64) - pad.astype(np.float64)).max()}"
         )
 
-    # Also verify that the in-place-modified input arrays are identical.
-    for field in LandSurfaceInputs._fields:
-        val_unpad = inputs_unpadded[field]
-        val_pad_trimmed = getattr(padded_nt_run, field)
-        if not isinstance(val_unpad, np.ndarray):
-            continue
-        if val_unpad.shape[0] != num_cells:
-            # Not a per-cell array (e.g. crop_group_number_per_group).
-            continue
-        val_pad_trimmed = (
-            val_pad_trimmed[:num_cells]
-            if val_pad_trimmed.ndim == 1
-            else val_pad_trimmed[:num_cells, :]
+    # Verify in-place-modified fields (not in return tuple) also match.
+    # Both ref_nt and padded_nt were passed to the kernel so their arrays carry
+    # post-run state.
+    _INPLACE_FIELDS = {
+        "water_content_m",
+        "soil_enthalpy_J_per_m2",
+        "wetting_front_depth_m",
+        "wetting_front_suction_head_m",
+        "wetting_front_moisture_deficit",
+        "green_ampt_active_layer_idx",
+    }
+    for field in _INPLACE_FIELDS:
+        ref_val = getattr(ref_nt, field)
+        pad_val = getattr(padded_nt, field)
+        ref_trimmed = (
+            ref_val[:num_cells] if ref_val.ndim == 1 else ref_val[:num_cells, :]
         )
-        assert np.array_equal(val_unpad, val_pad_trimmed), (
-            f"In-place input '{field}' differs between padded and unpadded runs."
+        pad_trimmed = (
+            pad_val[:num_cells] if pad_val.ndim == 1 else pad_val[:num_cells, :]
+        )
+        assert np.array_equal(ref_trimmed, pad_trimmed), (
+            f"In-place input '{field}' differs between reference and padded runs."
         )
 
 
