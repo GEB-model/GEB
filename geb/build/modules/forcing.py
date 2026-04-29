@@ -1107,6 +1107,19 @@ class Forcing(BuildModelBase):
             **kwargs,
         )
 
+    @build_method(depends_on=["set_ssp", "set_time_range"], required=True)
+    def setup_deltas_CMIP6(self) -> None:
+        """Sets up the CMIP6 deltas for GEB.
+
+        This method is a placeholder and should be implemented to process CMIP6 delta data when it becomes available.
+        """
+        cmip6_deltas = self.data_catalog.fetch(
+            "cmip6",
+            self.start_date - relativedelta(years=1),
+            self.end_date,
+            self.grid["mask"].rio.bounds(recalc=True),
+        )
+
     def setup_forcing_ERA5(self, create_plots: bool = False) -> None:
         """Sets up the ERA5 forcing data for GEB.
 

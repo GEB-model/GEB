@@ -5,6 +5,7 @@ from typing import Any
 
 from .aquastat import AQUASTAT
 from .base import Adapter
+from .cmip6 import CMIP6
 from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
@@ -694,6 +695,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "OECD",
             "license": "CC BY 4.0",
             "url": "https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov",
+        },
+    },
+    "cmip6": {
+        "adapter": CMIP6(
+            folder="cmip6",
+            local_version=1,
+            filename="cmip6.parquet",
+            cache="global",
+        ),
+        "url": "https://esgf-node.llnl.gov/search/cmip6-datasets/",
+        "source": {
+            "name": "CMIP6",
+            "author": "CMIP6 Modeling Groups",
+            "license": "Varies by dataset",
+            "url": "https://esgf-node.llnl.gov/search/cmip6-datasets/",
         },
     },
     "coast_rp": {
