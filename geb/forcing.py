@@ -294,7 +294,7 @@ class ForcingLoader(ABC):
         """
         mask_key = f"climate/{self.variable}_mask"
         forcing_mask: xr.DataArray = xr.open_dataarray(
-            self.model.files["other"][mask_key], consolidated=False
+            self.model.files["other"][mask_key], engine="zarr", consolidated=False
         )
         return forcing_mask
 
