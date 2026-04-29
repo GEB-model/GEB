@@ -25,7 +25,7 @@ from shapely.geometry.base import BaseGeometry
 
 from geb.workflows.io import fetch_and_save
 from geb.workflows.raster import convert_nodata
-
+from rioxarray import merge
 from .base import Adapter
 
 available_continents: dict[str, str] = {
@@ -171,13 +171,8 @@ class DeltaDTM(Adapter):
             rxr.open_rasterio(path, chunks={}) for path in tile_paths
         ]  # ty: ignore[invalid-assignment]
         das: list[xr.DataArray] = [da.sel(band=1) for da in das]
-        da = xr.combine_by_coords(
-            das,
-            fill_value=das[0].rio.nodata,
-            combine_attrs="drop_conflicts",
-            join="outer",
-            compat="broadcast_equals",
-            data_vars="all",
-        )
-        assert isinstance(da, xr.DataArray)
-        return da
+
+        da_merged: xr.DataArray = merge.merge_arrays(das)
+
+        assert isinstance(da_merged, xr.DataArray)
+        return da_merged
