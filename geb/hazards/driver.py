@@ -279,5 +279,10 @@ class HazardDriver(Module):
                         )
                         assert event["end_time"] > event["start_time"]
 
+                    if self.model.in_spinup:
+                        msg = f"Flood event {event} cannot be simulated during spinup. Please adjust the flood event times or the spinup time in the configuration."
+                        self.model.logger.exception(msg)
+                        raise ValueError(msg)
+
                     print("Running floods for event:", event)
                     self.floods.run(event)
