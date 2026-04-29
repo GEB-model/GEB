@@ -20,7 +20,7 @@ from geb.store import Bucket
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_grid
 
-from ..landcovers import PADDY_IRRIGATED, SEALED
+from ..landcovers import FOREST, GRASSLAND_LIKE, PADDY_IRRIGATED, SEALED
 from .constants import (
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
@@ -75,6 +75,11 @@ SOIL_EMISSIVITY = np.float32(0.95)
 # Number of soil layers, set dynamically by set_global_variables
 # Default is 6, matching other modules
 N_SOIL_LAYERS: int = 6
+
+# Lane width for SIMD vectorisation (AVX2 = 8 × float32; AVX-512 = 16 × float32).
+# Padding the HRU dimension to this multiple allows Numba/LLVM to emit full
+# width vector loads and stores with no scalar remainder loop.
+BLOCK_SIZE: int = 16
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -152,9 +157,7 @@ def land_surface_model(
     green_ampt_active_layer_idx: ArrayInt32,
     lambda_pore_size_distribution: ArrayFloat32,
     bubbling_pressure_cm: ArrayFloat32,
-    crop_group_forest: ArrayFloat32,
-    crop_group_grassland_like: ArrayFloat32,
-    crop_group_number_per_group: ArrayFloat32,
+    crop_group_number: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
     interflow_multiplier: np.float32,
     deep_soil_temperature_C: ArrayFloat32,
@@ -246,9 +249,7 @@ def land_surface_model(
         groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
         bubbling_pressure_cm: Bubbling pressure in cm.
-        crop_group_forest: Crop group numbers for forests (see WOFOST 6.0).
-        crop_group_grassland_like: Crop group numbers for grassland-like areas (see WOFOST 6.0).
-        crop_group_number_per_group: Crop group numbers for each crop type.
+        crop_group_number: Crop group number per HRU, pre-resolved from land use type and crop map (see WOFOST 6.0).
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
         interflow_multiplier: Calibration factor for interflow calculation.
         deep_soil_temperature_C: Deep soil temperature in Celsius.
@@ -992,12 +993,9 @@ def land_surface_model(
                 soil_layer_height_m=soil_layer_height[i, :],
                 land_use_type=land_use_type[i],
                 root_depth_m=root_depth_m[i],
-                crop_map=crop_map[i],
-                crop_group_forest=crop_group_forest[i],
-                crop_group_grassland_like=crop_group_grassland_like[i],
+                crop_group_number=crop_group_number[i],
                 potential_transpiration_m=potential_transpiration_m_cell_hour,
                 reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour_cell,
-                crop_group_number_per_group=crop_group_number_per_group,
                 w_m=water_content_m[i, :],
                 topwater_m=topwater_m[i],
                 minimum_effective_root_depth_m=minimum_effective_root_depth_m,
@@ -1192,13 +1190,57 @@ class LandSurfaceInputs(NamedTuple):
     green_ampt_active_layer_idx: ArrayInt32
     lambda_pore_size_distribution: TwoDArrayFloat32
     bubbling_pressure_cm: TwoDArrayFloat32
-    crop_group_forest: ArrayFloat32
-    crop_group_grassland_like: ArrayFloat32
-    crop_group_number_per_group: ArrayFloat32
+    crop_group_number: ArrayFloat32
     minimum_effective_root_depth_m: np.float32
     interflow_multiplier: np.float32
     deep_soil_temperature_C: ArrayFloat32
     leaf_area_index: ArrayFloat32
+
+
+def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
+    """Pad every HRU-dimensioned array to the next multiple of BLOCK_SIZE.
+
+    Padding cells are filled with the values from cell 0 so they represent a
+    physically valid (but silent) extra cell.  Because those indices are never
+    written back to the model state, any in-place mutations to the padding
+    region are discarded after the kernel returns.
+
+    Notes:
+        Arrays whose first axis does not equal ``num_cells`` (scalars) are left
+        unchanged.
+
+    Args:
+        inputs: Land surface inputs to pad.
+
+    Returns:
+        Land surface inputs with every HRU-sized array padded to the next
+        multiple of BLOCK_SIZE along the cell axis (axis 0).  Returns
+        ``inputs`` unchanged when ``num_cells`` is already a multiple of
+        BLOCK_SIZE.
+    """
+    num_cells: int = inputs.slope_m_per_m.shape[0]
+    pad_size: int = (-num_cells) % BLOCK_SIZE
+    if pad_size == 0:
+        return inputs
+
+    padded_fields: dict = {}
+    for field in inputs._fields:
+        val = getattr(inputs, field)
+        if isinstance(val, np.ndarray) and val.shape[0] == num_cells:
+            if val.ndim == 1:
+                padded: np.ndarray = np.empty(num_cells + pad_size, dtype=val.dtype)
+                padded[:num_cells] = val
+                padded[num_cells:] = val[0]
+            else:
+                # 2-D arrays are cell-major (num_cells, N_LAYERS or N_HOURS).
+                padded = np.empty((num_cells + pad_size, val.shape[1]), dtype=val.dtype)
+                padded[:num_cells, :] = val
+                padded[num_cells:, :] = val[0, :]
+            padded_fields[field] = np.ascontiguousarray(padded)
+        else:
+            padded_fields[field] = val
+
+    return LandSurfaceInputs(**padded_fields)
 
 
 class LandSurfaceVariables(Bucket):
@@ -1294,7 +1336,9 @@ class LandSurface(Module):
             leaf_area_index: Leaf area index per HRU (-).
 
         Returns:
-            Bundle of inputs for `land_surface_model`.
+            Bundle of inputs for `land_surface_model`, with all HRU-dimensioned
+            arrays padded to the next multiple of BLOCK_SIZE via
+            `_pad_hru_arrays`.
         """
         CO2_ppm: np.float32 = np.float32(self.model.forcing.load("CO2_ppm"))
         groundwater_toplayer_conductivity_m_per_day: ArrayFloat32 = (
@@ -1308,8 +1352,22 @@ class LandSurface(Module):
                 "crop_group_number"
             ].values.astype(np.float32)
         )
+        # Resolve crop group number to a per-HRU array so all kernel inputs are
+        # either scalars or HRU-dimensioned (avoids a lookup inside the Numba kernel).
+        safe_crop_map: ArrayInt32 = np.clip(
+            self.HRU.var.crop_map, 0, len(crop_group_number_per_group) - 1
+        )
+        crop_group_number: ArrayFloat32 = np.where(
+            self.HRU.var.land_use_type == FOREST,
+            self.HRU.var.crop_group_number_forest,
+            np.where(
+                self.HRU.var.land_use_type == GRASSLAND_LIKE,
+                self.HRU.var.crop_group_number_grassland_like,
+                crop_group_number_per_group[safe_crop_map],
+            ),
+        ).astype(np.float32)
 
-        return LandSurfaceInputs(
+        unpadded_inputs = LandSurfaceInputs(
             land_use_type=self.HRU.var.land_use_type,
             slope_m_per_m=self.HRU.var.slope_m_per_m,
             hillslope_length_m=self.HRU.var.hillslope_length_m,
@@ -1376,9 +1434,7 @@ class LandSurface(Module):
             bubbling_pressure_cm=np.ascontiguousarray(
                 self.HRU.var.bubbling_pressure_cm.T
             ),
-            crop_group_forest=self.HRU.var.crop_group_number_forest,
-            crop_group_grassland_like=self.HRU.var.crop_group_number_grassland_like,
-            crop_group_number_per_group=crop_group_number_per_group,
+            crop_group_number=crop_group_number,
             minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
             interflow_multiplier=np.float32(
                 self.model.config["parameters"]["interflow_multiplier"]
@@ -1386,6 +1442,8 @@ class LandSurface(Module):
             deep_soil_temperature_C=deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
         )
+
+        return _pad_hru_arrays(unpadded_inputs)
 
     def _snapshot_land_surface_inputs_for_error(
         self,
@@ -2022,6 +2080,10 @@ class LandSurface(Module):
 
         pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.HRU.pr_kg_per_m2_per_s
 
+        # Record original cell count before building inputs (inputs may be padded
+        # to a multiple of BLOCK_SIZE inside _build_land_surface_inputs).
+        num_cells_original: int = self.HRU.var.slope_m_per_m.shape[0]
+
         land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(
             root_depth_m=root_depth_m,
             interception_capacity_m=interception_capacity_m,
@@ -2040,6 +2102,10 @@ class LandSurface(Module):
         import time
 
         t0 = time.time()
+        # Collect all outputs as a list so we can trim the padded cell dimension in one
+        # pass before unpacking.  The kernel processes num_cells_padded cells (a multiple
+        # of BLOCK_SIZE); phantom cells beyond num_cells_original are discarded here.
+        _n: int = num_cells_original
         (
             rain_m,
             snow_m,
@@ -2070,15 +2136,46 @@ class LandSurface(Module):
             top_soil_rise_from_layer_2_m,
             top_soil_percolation_to_layer_2_m,
             top_soil_transpiration_m,
-        ) = land_surface_model(**land_surface_inputs._asdict())
+        ) = [
+            r[:_n]
+            if isinstance(r, np.ndarray) and r.ndim == 1
+            else r[:_n, :]
+            if isinstance(r, np.ndarray) and r.ndim == 2
+            else r
+            for r in land_surface_model(**land_surface_inputs._asdict())
+        ]
 
         # Write back cell-major copies to the layer-major model state.
+        # Slice the cell axis to num_cells_original to discard the padding region.
         # TODO: Remove these copy-backs once the model state is stored in
         # cell-major layout throughout.
-        np.copyto(self.HRU.var.water_content_m, land_surface_inputs.water_content_m.T)
+        np.copyto(
+            self.HRU.var.water_content_m,
+            land_surface_inputs.water_content_m[:_n, :].T,
+        )
         np.copyto(
             self.HRU.var.soil_enthalpy_J_per_m2,
-            land_surface_inputs.soil_enthalpy_J_per_m2.T,
+            land_surface_inputs.soil_enthalpy_J_per_m2[:_n, :].T,
+        )
+
+        # Copy back wetting-front state modified in-place inside the kernel.
+        # When inputs were padded, these are new arrays rather than direct
+        # model-state references, so an explicit copy-back is always required.
+        np.copyto(
+            self.HRU.var.wetting_front_depth_m,
+            land_surface_inputs.wetting_front_depth_m[:_n],
+        )
+        np.copyto(
+            self.HRU.var.wetting_front_suction_head_m,
+            land_surface_inputs.wetting_front_suction_head_m[:_n],
+        )
+        np.copyto(
+            self.HRU.var.wetting_front_moisture_deficit,
+            land_surface_inputs.wetting_front_moisture_deficit[:_n],
+        )
+        np.copyto(
+            self.HRU.var.green_ampt_active_layer_idx,
+            land_surface_inputs.green_ampt_active_layer_idx[:_n],
         )
 
         t1 = time.time()
