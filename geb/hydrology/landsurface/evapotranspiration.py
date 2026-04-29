@@ -7,8 +7,6 @@ from numba import njit
 from geb.geb_types import ArrayFloat32
 
 from ..landcovers import (
-    FOREST,
-    GRASSLAND_LIKE,
     OPEN_WATER,
     PADDY_IRRIGATED,
     SEALED,
@@ -270,12 +268,9 @@ def calculate_transpiration(
     soil_layer_height_m: npt.NDArray[np.float32],  # [m]
     land_use_type: np.int32,
     root_depth_m: np.float32,  # [m]
-    crop_map: np.int32,
-    crop_group_forest: np.float32,
-    crop_group_grassland_like: np.float32,
+    crop_group_number: np.float32,
     potential_transpiration_m: np.float32,  # [m]
     reference_evapotranspiration_grass_m_hour: np.float32,  # [m]
-    crop_group_number_per_group: npt.NDArray[np.float32],
     w_m: npt.NDArray[np.float32],  # [m]
     topwater_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
@@ -290,12 +285,10 @@ def calculate_transpiration(
         soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
         land_use_type: Land use type of the hydrological response unit.
         root_depth_m: The root depth [m].
-        crop_map: Crop map indicating the crop type for the hydrological response unit. -1 indicates no crop.
-        crop_group_forest: Crop group numbers for forest (see WOFOST 6.0).
-        crop_group_grassland_like: Crop group numbers for grassland-like areas (see WOFOST 6.0).
+        crop_group_number: Crop group number for this HRU, pre-resolved from land use type
+            and crop map (see WOFOST 6.0).
         potential_transpiration_m: Potential transpiration [m].
         reference_evapotranspiration_grass_m_hour: Reference evapotranspiration for grass [m/hour]. This is an hourly value that will be converted to a daily value for the calculation.
-        crop_group_number_per_group: Crop group numbers for each crop type.
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
@@ -317,14 +310,6 @@ def calculate_transpiration(
         transpiration += transpiration_from_topwater
 
     if not soil_is_frozen:
-        # get group group numbers for natural areas
-        if land_use_type == FOREST:
-            crop_group_number: np.float32 = crop_group_forest
-        elif land_use_type == GRASSLAND_LIKE:
-            crop_group_number: np.float32 = crop_group_grassland_like
-        else:  #
-            crop_group_number: np.float32 = crop_group_number_per_group[crop_map]
-
         # vegetation-specific factor for easily available soil water
         fraction_easily_available_soil_water: np.float32 = get_fraction_easily_available_soil_water(
             crop_group_number=crop_group_number,

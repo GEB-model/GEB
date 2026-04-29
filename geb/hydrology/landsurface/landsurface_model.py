@@ -20,7 +20,7 @@ from geb.store import Bucket
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_grid
 
-from ..landcovers import PADDY_IRRIGATED, SEALED
+from ..landcovers import FOREST, GRASSLAND_LIKE, PADDY_IRRIGATED, SEALED
 from .constants import (
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
@@ -76,6 +76,11 @@ SOIL_EMISSIVITY = np.float32(0.95)
 # Default is 6, matching other modules
 N_SOIL_LAYERS: int = 6
 
+# Lane width for SIMD vectorisation (AVX2 = 8 × float32; AVX-512 = 16 × float32).
+# Padding the HRU dimension to this multiple allows Numba/LLVM to emit full
+# width vector loads and stores with no scalar remainder loop.
+BLOCK_SIZE: int = 16
+
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
@@ -106,22 +111,22 @@ def map_date_to_dekad(dt: datetime) -> int:
     return dekadal_index
 
 
-@njit(parallel=True, cache=True, fastmath=False)
+@njit(parallel=True, cache=True, fastmath=True)
 def land_surface_model(
     land_use_type: ArrayInt32,
     slope_m_per_m: ArrayFloat32,
     hillslope_length_m: ArrayFloat32,
-    water_content_m: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
-    water_content_residual_m: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
-    water_content_wilting_point_m: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
-    water_content_field_capacity_m: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
-    water_content_saturated_m: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
+    water_content_m: TwoDArrayFloat32,
+    water_content_residual_m: TwoDArrayFloat32,
+    water_content_wilting_point_m: TwoDArrayFloat32,
+    water_content_field_capacity_m: TwoDArrayFloat32,
+    water_content_saturated_m: TwoDArrayFloat32,
     soil_enthalpy_J_per_m2: TwoDArrayFloat32,
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32,
     solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32,
     sand_percentage: TwoDArrayFloat32,
-    delta_z: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
-    soil_layer_height: TwoDArrayFloat32,  # TODO: Check if fortran order speeds up
+    delta_z: TwoDArrayFloat32,
+    soil_layer_height: TwoDArrayFloat32,
     root_depth_m: ArrayFloat32,
     topwater_m: ArrayFloat32,
     variable_runoff_shape_beta: ArrayFloat32,
@@ -150,11 +155,9 @@ def land_surface_model(
     wetting_front_suction_head_m: ArrayFloat32,
     wetting_front_moisture_deficit: ArrayFloat32,
     green_ampt_active_layer_idx: ArrayInt32,
-    lambda_pore_size_distribution: ArrayFloat32,
-    bubbling_pressure_cm: ArrayFloat32,
-    crop_group_forest: ArrayFloat32,
-    crop_group_grassland_like: ArrayFloat32,
-    crop_group_number_per_group: ArrayFloat32,
+    lambda_pore_size_distribution: TwoDArrayFloat32,
+    bubbling_pressure_cm: TwoDArrayFloat32,
+    crop_group_number: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
     interflow_multiplier: np.float32,
     deep_soil_temperature_C: ArrayFloat32,
@@ -246,9 +249,7 @@ def land_surface_model(
         groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
         bubbling_pressure_cm: Bubbling pressure in cm.
-        crop_group_forest: Crop group numbers for forests (see WOFOST 6.0).
-        crop_group_grassland_like: Crop group numbers for grassland-like areas (see WOFOST 6.0).
-        crop_group_number_per_group: Crop group numbers for each crop type.
+        crop_group_number: Crop group number per HRU, pre-resolved from land use type and crop map (see WOFOST 6.0).
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
         interflow_multiplier: Calibration factor for interflow calculation.
         deep_soil_temperature_C: Deep soil temperature in Celsius.
@@ -325,778 +326,818 @@ def land_surface_model(
     groundwater_recharge_enthalpy_loss_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
     transpiration_enthalpy_loss_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
 
-    # Pre-allocate work buffers for solve_soil_enthalpy_column per cell to avoid NRT allocations in the hot loop.
-    # We allocate them for each cell in the prange loop to avoid cross-thread interference.
-    n_soil_layers = soil_enthalpy_J_per_m2.shape[0]
-
-    for i in prange(slope_m_per_m.size):  # ty: ignore[not-iterable]
-        # Pre-allocate cell-local buffers
-        lower_diagonal_a = np.zeros(n_soil_layers, dtype=np.float32)
-        main_diagonal_b = np.zeros(n_soil_layers, dtype=np.float32)
-        upper_diagonal_c = np.zeros(n_soil_layers, dtype=np.float32)
-        rhs_vector_d = np.zeros(n_soil_layers, dtype=np.float32)
-        tdma_c_prime = np.empty(n_soil_layers, dtype=np.float32)
-        tdma_d_prime = np.empty(n_soil_layers, dtype=np.float32)
-        enthalpies_new_iteration = np.empty(n_soil_layers, dtype=np.float32)
-        thermal_conductances_between_layer_centers_W_per_m2_K = np.empty(
-            n_soil_layers - 1, dtype=np.float32
-        )
-        frozen_fraction_for_conductivity = np.empty(n_soil_layers, dtype=np.float32)
-        latent_heat_areal_J_per_m2_per_layer = np.empty(n_soil_layers, dtype=np.float32)
-        heat_capacity_liquid_J_per_m2_K_per_layer = np.empty(
-            n_soil_layers, dtype=np.float32
-        )
-        heat_capacity_frozen_J_per_m2_K_per_layer = np.empty(
-            n_soil_layers, dtype=np.float32
-        )
-        dT_dH_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
-        beta_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
-        enthalpies_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
-
-        snow_water_equivalent_m_cell = snow_water_equivalent_m[i]
-        liquid_water_in_snow_m_cell = liquid_water_in_snow_m[i]
-        snow_temperature_C_cell = snow_temperature_C[i]
-
-        for hour in range(24):
-            # Climate values for current hour (contigous access [i, hour])
-            tas_2m_K_val = tas_2m_K[i, hour]
-            ps_pascal_val = ps_pascal[i, hour]
-            rlds_W_per_m2_val = rlds_W_per_m2[i, hour]
-            rsds_W_per_m2_val = rsds_W_per_m2[i, hour]
-            pr_val = pr_kg_per_m2_per_s[i, hour]
-
-            tas_C: np.float32 = tas_2m_K_val - np.float32(273.15)
-            dewpoint_tas_C: np.float32 = dewpoint_tas_2m_K[i, hour] - np.float32(273.15)
-
-            wind_u = wind_u10m_m_per_s[i, hour]
-            wind_v = wind_v10m_m_per_s[i, hour]
-            wind_10m_m_per_s: np.float32 = np.sqrt(
-                wind_u * wind_u + wind_v * wind_v
-            )  # Wind speed at 10m height
-
-            soil_enthalpy_before_solver_J_per_m2: np.float32 = soil_enthalpy_J_per_m2[
-                :, i
-            ].sum()
-
-            (
-                soil_enthalpy_J_per_m2_cell_updated,
-                soil_heat_flux_W_per_m2_cell,
-                frozen_fractions_cell,
-            ) = solve_soil_enthalpy_column(
-                soil_enthalpies_J_per_m2=soil_enthalpy_J_per_m2[:, i],
-                layer_thicknesses_m=soil_layer_height[:, i],
-                bulk_density_kg_per_dm3=bulk_density_kg_per_dm3[:, i],
-                solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[:, i],
-                thermal_conductivity_solid_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
-                    :, i
-                ],
-                water_content_saturated_m=water_content_saturated_m[:, i],
-                sand_percentage=sand_percentage[:, i],
-                water_content_m=water_content_m[:, i],
-                shortwave_radiation_W_per_m2=rsds_W_per_m2_val,
-                longwave_radiation_W_per_m2=rlds_W_per_m2_val,
-                air_temperature_K=tas_2m_K_val,
-                wind_speed_10m_m_per_s=wind_10m_m_per_s,
-                surface_pressure_pa=ps_pascal_val,
-                timestep_seconds=np.float32(3600.0),
-                deep_soil_temperature_C=deep_soil_temperature_C[i],
-                soil_emissivity=SOIL_EMISSIVITY,
-                soil_albedo=SOIL_ALBEDO,
-                leaf_area_index=leaf_area_index[i],
-                snow_water_equivalent_m=np.float32(snow_water_equivalent_m_cell),
-                snow_temperature_C=snow_temperature_C_cell,
-                topwater_m=topwater_m[i],
-                lower_diagonal_a=lower_diagonal_a,
-                main_diagonal_b=main_diagonal_b,
-                upper_diagonal_c=upper_diagonal_c,
-                rhs_vector_d=rhs_vector_d,
-                tdma_c_prime=tdma_c_prime,
-                tdma_d_prime=tdma_d_prime,
-                enthalpies_new_iteration=enthalpies_new_iteration,
-                thermal_conductances_between_layer_centers_W_per_m2_K=thermal_conductances_between_layer_centers_W_per_m2_K,
-                frozen_fraction_for_conductivity=frozen_fraction_for_conductivity,
-                latent_heat_areal_J_per_m2_per_layer=latent_heat_areal_J_per_m2_per_layer,
-                heat_capacity_liquid_J_per_m2_K_per_layer=heat_capacity_liquid_J_per_m2_K_per_layer,
-                heat_capacity_frozen_J_per_m2_K_per_layer=heat_capacity_frozen_J_per_m2_K_per_layer,
-                dT_dH_current_iteration=dT_dH_current_iteration,
-                beta_current_iteration=beta_current_iteration,
-                enthalpies_current_iteration=enthalpies_current_iteration,
+    num_blocks: int = num_cells // BLOCK_SIZE
+    for _block in prange(num_blocks):  # ty: ignore[not-iterable]
+        for _j in range(BLOCK_SIZE):
+            i: int = _block * BLOCK_SIZE + _j
+            # Use the compile-time constant N_SOIL_LAYERS (always 6) so Numba can
+            # stack-allocate these small scratch buffers instead of going through
+            # the NRT heap allocator on every cell iteration.
+            lower_diagonal_a = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            main_diagonal_b = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            upper_diagonal_c = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            rhs_vector_d = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            tdma_c_prime = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            tdma_d_prime = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            enthalpies_new_iteration = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            thermal_conductances_between_layer_centers_W_per_m2_K = np.empty(
+                N_SOIL_LAYERS - 1, dtype=np.float32
+            )
+            frozen_fraction_for_conductivity = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            latent_heat_areal_J_per_m2_per_layer = np.empty(
+                N_SOIL_LAYERS, dtype=np.float32
+            )
+            heat_capacity_liquid_J_per_m2_K_per_layer = np.empty(
+                N_SOIL_LAYERS, dtype=np.float32
+            )
+            heat_capacity_frozen_J_per_m2_K_per_layer = np.empty(
+                N_SOIL_LAYERS, dtype=np.float32
+            )
+            dT_dH_current_iteration = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            beta_current_iteration = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            enthalpies_current_iteration = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+            # Pre-allocate the per-cell transpiration snapshot buffer here (outside the
+            # hour loop) to avoid a heap allocation on each of the 24 hourly sub-steps.
+            water_content_before_transpiration_m = np.empty(
+                N_SOIL_LAYERS, dtype=np.float32
             )
 
-            soil_enthalpy_J_per_m2[:, i] = soil_enthalpy_J_per_m2_cell_updated
+            snow_water_equivalent_m_cell = snow_water_equivalent_m[i]
+            liquid_water_in_snow_m_cell = liquid_water_in_snow_m[i]
+            snow_temperature_C_cell = snow_temperature_C[i]
 
-            soil_boundary_enthalpy_flux_J_per_m2[i] += (
-                soil_enthalpy_J_per_m2[:, i].sum()
-                - soil_enthalpy_before_solver_J_per_m2
-            )
-
-            (
-                reference_evapotranspiration_grass_m_hour_cell,
-                reference_evapotranspiration_water_m_hour_cell,
-                net_absorbed_radiation_vegetation_MJ_m2_dt,
-                actual_vapour_pressure_Pa,
-            ) = get_reference_evapotranspiration(
-                tas_C=tas_C,
-                dewpoint_tas_C=dewpoint_tas_C,
-                ps_pa=ps_pascal_val,
-                rlds_W_per_m2=rlds_W_per_m2_val,
-                rsds_W_per_m2=rsds_W_per_m2_val,
-                wind_10m_m_per_s=wind_10m_m_per_s,
-                soil_heat_flux_W_per_m2=soil_heat_flux_W_per_m2_cell,
-            )
-
-            # Ensure non-negative evapotranspiration values
-            # TODO: Use this to implement dew rather than clipping
-            reference_evapotranspiration_grass_m_hour_cell = max(
-                reference_evapotranspiration_grass_m_hour_cell, np.float32(0.0)
-            )
-            reference_evapotranspiration_water_m_hour_cell = max(
-                reference_evapotranspiration_water_m_hour_cell, np.float32(0.0)
-            )
-
-            reference_evapotranspiration_grass_m[i] += (
-                reference_evapotranspiration_grass_m_hour_cell
-            )
-            reference_evapotranspiration_water_m[i, hour] += (
-                reference_evapotranspiration_water_m_hour_cell
-            )
-
-            (
-                rain_m_cell,
-                snow_m_cell,
-                snow_water_equivalent_m_cell,
-                liquid_water_in_snow_m_cell,
-                snow_temperature_C_cell,
-                _,  # melt (before refreezing)
-                runoff_from_melt_m,  # after refreezing
-                rainfall_that_resulted_in_runoff_if_interception_was_not_considered_m_per_hour,
-                sublimation_m_cell_hour,
-                _,  # refreezing
-                _,  # snow surface temperature
-                _,  # net shortwave radiation
-                _,  # net longwave radiation
-                _,  # sensible heat flux
-                _,  # latent heat flux
-            ) = snow_model(
-                pr_kg_per_m2_per_s=pr_val,
-                air_temperature_C=tas_C,
-                snow_water_equivalent_m=snow_water_equivalent_m_cell,
-                liquid_water_in_snow_m=liquid_water_in_snow_m_cell,
-                snow_temperature_C=snow_temperature_C_cell,
-                shortwave_radiation_W_per_m2=rsds_W_per_m2_val,
-                downward_longwave_radiation_W_per_m2=rlds_W_per_m2_val,
-                vapor_pressure_air_Pa=actual_vapour_pressure_Pa,
-                air_pressure_Pa=ps_pascal_val,
-                wind_10m_m_per_s=wind_10m_m_per_s,
-            )
-
-            rain_m[i] += rain_m_cell
-            snow_m[i] += snow_m_cell
-
-            sublimation_m[i] += sublimation_m_cell_hour
-
-            potential_evapotranspiration_m_cell: np.float32 = get_potential_evapotranspiration(
-                reference_evapotranspiration_grass_m=reference_evapotranspiration_grass_m_hour_cell,
-                crop_factor=crop_factor[i],
-                CO2_induced_crop_factor_adustment=CO2_induced_crop_factor_adustment,
-            )
-            potential_evapotranspiration_m[i] += potential_evapotranspiration_m_cell
-
-            (
-                potential_transpiration_m_cell_hour,
-                potential_direct_evaporation_m,  # Updates the potential direct evaporation
-            ) = get_potential_transpiration(
-                potential_evapotranspiration_m=potential_evapotranspiration_m_cell,
-                leaf_area_index=leaf_area_index[i],
-            )
-
-            potential_interception_evaporation_m: np.float32 = get_potential_interception_evaporation(
-                reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m_hour_cell,
-                potential_evapotranspiration_m=potential_evapotranspiration_m_cell,
-            )
-            (
-                interception_storage_m[i],
-                throughfall_m,
-                interception_evaporation_m_cell_hour,
-                potential_transpiration_m_cell_hour,
-                potential_direct_evaporation_m,
-            ) = interception(
-                rainfall_m=rainfall_that_resulted_in_runoff_if_interception_was_not_considered_m_per_hour,
-                storage_m=interception_storage_m[i],
-                capacity_m=interception_capacity_m[i],
-                potential_interception_evaporation_m=potential_interception_evaporation_m,
-                potential_transpiration_m=potential_transpiration_m_cell_hour,
-                potential_direct_evaporation_m=potential_direct_evaporation_m,
-            )
-
-            interception_evaporation_m[i] += interception_evaporation_m_cell_hour
-
-            natural_available_water_infiltration_m: np.float32 = (
-                throughfall_m + runoff_from_melt_m
-            )
-
-            # if there is snow, we assume no soil evaporation or transpiration can occur
-            if snow_water_equivalent_m_cell > np.float64(0.0):
-                potential_direct_evaporation_m = np.float32(0.0)
-                potential_transpiration_m_cell_hour = np.float32(0.0)
-
-            topwater_m[i], open_water_evaporation_m_cell_hour = (
-                add_water_to_topwater_and_evaporate_open_water(
-                    natural_available_water_infiltration_m=natural_available_water_infiltration_m,
-                    actual_irrigation_consumption_m=actual_irrigation_consumption_m[i],
-                    land_use_type=land_use_type[i],
-                    potential_direct_evaporation_m=potential_direct_evaporation_m,
-                    topwater_m=topwater_m[i],
-                )
-            )
-            open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
-
-            groundwater_rise = rise_from_groundwater(
-                w=water_content_m[:, i],
-                ws=water_content_saturated_m[:, i],
-                capillary_rise_from_groundwater=capillar_rise_m[i],
-            )
-            if land_use_type[i] == PADDY_IRRIGATED:
-                topwater_m[i] += groundwater_rise
-            else:
-                runoff_m[i, hour] += groundwater_rise
-
-            # Only newly added liquid surface water should advect rain heat here.
-            # Pre-existing ponded water is already part of the top-soil control
-            # volume and must not be reheated every infiltration call.
-            liquid_water_input_for_enthalpy_m: np.float32 = (
-                natural_available_water_infiltration_m
-                + actual_irrigation_consumption_m[i]
-            )
-
-            top_layer_frozen_fraction: np.float32 = np.minimum(
-                np.maximum(frozen_fractions_cell[0], np.float32(0.0)),
-                np.float32(1.0),
-            )
-            soil_is_frozen = top_layer_frozen_fraction > np.float32(0.0)
-            soil_enthalpy_before_rain_advection_J_per_m2: np.float32 = (
-                soil_enthalpy_J_per_m2[0, i]
-            )
-
-            (
-                topwater_m[i],
-                direct_runoff_m,
-                groundwater_recharge_from_infiltraton_m,
-                infiltration_amount,
-                wetting_front_depth_m[i],
-                wetting_front_suction_head_m[i],
-                wetting_front_moisture_deficit[i],
-                green_ampt_active_layer_idx[i],
-                soil_enthalpy_J_per_m2[0, i],
-            ) = infiltration(
-                ws=water_content_saturated_m[:, i],
-                wres=water_content_residual_m[:, i],
-                saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
-                    :, i
-                ],
-                groundwater_toplayer_conductivity_m_per_timestep=groundwater_toplayer_conductivity_m_per_hour[
-                    i
-                ],
-                land_use_type=land_use_type[i],
-                frozen_fraction_top_layer=top_layer_frozen_fraction,
-                w=water_content_m[:, i],
-                topwater_m=topwater_m[i],
-                capillary_rise_from_groundwater_m=capillar_rise_m[i],
-                wetting_front_depth_m=wetting_front_depth_m[i],
-                wetting_front_suction_head_m=wetting_front_suction_head_m[i],
-                wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
-                green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
-                variable_runoff_shape_beta=variable_runoff_shape_beta[i],
-                bubbling_pressure_cm=bubbling_pressure_cm[:, i],
-                soil_layer_height_m=soil_layer_height[:, i],
-                lambda_pore_size_distribution=lambda_pore_size_distribution[:, i],
-                soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0, i],
-                solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                    0, i
-                ],
-                rain_temperature_C=tas_C,
-                liquid_water_input_for_enthalpy_m=liquid_water_input_for_enthalpy_m,
-            )
-            runoff_m[i, hour] += direct_runoff_m
-            groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
-            top_soil_infiltration_m[i] += infiltration_amount
-            rain_advection_enthalpy_flux_J_per_m2[i] += (
-                soil_enthalpy_J_per_m2[0, i]
-                - soil_enthalpy_before_rain_advection_J_per_m2
-            )
-
+            # bottom_layer is invariant across hourly substeps.
             bottom_layer = N_SOIL_LAYERS - 1
+            for hour in range(24):
+                # Climate values for current hour (contigous access [i, hour])
+                tas_2m_K_val = tas_2m_K[i, hour]
+                ps_pascal_val = ps_pascal[i, hour]
+                rlds_W_per_m2_val = rlds_W_per_m2[i, hour]
+                rsds_W_per_m2_val = rsds_W_per_m2[i, hour]
+                pr_val = pr_kg_per_m2_per_s[i, hour]
 
-            psi: np.float32
-            unsaturated_hydraulic_conductivity_m_per_hour: np.float32
-            psi, unsaturated_hydraulic_conductivity_m_per_hour = (
-                get_soil_water_flow_parameters(
-                    w=water_content_m[bottom_layer, i],
-                    wres=water_content_residual_m[bottom_layer, i],
-                    ws=water_content_saturated_m[bottom_layer, i],
-                    lambda_pore_size_distribution=lambda_pore_size_distribution[
-                        bottom_layer, i
+                tas_C: np.float32 = tas_2m_K_val - np.float32(273.15)
+                dewpoint_tas_C: np.float32 = dewpoint_tas_2m_K[i, hour] - np.float32(
+                    273.15
+                )
+
+                wind_u = wind_u10m_m_per_s[i, hour]
+                wind_v = wind_v10m_m_per_s[i, hour]
+                wind_10m_m_per_s: np.float32 = np.sqrt(
+                    wind_u * wind_u + wind_v * wind_v
+                )  # Wind speed at 10m height
+
+                soil_enthalpy_before_solver_J_per_m2: np.float32 = (
+                    soil_enthalpy_J_per_m2[i, :].sum()
+                )
+
+                (
+                    soil_enthalpy_J_per_m2_cell_updated,
+                    soil_heat_flux_W_per_m2_cell,
+                    frozen_fractions_cell,
+                ) = solve_soil_enthalpy_column(
+                    soil_enthalpies_J_per_m2=soil_enthalpy_J_per_m2[i, :],
+                    layer_thicknesses_m=soil_layer_height[i, :],
+                    bulk_density_kg_per_dm3=bulk_density_kg_per_dm3[i, :],
+                    solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                        i, :
                     ],
+                    thermal_conductivity_solid_W_per_m_K=solid_thermal_conductivity_W_per_m_K[
+                        i, :
+                    ],
+                    water_content_saturated_m=water_content_saturated_m[i, :],
+                    sand_percentage=sand_percentage[i, :],
+                    water_content_m=water_content_m[i, :],
+                    shortwave_radiation_W_per_m2=rsds_W_per_m2_val,
+                    longwave_radiation_W_per_m2=rlds_W_per_m2_val,
+                    air_temperature_K=tas_2m_K_val,
+                    wind_speed_10m_m_per_s=wind_10m_m_per_s,
+                    surface_pressure_pa=ps_pascal_val,
+                    timestep_seconds=np.float32(3600.0),
+                    deep_soil_temperature_C=deep_soil_temperature_C[i],
+                    soil_emissivity=SOIL_EMISSIVITY,
+                    soil_albedo=SOIL_ALBEDO,
+                    leaf_area_index=leaf_area_index[i],
+                    snow_water_equivalent_m=np.float32(snow_water_equivalent_m_cell),
+                    snow_temperature_C=snow_temperature_C_cell,
+                    topwater_m=topwater_m[i],
+                    lower_diagonal_a=lower_diagonal_a,
+                    main_diagonal_b=main_diagonal_b,
+                    upper_diagonal_c=upper_diagonal_c,
+                    rhs_vector_d=rhs_vector_d,
+                    tdma_c_prime=tdma_c_prime,
+                    tdma_d_prime=tdma_d_prime,
+                    enthalpies_new_iteration=enthalpies_new_iteration,
+                    thermal_conductances_between_layer_centers_W_per_m2_K=thermal_conductances_between_layer_centers_W_per_m2_K,
+                    frozen_fraction_for_conductivity=frozen_fraction_for_conductivity,
+                    latent_heat_areal_J_per_m2_per_layer=latent_heat_areal_J_per_m2_per_layer,
+                    heat_capacity_liquid_J_per_m2_K_per_layer=heat_capacity_liquid_J_per_m2_K_per_layer,
+                    heat_capacity_frozen_J_per_m2_K_per_layer=heat_capacity_frozen_J_per_m2_K_per_layer,
+                    dT_dH_current_iteration=dT_dH_current_iteration,
+                    beta_current_iteration=beta_current_iteration,
+                    enthalpies_current_iteration=enthalpies_current_iteration,
+                )
+
+                soil_enthalpy_J_per_m2[i, :] = soil_enthalpy_J_per_m2_cell_updated
+
+                soil_boundary_enthalpy_flux_J_per_m2[i] += (
+                    soil_enthalpy_J_per_m2[i, :].sum()
+                    - soil_enthalpy_before_solver_J_per_m2
+                )
+
+                (
+                    reference_evapotranspiration_grass_m_hour_cell,
+                    reference_evapotranspiration_water_m_hour_cell,
+                    net_absorbed_radiation_vegetation_MJ_m2_dt,
+                    actual_vapour_pressure_Pa,
+                ) = get_reference_evapotranspiration(
+                    tas_C=tas_C,
+                    dewpoint_tas_C=dewpoint_tas_C,
+                    ps_pa=ps_pascal_val,
+                    rlds_W_per_m2=rlds_W_per_m2_val,
+                    rsds_W_per_m2=rsds_W_per_m2_val,
+                    wind_10m_m_per_s=wind_10m_m_per_s,
+                    soil_heat_flux_W_per_m2=soil_heat_flux_W_per_m2_cell,
+                )
+
+                # Ensure non-negative evapotranspiration values
+                # TODO: Use this to implement dew rather than clipping
+                reference_evapotranspiration_grass_m_hour_cell = max(
+                    reference_evapotranspiration_grass_m_hour_cell, np.float32(0.0)
+                )
+                reference_evapotranspiration_water_m_hour_cell = max(
+                    reference_evapotranspiration_water_m_hour_cell, np.float32(0.0)
+                )
+
+                reference_evapotranspiration_grass_m[i] += (
+                    reference_evapotranspiration_grass_m_hour_cell
+                )
+                reference_evapotranspiration_water_m[i, hour] += (
+                    reference_evapotranspiration_water_m_hour_cell
+                )
+
+                (
+                    rain_m_cell,
+                    snow_m_cell,
+                    snow_water_equivalent_m_cell,
+                    liquid_water_in_snow_m_cell,
+                    snow_temperature_C_cell,
+                    _,  # melt (before refreezing)
+                    runoff_from_melt_m,  # after refreezing
+                    rainfall_that_resulted_in_runoff_if_interception_was_not_considered_m_per_hour,
+                    sublimation_m_cell_hour,
+                    _,  # refreezing
+                    _,  # snow surface temperature
+                    _,  # net shortwave radiation
+                    _,  # net longwave radiation
+                    _,  # sensible heat flux
+                    _,  # latent heat flux
+                ) = snow_model(
+                    pr_kg_per_m2_per_s=pr_val,
+                    air_temperature_C=tas_C,
+                    snow_water_equivalent_m=snow_water_equivalent_m_cell,
+                    liquid_water_in_snow_m=liquid_water_in_snow_m_cell,
+                    snow_temperature_C=snow_temperature_C_cell,
+                    shortwave_radiation_W_per_m2=rsds_W_per_m2_val,
+                    downward_longwave_radiation_W_per_m2=rlds_W_per_m2_val,
+                    vapor_pressure_air_Pa=actual_vapour_pressure_Pa,
+                    air_pressure_Pa=ps_pascal_val,
+                    wind_10m_m_per_s=wind_10m_m_per_s,
+                )
+
+                rain_m[i] += rain_m_cell
+                snow_m[i] += snow_m_cell
+
+                sublimation_m[i] += sublimation_m_cell_hour
+
+                potential_evapotranspiration_m_cell: np.float32 = get_potential_evapotranspiration(
+                    reference_evapotranspiration_grass_m=reference_evapotranspiration_grass_m_hour_cell,
+                    crop_factor=crop_factor[i],
+                    CO2_induced_crop_factor_adustment=CO2_induced_crop_factor_adustment,
+                )
+                potential_evapotranspiration_m[i] += potential_evapotranspiration_m_cell
+
+                (
+                    potential_transpiration_m_cell_hour,
+                    potential_direct_evaporation_m,  # Updates the potential direct evaporation
+                ) = get_potential_transpiration(
+                    potential_evapotranspiration_m=potential_evapotranspiration_m_cell,
+                    leaf_area_index=leaf_area_index[i],
+                )
+
+                potential_interception_evaporation_m: np.float32 = get_potential_interception_evaporation(
+                    reference_evapotranspiration_water_m_per_hour=reference_evapotranspiration_water_m_hour_cell,
+                    potential_evapotranspiration_m=potential_evapotranspiration_m_cell,
+                )
+                (
+                    interception_storage_m[i],
+                    throughfall_m,
+                    interception_evaporation_m_cell_hour,
+                    potential_transpiration_m_cell_hour,
+                    potential_direct_evaporation_m,
+                ) = interception(
+                    rainfall_m=rainfall_that_resulted_in_runoff_if_interception_was_not_considered_m_per_hour,
+                    storage_m=interception_storage_m[i],
+                    capacity_m=interception_capacity_m[i],
+                    potential_interception_evaporation_m=potential_interception_evaporation_m,
+                    potential_transpiration_m=potential_transpiration_m_cell_hour,
+                    potential_direct_evaporation_m=potential_direct_evaporation_m,
+                )
+
+                interception_evaporation_m[i] += interception_evaporation_m_cell_hour
+
+                natural_available_water_infiltration_m: np.float32 = (
+                    throughfall_m + runoff_from_melt_m
+                )
+
+                # if there is snow, we assume no soil evaporation or transpiration can occur
+                if snow_water_equivalent_m_cell > np.float64(0.0):
+                    potential_direct_evaporation_m = np.float32(0.0)
+                    potential_transpiration_m_cell_hour = np.float32(0.0)
+
+                topwater_m[i], open_water_evaporation_m_cell_hour = (
+                    add_water_to_topwater_and_evaporate_open_water(
+                        natural_available_water_infiltration_m=natural_available_water_infiltration_m,
+                        actual_irrigation_consumption_m=actual_irrigation_consumption_m[
+                            i
+                        ],
+                        land_use_type=land_use_type[i],
+                        potential_direct_evaporation_m=potential_direct_evaporation_m,
+                        topwater_m=topwater_m[i],
+                    )
+                )
+                open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
+
+                groundwater_rise = rise_from_groundwater(
+                    w=water_content_m[i, :],
+                    ws=water_content_saturated_m[i, :],
+                    capillary_rise_from_groundwater=capillar_rise_m[i],
+                )
+                if land_use_type[i] == PADDY_IRRIGATED:
+                    topwater_m[i] += groundwater_rise
+                else:
+                    runoff_m[i, hour] += groundwater_rise
+
+                # Only newly added liquid surface water should advect rain heat here.
+                # Pre-existing ponded water is already part of the top-soil control
+                # volume and must not be reheated every infiltration call.
+                liquid_water_input_for_enthalpy_m: np.float32 = (
+                    natural_available_water_infiltration_m
+                    + actual_irrigation_consumption_m[i]
+                )
+
+                top_layer_frozen_fraction: np.float32 = np.minimum(
+                    np.maximum(frozen_fractions_cell[0], np.float32(0.0)),
+                    np.float32(1.0),
+                )
+                soil_is_frozen = top_layer_frozen_fraction > np.float32(0.0)
+                soil_enthalpy_before_rain_advection_J_per_m2: np.float32 = (
+                    soil_enthalpy_J_per_m2[i, 0]
+                )
+
+                (
+                    topwater_m[i],
+                    direct_runoff_m,
+                    groundwater_recharge_from_infiltraton_m,
+                    infiltration_amount,
+                    wetting_front_depth_m[i],
+                    wetting_front_suction_head_m[i],
+                    wetting_front_moisture_deficit[i],
+                    green_ampt_active_layer_idx[i],
+                    soil_enthalpy_J_per_m2[i, 0],
+                ) = infiltration(
+                    ws=water_content_saturated_m[i, :],
+                    wres=water_content_residual_m[i, :],
                     saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
-                        bottom_layer, i
+                        i, :
                     ],
-                    bubbling_pressure_cm=bubbling_pressure_cm[bottom_layer, i],
+                    groundwater_toplayer_conductivity_m_per_timestep=groundwater_toplayer_conductivity_m_per_hour[
+                        i
+                    ],
+                    land_use_type=land_use_type[i],
+                    frozen_fraction_top_layer=top_layer_frozen_fraction,
+                    w=water_content_m[i, :],
+                    topwater_m=topwater_m[i],
+                    capillary_rise_from_groundwater_m=capillar_rise_m[i],
+                    wetting_front_depth_m=wetting_front_depth_m[i],
+                    wetting_front_suction_head_m=wetting_front_suction_head_m[i],
+                    wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
+                    green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
+                    variable_runoff_shape_beta=variable_runoff_shape_beta[i],
+                    bubbling_pressure_cm=bubbling_pressure_cm[i, :],
+                    soil_layer_height_m=soil_layer_height[i, :],
+                    lambda_pore_size_distribution=lambda_pore_size_distribution[i, :],
+                    soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
+                    solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                        i, 0
+                    ],
+                    rain_temperature_C=tas_C,
+                    liquid_water_input_for_enthalpy_m=liquid_water_input_for_enthalpy_m,
                 )
-            )
-
-            # Percolation from bottom soil layer to groundwater.
-            # This is the original bottom-layer drainage implementation. It is turned off
-            # when the Green-Ampt infiltration routine already produced groundwater recharge
-            # for this hour to avoid double counting.
-            if groundwater_recharge_from_infiltraton_m <= np.float32(0.0):
-                # We assume that the bottom layer is draining under gravity
-                # i.e., assuming homogeneous soil water potential below
-                # bottom layer all the way to groundwater.
-                # If there is capillary rise from groundwater, we assume no simultaneous
-                # percolation to groundwater.
-                flux: np.float32 = unsaturated_hydraulic_conductivity_m_per_hour * (
-                    capillar_rise_m[i] <= np.float32(0)
+                runoff_m[i, hour] += direct_runoff_m
+                groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
+                top_soil_infiltration_m[i] += infiltration_amount
+                rain_advection_enthalpy_flux_J_per_m2[i] += (
+                    soil_enthalpy_J_per_m2[i, 0]
+                    - soil_enthalpy_before_rain_advection_J_per_m2
                 )
-                # Limit flux by the saturated hydraulic conductivity of groundwater top layer
-                flux = min(flux, groundwater_toplayer_conductivity_m_per_hour[i])
 
-                # Limit flux by available water in the bottom layer
+                psi: np.float32
+                unsaturated_hydraulic_conductivity_m_per_hour: np.float32
+                # Cache sat_K for the bottom layer to avoid re-reading it in the
+                # get_interflow call below.
+                sat_K_bottom_m_per_hour: np.float32 = (
+                    saturated_hydraulic_conductivity_m_per_hour[i, bottom_layer]
+                )
+                psi, unsaturated_hydraulic_conductivity_m_per_hour = (
+                    get_soil_water_flow_parameters(
+                        w=water_content_m[i, bottom_layer],
+                        wres=water_content_residual_m[i, bottom_layer],
+                        ws=water_content_saturated_m[i, bottom_layer],
+                        lambda_pore_size_distribution=lambda_pore_size_distribution[
+                            i, bottom_layer
+                        ],
+                        saturated_hydraulic_conductivity_m_per_timestep=sat_K_bottom_m_per_hour,
+                        bubbling_pressure_cm=bubbling_pressure_cm[i, bottom_layer],
+                    )
+                )
+
+                # Percolation from bottom soil layer to groundwater.
+                # This is the original bottom-layer drainage implementation. It is turned off
+                # when the Green-Ampt infiltration routine already produced groundwater recharge
+                # for this hour to avoid double counting.
+                if groundwater_recharge_from_infiltraton_m <= np.float32(0.0):
+                    # We assume that the bottom layer is draining under gravity
+                    # i.e., assuming homogeneous soil water potential below
+                    # bottom layer all the way to groundwater.
+                    # If there is capillary rise from groundwater, we assume no simultaneous
+                    # percolation to groundwater.
+                    flux: np.float32 = unsaturated_hydraulic_conductivity_m_per_hour * (
+                        capillar_rise_m[i] <= np.float32(0)
+                    )
+                    # Limit flux by the saturated hydraulic conductivity of groundwater top layer
+                    flux = min(flux, groundwater_toplayer_conductivity_m_per_hour[i])
+
+                    # Limit flux by available water in the bottom layer
+                    bottom_layer_temperature_C, bottom_layer_frozen_fraction = (
+                        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, bottom_layer],
+                            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                                i, bottom_layer
+                            ],
+                            water_content_m=water_content_m[i, bottom_layer],
+                        )
+                    )
+                    liquid_fraction_bottom_layer = np.float32(1.0) - np.minimum(
+                        np.maximum(bottom_layer_frozen_fraction, np.float32(0.0)),
+                        np.float32(1.0),
+                    )
+                    available_water_source: np.float32 = max(
+                        np.float32(0.0),
+                        liquid_fraction_bottom_layer
+                        * (
+                            water_content_m[i, bottom_layer]
+                            - water_content_residual_m[i, bottom_layer]
+                        ),
+                    )
+                    flux = min(flux, available_water_source)
+
+                    # Remove sensible enthalpy carried out of the soil column by percolating liquid water.
+                    bottom_advected_temperature_C = max(
+                        bottom_layer_temperature_C, np.float32(0.0)
+                    )
+                    groundwater_recharge_enthalpy_loss_J_per_m2_hour: np.float32 = (
+                        flux
+                        * RHO_WATER_KG_PER_M3
+                        * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+                        * bottom_advected_temperature_C
+                    )
+                    soil_enthalpy_J_per_m2[i, bottom_layer] -= (
+                        groundwater_recharge_enthalpy_loss_J_per_m2_hour
+                    )
+                    groundwater_recharge_enthalpy_loss_J_per_m2[i] += (
+                        groundwater_recharge_enthalpy_loss_J_per_m2_hour
+                    )
+                    water_content_m[i, bottom_layer] -= flux
+                    water_content_m[i, bottom_layer] = max(
+                        water_content_m[i, bottom_layer],
+                        water_content_residual_m[i, bottom_layer],
+                    )
+                    groundwater_recharge_m[i] += flux
+
+                # Calculate interflow from bottom layer
+                interflow_cell_hour: np.float32 = get_interflow(
+                    w=water_content_m[i, bottom_layer],
+                    wfc=water_content_field_capacity_m[i, bottom_layer],
+                    ws=water_content_saturated_m[i, bottom_layer],
+                    soil_layer_height_m=soil_layer_height[i, bottom_layer],
+                    saturated_hydraulic_conductivity_m_per_hour=sat_K_bottom_m_per_hour,
+                    slope_m_per_m=slope_m_per_m[i],
+                    hillslope_length_m=hillslope_length_m[i],
+                    interflow_multiplier=interflow_multiplier,
+                )
+
+                # Limit interflow to the unfrozen (liquid) fraction of the layer water and
+                # remove the corresponding sensible enthalpy exported with the liquid outflow.
                 bottom_layer_temperature_C, bottom_layer_frozen_fraction = (
                     get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[bottom_layer, i],
+                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, bottom_layer],
                         solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                            bottom_layer, i
+                            i, bottom_layer
                         ],
-                        water_content_m=water_content_m[bottom_layer, i],
+                        water_content_m=water_content_m[i, bottom_layer],
                     )
                 )
                 liquid_fraction_bottom_layer = np.float32(1.0) - np.minimum(
                     np.maximum(bottom_layer_frozen_fraction, np.float32(0.0)),
                     np.float32(1.0),
                 )
-                available_water_source: np.float32 = max(
-                    np.float32(0.0),
-                    liquid_fraction_bottom_layer
-                    * (
-                        water_content_m[bottom_layer, i]
-                        - water_content_residual_m[bottom_layer, i]
-                    ),
-                )
-                flux = min(flux, available_water_source)
-
-                # Remove sensible enthalpy carried out of the soil column by percolating liquid water.
-                bottom_advected_temperature_C = max(
-                    bottom_layer_temperature_C, np.float32(0.0)
-                )
-                groundwater_recharge_enthalpy_loss_J_per_m2_hour: np.float32 = (
-                    flux
-                    * RHO_WATER_KG_PER_M3
-                    * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
-                    * bottom_advected_temperature_C
-                )
-                soil_enthalpy_J_per_m2[bottom_layer, i] -= (
-                    groundwater_recharge_enthalpy_loss_J_per_m2_hour
-                )
-                groundwater_recharge_enthalpy_loss_J_per_m2[i] += (
-                    groundwater_recharge_enthalpy_loss_J_per_m2_hour
-                )
-                water_content_m[bottom_layer, i] -= flux
-                water_content_m[bottom_layer, i] = max(
-                    water_content_m[bottom_layer, i],
-                    water_content_residual_m[bottom_layer, i],
-                )
-                groundwater_recharge_m[i] += flux
-
-            # Calculate interflow from bottom layer
-            interflow_cell_hour: np.float32 = get_interflow(
-                w=water_content_m[bottom_layer, i],
-                wfc=water_content_field_capacity_m[bottom_layer, i],
-                ws=water_content_saturated_m[bottom_layer, i],
-                soil_layer_height_m=soil_layer_height[bottom_layer, i],
-                saturated_hydraulic_conductivity_m_per_hour=saturated_hydraulic_conductivity_m_per_hour[
-                    bottom_layer, i
-                ],
-                slope_m_per_m=slope_m_per_m[i],
-                hillslope_length_m=hillslope_length_m[i],
-                interflow_multiplier=interflow_multiplier,
-            )
-
-            # Limit interflow to the unfrozen (liquid) fraction of the layer water and
-            # remove the corresponding sensible enthalpy exported with the liquid outflow.
-            bottom_layer_temperature_C, bottom_layer_frozen_fraction = (
-                get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                    enthalpy_J_per_m2=soil_enthalpy_J_per_m2[bottom_layer, i],
-                    solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                        bottom_layer, i
-                    ],
-                    water_content_m=water_content_m[bottom_layer, i],
-                )
-            )
-            liquid_fraction_bottom_layer = np.float32(1.0) - np.minimum(
-                np.maximum(bottom_layer_frozen_fraction, np.float32(0.0)),
-                np.float32(1.0),
-            )
-            max_liquid_outflow_bottom_layer = liquid_fraction_bottom_layer * (
-                water_content_m[bottom_layer, i]
-                - water_content_residual_m[bottom_layer, i]
-            )
-            interflow_cell_hour = min(
-                interflow_cell_hour,
-                max(np.float32(0.0), max_liquid_outflow_bottom_layer),
-            )
-
-            interflow_m[i, hour] += interflow_cell_hour
-            bottom_layer_advected_temperature_C = max(
-                bottom_layer_temperature_C, np.float32(0.0)
-            )
-            interflow_enthalpy_loss_J_per_m2_hour: np.float32 = (
-                interflow_cell_hour
-                * RHO_WATER_KG_PER_M3
-                * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
-                * bottom_layer_advected_temperature_C
-            )
-            soil_enthalpy_J_per_m2[bottom_layer, i] -= (
-                interflow_enthalpy_loss_J_per_m2_hour
-            )
-            interflow_enthalpy_loss_J_per_m2[i] += interflow_enthalpy_loss_J_per_m2_hour
-            water_content_m[bottom_layer, i] -= interflow_cell_hour
-            water_content_m[bottom_layer, i] = max(
-                water_content_m[bottom_layer, i],
-                water_content_residual_m[bottom_layer, i],
-            )
-
-            psi_layer_below = psi
-            unsaturated_hydraulic_conductivity_layer_below = (
-                unsaturated_hydraulic_conductivity_m_per_hour
-            )
-
-            # iterate from bottom to top layer (ignoring the bottom layer which is treated above)
-            for layer in range(N_SOIL_LAYERS - 2, -1, -1):
-                psi, unsaturated_hydraulic_conductivity_m_per_hour = (
-                    get_soil_water_flow_parameters(
-                        w=water_content_m[layer, i],
-                        wres=water_content_residual_m[layer, i],
-                        ws=water_content_saturated_m[layer, i],
-                        lambda_pore_size_distribution=lambda_pore_size_distribution[
-                            layer, i
-                        ],
-                        saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
-                            layer, i
-                        ],
-                        bubbling_pressure_cm=bubbling_pressure_cm[layer, i],
-                    )
-                )
-
-                # If the layer is above the wetting front, we skip Darcy flow calculations
-                # because the Green-Ampt infiltration is handling the water movement in this
-                # region. We effectively "freeze" the redistribution here to let the piston
-                # flow dominate.
-
-                # Important: in the current implementation, this means that no redistribution
-                # occurs in the layer that is the wetting front layer. This is a simplification
-                # that could be improved in future versions.
-                if layer >= green_ampt_active_layer_idx[i]:
-                    # Compute flux using Darcy's law. The -1 accounts for gravity.
-                    # Positive flux is downwards; see minus sign in the equation, which negates
-                    # the -1 of gravity and other terms.
-                    # We use upstream weighting for the hydraulic conductivity,
-                    # which means that we use the hydraulic conductivity of the layer
-                    # that the flux is coming from.
-                    flux_gradient_term: np.float32 = -(
-                        (psi_layer_below - psi) / delta_z[layer, i] - np.float32(1.0)
-                    )
-
-                    # if the flux gradient term is positive, the flux is going downwards
-                    # and we use the hydraulic conductivity of the current layer
-                    if flux_gradient_term > 0:
-                        flux: np.float32 = (
-                            unsaturated_hydraulic_conductivity_m_per_hour
-                            * flux_gradient_term
-                        )
-                        flux_direction = 1  # 1 if flux >= 0, 0 if flux < 0
-                    # if the flux gradient term is negative, the flux is going upwards
-                    # thus we use the hydraulic conductivity of the layer below
-                    else:
-                        flux: np.float32 = -(
-                            unsaturated_hydraulic_conductivity_layer_below
-                            * flux_gradient_term
-                        )
-                        flux_direction = 0  # 1 if flux >= 0, 0 if flux < 0
-
-                    # Limit flux by the minimum saturated hydraulic conductivity of the two layers
-                    min_saturated_hydraulic_conductivity_m_per_hour = min(
-                        saturated_hydraulic_conductivity_m_per_hour[layer, i],
-                        saturated_hydraulic_conductivity_m_per_hour[layer + 1, i],
-                    )
-                    flux = min(flux, min_saturated_hydraulic_conductivity_m_per_hour)
-
-                    source: int = layer + (
-                        1 - flux_direction
-                    )  # layer if flux >= 0, layer + 1 if flux < 0
-                    sink: int = (
-                        layer + flux_direction
-                    )  # layer + 1 if flux >= 0, layer if flux < 0
-
-                    # Limit flux by available water in source and storage capacity of sink
-                    remaining_storage_capacity_sink = max(
-                        np.float32(0.0),
-                        water_content_saturated_m[sink, i] - water_content_m[sink, i],
-                    )
-                    topwater_layer_source = (
-                        topwater_m[i] if source == 0 else np.float32(0.0)
-                    )
-
-                    # Limit redistribution to the unfrozen (liquid) fraction of the source water.
-                    source_temperature_C, frozen_fraction_source = (
-                        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[source, i],
-                            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                                source, i
-                            ],
-                            water_content_m=water_content_m[source, i],
-                            topwater_m=topwater_layer_source,
-                        )
-                    )
-                    liquid_fraction_source = np.float32(1.0) - np.minimum(
-                        np.maximum(frozen_fraction_source, np.float32(0.0)),
-                        np.float32(1.0),
-                    )
-
-                    available_water_source = max(
-                        np.float32(0.0),
-                        liquid_fraction_source
-                        * (
-                            water_content_m[source, i]
-                            - water_content_residual_m[source, i]
-                        ),
-                    )
-
-                    flux = min(
-                        flux, remaining_storage_capacity_sink, available_water_source
-                    )
-
-                    if layer == 0 and flux_direction == 1:
-                        top_soil_percolation_to_layer_2_m[i] += flux
-                    elif layer == 0 and flux_direction == 0:
-                        top_soil_rise_from_layer_2_m[i] += flux
-
-                    # Update water content in source and sink layers
-                    water_content_m[source, i] -= flux
-                    water_content_m[sink, i] += flux
-
-                    # Apply advective heat transport between soil layers using enthalpy.
-                    # We transfer sensible heat carried by moving liquid water.
-                    advected_water_temperature_C = max(
-                        source_temperature_C, np.float32(0.0)
-                    )
-                    energy_transfer_J_per_m2 = (
-                        flux
-                        * RHO_WATER_KG_PER_M3
-                        * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
-                        * advected_water_temperature_C
-                    )
-
-                    soil_enthalpy_J_per_m2[source, i] -= energy_transfer_J_per_m2
-                    soil_enthalpy_J_per_m2[sink, i] += energy_transfer_J_per_m2
-
-                    # Ensure water content stays within physical bounds
-                    water_content_m[sink, i] = min(
-                        water_content_m[sink, i],
-                        water_content_saturated_m[sink, i],
-                    )
-                    water_content_m[source, i] = max(
-                        water_content_m[source, i],
-                        water_content_residual_m[source, i],
-                    )
-
-                psi_layer_below = psi
-                unsaturated_hydraulic_conductivity_layer_below = (
-                    unsaturated_hydraulic_conductivity_m_per_hour
-                )
-
-                interflow_cell_hour: np.float32 = get_interflow(
-                    w=water_content_m[layer, i],
-                    wfc=water_content_field_capacity_m[layer, i],
-                    ws=water_content_saturated_m[layer, i],
-                    soil_layer_height_m=soil_layer_height[layer, i],
-                    saturated_hydraulic_conductivity_m_per_hour=saturated_hydraulic_conductivity_m_per_hour[
-                        layer, i
-                    ],
-                    slope_m_per_m=slope_m_per_m[i],
-                    hillslope_length_m=hillslope_length_m[i],
-                    interflow_multiplier=interflow_multiplier,
-                )
-
-                # Limit interflow to liquid water and remove exported sensible enthalpy.
-                layer_temperature_C, layer_frozen_fraction = (
-                    get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[layer, i],
-                        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                            layer, i
-                        ],
-                        water_content_m=water_content_m[layer, i],
-                        topwater_m=topwater_m[i] if layer == 0 else np.float32(0.0),
-                    )
-                )
-                liquid_fraction_layer = np.float32(1.0) - np.minimum(
-                    np.maximum(layer_frozen_fraction, np.float32(0.0)), np.float32(1.0)
-                )
-                max_liquid_outflow_layer = liquid_fraction_layer * (
-                    water_content_m[layer, i] - water_content_residual_m[layer, i]
+                max_liquid_outflow_bottom_layer = liquid_fraction_bottom_layer * (
+                    water_content_m[i, bottom_layer]
+                    - water_content_residual_m[i, bottom_layer]
                 )
                 interflow_cell_hour = min(
-                    interflow_cell_hour, max(np.float32(0.0), max_liquid_outflow_layer)
+                    interflow_cell_hour,
+                    max(np.float32(0.0), max_liquid_outflow_bottom_layer),
                 )
 
                 interflow_m[i, hour] += interflow_cell_hour
-                layer_advected_temperature_C = max(layer_temperature_C, np.float32(0.0))
-                interflow_enthalpy_loss_J_per_m2_hour = (
+                bottom_layer_advected_temperature_C = max(
+                    bottom_layer_temperature_C, np.float32(0.0)
+                )
+                interflow_enthalpy_loss_J_per_m2_hour: np.float32 = (
                     interflow_cell_hour
                     * RHO_WATER_KG_PER_M3
                     * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
-                    * layer_advected_temperature_C
+                    * bottom_layer_advected_temperature_C
                 )
-                soil_enthalpy_J_per_m2[layer, i] -= (
+                soil_enthalpy_J_per_m2[i, bottom_layer] -= (
                     interflow_enthalpy_loss_J_per_m2_hour
                 )
                 interflow_enthalpy_loss_J_per_m2[i] += (
                     interflow_enthalpy_loss_J_per_m2_hour
                 )
-                water_content_m[layer, i] -= interflow_cell_hour
-                water_content_m[layer, i] = max(
-                    water_content_m[layer, i],
-                    water_content_residual_m[layer, i],
+                water_content_m[i, bottom_layer] -= interflow_cell_hour
+                water_content_m[i, bottom_layer] = max(
+                    water_content_m[i, bottom_layer],
+                    water_content_residual_m[i, bottom_layer],
                 )
 
-            # soil moisture is updated in place
-            water_content_before_transpiration_m: TwoDArrayFloat32 = water_content_m[
-                :, i
-            ].copy()
-            topwater_before_transpiration_m: np.float32 = topwater_m[i]
-
-            transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
-                soil_is_frozen=soil_is_frozen,
-                wwp_m=water_content_wilting_point_m[:, i],
-                wfc_m=water_content_field_capacity_m[:, i],
-                wres_m=water_content_residual_m[:, i],
-                soil_layer_height_m=soil_layer_height[:, i],
-                land_use_type=land_use_type[i],
-                root_depth_m=root_depth_m[i],
-                crop_map=crop_map[i],
-                crop_group_forest=crop_group_forest[i],
-                crop_group_grassland_like=crop_group_grassland_like[i],
-                potential_transpiration_m=potential_transpiration_m_cell_hour,
-                reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour_cell,
-                crop_group_number_per_group=crop_group_number_per_group,
-                w_m=water_content_m[:, i],
-                topwater_m=topwater_m[i],
-                minimum_effective_root_depth_m=minimum_effective_root_depth_m,
-            )
-
-            # Remove sensible enthalpy exported with transpired liquid water.
-            for layer in range(N_SOIL_LAYERS):
-                transpired_from_layer_m: np.float32 = max(
-                    np.float32(0.0),
-                    water_content_before_transpiration_m[layer]
-                    - water_content_m[layer, i],
+                psi_layer_below = psi
+                unsaturated_hydraulic_conductivity_layer_below = (
+                    unsaturated_hydraulic_conductivity_m_per_hour
                 )
-                if transpired_from_layer_m > np.float32(0.0):
-                    if layer == 0:
-                        top_soil_transpiration_m[i] += transpired_from_layer_m
-                    layer_temperature_C, _ = (
-                        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[layer, i],
-                            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                                layer, i
+                # sat_K for layer+1 (bottom layer in the first inner-loop iteration) is
+                # already cached; carry it into the loop variable.
+                sat_K_layer_below_m_per_hour: np.float32 = sat_K_bottom_m_per_hour
+
+                # iterate from bottom to top layer (ignoring the bottom layer which is treated above)
+                for layer in range(N_SOIL_LAYERS - 2, -1, -1):
+                    # Cache sat_K for this layer to reuse in the Darcy conductivity cap,
+                    # the interflow call, and as sat_K_layer_below for the next iteration.
+                    sat_K_layer_m_per_hour: np.float32 = (
+                        saturated_hydraulic_conductivity_m_per_hour[i, layer]
+                    )
+                    psi, unsaturated_hydraulic_conductivity_m_per_hour = (
+                        get_soil_water_flow_parameters(
+                            w=water_content_m[i, layer],
+                            wres=water_content_residual_m[i, layer],
+                            ws=water_content_saturated_m[i, layer],
+                            lambda_pore_size_distribution=lambda_pore_size_distribution[
+                                i, layer
                             ],
-                            water_content_m=water_content_before_transpiration_m[layer],
-                            topwater_m=(
-                                topwater_before_transpiration_m
-                                if layer == 0
-                                else np.float32(0.0)
-                            ),
+                            saturated_hydraulic_conductivity_m_per_timestep=sat_K_layer_m_per_hour,
+                            bubbling_pressure_cm=bubbling_pressure_cm[i, layer],
                         )
                     )
-                    advected_temperature_C = max(layer_temperature_C, np.float32(0.0))
-                    enthalpy_export_J_per_m2 = (
-                        transpired_from_layer_m
+
+                    # If the layer is above the wetting front, we skip Darcy flow calculations
+                    # because the Green-Ampt infiltration is handling the water movement in this
+                    # region. We effectively "freeze" the redistribution here to let the piston
+                    # flow dominate.
+
+                    # Important: in the current implementation, this means that no redistribution
+                    # occurs in the layer that is the wetting front layer. This is a simplification
+                    # that could be improved in future versions.
+                    if layer >= green_ampt_active_layer_idx[i]:
+                        # Compute flux using Darcy's law. The -1 accounts for gravity.
+                        # Positive flux is downwards; see minus sign in the equation, which negates
+                        # the -1 of gravity and other terms.
+                        # We use upstream weighting for the hydraulic conductivity,
+                        # which means that we use the hydraulic conductivity of the layer
+                        # that the flux is coming from.
+                        flux_gradient_term: np.float32 = -(
+                            (psi_layer_below - psi) / delta_z[i, layer]
+                            - np.float32(1.0)
+                        )
+
+                        # if the flux gradient term is positive, the flux is going downwards
+                        # and we use the hydraulic conductivity of the current layer
+                        if flux_gradient_term > 0:
+                            flux: np.float32 = (
+                                unsaturated_hydraulic_conductivity_m_per_hour
+                                * flux_gradient_term
+                            )
+                            flux_direction = 1  # 1 if flux >= 0, 0 if flux < 0
+                        # if the flux gradient term is negative, the flux is going upwards
+                        # thus we use the hydraulic conductivity of the layer below
+                        else:
+                            flux: np.float32 = -(
+                                unsaturated_hydraulic_conductivity_layer_below
+                                * flux_gradient_term
+                            )
+                            flux_direction = 0  # 1 if flux >= 0, 0 if flux < 0
+
+                        # Limit flux by the minimum saturated hydraulic conductivity of the two layers.
+                        # sat_K for layer+1 is cached from the previous iteration (or the
+                        # bottom-layer pre-computation for the first iteration).
+                        min_saturated_hydraulic_conductivity_m_per_hour = min(
+                            sat_K_layer_m_per_hour,
+                            sat_K_layer_below_m_per_hour,
+                        )
+                        flux = min(
+                            flux, min_saturated_hydraulic_conductivity_m_per_hour
+                        )
+
+                        source: int = layer + (
+                            1 - flux_direction
+                        )  # layer if flux >= 0, layer + 1 if flux < 0
+                        sink: int = (
+                            layer + flux_direction
+                        )  # layer + 1 if flux >= 0, layer if flux < 0
+
+                        # Limit flux by available water in source and storage capacity of sink
+                        remaining_storage_capacity_sink = max(
+                            np.float32(0.0),
+                            water_content_saturated_m[i, sink]
+                            - water_content_m[i, sink],
+                        )
+                        topwater_layer_source = (
+                            topwater_m[i] if source == 0 else np.float32(0.0)
+                        )
+
+                        # Limit redistribution to the unfrozen (liquid) fraction of the source water.
+                        source_temperature_C, frozen_fraction_source = (
+                            get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                                enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, source],
+                                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                                    i, source
+                                ],
+                                water_content_m=water_content_m[i, source],
+                                topwater_m=topwater_layer_source,
+                            )
+                        )
+                        liquid_fraction_source = np.float32(1.0) - np.minimum(
+                            np.maximum(frozen_fraction_source, np.float32(0.0)),
+                            np.float32(1.0),
+                        )
+
+                        available_water_source = max(
+                            np.float32(0.0),
+                            liquid_fraction_source
+                            * (
+                                water_content_m[i, source]
+                                - water_content_residual_m[i, source]
+                            ),
+                        )
+
+                        flux = min(
+                            flux,
+                            remaining_storage_capacity_sink,
+                            available_water_source,
+                        )
+
+                        if layer == 0 and flux_direction == 1:
+                            top_soil_percolation_to_layer_2_m[i] += flux
+                        elif layer == 0 and flux_direction == 0:
+                            top_soil_rise_from_layer_2_m[i] += flux
+
+                        # Update water content in source and sink layers
+                        water_content_m[i, source] -= flux
+                        water_content_m[i, sink] += flux
+
+                        # Apply advective heat transport between soil layers using enthalpy.
+                        # We transfer sensible heat carried by moving liquid water.
+                        advected_water_temperature_C = max(
+                            source_temperature_C, np.float32(0.0)
+                        )
+                        energy_transfer_J_per_m2 = (
+                            flux
+                            * RHO_WATER_KG_PER_M3
+                            * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+                            * advected_water_temperature_C
+                        )
+
+                        soil_enthalpy_J_per_m2[i, source] -= energy_transfer_J_per_m2
+                        soil_enthalpy_J_per_m2[i, sink] += energy_transfer_J_per_m2
+
+                        # Ensure water content stays within physical bounds
+                        water_content_m[i, sink] = min(
+                            water_content_m[i, sink],
+                            water_content_saturated_m[i, sink],
+                        )
+                        water_content_m[i, source] = max(
+                            water_content_m[i, source],
+                            water_content_residual_m[i, source],
+                        )
+
+                    psi_layer_below = psi
+                    unsaturated_hydraulic_conductivity_layer_below = (
+                        unsaturated_hydraulic_conductivity_m_per_hour
+                    )
+                    # Carry sat_K forward so the next iteration (layer-1) can use it as
+                    # sat_K_layer_below without an extra array read.
+                    sat_K_layer_below_m_per_hour = sat_K_layer_m_per_hour
+
+                    interflow_cell_hour: np.float32 = get_interflow(
+                        w=water_content_m[i, layer],
+                        wfc=water_content_field_capacity_m[i, layer],
+                        ws=water_content_saturated_m[i, layer],
+                        soil_layer_height_m=soil_layer_height[i, layer],
+                        saturated_hydraulic_conductivity_m_per_hour=sat_K_layer_m_per_hour,
+                        slope_m_per_m=slope_m_per_m[i],
+                        hillslope_length_m=hillslope_length_m[i],
+                        interflow_multiplier=interflow_multiplier,
+                    )
+
+                    # Limit interflow to liquid water and remove exported sensible enthalpy.
+                    layer_temperature_C, layer_frozen_fraction = (
+                        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, layer],
+                            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                                i, layer
+                            ],
+                            water_content_m=water_content_m[i, layer],
+                            topwater_m=topwater_m[i] if layer == 0 else np.float32(0.0),
+                        )
+                    )
+                    liquid_fraction_layer = np.float32(1.0) - np.minimum(
+                        np.maximum(layer_frozen_fraction, np.float32(0.0)),
+                        np.float32(1.0),
+                    )
+                    max_liquid_outflow_layer = liquid_fraction_layer * (
+                        water_content_m[i, layer] - water_content_residual_m[i, layer]
+                    )
+                    interflow_cell_hour = min(
+                        interflow_cell_hour,
+                        max(np.float32(0.0), max_liquid_outflow_layer),
+                    )
+
+                    interflow_m[i, hour] += interflow_cell_hour
+                    layer_advected_temperature_C = max(
+                        layer_temperature_C, np.float32(0.0)
+                    )
+                    interflow_enthalpy_loss_J_per_m2_hour = (
+                        interflow_cell_hour
                         * RHO_WATER_KG_PER_M3
                         * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
-                        * advected_temperature_C
+                        * layer_advected_temperature_C
                     )
-                    soil_enthalpy_J_per_m2[layer, i] -= enthalpy_export_J_per_m2
-                    transpiration_enthalpy_loss_J_per_m2[i] += enthalpy_export_J_per_m2
-
-            transpired_from_topwater_m: np.float32 = max(
-                np.float32(0.0), topwater_before_transpiration_m - topwater_m[i]
-            )
-            if transpired_from_topwater_m > np.float32(0.0):
-                top_layer_temperature_C, _ = (
-                    get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[0, i],
-                        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                            0, i
-                        ],
-                        water_content_m=water_content_before_transpiration_m[0],
-                        topwater_m=topwater_before_transpiration_m,
+                    soil_enthalpy_J_per_m2[i, layer] -= (
+                        interflow_enthalpy_loss_J_per_m2_hour
                     )
-                )
-                topwater_advected_temperature_C = max(
-                    top_layer_temperature_C, np.float32(0.0)
-                )
-                topwater_enthalpy_export_J_per_m2 = (
-                    transpired_from_topwater_m
-                    * RHO_WATER_KG_PER_M3
-                    * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
-                    * topwater_advected_temperature_C
-                )
-                soil_enthalpy_J_per_m2[0, i] -= topwater_enthalpy_export_J_per_m2
-                transpiration_enthalpy_loss_J_per_m2[i] += (
-                    topwater_enthalpy_export_J_per_m2
-                )
+                    interflow_enthalpy_loss_J_per_m2[i] += (
+                        interflow_enthalpy_loss_J_per_m2_hour
+                    )
+                    water_content_m[i, layer] -= interflow_cell_hour
+                    water_content_m[i, layer] = max(
+                        water_content_m[i, layer],
+                        water_content_residual_m[i, layer],
+                    )
 
-            potential_transpiration_m[i] += potential_transpiration_m_cell_hour
-            transpiration_m[i] += transpiration_m_cell_hour
+                # In-place copy into the pre-allocated buffer (avoids a heap allocation
+                # per hourly substep that .copy() would trigger).
+                water_content_before_transpiration_m[:] = water_content_m[i, :]
+                topwater_before_transpiration_m: np.float32 = topwater_m[i]
 
-            # soil moisture is updated in place
-            bare_soil_evaporation_m_cell_hour = calculate_bare_soil_evaporation(
-                soil_is_frozen=soil_is_frozen,
-                land_use_type=land_use_type[i],
-                potential_direct_evaporation_m=potential_direct_evaporation_m,
-                open_water_evaporation_m=open_water_evaporation_m_cell_hour,
-                w_m=water_content_m[:, i],
-                wres_m=water_content_residual_m[:, i],
-                wfc_m=water_content_field_capacity_m[:, i],
-                unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity_m_per_hour,
-            )
-            bare_soil_evaporation[i] += bare_soil_evaporation_m_cell_hour
-
-            _, frozen_fraction_top_layer = (
-                get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                    enthalpy_J_per_m2=soil_enthalpy_J_per_m2[0, i],
-                    solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0, i],
-                    water_content_m=water_content_m[0, i],
+                transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
+                    soil_is_frozen=soil_is_frozen,
+                    wwp_m=water_content_wilting_point_m[i, :],
+                    wfc_m=water_content_field_capacity_m[i, :],
+                    wres_m=water_content_residual_m[i, :],
+                    soil_layer_height_m=soil_layer_height[i, :],
+                    land_use_type=land_use_type[i],
+                    root_depth_m=root_depth_m[i],
+                    crop_group_number=crop_group_number[i],
+                    potential_transpiration_m=potential_transpiration_m_cell_hour,
+                    reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour_cell,
+                    w_m=water_content_m[i, :],
                     topwater_m=topwater_m[i],
+                    minimum_effective_root_depth_m=minimum_effective_root_depth_m,
                 )
-            )
 
-            soil_enthalpy_before_evaporative_cooling_J_per_m2: np.float32 = (
-                soil_enthalpy_J_per_m2[0, i]
-            )
-            soil_enthalpy_J_per_m2[0, i] = apply_evaporative_cooling(
-                soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0, i],
-                evaporation_m=bare_soil_evaporation_m_cell_hour
-                + open_water_evaporation_m_cell_hour,
-                frozen_fraction_top_layer=frozen_fraction_top_layer,
-            )
-            evaporative_cooling_enthalpy_loss_J_per_m2[i] += (
-                soil_enthalpy_before_evaporative_cooling_J_per_m2
-                - soil_enthalpy_J_per_m2[0, i]
-            )
+                # Remove sensible enthalpy exported with transpired liquid water.
+                for layer in range(N_SOIL_LAYERS):
+                    transpired_from_layer_m: np.float32 = max(
+                        np.float32(0.0),
+                        water_content_before_transpiration_m[layer]
+                        - water_content_m[i, layer],
+                    )
+                    if transpired_from_layer_m > np.float32(0.0):
+                        if layer == 0:
+                            top_soil_transpiration_m[i] += transpired_from_layer_m
+                        layer_temperature_C, _ = (
+                            get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                                enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, layer],
+                                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                                    i, layer
+                                ],
+                                water_content_m=water_content_before_transpiration_m[
+                                    layer
+                                ],
+                                topwater_m=(
+                                    topwater_before_transpiration_m
+                                    if layer == 0
+                                    else np.float32(0.0)
+                                ),
+                            )
+                        )
+                        advected_temperature_C = max(
+                            layer_temperature_C, np.float32(0.0)
+                        )
+                        enthalpy_export_J_per_m2 = (
+                            transpired_from_layer_m
+                            * RHO_WATER_KG_PER_M3
+                            * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+                            * advected_temperature_C
+                        )
+                        soil_enthalpy_J_per_m2[i, layer] -= enthalpy_export_J_per_m2
+                        transpiration_enthalpy_loss_J_per_m2[i] += (
+                            enthalpy_export_J_per_m2
+                        )
 
-        snow_water_equivalent_m[i] = snow_water_equivalent_m_cell
-        liquid_water_in_snow_m[i] = liquid_water_in_snow_m_cell
-        snow_temperature_C[i] = snow_temperature_C_cell
+                transpired_from_topwater_m: np.float32 = max(
+                    np.float32(0.0), topwater_before_transpiration_m - topwater_m[i]
+                )
+                if transpired_from_topwater_m > np.float32(0.0):
+                    top_layer_temperature_C, _ = (
+                        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
+                            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                                i, 0
+                            ],
+                            water_content_m=water_content_before_transpiration_m[0],
+                            topwater_m=topwater_before_transpiration_m,
+                        )
+                    )
+                    topwater_advected_temperature_C = max(
+                        top_layer_temperature_C, np.float32(0.0)
+                    )
+                    topwater_enthalpy_export_J_per_m2 = (
+                        transpired_from_topwater_m
+                        * RHO_WATER_KG_PER_M3
+                        * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+                        * topwater_advected_temperature_C
+                    )
+                    soil_enthalpy_J_per_m2[i, 0] -= topwater_enthalpy_export_J_per_m2
+                    transpiration_enthalpy_loss_J_per_m2[i] += (
+                        topwater_enthalpy_export_J_per_m2
+                    )
+
+                potential_transpiration_m[i] += potential_transpiration_m_cell_hour
+                transpiration_m[i] += transpiration_m_cell_hour
+
+                # soil moisture is updated in place
+                bare_soil_evaporation_m_cell_hour = calculate_bare_soil_evaporation(
+                    soil_is_frozen=soil_is_frozen,
+                    land_use_type=land_use_type[i],
+                    potential_direct_evaporation_m=potential_direct_evaporation_m,
+                    open_water_evaporation_m=open_water_evaporation_m_cell_hour,
+                    w_m=water_content_m[i, :],
+                    wres_m=water_content_residual_m[i, :],
+                    wfc_m=water_content_field_capacity_m[i, :],
+                    unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity_m_per_hour,
+                )
+                bare_soil_evaporation[i] += bare_soil_evaporation_m_cell_hour
+
+                _, frozen_fraction_top_layer = (
+                    get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                        enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
+                        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                            i, 0
+                        ],
+                        water_content_m=water_content_m[i, 0],
+                        topwater_m=topwater_m[i],
+                    )
+                )
+
+                soil_enthalpy_before_evaporative_cooling_J_per_m2: np.float32 = (
+                    soil_enthalpy_J_per_m2[i, 0]
+                )
+                soil_enthalpy_J_per_m2[i, 0] = apply_evaporative_cooling(
+                    soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
+                    evaporation_m=bare_soil_evaporation_m_cell_hour
+                    + open_water_evaporation_m_cell_hour,
+                    frozen_fraction_top_layer=frozen_fraction_top_layer,
+                )
+                evaporative_cooling_enthalpy_loss_J_per_m2[i] += (
+                    soil_enthalpy_before_evaporative_cooling_J_per_m2
+                    - soil_enthalpy_J_per_m2[i, 0]
+                )
+
+            snow_water_equivalent_m[i] = snow_water_equivalent_m_cell
+            liquid_water_in_snow_m[i] = liquid_water_in_snow_m_cell
+            snow_temperature_C[i] = snow_temperature_C_cell
 
     return (
         rain_m,
@@ -1182,13 +1223,57 @@ class LandSurfaceInputs(NamedTuple):
     green_ampt_active_layer_idx: ArrayInt32
     lambda_pore_size_distribution: TwoDArrayFloat32
     bubbling_pressure_cm: TwoDArrayFloat32
-    crop_group_forest: ArrayFloat32
-    crop_group_grassland_like: ArrayFloat32
-    crop_group_number_per_group: ArrayFloat32
+    crop_group_number: ArrayFloat32
     minimum_effective_root_depth_m: np.float32
     interflow_multiplier: np.float32
     deep_soil_temperature_C: ArrayFloat32
     leaf_area_index: ArrayFloat32
+
+
+def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
+    """Pad every HRU-dimensioned array to the next multiple of BLOCK_SIZE.
+
+    Padding cells are filled with the values from cell 0 so they represent a
+    physically valid (but silent) extra cell.  Because those indices are never
+    written back to the model state, any in-place mutations to the padding
+    region are discarded after the kernel returns.
+
+    Notes:
+        Arrays whose first axis does not equal ``num_cells`` (scalars) are left
+        unchanged.
+
+    Args:
+        inputs: Land surface inputs to pad.
+
+    Returns:
+        Land surface inputs with every HRU-sized array padded to the next
+        multiple of BLOCK_SIZE along the cell axis (axis 0).  Returns
+        ``inputs`` unchanged when ``num_cells`` is already a multiple of
+        BLOCK_SIZE.
+    """
+    num_cells: int = inputs.slope_m_per_m.shape[0]
+    pad_size: int = (-num_cells) % BLOCK_SIZE
+    if pad_size == 0:
+        return inputs
+
+    padded_fields: dict = {}
+    for field in inputs._fields:
+        val = getattr(inputs, field)
+        if isinstance(val, np.ndarray) and val.shape[0] == num_cells:
+            if val.ndim == 1:
+                padded: np.ndarray = np.empty(num_cells + pad_size, dtype=val.dtype)
+                padded[:num_cells] = val
+                padded[num_cells:] = val[0]
+            else:
+                # 2-D arrays are cell-major (num_cells, N_LAYERS or N_HOURS).
+                padded = np.empty((num_cells + pad_size, val.shape[1]), dtype=val.dtype)
+                padded[:num_cells, :] = val
+                padded[num_cells:, :] = val[0, :]
+            padded_fields[field] = np.ascontiguousarray(padded)
+        else:
+            padded_fields[field] = val
+
+    return LandSurfaceInputs(**padded_fields)
 
 
 class LandSurfaceVariables(Bucket):
@@ -1284,7 +1369,9 @@ class LandSurface(Module):
             leaf_area_index: Leaf area index per HRU (-).
 
         Returns:
-            Bundle of inputs for `land_surface_model`.
+            Bundle of inputs for `land_surface_model`, with all HRU-dimensioned
+            arrays padded to the next multiple of BLOCK_SIZE via
+            `_pad_hru_arrays`.
         """
         CO2_ppm: np.float32 = np.float32(self.model.forcing.load("CO2_ppm"))
         groundwater_toplayer_conductivity_m_per_day: ArrayFloat32 = (
@@ -1298,22 +1385,50 @@ class LandSurface(Module):
                 "crop_group_number"
             ].values.astype(np.float32)
         )
+        # Resolve crop group number to a per-HRU array so all kernel inputs are
+        # either scalars or HRU-dimensioned (avoids a lookup inside the Numba kernel).
+        safe_crop_map: ArrayInt32 = np.clip(
+            self.HRU.var.crop_map, 0, len(crop_group_number_per_group) - 1
+        )
+        crop_group_number: ArrayFloat32 = np.where(
+            self.HRU.var.land_use_type == FOREST,
+            self.HRU.var.crop_group_number_forest,
+            np.where(
+                self.HRU.var.land_use_type == GRASSLAND_LIKE,
+                self.HRU.var.crop_group_number_grassland_like,
+                crop_group_number_per_group[safe_crop_map],
+            ),
+        ).astype(np.float32)
 
-        return LandSurfaceInputs(
+        unpadded_inputs = LandSurfaceInputs(
             land_use_type=self.HRU.var.land_use_type,
             slope_m_per_m=self.HRU.var.slope_m_per_m,
             hillslope_length_m=self.HRU.var.hillslope_length_m,
-            water_content_m=self.HRU.var.water_content_m,
-            water_content_residual_m=self.HRU.var.water_content_residual_m,
-            water_content_wilting_point_m=self.HRU.var.water_content_wilting_point_m,
-            water_content_field_capacity_m=self.HRU.var.water_content_field_capacity_m,
-            water_content_saturated_m=self.HRU.var.water_content_saturated_m,
-            soil_enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2,
-            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
-            solid_thermal_conductivity_W_per_m_K=self.HRU.var.solid_thermal_conductivity_W_per_m_K,
-            sand_percentage=self.HRU.var.sand_percentage,
+            water_content_m=np.ascontiguousarray(self.HRU.var.water_content_m.T),
+            water_content_residual_m=np.ascontiguousarray(
+                self.HRU.var.water_content_residual_m.T
+            ),
+            water_content_wilting_point_m=np.ascontiguousarray(
+                self.HRU.var.water_content_wilting_point_m.T
+            ),
+            water_content_field_capacity_m=np.ascontiguousarray(
+                self.HRU.var.water_content_field_capacity_m.T
+            ),
+            water_content_saturated_m=np.ascontiguousarray(
+                self.HRU.var.water_content_saturated_m.T
+            ),
+            soil_enthalpy_J_per_m2=np.ascontiguousarray(
+                self.HRU.var.soil_enthalpy_J_per_m2.T
+            ),
+            solid_heat_capacity_J_per_m2_K=np.ascontiguousarray(
+                self.HRU.var.solid_heat_capacity_J_per_m2_K.T
+            ),
+            solid_thermal_conductivity_W_per_m_K=np.ascontiguousarray(
+                self.HRU.var.solid_thermal_conductivity_W_per_m_K.T
+            ),
+            sand_percentage=np.ascontiguousarray(self.HRU.var.sand_percentage.T),
             delta_z=delta_z,
-            soil_layer_height=self.HRU.var.soil_layer_height_m,
+            soil_layer_height=np.ascontiguousarray(self.HRU.var.soil_layer_height_m.T),
             root_depth_m=root_depth_m,
             topwater_m=self.HRU.var.topwater_m,
             variable_runoff_shape_beta=self.HRU.var.variable_runoff_shape_beta,
@@ -1336,24 +1451,32 @@ class LandSurface(Module):
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             capillar_rise_m=capillar_rise_m,
             groundwater_toplayer_conductivity_m_per_day=groundwater_toplayer_conductivity_m_per_day,
-            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
-            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+            saturated_hydraulic_conductivity_m_per_s=np.ascontiguousarray(
+                self.HRU.var.saturated_hydraulic_conductivity_m_per_s.T
+            ),
+            bulk_density_kg_per_dm3=np.ascontiguousarray(
+                self.HRU.var.bulk_density_kg_per_dm3.T
+            ),
             wetting_front_depth_m=self.HRU.var.wetting_front_depth_m,
             wetting_front_suction_head_m=self.HRU.var.wetting_front_suction_head_m,
             wetting_front_moisture_deficit=self.HRU.var.wetting_front_moisture_deficit,
             green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
-            lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-            bubbling_pressure_cm=self.HRU.var.bubbling_pressure_cm,
-            crop_group_forest=self.HRU.var.crop_group_number_forest,
-            crop_group_grassland_like=self.HRU.var.crop_group_number_grassland_like,
-            crop_group_number_per_group=crop_group_number_per_group,
+            lambda_pore_size_distribution=np.ascontiguousarray(
+                self.HRU.var.lambda_pore_size_distribution.T
+            ),
+            bubbling_pressure_cm=np.ascontiguousarray(
+                self.HRU.var.bubbling_pressure_cm.T
+            ),
+            crop_group_number=crop_group_number,
             minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
-            interflow_multiplier=self.model.config["parameters"][
-                "interflow_multiplier"
-            ],
+            interflow_multiplier=np.float32(
+                self.model.config["parameters"]["interflow_multiplier"]
+            ),
             deep_soil_temperature_C=deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
         )
+
+        return _pad_hru_arrays(unpadded_inputs)
 
     def _snapshot_land_surface_inputs_for_error(
         self,
@@ -1402,7 +1525,9 @@ class LandSurface(Module):
                 if val.ndim == 1:
                     sliced_fields[field] = val[index : index + 1]
                 elif val.ndim == 2:
-                    sliced_fields[field] = val[:, index : index + 1]
+                    # Inputs are in cell-major layout [num_cells, N_LAYERS] or
+                    # time-major layout [num_cells, 24]; cell axis is 0.
+                    sliced_fields[field] = val[index : index + 1, :]
                 else:
                     sliced_fields[field] = val
             else:
@@ -1411,13 +1536,20 @@ class LandSurface(Module):
         land_surface_inputs = LandSurfaceInputs(**sliced_fields)
 
         error_inputs: LandSurfaceInputs = land_surface_inputs._replace(
-            water_content_m=water_content_m_prev[:, index : index + 1],
+            # water_content_m_prev and soil_enthalpy_J_per_m2_prev are still in
+            # layer-major layout [N_LAYERS, num_cells] (from self.HRU.var.*), so
+            # transpose the cell slice to get [1, N_LAYERS].
+            water_content_m=np.ascontiguousarray(
+                water_content_m_prev[:, index : index + 1].T
+            ),
             topwater_m=topwater_m_prev[index : index + 1],
             snow_water_equivalent_m=snow_water_equivalent_prev[index : index + 1],
             liquid_water_in_snow_m=liquid_water_in_snow_prev[index : index + 1],
             snow_temperature_C=snow_temperature_C_prev[index : index + 1],
             interception_storage_m=interception_storage_prev[index : index + 1],
-            soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2_prev[:, index : index + 1],
+            soil_enthalpy_J_per_m2=np.ascontiguousarray(
+                soil_enthalpy_J_per_m2_prev[:, index : index + 1].T
+            ),
             deep_soil_temperature_C=deep_soil_temperature_C_prev[index : index + 1],
             wetting_front_depth_m=wetting_front_depth_prev[index : index + 1],
             wetting_front_suction_head_m=wetting_front_suction_head_prev[
@@ -1950,10 +2082,15 @@ class LandSurface(Module):
             )
 
         # TODO: pre-compute this once only
-        delta_z: TwoDArrayFloat32 = (
-            self.HRU.var.soil_layer_height_m[:-1, :]
-            + self.HRU.var.soil_layer_height_m[1:, :]
-        ) / 2
+        # Transpose to cell-major layout (num_cells, N_SOIL_LAYERS-1) for
+        # cache-efficient access inside the land surface kernel.
+        delta_z: TwoDArrayFloat32 = np.ascontiguousarray(
+            (
+                self.HRU.var.soil_layer_height_m[:-1, :]
+                + self.HRU.var.soil_layer_height_m[1:, :]
+            ).T
+            / 2
+        )
 
         # Update deep soil temperature boundary condition using a 10-year Exponential Moving Average.
         # This reflects the multi-year thermal inertia of the deep soil profile.
@@ -1976,6 +2113,10 @@ class LandSurface(Module):
 
         pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.HRU.pr_kg_per_m2_per_s
 
+        # Record original cell count before building inputs (inputs may be padded
+        # to a multiple of BLOCK_SIZE inside _build_land_surface_inputs).
+        num_cells_original: int = self.HRU.var.slope_m_per_m.shape[0]
+
         land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(
             root_depth_m=root_depth_m,
             interception_capacity_m=interception_capacity_m,
@@ -1991,6 +2132,10 @@ class LandSurface(Module):
 
         timer.finish_split("Prepare inputs for land surface model")
 
+        # Collect all outputs as a list so we can trim the padded cell dimension in one
+        # pass before unpacking.  The kernel processes num_cells_padded cells (a multiple
+        # of BLOCK_SIZE); phantom cells beyond num_cells_original are discarded here.
+        _n: int = num_cells_original
         (
             rain_m,
             snow_m,
@@ -2021,7 +2166,47 @@ class LandSurface(Module):
             top_soil_rise_from_layer_2_m,
             top_soil_percolation_to_layer_2_m,
             top_soil_transpiration_m,
-        ) = land_surface_model(**land_surface_inputs._asdict())
+        ) = [
+            r[:_n]
+            if isinstance(r, np.ndarray) and r.ndim == 1
+            else r[:_n, :]
+            if isinstance(r, np.ndarray) and r.ndim == 2
+            else r
+            for r in land_surface_model(**land_surface_inputs._asdict())
+        ]
+
+        # Write back cell-major copies to the layer-major model state.
+        # Slice the cell axis to num_cells_original to discard the padding region.
+        # TODO: Remove these copy-backs once the model state is stored in
+        # cell-major layout throughout.
+        np.copyto(
+            self.HRU.var.water_content_m,
+            land_surface_inputs.water_content_m[:_n, :].T,
+        )
+        np.copyto(
+            self.HRU.var.soil_enthalpy_J_per_m2,
+            land_surface_inputs.soil_enthalpy_J_per_m2[:_n, :].T,
+        )
+
+        # Copy back wetting-front state modified in-place inside the kernel.
+        # When inputs were padded, these are new arrays rather than direct
+        # model-state references, so an explicit copy-back is always required.
+        np.copyto(
+            self.HRU.var.wetting_front_depth_m,
+            land_surface_inputs.wetting_front_depth_m[:_n],
+        )
+        np.copyto(
+            self.HRU.var.wetting_front_suction_head_m,
+            land_surface_inputs.wetting_front_suction_head_m[:_n],
+        )
+        np.copyto(
+            self.HRU.var.wetting_front_moisture_deficit,
+            land_surface_inputs.wetting_front_moisture_deficit[:_n],
+        )
+        np.copyto(
+            self.HRU.var.green_ampt_active_layer_idx,
+            land_surface_inputs.green_ampt_active_layer_idx[:_n],
+        )
 
         timer.finish_split("Land surface model")
 

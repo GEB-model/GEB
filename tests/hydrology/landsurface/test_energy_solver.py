@@ -80,7 +80,11 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
     enthalpies_current_iteration = np.empty(n_layers, dtype=np.float32)
 
     # Run Solver
-    new_enthalpies, heat_flux, frozen_fraction = solve_soil_enthalpy_column(
+    (
+        new_enthalpies,
+        heat_flux,
+        frozen_fraction,
+    ) = solve_soil_enthalpy_column(
         soil_enthalpies_J_per_m2=soil_enthalpies_J_per_m2.copy(),
         layer_thicknesses_m=layer_thickness_m,
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
@@ -127,7 +131,11 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
     # Add significant Shortwave radiation
     sw_in = np.float32(500.0)  # W/m2
 
-    new_enthalpies_heating, heat_flux_heating, _ = solve_soil_enthalpy_column(
+    (
+        new_enthalpies_heating,
+        heat_flux_heating,
+        _,
+    ) = solve_soil_enthalpy_column(
         soil_enthalpies_J_per_m2=soil_enthalpies_J_per_m2.copy(),
         layer_thicknesses_m=layer_thickness_m,
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
@@ -198,7 +206,11 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
     # Provide an massive heat pulse that would cause instability in explicit schemes
     # The implicit scheme should dampen it and find a valid solution
 
-    new_enthalpies_extreme, _, _ = solve_soil_enthalpy_column(
+    (
+        new_enthalpies_extreme,
+        _,
+        _,
+    ) = solve_soil_enthalpy_column(
         soil_enthalpies_J_per_m2=initial_enthalpy_J_per_m2.copy(),
         layer_thicknesses_m=layer_thickness_m,
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
@@ -284,7 +296,11 @@ def test_solve_soil_enthalpy_column_tiny_snow_stays_stable() -> None:
     beta_current_iteration = np.empty(n_layers, dtype=np.float32)
     enthalpies_current_iteration = np.empty(n_layers, dtype=np.float32)
 
-    new_enthalpies_J_per_m2, _, _ = solve_soil_enthalpy_column(
+    (
+        new_enthalpies_J_per_m2,
+        _,
+        _,
+    ) = solve_soil_enthalpy_column(
         soil_enthalpies_J_per_m2=initial_enthalpy_J_per_m2.copy(),
         layer_thicknesses_m=layer_thickness_m,
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
