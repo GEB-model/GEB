@@ -21,11 +21,12 @@ import geopandas as gpd
 import numpy as np
 import rioxarray as rxr
 import xarray as xr
+from rioxarray import merge
 from shapely.geometry.base import BaseGeometry
 
 from geb.workflows.io import fetch_and_save
 from geb.workflows.raster import convert_nodata
-from rioxarray import merge
+
 from .base import Adapter
 
 available_continents: dict[str, str] = {
