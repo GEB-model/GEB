@@ -281,7 +281,7 @@ class HazardDriver(Module):
 
                     if self.model.in_spinup:
                         msg = f"Flood event {event} cannot be simulated during spinup. Please adjust the flood event times or the spinup time in the configuration."
-                        self.model.logger.exception(msg)
+                        self.model.logger.error(msg)
                         raise ValueError(msg)
 
                     print("Running floods for event:", event)
