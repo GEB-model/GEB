@@ -1,4 +1,5 @@
 # dev
+- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies.
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
 - Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
 

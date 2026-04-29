@@ -1,8 +1,8 @@
 """Build methods for the hydrography for GEB."""
-
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Literal
 
 import geopandas as gpd
 import networkx as nx
@@ -12,10 +12,12 @@ import pandas as pd
 import pyflwdir
 import rasterio.features
 import xarray as xr
+from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
+from geb.build import get_river_graph
 from geb.build.data_catalog import DataCatalog
 from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
@@ -1138,6 +1140,7 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_waterbodies(
         self,
+        mode: Literal['on', 'off'] = "on",
         command_areas: None | str = None,
         calculate_command_areas: None | str = None,
         custom_reservoir_capacity: None | str = None,
@@ -1150,6 +1153,8 @@ class Hydrography(BuildModelBase):
         routing network, and updating reservoir storage capacities.
 
         Notes:
+            If ``mode`` is set to "off", waterbodies are disabled and all
+            waterbody-related grids are filled with missing values.
             If ``command_areas`` is provided, those geometries are used to
             define reservoir command areas and mapped onto the model grid and
             subgrid. If no preset command areas are provided but
@@ -1159,6 +1164,7 @@ class Hydrography(BuildModelBase):
             overridden using that table.
 
         Args:
+            mode: Whether to enable waterbodies ("on") or disable them ("off").
             command_areas: Identifier of the preset command area data in the
                 data catalog. If None, command areas can be calculated from the
                 routing network instead.
@@ -1174,36 +1180,54 @@ class Hydrography(BuildModelBase):
         Raises:
             ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
             ValueError: If command_areas and calculate_command_areas are both provided.
+            ValueError: If mode is not "on" or "off".
         """
-        if command_areas and calculate_command_areas:
-            raise ValueError(
-                "command_areas and calculate_command_areas cannot both be provided. "
-                "Use either preset command areas or calculate them from the routing network."
-            )
-        waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
-            bbox=self.bounds,
-            columns=[
-                "waterbody_id",
-                "waterbody_type",
-                "volume_total",
-                "average_discharge",
-                "average_area",
-                "geometry",
-            ],
-        )
-        # only select waterbodies that intersect with the region
-        waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
+        if mode not in ["on", "off"]:
+            raise ValueError(f"Invalid mode: {mode}. Must be 'on' or 'off'.")
 
-        hydrolakes_to_geb: dict[int, np.int32] = {
-            1: np.int32(LAKE),
-            2: np.int32(RESERVOIR),
-            3: np.int32(LAKE_CONTROL),
-        }
-        assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
-        waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
-            hydrolakes_to_geb
-        )
-        assert waterbodies["waterbody_type"].dtype == np.int32
+        if mode == "off":
+            self.logger.info("Waterbodies are disabled (mode='off').")
+            # create empty waterbodies dataframe
+            waterbodies = gpd.GeoDataFrame(
+                columns=[
+                    "waterbody_id",
+                    "waterbody_type",
+                    "volume_total",
+                    "average_discharge",
+                    "average_area",
+                    "geometry",
+                    "volume_flood",
+                ],
+                geometry="geometry",
+                crs="EPSG:4326",
+            )
+        else:
+            waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
+                bbox=self.bounds,
+                columns=[
+                    "waterbody_id",
+                    "waterbody_type",
+                    "volume_total",
+                    "average_discharge",
+                    "average_area",
+                    "geometry",
+                ],
+            )
+            # only select waterbodies that intersect with the region
+            waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
+
+            hydrolakes_to_geb: dict[int, np.int32] = {
+                1: np.int32(LAKE),
+                2: np.int32(RESERVOIR),
+                3: np.int32(LAKE_CONTROL),
+            }
+            assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
+            waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
+                hydrolakes_to_geb
+            )
+            assert waterbodies["waterbody_type"].dtype == np.int32
+
+            waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
@@ -1226,25 +1250,25 @@ class Hydrography(BuildModelBase):
         self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
         self.set_subgrid(sub_waterbody_id, name="waterbodies/sub_waterbody_id")
 
-        waterbodies["volume_flood"] = waterbodies["volume_total"]
-
-        if command_areas:
-            command_areas: gpd.GeoDataFrame = gpd.read_file(
+        if mode == "on" and command_areas:
+            command_areas_gdf: gpd.GeoDataFrame = gpd.read_file(
                 command_areas, mask=self.region
             )
-            assert isinstance(command_areas, gpd.GeoDataFrame)
-            command_areas = command_areas[
-                ~command_areas["waterbody_id"].isnull()
+            assert isinstance(command_areas_gdf, gpd.GeoDataFrame)
+            command_areas_gdf = command_areas_gdf[
+                ~command_areas_gdf["waterbody_id"].isnull()
             ].reset_index(drop=True)
-            command_areas["waterbody_id"] = command_areas["waterbody_id"].astype(
+            command_areas_gdf["waterbody_id"] = command_areas_gdf["waterbody_id"].astype(
                 np.int32
             )
 
             # Dissolve command areas with same reservoir
-            command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
+            command_areas_gdf = command_areas_gdf.dissolve(
+                by="waterbody_id", as_index=False
+            )
 
             # Set lakes with command area to reservoirs and reservoirs without command area to lakes
-            ids_with_command: set[int] = set(command_areas["waterbody_id"])
+            ids_with_command: set[int] = set(command_areas_gdf["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
                 "waterbody_type",
@@ -1256,8 +1280,8 @@ class Hydrography(BuildModelBase):
                     waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
                 ]
             )
-            command_areas_dissolved = command_areas[
-                command_areas["waterbody_id"].isin(reservoir_ids)
+            command_areas_dissolved = command_areas_gdf[
+                command_areas_gdf["waterbody_id"].isin(reservoir_ids)
             ].reset_index(drop=True)
 
             self.set_geom(command_areas_dissolved, name="waterbodies/command_areas")
@@ -1282,10 +1306,8 @@ class Hydrography(BuildModelBase):
                 all_touched=True,
             )
 
-        elif calculate_command_areas:
-            from geb.build import get_river_graph
-
-            river_graph = get_river_graph(self.data_catalog)
+        elif mode == "on" and calculate_command_areas:
+            river_graph: DiGraph = get_river_graph(self.data_catalog)
 
             mapped_reservoirs_grid, mapped_reservoirs_subgrid = (
                 derive_command_areas_from_routing(
@@ -1298,39 +1320,39 @@ class Hydrography(BuildModelBase):
                     river_graph=river_graph,
                 )
             )
-            command_areas = self.full_like(
+            command_area_raster = self.full_like(
                 self.grid["mask"],
                 fill_value=-1,
                 nodata=-1,
                 dtype=np.int32,
             )
-            command_areas.data = mapped_reservoirs_grid
+            command_area_raster.data = mapped_reservoirs_grid
 
-            subcommand_areas = self.full_like(
+            subcommand_area_raster = self.full_like(
                 self.subgrid["mask"],
                 fill_value=-1,
                 nodata=-1,
                 dtype=np.int32,
             )
-            subcommand_areas.data = mapped_reservoirs_subgrid
+            subcommand_area_raster.data = mapped_reservoirs_subgrid
         else:
-            command_areas: xr.DataArray = self.full_like(
+            command_area_raster: xr.DataArray = self.full_like(
                 self.grid["mask"],
                 fill_value=-1,
                 nodata=-1,
                 dtype=np.int32,
             )
-            subcommand_areas = self.full_like(
+            subcommand_area_raster = self.full_like(
                 self.subgrid["mask"],
                 fill_value=-1,
                 nodata=-1,
                 dtype=np.int32,
             )
 
-        self.set_grid(command_areas, name="waterbodies/command_area")
-        self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
+        self.set_grid(command_area_raster, name="waterbodies/command_area")
+        self.set_subgrid(subcommand_area_raster, name="waterbodies/subcommand_areas")
 
-        if custom_reservoir_capacity:
+        if mode == "on" and custom_reservoir_capacity:
             if custom_reservoir_capacity.endswith(".xlsx"):
                 custom_reservoir_capacity_df: pd.DataFrame = pd.read_excel(
                     custom_reservoir_capacity
