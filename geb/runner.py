@@ -28,12 +28,12 @@ from geb.build.__init__ import (
     create_cluster_visualization_map,
     create_multi_basin_configs,
     get_all_downstream_subbasins_in_geom,
-    get_river_graph,
     save_clusters_as_merged_geometries,
     save_clusters_to_geoparquet,
 )
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
+from geb.build.workflows.hydrography import get_river_graph
 from geb.config_schema import Config
 from geb.model import GEBModel
 from geb.workflows.io import WorkingDirectory, read_params

@@ -1,4 +1,5 @@
 """Build methods for the hydrography for GEB."""
+
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -17,11 +18,11 @@ from pyflwdir import FlwdirRaster
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
-from geb.build import get_river_graph
 from geb.build.data_catalog import DataCatalog
 from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
 from geb.build.workflows.command_areas import derive_command_areas_from_routing
+from geb.build.workflows.hydrography import get_river_graph
 from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
     ArrayBool,
@@ -1140,7 +1141,7 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_waterbodies(
         self,
-        mode: Literal['on', 'off'] = "on",
+        mode: Literal["on", "off"] = "on",
         command_areas: None | str = None,
         calculate_command_areas: None | str = None,
         custom_reservoir_capacity: None | str = None,
@@ -1258,9 +1259,9 @@ class Hydrography(BuildModelBase):
             command_areas_gdf = command_areas_gdf[
                 ~command_areas_gdf["waterbody_id"].isnull()
             ].reset_index(drop=True)
-            command_areas_gdf["waterbody_id"] = command_areas_gdf["waterbody_id"].astype(
-                np.int32
-            )
+            command_areas_gdf["waterbody_id"] = command_areas_gdf[
+                "waterbody_id"
+            ].astype(np.int32)
 
             # Dissolve command areas with same reservoir
             command_areas_gdf = command_areas_gdf.dissolve(
