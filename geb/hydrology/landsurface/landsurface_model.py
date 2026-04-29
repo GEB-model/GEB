@@ -1259,7 +1259,7 @@ def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
     padded_fields: dict = {}
     for field in inputs._fields:
         val = getattr(inputs, field)
-        if isinstance(val, np.ndarray) and val.ndim >= 1 and val.shape[0] == num_cells:
+        if isinstance(val, np.ndarray) and val.shape[0] == num_cells:
             if val.ndim == 1:
                 padded: np.ndarray = np.empty(num_cells + pad_size, dtype=val.dtype)
                 padded[:num_cells] = val
