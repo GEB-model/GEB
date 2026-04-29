@@ -2780,7 +2780,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["array"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            write_array(data, fp_with_root)
+            write_array(data, fp_with_root, compression_level=18)
 
         self.array[name] = fp_with_root
 
@@ -3306,34 +3306,32 @@ class GEBModel(
             validate_order: If True, validate the order of methods using the build_method decorator.
             record_progress: If True, record progress after each method.
             continue_: Continue previous build if it was interrupted or failed.
+
+        Raises:
+            ValueError: If continuing a build and completed methods are not in the methods to run
+                or if the order is incorrect.
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        methods = build_method.validate_methods(
-            methods, validate_order=validate_order, fix_order_if_broken=True
-        )
+        methods = build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (
             build_method.read_progress(self.progress_path) if continue_ else []
         )
 
-        # Filter completed methods against the current build config.
+        # check if all completed methods are in the methods to run and if order is correct
         if continue_:
             methods_to_run = list(methods.keys())
-            methods_to_run_set = set(methods_to_run)
-            active_completed_methods: list[str] = []
-            for completed_method in completed_methods:
-                if completed_method not in methods_to_run_set:
-                    # Method was removed from build.yml (e.g. deprecated by a
-                    # version update). Warn so the user knows it was skipped.
-                    self.logger.warning(
-                        f"Completed method '{completed_method}' is no longer in build config "
-                        "(likely removed by a version update); skipping."
+            for i, completed_method in enumerate(completed_methods):
+                if completed_method not in methods_to_run:
+                    raise ValueError(
+                        f"Cannot continue build: completed method {completed_method} not in methods to run. Restore the method or start a new build."
                     )
-                else:
-                    active_completed_methods.append(completed_method)
-            completed_methods = active_completed_methods
+                if completed_method != methods_to_run[i]:
+                    raise ValueError(
+                        f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
+                    )
 
         build_run_started_at: datetime = datetime.now()
 

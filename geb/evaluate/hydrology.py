@@ -19,6 +19,7 @@ from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
+from geb.hydrology.routing import read_discharge_per_river
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
 from geb.workflows.visualise import plot_sunburst
 
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 from geb.workflows.extreme_value_analysis import (
     ReturnPeriodModel,
 )
-from geb.workflows.io import read_geom, read_table, read_zarr, write_zarr
+from geb.workflows.io import read_geom, read_table
 from geb.workflows.timeseries import regularize_discharge_timeseries
 
 
@@ -2036,51 +2037,50 @@ class Hydrology:
             FileNotFoundError: If the discharge file for the specified run does not exist
                 in the report directory.
         """
-        _ = args, kwargs
-
-        # check if discharge file exists
-        if not (
-            self.model.output_folder
-            / "report"
-            / run_name
-            / "hydrology.routing"
-            / "discharge_daily.zarr"
-        ).exists():
+        # check if discharge files exists
+        discharge_folder = (
+            self.model.output_folder / "report" / run_name / "hydrology.routing"
+        )
+        if not discharge_folder.exists():
             raise FileNotFoundError(
-                f"Discharge file for run '{run_name}' does not exist in the report directory. Did you run the model?"
+                f"Discharge files for run '{run_name}' does not exist in the report directory. Did you run the model?"
             )
-        # load the discharge simulation
-        GEB_discharge = read_zarr(
-            self.model.output_folder
-            / "report"
-            / run_name
-            / "hydrology.routing"
-            / "discharge_daily.zarr"
+
+        # load rivers
+        all_rivers: gpd.GeoDataFrame = read_geom(
+            self.model.files["geom"]["routing/rivers"]
         )
+        rivers_of_interest: gpd.GeoDataFrame = all_rivers[
+            ~(
+                all_rivers["is_downstream_outflow"]
+                | all_rivers["is_upstream_of_downstream_basin"]
+                | all_rivers["is_further_downstream_outflow"]
+            )
+        ].copy()
 
-        # calculate the mean discharge over time, and plot spatially
-        mean_discharge = GEB_discharge.mean(dim="time")
-        mean_discharge.attrs["_FillValue"] = np.nan
-
-        write_zarr(
-            mean_discharge,
-            self.output_folder / "mean_discharge_m3_per_s.zarr",
-            crs=4326,
+        discharge: pd.DataFrame = read_discharge_per_river(
+            folder=discharge_folder,
+            rivers=rivers_of_interest,
+            all_rivers=all_rivers,
         )
+        for river_id in discharge.columns:
+            rivers_of_interest.loc[river_id, "discharge_m3_per_s"] = discharge[
+                river_id
+            ].mean()
 
-        fig, ax = plt.subplots(figsize=(10, 10))
-
-        mean_discharge.plot(ax=ax, cmap="Blues")  # ty:ignore[missing-argument]
-
+        ax = rivers_of_interest.plot(
+            column="discharge_m3_per_s",
+            cmap="Blues",
+            legend=True,
+        )
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
+        ax.set_title(f"Mean discharge (m3/s)")
 
         plt.savefig(
-            self.output_folder / "mean_discharge_m3_per_s.png",
-            dpi=300,
+            self.output_folder / "mean_discharge_m3_per_s_map.svg",
         )
-        plt.show()
-        plt.close(fig)
+        plt.close()
 
         outflow_plot_count: int = _plot_outflow_discharge_timeseries(
             model=self.model,

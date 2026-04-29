@@ -674,7 +674,11 @@ class ReservoirOperators(AgentBaseClass):
         # operational year should start after the end of the rainy season
         # this could also maybe be determined based on the start of the irrigation season
         # thus crop calendars
-        if self.model.current_time.day == 1 and self.model.current_time.month == 10:
+        if (
+            self.model.simulate_hydrology
+            and self.model.current_time.day == 1
+            and self.model.current_time.month == self.hydrological_year_start_month
+        ):
             # in the second year, we want to discard the default data that was estimated
             # from external sources
             if self.var.hydrological_year_counter == 1:

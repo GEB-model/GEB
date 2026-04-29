@@ -1,4 +1,17 @@
 # dev
+- Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
+- Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
+
+# v1.0.0b23
+- Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).
+- Update license specification in `pyproject.toml` to follow PEP 639.
+- Re-support running with yearly timestep (fix several small bugs with variables not being available).
+- Add `create_plots` to `setup_discharge_observations`. This is because the plots are quite large and take long to generate. Default is false.
+
+# v1.0.0b22
+- Remove option to auto-fix build order (now build order should be much more consistent with `reasonable_default_build.yml`) and fix associated tests.
+
+# v1.0.0b21
 - Remove `ncpus` config option from SFINCS. CPU count is now always determined automatically from the SLURM environment or system.
 - Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
 - Remove setup_irrigation_sources from build process as it is not needed anymore.
@@ -27,10 +40,25 @@
 - Fix bug where river widths could be negative in rare cases. This clearly raised an error in the model run, so it doesn't affect any model that ran normally ([#770](https://github.com/GEB-model/GEB/issues/770))
 - Fix bugs in DeltaDTM: 1) tiles were not found as a buffer was not present around the coastal mask 2) for large coastal regions, the tiles were deleted, solving [[#783](https://github.com/GEB-model/GEB/issues/783)]
 - Different updates to Global Exposure model (GEM), most importantly a detailed mapping of name changes between GEM and GADM 
+- Fix bug where `insurance_active` tuple was always truthy; insurance check now uses `any(insurance_active)` in crop farmers (https://github.com/GEB-model/GEB/issues/790).
+- Fix wrong config key in `livestock_farmers.py`: was reading from `agent_settings.town_managers` instead of `agent_settings.livestock_farmers`. Since no config was actually used, this didn't have an effect on the model run.
+- Fix accounting bug in `get_current_storage()` where topwater was counted twice.
+- Replace `efficiency` [0–1] with explicit `return_flow` (m/day) in industry and livestock agents. The `to_grid` conversion for industry and livestock water demand is now performed inside `update_water_demand()`, so both agents return grid-scale arrays directly.
+- Speed up `to_grid` by parallelizing and simplifying because only weightedmean was used.
+- Split `get_current_storage()` into five sub-methods: `get_landsurface_storage_m3`, `get_overland_flow_buffer_storage_m3`, `get_routing_storage_m3`, `get_waterbodies_storage_m3`, `get_groundwater_storage_m3` for better profiling and clarity. Also sped up some of the functions using numba.
+- Cache `current_time` in `set_timestep()` to avoid recomputing date every call.
+- Make saving of store and finalization of reporting multithreaded.
+- Refactor `Reporter.process_value()` into helper methods (`_write_grid_hru_to_zarr`, `_apply_grid_hru_function`, `_write_agents_to_zarr`, `_apply_agent_function`) for better readability and profiling.
+- Adapt `plot_discharge` in evaluate to work with timeseries instead of grid.
 
 To support this version:
-- Remove `setup_irrigation_sources` from build.yml.
-- Re-run `setup_gtsm_station_data`.
+- First of all it is HIGHLY RECOMMENDED to remove your own build.yml and replace it with the one in the examples. See `geb/examples/geul/build.yml`. This build.yml inherits from a new `reasonable_default_build.yml` (see `geb/reasonable_default_build.yml`). This will drastrically reduce the number of manual updates you need to do in the future. If you made any changes to your `build.yml` relative to the example, you can only keep those methods in your `build.yml`, which will then override the default ones in the `reasonable_default_build.yml`. If you want to keep the current setup, you need to remove `setup_irrigation_sources` from build.yml.
+
+The following should be run automatically with `geb update-version`, but if you want to do this manually:
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.
+- Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data`.
 
 # v1.0.0b20
 - Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
@@ -62,6 +90,9 @@ To support this version:
 - Added auto-update for build methods.
 - Improve memory usage of setup_soil (hopefully)
 - Update to Python 3.14.4.
+- Fix variables that were not correctly set in optimized mode.
+- Assert that future sea level rise is monotonically increasing, or monotontically decreasing.
+- Catch more exceptions where names for regions between several datasets do not match.
 
 To support this version:
 - Add `setup_flood_damage_model` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_flood_damage_model`.

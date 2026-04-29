@@ -271,6 +271,17 @@ class CropFarmersVariables(Bucket):
     cumulative_SPEI_count_during_growing_season: DynamicArray
     avg_income_per_agent: ArrayFloat64
     payout_mask: TwoDArrayBool
+    seasonal_income_farmer: DynamicArray
+    farmer_yield_probability_relation: DynamicArray
+    irr_eff_sprinkler: float
+    return_fraction_sprinkler: float
+    mean_irrigation_efficiency: float
+    irrigation_efficiency_group: DynamicArray
+    adjusted_annual_loan_cost: DynamicArray
+    adjusted_yearly_income: DynamicArray
+    decision_horizon: DynamicArray
+    household_size: DynamicArray
+    cumulative_inflation: DynamicArray
 
 
 class CropFarmers(AgentBaseClass):
@@ -1068,7 +1079,12 @@ class CropFarmers(AgentBaseClass):
                 "expected_utility"
             ]["decisions"]["decision_horizon"],
         )
-
+        self.var.household_size = DynamicArray(
+            n=self.var.n, max_n=self.var.max_n, dtype=np.int32, fill_value=-1
+        )
+        self.var.household_size[:] = read_array(
+            self.model.files["array"]["agents/farmers/household_size"]
+        )
         self.var.cumulative_water_deficit_m3 = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -1091,6 +1107,13 @@ class CropFarmers(AgentBaseClass):
             extra_dims_names=("day",),
             dtype=np.float32,
             fill_value=0,
+        )
+
+        self.var.cumulative_inflation = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
         )
 
         self.var.field_indices_by_farmer = DynamicArray(
@@ -2130,7 +2153,7 @@ class CropFarmers(AgentBaseClass):
                 weights=potential_profit_per_field,
                 minlength=self.var.n,
             )
-            self.income_farmer = np.bincount(
+            self.var.seasonal_income_farmer[:] = np.bincount(
                 harvesting_farmer_fields,
                 weights=actual_profit_per_field,
                 minlength=self.var.n,
@@ -5004,7 +5027,7 @@ class CropFarmers(AgentBaseClass):
 
         # Adjust for inflation in separate array for export
         # Calculate the cumulative inflation from the start year to the current year for each farmer
-        cumulative_inflation = np.prod(
+        self.var.cumulative_inflation[:] = np.prod(
             [
                 self.get_value_per_farmer_from_region_id(
                     self.inflation_rate, datetime(year, 1, 1)
@@ -5018,17 +5041,12 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.adjusted_annual_loan_cost = (
-            self.var.all_loans_annual_cost / cumulative_inflation[..., None, None]
+            self.var.all_loans_annual_cost
+            / self.var.cumulative_inflation[..., None, None]
         )
 
         self.var.adjusted_yearly_income = (
-            self.var.insured_yearly_income / cumulative_inflation[..., None]
-        )
-
-        self.var.adjusted_pr_premium = self.var.pr_premium / cumulative_inflation
-        self.var.adjusted_index_premium = self.var.index_premium / cumulative_inflation
-        self.var.adjusted_personal_premium = (
-            self.var.personal_premium / cumulative_inflation
+            self.var.yearly_income / self.var.cumulative_inflation[..., None]
         )
 
     def get_value_per_farmer_from_region_id(
@@ -5224,8 +5242,8 @@ class CropFarmers(AgentBaseClass):
             )
 
             # create a unique index for each type of crop calendar that a farmer follows
-            crop_calendar_group = np.unique(
-                self.var.crop_calendar[:, :, 0], axis=0, return_inverse=True
+            self.crop_calendar_group = np.unique(
+                self.var.crop_calendar[:, :, :], axis=0, return_inverse=True
             )[1]
 
             self.insurance_diffentiator = (
@@ -5278,11 +5296,15 @@ class CropFarmers(AgentBaseClass):
 
                 timer.finish_split("yield-spei relation")
 
-                if (
-                    self.personal_insurance_adaptation_active
-                    or self.index_insurance_adaptation_active
-                    or self.pr_insurance_adaptation_active
-                ):
+                insurance_active: tuple[bool, bool, bool] = (
+                    self.traditional_insurance_adaptation_active,
+                    self.index_insurance_adaptation_active,
+                    self.pr_insurance_adaptation_active,
+                )
+                if any(insurance_active):
+                    assert sum(insurance_active) <= 1, (
+                        "Currently, only one insurance adaptation may be active at a time. Multiple can be enabled with some minor adjustments"
+                    )
                     # save the base relations for determining the difference with and without insurance
                     farmer_yield_probability_relation_base = (
                         farmer_yield_probability_relation.copy()

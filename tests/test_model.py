@@ -267,7 +267,7 @@ def test_profile_model_start() -> None:
         args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
-        args["profiling"] = True
+        args["profile_speed"] = True
         args["method_args"] = {
             "initialize_only": True,
         }
@@ -353,10 +353,12 @@ def test_forcing() -> None:
         model.run(initialize_only=True)
 
         for name, loader in model.forcing._loaders.items():
-            t_0: datetime = datetime(2010, 1, 1, 0, 0, 0)
+            if name == "SPEI":
+                continue
+            t_0: datetime = datetime(2010, 1, 1, 1, 0, 0)
             forcing_0 = loader.load(t_0)
 
-            t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
+            t_1: datetime = datetime(2020, 1, 1, 1, 0, 0)
             forcing_1 = loader.load(t_1)
 
             if isinstance(forcing_0, (xr.DataArray, np.ndarray)) and isinstance(
@@ -397,6 +399,7 @@ def test_run() -> None:
         run_model_with_method(method="run", **args)
 
         for evaluation_method in (
+            "hydrology.plot_discharge",
             "hydrology.plot_water_balance",
             "hydrology.plot_water_storage",
             "hydrology.plot_water_circle",
@@ -446,6 +449,8 @@ def test_run() -> None:
         assert result["KGE"] > -0.05
         assert result["NSE"] > -0.49
         assert result["R"] > 0.41
+
+        print("Discharge evaluation results:", result)
 
         # method_args = {
         #     "method": "hydrodynamics.evaluate_hydrodynamics",

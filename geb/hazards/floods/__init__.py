@@ -18,7 +18,10 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hazards.floods.workflows.utils import get_start_point
-from geb.hydrology.routing import get_upstream_represented_xys
+from geb.hydrology.routing import (
+    get_upstream_represented_xys as get_upstream_represented_xys,
+    read_discharge_per_river,
+)
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows.io import read_geom, read_table
@@ -774,31 +777,12 @@ class Floods(Module):
             self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
         )
         all_rivers = self.model.hydrology.routing.rivers
-        discharge = pd.DataFrame()
-        for river_id, river in rivers.iterrows():
-            assert isinstance(river_id, int)
-            xys: list[tuple[int, int]] = get_upstream_represented_xys(
-                river_id, all_rivers
-            )
-            if len(xys) == 1:
-                discharge[river_id] = read_table(
-                    self.model.report_folder.parent
-                    / "spinup"
-                    / "hydrology.routing"
-                    / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
-                )[f"river_outflow_hourly_m3_per_s_{river_id}"]
-            else:
-                for i in range(len(xys)):
-                    discharge_part = read_table(
-                        self.model.report_folder.parent
-                        / "spinup"
-                        / "hydrology.routing"
-                        / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
-                    )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
-                    if river_id not in discharge:
-                        discharge[river_id] = discharge_part
-                    else:
-                        discharge[river_id] += discharge_part
+
+        discharge = read_discharge_per_river(
+            folder=self.model.report_folder.parent / "spinup" / "hydrology.routing",
+            rivers=rivers,
+            all_rivers=all_rivers,
+        )
 
         start_time = discharge.index[0] + pd.DateOffset(years=10)
         discharge = discharge.loc[start_time:]
