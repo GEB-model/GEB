@@ -329,27 +329,33 @@ def land_surface_model(
     n_soil_layers = soil_enthalpy_J_per_m2.shape[1]
 
     for i in prange(slope_m_per_m.size):  # ty: ignore[not-iterable]
-        lower_diagonal_a = np.empty(n_soil_layers, dtype=np.float32)
-        main_diagonal_b = np.empty(n_soil_layers, dtype=np.float32)
-        upper_diagonal_c = np.empty(n_soil_layers, dtype=np.float32)
-        rhs_vector_d = np.empty(n_soil_layers, dtype=np.float32)
-        tdma_c_prime = np.empty(n_soil_layers, dtype=np.float32)
-        tdma_d_prime = np.empty(n_soil_layers, dtype=np.float32)
-        enthalpies_new_iteration = np.empty(n_soil_layers, dtype=np.float32)
+        # Use the compile-time constant N_SOIL_LAYERS (always 6) so Numba can
+        # stack-allocate these small scratch buffers instead of going through
+        # the NRT heap allocator on every cell iteration.
+        lower_diagonal_a = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        main_diagonal_b = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        upper_diagonal_c = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        rhs_vector_d = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        tdma_c_prime = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        tdma_d_prime = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        enthalpies_new_iteration = np.empty(N_SOIL_LAYERS, dtype=np.float32)
         thermal_conductances_between_layer_centers_W_per_m2_K = np.empty(
-            n_soil_layers - 1, dtype=np.float32
+            N_SOIL_LAYERS - 1, dtype=np.float32
         )
-        frozen_fraction_for_conductivity = np.empty(n_soil_layers, dtype=np.float32)
-        latent_heat_areal_J_per_m2_per_layer = np.empty(n_soil_layers, dtype=np.float32)
+        frozen_fraction_for_conductivity = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        latent_heat_areal_J_per_m2_per_layer = np.empty(N_SOIL_LAYERS, dtype=np.float32)
         heat_capacity_liquid_J_per_m2_K_per_layer = np.empty(
-            n_soil_layers, dtype=np.float32
+            N_SOIL_LAYERS, dtype=np.float32
         )
         heat_capacity_frozen_J_per_m2_K_per_layer = np.empty(
-            n_soil_layers, dtype=np.float32
+            N_SOIL_LAYERS, dtype=np.float32
         )
-        dT_dH_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
-        beta_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
-        enthalpies_current_iteration = np.empty(n_soil_layers, dtype=np.float32)
+        dT_dH_current_iteration = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        beta_current_iteration = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        enthalpies_current_iteration = np.empty(N_SOIL_LAYERS, dtype=np.float32)
+        # Pre-allocate the per-cell transpiration snapshot buffer here (outside the
+        # hour loop) to avoid a heap allocation on each of the 24 hourly sub-steps.
+        water_content_before_transpiration_m = np.empty(N_SOIL_LAYERS, dtype=np.float32)
 
         snow_water_equivalent_m_cell = snow_water_equivalent_m[i]
         liquid_water_in_snow_m_cell = liquid_water_in_snow_m[i]
@@ -972,7 +978,9 @@ def land_surface_model(
                     water_content_residual_m[i, layer],
                 )
 
-            water_content_before_transpiration_m = water_content_m[i, :].copy()
+            # In-place copy into the pre-allocated buffer (avoids a heap allocation
+            # per hourly substep that .copy() would trigger).
+            water_content_before_transpiration_m[:] = water_content_m[i, :]
             topwater_before_transpiration_m: np.float32 = topwater_m[i]
 
             transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
