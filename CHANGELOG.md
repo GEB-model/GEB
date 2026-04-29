@@ -1,6 +1,8 @@
 # dev
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
 - Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
+- Improve allignment of data that goes into land surface model. And various other optimizations in land surface model.
+- Fix "Inflation not set when model runs to final year of data that was created in build process" ([#808](https://github.com/GEB-model/GEB/issues/808)).
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).
