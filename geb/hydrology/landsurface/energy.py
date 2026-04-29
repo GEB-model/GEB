@@ -630,7 +630,7 @@ def solve_soil_enthalpy_column(
     dT_dH_current_iteration: np.ndarray,
     beta_current_iteration: np.ndarray,
     enthalpies_current_iteration: np.ndarray,
-) -> tuple[np.ndarray, np.float32, np.ndarray, np.float32]:
+) -> tuple[np.ndarray, np.float32, np.ndarray]:
     """Solve the soil enthalpy profile with an implicit scheme.
 
     The prognostic state is enthalpy H (J/m2) per layer. Temperature and frozen fraction
@@ -781,11 +781,9 @@ def solve_soil_enthalpy_column(
 
     MAX_ITERATIONS = 15
     # Convergence tolerance in enthalpy.
-    # Rough scaling: an areal heat capacity of ~1e6 J/m2/K means that a 0.01 K
-    # change in temperature corresponds to ~1e4 J/m2.
-    # We use an enthalpy-based criterion because the sharp-freezing (0°C plateau)
-    # formulation has dT/dH = 0 in the mushy zone.
-    TOLERANCE_ENTHALPY_J_PER_M2 = np.float32(1.0e4)
+    # We use a strict tolerance to ensure energy balance closure across the
+    # daily diagnostics.
+    TOLERANCE_ENTHALPY_J_PER_M2 = np.float32(1.0)
 
     final_net_radiation_flux_W_per_m2 = np.float32(0.0)
     final_sensible_heat_flux_W_per_m2 = np.float32(0.0)
@@ -1017,10 +1015,12 @@ def solve_soil_enthalpy_column(
         )
         frozen_fractions_final[layer_idx] = frozen_fraction
 
-    # Compute the net enthalpy change for the caller's energy-balance diagnostic,
-    net_enthalpy_delta_J_per_m2: np.float32 = np.float32(0.0)
+    # Compute the net enthalpy change for the caller's energy-balance diagnostic.
+    # To close the balance, the returned flux must represent the total energy
+    # net exchange that caused the enthalpy to change.
+    net_enthalpy_change_J_per_m2: np.float32 = np.float32(0.0)
     for layer_idx in range(n_soil_layers):
-        net_enthalpy_delta_J_per_m2 += (
+        net_enthalpy_change_J_per_m2 += (
             enthalpies_current_iteration[layer_idx]
             - enthalpies_at_start_of_timestep[layer_idx]
         )
@@ -1029,5 +1029,4 @@ def solve_soil_enthalpy_column(
         enthalpies_current_iteration,
         soil_heat_flux_W_per_m2,
         frozen_fractions_final,
-        net_enthalpy_delta_J_per_m2,
     )
