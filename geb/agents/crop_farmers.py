@@ -387,6 +387,16 @@ class CropFarmers(AgentBaseClass):
         self.microcredit_adaptation_active = (
             not self.config["microcredit"]["ruleset"] == "no-adaptation"
         )
+        self.price_adjustment_surface = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_efficiency"]["price_adjustment_surface"]
+        self.price_adjustment_sprinkler = self.model.config["agent_settings"][
+            "farmers"
+        ]["expected_utility"]["adaptation_efficiency"]["price_adjustment_sprinkler"]
+        self.price_adjustment_drip = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_efficiency"]["price_adjustment_drip"]
+
         self.static_efficiency_price = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["adaptation_efficiency"]["static_price"]
@@ -397,10 +407,10 @@ class CropFarmers(AgentBaseClass):
             ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
             self.water_costs_m3_reservoir = self.model.config["agent_settings"][
                 "farmers"
-            ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
+            ]["expected_utility"]["water_price"]["water_costs_m3_reservoir"]
             self.water_costs_m3_groundwater = self.model.config["agent_settings"][
                 "farmers"
-            ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+            ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
         else:
             # irrigation prices
             self.operation_cost_surface = load_economic_data(
@@ -422,6 +432,9 @@ class CropFarmers(AgentBaseClass):
                 self.model.files["dict"]["socioeconomics/capital_cost_drip"]
             )
 
+        self.price_adjustment_water = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["water_price"]["price_adjustment_water"]
         self.static_water_price = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["water_price"]["static"]
@@ -2556,6 +2569,9 @@ class CropFarmers(AgentBaseClass):
             price_channel = self.water_price[mask_channel]
             price_reservoir = self.water_price[mask_reservoir]
             price_groundwater = self.water_price[mask_groundwater]
+        price_channel = price_channel * self.price_adjustment_water
+        price_reservoir = price_reservoir * self.price_adjustment_water
+        price_groundwater = price_groundwater * self.price_adjustment_water
 
         water_costs_channel = (
             self.var.yearly_abstraction_m3_by_farmer[
@@ -4944,7 +4960,7 @@ class CropFarmers(AgentBaseClass):
             )
             # These variables can be used to create the different meta groups
             # i.e. farmers with similar precipitation or irrigation get grouped together
-            k = 3
+            k = 1
             pr_sum = np.sum(self.var.cumulative_pr_mm, axis=1)
             edges_pr = np.nanpercentile(
                 pr_sum, np.linspace(100 / k, 100 - 100 / k, k - 1)
@@ -5015,7 +5031,7 @@ class CropFarmers(AgentBaseClass):
 
                         self.adapt_irrigation_efficiency(
                             self.farmer_yield_probability_relation,
-                            annual_cost_drip,
+                            annual_cost_drip * self.price_adjustment_drip,
                             IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
                             self.var.irr_eff_drip,
                             self.var.return_fraction_drip,
