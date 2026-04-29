@@ -326,10 +326,10 @@ def land_surface_model(
     groundwater_recharge_enthalpy_loss_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
     transpiration_enthalpy_loss_J_per_m2 = np.zeros(num_cells, dtype=np.float32)
 
-    num_blocks: int = num_cells // 16
+    num_blocks: int = num_cells // BLOCK_SIZE
     for _block in prange(num_blocks):  # ty: ignore[not-iterable]
-        for _j in range(16):
-            i: int = _block * 16 + _j
+        for _j in range(BLOCK_SIZE):
+            i: int = _block * BLOCK_SIZE + _j
             # Use the compile-time constant N_SOIL_LAYERS (always 6) so Numba can
             # stack-allocate these small scratch buffers instead of going through
             # the NRT heap allocator on every cell iteration.
