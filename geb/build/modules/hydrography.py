@@ -1186,49 +1186,38 @@ class Hydrography(BuildModelBase):
         if mode not in ["on", "off"]:
             raise ValueError(f"Invalid mode: {mode}. Must be 'on' or 'off'.")
 
-        if mode == "off":
-            self.logger.info("Waterbodies are disabled (mode='off').")
-            # create empty waterbodies dataframe
-            waterbodies = gpd.GeoDataFrame(
-                columns=[
-                    "waterbody_id",
-                    "waterbody_type",
-                    "volume_total",
-                    "average_discharge",
-                    "average_area",
-                    "geometry",
-                    "volume_flood",
-                ],
-                geometry="geometry",
-                crs="EPSG:4326",
-            )
+        waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
+            bbox=self.bounds,
+            columns=[
+                "waterbody_id",
+                "waterbody_type",
+                "volume_total",
+                "average_discharge",
+                "average_area",
+                "geometry",
+            ],
+        )
+        if (
+            mode == "off"
+        ):  # to keep the dtypes consistent we still load the waterbodies, but we will remove all rows to disable them
+            # remove all rows
+            waterbodies = waterbodies.iloc[0:0]
         else:
-            waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
-                bbox=self.bounds,
-                columns=[
-                    "waterbody_id",
-                    "waterbody_type",
-                    "volume_total",
-                    "average_discharge",
-                    "average_area",
-                    "geometry",
-                ],
-            )
             # only select waterbodies that intersect with the region
             waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
 
-            hydrolakes_to_geb: dict[int, np.int32] = {
-                1: np.int32(LAKE),
-                2: np.int32(RESERVOIR),
-                3: np.int32(LAKE_CONTROL),
-            }
-            assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
-            waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
-                hydrolakes_to_geb
-            )
-            assert waterbodies["waterbody_type"].dtype == np.int32
+        hydrolakes_to_geb: dict[int, np.int32] = {
+            1: np.int32(LAKE),
+            2: np.int32(RESERVOIR),
+            3: np.int32(LAKE_CONTROL),
+        }
+        assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
+        waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
+            hydrolakes_to_geb
+        )
+        assert waterbodies["waterbody_type"].dtype == np.int32
 
-            waterbodies["volume_flood"] = waterbodies["volume_total"]
+        waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
