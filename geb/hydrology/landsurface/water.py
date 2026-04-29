@@ -59,7 +59,7 @@ def add_water_to_topwater_and_evaporate_open_water(
     return topwater_m, open_water_evaporation_m
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def calculate_spatial_infiltration_excess(
     infiltration_capacity_mean: np.float32,
     available_water: np.float32,
@@ -115,7 +115,7 @@ def calculate_spatial_infiltration_excess(
     return infiltration, runoff
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always", fastmath=True)
 def calculate_green_ampt_time_from_infiltration(
     cumulative_infiltration: np.float32,
     saturated_hydraulic_conductivity_m_per_time_unit: np.float32,
@@ -173,7 +173,7 @@ def calculate_green_ampt_time_from_infiltration(
     return max(t, np.float32(0.0))
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always", fastmath=True)
 def calculate_green_ampt_cumulative_infiltration(
     time: np.float32,
     saturated_hydraulic_conductivity_m_per_time_unit: np.float32,
@@ -293,7 +293,7 @@ def rise_from_groundwater(
     return runoff_from_groundwater
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_soil_water_flow_parameters(
     w: np.float32,
     wres: np.float32,
@@ -1229,7 +1229,7 @@ def kv_cosby(
     return kv.astype(np.float32)
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True, inline="always", fastmath=True)
 def get_interflow(
     w: np.float32,
     wfc: np.float32,

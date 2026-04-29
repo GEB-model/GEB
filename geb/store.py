@@ -1166,19 +1166,19 @@ class Bucket:
         if isinstance(value, DynamicArray):
             value.save(path / name)
         elif isinstance(value, np.ndarray):
+            if value.ndim == 0:
+                raise ValueError(
+                    "0-dimensional arrays should be saved as scalars, not .array.zarr"
+                )
             write_array(value, (path / name).with_suffix(".array.zarr"))
         elif isinstance(value, gpd.GeoDataFrame):
             write_geom(value, (path / name).with_suffix(".geoparquet"))
         elif isinstance(value, pd.DataFrame):
             write_table(value, (path / name).with_suffix(".parquet"))
-        elif isinstance(value, (list, dict, float, int, str, datetime)):
-            if isinstance(value, np.generic):
-                value = (
-                    value.item()
-                )  # If it's a numpy scalar, convert to native Python type
-            write_params(value, (path / name).with_suffix(".yml"))
         elif isinstance(value, np.generic):
             np.save((path / name).with_suffix(".npy"), value)
+        elif isinstance(value, (list, dict, float, int, str, datetime)):
+            write_params(value, (path / name).with_suffix(".yml"))
         elif isinstance(value, deque):
             # TODO: Remove this option when we use the BMI of SFINCS and deques
             # are no longer needed.
@@ -1227,10 +1227,14 @@ class Bucket:
                     DynamicArray.load(filename),
                 )
             elif filename.suffix == ".npy":
+                value = np.load(filename)
+                if value.ndim == 0:
+                    value = value.item()  # convert to scalar
+
                 setattr(
                     self,
                     filename.stem,
-                    np.load(filename),
+                    value,
                 )
             elif filename.suffixes == [".array", ".zarr"]:
                 value = read_array(filename)
