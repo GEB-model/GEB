@@ -1,5 +1,5 @@
 # dev
-- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies.
+- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode="lakes_only"` or `mode="reservoirs_only"`.
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
 - Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
 - Improve alignment of data that goes into land surface model, reducing memory contention. And various other optimizations in land surface model.

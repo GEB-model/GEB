@@ -1141,9 +1141,9 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_waterbodies(
         self,
-        mode: Literal["on", "off"] = "on",
+        mode: Literal["on", "off", "lakes_only", "reservoirs_only"] = "on",
         command_areas: None | str = None,
-        calculate_command_areas: None | str = None,
+        calculate_command_areas: bool = False,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
         """Set up waterbodies, reservoirs, and command areas.
@@ -1153,19 +1153,9 @@ class Hydrography(BuildModelBase):
         assigning command areas from preset data or by deriving them from the river
         routing network, and updating reservoir storage capacities.
 
-        Notes:
-            If ``mode`` is set to "off", waterbodies are disabled and all
-            waterbody-related grids are filled with missing values.
-            If ``command_areas`` is provided, those geometries are used to
-            define reservoir command areas and mapped onto the model grid and
-            subgrid. If no preset command areas are provided but
-            ``calculate_command_areas`` is true, command areas are derived by
-            propagating reservoir influence along the routing network. If
-            ``custom_reservoir_capacity`` is provided, reservoir volumes are
-            overridden using that table.
-
         Args:
-            mode: Whether to enable waterbodies ("on") or disable them ("off").
+            mode: Whether to enable waterbodies ("on"), disable them ("off"),
+                or include only lakes ("lakes_only") or only reservoirs ("reservoirs_only").
             command_areas: Identifier of the preset command area data in the
                 data catalog. If None, command areas can be calculated from the
                 routing network instead.
@@ -1181,10 +1171,26 @@ class Hydrography(BuildModelBase):
         Raises:
             ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
             ValueError: If command_areas and calculate_command_areas are both provided.
-            ValueError: If mode is not "on" or "off".
+            ValueError: If mode is not "on", "off", "lakes_only", or "reservoirs_only".
+            ValueError: If command areas are requested but mode is "off" or "lakes_only".
         """
-        if mode not in ["on", "off"]:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'on' or 'off'.")
+        if mode not in ["on", "off", "lakes_only", "reservoirs_only"]:
+            raise ValueError(
+                f"Invalid mode: {mode}. Must be 'on', 'off', 'lakes_only', or 'reservoirs_only'."
+            )
+
+        if command_areas is not None and calculate_command_areas:
+            raise ValueError(
+                "Cannot provide both command_areas and calculate_command_areas. Please choose one."
+            )
+
+        if (command_areas is not None or calculate_command_areas) and mode in (
+            "off",
+            "lakes_only",
+        ):
+            raise ValueError(
+                "Command areas cannot be used or calculated when waterbodies are disabled or set to lakes only."
+            )
 
         waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
@@ -1197,15 +1203,6 @@ class Hydrography(BuildModelBase):
                 "geometry",
             ],
         )
-        if (
-            mode == "off"
-        ):  # to keep the dtypes consistent we still load the waterbodies, but we will remove all rows to disable them
-            # remove all rows
-            waterbodies = waterbodies.iloc[0:0]
-        else:
-            # only select waterbodies that intersect with the region
-            waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
-
         hydrolakes_to_geb: dict[int, np.int32] = {
             1: np.int32(LAKE),
             2: np.int32(RESERVOIR),
@@ -1216,6 +1213,23 @@ class Hydrography(BuildModelBase):
             hydrolakes_to_geb
         )
         assert waterbodies["waterbody_type"].dtype == np.int32
+
+        if (
+            mode == "off"
+        ):  # to keep the dtypes consistent we still load the waterbodies, but we will remove all rows to disable them
+            # remove all rows
+            waterbodies = waterbodies.iloc[0:0]
+        elif mode == "lakes_only":
+            waterbodies = waterbodies[waterbodies["waterbody_type"] == LAKE]
+        elif mode == "reservoirs_only":
+            waterbodies = waterbodies[waterbodies["waterbody_type"] == RESERVOIR]
+        else:
+            # only select waterbodies that intersect with the region
+            waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
+
+        print(
+            f"Selected {len(waterbodies)} waterbodies for the model based on mode '{mode}'"
+        )
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
@@ -1228,19 +1242,12 @@ class Hydrography(BuildModelBase):
             all_touched=True,
         )
 
-        sub_waterbody_id: xr.DataArray = rasterize_like(
-            gdf=waterbodies,
-            column="waterbody_id",
-            raster=self.subgrid["mask"],
-            nodata=-1,
-            dtype=np.int32,
-            all_touched=True,
-        )
+        waterbodies_values = waterbody_id.values
+        print(np.unique(waterbodies_values))
 
         self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
-        self.set_subgrid(sub_waterbody_id, name="waterbodies/sub_waterbody_id")
 
-        if mode == "on" and command_areas:
+        if mode in ("on", "reservoirs_only") and command_areas:
             command_areas_gdf: gpd.GeoDataFrame = gpd.read_file(
                 command_areas, mask=self.region
             )
@@ -1296,7 +1303,7 @@ class Hydrography(BuildModelBase):
                 all_touched=True,
             )
 
-        elif mode == "on" and calculate_command_areas:
+        elif mode in ("on", "reservoirs_only") and calculate_command_areas:
             river_graph: DiGraph = get_river_graph(self.data_catalog)
 
             mapped_reservoirs_grid, mapped_reservoirs_subgrid = (
