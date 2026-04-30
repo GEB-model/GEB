@@ -43,11 +43,20 @@ class CMIP6(Adapter):
         Returns:
              A dictionary containing the parameters for the GTSM API call.
         """
+        # Add a buffer to the bounds to ensure we match the extent of the ERA5 data (see buffer in destination_earth.py)
+        buffer: float = 0.5
+        buffered_bounds: tuple[float, float, float, float] = (
+            bounds[0] - buffer,
+            bounds[1] - buffer,
+            bounds[2] + buffer,
+            bounds[3] + buffer,
+        )
+
         area = [
-            bounds[3],
-            bounds[0],
-            bounds[1],
-            bounds[2],
+            buffered_bounds[3],
+            buffered_bounds[0],
+            buffered_bounds[1],
+            buffered_bounds[2],
         ]  # [max_lat, min_lon, min_lat, max_lon]
         request = {
             "temporal_resolution": "monthly",
