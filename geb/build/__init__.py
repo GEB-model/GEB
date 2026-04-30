@@ -3382,7 +3382,11 @@ class GEBModel(
         build_method.log_statistics()
 
     def build(
-        self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
+        self,
+        region: dict,
+        methods: dict[str, dict[str, Any]],
+        continue_: bool,
+        check_required_methods: bool = True,
     ) -> None:
         """Build the model with the specified region and methods.
 
@@ -3390,6 +3394,7 @@ class GEBModel(
             region: A dictionary defining the region to build the model for.
             methods: A dictionary with method names as keys and their parameters as values.
             continue_: Continue previous build if it was interrupted or failed.
+            check_required_methods: If True, check if all required methods are present in methods.
 
         Raises:
             ValueError: If "setup_region" is not in methods when building a new model.
@@ -3402,7 +3407,8 @@ class GEBModel(
             )
         methods["setup_region"].update(region=region)
 
-        build_method.check_required_methods(methods.keys())
+        if check_required_methods:
+            build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
         if (
