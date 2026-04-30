@@ -1107,7 +1107,9 @@ class Forcing(BuildModelBase):
             **kwargs,
         )
 
-    @build_method(depends_on=["set_ssp", "set_time_range"], required=True)
+    @build_method(
+        depends_on=["set_ssp", "set_time_range", "setup_forcing"], required=True
+    )
     def setup_deltas_CMIP6(self) -> None:
         """Sets up the CMIP6 deltas for GEB.
 
@@ -1115,10 +1117,17 @@ class Forcing(BuildModelBase):
         """
         cmip6_deltas = self.data_catalog.fetch(
             "cmip6",
-            self.start_date - relativedelta(years=1),
-            self.end_date,
-            self.grid["mask"].rio.bounds(recalc=True),
-        )
+            bounds=self.grid["mask"].rio.bounds(recalc=True),
+            start_year=self.start_date.year,
+            end_year=self.end_date.year,
+            representative_year=2050,
+        ).read()
+
+        # load the precipitation and near-surface air temperature data
+        precipitation = self.other["climate/pr_kg_per_m2_per_s"].load()
+        near_surface_air_temperature = self.other["climate/tas_2m_K"].load()
+
+        a = 0
 
     def setup_forcing_ERA5(self, create_plots: bool = False) -> None:
         """Sets up the ERA5 forcing data for GEB.
