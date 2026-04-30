@@ -701,8 +701,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": CMIP6(
             folder="cmip6",
             local_version=1,
-            filename="cmip6.parquet",
-            cache="global",
+            filename="cmip6_combined_deltas.nc",
+            cache="local",
         ),
         "url": "https://esgf-node.llnl.gov/search/cmip6-datasets/",
         "source": {
