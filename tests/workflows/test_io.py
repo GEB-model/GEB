@@ -4,7 +4,7 @@ import shutil
 import warnings
 from datetime import datetime
 from pathlib import Path
-from time import sleep, time
+from time import time
 
 import dask.array
 import numpy as np
@@ -18,7 +18,7 @@ from zarr.codecs.numcodecs import FixedScaleOffset
 
 import geb.workflows.io as io_module
 from geb.workflows.io import (
-    AsyncGriddedForcingReader,
+    ForcingReader,
     calculate_scaling,
     create_hash_from_parameters,
     get_window,
@@ -556,112 +556,14 @@ def zarr_file(varname: str) -> Path:
     return file_path
 
 
-def test_read_timestep_async() -> None:
-    """Test the AsyncGriddedForcingReader class with asynchronous reading.
+def test_read_timestep() -> None:
+    """Test the ForcingReader class.
 
-    This test creates three temporary zarr files with a single variable each.
-    It then creates three AsyncGriddedForcingReader instances to read the data from these
-    files. The test reads several timesteps from the first reader, with varying wait times
-    in between to simulate processing time. It also reads timesteps from the other two readers
-    to ensure that they work correctly. Finally, it cleans up the temporary files.
-
-    Reading a previous timestep should be slow, as it needs to be loaded from disk.
-    Reading the same timestep should be quick, as it is already in the cache.
-    Reading the next timestep after a long wait should be quick, as it is already in the cache.
-    Reading the next timestep after a short wait should be semi-quick, as it is already being
-    loaded in the cache but not yet ready.
-
-    """
-    temperature_file: Path = zarr_file("temperature")
-    precipitation_file: Path = zarr_file("precipitation")
-    pressure_file: Path = zarr_file("pressure")
-    reader1: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        temperature_file, variable_name="temperature", asynchronous=True
-    )
-    reader2: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        precipitation_file, variable_name="precipitation", asynchronous=True
-    )
-    reader3: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        pressure_file, variable_name="pressure", asynchronous=True
-    )
-
-    data0, _ = reader1.read_timestep(datetime(2000, 1, 1))
-
-    sleep(3)  # Simulate some processing time
-
-    t0 = time()
-    data1, _ = reader1.read_timestep(datetime(2000, 1, 2))
-    t1 = time()
-    print("Async - Load next timestep (quick): {:.3f}s".format(t1 - t0))
-
-    # wait half the time it took to load the previous timestep to simulate a short
-    # processing time
-    sleep((t1 - t0) / 2)
-
-    t0 = time()
-    data2, _ = reader1.read_timestep(datetime(2000, 1, 3))
-    t1 = time()
-    print(
-        "Async - Load next timestep short waiting (semi-quick): {:.3f}s".format(t1 - t0)
-    )
-
-    assert (data0 == 0).all()
-    assert (data1 == 1).all()
-    assert (data2 == 2).all()
-    assert data0.dtype == np.float32
-
-    sleep(3)
-
-    t0 = time()
-    data3, _ = reader1.read_timestep(datetime(2000, 1, 4))
-    t1 = time()
-    print("Async - Load next timestep with waiting (quick): {:.3f}s".format(t1 - t0))
-
-    t0 = time()
-    data3, _ = reader1.read_timestep(datetime(2000, 1, 4))
-    t1 = time()
-    print("Async - Load same timestep (quick): {:.3f}s".format(t1 - t0))
-    assert (data3 == 3).all()
-
-    t0 = time()
-    data0, _ = reader1.read_timestep(datetime(2000, 1, 6))
-    t1 = time()
-    print("Async - Load next next timestep (slow): {:.3f}s".format(t1 - t0))
-    assert (data0 == 5).all()
-
-    _, _ = reader1.read_timestep(datetime(2000, 1, 1))
-    _, _ = reader2.read_timestep(datetime(2000, 1, 1))
-    _, _ = reader3.read_timestep(datetime(2000, 1, 1))
-
-    sleep(3)  # Simulate some processing time
-    print("-----------------")
-
-    t0 = time()
-    data1, _ = reader1.read_timestep(datetime(2000, 1, 2))
-    _, _ = reader2.read_timestep(datetime(2000, 1, 2))
-    _, _ = reader3.read_timestep(datetime(2000, 1, 2))
-    t1 = time()
-    print("Async - Load data from three readers (quick): {:.3f}s".format(t1 - t0))
-
-    reader1.close()
-    reader2.close()
-    reader3.close()
-
-    shutil.rmtree(temperature_file)
-    shutil.rmtree(precipitation_file)
-    shutil.rmtree(pressure_file)
-
-
-def test_read_timestep_sync() -> None:
-    """Test the AsyncGriddedForcingReader class with synchronous reading.
-
-    This test verifies that the reader works correctly when asynchronous mode is disabled.
+    This test verifies that the reader works correctly by reading several timesteps.
     It should correctly read data without any preloading mechanism.
     """
     temperature_file: Path = zarr_file("temperature")
-    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        temperature_file, variable_name="temperature", asynchronous=False
-    )
+    reader: ForcingReader = ForcingReader(temperature_file, variable_name="temperature")
 
     # Test reading single timesteps
     data0, _ = reader.read_timestep(datetime(2000, 1, 1))
@@ -683,7 +585,6 @@ def test_read_timestep_sync() -> None:
     data10, _ = reader.read_timestep(datetime(2000, 1, 11))
     assert (data10 == 10).all()
 
-    reader.close()
     shutil.rmtree(temperature_file)
 
 
@@ -691,63 +592,37 @@ def test_read_multiple_timesteps() -> None:
     """Test reading multiple timesteps at once (n=1).
 
     This test verifies that the reader correctly handles reading consecutive
-    timesteps in single-step calls, and that the data is correct for both async and sync modes.
+    timesteps in single-step calls.
     """
     temperature_file: Path = zarr_file("temperature")
 
-    # Test with asynchronous reading
-    reader_async: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        temperature_file, variable_name="temperature", asynchronous=True
-    )
+    reader: ForcingReader = ForcingReader(temperature_file, variable_name="temperature")
 
     # Read 1 timestep starting from Jan 1
-    data_multi, _ = reader_async.read_timestep(datetime(2000, 1, 1), n=1)
+    data_multi, _ = reader.read_timestep(datetime(2000, 1, 1), n=1)
     assert data_multi.shape == (1000000, 1)
     assert (data_multi == 0).all()
 
-    sleep(2)  # Allow preloading to happen
-
     # Read next 1 timestep
-    t0 = time()
-    data_multi_next, _ = reader_async.read_timestep(datetime(2000, 1, 2), n=1)
-    t1 = time()
-    print(f"Async - Load next timestep (should be quick): {t1 - t0:.3f}s")
+    data_multi_next, _ = reader.read_timestep(datetime(2000, 1, 2), n=1)
     assert data_multi_next.shape == (1000000, 1)
     assert (data_multi_next == 1).all()
 
-    reader_async.close()
-
-    # Test with synchronous reading
-    reader_sync: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        temperature_file, variable_name="temperature", asynchronous=False
-    )
-
-    # Read 1 timestep starting from Jan 1
-    data_multi_sync, _ = reader_sync.read_timestep(datetime(2000, 1, 1), n=1)
-    assert data_multi_sync.shape == (1000000, 1)
-    assert (data_multi_sync == 0).all()
-
-    # Verify that async and sync give same results
-    assert np.array_equal(data_multi, data_multi_sync), "Async and sync results differ"
-
-    reader_sync.close()
     shutil.rmtree(temperature_file)
 
 
-def test_asyncreader_rapid_access() -> None:
-    """Test rapid access of timesteps using AsyncGriddedForcingReader.
+def test_reader_rapid_access() -> None:
+    """Test rapid access of timesteps using ForcingReader.
 
     This test verifies that the reader can handle rapid sequential access of timesteps
     so no sleeps in between reads.
     """
     temperature_file: Path = zarr_file("temperature")
-    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        temperature_file, variable_name="temperature", asynchronous=True
-    )
+    reader: ForcingReader = ForcingReader(temperature_file, variable_name="temperature")
     for day in range(1, 11):
         data, _ = reader.read_timestep(datetime(2000, 1, day))
         assert (data == day - 1).all()
-    reader.close()
+    shutil.rmtree(temperature_file)
 
 
 HOURLY_CHUNK_SIZE: int = 7 * 24  # one week of hourly data per on-disk chunk
@@ -814,9 +689,10 @@ def test_chunk_aligned_reading_correctness() -> None:
     hourly_file: Path = zarr_file_hourly(varname)
     hours_per_day: int = 24
 
-    for asynchronous in (True, False):
-        reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-            hourly_file, variable_name=varname, asynchronous=asynchronous
+    if True:
+        reader: ForcingReader = ForcingReader(
+            hourly_file,
+            variable_name=varname,
         )
         assert reader.time_chunk_size == HOURLY_CHUNK_SIZE
 
@@ -863,61 +739,44 @@ def test_chunk_aligned_reading_correctness() -> None:
     shutil.rmtree(hourly_file)
 
 
-def test_chunk_aligned_reading_preload_performance() -> None:
-    """Test that chunk-boundary crossings are fast due to background preloading.
+def test_chunk_aligned_reading_performance() -> None:
+    """Test that chunk-aligned reading performs as expected.
 
-    After reading day 7 (last day of chunk 0) with a sufficient sleep to let the
-    background preload of chunk 1 finish, reading day 8 (first day of chunk 1)
-    should be served from the preloaded cache and therefore be substantially faster
-    than a cold disk read.
+    Successive reads within the same chunk should be served from cache.
     """
     varname: str = "temperature_perf"
     hourly_file: Path = zarr_file_hourly(varname)
     hours_per_day: int = 24
 
-    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        hourly_file, variable_name=varname, asynchronous=True
-    )
+    reader: ForcingReader = ForcingReader(hourly_file, variable_name=varname)
 
-    # Read day 7 to populate the cache for chunk 0 and trigger preload of chunk 1.
-    _, _ = reader.read_timestep(datetime(2000, 1, 7), n=hours_per_day)
+    # Initial read to populate cache for chunk 0
+    _, _ = reader.read_timestep(datetime(2000, 1, 1), n=hours_per_day)
 
-    # Sleep long enough for the background preload to finish.
-    sleep(3)
-
-    # Day 8 crosses into chunk 1 - should be fast because it was preloaded.
+    # Read another day in the same chunk - should be fast (cache hit)
     t0: float = time()
-    data_day8, _ = reader.read_timestep(datetime(2000, 1, 8), n=hours_per_day)
+    data_day2, _ = reader.read_timestep(datetime(2000, 1, 2), n=hours_per_day)
     t1: float = time()
-    print(f"Chunk-boundary read (preloaded): {t1 - t0:.4f}s")
+    print(f"Same-chunk cache hit: {t1 - t0:.4f}s")
 
-    # Verify data correctness.
-    offset_day8: int = HOURLY_CHUNK_SIZE
+    # Verify data correctness for day 2
+    offset_day2: int = 24
     for h in range(hours_per_day):
-        assert (data_day8[:, h] == float(offset_day8 + h)).all()
-
-    # Read same day again (cache hit) - must be essentially instant.
-    t0 = time()
-    data_day8_cached, _ = reader.read_timestep(datetime(2000, 1, 8), n=hours_per_day)
-    t1 = time()
-    print(f"Same-day cache hit: {t1 - t0:.4f}s")
-    assert np.array_equal(data_day8, data_day8_cached)
+        assert (data_day2[:, h] == float(offset_day2 + h)).all()
 
     reader.close()
     shutil.rmtree(hourly_file)
 
 
-def test_async_gridded_forcing_reader_get_index_fast_paths() -> None:
+def test_gridded_forcing_reader_get_index_fast_paths() -> None:
     """Test the fast paths in get_index for current and next chunks."""
     varname: str = "test_get_index"
     hourly_file: Path = zarr_file_hourly(varname)
 
-    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        hourly_file, variable_name=varname, asynchronous=False
-    )
+    reader: ForcingReader = ForcingReader(hourly_file, variable_name=varname)
 
     # Initial state: current_chunk_start_index is -1
-    assert reader.current_chunk_start_index == -1
+    assert reader.current_chunk_index == -1
 
     # Search for a date in the middle of the first chunk (chunk 0: 0-167)
     date_chunk0 = datetime(2000, 1, 4)  # day 4, hour 0 -> index 72
@@ -927,7 +786,7 @@ def test_async_gridded_forcing_reader_get_index_fast_paths() -> None:
     # Now read a timestep to set current_chunk_start_index
     _, _ = reader.read_timestep(datetime(2000, 1, 1), n=1)
     # HOURLY_CHUNK_SIZE is 168 (7 days)
-    assert reader.current_chunk_start_index == 0
+    assert reader.current_chunk_index == 0
 
     # Fast path 1: same chunk
     idx0_fast = reader.get_index(date_chunk0)
@@ -943,7 +802,7 @@ def test_async_gridded_forcing_reader_get_index_fast_paths() -> None:
     _, _ = reader.read_timestep(
         datetime(2000, 1, 8), n=1
     )  # Sets current_chunk to chunk 1 (index 168)
-    assert reader.current_chunk_start_index == 168
+    assert reader.current_chunk_index == 168 // reader.time_chunk_size
 
     # Fast path 1 (now chunk 1)
     idx1_fast = reader.get_index(date_chunk1)
@@ -975,13 +834,11 @@ def test_async_gridded_forcing_reader_full_chunk_consumption() -> None:
     hourly_file: Path = zarr_file_hourly(varname)
 
     # Test asynchronous mode
-    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        hourly_file, variable_name=varname, asynchronous=True
-    )
+    reader: ForcingReader = ForcingReader(hourly_file, variable_name=varname)
 
     # Initially no chunk is cached or preloaded
-    assert reader.current_chunk_start_index == -1
-    assert reader.preloaded_chunk_start_index == -1
+    assert reader.current_chunk_index == -1
+    pass
 
     # 1. Consume the first full chunk (7 days = 168 hours)
     # This falls into the fallback path in read_timestep_async (n == chunk_size, offset == 0)
@@ -989,9 +846,9 @@ def test_async_gridded_forcing_reader_full_chunk_consumption() -> None:
     _, _ = reader.read_timestep(datetime(2000, 1, 1), n=HOURLY_CHUNK_SIZE)
 
     # Check that current_chunk_start_index is set to 0
-    assert reader.current_chunk_start_index == 0
+    assert reader.current_chunk_index == 0
     # Check that it triggered preload of the next chunk (index 168)
-    assert reader.preloaded_chunk_start_index == 168
+    pass  # 168
 
     # 2. Wait a bit and check if we have a preload hit for the next chunk
     from time import sleep
@@ -1004,22 +861,20 @@ def test_async_gridded_forcing_reader_full_chunk_consumption() -> None:
     # and that the next preload is triggered)
     _, _ = reader.read_timestep(datetime(2000, 1, 8), n=1)
 
-    assert reader.current_chunk_start_index == 168
-    assert reader.preloaded_chunk_start_index == 168 + HOURLY_CHUNK_SIZE
+    assert reader.current_chunk_index == 168 // reader.time_chunk_size
+    pass  # 168 + HOURLY_CHUNK_SIZE
 
     reader.close()
 
     # Test synchronous mode
-    reader_sync: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        hourly_file, variable_name=varname, asynchronous=False
-    )
+    reader_sync: ForcingReader = ForcingReader(hourly_file, variable_name=varname)
 
     # Initially no chunk is cached
-    assert reader_sync.current_chunk_start_index == -1
+    assert reader_sync.current_chunk_index == -1
 
     # Consume full chunk
     _, _ = reader_sync.read_timestep(datetime(2000, 1, 1), n=HOURLY_CHUNK_SIZE)
-    assert reader_sync.current_chunk_start_index == 0
+    assert reader_sync.current_chunk_index == 0
 
     reader_sync.close()
     shutil.rmtree(hourly_file)
@@ -1035,9 +890,7 @@ def test_chunk_aligned_reading_within_same_day() -> None:
     hourly_file: Path = zarr_file_hourly(varname)
     hours_per_day: int = 24
 
-    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        hourly_file, variable_name=varname, asynchronous=True
-    )
+    reader: ForcingReader = ForcingReader(hourly_file, variable_name=varname)
 
     # First read: cold load of chunk 0.
     data_a, _ = reader.read_timestep(datetime(2000, 1, 3), n=hours_per_day)
@@ -1067,16 +920,17 @@ def test_chunk_boundary_spanning_request() -> None:
     hourly_file: Path = zarr_file_hourly(varname)
     hours_per_day: int = 24
 
-    for asynchronous in (True, False):
-        reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-            hourly_file, variable_name=varname, asynchronous=asynchronous
+    if True:
+        reader: ForcingReader = ForcingReader(
+            hourly_file,
+            variable_name=varname,
         )
         assert reader.time_chunk_size == HOURLY_CHUNK_SIZE
 
         # Start at hour 156 (= HOURLY_CHUNK_SIZE - 12): asking for 24 h straddles
         # the boundary between chunk 0 (0-167) and chunk 1 (168-335).
         straddle_start: datetime = datetime(2000, 1, 7, 12)  # hour 156
-        with pytest.raises(ValueError, match="not aligned with the chunk size"):
+        with pytest.raises(ValueError, match="straddles chunk boundaries"):
             reader.read_timestep(straddle_start, n=hours_per_day)
 
         reader.close()
@@ -1099,9 +953,10 @@ def test_first_request_mid_chunk() -> None:
     mid_chunk_start: datetime = datetime(2000, 1, 9, 0)  # hour 192
     start_value: int = 192
 
-    for asynchronous in (True, False):
-        reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-            hourly_file, variable_name=varname, asynchronous=asynchronous
+    if True:
+        reader: ForcingReader = ForcingReader(
+            hourly_file,
+            variable_name=varname,
         )
 
         # Cold cache, first request lands in the middle of chunk 1.
