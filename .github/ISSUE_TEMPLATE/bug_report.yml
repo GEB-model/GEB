@@ -17,10 +17,11 @@ body:
     id: steps
     attributes:
       label: Steps to Reproduce
-      description: Please provide the steps to reproduce the behavior. Include your build.yml and config.yml below if a model must be build to reproduce the issue.
+      description: Please provide the steps to reproduce the behavior. Also include the branch you are working on, especially if not the main branch. Did you also try in the latest main branch?
       placeholder: |
-        1. Run 'geb build' with config '...' (see attached config file)
-        2. ...
+        1. Use branch 'main'
+        2. Run 'geb build' with config '...' (see attached config file)
+        3. ...
     validations:
       required: true
   - type: textarea
