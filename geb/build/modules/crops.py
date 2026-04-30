@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -34,7 +35,6 @@ from geb.workflows.raster import (
 from ..workflows.conversions import TRADE_REGIONS
 from ..workflows.crop_calendars import (
     donate_and_receive_crop_prices,
-    parse_MIRCA2000_crop_calendar,
 )
 from ..workflows.farmers import get_farm_locations
 from .base import BuildModelBase
@@ -1681,20 +1681,43 @@ class Crops(BuildModelBase):
         """
         n_farmers = self.array["agents/farmers/region_id"].size
 
-        MIRCA_unit_grid = (
-            self.data_catalog.fetch("mirca2000_unit_grid").read().astype(np.int32)
-        ).isel(band=0)
-        assert isinstance(MIRCA_unit_grid, xr.DataArray)
+        # Load MIRCA-OS data for the given year
+        MIRCA_unit_geom = self.data_catalog.fetch(
+            f"mirca_os_admin_boundaries_{year}"
+        ).read()
+        assert isinstance(MIRCA_unit_geom, gpd.GeoDataFrame)
 
-        MIRCA_unit_grid = MIRCA_unit_grid.isel(
-            get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=100)
+        # select only what is within the model bounds
+        minx, miny, maxx, maxy = self.bounds
+        MIRCA_unit_geom = MIRCA_unit_geom.cx[minx:maxx, miny:maxy]
+
+        rainfed_source = self.data_catalog.fetch(
+            f"mirca_os_crop_calendar_{year}_rf"
+        ).read()
+        rainfed_source = rainfed_source[
+            rainfed_source["unit_code"].isin(MIRCA_unit_geom["unit_code"])
+        ]
+        irrigated_source = self.data_catalog.fetch(
+            f"mirca_os_crop_calendar_{year}_ir"
+        ).read()
+        irrigated_source = irrigated_source[
+            irrigated_source["unit_code"].isin(MIRCA_unit_geom["unit_code"])
+        ]
+
+        # Convert DF to list of strings for parse_MIRCA_file compatibility
+        # This is a bit hacky, maybe update parse_MIRCA_file to handle DataFrames later
+        rainfed_lines = rainfed_source.to_csv(index=False).splitlines()
+        irrigated_lines = irrigated_source.to_csv(index=False).splitlines()
+
+        crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
+        from geb.build.workflows.crop_calendars import parse_MIRCA_file
+
+        MIRCA_units = np.unique(MIRCA_unit_grid.values).tolist()
+        crop_calendar = parse_MIRCA_file(
+            crop_calendar, rainfed_lines, MIRCA_units, is_irrigated=False
         )
-
-        crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = (
-            parse_MIRCA2000_crop_calendar(
-                self.data_catalog,
-                MIRCA_units=np.unique(MIRCA_unit_grid.values).tolist(),
-            )
+        crop_calendar = parse_MIRCA_file(
+            crop_calendar, irrigated_lines, MIRCA_units, is_irrigated=True
         )
 
         def fix_365_in_crop_calendar(

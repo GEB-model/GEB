@@ -8,11 +8,11 @@ import rioxarray  # noqa: F401
 from .base import Adapter
 
 
-class MIRCAOS(Adapter):
+class MIRCAOSHarvestedGrids(Adapter):
     """Adapter for MIRCA-OS datasets."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize the MIRCAOS adapter.
+        """Initialize the MIRCAOSHarvestedGrids adapter.
 
         Args:
             *args: Positional arguments to pass to the Adapter constructor.
