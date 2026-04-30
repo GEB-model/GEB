@@ -11,7 +11,6 @@ import xarray as xr
 
 from .base import Adapter
 
-
 mapping_variables_to_cdf = {
     "near_surface_air_temperature": "tas",
     "precipitation": "pr",
@@ -29,7 +28,7 @@ class CMIP6(Adapter):
         self,
         years: list[int],
         bounds: tuple[float, float, float, float],
-        variable,
+        variable: str,
         experiment: str = "historical",
         model: str = "gfdl_esm4",
     ) -> dict[str, Any]:
@@ -44,7 +43,6 @@ class CMIP6(Adapter):
         Returns:
              A dictionary containing the parameters for the GTSM API call.
         """
-
         area = [
             bounds[3],
             bounds[0],
@@ -94,12 +92,12 @@ class CMIP6(Adapter):
 
     def calculate_deltas(
         self,
-        variable,
-        historical_data_path,
-        future_data_path,
-        start_year,
-        end_year,
-        representative_year,
+        variable: str,
+        historical_data_path: Path,
+        future_data_path: Path,
+        start_year: int,
+        end_year: int,
+        representative_year: int = 2050,
     ) -> xr.Dataset:
         """Calculate the {variable} deltas from the historical and future CMIP6 data.
 
@@ -174,13 +172,11 @@ class CMIP6(Adapter):
 
         return delta
 
-    def combine_deltas_and_write_to_file(self, deltas: dict[str, xr.Dataset]):
+    def combine_deltas_and_write_to_file(self, deltas: dict[str, xr.Dataset]) -> None:
         """Combine the individual variable deltas into a single xarray Dataset and write it to a NetCDF file.
 
         Args:
             deltas: A dictionary mapping variable names to their corresponding delta xarray Datasets.
-        Returns:
-            An xarray Dataset containing all the combined deltas.
         """
         combined = xr.Dataset()
         for variable, delta in deltas.items():
@@ -277,5 +273,10 @@ class CMIP6(Adapter):
         self.combine_deltas_and_write_to_file(deltas)
         return self
 
-    def read(self, *args, **kwargs):
-        return xr.open_dataset(self.path, **kwargs)
+    def read(self) -> xr.Dataset:
+        """Read the processed CMIP6 deltas from the local cache.
+
+        Returns:
+            An xarray Dataset containing the CMIP6 deltas.
+        """
+        return xr.open_dataset(self.path)
