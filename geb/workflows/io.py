@@ -1092,10 +1092,7 @@ def get_window(
 
 
 class ForcingReader:
-    """Thread-safe Zarr forcing reader with chunk-aligned caching.
-
-    Simplified reader that uses standard synchronous Zarr calls.
-    """
+    """Zarr forcing reader with chunk-aligned caching."""
 
     array: zarr.Array
 
@@ -1228,7 +1225,7 @@ class ForcingReader:
             n: The number of consecutive timesteps to read starting from date.
 
         Returns:
-            A tuple of (data, timestamp) where data is a 2D array of shape (lat, lon) and timestamp is the datetime64 of the first timestep.
+            A tuple of (data, timestamp) where data is a 1D array of makes size and timestamp is the datetime64 of the first timestep.
 
         Raises:
             ValueError: If the requested range straddles chunk boundaries or exceeds available range.

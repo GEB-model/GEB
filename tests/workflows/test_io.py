@@ -689,52 +689,47 @@ def test_chunk_aligned_reading_correctness() -> None:
     hourly_file: Path = zarr_file_hourly(varname)
     hours_per_day: int = 24
 
-    if True:
-        reader: ForcingReader = ForcingReader(
-            hourly_file,
-            variable_name=varname,
+    reader: ForcingReader = ForcingReader(
+        hourly_file,
+        variable_name=varname,
+    )
+    assert reader.time_chunk_size == HOURLY_CHUNK_SIZE
+
+    # Day 1: hours 0-23, first slice of chunk 0
+    data_day1, _ = reader.read_timestep(datetime(2000, 1, 1), n=hours_per_day)
+    assert data_day1.shape == (16, hours_per_day)
+    for h in range(hours_per_day):
+        assert (data_day1[:, h] == float(h)).all(), f"day1 hour {h} wrong"
+
+    # Day 2: hours 24-47, still within chunk 0 (served from cache)
+    data_day2, _ = reader.read_timestep(datetime(2000, 1, 2), n=hours_per_day)
+    for h in range(hours_per_day):
+        assert (data_day2[:, h] == float(hours_per_day + h)).all(), (
+            f"day2 hour {h} wrong"
         )
-        assert reader.time_chunk_size == HOURLY_CHUNK_SIZE
 
-        # Day 1: hours 0-23, first slice of chunk 0
-        data_day1, _ = reader.read_timestep(datetime(2000, 1, 1), n=hours_per_day)
-        assert data_day1.shape == (16, hours_per_day)
-        for h in range(hours_per_day):
-            assert (data_day1[:, h] == float(h)).all(), f"day1 hour {h} wrong"
+    # Day 7: hours 144-167, last day of chunk 0 (still from cache)
+    data_day7, _ = reader.read_timestep(datetime(2000, 1, 7), n=hours_per_day)
+    offset_day7: int = 6 * hours_per_day
+    for h in range(hours_per_day):
+        assert (data_day7[:, h] == float(offset_day7 + h)).all(), f"day7 hour {h} wrong"
 
-        # Day 2: hours 24-47, still within chunk 0 (served from cache)
-        data_day2, _ = reader.read_timestep(datetime(2000, 1, 2), n=hours_per_day)
-        for h in range(hours_per_day):
-            assert (data_day2[:, h] == float(hours_per_day + h)).all(), (
-                f"day2 hour {h} wrong"
-            )
+    # Day 8: hours 168-191, first day of chunk 1
+    data_day8, _ = reader.read_timestep(datetime(2000, 1, 8), n=hours_per_day)
+    offset_day8: int = HOURLY_CHUNK_SIZE  # start of chunk 1
+    for h in range(hours_per_day):
+        assert (data_day8[:, h] == float(offset_day8 + h)).all(), f"day8 hour {h} wrong"
 
-        # Day 7: hours 144-167, last day of chunk 0 (still from cache)
-        data_day7, _ = reader.read_timestep(datetime(2000, 1, 7), n=hours_per_day)
-        offset_day7: int = 6 * hours_per_day
-        for h in range(hours_per_day):
-            assert (data_day7[:, h] == float(offset_day7 + h)).all(), (
-                f"day7 hour {h} wrong"
-            )
+    # Non-sequential jump to week 3, day 1 (chunk 2)
+    week3_start: datetime = datetime(2000, 1, 15)  # 14 days * 24h = index 336
+    data_week3, _ = reader.read_timestep(week3_start, n=hours_per_day)
+    offset_week3: int = 2 * HOURLY_CHUNK_SIZE
+    for h in range(hours_per_day):
+        assert (data_week3[:, h] == float(offset_week3 + h)).all(), (
+            f"week3 hour {h} wrong"
+        )
 
-        # Day 8: hours 168-191, first day of chunk 1
-        data_day8, _ = reader.read_timestep(datetime(2000, 1, 8), n=hours_per_day)
-        offset_day8: int = HOURLY_CHUNK_SIZE  # start of chunk 1
-        for h in range(hours_per_day):
-            assert (data_day8[:, h] == float(offset_day8 + h)).all(), (
-                f"day8 hour {h} wrong"
-            )
-
-        # Non-sequential jump to week 3, day 1 (chunk 2)
-        week3_start: datetime = datetime(2000, 1, 15)  # 14 days * 24h = index 336
-        data_week3, _ = reader.read_timestep(week3_start, n=hours_per_day)
-        offset_week3: int = 2 * HOURLY_CHUNK_SIZE
-        for h in range(hours_per_day):
-            assert (data_week3[:, h] == float(offset_week3 + h)).all(), (
-                f"week3 hour {h} wrong"
-            )
-
-        reader.close()
+    reader.close()
 
     shutil.rmtree(hourly_file)
 
@@ -828,58 +823,6 @@ def test_gridded_forcing_reader_get_index_fast_paths() -> None:
     shutil.rmtree(hourly_file)
 
 
-def test_async_gridded_forcing_reader_full_chunk_consumption() -> None:
-    """Test that consuming a full chunk in one go correctly updates cache and preload state."""
-    varname: str = "test_full_chunk"
-    hourly_file: Path = zarr_file_hourly(varname)
-
-    # Test asynchronous mode
-    reader: ForcingReader = ForcingReader(hourly_file, variable_name=varname)
-
-    # Initially no chunk is cached or preloaded
-    assert reader.current_chunk_index == -1
-    pass
-
-    # 1. Consume the first full chunk (7 days = 168 hours)
-    # This falls into the fallback path in read_timestep_async (n == chunk_size, offset == 0)
-    # but still happens to be chunk-aligned.
-    _, _ = reader.read_timestep(datetime(2000, 1, 1), n=HOURLY_CHUNK_SIZE)
-
-    # Check that current_chunk_start_index is set to 0
-    assert reader.current_chunk_index == 0
-    # Check that it triggered preload of the next chunk (index 168)
-    pass  # 168
-
-    # 2. Wait a bit and check if we have a preload hit for the next chunk
-    from time import sleep
-
-    sleep(1.0)
-
-    # Accessing the first timestep of the next chunk should now hit the preload
-    # We can check this by verifying that the preload_hit logic path is taken
-    # (Since we can't easily check prints, we check that it doesn't crash
-    # and that the next preload is triggered)
-    _, _ = reader.read_timestep(datetime(2000, 1, 8), n=1)
-
-    assert reader.current_chunk_index == 168 // reader.time_chunk_size
-    pass  # 168 + HOURLY_CHUNK_SIZE
-
-    reader.close()
-
-    # Test synchronous mode
-    reader_sync: ForcingReader = ForcingReader(hourly_file, variable_name=varname)
-
-    # Initially no chunk is cached
-    assert reader_sync.current_chunk_index == -1
-
-    # Consume full chunk
-    _, _ = reader_sync.read_timestep(datetime(2000, 1, 1), n=HOURLY_CHUNK_SIZE)
-    assert reader_sync.current_chunk_index == 0
-
-    reader_sync.close()
-    shutil.rmtree(hourly_file)
-
-
 def test_chunk_aligned_reading_within_same_day() -> None:
     """Test that multiple reads within the same day (same chunk) are served from cache.
 
@@ -920,20 +863,19 @@ def test_chunk_boundary_spanning_request() -> None:
     hourly_file: Path = zarr_file_hourly(varname)
     hours_per_day: int = 24
 
-    if True:
-        reader: ForcingReader = ForcingReader(
-            hourly_file,
-            variable_name=varname,
-        )
-        assert reader.time_chunk_size == HOURLY_CHUNK_SIZE
+    reader: ForcingReader = ForcingReader(
+        hourly_file,
+        variable_name=varname,
+    )
+    assert reader.time_chunk_size == HOURLY_CHUNK_SIZE
 
-        # Start at hour 156 (= HOURLY_CHUNK_SIZE - 12): asking for 24 h straddles
-        # the boundary between chunk 0 (0-167) and chunk 1 (168-335).
-        straddle_start: datetime = datetime(2000, 1, 7, 12)  # hour 156
-        with pytest.raises(ValueError, match="straddles chunk boundaries"):
-            reader.read_timestep(straddle_start, n=hours_per_day)
+    # Start at hour 156 (= HOURLY_CHUNK_SIZE - 12): asking for 24 h straddles
+    # the boundary between chunk 0 (0-167) and chunk 1 (168-335).
+    straddle_start: datetime = datetime(2000, 1, 7, 12)  # hour 156
+    with pytest.raises(ValueError, match="straddles chunk boundaries"):
+        reader.read_timestep(straddle_start, n=hours_per_day)
 
-        reader.close()
+    reader.close()
 
     shutil.rmtree(hourly_file)
 
@@ -953,31 +895,26 @@ def test_first_request_mid_chunk() -> None:
     mid_chunk_start: datetime = datetime(2000, 1, 9, 0)  # hour 192
     start_value: int = 192
 
-    if True:
-        reader: ForcingReader = ForcingReader(
-            hourly_file,
-            variable_name=varname,
-        )
+    reader: ForcingReader = ForcingReader(
+        hourly_file,
+        variable_name=varname,
+    )
 
-        # Cold cache, first request lands in the middle of chunk 1.
-        data, _ = reader.read_timestep(mid_chunk_start, n=hours_per_day)
-        assert data.shape == (16, hours_per_day)
-        for h in range(hours_per_day):
-            assert (data[:, h] == float(start_value + h)).all(), (
-                f"async={asynchronous} hour {h}: expected {start_value + h}"
-            )
+    # Cold cache, first request lands in the middle of chunk 1.
+    data, _ = reader.read_timestep(mid_chunk_start, n=hours_per_day)
+    assert data.shape == (16, hours_per_day)
+    for h in range(hours_per_day):
+        assert (data[:, h] == float(start_value + h)).all()
 
-        # Verify the chunk is now cached by reading another day inside the same chunk.
-        # hour 216 = chunk 1 offset 48. 216 % 24 == 0.
-        next_day_start: datetime = datetime(2000, 1, 10, 0)  # hour 216
-        data_next, _ = reader.read_timestep(next_day_start, n=hours_per_day)
-        assert data_next.shape == (16, hours_per_day)
-        for h in range(hours_per_day):
-            assert (data_next[:, h] == float(216 + h)).all(), (
-                f"async={asynchronous} intra-chunk hour {h}: expected {216 + h}"
-            )
+    # Verify the chunk is now cached by reading another day inside the same chunk.
+    # hour 216 = chunk 1 offset 48. 216 % 24 == 0.
+    next_day_start: datetime = datetime(2000, 1, 10, 0)  # hour 216
+    data_next, _ = reader.read_timestep(next_day_start, n=hours_per_day)
+    assert data_next.shape == (16, hours_per_day)
+    for h in range(hours_per_day):
+        assert (data_next[:, h] == float(216 + h)).all()
 
-        reader.close()
+    reader.close()
 
     shutil.rmtree(hourly_file)
 
