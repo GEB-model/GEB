@@ -19,7 +19,7 @@ from geb.geb_types import (
 from geb.workflows.io import read_grid, read_table
 
 from .module import Module
-from .workflows.io import AsyncGriddedForcingReader
+from .workflows.io import ForcingReader
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -254,8 +254,8 @@ class ForcingLoader(ABC):
         self.n: int = n
         self.variable: str = variable
         self.grid_mask = grid_mask
-        self.reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-            model.files["other"][f"climate/{variable}"], variable, asynchronous=True
+        self.reader: ForcingReader = ForcingReader(
+            model.files["other"][f"climate/{variable}"], variable
         )
         self.forcing_mask = self._load_forcing_mask()
 

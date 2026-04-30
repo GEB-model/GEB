@@ -1,0 +1,34 @@
+name: Cross-platform Installation Test
+
+on:
+  push:
+    paths:
+      - 'uv.lock'
+  pull_request:
+    paths:
+      - 'uv.lock'
+  workflow_dispatch:
+
+jobs:
+  install-test:
+    name: Install on ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install the project
+        run: uv sync --all-extras --dev
+
+      - name: Verify installation
+        run: uv run geb --help
