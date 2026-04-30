@@ -640,7 +640,7 @@ class LandSurface(BuildModelBase):
 
             leaf_area_index = leaf_area_index.astype(np.float32)
             leaf_area_index = convert_nodata(leaf_area_index, np.nan)
-            leaf_area_index = interpolate_na_along_dim(leaf_area_index, dim="time")
+            leaf_area_index = interpolate_na_along_dim(leaf_area_index)
             leaf_area_index = resample_like(
                 leaf_area_index,
                 self.grid["mask"],

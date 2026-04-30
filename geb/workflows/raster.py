@@ -985,14 +985,17 @@ def pad_xy(
         return superset
 
 
-def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArray:
+def interpolate_na_along_dim(
+    da: xr.DataArray, mask: xr.DataArray | None = None
+) -> xr.DataArray:
     """Interpolate NaN values along the time dimension of a DataArray.
 
     Uses nearest neighbor interpolation in the spatial dimensions for each time slice.
 
     Args:
-        da: The input 3D DataArray with dimensions (dim, y, x) and NaN values to interpolate.
-        dim: The dimension along which to interpolate NaN values. Default is 'time'.
+        da: The input 3D DataArray with dimensions (time, y, x) and NaN values to interpolate.
+        mask: Optional spatial mask with True where interpolation should be performed.
+            The interpolation will only use values from cells where the mask is True.
 
     Returns:
         A new DataArray with NaN values interpolated along the dimension.
@@ -1006,47 +1009,92 @@ def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArra
     nodata = da.attrs["_FillValue"]
 
     def fillna_nearest_2d(
-        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...], nodata: float
+        arr: TwoDArrayFloat32 | TwoDArrayFloat64,
+        mask: np.ndarray | None = None,
+        *,
+        nodata: float,
     ) -> TwoDArrayFloat32 | TwoDArrayFloat64:
         """Fill NaN values in a 2D array using nearest neighbor interpolation.
 
         Args:
-            arr: The input 2D array with NaN values.
-            dims: The dimensions of the array.
+            arr: The input 3D array (time, y, x) or 2D slice (y, x).
+            mask: Optional mask with True where interpolation should be performed.
             nodata: The nodata value to treat as missing.
 
         Returns:
             The array with NaN values filled.
         """
-        mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
-        if not mask.any():
+        is_nodata = np.isnan(arr) if np.isnan(nodata) else arr == nodata
+        if not is_nodata.any():
             return arr
 
-        assert dims == (dim, "y", "x")
+        # When using apply_ufunc with dask='parallelized', the function may receive
+        # a 3D array (time, y, x) if 'time' is a broadcast dimension.
+        if arr.ndim == 3:
+            for idx in range(arr.shape[0]):
+                mask_slice = is_nodata[idx]
+                dim_slice = arr[idx]
 
-        for idx in range(arr.shape[0]):
-            mask_slice = mask[idx]
-            dim_slice = arr[idx]
+                if mask is not None:
+                    # Only fill cells within the mask, using only data from within the mask
+                    m_slice = mask_slice & mask
+                    known_mask = (~is_nodata[idx]) & mask
+                else:
+                    m_slice = mask_slice
+                    known_mask = ~mask_slice
 
-            y, x = np.indices(dim_slice.shape)
-            known_x, known_y = x[~mask_slice], y[~mask_slice]
-            known_v = dim_slice[~mask_slice]
-            missing_x, missing_y = x[mask_slice], y[mask_slice]
+                if not m_slice.any() or not known_mask.any():
+                    continue
 
-            filled_values = griddata(
-                (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
-            )
-            arr[idx][mask_slice] = filled_values
+                y, x = np.indices(dim_slice.shape)
+                known_x, known_y = x[known_mask], y[known_mask]
+                known_v = dim_slice[known_mask]
+                missing_x, missing_y = x[m_slice], y[m_slice]
+
+                filled_values = griddata(
+                    (known_x, known_y),
+                    known_v,
+                    (missing_x, missing_y),
+                    method="nearest",
+                )
+                arr[idx][m_slice] = filled_values
+        else:
+            # 2D case (single slice)
+            if mask is not None:
+                m_slice = is_nodata & mask
+                known_mask = (~is_nodata) & mask
+            else:
+                m_slice = is_nodata
+                known_mask = ~is_nodata
+
+            if m_slice.any() and known_mask.any():
+                y, x = np.indices(arr.shape)
+                known_x, known_y = x[known_mask], y[known_mask]
+                known_v = arr[known_mask]
+                missing_x, missing_y = x[m_slice], y[m_slice]
+
+                filled_values = griddata(
+                    (known_x, known_y),
+                    known_v,
+                    (missing_x, missing_y),
+                    method="nearest",
+                )
+                arr[m_slice] = filled_values
         return arr
+
+    input_core_dims = [["y", "x"]]
+    input_args = [da]
+    if mask is not None:
+        input_args.append(mask)
+        input_core_dims.append(["y", "x"])
 
     da = xr.apply_ufunc(
         fillna_nearest_2d,
-        da,
+        *input_args,
         dask="parallelized",  # Enable parallelized computation
-        input_core_dims=[["y", "x"]],
+        input_core_dims=input_core_dims,
         output_core_dims=[["y", "x"]],
         kwargs={
-            "dims": da.dims,
             "nodata": nodata,
         },  # Additional arguments for the function
         output_dtypes=[da.dtype],
@@ -1055,38 +1103,54 @@ def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArra
     return da
 
 
-def fillna_2d(arr: np.ndarray, nodata: float) -> np.ndarray:
+def fillna_2d(
+    arr: np.ndarray, nodata: float, mask: np.ndarray | None = None
+) -> np.ndarray:
     """Interpolate NaN values in a 2D numpy array using nearest neighbor interpolation.
 
     Args:
         arr: The input 2D array with NaN values.
         nodata: The nodata value to treat as missing.
+        mask: Optional mask with True where interpolation should be performed.
 
     Returns:
         A new 2D NumPy array with missing values interpolated.
     """
-    mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
+    is_nodata = np.isnan(arr) if np.isnan(nodata) else arr == nodata
 
-    if not mask.any():
+    if not is_nodata.any():
         return arr
-    if mask.all():
+    if is_nodata.all():
+        return arr
+
+    if mask is not None:
+        mask_slice = is_nodata & mask
+        known_mask = (~is_nodata) & mask
+    else:
+        # If no mask is provided, use all non-nodata cells as sources
+        mask_slice = is_nodata
+        known_mask = ~is_nodata
+
+    if not mask_slice.any() or not known_mask.any():
         return arr
 
     y, x = np.indices(arr.shape)
-    known_x, known_y = x[~mask], y[~mask]
-    known_v = arr[~mask]
-    missing_x, missing_y = x[mask], y[mask]
+    known_x, known_y = x[known_mask], y[known_mask]
+    known_v = arr[known_mask]
+    missing_x, missing_y = x[mask_slice], y[mask_slice]
 
     filled_values = griddata(
         (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
     )
     arr_filled = arr.copy()
-    arr_filled[mask] = filled_values
+    arr_filled[mask_slice] = filled_values
     return arr_filled
 
 
 def interpolate_na_2d(
-    da: xr.DataArray, buffer: int | tuple[int, int] = 0
+    da: xr.DataArray,
+    buffer: int | tuple[int, int] = 0,
+    mask: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Interpolate NaN values in a 2D DataArray using nearest neighbor interpolation.
 
@@ -1096,6 +1160,8 @@ def interpolate_na_2d(
             effective overlap is capped per axis to the raster extent so large
             requested buffers remain valid for small arrays. If a tuple is
             provided, it is interpreted as ``(buffer_y, buffer_x)``.
+        mask: Optional spatial mask with True where interpolation should be performed.
+            The interpolation will only use values from cells where the mask is True.
 
     Returns:
         A new DataArray with NaN values interpolated.
@@ -1125,7 +1191,8 @@ def interpolate_na_2d(
         )
 
     if da.chunks is None:
-        filled_values = fillna_2d(np.asarray(da.data), nodata=nodata)
+        mask_val = mask.values if mask is not None else None
+        filled_values = fillna_2d(np.asarray(da.data), nodata=nodata, mask=mask_val)
         result = da.copy(data=filled_values)
         result.attrs = da.attrs.copy()
         return result
@@ -1135,15 +1202,27 @@ def interpolate_na_2d(
         1: min(buffer_x, max(da.sizes["x"] - 1, 0)),
     }
 
-    filled_data = dask_array.map_overlap(
-        fillna_2d,
-        da.data,
-        depth=overlap_depth,
-        boundary="none",
-        trim=True,
-        dtype=da.dtype,
-        nodata=nodata,
-    )
+    map_overlap_kwargs = {
+        "depth": overlap_depth,
+        "boundary": "none",
+        "trim": True,
+        "dtype": da.dtype,
+        "nodata": nodata,
+    }
+
+    if mask is not None:
+        filled_data = dask_array.map_overlap(
+            fillna_2d,
+            da.data,
+            mask.data,
+            **map_overlap_kwargs,
+        )
+    else:
+        filled_data = dask_array.map_overlap(
+            fillna_2d,
+            da.data,
+            **map_overlap_kwargs,
+        )
 
     result = da.copy(data=filled_data)
     result.attrs = da.attrs.copy()
