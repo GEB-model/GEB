@@ -1223,13 +1223,9 @@ class Hydrography(BuildModelBase):
             waterbodies = waterbodies[waterbodies["waterbody_type"] == LAKE]
         elif mode == "reservoirs_only":
             waterbodies = waterbodies[waterbodies["waterbody_type"] == RESERVOIR]
-        else:
-            # only select waterbodies that intersect with the region
-            waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
 
-        print(
-            f"Selected {len(waterbodies)} waterbodies for the model based on mode '{mode}'"
-        )
+        # only select waterbodies that intersect with the region
+        waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
@@ -1241,9 +1237,6 @@ class Hydrography(BuildModelBase):
             dtype=np.int32,
             all_touched=True,
         )
-
-        waterbodies_values = waterbody_id.values
-        print(np.unique(waterbodies_values))
 
         self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
 
@@ -1349,7 +1342,7 @@ class Hydrography(BuildModelBase):
         self.set_grid(command_area_raster, name="waterbodies/command_area")
         self.set_subgrid(subcommand_area_raster, name="waterbodies/subcommand_areas")
 
-        if mode == "on" and custom_reservoir_capacity:
+        if mode in ("on", "reservoirs_only") and custom_reservoir_capacity:
             if custom_reservoir_capacity.endswith(".xlsx"):
                 custom_reservoir_capacity_df: pd.DataFrame = pd.read_excel(
                     custom_reservoir_capacity
