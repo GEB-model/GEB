@@ -944,15 +944,27 @@ def build_fn(
                 )
 
             # setup_region is always required
-            debug_methods = {"setup_region": methods["setup_region"]}
+            try:
+                debug_methods = {"setup_region": methods["setup_region"]}
+            except KeyError:
+                raise ValueError(
+                    f"Required method 'setup_region' not found in build config."
+                )
             dependencies = build_method.get_dependencies(debug_method)
             for dep in dependencies:
                 if dep in methods:
                     debug_methods[dep] = methods[dep]
+                else:
+                    raise ValueError(
+                        f"Dependency '{dep}' of debug method '{debug_method}' not found in build config."
+                    )
             debug_methods[debug_method] = methods[debug_method]
 
             # Re-order methods to match original build config order
             methods = {k: v for k, v in methods.items() if k in debug_methods}
+            logger.info(
+                f"Debug mode enabled for method '{debug_method}'. Running with dependencies: {list(methods.keys())}"
+            )
             check_required_methods: bool = False
         else:
             check_required_methods: bool = True
