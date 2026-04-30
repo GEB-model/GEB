@@ -889,10 +889,12 @@ class GEBModel(Module):
         ):
             Hydrology.finalize(self.hydrology)
 
-            # Close all async forcing readers
+            # Close all forcing readers
             if hasattr(self, "forcing"):
                 for forcing_loader in self.forcing.forcing_loaders.values():
-                    if hasattr(forcing_loader, "reader"):
+                    if hasattr(forcing_loader, "reader") and hasattr(
+                        forcing_loader.reader, "close"
+                    ):
                         forcing_loader.reader.close()
 
     def __enter__(self) -> GEBModel:

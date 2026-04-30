@@ -724,6 +724,9 @@ def prepare_agent_group(
         )
 
 
+RE_SQUARE_BRACKETS = re.compile(r"\[.*?\]")
+
+
 class Reporter:
     """This class is used to report data to disk."""
 
@@ -946,10 +949,10 @@ class Reporter:
             KeyError: If the variable is not found in the local variables or module attributes.
             AttributeError: If the attribute is not found in the module.
         """
-        current_time = self.model.current_time
-        current_timestep = self.model.current_timestep
-        # here we return None if the value is not to be reported on this timestep
         if "frequency" in config:
+            current_time = self.model.current_time
+            current_timestep = self.model.current_timestep
+            # here we return None if the value is not to be reported on this timestep
             if config["frequency"] == "initial":
                 if current_timestep != 0:
                     return None
@@ -977,10 +980,10 @@ class Reporter:
                 raise ValueError(f"Frequency {config['frequency']} not recognized.")
 
         varname = config["varname"]
-        fancy_index = re.search(r"\[.*?\]", varname)
+        fancy_index: re.Match[str] | None = RE_SQUARE_BRACKETS.search(varname)
         if fancy_index:
-            fancy_index = fancy_index.group(0)
-            varname = varname.replace(fancy_index, "")
+            fancy_index: str = fancy_index.group(0)
+            varname: str = varname.replace(fancy_index, "")
 
         # get the variable
         if varname.startswith("."):
@@ -1002,12 +1005,7 @@ class Reporter:
         if fancy_index:
             value = eval(f"value{fancy_index}")
 
-        # if the value is not None, we check whether the value is valid
-        if isinstance(value, list):
-            value = np.array([v.item() for v in value])
-            for v in value:
-                assert not np.isnan(value) and not np.isinf(v)
-        elif np.isscalar(value):
+        if np.isscalar(value):
             assert not np.isnan(value) and not np.isinf(value)
             if isinstance(value, (np.floating, np.integer, np.bool_)):
                 value = value.item()
