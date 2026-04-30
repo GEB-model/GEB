@@ -3465,7 +3465,7 @@ class GEBModel(
                 self.set_current_version()
                 error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
                 self.logger.error(error)
-                raise RuntimeError(error)
+                # raise RuntimeError(error)
             else:
                 self.logger.info(
                     "No specific updates found for this version or auto-updated. Updated version file."
