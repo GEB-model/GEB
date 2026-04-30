@@ -106,7 +106,7 @@ agent_settings:
       ruleset: no-adaptation
       loading_rate: 0.2
   farmers:
-    ruleset: base
+    ruleset: no-adaptation
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
