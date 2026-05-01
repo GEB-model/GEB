@@ -1156,20 +1156,21 @@ class Forcing(BuildModelBase):
                 representative_year=representative_year
             )
 
-            cmip6_deltas_interpolated = cmip6_deltas.interp(
-                lat=pr_hourly.y, lon=pr_hourly.x, method="nearest"
+            cmip6_deltas_interpolated = (
+                cmip6_deltas.interp(lat=pr_hourly.y, lon=pr_hourly.x, method="nearest")
+                .drop("lat")
+                .drop("lon")
             )
             cmip6_deltas_interpolated_hourly = cmip6_deltas_interpolated.reindex(
                 time=pr_hourly.time, method="ffill"
             )
             pr_hourly = (
-                (pr_hourly * cmip6_deltas_interpolated_hourly["precipitation_delta"])
-                .drop("lat")
-                .drop("lon")
+                pr_hourly * cmip6_deltas_interpolated_hourly["precipitation_delta"]
             )
-            tas = tas + cmip6_deltas_interpolated_hourly[
-                "near_surface_air_temperature_delta"
-            ].drop("lat").drop("lon")
+            tas = (
+                tas
+                + cmip6_deltas_interpolated_hourly["near_surface_air_temperature_delta"]
+            )
 
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
