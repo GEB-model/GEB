@@ -118,7 +118,7 @@ def encode_decode(
         max_value: Maximum value that is expected in the data.
             This value is used to calculate the scaling factor.
         offset:
-            Offset to be used in the FixedScaleOffset codec.
+            Offset to be used in the ScaleOffset codec.
             This value is subtracted from the data before scaling.
         precision: Required precision of the data. Defaults to 0.1.
 
