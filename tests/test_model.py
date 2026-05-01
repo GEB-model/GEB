@@ -446,9 +446,9 @@ def test_run() -> None:
             assert result[label] is not None
 
         # Note this should be much higher.
-        assert result["KGE"] > -0.05
-        assert result["NSE"] > -0.49
-        assert result["R"] > 0.41
+        assert result["KGE"] > 0.018
+        assert result["NSE"] > -0.352
+        assert result["R"] > 0.429
 
         print("Discharge evaluation results:", result)
 
