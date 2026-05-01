@@ -1107,33 +1107,34 @@ class Forcing(BuildModelBase):
             **kwargs,
         )
 
-    @build_method(
-        depends_on=["set_ssp", "set_time_range", "setup_forcing"], required=True
-    )
-    def setup_deltas_CMIP6(self) -> None:
+    def setup_deltas_CMIP6(self, representative_year: int) -> xr.DataArray:
         """Sets up the CMIP6 deltas for GEB.
 
-        This method is a placeholder and should be implemented to process CMIP6 delta data when it becomes available.
+        CMIP6 deltas are used to adjust the historical ERA5 forcing data to reflect future climate conditions. This method fetches the CMIP6 deltas from the data catalog for the specified representative year and the spatial bounds of the model grid.
+        Args:
+            representative_year: The representative year for which to fetch the CMIP6 deltas. This is typically a year in the future (e.g., 2050) for which climate projections are available.
+        Returns:
+            The CMIP6 deltas as an xarray DataArray, which can be used to adjust the ERA5 forcing data.
         """
         cmip6_deltas = self.data_catalog.fetch(
             "cmip6",
             bounds=self.grid["mask"].rio.bounds(recalc=True),
-            start_year=self.start_date.year,
+            start_year=self.start_date.year - 1,
             end_year=self.end_date.year,
-            representative_year=2050,
+            representative_year=representative_year,
         ).read()
+        cmip6_deltas["time"] = cmip6_deltas.indexes["time"].to_datetimeindex()
 
-        # load the precipitation and near-surface air temperature data
-        precipitation = self.other["climate/pr_kg_per_m2_per_s"].load()
-        near_surface_air_temperature = self.other["climate/tas_2m_K"].load()
+        return cmip6_deltas
 
-        a = 0
-
-    def setup_forcing_ERA5(self, create_plots: bool = False) -> None:
+    def setup_forcing_ERA5(
+        self, create_plots: bool = False, representative_year: int = None
+    ) -> None:
         """Sets up the ERA5 forcing data for GEB.
 
         Args:
             create_plots: If True, create plots for the forcing data.
+            representative_year: The representative year for which to fetch the CMIP6 deltas.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
@@ -1148,6 +1149,28 @@ class Forcing(BuildModelBase):
         )
 
         pr_hourly: xr.DataArray = era5_loader(variable="tp")
+        tas: xr.DataArray = era5_loader("t2m")
+
+        if representative_year:
+            cmip6_deltas = self.setup_deltas_CMIP6(
+                representative_year=representative_year
+            )
+
+            cmip6_deltas_interpolated = cmip6_deltas.interp(
+                lat=pr_hourly.y, lon=pr_hourly.x, method="nearest"
+            )
+            cmip6_deltas_interpolated_hourly = cmip6_deltas_interpolated.reindex(
+                time=pr_hourly.time, method="ffill"
+            )
+            pr_hourly = (
+                (pr_hourly * cmip6_deltas_interpolated_hourly["precipitation_delta"])
+                .drop("lat")
+                .drop("lon")
+            )
+            tas = tas + cmip6_deltas_interpolated_hourly[
+                "near_surface_air_temperature_delta"
+            ].drop("lat").drop("lon")
+
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
         )  # convert from m/hr to kg/m2/s
@@ -1157,6 +1180,7 @@ class Forcing(BuildModelBase):
         pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(
             pr_hourly, create_plots=create_plots
         )
+        self.set_tas_2m_K(tas, create_plots=create_plots)
 
         climate_grid = self.other["climate/pr_kg_per_m2_per_s_mask"]
 
@@ -1172,9 +1196,6 @@ class Forcing(BuildModelBase):
         geopotential = snap_to_grid(geopotential, climate_grid).compute()
         assert (geopotential.x.values == climate_grid.x.values).all()
         assert (geopotential.y.values == climate_grid.y.values).all()
-
-        tas: xr.DataArray = era5_loader("t2m")
-        self.set_tas_2m_K(tas, create_plots=create_plots)
 
         dew_point_tas: xr.DataArray = era5_loader("d2m")
         self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
@@ -1216,6 +1237,7 @@ class Forcing(BuildModelBase):
         self,
         forcing: str = "ERA5",
         create_plots: bool = False,
+        representative_year: int = None,
     ) -> None:
         """Sets up the forcing data for GEB.
 
@@ -1234,7 +1256,9 @@ class Forcing(BuildModelBase):
                 "ISIMIP forcing is not supported anymore. We switched fully to hourly forcing data."
             )
         elif forcing == "ERA5":
-            self.setup_forcing_ERA5(create_plots=create_plots)
+            self.setup_forcing_ERA5(
+                create_plots=create_plots, representative_year=representative_year
+            )
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
