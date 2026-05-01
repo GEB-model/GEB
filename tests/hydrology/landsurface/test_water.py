@@ -17,7 +17,8 @@ from geb.hydrology.landsurface.water import (
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
     get_soil_moisture_at_pressure,
-    get_soil_water_flow_parameters,
+    get_soil_water_potential_van_genuchten,
+    get_unsaturated_conductivity_van_genuchten,
     infiltration,
     kv_brakensiek,
     kv_cosby,
@@ -738,8 +739,8 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     assert abs(direct_runoff - topwater_m) < 1e-6
 
 
-def test_get_soil_water_flow_parameters() -> None:
-    """Test get_soil_water_flow_parameters function."""
+def test_soil_water_flow_functions() -> None:
+    """Test soil water potential and conductivity functions."""
     # Test case 1: Saturated soil
     w = np.float32(0.3)  # saturated
     wres = np.float32(0.05)  # residual
@@ -748,9 +749,10 @@ def test_get_soil_water_flow_parameters() -> None:
     ksat = np.float32(0.01)  # saturated hydraulic conductivity
     bubbling_pressure = np.float32(10.0)  # cm
 
-    psi, k_unsat = get_soil_water_flow_parameters(
-        w, wres, ws, lambda_, ksat, bubbling_pressure
+    psi = get_soil_water_potential_van_genuchten(
+        w, wres, ws, lambda_, bubbling_pressure
     )
+    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
 
     # At saturation, psi should be close to 0 (no suction)
     assert abs(psi) < 1e-3, f"Expected psi close to 0 at saturation, got {psi}"
@@ -761,9 +763,10 @@ def test_get_soil_water_flow_parameters() -> None:
 
     # Test case 2: Residual soil water content
     w = np.float32(0.05)  # at residual
-    psi, k_unsat = get_soil_water_flow_parameters(
-        w, wres, ws, lambda_, ksat, bubbling_pressure
+    psi = get_soil_water_potential_van_genuchten(
+        w, wres, ws, lambda_, bubbling_pressure
     )
+    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
 
     # At residual, psi should be very negative (high suction)
     assert psi < -1000, f"Expected high suction at residual, got {psi}"
@@ -774,9 +777,10 @@ def test_get_soil_water_flow_parameters() -> None:
 
     # Test case 3: Field capacity (typical value)
     w = np.float32(0.15)  # field capacity
-    psi, k_unsat = get_soil_water_flow_parameters(
-        w, wres, ws, lambda_, ksat, bubbling_pressure
+    psi = get_soil_water_potential_van_genuchten(
+        w, wres, ws, lambda_, bubbling_pressure
     )
+    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
 
     # At field capacity, psi should be around -1 to -10 m
     assert -10 < psi < -0.1, f"Expected moderate suction at field capacity, got {psi}"
@@ -788,18 +792,20 @@ def test_get_soil_water_flow_parameters() -> None:
 
     # Test case 4: Boundary conditions - w exactly at wres
     w = np.float32(0.05)  # exactly residual
-    psi, k_unsat = get_soil_water_flow_parameters(
-        w, wres, ws, lambda_, ksat, bubbling_pressure
+    psi = get_soil_water_potential_van_genuchten(
+        w, wres, ws, lambda_, bubbling_pressure
     )
+    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
 
     assert psi < 0, "Psi should be negative (suction)"
     assert k_unsat >= 0, "Unsaturated conductivity should be non-negative"
 
     # Test case 5: Boundary conditions - w exactly at ws
     w = np.float32(0.3)  # exactly saturated
-    psi, k_unsat = get_soil_water_flow_parameters(
-        w, wres, ws, lambda_, ksat, bubbling_pressure
+    psi = get_soil_water_potential_van_genuchten(
+        w, wres, ws, lambda_, bubbling_pressure
     )
+    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
 
     assert psi >= -1e-3, "Psi should be close to 0 at saturation"
     assert k_unsat <= ksat, "Unsaturated conductivity should not exceed saturated"
@@ -808,8 +814,11 @@ def test_get_soil_water_flow_parameters() -> None:
     lambda_values = [0.2, 0.8, 1.5]
     for lambda_val in lambda_values:
         w = np.float32(0.15)
-        psi, k_unsat = get_soil_water_flow_parameters(
-            w, wres, ws, np.float32(lambda_val), ksat, bubbling_pressure
+        psi = get_soil_water_potential_van_genuchten(
+            w, wres, ws, np.float32(lambda_val), bubbling_pressure
+        )
+        k_unsat = get_unsaturated_conductivity_van_genuchten(
+            w, wres, ws, np.float32(lambda_val), ksat
         )
         assert psi < 0, f"Psi should be negative for lambda={lambda_val}"
         assert 0 <= k_unsat <= ksat, (
@@ -820,9 +829,10 @@ def test_get_soil_water_flow_parameters() -> None:
     bubbling_pressures = [5.0, 20.0, 50.0]  # cm
     for bp in bubbling_pressures:
         w = np.float32(0.15)
-        psi, k_unsat = get_soil_water_flow_parameters(
-            w, wres, ws, lambda_, ksat, np.float32(bp)
+        psi = get_soil_water_potential_van_genuchten(
+            w, wres, ws, lambda_, np.float32(bp)
         )
+        k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
         assert psi < 0, f"Psi should be negative for bubbling_pressure={bp}"
         assert 0 <= k_unsat <= ksat, (
             f"k_unsat should be between 0 and ksat for bubbling_pressure={bp}"
@@ -830,9 +840,10 @@ def test_get_soil_water_flow_parameters() -> None:
 
     # Test case 8: Very dry soil (effective saturation approaches 0)
     w = np.float32(0.0501)  # just above residual
-    psi, k_unsat = get_soil_water_flow_parameters(
-        w, wres, ws, lambda_, ksat, bubbling_pressure
+    psi = get_soil_water_potential_van_genuchten(
+        w, wres, ws, lambda_, bubbling_pressure
     )
+    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
 
     # Should have high suction and very low conductivity
     assert psi < -100, f"Expected high suction for very dry soil, got {psi}"
