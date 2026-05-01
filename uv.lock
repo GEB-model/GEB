@@ -1377,6 +1377,7 @@ dependencies = [
     { name = "geopandas" },
     { name = "h5netcdf" },
     { name = "h5py" },
+    { name = "hda" },
     { name = "hydromt-sfincs" },
     { name = "imageio" },
     { name = "matplotlib" },
@@ -1476,6 +1477,7 @@ requires-dist = [
     { name = "geopandas", specifier = ">=1.0.1" },
     { name = "h5netcdf", specifier = ">=1.8.1" },
     { name = "h5py", specifier = ">=3.16.0" },
+    { name = "hda", specifier = ">=2.39" },
     { name = "hydromt-sfincs", specifier = ">=1.2.0" },
     { name = "imageio", specifier = ">=2.37.2" },
     { name = "jupyter", marker = "extra == 'display'", specifier = ">=1.1.1" },
@@ -1870,6 +1872,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/41/8c/bbe98f813722b4873818a8db3e15aa3e625b59278566905ac439725e8070/h5py-3.16.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:346df559a0f7dcb31cf8e44805319e2ab24b8957c45e7708ce503b2ec79ba725", size = 5300253, upload-time = "2026-03-06T13:49:02.033Z" },
     { url = "https://files.pythonhosted.org/packages/32/9e/87e6705b4d6890e7cecdf876e2a7d3e40654a2ae37482d79a6f1b87f7b92/h5py-3.16.0-cp314-cp314t-win_amd64.whl", hash = "sha256:4c6ab014ab704b4feaa719ae783b86522ed0bf1f82184704ed3c9e4e3228796e", size = 3381671, upload-time = "2026-03-06T13:49:04.351Z" },
     { url = "https://files.pythonhosted.org/packages/96/91/9fad90cfc5f9b2489c7c26ad897157bce82f0e9534a986a221b99760b23b/h5py-3.16.0-cp314-cp314t-win_arm64.whl", hash = "sha256:faca8fb4e4319c09d83337adc80b2ca7d5c5a343c2d6f1b6388f32cfecca13c1", size = 2740706, upload-time = "2026-03-06T13:49:06.347Z" },
+]
+
+[[package]]
+name = "hda"
+version = "2.39"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e1/58/98deab5d1d3a9d800c787f42c1b922d1c8a384ec0ff395214b815d8925ac/hda-2.39.tar.gz", hash = "sha256:c41d4ed3bd1d3591340f4fa9664c0ace7ae853d530709422efbc93e3d56af706", size = 25391, upload-time = "2025-12-15T02:00:02.237Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/66/43190d4fc669587ccdc934d1089b8b40122c0f147c83313f82e7c79a05f0/hda-2.39-py3-none-any.whl", hash = "sha256:662ea1c226805026639e9f900a77bab37127a79f801b8f42ef8fa60602e3944a", size = 22793, upload-time = "2025-12-15T02:00:01.063Z" },
 ]
 
 [[package]]
