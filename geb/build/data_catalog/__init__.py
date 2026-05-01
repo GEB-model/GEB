@@ -704,12 +704,12 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="cmip6_combined_deltas.nc",
             cache="local",
         ),
-        "url": "https://esgf-node.llnl.gov/search/cmip6-datasets/",
+        "url": "https://cds.climate.copernicus.eu/datasets/projections-cmip6?tab=download",
         "source": {
             "name": "CMIP6",
             "author": "CMIP6 Modeling Groups",
-            "license": "Varies by dataset",
-            "url": "https://esgf-node.llnl.gov/search/cmip6-datasets/",
+            "license": "“Creative Commons Attribution-ShareAlike 4.0 International License (https://creativecommons.org/licenses/).”",
+            "url": "https://cds.climate.copernicus.eu/datasets/projections-cmip6?tab=overview",
         },
     },
     "coast_rp": {
