@@ -152,13 +152,14 @@ class CMIP6(Adapter):
         shift = representative_year - end_year  # years
         initial_start, initial_end = start_year, end_year
         new_start, new_end = initial_start + shift, initial_end + shift
-
         # Select subsets for historical and future periods
         historical_subset = merged.sel(
-            time=slice(f"{initial_start}-01-01", f"{initial_end}-12-31")
+            time=slice(f"{initial_start}-01-01", f"{initial_end + 1}-12-31")
         )
 
-        future_subset = merged.sel(time=slice(f"{new_start}-01-01", f"{new_end}-12-31"))
+        future_subset = merged.sel(
+            time=slice(f"{new_start}-01-01", f"{new_end + 1}-12-31")
+        )
 
         # Align time axes by shifting future back
         future_subset = future_subset.assign_coords(time=historical_subset.time)
