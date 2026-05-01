@@ -1244,6 +1244,7 @@ class Forcing(BuildModelBase):
         Args:
             forcing: The data source to use for the forcing data. Currently only ERA5 is supported.
             create_plots: If True, create plots for the forcing data.
+            representative_year: The representative year for which to fetch the CMIP6 deltas. Only used if forcing is 'ERA5' to adjust the historical data to future conditions.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
