@@ -493,20 +493,26 @@ def test_calculate_transpiration() -> None:
     topwater = np.float32(0.0)
     minimum_effective_root_depth = np.float32(0.1)
 
+    # Resolve crop group number (logic extracted from landsurface_model.py)
+    crop_group_number = np.float32(0.0)
+    if land_use_type == 1:  # FOREST
+        crop_group_number = crop_group_forest
+    elif land_use_type == 2:  # GRASSLAND_LIKE
+        crop_group_number = crop_group_grassland_like
+    elif crop_map >= 0 and crop_map < len(crop_group_number_per_group):
+        crop_group_number = crop_group_number_per_group[crop_map]
+
     transpiration, topwater_m = calculate_transpiration(
         soil_is_frozen=soil_is_frozen,
         wwp_m=wwp_cell,
         wfc_m=wfc_cell,
         wres_m=wres_cell,
         soil_layer_height_m=soil_layer_height_cell,
-        land_use_type=land_use_type,
+        land_use_type=np.int32(land_use_type),
         root_depth_m=root_depth,
-        crop_map=crop_map,
-        crop_group_forest=crop_group_forest,
-        crop_group_grassland_like=crop_group_grassland_like,
+        crop_group_number=crop_group_number,
         potential_transpiration_m=potential_transpiration,
         reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour,
-        crop_group_number_per_group=crop_group_number_per_group,
         w_m=w_cell,
         topwater_m=topwater,
         minimum_effective_root_depth_m=minimum_effective_root_depth,
@@ -604,23 +610,34 @@ def test_calculate_transpiration_frozen_soil() -> None:
     soil_layer_height = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
 
+    # Resolve crop group number
+    crop_group_forest = np.float32(3.0)
+    crop_group_grassland_like = np.float32(3.0)
+    crop_group_number_per_group = np.array([3.0, 4.0, 5.0], dtype=np.float32)
+    land_use_type = 1
+    crop_map = 0
+    crop_group_number = np.float32(0.0)
+    if land_use_type == 1:  # FOREST
+        crop_group_number = crop_group_forest
+    elif land_use_type == 2:  # GRASSLAND_LIKE
+        crop_group_number = crop_group_grassland_like
+    elif crop_map >= 0 and crop_map < len(crop_group_number_per_group):
+        crop_group_number = crop_group_number_per_group[crop_map]
+
     transpiration_frozen, topwater_m = calculate_transpiration(
         soil_is_frozen=True,  # Frozen soil
         wwp_m=wwp,
         wfc_m=wfc,
         wres_m=wres,
         soil_layer_height_m=soil_layer_height,
-        land_use_type=1,
-        root_depth_m=0.3,
-        crop_map=0,
-        crop_group_forest=3.0,
-        crop_group_grassland_like=3.0,
-        potential_transpiration_m=0.002,
-        reference_evapotranspiration_grass_m_hour=0.003,
-        crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),
+        land_use_type=np.int32(land_use_type),
+        root_depth_m=np.float32(0.3),
+        crop_group_number=crop_group_number,
+        potential_transpiration_m=np.float32(0.002),
+        reference_evapotranspiration_grass_m_hour=np.float32(0.003),
         w_m=w.copy(),
-        topwater_m=0.0,
-        minimum_effective_root_depth_m=0.1,
+        topwater_m=np.float32(0.0),
+        minimum_effective_root_depth_m=np.float32(0.1),
     )
 
     assert transpiration_frozen == 0.0
@@ -636,6 +653,20 @@ def test_calculate_transpiration_paddy_irrigation() -> None:
     soil_layer_height = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
 
+    # Resolve crop group number
+    crop_group_forest = np.float32(3.0)
+    crop_group_grassland_like = np.float32(3.0)
+    crop_group_number_per_group = np.array([3.0, 4.0, 5.0], dtype=np.float32)
+    crop_map = 0
+    crop_group_number = np.float32(0.0)
+    # PADDY_IRRIGATED is a unique land_use_type, but we still need its crop group
+    if PADDY_IRRIGATED == 1:  # FOREST
+        crop_group_number = crop_group_forest
+    elif PADDY_IRRIGATED == 2:  # GRASSLAND_LIKE
+        crop_group_number = crop_group_grassland_like
+    elif crop_map >= 0 and crop_map < len(crop_group_number_per_group):
+        crop_group_number = crop_group_number_per_group[crop_map]
+
     # Test with topwater available
     transpiration_paddy, topwater_m = calculate_transpiration(
         soil_is_frozen=False,
@@ -643,17 +674,14 @@ def test_calculate_transpiration_paddy_irrigation() -> None:
         wfc_m=wfc,
         wres_m=wres,
         soil_layer_height_m=soil_layer_height,
-        land_use_type=PADDY_IRRIGATED,
-        root_depth_m=0.3,
-        crop_map=0,
-        crop_group_forest=3.0,
-        crop_group_grassland_like=3.0,
-        potential_transpiration_m=0.002,
-        reference_evapotranspiration_grass_m_hour=0.003,
-        crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),
+        land_use_type=np.int32(PADDY_IRRIGATED),
+        root_depth_m=np.float32(0.3),
+        crop_group_number=crop_group_number,
+        potential_transpiration_m=np.float32(0.002),
+        reference_evapotranspiration_grass_m_hour=np.float32(0.003),
         w_m=w.copy(),
-        topwater_m=0.005,  # Topwater available
-        minimum_effective_root_depth_m=0.1,
+        topwater_m=np.float32(0.005),  # Topwater available
+        minimum_effective_root_depth_m=np.float32(0.1),
     )
 
     # Should use topwater first

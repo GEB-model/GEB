@@ -28,12 +28,12 @@ from geb.build.__init__ import (
     create_cluster_visualization_map,
     create_multi_basin_configs,
     get_all_downstream_subbasins_in_geom,
-    get_river_graph,
     save_clusters_as_merged_geometries,
     save_clusters_to_geoparquet,
 )
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
+from geb.build.workflows.hydrography import get_river_graph
 from geb.config_schema import Config
 from geb.model import GEBModel
 from geb.workflows.io import WorkingDirectory, read_params
@@ -898,6 +898,7 @@ def build_fn(
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     continue_: bool = False,
+    debug_method: str | None = None,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
@@ -912,6 +913,7 @@ def build_fn(
         build_config: Path to the model build configuration file.
         working_directory: Working directory for the model.
         continue_: Continue previous build if it was interrupted or failed.
+        debug_method: Filter the build to only run this method and its dependencies.
         profile_speed: If True, run the build with speed profiling.
         profile_ram: If True, run the build with RAM profiling.
         optimize: If True, run the build in optimized mode.
@@ -934,10 +936,44 @@ def build_fn(
             for method, args in parsed_build_config.items()
             if not method.startswith("_")
         }
+
+        if debug_method:
+            if debug_method not in methods:
+                raise ValueError(
+                    f"Debug method '{debug_method}' not found in build config."
+                )
+
+            # setup_region is always required
+            try:
+                debug_methods = {"setup_region": methods["setup_region"]}
+            except KeyError:
+                raise ValueError(
+                    f"Required method 'setup_region' not found in build config."
+                )
+            dependencies = build_method.get_dependencies(debug_method)
+            for dep in dependencies:
+                if dep in methods:
+                    debug_methods[dep] = methods[dep]
+                else:
+                    raise ValueError(
+                        f"Dependency '{dep}' of debug method '{debug_method}' not found in build config."
+                    )
+            debug_methods[debug_method] = methods[debug_method]
+
+            # Re-order methods to match original build config order
+            methods = {k: v for k, v in methods.items() if k in debug_methods}
+            logger.info(
+                f"Debug mode enabled for method '{debug_method}'. Running with dependencies: {list(methods.keys())}"
+            )
+            check_required_methods: bool = False
+        else:
+            check_required_methods: bool = True
+
         model.build(
             methods=methods,
             region=parse_config(config, schema=Config)["general"]["region"],
             continue_=continue_,
+            check_required_methods=check_required_methods,
         )
 
     with WorkingDirectory(working_directory):

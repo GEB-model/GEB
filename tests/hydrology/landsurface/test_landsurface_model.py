@@ -33,6 +33,19 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
     with np.load(error_case_path) as data:
         inputs = {key: data[key] for key in data.files}
 
+    # Old error-case files were saved in layer-major layout (N_LAYERS, num_cells) or
+    # (N_HOURS, num_cells). The refactored land_surface_model expects cell-major layout
+    # (num_cells, N_LAYERS) / (num_cells, N_HOURS).  Detect the old format by checking
+    # for shape (N, 1) with N > 1 and transpose to (1, N) accordingly.
+    for key, value in inputs.items():
+        if (
+            isinstance(value, np.ndarray)
+            and value.ndim == 2
+            and value.shape[1] == 1
+            and value.shape[0] > 1
+        ):
+            inputs[key] = np.ascontiguousarray(value.T)
+
     # Cast inputs if requested
     if asfloat64:
         for key, value in inputs.items():
@@ -103,7 +116,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         name=f"Water balance: {error_case_path.name}",
         how="cellwise",
         influxes=[
-            inputs["pr_kg_per_m2_per_s"].sum(axis=0) * 3.6,
+            inputs["pr_kg_per_m2_per_s"].sum(axis=1) * 3.6,
             inputs["actual_irrigation_consumption_m"],
             inputs["capillar_rise_m"],
         ],
@@ -122,14 +135,14 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
             pre_liquid_water_in_snow_m,
             pre_interception_storage_m,
             pre_topwater_m,
-            pre_water_content_m.sum(axis=0),
+            pre_water_content_m.sum(axis=1),
         ],
         poststorages=[
             post_snow_water_equivalent_m,
             post_liquid_water_in_snow_m,
             post_interception_storage_m,
             post_topwater_m,
-            post_water_content_m.sum(axis=0),
+            post_water_content_m.sum(axis=1),
         ],
         tolerance=1e-5,
         raise_on_error=False,
@@ -151,8 +164,8 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
             out_gw_recharge_h_loss,
             out_transpiration_h_loss,
         ],
-        prestorages=[pre_soil_enthalpy.sum(axis=0)],
-        poststorages=[post_soil_enthalpy.sum(axis=0)],
+        prestorages=[pre_soil_enthalpy.sum(axis=1)],
+        poststorages=[post_soil_enthalpy.sum(axis=1)],
         tolerance=1e3,
         raise_on_error=False,
     )

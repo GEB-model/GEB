@@ -89,6 +89,9 @@ class HazardDriver(Module):
 
         If flood simulation is enabled in the configuration, it runs the SFINCS model for each flood event
         that ends during the current timestep.
+
+        Raises:
+            ValueError: If a flood event is scheduled during the spinup period, an error is raised as flood events cannot be simulated during spinup.
         """
         if self.model.config["hazards"]["floods"]["simulate"]:
             if self.model.config["hazards"]["floods"]["events"] is None:
@@ -278,6 +281,11 @@ class HazardDriver(Module):
                             self.model.simulation_end + self.model.timestep_length
                         )
                         assert event["end_time"] > event["start_time"]
+
+                    if self.model.in_spinup:
+                        msg = f"Flood event {event} cannot be simulated during spinup. Please adjust the flood event times or the spinup time in the configuration."
+                        self.model.logger.error(msg)
+                        raise ValueError(msg)
 
                     print("Running floods for event:", event)
                     self.floods.run(event)
