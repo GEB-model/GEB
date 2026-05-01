@@ -154,7 +154,7 @@ def test_create_farm_distributions_for_all_lowder_regions() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_fetch_field_boundaries() -> None:
-    """Fetch field boundaries."""
+    """Fetch field boundaries and rasterize."""
     logger = logging.getLogger("test_fetch_field_boundaries")
 
     field_boundaries = DataCatalog(logger=logger).fetch("field_boundaries").read(BOUNDS)
@@ -225,7 +225,7 @@ def test_fetch_field_boundaries() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_fetch_HRL_crop_types() -> None:
-    """Fetch HRL crop types."""
+    """Fetch HRL crop types for different years."""
     logger = logging.getLogger("test_fetch_HRL_crop_types")
 
     years = [2017, 2023]
