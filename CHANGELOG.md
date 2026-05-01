@@ -7,6 +7,7 @@
 - Fix "Inflation not set when model runs to final year of data that was created in build process" ([#808](https://github.com/GEB-model/GEB/issues/808)).
 - Flood events could not and still cannot be simulated during the spinup. However, this was not clear and a funny error about missing files was raised. Now this situation is detected and a clear error is raised ([#806](https://github.com/GEB-model/GEB/issues/806)).
 - Simplify and speed up reading of forcing data. Before we used chunks of only 24 hours and used complex async reading to make it fast. Now that we use much larger chunks and efficient masking, the asynchronous reading made things overly complex and error prone. Simplifying the reading (e.g., dropping the async reader) while optimizing the indexing makes the model 10-20% faster in the test region. The difference is negligible in large regions.
+- Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point).
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).

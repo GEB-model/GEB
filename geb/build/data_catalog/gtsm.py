@@ -14,18 +14,27 @@ import numpy as np
 import pandas as pd
 import tqdm
 import xarray as xr
-from zarr.codecs.numcodecs import Delta, FixedScaleOffset
+from zarr.abc.codec import ArrayArrayCodec
+from zarr.codecs import CastValue, ScaleOffset
+from zarr.codecs.numcodecs import Delta
 
 from geb.workflows.io import read_geom, read_zarr, write_geom, write_zarr
 
 from .base import Adapter
 
-gtsm_filters: list = [
-    FixedScaleOffset(
-        offset=0,
+gtsm_filters: list[ArrayArrayCodec] = [
+    ScaleOffset(
+        offset=0,  # 0 offset for sea level data, as it is defined relative to a reference level (e.g., mean sea level)
         scale=1000,  # gtsm has a precision of 0.001, so multiplying by 1000 allows us to store as int16 without losing any precision
-        dtype="float32",  # float 32 is sufficient to store the data with the given scale and offset
-        astype="int16",  # int16 has sufficient range here. The int16 range of -32768 to 32767, so can store values from -32.768 to 32.767 with a scale of 1000, which is sufficient for the GTSM data
+    ),
+    CastValue(
+        data_type="int16",  # int16 has sufficient range here. The int16 range of -32768 to 32767, so can store values from -32.768 to 32.767 with a scale of 1000, which is sufficient for the GTSM data
+        rounding="nearest-even",
+        out_of_range=None,  # raise error if value exceeds the range of the output dtype
+        scalar_map={
+            "encode": {"NaN": np.iinfo(np.int16).max},
+            "decode": {np.iinfo(np.int16).max: np.nan},
+        },
     ),
     Delta(dtype="int16", astype="int16"),
 ]
