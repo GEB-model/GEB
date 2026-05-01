@@ -17,7 +17,6 @@ from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
 from pandas.errors import SettingWithCopyWarning
-from zarr.errors import ZarrUserWarning
 
 from geb.workflows.io import fetch_and_save
 
@@ -177,7 +176,5 @@ pd.set_option("future.no_silent_downcasting", True)
 
 # we don't want to miss any runtime warnings, as they can indicate potential issues in the code, so we also raise them as errors
 warnings.simplefilter(action="error", category=RuntimeWarning)
-
-warnings.simplefilter(action="ignore", category=ZarrUserWarning)
 
 faulthandler.enable()

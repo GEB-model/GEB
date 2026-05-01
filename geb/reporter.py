@@ -12,13 +12,12 @@ import pandas as pd
 import zarr.storage
 from dateutil.relativedelta import relativedelta
 from xarray.backends.zarr import FillValueCoder
-from zarr.abc.codec import BytesBytesCodec
+from zarr.abc.codec import ArrayArrayCodec, BytesBytesCodec
 from zarr.codecs import ZstdCodec
 from zarr.codecs.numcodecs import (
     BitRound,
     PackBits,
     Shuffle,
-    _NumcodecsArrayArrayCodec,
 )
 
 from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
@@ -456,7 +455,7 @@ def create_time_array(
 def get_filters_and_compressors(
     dtype: np.dtype,
     compression_level: int,
-) -> tuple[list[_NumcodecsArrayArrayCodec], list[BytesBytesCodec]]:
+) -> tuple[list[ArrayArrayCodec], list[BytesBytesCodec]]:
     """Select zarr filters and compressors appropriate for a given dtype.
 
     The chosen pipeline balances precision loss, byte-shuffle efficiency,
@@ -478,7 +477,7 @@ def get_filters_and_compressors(
         compressors: Bytes-to-bytes codecs applied after filters, always
             ending with ZstdCodec at the given compression level.
     """
-    filters: list[_NumcodecsArrayArrayCodec]
+    filters: list[ArrayArrayCodec]
     compressors: list[BytesBytesCodec]
     if dtype == bool:
         filters = [PackBits()]
