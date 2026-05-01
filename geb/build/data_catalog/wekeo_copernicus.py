@@ -294,6 +294,7 @@ class WEkEOCopernicus(Adapter):
         year: str | int,
         bounds: tuple[float, float, float, float],
         query_overrides: dict[str, Any] | None = None,
+        result_lookup: dict[str, Any] | None = None,
     ) -> None:
         """Download WEkEO ZIP tiles for the specified tile identifiers.
 
@@ -302,6 +303,9 @@ class WEkEOCopernicus(Adapter):
             year: Product year.
             bounds: Requested bounding box as ``(min_lon, min_lat, max_lon, max_lat)``.
             query_overrides: Additional dataset-specific query fields or overrides.
+            result_lookup: Optional lookup mapping tile identifiers to downloadable
+                WEkEO result objects. If omitted, WEkEO is searched using ``bounds``,
+                ``year``, and ``query_overrides``.
 
         Raises:
             FileNotFoundError: If a requested tile is not found in the WEkEO results,
@@ -311,10 +315,24 @@ class WEkEOCopernicus(Adapter):
         year_dir = self._year_dir(year)
         year_dir.mkdir(parents=True, exist_ok=True)
 
-        _, result_lookup = self._search_tiles(
-            bounds=bounds,
-            year=year,
-            query_overrides=query_overrides,
+        if result_lookup is None:
+            self.logger.info(
+                "No WEkEO result lookup was provided. Searching WEkEO before downloading "
+                "tiles for year %s and bounds %s.",
+                year,
+                bounds,
+            )
+            _, result_lookup = self._search_tiles(
+                bounds=bounds,
+                year=year,
+                query_overrides=query_overrides,
+            )
+
+        self.logger.info(
+            "Preparing to download %s WEkEO tile(s) for year %s into %s.",
+            len(tile_ids),
+            year,
+            year_dir,
         )
 
         for tile_id in tile_ids:
@@ -322,12 +340,32 @@ class WEkEOCopernicus(Adapter):
             tif_path = self._tile_tif_path(year, tile_id)
 
             if tif_path.exists():
+                self.logger.info(
+                    "Skipping WEkEO tile %s for year %s because TIFF already exists: %s",
+                    tile_id,
+                    year,
+                    tif_path,
+                )
                 continue
 
             if self._problem_tile_name(tile_id) is not None:
+                self.logger.error(
+                    "WEkEO tile %s for year %s is known to be problematic and no "
+                    "corrected local TIFF was found at %s.",
+                    tile_id,
+                    year,
+                    tif_path,
+                )
                 self._raise_problem_tile_error(tile_id=tile_id, year=year)
 
             if zip_path.exists():
+                self.logger.info(
+                    "Skipping download of WEkEO tile %s for year %s because ZIP already "
+                    "exists and will be reused: %s",
+                    tile_id,
+                    year,
+                    zip_path,
+                )
                 continue
 
             if tile_id not in result_lookup:
@@ -337,7 +375,12 @@ class WEkEOCopernicus(Adapter):
 
             before_files = set(year_dir.iterdir()) if year_dir.exists() else set()
 
-            self.logger.info("Downloading WEkEO tile %s", tile_id)
+            self.logger.info(
+                "Downloading WEkEO tile %s for year %s into %s.",
+                tile_id,
+                year,
+                year_dir,
+            )
             result_lookup[tile_id].download(str(year_dir))
 
             after_files = set(year_dir.iterdir())
@@ -360,9 +403,21 @@ class WEkEOCopernicus(Adapter):
             downloaded_zip = matching_zip if matching_zip is not None else zip_files[0]
 
             if downloaded_zip != zip_path:
+                self.logger.info(
+                    "Renaming downloaded WEkEO ZIP from %s to expected path %s.",
+                    downloaded_zip,
+                    zip_path,
+                )
                 if zip_path.exists():
                     zip_path.unlink()
                 downloaded_zip.replace(zip_path)
+
+            self.logger.info(
+                "Finished downloading WEkEO tile %s for year %s: %s",
+                tile_id,
+                year,
+                zip_path,
+            )
 
     def unpack_and_merge_tiles(
         self,
@@ -491,19 +546,42 @@ class WEkEOCopernicus(Adapter):
         Returns:
             The WEkEO Copernicus adapter instance with the downloaded data.
         """
-        mask = box(*bounds)
-        self.tile_ids = self.get_tiles_for_mask(
-            mask=mask,
+        self.logger.info(
+            "Fetching WEkEO Copernicus data for year %s and bounds %s.",
+            year,
+            bounds,
+        )
+
+        tile_ids, result_lookup = self._search_tiles(
+            bounds=bounds,
             year=year,
             query_overrides=query_overrides,
         )
+
+        self.logger.info(
+            "Found %s WEkEO tile(s) for year %s: %s",
+            len(tile_ids),
+            year,
+            tile_ids,
+        )
+
+        self.tile_ids = tile_ids
         self.year = year
+
         self.download_tiles(
             tile_ids=self.tile_ids,
             year=year,
             bounds=bounds,
             query_overrides=query_overrides,
+            result_lookup=result_lookup,
         )
+
+        self.logger.info(
+            "Finished fetching WEkEO Copernicus data for year %s and bounds %s.",
+            year,
+            bounds,
+        )
+
         return self
 
     def read(
