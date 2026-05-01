@@ -1472,7 +1472,7 @@ class Routing(Module):
             self.model.files["grid"]["routing/river_ids"],
         )
 
-        self.retention_basin_ids: ArrayInt32 = self.grid.load(
+        self.retention_basin_ids: ArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["routing/retention_basin_ids"],
         )
         self.retention_basin_data: pd.DataFrame = read_table(
