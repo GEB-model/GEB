@@ -48,6 +48,7 @@ from .soilgrids import SoilGridsV1, SoilGridsV2
 from .superwell import GCAMElectricityRates
 from .sword import Sword
 from .undp import HumanDevelopmentIndex
+from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
@@ -244,6 +245,31 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "Commercial",
             "url": "https://medium.com/sentinel-hub/automatic-field-delineation-new-release-1c2938399f0",
         },
+    },
+    **{
+        f"hrl_crop_types_{year}": {
+            "adapter": WEkEOCopernicus(
+                folder="hrl_crop_types",
+                local_version=1,
+                filename="tiles",
+                cache="global",
+                dataset_id="EO:EEA:DAT:HRL:CRL",
+                default_query={
+                    "productType": "Crop Types",
+                    "resolution": "10m",
+                    "itemsPerPage": 200,
+                    "startIndex": 0,
+                },
+            ),
+            "url": None,
+            "source": {
+                "name": "HRL crop types",
+                "author": "Copernicus Land Monitoring Service",
+                "license": "CC BY 4.0",
+                "url": "https://land.copernicus.eu/en/products/high-resolution-layer-croplands/crop-types-2023-raster-10-m-europe-yearly",
+            },
+        }
+        for year in ["2017", "2018", "2019", "2020", "2021", "2022", "2023"]
     },
     "gebco": {
         "adapter": GEBCO(
