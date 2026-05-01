@@ -228,7 +228,7 @@ def test_fetch_HRL_crop_types() -> None:
     """Fetch HRL crop types for different years."""
     logger = logging.getLogger("test_fetch_HRL_crop_types")
 
-    years = [2017, 2023]
+    years = [2017, 2018, 2019, 2020, 2021, 2022, 2023]
     crop_types_per_year: list[xr.DataArray] = []
 
     for year in years:

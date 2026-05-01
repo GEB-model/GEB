@@ -104,6 +104,13 @@ You can find the personal access token [here](https://earthdatahub.destine.eu/ac
 
 4.  To set up the Global Tide and Surge Model using the build-method `setup_gtsm_station_data` you first need to create an account on [ECMF](https://earthdatahub.destine.eu/]https://accounts.ecmwf.int/auth/realms/ecmwf/protocol/openid-connect/auth?client_id=cds&scope=openid%20email&response_type=code&redirect_uri=https%3A%2F%2Fcds.climate.copernicus.eu%2Fapi%2Fauth%2Fcallback%2Fkeycloak&state=IA76J5TAf7ZAgZ3YBCPSjsC1b4LKiENc3SozoQ5hbWA&code_challenge=LZdj2TMGRZZ4Aei7DFEKlht_kLHs7EInxqL3qax9oIE&code_challenge_method=S256). Afterwards, you will find your CDS API key and further instructions [here](https://cds.climate.copernicus.eu/how-to-api). You should store the API url and key in your home folder as "$HOME/.cdsapirc". For CDS datasets, you need to manually accept the terms and conditions of datasets. Currently, this is only needed for the [future sea level rise dataset](https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download): 
 
+5.  If using the European farmer set-up, make an account on the [WEkEO Copernicus data adapter](https://wekeo.copernicus.eu/register), create an access token and create or add to a ".env"-file in the GEB repository with the following content:
+
+``` text
+WEKEO_USERNAME=<your_username>
+WEKEO_PASSWORD=<your_password>
+```
+
 ### Building to model
 
 The `build.yml`-file contains the name of functions that should be run to preprocess the data. The processed data will be stored in the "input" folder in the working directory. The data is stored in a format that is compatible with the GEB model. You can build the model using the following command, assuming you are in the working directory of the model which contains the `model.yml`-file and `build.yml`-file:

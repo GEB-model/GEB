@@ -11,6 +11,7 @@ import geopandas as gpd
 import rioxarray as rxr
 import xarray as xr
 from hda import Client, Configuration
+from rioxarray.exceptions import NoDataInBounds
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
@@ -22,7 +23,6 @@ _REQUEST_CRS = "EPSG:4326"
 _MANUAL_TILE_DOWNLOAD_URL = (
     "https://land.copernicus.eu/en/map-viewer?product=c6d1726c6e824ae4819bdf402b785956"
 )
-_KNOWN_WEKEO_PROBLEM_TILES = frozenset({"E40N30", "E41N29"})
 
 
 class WEkEOCopernicus(Adapter):
@@ -74,6 +74,12 @@ class WEkEOCopernicus(Adapter):
 
         Returns:
             Authenticated WEkEO HDA client.
+
+        Authentication:
+            Basic auth is required and read from environment variables:
+            WEKEO_USERNAME and WEKEO_PASSWORD. A new account can be made at
+            https://wekeo.copernicus.eu/register .
+
 
         Raises:
             ValueError: If WEkEO credentials are not available.
@@ -160,28 +166,6 @@ class WEkEOCopernicus(Adapter):
             if tile_name in tile_id:
                 return tile_name
         return None
-
-    def _raise_problem_tile_error(self, tile_id: str, year: str | int) -> None:
-        """Raise an error explaining how to manually retrieve a problematic tile.
-
-        Args:
-            tile_id: WEkEO tile identifier.
-            year: Product year.
-
-        Raises:
-            FileNotFoundError: Always raised with manual retrieval instructions.
-        """
-        tile_name = self._problem_tile_name(tile_id) or tile_id
-
-        raise FileNotFoundError(
-            f"Tile {tile_name} is currently not correctly available through the "
-            "WEkEO API. The API may return a file with the expected tile name, "
-            "but with the wrong underlying spatial data, which causes clipping "
-            "or alignment errors later in the adapter.\n\n"
-            "If you do not have access to the IVM cluster GEB data catalog, "
-            f"retrieve this tile manually from {_MANUAL_TILE_DOWNLOAD_URL}.\n\n"
-            f"Expected local corrected file: {self._tile_tif_path(year, tile_id)}"
-        )
 
     def _build_query(
         self,
@@ -347,16 +331,6 @@ class WEkEOCopernicus(Adapter):
                     tif_path,
                 )
                 continue
-
-            if self._problem_tile_name(tile_id) is not None:
-                self.logger.error(
-                    "WEkEO tile %s for year %s is known to be problematic and no "
-                    "corrected local TIFF was found at %s.",
-                    tile_id,
-                    year,
-                    tif_path,
-                )
-                self._raise_problem_tile_error(tile_id=tile_id, year=year)
 
             if zip_path.exists():
                 self.logger.info(
@@ -632,21 +606,21 @@ class WEkEOCopernicus(Adapter):
                 maxx=max_x,
                 maxy=max_y,
             )
-        except Exception as error:
+        except NoDataInBounds as error:
             data_bounds = da.rio.bounds()
             raise ValueError(
-                "Failed to clip the merged WEkEO raster to the requested bounds. "
-                "This can happen when WEkEO returns a tile with the expected file "
-                "name but with incorrect underlying spatial data. Known problematic "
-                f"tiles are: {sorted(_KNOWN_WEKEO_PROBLEM_TILES)}.\n\n"
+                "Failed to clip the merged WEkEO raster to the requested bounds because "
+                "no raster data were found inside the requested bounding box. This can "
+                "happen when WEkEO returns a tile with the expected file name but with "
+                "incorrect underlying spatial data."
                 f"Requested bounds in {_REQUEST_CRS}: {bounds}\n"
                 f"Projected clip bounds in {_TILE_CRS}: "
                 f"{(min_x, min_y, max_x, max_y)}\n"
                 f"Merged raster bounds: {data_bounds}\n"
                 f"Tile IDs used: {tile_ids}\n\n"
-                "If one of these tiles is affected and you do not have access to "
-                "the IVM cluster GEB data catalog, retrieve the tile manually from "
+                "Retrieve the tile manually from "
                 f"{_MANUAL_TILE_DOWNLOAD_URL}."
+                "Or contact: luca.battistella@eea.europa.eu"
             ) from error
 
         da = da.rio.reproject(_REQUEST_CRS)
