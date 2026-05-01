@@ -1,5 +1,5 @@
 # dev
-- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode="lakes_only"` or `mode="reservoirs_only"`.
+- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
 - Add `--debug-method "method_name"` to `geb build` to filter the build to only run the setup region and any other methods that are required to run that specific method. For debugging purposes only.
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
 - Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.

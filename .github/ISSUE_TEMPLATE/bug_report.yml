@@ -29,7 +29,7 @@ body:
     attributes:
       label: model.yml
       description: |
-        Please attach or paste the contents of your `model.yml` file if a model must be build to reproduce the issue.
+        Please attach or paste the contents of your `model.yml` file if a model must be build to reproduce the issue. Ensure no "inherit" statements are used in the file, except to the "reasonable_default_config.yml".
         You can drag and drop the file directly into this text box.
       render: yaml
   - type: textarea
@@ -37,7 +37,7 @@ body:
     attributes:
       label: build.yml
       description: |
-        Please attach or paste the contents of your `build.yml` file if a model must be build to reproduce the issue.
+        Please attach or paste the contents of your `build.yml` file if a model must be build to reproduce the issue. Ensure no "inherit" statements are used in the file, except to the "reasonable_default_build.yml".
         You can drag and drop the file directly into this text box.
       render: yaml
   - type: textarea
