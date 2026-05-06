@@ -94,7 +94,7 @@ class Industry(AgentBaseClass):
         self.var.current_return_flow = water_return_flow
 
     def create_abstraction_areas(
-        self, minimum_shreve_stream_order: int = 4
+        self, minimum_shreve_stream_order: int = 6
     ) -> tuple[dict[int, ArrayInt32], dict[int, ArrayInt32]]:
         """Create abstraction areas for industry based on the river network.
 
@@ -133,6 +133,8 @@ class Industry(AgentBaseClass):
 
         rivers: gpd.GeoDataFrame = self.model.hydrology.routing.active_rivers.copy()
         for river_idx, river in rivers.iterrows():
+            if not river["represented_in_grid"]:
+                continue
             assert isinstance(river_idx, int)
             abstraction_river = river
             while (
@@ -260,6 +262,7 @@ class Industry(AgentBaseClass):
                 return_flow_in_abstraction_area
                 / self.abstraction_river_ids[abstraction_area_id].size
             )
+            return_flow_assigned_to_rivers[return_flow_assigned_to_rivers < 0] = 0.0
 
         self.var.last_water_demand_update = self.model.current_time
         return water_demand_assigned_to_rivers, return_flow_assigned_to_rivers
