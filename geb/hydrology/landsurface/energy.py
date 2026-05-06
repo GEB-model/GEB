@@ -486,9 +486,10 @@ def get_phase_state(
 
     Notes:
         The enthalpy reference point is 0°C liquid water.
-        - $H > 0$: Fully liquid, $T = H / C_{liq}$
-        - $-L < H \leq 0$: Phase change (mushy zone), $T = 0$, $f_{ice} = -H / L$
-        - $H \leq -L$: Fully frozen, $T = (H + L) / C_{ice}$
+        - H > 0: Fully liquid. Temperature T = H / C_liquid.
+        - -L < H <= 0: Phase change (mushy zone). Temperature T = 0.
+          Frozen fraction f_ice = -H / L.
+        - H <= -L: Fully frozen. Temperature T = (H + L) / C_ice.
 
     Args:
         enthalpy_J_per_m2: Layer enthalpy relative to 0°C liquid water (J/m2).
