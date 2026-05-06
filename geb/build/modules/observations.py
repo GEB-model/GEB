@@ -116,7 +116,6 @@ class Observations(BuildModelBase):
 
         # Initialize discharge observation DataFrames
         obs_hourly = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
-        obs_daily = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
 
         # Initialize metadata GeoDataFrame from GRDC
         obs_metadata = gpd.GeoDataFrame(
@@ -137,7 +136,6 @@ class Observations(BuildModelBase):
 
         # Track which IDs belong to which frequency
         hourly_ids = set()
-        daily_ids = set()
 
         # Filter metadata by region first
         region_obs_metadata = obs_metadata[
@@ -299,7 +297,7 @@ class Observations(BuildModelBase):
         for _, station_row in tqdm(obs_metadata.iterrows(), total=len(obs_metadata)):
             station_id = station_row["discharge_observations_station_ID"]
             station_name = station_row["discharge_observations_station_name"]
-            station_coords = (station_row["x"], station_row["y"])
+            station_coords: tuple[float, float] = (station_row["x"], station_row["y"])
 
             discharge_observations_uparea_m2 = station_row[
                 "discharge_observations_upstream_area_m2"

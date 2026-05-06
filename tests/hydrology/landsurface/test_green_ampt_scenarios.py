@@ -57,6 +57,11 @@ def run_infiltration_simulation(
     # Initial state
     w = ws * np.float32(initial_saturation)  # 50% saturation
 
+    # Thermal integration (simplified for tests)
+    soil_enthalpy_top_layer = np.float32(200000.0)  # Dummy J/m2 (~above freezing)
+    solid_heat_capacity_top_layer = np.float32(100000.0)  # Dummy J/m2/K
+    rain_temp = np.float32(10.0)  # 10C
+
     saturated_hydraulic_conductivity = np.full(n_layers, ksat_m, dtype=np.float32)
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
     frozen_fraction_top_layer = np.float32(0.0)
@@ -101,14 +106,13 @@ def run_infiltration_simulation(
             wetting_front_suction,
             wetting_front_deficit,
             green_ampt_active_layer_idx,
-            _,
+            soil_enthalpy_top_layer,
         ) = infiltration.py_func(
             ws,
             wres,
             saturated_hydraulic_conductivity,
             np.float32(0.0),
             land_use_type,
-            frozen_fraction_top_layer,
             w,
             rain_m,
             np.float32(0.0),
@@ -120,6 +124,10 @@ def run_infiltration_simulation(
             bubbling_pressure_cm,
             layer_heights,
             lambda_param,
+            soil_enthalpy_top_layer,
+            solid_heat_capacity_top_layer,
+            rain_temp,
+            rain_m,
         )
 
         # Simulate percolation (drainage) between layers to prevent top saturation blocks
@@ -334,6 +342,11 @@ def test_ga_full_column_saturation_processes() -> None:
     # Start dry
     w = wres.copy() + np.float32(1e-4)  # Near residual
 
+    # Thermal integration (simplified for tests)
+    soil_enthalpy_top_layer = np.float32(200000.0)  # Dummy J/m2 (~above freezing)
+    solid_heat_capacity_top_layer = np.float32(100000.0)  # Dummy J/m2/K
+    rain_temp = np.float32(10.0)  # 10C
+
     saturated_hydraulic_conductivity = np.full(n_layers, ksat_m, dtype=np.float32)
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
     frozen_fraction_top_layer = np.float32(0.0)
@@ -376,14 +389,13 @@ def test_ga_full_column_saturation_processes() -> None:
             wetting_front_suction,
             wetting_front_deficit,
             green_ampt_active_layer_idx,
-            _,
+            soil_enthalpy_top_layer,
         ) = infiltration.py_func(
             ws,
             wres,
             saturated_hydraulic_conductivity,
             np.float32(0.0),
             land_use_type,
-            frozen_fraction_top_layer,
             w,
             rain_m,
             np.float32(0.0),
@@ -395,6 +407,10 @@ def test_ga_full_column_saturation_processes() -> None:
             bubbling_pressure_cm,
             layer_heights,
             lambda_param,
+            soil_enthalpy_top_layer,
+            solid_heat_capacity_top_layer,
+            rain_temp,
+            rain_m,
         )
 
         # Simulate Drainage (simple gravity flow)
@@ -495,7 +511,12 @@ def test_ga_top_layer_refill_priority() -> None:
     # Dummy params
     ksat = np.full(n_layers, 1.0, dtype=np.float32)  # High K to not limit infil
     land_use = np.int32(1)
-    frozen_fraction_top_layer = np.float32(0.0)
+
+    # Thermal integration (simplified for tests)
+    soil_enthalpy_top_layer = np.float32(200000.0)  # Dummy J/m2 (~above freezing)
+    solid_heat_capacity_top_layer = np.float32(100000.0)  # Dummy J/m2/K
+    rain_temp = np.float32(10.0)  # 10C
+
     variable_runoff_beta = np.float32(0.0)
     bubbling = np.full(n_layers, 20.0, dtype=np.float32)
     lam = np.full(n_layers, 0.25, dtype=np.float32)
@@ -509,14 +530,13 @@ def test_ga_top_layer_refill_priority() -> None:
         wetting_front_suction,
         wetting_front_deficit,
         green_ampt_active_layer_idx,
-        _,
+        soil_enthalpy_top_layer,
     ) = infiltration.py_func(
         ws,
         wres,
         ksat,
         np.float32(0.0),
         land_use,
-        frozen_fraction_top_layer,
         w,
         rain_m,
         np.float32(0.0),
@@ -528,6 +548,10 @@ def test_ga_top_layer_refill_priority() -> None:
         bubbling,
         layer_heights,
         lam,
+        soil_enthalpy_top_layer,
+        solid_heat_capacity_top_layer,
+        rain_temp,
+        rain_m,
     )
 
     # Verify:
@@ -602,7 +626,12 @@ def test_ga_saturation_excess_runoff() -> None:
     # Dummy params
     ksat = np.full(n_layers, 1.0, dtype=np.float32)
     land_use = np.int32(NON_PADDY_IRRIGATED)
-    frozen_fraction_top_layer = np.float32(0.0)
+
+    # Thermal integration (simplified for tests)
+    soil_enthalpy_top_layer = np.float32(200000.0)  # Dummy J/m2 (~above freezing)
+    solid_heat_capacity_top_layer = np.float32(100000.0)  # Dummy J/m2/K
+    rain_temp = np.float32(10.0)  # 10C
+
     variable_runoff_beta = np.float32(0.1)
     bubbling = np.full(n_layers, 20.0, dtype=np.float32)
     lam = np.full(n_layers, 0.25, dtype=np.float32)
@@ -621,14 +650,13 @@ def test_ga_saturation_excess_runoff() -> None:
         wetting_front_suction,
         wetting_front_deficit,
         green_ampt_active_layer_idx,
-        _,
+        soil_enthalpy_top_layer,
     ) = infiltration.py_func(
         ws,
         wres,
         ksat,
         np.float32(0.0),
         land_use,
-        frozen_fraction_top_layer,
         w,
         rain_m,
         np.float32(0.0),
@@ -640,6 +668,10 @@ def test_ga_saturation_excess_runoff() -> None:
         bubbling,
         layer_heights,
         lam,
+        soil_enthalpy_top_layer,
+        solid_heat_capacity_top_layer,
+        rain_temp,
+        rain_m,
     )
 
     # All rain should be runoff
