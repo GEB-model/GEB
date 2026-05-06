@@ -180,7 +180,7 @@ class CMIP6(Adapter):
                 / historical_subset[variable_in_netcdf]
             )
 
-        return delta
+        return delta.rio.write_crs("EPSG:4326")  # ensure the deltas have a CRS
 
     def combine_deltas_and_write_to_file(self, deltas: dict[str, xr.Dataset]) -> None:
         """Combine the individual variable deltas into a single xarray Dataset and write it to a NetCDF file.
@@ -239,6 +239,9 @@ class CMIP6(Adapter):
         Returns:
             The current instance of the CMIP6 adapter.
         """
+        if self.path.exists():
+            return self
+
         # first fetch historical data (up to 2016), then fetch future projections (2017-2100)
         years_historical = [str(year) for year in range(1950, 2017)]
         years_future = [str(year) for year in range(2017, 2101)]

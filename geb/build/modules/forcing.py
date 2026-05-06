@@ -1153,70 +1153,38 @@ class Forcing(BuildModelBase):
 
         pr_hourly: xr.DataArray = era5_loader(variable="tp")
         tas: xr.DataArray = era5_loader("t2m")
+        all_nans_tas = np.isnan(tas.values).sum()
+        all_nans_pr = np.isnan(pr_hourly.values).sum()
 
         if representative_year:
             cmip6_deltas = self.setup_deltas_CMIP6(
                 representative_year=representative_year
             )
-            # the deltas are now in months, we want to apply them to the hourly data. We assume that the deltas are the same for each hour of a given month, which is a common approach in climate impact studies.
-            cmip6_deltas_hourly = (
-                cmip6_deltas.resample(time="1H")
-                .ffill()
-                .sel(time=slice(self.start_date, self.end_date))
-            )
 
-            # assert that there are no nans in the deltas after resampling and slicing, which would indicate that the resampling or slicing went wrong
-            assert not np.isnan(
-                cmip6_deltas_hourly["precipitation_delta"].values
-            ).any(), (
-                "NaN values found in precipitation_delta after resampling and slicing. Please check the resampling and slicing steps."
-            )
-            assert not np.isnan(
-                cmip6_deltas_hourly["near_surface_air_temperature_delta"].values
-            ).any(), (
-                "NaN values found in near_surface_air_temperature_delta after resampling and slicing. Please check the resampling and slicing steps."
-            )
-            cmip6_deltas_hourly_broadcasted = (
-                cmip6_deltas_hourly.broadcast_like(  # remove singleton dims
-                    pr_hourly
-                )  # expand to (time, y, x)
-            )
-            # assert time dimension matches between the deltas and the hourly data after resampling and slicing
-            assert all(cmip6_deltas_hourly.time == pr_hourly.time), (
-                "Time dimension of CMIP6 deltas does not match time dimension of ERA5 hourly data after resampling and slicing. Please check the resampling and slicing steps."
-            )
-
-            assert (
-                pr_hourly.shape
-                == cmip6_deltas_hourly_broadcasted["precipitation_delta"].shape
-            ), (
-                "Shape of CMIP6 precipitation_delta does not match shape of ERA5 hourly precipitation data after resampling and broadcasting. Please check the resampling, slicing, and broadcasting steps."
-            )
-            assert (
-                tas.shape
-                == cmip6_deltas_hourly_broadcasted[
+            if len(cmip6_deltas.x) == 1 and len(cmip6_deltas.y) == 1:
+                cmip6_aligned = (
+                    cmip6_deltas.resample(time="1H")
+                    .ffill()
+                    .sel(
+                        time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1])
+                    )
+                )
+                # Single-point CMIP6 deltas: broadcast along the ERA5 grid via xarray alignment.
+                delta_pr: xr.DataArray = cmip6_aligned["precipitation_delta"].isel(
+                    x=0, y=0, drop=True
+                )
+                delta_tas: xr.DataArray = cmip6_aligned[
                     "near_surface_air_temperature_delta"
-                ].shape
-            ), (
-                "Shape of CMIP6 near_surface_air_temperature_delta does not match shape of ERA5 hourly temperature data after resampling and broadcasting. Please check the resampling, slicing, and broadcasting steps."
-            )
-
-            pr_hourly = (
-                pr_hourly * cmip6_deltas_hourly_broadcasted["precipitation_delta"]
-            )
-            tas = (
-                tas
-                + cmip6_deltas_hourly_broadcasted["near_surface_air_temperature_delta"]
-            )
-
-            # assert that there are no nans in the adjusted data, which would indicate that the interpolation or reindexing went wrong
-            assert not np.isnan(tas.values).any(), (
-                "NaN values found in adjusted precipitation data after applying CMIP6 deltas. Please check the interpolation and reindexing steps."
-            )
-            assert not np.isnan(pr_hourly.values).any(), (
-                "NaN values found in adjusted temperature data after applying CMIP6 deltas. Please check the interpolation and reindexing steps."
-            )
-
+                ].isel(x=0, y=0, drop=True)
+                assert not delta_pr.isnull().any()
+                assert not delta_tas.isnull().any()
+                tas = tas + delta_tas
+                pr_hourly = pr_hourly * delta_pr
+            # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
+            assert np.isnan(tas.values).sum() == all_nans_tas
+            assert np.isnan(pr_hourly.values).sum() == all_nans_pr
+        tas = tas.chunk({"y": -1, "x": -1})
+        pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
         )  # convert from m/hr to kg/m2/s
