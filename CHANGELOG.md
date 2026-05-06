@@ -21,6 +21,7 @@
 - Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point). Also they are faster.
 - Do not convert from grid to HRU and then back to grid for livestock water consumption.
 - Abstraction from industry is now assumed to be abstrace from larger rivers only. If we let industry abstract from each grid cell that has any industry, the industrial users abstract water from very small rivers, which also leads to very high groundwater abstraction in those cells because the demand is not satisfiable from the river. This is highly unrealistic. Therefore, we define abstraction areas based on the river network. Each abstraction area is associated with a river of shreve stream order above a set threshold. All water demands from industry are essentially transferred downstream to the river of the abstraction area, and abstraction is assumed to occur from that river.
+- All other configuration options that essentially tried to do some of these things above per study area (like custom abstraction) are removed now. Hopefully we can simply reduce the need for configuration options with better defaults!
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).
