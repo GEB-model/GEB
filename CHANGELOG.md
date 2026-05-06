@@ -1,5 +1,5 @@
 # dev
-- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode="lakes_only"` or `mode="reservoirs_only"`.
+- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
 - Add `--debug-method "method_name"` to `geb build` to filter the build to only run the setup region and any other methods that are required to run that specific method. For debugging purposes only.
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
 - Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
@@ -18,6 +18,7 @@
 - Improved layout of profiling txt file.
 - Export less data by default.
 - Combine various reporter outputs more efficiently.
+- Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point).
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).

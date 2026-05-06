@@ -1,7 +1,6 @@
 """Tests for I/O workflow functions."""
 
 import shutil
-import warnings
 from datetime import datetime
 from pathlib import Path
 from time import time
@@ -14,7 +13,8 @@ import pytest
 import xarray as xr
 import zarr
 import zarr.storage
-from zarr.codecs.numcodecs import FixedScaleOffset
+from zarr.abc.codec import ArrayArrayCodec
+from zarr.codecs import CastValue, ScaleOffset
 
 import geb.workflows.io as io_module
 from geb.workflows.io import (
@@ -118,7 +118,7 @@ def encode_decode(
         max_value: Maximum value that is expected in the data.
             This value is used to calculate the scaling factor.
         offset:
-            Offset to be used in the FixedScaleOffset codec.
+            Offset to be used in the ScaleOffset codec.
             This value is subtracted from the data before scaling.
         precision: Required precision of the data. Defaults to 0.1.
 
@@ -137,26 +137,28 @@ def encode_decode(
         offset=offset,
     )
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations",
-        )
-        codec = FixedScaleOffset(
-            offset=offset, scale=scaling_factor, dtype=in_dtype, astype=out_dtype
-        )
-        da = xr.DataArray(data)
-        da.name = "data"
-        da.to_zarr(
-            tmp_folder / "test.zarr",
-            mode="w",
-            encoding={"data": {"filters": [codec]}},
-            consolidated=False,
-        )
+    filters: list[ArrayArrayCodec] = [
+        ScaleOffset(offset=offset, scale=scaling_factor),
+        CastValue(
+            data_type=out_dtype,
+            rounding="nearest-even",
+            out_of_range=None,  # raise error if value exceeds the range of the output dtype
+            scalar_map={"encode": {"NaN": 0}},
+        ),
+    ]
 
-        decoded_data = xr.open_zarr(tmp_folder / "test.zarr", consolidated=False)[
-            "data"
-        ].values
+    da = xr.DataArray(data)
+    da.name = "data"
+    da.to_zarr(
+        tmp_folder / "test.zarr",
+        mode="w",
+        encoding={"data": {"filters": filters}},
+        consolidated=False,
+    )
+
+    decoded_data = xr.open_zarr(tmp_folder / "test.zarr", consolidated=False)[
+        "data"
+    ].values
 
     diff: npt.NDArray[np.float32] = data - decoded_data
 
