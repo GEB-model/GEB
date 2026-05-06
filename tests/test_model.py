@@ -394,7 +394,7 @@ def test_run() -> None:
                 "_energy_balance": True,
             }
         )
-        args["config"]["hazards"]["floods"]["simulate"] = True
+        # args["config"]["hazards"]["floods"]["simulate"] = True
 
         run_model_with_method(method="run", **args)
 

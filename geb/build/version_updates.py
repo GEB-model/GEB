@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b22": [
+    "1.0.0b24": [
         "[update-method;setup_hydrography]",
     ],
     "1.0.0b21": [

@@ -11,7 +11,6 @@ from geb.geb_types import ArrayFloat32
 from geb.hydrology.HRUs import load_water_demand_xr
 from geb.store import Bucket
 
-from ..hydrology.landcovers import GRASSLAND_LIKE
 from .general import AgentBaseClass
 
 if TYPE_CHECKING:
@@ -105,12 +104,6 @@ class LiveStockFarmers(AgentBaseClass):
             366 if calendar.isleap(self.model.current_time.year) else 365
         )
 
-        # grassland/non-irrigated land that is not owned by a crop farmer
-        land_use_type = self.HRU.var.land_use_type
-        downscale_mask = (land_use_type != GRASSLAND_LIKE) | (
-            self.HRU.var.land_owners != -1
-        )
-
         # transform from mio m3 per year to m3/day
         water_consumption = (
             self.livestock_water_consumption_ds.sel(
@@ -149,8 +142,8 @@ class LiveStockFarmers(AgentBaseClass):
 
         Returns:
             A tuple containing:
-            - The current water demand as a numpy array (m/day).
-            - The current return flow as a numpy array (m/day).
+            - The current water demand as a numpy array (m3/day).
+            - The current return flow as a numpy array (m3/day).
         """
         if (
             self.model.current_time.day == 1

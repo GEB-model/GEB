@@ -69,9 +69,10 @@ class Industry(AgentBaseClass):
             self.model.files["other"]["water_demand/industry_water_demand"]
         )
 
-        self.abstraction_areas, self.abstraction_river_ids = (
-            self.create_abstraction_areas()
-        )
+        if self.model.simulate_hydrology:
+            self.abstraction_areas, self.abstraction_river_ids = (
+                self.create_abstraction_areas()
+            )
         if self.model.in_spinup:
             self.spinup()
 
@@ -93,7 +94,7 @@ class Industry(AgentBaseClass):
         self.var.current_return_flow = water_return_flow
 
     def create_abstraction_areas(
-        self, minimum_shreve_stream_order: int = 6
+        self, minimum_shreve_stream_order: int = 4
     ) -> tuple[dict[int, ArrayInt32], dict[int, ArrayInt32]]:
         """Create abstraction areas for industry based on the river network.
 
@@ -135,7 +136,8 @@ class Industry(AgentBaseClass):
             assert isinstance(river_idx, int)
             abstraction_river = river
             while (
-                abstraction_river["shreve_stream_order"] <= minimum_shreve_stream_order
+                abstraction_river["shreve_stream_order"] < minimum_shreve_stream_order
+                or not abstraction_river["represented_in_grid"]
             ):
                 downstream_idx = abstraction_river["downstream_ID"]
                 try:
@@ -173,8 +175,8 @@ class Industry(AgentBaseClass):
 
         Returns:
             A tuple containing:
-            - The updated water demand (m/day).
-            - The updated return flow (m/day).
+            - The updated water demand (m3/day).
+            - The updated return flow (m3/day).
         """
         days_in_year: Literal[366, 365] = (
             366 if calendar.isleap(self.model.current_time.year) else 365
