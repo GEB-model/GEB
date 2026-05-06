@@ -394,7 +394,7 @@ def test_run() -> None:
                 "_energy_balance": True,
             }
         )
-        # args["config"]["hazards"]["floods"]["simulate"] = True
+        args["config"]["hazards"]["floods"]["simulate"] = True
 
         run_model_with_method(method="run", **args)
 
@@ -445,12 +445,12 @@ def test_run() -> None:
             assert label in result
             assert result[label] is not None
 
-        # Note this should be much higher.
-        assert result["KGE"] > 0.125
-        assert result["NSE"] > -0.252
-        assert result["R"] > 0.430
-
         print("Discharge evaluation results:", result)
+
+        # Note this should be much higher.
+        assert result["KGE_hourly"] > 0.134
+        assert result["NSE_hourly"] > -0.324
+        assert result["R_hourly"] > 0.4180
 
         # method_args = {
         #     "method": "hydrodynamics.evaluate_hydrodynamics",
