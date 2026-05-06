@@ -10,11 +10,11 @@ def calculate_shreve_stream_order(rivers: pd.DataFrame) -> pd.Series:
     """Calculate the Shreve stream order for each river segment.
 
     Args:
-        rivers: A DataFrame containing river segments with at least `COMID`
-            and `downstream_ID` columns.
+        rivers: A DataFrame containing river segments with at least downstream_ID.
+            the river id is expected to be the index of the DataFrame.
 
     Returns:
-        A Series indexed by river id (`COMID`) with the Shreve stream order as values.
+        A Series indexed by river id with the Shreve stream order as values.
 
     Notes:
         Shreve stream order is calculated by assigning an order of 1 to all sources.
