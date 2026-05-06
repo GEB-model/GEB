@@ -169,9 +169,7 @@ def write_array(
     z: zarr.Array[Any] = zarr.create_array(
         fp,
         shape=arr.shape,
-        chunks=arr.shape
-        if arr.size > 0
-        else "auto",  # Zarr does not support zero-sized chunks
+        chunks=tuple(max(dim_size, 1) for dim_size in arr.shape),
         dtype=arr.dtype,
         compressors=[ZstdCodec(level=compression_level)],
         overwrite=True,

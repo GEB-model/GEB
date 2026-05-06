@@ -490,7 +490,6 @@ class GEBModel(Module):
             self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
-            self.hydrology.landsurface.set_global_variables()
 
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
 
