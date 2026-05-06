@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b22": [
+        "[update-method;setup_hydrography]",
+    ],
     "1.0.0b21": [
         "[manual] Remove `setup_irrigation_sources` from your `build.yml`. Only required if you don't use the new build.yml format that inherits (see changelog.md)",
         "[update-method;setup_farmer_crop_calendar] Run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.",
