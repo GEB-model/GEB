@@ -1,4 +1,5 @@
 # dev
+- Add FLUXNET data adapter and `setup_meteorological_stations` to the build process to incorporate latent heat observations from flux towers.
 - Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
 - Add `--debug-method "method_name"` to `geb build` to filter the build to only run the setup region and any other methods that are required to run that specific method. For debugging purposes only.
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
@@ -19,6 +20,8 @@
 - Export less data by default.
 - Combine various reporter outputs more efficiently.
 - Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point).
+- Return median metrics for KGE, NSE etc rather than mean.
+- Add FLUXNET (https://fluxnet.org) and GROW (https://zenodo.org/records/15149480) observations to build process. Not yet used in evaluation.
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).

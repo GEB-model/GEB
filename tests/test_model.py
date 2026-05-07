@@ -240,6 +240,8 @@ def test_update_with_dict() -> None:
         "setup_vegetation",
         "setup_water_demand",
         "setup_discharge_observations",
+        "setup_meteorological_stations",
+        "setup_groundwater_observations",
     ],
 )
 def test_update_with_method(method: str) -> None:
