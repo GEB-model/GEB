@@ -83,28 +83,25 @@ def calculate_spatial_infiltration_excess(
 
     if infiltration_capacity_mean <= np.float32(0.0):
         return np.float32(0.0), available_water
-
-    # Calculate max capacity: f_max = f_GA * (b + 1)
-    max_infiltration_capacity = infiltration_capacity_mean * (
-        shape_parameter_beta + np.float32(1.0)
-    )
-
-    if available_water >= max_infiltration_capacity:
-        # If precipitation exceeds max capacity, infiltration is limited by the mean capacity
-        infiltration = infiltration_capacity_mean
+    # Higher beta = more early runoff, slower approach to mean
+    # Limit as beta -> 0 is the Exponential Distribution: I = f_mean * (1 - exp(-P/f_mean))
+    # For beta > 0, we use the Generalized Pareto / Lomax integral
+    if shape_parameter_beta < np.float32(1e-4):
+        infiltration: np.float32 = infiltration_capacity_mean * (
+            np.float32(1.0) - np.exp(-available_water / infiltration_capacity_mean)
+        )
     else:
-        # Integration of infiltration capacity < available water portion
-        # f_avg = f_GA * [1 - (1 - P/f_max)^(b+1)]
-        ratio = available_water / max_infiltration_capacity
-        power = shape_parameter_beta + np.float32(1.0)
-
-        infiltration = infiltration_capacity_mean * (
-            np.float32(1.0) - (np.float32(1.0) - ratio) ** power
+        # Higher beta = more early runoff, slower approach to mean
+        exponent = np.float32(-1.0) / shape_parameter_beta
+        base = np.float32(1.0) + (
+            shape_parameter_beta * available_water / infiltration_capacity_mean
+        )
+        infiltration: np.float32 = infiltration_capacity_mean * (
+            np.float32(1.0) - base**exponent
         )
 
     # Clamp infiltration to available water to prevent precision errors
-    if infiltration > available_water:
-        infiltration = available_water
+    infiltration: np.float32 = min(infiltration, available_water)
 
     runoff: np.float32 = available_water - infiltration
     # Prevent negative runoff due to float precision
@@ -420,9 +417,7 @@ def get_green_ampt_params(
           from the total layer water volume.
         - Includes heuristics (theta_floor) to prevent numerical instability when layers interact.
     """
-    current_depth = np.float32(0.0)
-    idx = 0
-    depth_in_layer = np.float32(0.0)
+    current_depth: np.float32 = np.float32(0.0)
     n_layers = len(soil_layer_height_m)
 
     # Find which layer the wetting front is currently in
@@ -483,8 +478,8 @@ def get_green_ampt_params(
 def infiltration(
     ws: ArrayFloat32,
     wres: ArrayFloat32,
-    saturated_hydraulic_conductivity_m_per_timestep: ArrayFloat32,
-    groundwater_toplayer_conductivity_m_per_timestep: np.float32,
+    saturated_hydraulic_conductivity_m_per_s: ArrayFloat32,
+    groundwater_toplayer_conductivity_m_per_s: np.float32,
     land_use_type: np.int32,
     w: ArrayFloat32,
     topwater_m: np.float32,
@@ -525,8 +520,8 @@ def infiltration(
     Args:
         ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
         wres: Residual soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
-        saturated_hydraulic_conductivity_m_per_timestep: Saturated hydraulic conductivity in each layer for the cell in m in this timestep, shape (N_SOIL_LAYERS,).
-        groundwater_toplayer_conductivity_m_per_timestep: Groundwater top layer conductivity limiting recharge (m/timestep).
+        saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity in each layer for the cell in m/s, shape (N_SOIL_LAYERS,).
+        groundwater_toplayer_conductivity_m_per_s: Groundwater top layer conductivity limiting recharge (m/s).
         land_use_type: Land use type for the cell.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
@@ -587,7 +582,7 @@ def infiltration(
     groundwater_recharge_m: np.float32 = np.float32(0.0)
 
     n_substeps: int = 6
-    dt: np.float32 = np.float32(1.0) / np.float32(n_substeps)
+    dt: np.float32 = np.float32(3600.0) / np.float32(n_substeps)
     topwater_per_step: np.float32 = topwater_m / np.float32(n_substeps)
     liquid_water_input_for_enthalpy_per_step_m: np.float32 = (
         liquid_water_input_for_enthalpy_m / np.float32(n_substeps)
@@ -605,13 +600,14 @@ def infiltration(
             w,
             ws,
             wres,
-            saturated_hydraulic_conductivity_m_per_timestep,
+            saturated_hydraulic_conductivity_m_per_s,
             bubbling_pressure_cm,
             lambda_pore_size_distribution,
         )
 
     # Calculate depth limit for current layer
     current_layer_depth_limit = np.float32(0.0)
+
     # Ensure active_layer_idx is within bounds
     green_ampt_active_layer_idx = max(
         0, min(green_ampt_active_layer_idx, len(soil_layer_height_m) - 1)
@@ -657,7 +653,7 @@ def infiltration(
                 w,
                 ws,
                 wres,
-                saturated_hydraulic_conductivity_m_per_timestep,
+                saturated_hydraulic_conductivity_m_per_s,
                 bubbling_pressure_cm,
                 lambda_pore_size_distribution,
             )
@@ -674,27 +670,29 @@ def infiltration(
         # Calculate effective time since start of infiltration event
         # If wetting_front_depth is negligible, we start at t=0
         if wetting_front_depth_m == np.float32(0.0):
-            effective_time_steps = np.float32(0.0)
+            effective_seconds_since_start_infiltration = np.float32(0.0)
         else:
-            effective_time_steps = calculate_green_ampt_time_from_infiltration(
-                current_cumulative_infiltration,
-                saturated_hydraulic_conductivity_m_per_timestep[
-                    green_ampt_active_layer_idx
-                ],
-                wetting_front_suction_head_m,
-                wetting_front_moisture_deficit,
+            effective_seconds_since_start_infiltration = (
+                calculate_green_ampt_time_from_infiltration(
+                    current_cumulative_infiltration,
+                    saturated_hydraulic_conductivity_m_per_s[
+                        green_ampt_active_layer_idx
+                    ],
+                    wetting_front_suction_head_m,
+                    wetting_front_moisture_deficit,
+                )
             )
 
         # Calculate potential cumulative infiltration at end of substep
         # We advance time by dt (fraction of timestep)
-        new_time_steps = effective_time_steps + dt
+        time_since_start_of_infiltration = (
+            effective_seconds_since_start_infiltration + dt
+        )
 
         potential_cumulative_infiltration = (
             calculate_green_ampt_cumulative_infiltration(
-                new_time_steps,
-                saturated_hydraulic_conductivity_m_per_timestep[
-                    green_ampt_active_layer_idx
-                ],
+                time_since_start_of_infiltration,
+                saturated_hydraulic_conductivity_m_per_s[green_ampt_active_layer_idx],
                 wetting_front_suction_head_m,
                 wetting_front_moisture_deficit,
                 adjust_for_coarse_soils=False,
@@ -756,8 +754,7 @@ def infiltration(
             )
 
             recharge_capacity_m_step = (
-                max(np.float32(0.0), groundwater_toplayer_conductivity_m_per_timestep)
-                * dt
+                max(np.float32(0.0), groundwater_toplayer_conductivity_m_per_s) * dt
             )
 
             step_groundwater_recharge_m = min(
@@ -783,7 +780,7 @@ def infiltration(
         # L_new = L_old + Infiltration / DeltaTheta
         if step_infiltration > np.float32(
             0.0
-        ) and wetting_front_moisture_deficit > np.float32(0.0):
+        ) and wetting_front_moisture_deficit > np.float32(1e-6):
             wetting_front_depth_m += step_infiltration / wetting_front_moisture_deficit
 
         # Update soil layers sequentially from top to bottom

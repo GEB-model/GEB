@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b24": [
         "[update-method;setup_hydrography]",
+        "[update-method;setup_geomorphology]",
     ],
     "1.0.0b21": [
         "[manual] Remove `setup_irrigation_sources` from your `build.yml`. Only required if you don't use the new build.yml format that inherits (see changelog.md)",

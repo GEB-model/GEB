@@ -289,13 +289,7 @@ def land_surface_model(
     # convert values to substep (i.e., per hour)
     actual_irrigation_consumption_m = actual_irrigation_consumption_m / 24.0
     capillar_rise_m = capillar_rise_m / 24.0
-    saturated_hydraulic_conductivity_m_per_hour = (
-        saturated_hydraulic_conductivity_m_per_s
-    ) * np.float32(3600.0)
 
-    groundwater_toplayer_conductivity_m_per_hour = (
-        groundwater_toplayer_conductivity_m_per_day
-    ) / np.float32(24.0)
     groundwater_toplayer_conductivity_m_per_s = (
         groundwater_toplayer_conductivity_m_per_day
     ) / np.float32(24.0 * 3600.0)
@@ -577,10 +571,10 @@ def land_surface_model(
                 ) = infiltration(
                     ws=water_content_saturated_m[i, :],
                     wres=water_content_residual_m[i, :],
-                    saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
+                    saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
                         i, :
                     ],
-                    groundwater_toplayer_conductivity_m_per_timestep=groundwater_toplayer_conductivity_m_per_hour[
+                    groundwater_toplayer_conductivity_m_per_s=groundwater_toplayer_conductivity_m_per_s[
                         i
                     ],
                     land_use_type=land_use_type[i],
@@ -756,9 +750,10 @@ def land_surface_model(
                     wres=water_content_residual_m[i, 0],
                     ws=water_content_saturated_m[i, 0],
                     lambda_pore_size_distribution=lambda_pore_size_distribution[i, 0],
-                    saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_hour[
+                    saturated_hydraulic_conductivity_m_per_timestep=saturated_hydraulic_conductivity_m_per_s[
                         i, 0
-                    ],
+                    ]
+                    * np.float32(3600.0),
                 )
 
                 # soil moisture is updated in place
@@ -1604,7 +1599,7 @@ class LandSurface(Module):
         Raises:
             AssertionError: If any of the debug assertions fail.
         """
-        self.HRU.var.variable_runoff_shape_beta.fill(1.0)
+        self.HRU.var.variable_runoff_shape_beta.fill(0.0)
         timer = TimingModule("Land surface model")
         if __debug__:
             snow_water_equivalent_prev: ArrayFloat64 = (
@@ -2095,6 +2090,8 @@ class LandSurface(Module):
                 * 0.001  # to m3/s
                 * (24 * 3600.0)  # to m3/day
             )
+            print((runoff_m * self.HRU.var.cell_area).sum(), pr_total_m3)
+
         else:
             pr_total_m3 = np.float64(np.nan)
 

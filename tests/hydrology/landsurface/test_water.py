@@ -2,7 +2,6 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 
 from geb.hydrology.landcovers import (
     NON_PADDY_IRRIGATED,
@@ -12,7 +11,6 @@ from geb.hydrology.landcovers import (
 )
 from geb.hydrology.landsurface.water import (
     add_water_to_topwater_and_evaporate_open_water,
-    calculate_spatial_infiltration_excess,
     get_bubbling_pressure,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
@@ -196,7 +194,9 @@ def test_infiltration() -> None:
     lam_arr = np.full_like(ws, 0.5)
 
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
-    saturated_hydraulic_conductivity = np.full_like(w, np.float32(0.01))
+    saturated_hydraulic_conductivity_m_per_s = np.full_like(
+        w, np.float32(0.01 / 3600.0)
+    )
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
     frozen_fraction_top_layer = np.float32(0.0)
     topwater = np.float32(0.005)
@@ -217,8 +217,8 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_s
         land_use_type,
         w,
         topwater,
@@ -267,11 +267,11 @@ def test_infiltration() -> None:
         _,
         _,
         _,
-    ) = infiltration(
+    ) = infiltration.py_func(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_s
         land_use_type,
         w,
         topwater,
@@ -317,8 +317,8 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_s
         land_use_type,
         w,
         topwater,
@@ -362,7 +362,7 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
+        saturated_hydraulic_conductivity_m_per_s,
         np.float32(0.0),
         np.int32(NON_PADDY_IRRIGATED),
         w,
@@ -405,7 +405,7 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
+        saturated_hydraulic_conductivity_m_per_s,
         np.float32(0.0),
         np.int32(NON_PADDY_IRRIGATED),
         w,
@@ -447,8 +447,8 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_s
         land_use_type,
         w,
         topwater,
@@ -492,8 +492,8 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_s
         land_use_type,
         w,
         topwater,
@@ -539,8 +539,8 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_s
         land_use_type,
         w,
         topwater,
@@ -584,8 +584,8 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_s
         land_use_type,
         w,
         topwater,
@@ -635,8 +635,8 @@ def test_infiltration() -> None:
     ) = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_timestep
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),  # groundwater_toplayer_conductivity_m_per_s
         land_use_type,
         w,
         topwater,
@@ -676,13 +676,15 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     lambda_param = np.full_like(ws, 0.5)
     # Use very high soil conductivity so the Green-Ampt rate limit does not bind;
     # the groundwater conductivity cap should be the limiting factor.
-    saturated_hydraulic_conductivity = np.full_like(ws, np.float32(10.0))
+    saturated_hydraulic_conductivity_m_per_s = np.full_like(
+        ws, np.float32(10.0 / 3600.0)
+    )
 
     # Fully saturated profile with wetting front at the bottom: no storage available,
     # so incoming topwater can only pass to groundwater (capped) or become runoff.
     w = ws.copy()
     topwater_m = np.float32(0.06)
-    groundwater_toplayer_conductivity_m_per_timestep = np.float32(0.02)
+    groundwater_toplayer_conductivity_m_per_s = np.float32(0.02 / 3600.0)
     total_soil_depth_m = np.float32(np.sum(soil_layer_height_m))
 
     (
@@ -698,14 +700,14 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     ) = infiltration.py_func(
         ws,
         wres,
-        saturated_hydraulic_conductivity,
-        groundwater_toplayer_conductivity_m_per_timestep,
+        saturated_hydraulic_conductivity_m_per_s,
+        groundwater_toplayer_conductivity_m_per_s,
         np.int32(NON_PADDY_IRRIGATED),
         w,
         topwater_m,
         np.float32(0.0),
         total_soil_depth_m,
-        np.float32(10.0),
+        np.float32(10.0 / 3600.0),
         np.float32(0.1),
         np.int32(0),
         np.float32(0.1),
@@ -720,7 +722,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
 
     assert infiltration_amount == 0.0
     assert (
-        abs(groundwater_recharge - groundwater_toplayer_conductivity_m_per_timestep)
+        abs(groundwater_recharge - groundwater_toplayer_conductivity_m_per_s * 3600)
         < 1e-6
     )
     assert abs(direct_runoff - (topwater_m - groundwater_recharge)) < 1e-6
@@ -737,17 +739,17 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         _,
         _,
         _,
-    ) = infiltration.py_func(
+    ) = infiltration(
         ws,
         wres,
-        saturated_hydraulic_conductivity,
-        groundwater_toplayer_conductivity_m_per_timestep,
+        saturated_hydraulic_conductivity_m_per_s,
+        groundwater_toplayer_conductivity_m_per_s,
         np.int32(NON_PADDY_IRRIGATED),
         w,
         topwater_m,
         np.float32(0.001),
         total_soil_depth_m,
-        np.float32(10.0),
+        np.float32(10.0 / 3600.0),
         np.float32(0.1),
         np.int32(0),
         np.float32(0.1),
@@ -944,9 +946,11 @@ def test_infiltration_variable_runoff_integration() -> None:
     w = np.array(
         [50.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
     )  # 50% saturation
-    saturated_hydraulic_conductivity = np.full_like(w, np.float32(10.0))  # High Ksat
+    saturated_hydraulic_conductivity_m_per_s = np.full_like(
+        w, np.float32(10.0 / 3600.0)
+    )  # High Ksat
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
-    topwater = np.float32(10.0)  # 10mm rain
+    topwater = np.float32(10.0 / 3600.0)  # 10mm rain
 
     # Run infiltration using .py_func to use the python implementation with the updated global
     # With variable runoff (b=0.4), even if not saturated, there should be some runoff.
@@ -962,10 +966,10 @@ def test_infiltration_variable_runoff_integration() -> None:
     h_arr = np.full_like(ws, 0.1)  # Assume layer height
     lam_arr = np.full_like(ws, 0.5)
 
-    _, runoff_variable, _, infil_variable, _, _, _, _, _ = infiltration.py_func(
+    _, runoff_variable, _, infil_variable, _, _, _, _, _ = infiltration(
         ws,
         np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
+        saturated_hydraulic_conductivity_m_per_s,
         np.float32(0.0),
         land_use_type,
         w_variable,
@@ -990,146 +994,81 @@ def test_infiltration_variable_runoff_integration() -> None:
     assert abs(runoff_variable + infil_variable - topwater) < 1e-5
 
 
-def test_infiltration_variable_capacity_limit() -> None:
-    """Test that Variable infiltration is limited by infiltration capacity (Ksat)."""
+def test_infiltration_variable_runoff_plot() -> None:
+    """Test infiltration with Variable Infiltration (PDM) runoff for various levels."""
     # Setup inputs
-    ws = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], dtype=np.float32)
-    w = np.array(
-        [10.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
-    )  # Low saturation (10/100 = 0.1)
-
-    # Ksat is low (2.0), Topwater is high (10.0)
-    # Variable infiltration would likely infiltrate most of the 10.0 if not limited,
-    # because relative saturation is low (0.1).
-    # Pass as array because infiltration expects array (for layers)
-    saturated_hydraulic_conductivity = np.full_like(w, np.float32(2.0))
-
+    soil_layer_height = np.array([0.05, 0.1, 0.2, 0.3, 0.5, 1.0], dtype=np.float32)
+    ws = np.array([0.03, 0.06, 0.10, 0.20, 0.30, 0.40], dtype=np.float32)
+    w = ws * 0.5  # 50% saturation
+    saturated_hydraulic_conductivity_m_per_s = np.full_like(
+        w, np.float32(0.01 / 3600.0)
+    )
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
-    topwater = np.float32(10.0)
-    variable_runoff_shape_beta = np.float32(0.4)
 
     # Define arrays for new signature
-    bub_arr = np.full_like(ws, 100.0)
-    h_arr = np.full_like(ws, 0.1)  # Assume layer height
+    bub_arr = np.full_like(ws, 0.2)
     lam_arr = np.full_like(ws, 0.5)
 
-    # Run infiltration using .py_func
-    # Use a copy of w to prevent inplace modification affecting subsequent tests
-    _, runoff, _, infiltration_amount, _, _, _, _, _ = infiltration.py_func(
-        ws,
-        np.zeros_like(ws),
-        saturated_hydraulic_conductivity,
-        np.float32(0.0),
-        land_use_type,
-        w.copy(),
-        topwater,
-        np.float32(0.0),
-        np.float32(0.0),
-        np.float32(100.0),  # wetting_front_suction_head_m
-        np.float32(0.1),  # wetting_front_moisture_deficit
-        np.int32(0),
-        variable_runoff_shape_beta,
-        bub_arr,
-        h_arr,
-        lam_arr,
-        np.float32(0.0),
-        np.float32(100000.0),
-        np.float32(0.0),
-        np.float32(0.0),
-    )
+    fig, ax = plt.subplots()
 
-    # With suction adjustment:
-    # Relative saturation S = 10.0 / 100.0 = 0.1
-    # Capacity = Ksat / S = 2.0 / 0.1 = 20.0
-    # Incoming water = 10.0
-    # Since 10.0 < 20.0, it is NOT limited by capacity.
-    # It is determined effectively by the variable infiltration curve (8.947...)
+    rainfall_amounts_m = np.linspace(0, 5.0, 20) / 1000.0
+    variable_runoff_shape_beta_values = np.array([0.0, 0.5, 1.0, 2.5, 5.0])
 
-    # We assert that infiltration significantly exceeds the old Ksat limit of 2.0
-    assert infiltration_amount > 2.0
+    colors = plt.cm.viridis(np.linspace(0, 1, len(variable_runoff_shape_beta_values)))
+    for idx, variable_runoff_shape_beta in enumerate(variable_runoff_shape_beta_values):
+        runoff_results = []
+        infiltration_results = []
+        for rainfall_amount in rainfall_amounts_m:
+            print(rainfall_amount)
+            _, direct_runoff, _, infiltration_amount, _, _, _, _, _ = infiltration(
+                ws,
+                np.zeros_like(ws),
+                saturated_hydraulic_conductivity_m_per_s,
+                np.float32(0.0),
+                land_use_type,
+                w.copy(),
+                rainfall_amount,
+                np.float32(0.0),
+                np.float32(0.0),
+                np.float32(0.1),  # wetting_front_suction_head_m
+                np.float32(0.1),  # wetting_front_moisture_deficit
+                np.int32(0),
+                variable_runoff_shape_beta,
+                bub_arr,
+                soil_layer_height,
+                lam_arr,
+                np.float32(0.0),
+                np.float32(100000.0),
+                np.float32(0.0),
+                np.float32(0.0),
+            )
+            runoff_results.append(direct_runoff * 1000)  # Convert to mm for plotting
+            infiltration_results.append(
+                infiltration_amount * 1000
+            )  # Convert to mm for plotting
 
-    # We can also check a case where we EXCEED the new higher capacity
-    # For this, we'll use a lower Ksat to lower the capacity threshold
-    # Ksat = 0.5. Capacity at start = 0.5 / 0.1 = 5.0.
-    # We provide topwater = 50.0.
-    # With sub-stepping (N=6):
-    # Step 1: P=8.33, Cap=0.833. Infil=0.833. w increases -> Cap decreases.
-    # Step 2: Cap < 0.833.
-    # ...
-    # Total infiltration should be roughly integrated capacity, which is < initial capacity (5.0)
-    # But significantly higher than Ksat (0.5).
+        ax.plot(
+            rainfall_amounts_m * 1000,  # Convert back to mm for plotting
+            runoff_results,
+            marker="o",
+            label=f"Runoff beta={variable_runoff_shape_beta:.1f}",
+            linestyle="--",
+            color=colors[idx],
+        )
+        ax.plot(
+            rainfall_amounts_m * 1000,  # Convert back to mm for plotting
+            infiltration_results,
+            marker="s",
+            label=f"Infiltration beta={variable_runoff_shape_beta:.1f}",
+            color=colors[idx],
+        )
 
-    saturated_hydraulic_conductivity_low = np.full_like(w, np.float32(0.5))
-    topwater_high = np.float32(50.0)
+    ax.set_xlabel("Rainfall Amount (mm)")
+    ax.set_ylabel("Infiltration / Runoff (mm)")
 
-    _, runoff_high, _, infiltration_amount_high, _, _, _, _, _ = infiltration.py_func(
-        ws,
-        np.zeros_like(ws),
-        saturated_hydraulic_conductivity_low,
-        np.float32(0.0),
-        land_use_type,
-        w.copy(),  # Use a fresh copy of w (10.0, 50.0, ...)
-        topwater_high,
-        np.float32(0.0),
-        np.float32(0.0),
-        np.float32(100.0),  # wetting_front_suction_head_m
-        np.float32(0.1),  # wetting_front_moisture_deficit
-        np.int32(0),
-        variable_runoff_shape_beta,
-        bub_arr,
-        h_arr,
-        lam_arr,
-        np.float32(0.0),
-        np.float32(100000.0),
-        np.float32(0.0),
-        np.float32(0.0),
-    )
-
-    # Check that we get the benefit of suction ( > Ksat)
-    assert infiltration_amount_high > 0.5, "Should exceed Ksat due to suction"
-
-    # Check that dynamic capacity reduces infiltration compared to static initial estimate
-    # Note: With Green-Ampt starting from wetting_front=0, the initial capacity is very high.
-    # We just ensure it is limited by available water and physically reasonable.
-    assert infiltration_amount_high < topwater_high, (
-        "Cannot infiltrate more than available"
-    )
-
-    # Based on manual calculation/execution, result is substantial
-    assert infiltration_amount_high > 3.5, "Should still be substantial"
-
-    # Check runoff for the first case
-    assert np.isclose(runoff, 10.0 - infiltration_amount)
-
-    # Verify that if Ksat is high, infiltration is higher
-    saturated_hydraulic_conductivity_high = np.full_like(w, np.float32(20.0))
-    _, runoff_high, _, infiltration_amount_high, _, _, _, _, _ = infiltration.py_func(
-        ws,
-        np.zeros_like(ws),
-        saturated_hydraulic_conductivity_high,
-        np.float32(0.0),
-        land_use_type,
-        w,
-        topwater,
-        np.float32(0.0),
-        np.float32(0.0),
-        np.float32(100.0),  # wetting_front_suction_head_m
-        np.float32(0.1),  # wetting_front_moisture_deficit
-        np.int32(0),
-        variable_runoff_shape_beta,
-        bub_arr,
-        h_arr,
-        lam_arr,
-        np.float32(0.0),
-        np.float32(100000.0),
-        np.float32(0.0),
-        np.float32(0.0),
-    )
-
-    # With high Ksat, infiltration should be higher than 2.0
-    # (It will be determined by variable infiltration curve)
-    assert infiltration_amount_high > 2.0
-    assert infiltration_amount_high <= 10.0
+    ax.legend()
+    ax.set_title("Infiltration with Variable Runoff")
+    fig.savefig(output_folder / "test_infiltration_variable_runoff_plot.png")
 
 
 def test_pedotransfer_functions_consistency() -> None:
@@ -1358,92 +1297,3 @@ def test_pedotransfer_functions_consistency() -> None:
     assert results["Clay"]["thetas_wosten"] > results["Sand"]["thetas_wosten"], (
         "Clay should have higher Thetas than Sand (Wosten)"
     )
-
-
-def test_calculate_spatial_infiltration_excess() -> None:
-    """Test the spatial variability of infiltration capacity function."""
-    # Case 1: Low precipitation (P << f_max), should be mostly infiltrated
-    f_GA = np.float32(10.0)
-    beta = np.float32(0.2)
-    f_max = f_GA * (beta + np.float32(1.0))  # 12.0
-
-    # Very small P
-    P = np.float32(0.01)
-    infil, runoff = calculate_spatial_infiltration_excess(f_GA, P, beta)
-    # For very small P, infiltration approaches P
-    assert abs(infil - P) < 1e-4
-    assert abs(runoff - 0.0) < 1e-4
-
-    # Case 2: High precipitation (P >= f_max)
-    P_high = np.float32(20.0)
-    infil, runoff = calculate_spatial_infiltration_excess(f_GA, P_high, beta)
-    assert abs(infil - f_GA) < 1e-4
-    assert abs(runoff - (P_high - f_GA)) < 1e-4
-
-    # Case 3: Intermediate P
-    P_mid = f_max / np.float32(2.0)  # 6.0
-    # ratio = 0.5
-    # power = 1.2
-    # term = 1 - (0.5)^1.2
-    # infil = f_GA * term
-    infil, runoff = calculate_spatial_infiltration_excess(f_GA, P_mid, beta)
-    expected_term = np.float32(1.0) - (np.float32(0.5) ** np.float32(1.2))
-    expected_infil = f_GA * expected_term
-    assert abs(infil - expected_infil) < 1e-4
-    assert abs(runoff - (P_mid - infil)) < 1e-4
-
-    # Case 4: Zero capacity
-    infil, runoff = calculate_spatial_infiltration_excess(np.float32(0.0), P_mid, beta)
-    assert infil == 0.0
-    assert runoff == P_mid
-
-    # Case 5: Zero precip
-    infil, runoff = calculate_spatial_infiltration_excess(f_GA, np.float32(0.0), beta)
-    assert infil == 0.0
-    assert runoff == 0.0
-
-
-def test_plot_spatial_infiltration_curve() -> None:
-    """Plot the spatial infiltration curve for verification."""
-    # Mean Green-Ampt Capacity
-    f_GA = 10.0  # arbitrary units
-
-    betas = [0.01, 0.2, 0.5, 1.0, 5.0]
-    precip_values = np.linspace(0, 30, 100).astype(np.float32)
-
-    sns.set_style("whitegrid")
-    plt.figure(figsize=(6, 6))
-
-    for beta in betas:
-        infils = []
-        for P in precip_values:
-            infil, _ = calculate_spatial_infiltration_excess(f_GA, P, np.float32(beta))
-            infils.append(infil)
-
-        plt.plot(precip_values, infils, label=f"beta={beta}")
-
-    # Plot f=P line (100% infiltration)
-    plt.plot(
-        precip_values,
-        precip_values,
-        "k--",
-        alpha=0.3,
-        label="1:1 Line (100% Infiltration)",
-    )
-
-    # Plot f=f_GA line (Mean capacity)
-    plt.axhline(y=f_GA, color="r", linestyle=":", label="Mean Capacity (F)")
-
-    plt.gca().set_aspect(
-        "equal", adjustable="box"
-    )  # Ensure the axes box is exactly square
-    plt.xlim(0, 30)
-    plt.ylim(0, 30)
-
-    plt.xlabel("Rainfall Intensity / Available Water [L/T]", fontweight="bold")
-    plt.ylabel("Effective Infiltration Rate [L/T]", fontweight="bold")
-    plt.title("Spatial Variability of Infiltration")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(output_folder / "spatial_infiltration_curve.svg")
-    plt.close()
