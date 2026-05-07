@@ -18,7 +18,7 @@ EUROPE_BOUNDS: tuple[float, float, float, float] = (-10.0, 35.0, 30.0, 60.0)
 
 @pytest.mark.skipif(
     IN_GITHUB_ACTIONS,
-    reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
+    reason="Too heavy for GitHub Actions.",
 )
 def test_fluxnet_adapter_metadata_reading() -> None:
     """Test that fetch() parses BIF files and produces a valid station GeoDataFrame.
@@ -39,7 +39,7 @@ def test_fluxnet_adapter_metadata_reading() -> None:
 
 @pytest.mark.skipif(
     IN_GITHUB_ACTIONS,
-    reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
+    reason="Too heavy for GitHub Actions.",
 )
 def test_fluxnet_adapter_timeseries_reading() -> None:
     """Test that read(variable='LE_F_MDS') returns evaporation timeseries.

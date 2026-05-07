@@ -12,7 +12,7 @@ from ...testconfig import IN_GITHUB_ACTIONS
 
 @pytest.mark.skipif(
     IN_GITHUB_ACTIONS,
-    reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
+    reason="Too heavy for GitHub Actions.",
 )
 def test_grow_data_adapter() -> None:
     """Test the GROW data adapter."""

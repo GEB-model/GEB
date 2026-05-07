@@ -171,7 +171,7 @@ class Fluxnet(Adapter):
                                 df["LE_F_MDS_QC"] != 0, "latent_heat_flux_W_per_m2"
                             ] = pd.NA
 
-                            # drop original columns and set date as index
+                            # drop original columns
                             df: pd.DataFrame = df.drop(
                                 columns=[
                                     "TIMESTAMP_START",
