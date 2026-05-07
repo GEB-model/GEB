@@ -950,17 +950,19 @@ def _create_discharge_folium_map(
             )
 
         popup_html = f"""
+<div style="width:600px">
 <b>Station Name:</b> {station_name}<br>
 <b>R:</b> {row["R"]:.2f}<br>
 <b>KGE:</b> {row["KGE"]:.2f}<br>
 <b>NSE:</b> {row["NSE"]:.2f}<br>
 <b>Upstream Area Ratio:</b> {row["discharge_observations_to_GEB_upstream_area_ratio"]:.2f}<br>
-<img src="data:image/png;base64,{encoded_image_scatter}" width="100%">
-<img src="data:image/png;base64,{encoded_image_time_series}" width="100%">
+<img src="data:image/png;base64,{encoded_image_scatter}" style="width:100%; max-width:600px; display:block; margin-top:6px;">
+<img src="data:image/png;base64,{encoded_image_time_series}" style="width:100%; max-width:600px; display:block; margin-top:4px;">
+</div>
 """
 
         color_r = colormap_r(row["R"])
-        popup_r = folium.Popup(popup_html, max_width=800)
+        popup_r = folium.Popup(popup_html, max_width=650)
         folium.CircleMarker(
             location=coords,
             radius=10,
@@ -972,7 +974,7 @@ def _create_discharge_folium_map(
         ).add_to(layer_r)
 
         color_kge = colormap_kge(row["KGE"])
-        popup_kge = folium.Popup(popup_html, max_width=800)
+        popup_kge = folium.Popup(popup_html, max_width=650)
         folium.CircleMarker(
             location=coords,
             radius=10,
@@ -984,7 +986,7 @@ def _create_discharge_folium_map(
         ).add_to(layer_kge)
 
         color_nse = colormap_nse(row["NSE"])
-        popup_nse = folium.Popup(popup_html, max_width=400)
+        popup_nse = folium.Popup(popup_html, max_width=650)
         folium.CircleMarker(
             location=coords,
             radius=10,
@@ -1002,7 +1004,7 @@ def _create_discharge_folium_map(
             if not isinstance(color_upstream, str) or color_upstream == "nan":
                 continue
 
-            popup_upstream = folium.Popup(popup_html, max_width=400)
+            popup_upstream = folium.Popup(popup_html, max_width=650)
             folium.CircleMarker(
                 location=coords,
                 radius=10,
