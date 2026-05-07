@@ -126,7 +126,7 @@ def _plot_validation_return_periods(
     )
 
     # 1. Simplified Fit for Popups
-    fig_simple, ax_fit_simple = plt.subplots(figsize=(10, 6))
+    fig_simple, ax_fit_simple = plt.subplots(figsize=(14, 4))
     obs_model.plot_fit(
         ax=ax_fit_simple, label_prefix="Observed", color=OBSERVATIONS_COLOR
     )
@@ -1000,7 +1000,7 @@ def _create_discharge_folium_map(
                 "utf-8"
             )
 
-        popup_width: int = 600
+        popup_width: int = 800
 
         popup_html = f"""
 <div style="width: {popup_width}px;">
@@ -1216,7 +1216,7 @@ def _plot_discharge_validation_graphs(
         include_yearly_plots: Whether to generate per-year timeseries plots.
         frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
     """
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig, ax = plt.subplots(figsize=(13, 4))
     ax.plot(
         validation_df.index,
         validation_df["discharge_simulations"],
@@ -1234,7 +1234,8 @@ def _plot_discharge_validation_graphs(
     ax.set_ylabel("Discharge [m3/s]")
     ax.set_xlabel("Time")
     ax.set_ylim(0, None)
-    ax.legend()
+    ax.set_xlim(validation_df.index.min(), validation_df.index.max())
+    ax.legend(loc="upper right", fontsize=10)
 
     if np.isfinite(r_value):
         ax.text(0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12)
@@ -1262,7 +1263,7 @@ def _plot_discharge_validation_graphs(
         transform=ax.transAxes,
         fontsize=12,
     )
-    plt.title(f"GEB discharge vs observations for station {station_name}")
+    plt.title(f"Discharge vs observations for station {station_name}")
     plt.savefig(
         eval_plot_folder / f"timeseries_plot_{station_id}.svg",
         bbox_inches="tight",
@@ -1283,21 +1284,21 @@ def _plot_discharge_validation_graphs(
                 print(f"No data available for year {year}, skipping.")
                 continue
 
-            fig, ax = plt.subplots(figsize=(7, 4))
+            fig, ax = plt.subplots(figsize=(13, 4))
             ax.plot(
                 one_year_df.index,
                 one_year_df["discharge_simulations"],
-                label="GEB simulation",
+                label="Simulated",
                 color=SIMULATIONS_DEFAULT_COLOR,
             )
             ax.plot(
                 one_year_df.index,
                 one_year_df["discharge_observations"],
-                label="observations",
+                label="Observed",
                 color=OBSERVATIONS_COLOR,
             )
+            ax.set_xlim(one_year_df.index[0], one_year_df.index[-1])
             ax.set_ylabel("Discharge [m3/s]")
-            ax.set_xlabel("Time")
             ax.legend()
 
             ax.text(

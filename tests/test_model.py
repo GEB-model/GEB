@@ -447,12 +447,12 @@ def test_run() -> None:
             assert label in result
             assert result[label] is not None
 
-        # Note this should be much higher.
-        assert result["KGE"] > 0.018
-        assert result["NSE"] > -0.352
-        assert result["R"] > 0.429
-
         print("Discharge evaluation results:", result)
+
+        # Note this should be much higher.
+        assert result["KGE_hourly"] > 0.134
+        assert result["NSE_hourly"] > -0.324
+        assert result["R_hourly"] > 0.4180
 
         # method_args = {
         #     "method": "hydrodynamics.evaluate_hydrodynamics",

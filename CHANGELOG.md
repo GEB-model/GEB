@@ -1,5 +1,6 @@
 # dev
-- Add FLUXNET data adapter and `setup_meteorological_stations` to the build process to incorporate latent heat observations from flux towers.
+
+# v1.0.0b24
 - Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
 - Add `--debug-method "method_name"` to `geb build` to filter the build to only run the setup region and any other methods that are required to run that specific method. For debugging purposes only.
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
@@ -22,6 +23,13 @@
 - Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point).
 - Return median metrics for KGE, NSE etc rather than mean.
 - Add FLUXNET (https://fluxnet.org) and GROW (https://zenodo.org/records/15149480) observations to build process. Not yet used in evaluation.
+- Export less data by default. If you miss any files that you relied on they can be explicitly turned on in your `model.yml`. See the `reasonable_default_config.yml` for references. This makes the model ~10% faster.
+- Combine various reporter outputs more efficiently reducing the amount of (duplicate) files exported. Naming conventions have changed slightly, but code in the evaluation functions was updated accordingly.
+- Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point). Also they are faster.
+- Do not convert from grid to HRU and then back to grid for livestock water consumption.
+- Abstraction from industry is now assumed to be abstracted from larger rivers only. If we let industry abstract from each grid cell that has any industry, the industrial users abstract water from very small rivers, which also leads to very high groundwater abstraction in those cells because the demand is not satisfiable from the river. This is highly unrealistic. Therefore, we define abstraction areas based on the river network. Each abstraction area is associated with a river of shreve stream order above a set threshold. All water demands from industry are essentially transferred downstream to the river of the abstraction area, and abstraction is assumed to occur from that river.
+- All other configuration options that essentially tried to do some of these things above per study area (like custom abstraction) are removed now. Hopefully we can simply reduce the need for configuration options with better defaults!
+- Change units that industry and livestock water demand return (now m3/day, was m/day).
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).
