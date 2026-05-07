@@ -204,3 +204,7 @@ setup_CO2_concentration:
 setup_global_ocean_mean_dynamic_topography:
 
 setup_osm_land_polygons:
+
+setup_groundwater_well_observations:
+
+setup_meteorological_stations_observations:

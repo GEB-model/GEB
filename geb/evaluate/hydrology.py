@@ -2303,7 +2303,7 @@ class Hydrology:
             self.output_folder / "evaluation_metrics.geoparquet",
         )
 
-        # Return mean metrics if available
+        # Return median metrics if available
         if not evaluation_df.empty:
             if create_plots:
                 _create_discharge_folium_map(
@@ -2317,15 +2317,15 @@ class Hydrology:
                 print("Discharge evaluation dashboard created.")
 
             return {
-                "KGE_hourly": float(evaluation_df["KGE_hourly"].mean()),
-                "NSE_hourly": float(evaluation_df["NSE_hourly"].mean()),
-                "R_hourly": float(evaluation_df["R_hourly"].mean()),
-                "KGE_daily": float(evaluation_df["KGE_daily"].mean()),
-                "NSE_daily": float(evaluation_df["NSE_daily"].mean()),
-                "R_daily": float(evaluation_df["R_daily"].mean()),
-                "KGE": float(evaluation_df["KGE"].mean()),
-                "NSE": float(evaluation_df["NSE"].mean()),
-                "R": float(evaluation_df["R"].mean()),
+                "KGE_hourly": float(evaluation_df["KGE_hourly"].median()),
+                "NSE_hourly": float(evaluation_df["NSE_hourly"].median()),
+                "R_hourly": float(evaluation_df["R_hourly"].median()),
+                "KGE_daily": float(evaluation_df["KGE_daily"].median()),
+                "NSE_daily": float(evaluation_df["NSE_daily"].median()),
+                "R_daily": float(evaluation_df["R_daily"].median()),
+                "KGE": float(evaluation_df["KGE"].median()),
+                "NSE": float(evaluation_df["NSE"].median()),
+                "R": float(evaluation_df["R"].median()),
             }
         else:
             self.model.logger.warning(

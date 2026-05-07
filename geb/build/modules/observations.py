@@ -424,3 +424,39 @@ class Observations(BuildModelBase):
         self.set_geom(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
+
+    @build_method(depends_on=["setup_hydrography"], required=False)
+    def setup_meteorological_stations_observations(self) -> None:
+        """Set up meteorological tower observations. Currently only latent heat."""
+        # Fetch metadata to find towers in region
+        stations, timeseries = self.data_catalog.fetch("fluxnet").read(geom=self.region)
+
+        if stations.empty:
+            self.logger.info("No FLUXNET towers found in the region.")
+
+        self.set_table(
+            timeseries, name="observations/meteorological_stations_timeseries"
+        )
+        self.set_geom(stations, name="observations/meteorological_station_locations")
+
+    @build_method(depends_on=["setup_hydrography"], required=False)
+    def setup_groundwater_well_observations(self) -> None:
+        """Set up groundwater level observations from the GROW dataset.
+
+        Downloads (if not already cached) and reads the GROW global groundwater
+        time series dataset, clips well locations to the basin area, and saves
+        the time series and well locations.
+
+        Notes:
+            Data are downloaded automatically from Zenodo on first use. The
+            timeseries file is ~1.7 GB; subsequent runs reuse the local cache.
+        """
+        wells, timeseries = self.data_catalog.fetch("grow").read(geom=self.region)
+
+        if wells.empty:
+            self.logger.info(
+                "No GROW groundwater observation wells found in the region."
+            )
+
+        self.set_table(timeseries, name="observations/groundwater_well_timeseries")
+        self.set_geom(wells, name="observations/groundwater_well_locations")

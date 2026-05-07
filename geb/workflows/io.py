@@ -74,51 +74,55 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
     Raises:
         ValueError: If the DataFrame contains unsupported column types.
     """
-    table: pa.Table = pa.Table.from_pandas(df)
+    if df.empty:
+        df.to_parquet(fp)
 
-    int_and_dt_cols: list[str] = []
-    bool_cols: list[str] = []
-    float_cols: list[str] = []
-    dict_cols: list[str] = []
+    else:
+        table: pa.Table = pa.Table.from_pandas(df)
 
-    for n, t in zip(table.schema.names, table.schema.types):
-        if pa.types.is_integer(t) or pa.types.is_timestamp(t):
-            int_and_dt_cols.append(n)
-        elif pa.types.is_boolean(t):
-            bool_cols.append(n)
-        elif pa.types.is_floating(t):
-            float_cols.append(n)
-        elif pa.types.is_string(t) or pa.types.is_binary(t):
-            dict_cols.append(n)
-        else:
-            raise ValueError(f"Unsupported column type {t} for column {n}")
+        int_and_dt_cols: list[str] = []
+        bool_cols: list[str] = []
+        float_cols: list[str] = []
+        dict_cols: list[str] = []
 
-    # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
-    column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
+        for name, t in zip(table.schema.names, table.schema.types):
+            if pa.types.is_integer(t) or pa.types.is_timestamp(t):
+                int_and_dt_cols.append(name)
+            elif pa.types.is_boolean(t):
+                bool_cols.append(name)
+            elif pa.types.is_floating(t):
+                float_cols.append(name)
+            elif pa.types.is_string(t) or pa.types.is_binary(t):
+                dict_cols.append(name)
+            else:
+                raise ValueError(f"Unsupported column type {t} for column {name}")
 
-    # Booleans use RLE (which includes bit-packing)
-    for col in bool_cols:
-        column_encoding[col] = "RLE"
+        # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
+        column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
 
-    # Estimate row group size to target ~100 MB per row group (uncompressed)
-    # 100 MB / bytes per row
-    bytes_per_row: int = table.nbytes // max(len(table), 1)
-    target_row_group_size = int(100 * 1024 * 1024 / max(bytes_per_row, 1))
-    target_row_group_size: int = min(target_row_group_size, len(table))
-    target_row_group_size: int = max(target_row_group_size, 1)
+        # Booleans use RLE (which includes bit-packing)
+        for col in bool_cols:
+            column_encoding[col] = "RLE"
 
-    pq.write_table(
-        table,
-        fp,
-        compression="zstd",
-        compression_level=22,  # Higher level for better disk density
-        use_dictionary=dict_cols,
-        column_encoding=column_encoding,
-        use_byte_stream_split=float_cols,
-        data_page_version="2.0",
-        row_group_size=target_row_group_size,
-        data_page_size=10_000_000,  # Larger page size for better compression
-    )
+        # Estimate row group size to target ~100 MB per row group (uncompressed)
+        # 100 MB / bytes per row
+        bytes_per_row: int = table.nbytes // max(len(table), 1)
+        target_row_group_size = int(100 * 1024 * 1024 / max(bytes_per_row, 1))
+        target_row_group_size: int = min(target_row_group_size, len(table))
+        target_row_group_size: int = max(target_row_group_size, 1)
+
+        pq.write_table(
+            table,
+            fp,
+            compression="zstd",
+            compression_level=22,  # Higher level for better disk density
+            use_dictionary=dict_cols,
+            column_encoding=column_encoding,
+            use_byte_stream_split=float_cols,
+            data_page_version="2.0",
+            row_group_size=target_row_group_size,
+            data_page_size=10_000_000,  # Larger page size for better compression
+        )
 
 
 @overload

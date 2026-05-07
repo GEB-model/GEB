@@ -1,3 +1,5 @@
+# dev
+
 # v1.0.0b24
 - Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
 - Add `--debug-method "method_name"` to `geb build` to filter the build to only run the setup region and any other methods that are required to run that specific method. For debugging purposes only.
@@ -16,6 +18,11 @@
 - Support 0 delay of runoff concentration.
 - Set variable runoff concentration variable to 1.0 by default (needs spatial discretization).
 - Improved layout of profiling txt file.
+- Export less data by default.
+- Combine various reporter outputs more efficiently.
+- Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point).
+- Return median metrics for KGE, NSE etc rather than mean.
+- Add FLUXNET (https://fluxnet.org) and GROW (https://zenodo.org/records/15149480) observations to build process. Not yet used in evaluation.
 - Export less data by default. If you miss any files that you relied on they can be explicitly turned on in your `model.yml`. See the `reasonable_default_config.yml` for references. This makes the model ~10% faster.
 - Combine various reporter outputs more efficiently reducing the amount of (duplicate) files exported. Naming conventions have changed slightly, but code in the evaluation functions was updated accordingly.
 - Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point). Also they are faster.
