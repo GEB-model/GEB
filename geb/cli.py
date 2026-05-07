@@ -509,6 +509,12 @@ def set(
     default=False,
     help="Continue previous build if it was interrupted or failed.",
 )
+@click.option(
+    "--debug-method",
+    default=None,
+    type=str,
+    help="Filter the build to only run 'setup_region' and the methods required for this specific 'method_name'. For debugging purposes only.",
+)
 def build(*args: Any, **kwargs: Any) -> None:
     """Build model with configuration file.
 

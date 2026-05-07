@@ -706,6 +706,8 @@ class HRUVariables(Bucket):
     saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
     organic_matter_percentage: TwoDArrayFloat32
     bulk_density_kg_per_dm3: TwoDArrayFloat32
+    thermal_conductivity_saturated_unfrozen_W_per_m_K: TwoDArrayFloat32
+    thermal_conductivity_saturated_frozen_W_per_m_K: TwoDArrayFloat32
     crop_group_number_forest: ArrayFloat32
     crop_group_number_grassland_like: ArrayFloat32
     leaf_area_index_forest: TwoDArrayFloat32
@@ -1203,22 +1205,28 @@ class HRUs(BaseVariables):
         return outarray
 
     @staticmethod
-    @njit(cache=True)
+    @njit(cache=True, parallel=True)
     def convert_subgrid_to_HRU_numba(
         array: npt.NDArray[np.generic],
         linear_mapping: npt.NDArray[np.int32],
         outarray: npt.NDArray[np.generic],
         nodatavalue: int | float | np.generic,
         method: str,
+        scaling: int,
     ) -> npt.NDArray[np.generic]:
         """Numba helper function to compress subgrid array to HRU array.
 
+        This function can be parallelized because HRUs never cross cell boundaries, so
+        by parallelizing over the cells, we can ensure that there are
+        no race conditions when writing to the output array.
+
         Args:
-            array: Uncompressed array.
-            linear_mapping: The index of the HRU to the subcell.
+            array: Uncompressed array (2D).
+            linear_mapping: The index of the HRU to the subcell (2D).
             outarray: Array to store the output data. Must be of size of the HRUs.
             nodatavalue: Value to use for nodata.
             method: Method to use for compression. "last" uses the last value found in the uncompressed array. "mean" uses the mean value found in the uncompressed array.
+            scaling: Scaling factor between grid and subgrid.
 
         Returns:
             outarray: Compressed array.
@@ -1226,27 +1234,51 @@ class HRUs(BaseVariables):
         Raises:
             ValueError: If method is not implemented.
         """
-        array = array.ravel()
-        linear_mapping = linear_mapping.ravel()
+        ysize: int = array.shape[0] // scaling
+        xsize: int = array.shape[1] // scaling
+        use_nan: bool = np.isnan(nodatavalue)
+
         if method == "last":
-            if np.isnan(nodatavalue):
-                for i in range(array.size):
-                    value = array[i]
-                    if not np.isnan(value):
-                        HRU = linear_mapping[i]
-                        outarray[HRU] = value
-            else:
-                for i in range(array.size):
-                    value = array[i]
-                    if value != nodatavalue:
-                        HRU = linear_mapping[i]
-                        outarray[HRU] = value
+            for y in prange(ysize):  # ty:ignore[not-iterable]
+                for x in range(xsize):
+                    for sy in range(scaling):
+                        for sx in range(scaling):
+                            abs_y = y * scaling + sy
+                            abs_x = x * scaling + sx
+                            val = array[abs_y, abs_x]
+                            HRU = linear_mapping[abs_y, abs_x]
+                            if HRU != -1:
+                                if use_nan:
+                                    if not np.isnan(val):
+                                        outarray[HRU] = val
+                                else:
+                                    if val != nodatavalue:
+                                        outarray[HRU] = val
         elif method == "mean":
-            array = array[linear_mapping != -1]
-            linear_mapping = linear_mapping[linear_mapping != -1]
-            outarray[:] = np.bincount(linear_mapping, weights=array) / np.bincount(
-                linear_mapping
-            )
+            outarray[:] = 0.0
+            counts: ArrayInt32 = np.zeros(outarray.size, dtype=np.int32)
+            for y in prange(ysize):  # ty:ignore[not-iterable]
+                for x in range(xsize):
+                    for sy in range(scaling):
+                        for sx in range(scaling):
+                            abs_y = y * scaling + sy
+                            abs_x = x * scaling + sx
+                            val = array[abs_y, abs_x]
+                            HRU = linear_mapping[abs_y, abs_x]
+                            if HRU != -1:
+                                if use_nan:
+                                    if not np.isnan(val):
+                                        outarray[HRU] += val
+                                        counts[HRU] += 1
+                                else:
+                                    if val != nodatavalue:
+                                        outarray[HRU] += val
+                                        counts[HRU] += 1
+            for i in prange(outarray.size):  # ty:ignore[not-iterable]
+                if counts[i] > 0:
+                    outarray[i] /= counts[i]
+                else:
+                    outarray[i] = nodatavalue
         else:
             raise ValueError("Method not implemented")
         return outarray
@@ -1292,6 +1324,7 @@ class HRUs(BaseVariables):
                 output_data,
                 nodatavalue=fill_value,
                 method=method,
+                scaling=self.scaling,
             )
         elif array.ndim == 3:
             for i in range(array.shape[0]):
@@ -1301,6 +1334,7 @@ class HRUs(BaseVariables):
                     output_data[i],
                     nodatavalue=fill_value,
                     method=method,
+                    scaling=self.scaling,
                 )
         else:
             raise NotImplementedError

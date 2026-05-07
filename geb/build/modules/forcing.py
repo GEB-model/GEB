@@ -2,7 +2,6 @@
 
 import math
 import re
-import warnings
 from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
@@ -24,8 +23,8 @@ from dateutil.relativedelta import relativedelta
 from matplotlib import colormaps as mcolormaps
 from matplotlib.colors import ListedColormap
 from numba import njit
-from zarr.codecs.numcodecs import FixedScaleOffset
-from zarr.errors import ZarrUserWarning
+from zarr.abc.codec import ArrayArrayCodec
+from zarr.codecs import CastValue, ScaleOffset
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
@@ -720,20 +719,21 @@ class Forcing(BuildModelBase):
             da, min_value, max_value, offset=offset, precision=precision
         )
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                category=ZarrUserWarning,
-                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
-            )
-            filters: list = [
-                FixedScaleOffset(
-                    offset=offset,
-                    scale=scaling_factor,
-                    dtype=in_dtype,
-                    astype=out_dtype,
-                ),
-            ]
+        max_encodedable_value = np.iinfo(
+            out_dtype
+        ).max  # in forcing, the max is never used
+        filters: list[ArrayArrayCodec] = [
+            ScaleOffset(offset=offset, scale=scaling_factor),
+            CastValue(
+                data_type=out_dtype,
+                rounding="nearest-even",
+                out_of_range=None,  # raise error if value exceeds the range of the output dtype
+                scalar_map={
+                    "encode": {"NaN": max_encodedable_value},
+                    "decode": {max_encodedable_value: np.nan},
+                },
+            ),
+        ]
 
         time_chunksize: int = 100_000_000 // (
             math.prod(
@@ -749,21 +749,15 @@ class Forcing(BuildModelBase):
         )  # ensure at least 24 time steps per chunk
         da = da.chunk({"time": time_chunksize})
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                category=ZarrUserWarning,
-                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
-            )
-            da: xr.DataArray = self.set_other(
-                da,
-                name=name,
-                filters=filters,
-                shards={
-                    "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
-                },
-                **kwargs,
-            )
+        da: xr.DataArray = self.set_other(
+            da,
+            name=name,
+            filters=filters,
+            shards={
+                "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
+            },
+            **kwargs,
+        )
 
         if create_plots:
             plot_forcing(mask, self.geom["mask"], self.report_dir, da, name)
