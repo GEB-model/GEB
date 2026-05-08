@@ -789,12 +789,26 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     # 1. Higher conductivity
     gw_ksat_high = np.float32(0.02 / 3600.0)
     res_high = infiltration(
-        ws, wres, saturated_hydraulic_conductivity_m_per_s,
-        gw_ksat_high, np.int32(NON_PADDY_IRRIGATED),
-        w_baseline.copy(), topwater_test, np.float32(0.0), total_soil_depth_m,
-        np.float32(10.0 / 3600.0), np.float32(0.1), np.int32(0), np.float32(0.1),
-        bubbling_pressure_m, soil_layer_height_m, lambda_param,
-        np.float32(0.0), np.float32(100000.0), np.float32(0.0), np.float32(0.0),
+        ws,
+        wres,
+        saturated_hydraulic_conductivity_m_per_s,
+        gw_ksat_high,
+        np.int32(NON_PADDY_IRRIGATED),
+        w_baseline.copy(),
+        topwater_test,
+        np.float32(0.0),
+        total_soil_depth_m,
+        np.float32(10.0 / 3600.0),
+        np.float32(0.1),
+        np.int32(0),
+        np.float32(0.1),
+        bubbling_pressure_m,
+        soil_layer_height_m,
+        lambda_param,
+        np.float32(0.0),
+        np.float32(100000.0),
+        np.float32(0.0),
+        np.float32(0.0),
     )
     runoff_high = res_high[1]
     recharge_high = res_high[2]
@@ -802,12 +816,26 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     # 2. Lower conductivity
     gw_ksat_low = np.float32(0.005 / 3600.0)
     res_low = infiltration(
-        ws, wres, saturated_hydraulic_conductivity_m_per_s,
-        gw_ksat_low, np.int32(NON_PADDY_IRRIGATED),
-        w_baseline.copy(), topwater_test, np.float32(0.0), total_soil_depth_m,
-        np.float32(10.0 / 3600.0), np.float32(0.1), np.int32(0), np.float32(0.1),
-        bubbling_pressure_m, soil_layer_height_m, lambda_param,
-        np.float32(0.0), np.float32(100000.0), np.float32(0.0), np.float32(0.0),
+        ws,
+        wres,
+        saturated_hydraulic_conductivity_m_per_s,
+        gw_ksat_low,
+        np.int32(NON_PADDY_IRRIGATED),
+        w_baseline.copy(),
+        topwater_test,
+        np.float32(0.0),
+        total_soil_depth_m,
+        np.float32(10.0 / 3600.0),
+        np.float32(0.1),
+        np.int32(0),
+        np.float32(0.1),
+        bubbling_pressure_m,
+        soil_layer_height_m,
+        lambda_param,
+        np.float32(0.0),
+        np.float32(100000.0),
+        np.float32(0.0),
+        np.float32(0.0),
     )
     runoff_low = res_low[1]
     recharge_low = res_low[2]
@@ -1072,7 +1100,6 @@ def test_infiltration_variable_runoff_plot() -> None:
         runoff_results = []
         infiltration_results = []
         for rainfall_amount in rainfall_amounts_m:
-            print(rainfall_amount)
             _, direct_runoff, _, infiltration_amount, _, _, _, _, _ = infiltration(
                 ws,
                 np.zeros_like(ws),

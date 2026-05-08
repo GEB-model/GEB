@@ -69,14 +69,14 @@ def calculate_spatial_infiltration_excess(
     Green-Ampt infiltration capacity within the cell follows a Reflected Power distribution.
 
     Args:
-        infiltration_capacity_mean: The mean infiltration capacity (Green-Ampt capacity) in the cell [L/T].
-        available_water: The amount of water available for infiltration (e.g. precipitation) [L/T].
+        infiltration_capacity_mean: The mean infiltration capacity (Green-Ampt capacity) in the cell (m).
+        available_water: The amount of water available for infiltration (e.g. precipitation) (m).
         shape_parameter_beta: The shape parameter `b` of the Reflected Power distribution.
 
     Returns:
         A tuple containing:
-            - infiltration: Effective infiltration amount [L/T].
-            - runoff: Runoff amount due to infiltration excess [L/T].
+            - infiltration: Effective infiltration amount (m).
+            - runoff: Runoff amount due to infiltration excess (m).
     """
     if available_water <= np.float32(0.0):
         return np.float32(0.0), np.float32(0.0)
@@ -113,7 +113,7 @@ def calculate_spatial_infiltration_excess(
 @njit(cache=True, inline="always", fastmath=True)
 def calculate_green_ampt_time_from_infiltration(
     cumulative_infiltration: np.float32,
-    saturated_hydraulic_conductivity_m_per_time_unit: np.float32,
+    saturated_hydraulic_conductivity_m_per_s: np.float32,
     wetting_front_suction_head_m: np.float32,
     moisture_deficit: np.float32,
 ) -> np.float32:
@@ -135,9 +135,9 @@ def calculate_green_ampt_time_from_infiltration(
         Chow, V. T., Maidment, D. R., & Mays, L. W. (1988). Applied Hydrology. McGraw-Hill.
 
     Args:
-        cumulative_infiltration: Cumulative infiltration amount [L].
-        saturated_hydraulic_conductivity_m_per_time_unit: Saturated hydraulic conductivity [L/T].
-        wetting_front_suction_head_m: Wetting front suction head [L].
+        cumulative_infiltration: Cumulative infiltration amount (m).
+        saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity (m/s).
+        wetting_front_suction_head_m: Wetting front suction head (m).
         moisture_deficit: Moisture deficit [-].
 
     Returns:
@@ -146,7 +146,7 @@ def calculate_green_ampt_time_from_infiltration(
     if cumulative_infiltration <= np.float32(0.0):
         return np.float32(0.0)
 
-    if saturated_hydraulic_conductivity_m_per_time_unit <= np.float32(0.0):
+    if saturated_hydraulic_conductivity_m_per_s <= np.float32(0.0):
         return np.float32(0.0)
 
     wetting_front_suction_potential: np.float32 = (
@@ -156,15 +156,13 @@ def calculate_green_ampt_time_from_infiltration(
     # Darcy limit: if there is no capillary suction effect (sf -> 0),
     # then cumulative infiltration is I = K_s t.
     if wetting_front_suction_potential <= np.float32(0.0):
-        return (
-            cumulative_infiltration / saturated_hydraulic_conductivity_m_per_time_unit
-        )
+        return cumulative_infiltration / saturated_hydraulic_conductivity_m_per_s
 
     # np.log1p(x) computes log(1 + x) accurately for small x
     term_log = np.log1p(cumulative_infiltration / wetting_front_suction_potential)
     t = (
         cumulative_infiltration - wetting_front_suction_potential * term_log
-    ) / saturated_hydraulic_conductivity_m_per_time_unit
+    ) / saturated_hydraulic_conductivity_m_per_s
     return max(t, np.float32(0.0))
 
 
@@ -1058,7 +1056,7 @@ def get_bubbling_pressure_m(
     Returns:
         bubbling_pressure: bubbling pressure [m].
     """
-    get_bubbling_pressure_m = np.exp(
+    bubbling_pressure_cm: np.ndarray[Shape, np.dtype[np.float32]] = np.exp(
         5.3396738
         + 0.1845038 * clay
         - 2.48394546 * thetas
@@ -1072,8 +1070,10 @@ def get_bubbling_pressure_m(
         + 0.00143598 * sand**2 * thetas**2
         - 0.00855375 * clay**2 * thetas**2
         + 0.50028060 * thetas**2 * clay
-    ).astype(np.float32) / np.float32(100.0)  # convert from cm to m
-    return get_bubbling_pressure_m
+    ).astype(np.float32)
+    return bubbling_pressure_cm / np.float32(
+        100.0
+    )  # convert from cm to m  # ty:ignore[invalid-return-type]
 
 
 def get_pore_size_index_brakensiek(

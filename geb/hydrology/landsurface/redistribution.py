@@ -367,8 +367,6 @@ def distribute_soil_water_ross(
         # Interface flux: positive is downward (i -> i+1), negative is upward (i+1 -> i)
         # We cap the flux by the available water in the source layer.
         # This is a safety check for the linear approximation.
-        # Since we use in-place updates, we must use the INITIAL water content
-        # for available water checks to maintain symmetry and pass tests.
         available_layer_i: np.float32 = max(
             np.float32(0.0), water_content_m[i] - water_content_residual_m[i]
         )

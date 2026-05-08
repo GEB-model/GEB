@@ -1446,7 +1446,7 @@ class LandSurface(Module):
 
         # θ saturation, field capacity, wilting point and residual moisture content
         thetafc: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
-            np.float32(-1.0),  # assuming field capacity is at -100 cm (pF 2) = 1m
+            np.float32(-1.0),  # assuming field capacity is at -100 cm (pF 2) -> 1m
             self.HRU.var.bubbling_pressure_m,
             thetas,
             thetar,
@@ -1456,8 +1456,8 @@ class LandSurface(Module):
         thetawp: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
             np.float32(
                 -(10**2.2)
-            ),  # assuming wilting point is at -10^4.2 cm (pF 4.2) or -10^2.2 m
-            self.HRU.var.bubbling_pressure_m,  # convert from m to cm
+            ),  # assuming wilting point is at -10^4.2 cm (pF 4.2) -> -10^2.2 m
+            self.HRU.var.bubbling_pressure_m,
             thetas,
             thetar,
             self.HRU.var.lambda_pore_size_distribution,

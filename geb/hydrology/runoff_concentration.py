@@ -160,8 +160,8 @@ class RunoffConcentrator(Module):
                 f"{max_required_buffer_hours} hours to avoid losing water at the end of the day."
             )
 
-        # if self.model.in_spinup:
-        self.spinup()
+        if self.model.in_spinup:
+            self.spinup()
 
     def _apply_triangular(
         self,

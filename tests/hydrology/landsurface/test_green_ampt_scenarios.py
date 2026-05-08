@@ -354,11 +354,10 @@ def test_ga_full_column_saturation_processes() -> None:
 
     saturated_hydraulic_conductivity = np.full(n_layers, ksat_m, dtype=np.float32)
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
-    frozen_fraction_top_layer = np.float32(0.0)
 
     # GA params
     variable_runoff_shape_beta = np.float32(0.1)
-    bubbling_pressure_cm = np.full(n_layers, 20.0, dtype=np.float32)
+    bubbling_pressure_m = np.full(n_layers, 0.2, dtype=np.float32)
     lambda_param = np.full(n_layers, 0.25, dtype=np.float32)
 
     # State
@@ -409,7 +408,7 @@ def test_ga_full_column_saturation_processes() -> None:
             wetting_front_deficit,
             green_ampt_active_layer_idx,
             variable_runoff_shape_beta,
-            bubbling_pressure_cm,
+            bubbling_pressure_m,
             layer_heights,
             lambda_param,
             soil_enthalpy_top_layer,
