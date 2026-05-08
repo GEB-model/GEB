@@ -1221,14 +1221,14 @@ def _plot_discharge_validation_graphs(
     ax.plot(
         validation_df.index,
         validation_df["discharge_simulations"],
-        label="GEB simulation",
+        label="Simulated",
         linewidth=0.5,
         color=SIMULATIONS_DEFAULT_COLOR,
     )
     ax.plot(
         validation_df.index,
         validation_df["discharge_observations"],
-        label="observations",
+        label="Observed",
         linewidth=0.5,
         color=OBSERVATIONS_COLOR,
     )
