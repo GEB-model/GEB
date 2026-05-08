@@ -11,12 +11,10 @@ from geb.hydrology.landcovers import (
 )
 from geb.hydrology.landsurface.water import (
     add_water_to_topwater_and_evaporate_open_water,
-    get_bubbling_pressure_m,
+    get_bubbling_pressure_m_positive,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
     get_soil_moisture_at_pressure,
-    get_soil_water_potential_van_genuchten,
-    get_unsaturated_conductivity_van_genuchten,
     infiltration,
     kv_brakensiek,
     kv_cosby,
@@ -688,7 +686,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
     wres = np.zeros_like(ws)
     soil_layer_height_m = np.full_like(ws, 0.1)
-    bubbling_pressure_m = np.full_like(ws, 1.0)
+    bubbling_pressure_m_positive = np.full_like(ws, 1.0)
     lambda_param = np.full_like(ws, 0.5)
     # Use very high soil conductivity so the Green-Ampt rate limit does not bind;
     # the groundwater conductivity cap should be the limiting factor.
@@ -727,7 +725,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(0.1),
         np.int32(0),
         np.float32(0.1),
-        bubbling_pressure_m,
+        bubbling_pressure_m_positive,
         soil_layer_height_m,
         lambda_param,
         np.float32(0.0),
@@ -769,7 +767,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(0.1),
         np.int32(0),
         np.float32(0.1),
-        bubbling_pressure_m,
+        bubbling_pressure_m_positive,
         soil_layer_height_m,
         lambda_param,
         np.float32(0.0),
@@ -802,7 +800,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(0.1),
         np.int32(0),
         np.float32(0.1),
-        bubbling_pressure_m,
+        bubbling_pressure_m_positive,
         soil_layer_height_m,
         lambda_param,
         np.float32(0.0),
@@ -829,7 +827,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(0.1),
         np.int32(0),
         np.float32(0.1),
-        bubbling_pressure_m,
+        bubbling_pressure_m_positive,
         soil_layer_height_m,
         lambda_param,
         np.float32(0.0),
@@ -847,119 +845,6 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     assert abs(recharge_low + runoff_low - topwater_test) < 1e-6
 
 
-def test_soil_water_flow_functions() -> None:
-    """Test soil water potential and conductivity functions."""
-    # Test case 1: Saturated soil
-    w = np.float32(0.3)  # saturated
-    wres = np.float32(0.05)  # residual
-    ws = np.float32(0.3)  # saturated
-    lambda_ = np.float32(0.5)  # van Genuchten parameter
-    ksat = np.float32(0.01)  # saturated hydraulic conductivity
-    bubbling_pressure = np.float32(0.1)  # m
-
-    psi = get_soil_water_potential_van_genuchten(
-        w, wres, ws, lambda_, bubbling_pressure
-    )
-    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
-
-    # At saturation, psi should be close to 0 (no suction)
-    assert abs(psi) < 1e-3, f"Expected psi close to 0 at saturation, got {psi}"
-    # Unsaturated conductivity should equal saturated at saturation
-    assert abs(k_unsat - ksat) < 1e-6, (
-        f"Expected k_unsat={ksat} at saturation, got {k_unsat}"
-    )
-
-    # Test case 2: Residual soil water content
-    w = np.float32(0.05)  # at residual
-    psi = get_soil_water_potential_van_genuchten(
-        w, wres, ws, lambda_, bubbling_pressure
-    )
-    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
-
-    # At residual, psi should be very negative (high suction)
-    assert psi < -1000, f"Expected high suction at residual, got {psi}"
-    # Unsaturated conductivity should be very low
-    assert k_unsat < ksat * 1e-6, (
-        f"Expected very low k_unsat at residual, got {k_unsat}"
-    )
-
-    # Test case 3: Field capacity (typical value)
-    w = np.float32(0.15)  # field capacity
-    psi = get_soil_water_potential_van_genuchten(
-        w, wres, ws, lambda_, bubbling_pressure
-    )
-    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
-
-    # At field capacity, psi should be around -1 to -10 m
-    assert -10 < psi < -0.1, f"Expected moderate suction at field capacity, got {psi}"
-    # Unsaturated conductivity should be reduced but not extremely low
-    assert k_unsat < ksat, f"Expected k_unsat < ksat at field capacity, got {k_unsat}"
-    assert k_unsat > ksat * 1e-4, (
-        f"Expected reasonable k_unsat at field capacity, got {k_unsat}"
-    )
-
-    # Test case 4: Boundary conditions - w exactly at wres
-    w = np.float32(0.05)  # exactly residual
-    psi = get_soil_water_potential_van_genuchten(
-        w, wres, ws, lambda_, bubbling_pressure
-    )
-    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
-
-    assert psi < 0, "Psi should be negative (suction)"
-    assert k_unsat >= 0, "Unsaturated conductivity should be non-negative"
-
-    # Test case 5: Boundary conditions - w exactly at ws
-    w = np.float32(0.3)  # exactly saturated
-    psi = get_soil_water_potential_van_genuchten(
-        w, wres, ws, lambda_, bubbling_pressure
-    )
-    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
-
-    assert psi >= -1e-3, "Psi should be close to 0 at saturation"
-    assert k_unsat <= ksat, "Unsaturated conductivity should not exceed saturated"
-
-    # Test case 6: Different van Genuchten parameters
-    lambda_values = [0.2, 0.8, 1.5]
-    for lambda_val in lambda_values:
-        w = np.float32(0.15)
-        psi = get_soil_water_potential_van_genuchten(
-            w, wres, ws, np.float32(lambda_val), bubbling_pressure
-        )
-        k_unsat = get_unsaturated_conductivity_van_genuchten(
-            w, wres, ws, np.float32(lambda_val), ksat
-        )
-        assert psi < 0, f"Psi should be negative for lambda={lambda_val}"
-        assert 0 <= k_unsat <= ksat, (
-            f"k_unsat should be between 0 and ksat for lambda={lambda_val}"
-        )
-
-    # Test case 7: Different bubbling pressures
-    bubbling_pressures = [0.05, 0.2, 0.5]  # m
-    for bp in bubbling_pressures:
-        w = np.float32(0.15)
-        psi = get_soil_water_potential_van_genuchten(
-            w, wres, ws, lambda_, np.float32(bp)
-        )
-        k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
-        assert psi < 0, f"Psi should be negative for bubbling_pressure={bp}"
-        assert 0 <= k_unsat <= ksat, (
-            f"k_unsat should be between 0 and ksat for bubbling_pressure={bp}"
-        )
-
-    # Test case 8: Very dry soil (effective saturation approaches 0)
-    w = np.float32(0.0501)  # just above residual
-    psi = get_soil_water_potential_van_genuchten(
-        w, wres, ws, lambda_, bubbling_pressure
-    )
-    k_unsat = get_unsaturated_conductivity_van_genuchten(w, wres, ws, lambda_, ksat)
-
-    # Should have high suction and very low conductivity
-    assert psi < -100, f"Expected high suction for very dry soil, got {psi}"
-    assert k_unsat < ksat * 1e-5, (
-        f"Expected very low conductivity for very dry soil, got {k_unsat}"
-    )
-
-
 def test_get_soil_moisture_at_pressure() -> None:
     """Test get_soil_moisture_at_pressure function."""
     # Test with different soil types
@@ -972,14 +857,14 @@ def test_get_soil_moisture_at_pressure() -> None:
     for soil_name, bp, thetas, thetar, lambda_val in soils_data:
         # Test at a few capillary suction values
         pressure_heads_m = np.array([-0.01, -0.1, -1.0, -10.0], dtype=np.float32)
-        bubbling_pressure_m = np.full_like(pressure_heads_m, bp)
+        bubbling_pressure_m_positive = np.full_like(pressure_heads_m, bp)
         thetas_arr = np.full_like(pressure_heads_m, thetas)
         thetar_arr = np.full_like(pressure_heads_m, thetar)
         lambda_arr = np.full_like(pressure_heads_m, lambda_val)
 
         soil_moisture = get_soil_moisture_at_pressure(
             pressure_heads_m,
-            bubbling_pressure_m,
+            bubbling_pressure_m_positive,
             thetas_arr,
             thetar_arr,
             lambda_arr,
@@ -1002,20 +887,28 @@ def test_get_soil_moisture_at_pressure() -> None:
     # Test edge cases
     # Very low suction (close to saturation)
     pressure_head_m = np.array([-0.1], dtype=np.float32)
-    bubbling_pressure_m = np.array([0.20], dtype=np.float32)
+    bubbling_pressure_m_positive = np.array([0.20], dtype=np.float32)
     thetas_arr = np.array([0.4], dtype=np.float32)
     thetar_arr = np.array([0.075], dtype=np.float32)
     lambda_arr = np.array([2.5], dtype=np.float32)
 
     soil_moisture = get_soil_moisture_at_pressure(
-        pressure_head_m, bubbling_pressure_m, thetas_arr, thetar_arr, lambda_arr
+        pressure_head_m,
+        bubbling_pressure_m_positive,
+        thetas_arr,
+        thetar_arr,
+        lambda_arr,
     )
     assert soil_moisture[0] > 0.35, "Should be close to saturated at low suction"
 
     # Very high suction (close to residual)
     pressure_head_m = np.array([-20.0], dtype=np.float32)
     soil_moisture = get_soil_moisture_at_pressure(
-        pressure_head_m, bubbling_pressure_m, thetas_arr, thetar_arr, lambda_arr
+        pressure_head_m,
+        bubbling_pressure_m_positive,
+        thetas_arr,
+        thetar_arr,
+        lambda_arr,
     )
     assert soil_moisture[0] < 0.1, "Should be close to residual at high suction"
 
@@ -1277,7 +1170,7 @@ def test_pedotransfer_functions_consistency() -> None:
 
         # Additional parameters
         thetar = thetar_brakensiek(sand=sand, clay=clay, thetas=thetas_val_toth)
-        bubbling_pressure = get_bubbling_pressure_m(
+        bubbling_pressure_m_positive = get_bubbling_pressure_m_positive(
             clay=clay, sand=sand, thetas=thetas_val_toth
         )
         psi_index_b = get_pore_size_index_brakensiek(
@@ -1292,7 +1185,7 @@ def test_pedotransfer_functions_consistency() -> None:
         )
 
         print(
-            f"{name:<15} | {val_b:.2e}        | {val_w:.2e}        | {val_c:.2e}        | {thetas_val_toth[0]:.4f}          | {thetas_val_wosten[0]:.4f}          | {thetar[0]:.4f}          | {bubbling_pressure[0]:.2f}           | {psi_index_b[0]:.4f}          | {psi_index_w[0]:.4f}"
+            f"{name:<15} | {val_b:.2e}        | {val_w:.2e}        | {val_c:.2e}        | {thetas_val_toth[0]:.4f}          | {thetas_val_wosten[0]:.4f}          | {thetar[0]:.4f}          | {bubbling_pressure_m_positive[0]:.2f}           | {psi_index_b[0]:.4f}          | {psi_index_w[0]:.4f}"
         )
 
         # Store results for cross-soil comparison
@@ -1303,7 +1196,7 @@ def test_pedotransfer_functions_consistency() -> None:
             "thetar": thetar[0],
             "thetas_toth": thetas_val_toth[0],
             "thetas_wosten": thetas_val_wosten[0],
-            "bubbling_pressure": bubbling_pressure[0],
+            "bubbling_pressure": bubbling_pressure_m_positive[0],
             "psi_index_b": psi_index_b[0],
             "psi_index_w": psi_index_w[0],
         }
@@ -1338,7 +1231,9 @@ def test_pedotransfer_functions_consistency() -> None:
 
         # Additional checks for other parameters
         assert 0 < thetar[0] < thetas_val_toth[0], f"Thetar invalid for {name}"
-        assert bubbling_pressure[0] > 0, f"Bubbling pressure invalid for {name}"
+        assert bubbling_pressure_m_positive[0] > 0, (
+            f"Bubbling pressure invalid for {name}"
+        )
         assert psi_index_b[0] > 0, f"Pore size index Brakensiek invalid for {name}"
         assert psi_index_w[0] > 0, f"Pore size index Wosten invalid for {name}"
 

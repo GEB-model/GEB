@@ -7,6 +7,7 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import zarr.storage
@@ -731,6 +732,7 @@ class Reporter:
         There are also several pre-defined report configurations that can be activated by adding
         special keys to the report configuration. These are:
         - _discharge_stations: if set to True, discharge at all discharge stations is reported.
+        - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported.
         - _outflow_points: if set to True, outflow at all outflow points is reported.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
@@ -774,61 +776,88 @@ class Reporter:
             to_delete: list[str] = []
             for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
-                    if module_name == "_discharge_stations" and module_values is True:
-                        stations = read_geom(
-                            self.model.files["geom"][
-                                "discharge/discharge_snapped_locations"
-                            ]
-                        )
-
-                        station_reporters = {}
-                        for station_ID, station_info in stations.iterrows():
-                            xy_grid = station_info["snapped_grid_pixel_xy"]
-                            station_reporters[
-                                f"discharge_hourly_m3_per_s_{station_ID}"
-                            ] = {
-                                "varname": f"grid.var.discharge_m3_s_per_substep",
-                                "type": "grid",
-                                "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
-                                "substeps": 24,
-                            }
-                        report_config = multi_level_merge(
-                            report_config,
-                            {"hydrology.routing": station_reporters},
-                        )
-                    elif module_name == "_outflow_points" and module_values is True:
-                        routing = self.model.hydrology.routing
-                        outflow_rivers = (
-                            routing.get_active_and_downstream_outflow_rivers()
-                        )
-                        all_rivers = routing.rivers
-
-                        outflow_reporters = {}
-
-                        for river_ID, river in outflow_rivers.iterrows():
-                            assert isinstance(river_ID, int)
-                            xys: list[tuple[int, int]] = get_upstream_represented_xys(
-                                river_ID, all_rivers
+                    if module_name == "_discharge_stations":
+                        if module_values is True:
+                            stations = read_geom(
+                                self.model.files["geom"][
+                                    "discharge/discharge_snapped_locations"
+                                ]
                             )
-                            for i, xy in enumerate(xys):
-                                # if there are multiple branches, we append a suffix to the name
-                                suffix = f"_{i}" if len(xys) > 1 else ""
-                                outflow_reporters[
-                                    f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
+
+                            station_reporters = {}
+                            for station_ID, station_info in stations.iterrows():
+                                xy_grid = station_info["snapped_grid_pixel_xy"]
+                                station_reporters[
+                                    f"discharge_hourly_m3_per_s_{station_ID}"
                                 ] = {
-                                    "varname": "grid.var.discharge_m3_s_per_substep",
+                                    "varname": f"grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
-                                    "function": f"sample_xy,{xy[0]},{xy[1]}",
+                                    "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
                                     "substeps": 24,
                                 }
-                        report_config = multi_level_merge(
-                            report_config,
-                            {"hydrology.routing": outflow_reporters},
-                        )
-                        report_config = multi_level_merge(
-                            report_config,
-                            OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
-                        )
+                            report_config = multi_level_merge(
+                                report_config,
+                                {"hydrology.routing": station_reporters},
+                            )
+                    elif module_name == "_meteorological_stations":
+                        if module_values is True:
+                            meteorological_station_locations: gpd.GeoDataFrame = (
+                                read_geom(
+                                    self.model.files["geom"][
+                                        "observations/meteorological_station_locations"
+                                    ]
+                                )
+                            )
+                            for (
+                                station_ID,
+                                station_info,
+                            ) in meteorological_station_locations.iterrows():
+                                station_reporters: dict[str, dict[str, str | int]] = {
+                                    f"evapotranspiration_{station_ID}": {
+                                        "varname": f".evapotranspiration_m",
+                                        "type": "HRU",
+                                        "function": f"sample_lonlat,{station_info['geometry'].x},{station_info['geometry'].y}",
+                                        "substeps": 24,
+                                    },
+                                }
+                                report_config = multi_level_merge(
+                                    report_config,
+                                    {"hydrology.landsurface": station_reporters},
+                                )
+                    elif module_name == "_outflow_points":
+                        if module_values is True:
+                            routing = self.model.hydrology.routing
+                            outflow_rivers = (
+                                routing.get_active_and_downstream_outflow_rivers()
+                            )
+                            all_rivers = routing.rivers
+
+                            outflow_reporters = {}
+
+                            for river_ID, river in outflow_rivers.iterrows():
+                                assert isinstance(river_ID, int)
+                                xys: list[tuple[int, int]] = (
+                                    get_upstream_represented_xys(river_ID, all_rivers)
+                                )
+                                for i, xy in enumerate(xys):
+                                    # if there are multiple branches, we append a suffix to the name
+                                    suffix = f"_{i}" if len(xys) > 1 else ""
+                                    outflow_reporters[
+                                        f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
+                                    ] = {
+                                        "varname": "grid.var.discharge_m3_s_per_substep",
+                                        "type": "grid",
+                                        "function": f"sample_xy,{xy[0]},{xy[1]}",
+                                        "substeps": 24,
+                                    }
+                            report_config = multi_level_merge(
+                                report_config,
+                                {"hydrology.routing": outflow_reporters},
+                            )
+                            report_config = multi_level_merge(
+                                report_config,
+                                OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
+                            )
                     elif module_name == "_water_circle":
                         if module_values is True:
                             report_config = multi_level_merge(

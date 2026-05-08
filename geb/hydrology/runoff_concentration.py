@@ -126,7 +126,7 @@ class RunoffConcentrator(Module):
         model: GEBModel,
         hydrology: Hydrology,
         lag_time_hours: int = 48,
-        runoff_peak_hour: float = 0.0,
+        runoff_peak_hour: float = 3.0,
     ) -> None:
         """Initialize the runoff concentrator model.
 
@@ -160,8 +160,8 @@ class RunoffConcentrator(Module):
                 f"{max_required_buffer_hours} hours to avoid losing water at the end of the day."
             )
 
-        if self.model.in_spinup:
-            self.spinup()
+        # if self.model.in_spinup:
+        self.spinup()
 
     def _apply_triangular(
         self,

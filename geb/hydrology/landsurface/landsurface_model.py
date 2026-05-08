@@ -61,10 +61,9 @@ from .redistribution import (
 from .snow_glaciers import snow_model
 from .water import (
     add_water_to_topwater_and_evaporate_open_water,
-    get_bubbling_pressure_m,
+    get_bubbling_pressure_m_positive,
     get_pore_size_index_brakensiek,
     get_soil_moisture_at_pressure,
-    get_unsaturated_conductivity_van_genuchten,
     infiltration,
     kv_wosten,
     rise_from_groundwater,
@@ -158,7 +157,7 @@ def land_surface_model(
     wetting_front_moisture_deficit: ArrayFloat32,
     green_ampt_active_layer_idx: ArrayInt32,
     lambda_pore_size_distribution: TwoDArrayFloat32,
-    bubbling_pressure_m: TwoDArrayFloat32,
+    bubbling_pressure_m_positive: TwoDArrayFloat32,
     crop_group_number: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
     interflow_multiplier: np.float32,
@@ -194,6 +193,7 @@ def land_surface_model(
     ArrayFloat32,
     ArrayFloat32,
     ArrayFloat32,
+    TwoDArrayFloat32,
 ]:
     """The main land surface model of GEB.
 
@@ -252,7 +252,7 @@ def land_surface_model(
         green_ampt_active_layer_idx: Index of the active soil layer for Green-Ampt infiltration.
         groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
-        bubbling_pressure_m: Bubbling pressure in m.
+        bubbling_pressure_m_positive: Bubbling pressure in m. Must be positive.
         crop_group_number: Crop group number per HRU, pre-resolved from land use type and crop map (see WOFOST 6.0).
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
         interflow_multiplier: Calibration factor for interflow calculation.
@@ -283,6 +283,7 @@ def land_surface_model(
             layer 2 in meters.
         - top_soil_transpiration_m: Transpiration extracted specifically from the
             top soil layer in meters.
+        - evapotranspiration_m: Actual evapotranspiration in meters, per hour.
     """
     CO2_induced_crop_factor_adustment = get_CO2_induced_crop_factor_adustment(CO2_ppm)
 
@@ -295,15 +296,20 @@ def land_surface_model(
     ) / np.float32(24.0 * 3600.0)
 
     num_cells: int = slope_m_per_m.size
-    runoff_m = np.zeros((num_cells, 24), dtype=np.float32)
-    interflow_m = np.zeros((num_cells, 24), dtype=np.float32)
-    reference_evapotranspiration_water_m = np.zeros((num_cells, 24), dtype=np.float32)
+    runoff_m: TwoDArrayFloat32 = np.zeros((num_cells, 24), dtype=np.float32)
+    interflow_m: TwoDArrayFloat32 = np.zeros((num_cells, 24), dtype=np.float32)
+    reference_evapotranspiration_water_m: TwoDArrayFloat32 = np.zeros(
+        (num_cells, 24), dtype=np.float32
+    )
+    evapotranspiration_m: TwoDArrayFloat32 = np.zeros((num_cells, 24), dtype=np.float32)
 
     # total per day variables for water balance
-    reference_evapotranspiration_grass_m = np.zeros(num_cells, dtype=np.float32)
-    rain_m = np.zeros(num_cells, dtype=np.float32)
-    snow_m = np.zeros(num_cells, dtype=np.float32)
-    sublimation_m = np.zeros(num_cells, dtype=np.float32)
+    reference_evapotranspiration_grass_m: ArrayFloat32 = np.zeros(
+        num_cells, dtype=np.float32
+    )
+    rain_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
+    snow_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
+    sublimation_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
     interception_evaporation_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
     open_water_evaporation_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
     bare_soil_evaporation: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
@@ -599,7 +605,7 @@ def land_surface_model(
                     wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
                     green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
                     variable_runoff_shape_beta=variable_runoff_shape_beta[i],
-                    bubbling_pressure_m=bubbling_pressure_m[i, :],
+                    bubbling_pressure_m_positive=bubbling_pressure_m_positive[i, :],
                     soil_layer_height_m=soil_layer_height[i, :],
                     lambda_pore_size_distribution=lambda_pore_size_distribution[i, :],
                     soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
@@ -648,7 +654,7 @@ def land_surface_model(
                     ],
                     interface_dist_m=delta_z[i, :],
                     soil_layer_height=soil_layer_height[i, :],
-                    bubbling_pressure_m=bubbling_pressure_m[i, :],
+                    bubbling_pressure_m_positive=bubbling_pressure_m_positive[i, :],
                     lambda_=lambda_,
                     pore_size_index=pore_size_index_cell,
                     slope_m_per_m=slope_m_per_m[i],
@@ -759,17 +765,6 @@ def land_surface_model(
                 potential_transpiration_m[i] += potential_transpiration_m_cell_hour
                 transpiration_m[i] += transpiration_m_cell_hour
 
-                # Calculate unsaturated hydraulic conductivity for bare soil evaporation
-                unsaturated_hydraulic_conductivity_bare_soil_m_per_s: np.float32 = get_unsaturated_conductivity_van_genuchten(
-                    w=water_content_m[i, 0],
-                    wres=water_content_residual_m[i, 0],
-                    ws=water_content_saturated_m[i, 0],
-                    lambda_pore_size_distribution=lambda_pore_size_distribution[i, 0],
-                    saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
-                        i, 0
-                    ],
-                )
-
                 # soil moisture is updated in place
                 bare_soil_evaporation_m_cell_hour = calculate_bare_soil_evaporation(
                     soil_is_frozen=soil_is_frozen,
@@ -779,9 +774,19 @@ def land_surface_model(
                     w_m=water_content_m[i, :],
                     wres_m=water_content_residual_m[i, :],
                     wfc_m=water_content_field_capacity_m[i, :],
-                    unsaturated_hydraulic_conductivity_m_per_s=unsaturated_hydraulic_conductivity_bare_soil_m_per_s,
+                    unsaturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
+                        i, 0
+                    ],
                 )
                 bare_soil_evaporation[i] += bare_soil_evaporation_m_cell_hour
+
+                actual_evapotranspiration_m_cell_hour: np.float32 = (
+                    interception_evaporation_m_cell_hour
+                    + open_water_evaporation_m_cell_hour
+                    + bare_soil_evaporation_m_cell_hour
+                    + transpiration_m_cell_hour
+                )
+                evapotranspiration_m[i, hour] = actual_evapotranspiration_m_cell_hour
 
                 _, frozen_fraction_top_layer = (
                     get_temperature_and_frozen_fraction_from_enthalpy_scalar(
@@ -842,6 +847,7 @@ def land_surface_model(
         top_soil_rise_from_layer_2_m,
         top_soil_percolation_to_layer_2_m,
         top_soil_transpiration_m,
+        evapotranspiration_m,
     )
 
 
@@ -895,7 +901,7 @@ class LandSurfaceInputs(NamedTuple):
     wetting_front_moisture_deficit: ArrayFloat32
     green_ampt_active_layer_idx: ArrayInt32
     lambda_pore_size_distribution: TwoDArrayFloat32
-    bubbling_pressure_m: TwoDArrayFloat32
+    bubbling_pressure_m_positive: TwoDArrayFloat32
     crop_group_number: ArrayFloat32
     minimum_effective_root_depth_m: np.float32
     interflow_multiplier: np.float32
@@ -1123,8 +1129,8 @@ class LandSurface(Module):
             lambda_pore_size_distribution=np.ascontiguousarray(
                 self.HRU.var.lambda_pore_size_distribution.T
             ),
-            bubbling_pressure_m=np.ascontiguousarray(
-                self.HRU.var.bubbling_pressure_m.T
+            bubbling_pressure_m_positive=np.ascontiguousarray(
+                self.HRU.var.bubbling_pressure_m_positive.T
             ),
             crop_group_number=crop_group_number,
             minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
@@ -1433,7 +1439,7 @@ class LandSurface(Module):
             clay=self.HRU.var.clay_percentage,
             thetas=thetas,
         )
-        self.HRU.var.bubbling_pressure_m = get_bubbling_pressure_m(
+        self.HRU.var.bubbling_pressure_m_positive = get_bubbling_pressure_m_positive(
             clay=self.HRU.var.clay_percentage,
             sand=self.HRU.var.sand_percentage,
             thetas=thetas,
@@ -1447,7 +1453,7 @@ class LandSurface(Module):
         # θ saturation, field capacity, wilting point and residual moisture content
         thetafc: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
             np.float32(-1.0),  # assuming field capacity is at -100 cm (pF 2) -> 1m
-            self.HRU.var.bubbling_pressure_m,
+            self.HRU.var.bubbling_pressure_m_positive,
             thetas,
             thetar,
             self.HRU.var.lambda_pore_size_distribution,
@@ -1457,7 +1463,7 @@ class LandSurface(Module):
             np.float32(
                 -(10**2.2)
             ),  # assuming wilting point is at -10^4.2 cm (pF 4.2) -> -10^2.2 m
-            self.HRU.var.bubbling_pressure_m,
+            self.HRU.var.bubbling_pressure_m_positive,
             thetas,
             thetar,
             self.HRU.var.lambda_pore_size_distribution,
@@ -1849,6 +1855,7 @@ class LandSurface(Module):
             top_soil_rise_from_layer_2_m,
             top_soil_percolation_to_layer_2_m,
             top_soil_transpiration_m,
+            evapotranspiration_m,
         ) = [
             r[:_n]
             if isinstance(r, np.ndarray) and r.ndim == 1
@@ -1857,6 +1864,7 @@ class LandSurface(Module):
             else r
             for r in land_surface_model(**land_surface_inputs._asdict())
         ]
+        evapotranspiration_m = evapotranspiration_m.transpose()
 
         # Write back cell-major copies to the layer-major model state.
         # Slice the cell axis to num_cells_original to discard the padding region.

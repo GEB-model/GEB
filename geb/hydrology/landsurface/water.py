@@ -286,54 +286,12 @@ def rise_from_groundwater(
 
 
 @njit(cache=True, inline="always", fastmath=True)
-def get_unsaturated_conductivity_van_genuchten(
-    w: np.float32,
-    wres: np.float32,
-    ws: np.float32,
-    lambda_pore_size_distribution: np.float32,
-    saturated_hydraulic_conductivity_m_per_s: np.float32,
-) -> np.float32:
-    """Calculate the unsaturated hydraulic conductivity for a single soil layer using Van Genuchten.
-
-    Args:
-        w: Soil water content in the layer in meters.
-        wres: Residual soil water content in the layer in meters.
-        ws: Saturated soil water content in the layer in meters.
-        lambda_pore_size_distribution: Van Genuchten parameter lambda for the layer.
-        saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for the layer in m/s
-
-    Returns:
-        Unsaturated hydraulic conductivity in the layer in m/s.
-    """
-    # Compute effective saturation
-    effective_saturation = (w - wres) / (ws - wres)
-    effective_saturation = np.maximum(effective_saturation, np.float32(1e-9))
-    effective_saturation = np.minimum(effective_saturation, np.float32(1))
-
-    # Compute parameters n and m
-    n = lambda_pore_size_distribution + np.float32(1)
-    m = np.float32(1) - np.float32(1) / n
-
-    # Compute unsaturated hydraulic conductivity
-    term1 = saturated_hydraulic_conductivity_m_per_s * np.sqrt(effective_saturation)
-    term2 = (
-        np.float32(1)
-        - np.power(
-            (np.float32(1) - np.power(effective_saturation, (np.float32(1) / m))),
-            m,
-        )
-    ) ** 2
-
-    return term1 * term2
-
-
-@njit(cache=True, inline="always", fastmath=True)
 def get_soil_water_potential_van_genuchten(
     w: np.float32,
     wres: np.float32,
     ws: np.float32,
     lambda_pore_size_distribution: np.float32,
-    bubbling_pressure_m: np.float32,
+    bubbling_pressure_m_positive: np.float32,
 ) -> np.float32:
     """Calculate the soil water potential for a single soil layer using Van Genuchten.
 
@@ -342,7 +300,7 @@ def get_soil_water_potential_van_genuchten(
         wres: Residual soil water content in the layer in meters.
         ws: Saturated soil water content in the layer in meters.
         lambda_pore_size_distribution: Van Genuchten parameter lambda for the layer.
-        bubbling_pressure_m: Bubbling pressure for the layer in m.
+        bubbling_pressure_m_positive: Bubbling pressure for the layer in m.
 
     Returns:
         psi: Soil water potential in the layer in meters (negative value for suction).
@@ -359,7 +317,7 @@ def get_soil_water_potential_van_genuchten(
     n = lambda_pore_size_distribution + np.float32(1)
     m = np.float32(1) - np.float32(1) / n
 
-    alpha = np.float32(1) / bubbling_pressure_m
+    alpha = np.float32(1) / bubbling_pressure_m_positive
 
     # Compute capillary pressure head (phi)
     phi_power_term = np.power(effective_saturation, (-np.float32(1) / m))
@@ -379,7 +337,7 @@ def get_green_ampt_params(
     w: ArrayFloat32,
     ws: ArrayFloat32,
     wres: ArrayFloat32,
-    bubbling_pressure_m: ArrayFloat32,
+    bubbling_pressure_m_positive: ArrayFloat32,
     lambda_pore_size_distribution: ArrayFloat32,
 ) -> tuple[int, np.float32, np.float32]:
     """Helper to determine active layer and Green-Ampt parameters at the wetting front depth.
@@ -395,7 +353,7 @@ def get_green_ampt_params(
         w: Current total water column in each soil layer (meters).
         ws: Saturated water column capacity of each soil layer (meters).
         wres: Residual water column of each soil layer (meters).
-        bubbling_pressure_m: Bubbling pressure parameter for each layer (m).
+        bubbling_pressure_m_positive: Bubbling pressure parameter for each layer (m).
         lambda_pore_size_distribution: Pore size distribution index (lambda) for each layer.
 
     Returns:
@@ -461,7 +419,7 @@ def get_green_ampt_params(
         wres=wres[idx],
         ws=ws[idx],
         lambda_pore_size_distribution=lambda_pore_size_distribution[idx],
-        bubbling_pressure_m=bubbling_pressure_m[idx],
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive[idx],
     )
 
     return idx, abs(psi), delta_theta
@@ -482,7 +440,7 @@ def infiltration(
     wetting_front_moisture_deficit: np.float32,
     green_ampt_active_layer_idx: int,
     variable_runoff_shape_beta: np.float32,
-    bubbling_pressure_m: ArrayFloat32,
+    bubbling_pressure_m_positive: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
     lambda_pore_size_distribution: ArrayFloat32,
     soil_enthalpy_top_layer_J_per_m2: np.float32,
@@ -524,7 +482,7 @@ def infiltration(
         wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
         green_ampt_active_layer_idx: The index of the active soil layer for Green-Ampt.
         variable_runoff_shape_beta: Shape parameter `b` for the PDM distribution.
-        bubbling_pressure_m: Bubbling pressure for each soil layer [m], shape (N_SOIL_LAYERS,).
+        bubbling_pressure_m_positive: Bubbling pressure for each soil layer [m], shape (N_SOIL_LAYERS,).
         soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
         lambda_pore_size_distribution: Van Genuchten parameter lambda for each soil layer, shape (N_SOIL_LAYERS,).
         soil_enthalpy_top_layer_J_per_m2: Top-layer soil enthalpy relative to 0°C liquid water (J/m2).
@@ -593,7 +551,7 @@ def infiltration(
             w,
             ws,
             wres,
-            bubbling_pressure_m,
+            bubbling_pressure_m_positive,
             lambda_pore_size_distribution,
         )
 
@@ -647,7 +605,7 @@ def infiltration(
                 w,
                 ws,
                 wres,
-                bubbling_pressure_m,
+                bubbling_pressure_m_positive,
                 lambda_pore_size_distribution,
             )
             # Update limit for the new layer
@@ -859,7 +817,7 @@ def infiltration(
 )
 def get_soil_moisture_at_pressure(
     pressure_head_m: np.float32,
-    bubbling_pressure_m: np.ndarray[Shape, np.dtype[np.float32]],
+    bubbling_pressure_m_positive: np.ndarray[Shape, np.dtype[np.float32]],
     thetas: np.ndarray[Shape, np.dtype[np.float32]],
     thetar: np.ndarray[Shape, np.dtype[np.float32]],
     lambda_: np.ndarray[Shape, np.dtype[np.float32]],
@@ -868,7 +826,7 @@ def get_soil_moisture_at_pressure(
 
     Args:
         pressure_head_m: The soil pressure_head. Must be negative. (m)
-        bubbling_pressure_m: The bubbling pressure (m)
+        bubbling_pressure_m_positive: The bubbling pressure (m)
         thetas: The saturated soil moisture content (m³/m³)
         thetar: The residual soil moisture content (m³/m³)
         lambda_: Lambda pore size distribution parameter (dimensionless)
@@ -876,7 +834,7 @@ def get_soil_moisture_at_pressure(
     Returns:
         The soil moisture content at the given soil water potential (m³/m³)
     """
-    alpha = np.float32(1) / bubbling_pressure_m
+    alpha = np.float32(1) / bubbling_pressure_m_positive
     n = lambda_ + np.float32(1)
     m = np.float32(1) - np.float32(1) / n
     phi: np.float32 = -pressure_head_m
@@ -930,11 +888,11 @@ def thetas_toth(
         organic_carbon_percentage: soil organic carbon content [%].
         bulk_density_kg_per_dm3: bulk density [kg/dm3].
         clay: clay percentage [%].
-        silt: fsilt percentage [%].
+        silt: silt percentage [%].
         is_top_soil: top soil flag.
 
     Returns:
-        thetas: saturated water content [cm3/cm3].
+        thetas: saturated water content [m3/m3].
 
     """
     return (
@@ -1033,7 +991,7 @@ def thetar_brakensiek(
     )
 
 
-def get_bubbling_pressure_m(
+def get_bubbling_pressure_m_positive(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     sand: np.ndarray[Shape, np.dtype[np.float32]],
     thetas: np.ndarray[Shape, np.dtype[np.float32]],

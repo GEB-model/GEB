@@ -27,7 +27,7 @@ def distribute_soil_water_ross(
     saturated_hydraulic_conductivity_m_per_s: np.ndarray,
     interface_dist_m: np.ndarray,
     soil_layer_height: np.ndarray,
-    bubbling_pressure_m: np.ndarray,
+    bubbling_pressure_m_positive: np.ndarray,
     lambda_: np.ndarray,
     pore_size_index: np.ndarray,
     slope_m_per_m: np.float32,
@@ -49,7 +49,7 @@ def distribute_soil_water_ross(
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for each layer (m/s).
         interface_dist_m: Distance between centers of soil layers (m).
         soil_layer_height: Height of each soil layer (m).
-        bubbling_pressure_m: Bubbling pressure in each layer (m).
+        bubbling_pressure_m_positive: Bubbling pressure in each layer (m). Must be positive.
         lambda_: van Genuchten n parameter minus one (lambda) (-).
         pore_size_index: Pore size index (3 + 2/lambda) (-).
         slope_m_per_m: Hillslope slope (m/m).
@@ -140,7 +140,9 @@ def distribute_soil_water_ross(
         # https://doi.org/10.2134/agronj2003.1352
 
         # The equation between 2 and 3 in Ross (2003) for matric flux potential phi is:
-        phi_e_val = (sat_cond_s * bubbling_pressure_m[i]) / (
+        # bubbling_pressure_m_positive is positive, in the paper it says:
+        # h_e is pressure head at air entry (negative), so we add -1
+        phi_e_val = (sat_cond_s * -bubbling_pressure_m_positive[i]) / (
             np.float32(1.0) - lambda_[i] * pore_size_index[i]
         )
         # Then equation 2 gives:
@@ -215,7 +217,7 @@ def distribute_soil_water_ross(
         # conductivity term is taken from layer i versus layer i+1.
         # The model stores suction head as a negative pressure head, but this
         # formulation uses its magnitude as a capillary length scale.
-        suction_head_magnitude_m = -bubbling_pressure_m[i] * (
+        suction_head_magnitude_m = bubbling_pressure_m_positive[i] * (
             effective_saturation[i] ** (-(np.float32(1.0) / lambda_[i]))
         )
         # Dimensionless ratio (m/m): larger values push the Ross blend toward

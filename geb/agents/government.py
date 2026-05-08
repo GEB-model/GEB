@@ -236,7 +236,7 @@ class Government(AgentBaseClass):
             "water_content_wilting_point_m",
             "water_content_residual_m",
             "saturated_hydraulic_conductivity_m_per_s",
-            "bubbling_pressure_m",
+            "bubbling_pressure_m_positive",
             "lambda_pore_size_distribution",
             "solid_heat_capacity_J_per_m2_K",
         ):

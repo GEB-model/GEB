@@ -73,7 +73,7 @@ def run_infiltration_simulation(
     variable_runoff_shape_beta = np.float32(
         0.1
     )  # Low shape factor -> more uniform infiltration
-    bubbling_pressure_m = np.full(n_layers, 0.2, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(n_layers, 0.2, dtype=np.float32)
     lambda_param = np.full(n_layers, 0.25, dtype=np.float32)
 
     # State variables
@@ -125,7 +125,7 @@ def run_infiltration_simulation(
             wetting_front_deficit,
             green_ampt_active_layer_idx,
             variable_runoff_shape_beta,
-            bubbling_pressure_m,
+            bubbling_pressure_m_positive,
             layer_heights,
             lambda_param,
             soil_enthalpy_top_layer,
@@ -357,7 +357,7 @@ def test_ga_full_column_saturation_processes() -> None:
 
     # GA params
     variable_runoff_shape_beta = np.float32(0.1)
-    bubbling_pressure_m = np.full(n_layers, 0.2, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(n_layers, 0.2, dtype=np.float32)
     lambda_param = np.full(n_layers, 0.25, dtype=np.float32)
 
     # State
@@ -408,7 +408,7 @@ def test_ga_full_column_saturation_processes() -> None:
             wetting_front_deficit,
             green_ampt_active_layer_idx,
             variable_runoff_shape_beta,
-            bubbling_pressure_m,
+            bubbling_pressure_m_positive,
             layer_heights,
             lambda_param,
             soil_enthalpy_top_layer,
