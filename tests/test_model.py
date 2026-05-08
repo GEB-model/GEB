@@ -449,9 +449,9 @@ def test_run() -> None:
         print("Discharge evaluation results:", result)
 
         # Note this should be much higher.
-        assert result["KGE_hourly"] > 0.134
-        assert result["NSE_hourly"] > -0.324
-        assert result["R_hourly"] > 0.4180
+        assert result["KGE_hourly"] > 0.144
+        assert result["NSE_hourly"] > -0.211
+        assert result["R_hourly"] > 0.466
 
         # method_args = {
         #     "method": "hydrodynamics.evaluate_hydrodynamics",

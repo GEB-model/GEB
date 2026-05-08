@@ -773,10 +773,7 @@ def land_surface_model(
                     open_water_evaporation_m=open_water_evaporation_m_cell_hour,
                     w_m=water_content_m[i, :],
                     wres_m=water_content_residual_m[i, :],
-                    wfc_m=water_content_field_capacity_m[i, :],
-                    unsaturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
-                        i, 0
-                    ],
+                    ws_m=water_content_saturated_m[i, :],
                 )
                 bare_soil_evaporation[i] += bare_soil_evaporation_m_cell_hour
 
@@ -1865,6 +1862,9 @@ class LandSurface(Module):
             for r in land_surface_model(**land_surface_inputs._asdict())
         ]
         evapotranspiration_m = evapotranspiration_m.transpose()
+        evapotranspiration_m += irrigation_loss_to_evaporation_m / np.float32(
+            24.0
+        )  # add irrigation losses to evaporation
 
         # Write back cell-major copies to the layer-major model state.
         # Slice the cell axis to num_cells_original to discard the padding region.
