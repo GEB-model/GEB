@@ -11,7 +11,7 @@ from geb.hydrology.landcovers import (
 )
 from geb.hydrology.landsurface.water import (
     add_water_to_topwater_and_evaporate_open_water,
-    get_bubbling_pressure,
+    get_bubbling_pressure_m,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
     get_soil_moisture_at_pressure,
@@ -200,6 +200,8 @@ def test_infiltration() -> None:
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
     frozen_fraction_top_layer = np.float32(0.0)
     topwater = np.float32(0.005)
+    initial_enthalpy = np.float32(100000.0)
+    rain_temp = np.float32(10.0)
 
     w_pre = w.copy()
     topwater_pre = topwater
@@ -213,7 +215,7 @@ def test_infiltration() -> None:
         _,
         _,
         _,
-        _,
+        updated_enthalpy,
     ) = infiltration(
         ws,
         np.zeros_like(ws),
@@ -231,14 +233,22 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
+        soil_enthalpy_top_layer_J_per_m2=initial_enthalpy,
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
-        rain_temperature_C=np.float32(0.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rain_temperature_C=rain_temp,
+        liquid_water_input_for_enthalpy_m=topwater,
     )
 
     # Check that some water was infiltrated
     assert infiltration_amount > 0.0
+    # Check enthalpy (rain advection)
+    # Heat capacity of water ~ 4186000 J/m3/K
+    # Added heat = topwater (m) * heat_cap * rain_temp
+    # Note: direct_runoff carries some heat away, so updated_enthalpy will be
+    # slightly less than expected_enthalpy if runoff occurs.
+    expected_enthalpy = initial_enthalpy + topwater * 4186000.0 * rain_temp
+    assert updated_enthalpy <= expected_enthalpy + 1.0
+    assert updated_enthalpy > initial_enthalpy
     # Check groundwater recharge is 0
     assert groundwater_recharge == 0.0
     # Check water balance
@@ -246,6 +256,9 @@ def test_infiltration() -> None:
     assert abs(total_water_added - topwater_pre) < 1e-6
     # Check that soil water increased
     assert np.sum(w) > np.sum(w_pre)
+    # Check water content bounds (infiltration case 1)
+    assert np.all(w >= 0.0)
+    assert np.all(w <= ws)
 
     # Test case 2: Fully frozen top layer with no new liquid heat input.
     # Use an enthalpy state that is consistent with a fully frozen thin top layer,
@@ -267,7 +280,7 @@ def test_infiltration() -> None:
         _,
         _,
         _,
-    ) = infiltration.py_func(
+    ) = infiltration(
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -341,6 +354,9 @@ def test_infiltration() -> None:
     assert infiltration_amount < topwater_pre
     assert groundwater_recharge == 0.0
     assert abs(infiltration_amount + direct_runoff - topwater_pre) < 1e-6
+    # Check water content bounds (infiltration case 3)
+    assert np.all(w >= 0.0)
+    assert np.all(w <= ws)
 
     # Test case 4: Warm liquid input can thaw a fully frozen top layer across substeps.
     w = np.array([0.002, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
@@ -672,7 +688,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
     wres = np.zeros_like(ws)
     soil_layer_height_m = np.full_like(ws, 0.1)
-    bubbling_pressure_cm = np.full_like(ws, 100.0)
+    bubbling_pressure_m = np.full_like(ws, 1.0)
     lambda_param = np.full_like(ws, 0.5)
     # Use very high soil conductivity so the Green-Ampt rate limit does not bind;
     # the groundwater conductivity cap should be the limiting factor.
@@ -697,7 +713,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         _,
         _,
         _,
-    ) = infiltration.py_func(
+    ) = infiltration(
         ws,
         wres,
         saturated_hydraulic_conductivity_m_per_s,
@@ -711,7 +727,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(0.1),
         np.int32(0),
         np.float32(0.1),
-        bubbling_pressure_cm,
+        bubbling_pressure_m,
         soil_layer_height_m,
         lambda_param,
         np.float32(0.0),
@@ -753,7 +769,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(0.1),
         np.int32(0),
         np.float32(0.1),
-        bubbling_pressure_cm,
+        bubbling_pressure_m,
         soil_layer_height_m,
         lambda_param,
         np.float32(0.0),
@@ -765,6 +781,43 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     assert groundwater_recharge_with_rise == 0.0
     assert abs(direct_runoff - topwater_m) < 1e-6
 
+    # Test case: Compare two different groundwater conductivities.
+    # Lower groundwater conductivity should lead to lower recharge and MORE runoff.
+    w_baseline = ws.copy()
+    topwater_test = np.float32(0.05)
+
+    # 1. Higher conductivity
+    gw_ksat_high = np.float32(0.02 / 3600.0)
+    res_high = infiltration(
+        ws, wres, saturated_hydraulic_conductivity_m_per_s,
+        gw_ksat_high, np.int32(NON_PADDY_IRRIGATED),
+        w_baseline.copy(), topwater_test, np.float32(0.0), total_soil_depth_m,
+        np.float32(10.0 / 3600.0), np.float32(0.1), np.int32(0), np.float32(0.1),
+        bubbling_pressure_m, soil_layer_height_m, lambda_param,
+        np.float32(0.0), np.float32(100000.0), np.float32(0.0), np.float32(0.0),
+    )
+    runoff_high = res_high[1]
+    recharge_high = res_high[2]
+
+    # 2. Lower conductivity
+    gw_ksat_low = np.float32(0.005 / 3600.0)
+    res_low = infiltration(
+        ws, wres, saturated_hydraulic_conductivity_m_per_s,
+        gw_ksat_low, np.int32(NON_PADDY_IRRIGATED),
+        w_baseline.copy(), topwater_test, np.float32(0.0), total_soil_depth_m,
+        np.float32(10.0 / 3600.0), np.float32(0.1), np.int32(0), np.float32(0.1),
+        bubbling_pressure_m, soil_layer_height_m, lambda_param,
+        np.float32(0.0), np.float32(100000.0), np.float32(0.0), np.float32(0.0),
+    )
+    runoff_low = res_low[1]
+    recharge_low = res_low[2]
+
+    assert recharge_low < recharge_high
+    assert runoff_low > runoff_high
+    # Total mass balance check for both cases
+    assert abs(recharge_high + runoff_high - topwater_test) < 1e-6
+    assert abs(recharge_low + runoff_low - topwater_test) < 1e-6
+
 
 def test_soil_water_flow_functions() -> None:
     """Test soil water potential and conductivity functions."""
@@ -774,7 +827,7 @@ def test_soil_water_flow_functions() -> None:
     ws = np.float32(0.3)  # saturated
     lambda_ = np.float32(0.5)  # van Genuchten parameter
     ksat = np.float32(0.01)  # saturated hydraulic conductivity
-    bubbling_pressure = np.float32(10.0)  # cm
+    bubbling_pressure = np.float32(0.1)  # m
 
     psi = get_soil_water_potential_van_genuchten(
         w, wres, ws, lambda_, bubbling_pressure
@@ -853,7 +906,7 @@ def test_soil_water_flow_functions() -> None:
         )
 
     # Test case 7: Different bubbling pressures
-    bubbling_pressures = [5.0, 20.0, 50.0]  # cm
+    bubbling_pressures = [0.05, 0.2, 0.5]  # m
     for bp in bubbling_pressures:
         w = np.float32(0.15)
         psi = get_soil_water_potential_van_genuchten(
@@ -883,22 +936,22 @@ def test_get_soil_moisture_at_pressure() -> None:
     """Test get_soil_moisture_at_pressure function."""
     # Test with different soil types
     soils_data = [
-        ("sand", 20.0, 0.4, 0.075, 2.5),
-        ("silt", 40.0, 0.45, 0.15, 1.45),
-        ("clay", 150.0, 0.50, 0.25, 1.2),
+        ("sand", 0.20, 0.4, 0.075, 2.5),
+        ("silt", 0.40, 0.45, 0.15, 1.45),
+        ("clay", 1.50, 0.50, 0.25, 1.2),
     ]
 
     for soil_name, bp, thetas, thetar, lambda_val in soils_data:
         # Test at a few capillary suction values
-        capillary_suctions = np.array([-1.0, -10.0, -100.0, -1000.0], dtype=np.float32)
-        bubbling_pressure_cm = np.full_like(capillary_suctions, bp)
-        thetas_arr = np.full_like(capillary_suctions, thetas)
-        thetar_arr = np.full_like(capillary_suctions, thetar)
-        lambda_arr = np.full_like(capillary_suctions, lambda_val)
+        pressure_heads_m = np.array([-0.01, -0.1, -1.0, -10.0], dtype=np.float32)
+        bubbling_pressure_m = np.full_like(pressure_heads_m, bp)
+        thetas_arr = np.full_like(pressure_heads_m, thetas)
+        thetar_arr = np.full_like(pressure_heads_m, thetar)
+        lambda_arr = np.full_like(pressure_heads_m, lambda_val)
 
         soil_moisture = get_soil_moisture_at_pressure(
-            capillary_suctions,
-            bubbling_pressure_cm,
+            pressure_heads_m,
+            bubbling_pressure_m,
             thetas_arr,
             thetar_arr,
             lambda_arr,
@@ -920,21 +973,21 @@ def test_get_soil_moisture_at_pressure() -> None:
 
     # Test edge cases
     # Very low suction (close to saturation)
-    capillary_suction = np.array([-0.1], dtype=np.float32)
-    bubbling_pressure_cm = np.array([20.0], dtype=np.float32)
+    pressure_head_m = np.array([-0.1], dtype=np.float32)
+    bubbling_pressure_m = np.array([0.20], dtype=np.float32)
     thetas_arr = np.array([0.4], dtype=np.float32)
     thetar_arr = np.array([0.075], dtype=np.float32)
     lambda_arr = np.array([2.5], dtype=np.float32)
 
     soil_moisture = get_soil_moisture_at_pressure(
-        capillary_suction, bubbling_pressure_cm, thetas_arr, thetar_arr, lambda_arr
+        pressure_head_m, bubbling_pressure_m, thetas_arr, thetar_arr, lambda_arr
     )
     assert soil_moisture[0] > 0.35, "Should be close to saturated at low suction"
 
     # Very high suction (close to residual)
-    capillary_suction = np.array([-20000.0], dtype=np.float32)
+    pressure_head_m = np.array([-20.0], dtype=np.float32)
     soil_moisture = get_soil_moisture_at_pressure(
-        capillary_suction, bubbling_pressure_cm, thetas_arr, thetar_arr, lambda_arr
+        pressure_head_m, bubbling_pressure_m, thetas_arr, thetar_arr, lambda_arr
     )
     assert soil_moisture[0] < 0.1, "Should be close to residual at high suction"
 
@@ -950,7 +1003,7 @@ def test_infiltration_variable_runoff_integration() -> None:
         w, np.float32(10.0 / 3600.0)
     )  # High Ksat
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
-    topwater = np.float32(10.0 / 3600.0)  # 10mm rain
+    topwater = np.float32(10.0)  # 10mm rain
 
     # Run infiltration using .py_func to use the python implementation with the updated global
     # With variable runoff (b=0.4), even if not saturated, there should be some runoff.
@@ -1197,7 +1250,7 @@ def test_pedotransfer_functions_consistency() -> None:
 
         # Additional parameters
         thetar = thetar_brakensiek(sand=sand, clay=clay, thetas=thetas_val_toth)
-        bubbling_pressure = get_bubbling_pressure(
+        bubbling_pressure = get_bubbling_pressure_m(
             clay=clay, sand=sand, thetas=thetas_val_toth
         )
         psi_index_b = get_pore_size_index_brakensiek(

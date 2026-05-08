@@ -395,32 +395,32 @@ def test_run() -> None:
                 "_energy_balance": True,
             }
         )
-        # args["config"]["hazards"]["floods"]["simulate"] = True
+        args["config"]["hazards"]["floods"]["simulate"] = True
 
         run_model_with_method(method="run", **args)
 
-        # for evaluation_method in (
-        #     "hydrology.plot_discharge",
-        #     "hydrology.plot_water_balance",
-        #     "hydrology.plot_water_storage",
-        #     "hydrology.plot_water_circle",
-        #     "energy.plot_soil_temperature",
-        # ):
-        #     evaluate_args = DEFAULT_RUN_ARGS.copy()
-        #     evaluate_args["method_args"] = {"method": evaluation_method}
-        #     run_model_with_method(method="evaluate", **evaluate_args)
+        for evaluation_method in (
+            "hydrology.plot_discharge",
+            "hydrology.plot_water_balance",
+            "hydrology.plot_water_storage",
+            "hydrology.plot_water_circle",
+            "energy.plot_soil_temperature",
+        ):
+            evaluate_args = DEFAULT_RUN_ARGS.copy()
+            evaluate_args["method_args"] = {"method": evaluation_method}
+            run_model_with_method(method="evaluate", **evaluate_args)
 
-        # hydrology_eval_folder: Path = Path("output") / "evaluate" / "hydrology"
-        # assert (hydrology_eval_folder / "water_balance_timeseries.svg").exists()
-        # assert (hydrology_eval_folder / "water_balance_timeseries_yearly.svg").exists()
-        # assert (
-        #     hydrology_eval_folder / "water_balance_top_soil_timeseries.svg"
-        # ).exists()
-        # assert (
-        #     hydrology_eval_folder / "water_balance_top_soil_timeseries_yearly.svg"
-        # ).exists()
-        # assert (hydrology_eval_folder / "water_storage_timeseries.svg").exists()
-        # assert (hydrology_eval_folder / "water_storage_timeseries_yearly.svg").exists()
+        hydrology_eval_folder: Path = Path("output") / "evaluate" / "hydrology"
+        assert (hydrology_eval_folder / "water_balance_timeseries.svg").exists()
+        assert (hydrology_eval_folder / "water_balance_timeseries_yearly.svg").exists()
+        assert (
+            hydrology_eval_folder / "water_balance_top_soil_timeseries.svg"
+        ).exists()
+        assert (
+            hydrology_eval_folder / "water_balance_top_soil_timeseries_yearly.svg"
+        ).exists()
+        assert (hydrology_eval_folder / "water_storage_timeseries.svg").exists()
+        assert (hydrology_eval_folder / "water_storage_timeseries_yearly.svg").exists()
 
         method_args = {
             "method": "hydrology.evaluate_discharge",

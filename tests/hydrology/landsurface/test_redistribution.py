@@ -77,6 +77,9 @@ def test_distribute_soil_water_ross_basic() -> None:
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
 
 
 def test_distribute_soil_water_ross_active_layer_masking() -> None:
@@ -143,6 +146,9 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
 
 
 def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
@@ -202,6 +208,9 @@ def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
     # Water should have moved from saturated layers to dry layers
     assert w_new[0] < w[0]
     assert w_new[5] < w[5]
@@ -412,6 +421,9 @@ def test_distribute_soil_water_ross_frozen_barrier() -> None:
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
 
     # Layer 2 is frozen, it should act as a barrier.
     assert w_new[3] == pytest.approx(w[3], abs=1e-5)
@@ -608,6 +620,10 @@ def test_distribute_soil_water_ross_percolation_to_groundwater() -> None:
     assert np.float32(np.sum(w_new) + perc_gw + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
+
     # Check that enthalpy was also advected out
     assert np.sum(e_new) < np.sum(enth)
     assert perc_gw_e > 0

@@ -395,7 +395,7 @@ def calculate_bare_soil_evaporation(
     w_m: npt.NDArray[np.float32],
     wres_m: npt.NDArray[np.float32],
     wfc_m: npt.NDArray[np.float32],
-    unsaturated_hydraulic_conductivity_m_per_hour: np.float32,
+    unsaturated_hydraulic_conductivity_m_per_s: np.float32,
 ) -> np.float32:
     """Calculate bare soil evaporation for a single soil cell.
 
@@ -407,7 +407,7 @@ def calculate_bare_soil_evaporation(
         w_m: Soil water content (m), shape (N_SOIL_LAYERS,).
         wres_m: Residual soil moisture content (m), shape (N_SOIL_LAYERS,).
         wfc_m: Field capacity soil moisture content (m), shape (N_SOIL_LAYERS,).
-        unsaturated_hydraulic_conductivity_m_per_hour: Unsaturated hydraulic conductivity (m/h).
+        unsaturated_hydraulic_conductivity_m_per_s: Unsaturated hydraulic conductivity (m/s).
 
     Returns:
         Actual bare soil evaporation (m).
@@ -435,7 +435,7 @@ def calculate_bare_soil_evaporation(
         # This accounts for the reduced ability of the soil to transport water to the surface
         potential_direct_evaporation_m = min(
             potential_direct_evaporation_m,
-            unsaturated_hydraulic_conductivity_m_per_hour,
+            unsaturated_hydraulic_conductivity_m_per_s * np.float32(3600),
         )
 
         # Subtract open water evaporation (though it's expected to be 0 for these land uses)
