@@ -1625,7 +1625,7 @@ class LandSurface(Module):
             surface_area_ratio = self.hydrology.to_HRU(surface_area_ratio)
 
             self.HRU.var.variable_runoff_shape_beta[:] = (
-                surface_area_ratio - np.float32(1)
+                (surface_area_ratio - np.float32(1)) + np.float32(0.2)
             ) * 5
 
         timer = TimingModule("Land surface model")
