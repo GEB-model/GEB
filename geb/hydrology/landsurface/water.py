@@ -186,7 +186,7 @@ def calculate_green_ampt_potential_cumulative_infiltration(
     Args:
         seconds_since_start: Seconds since the start of the infiltration event.
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity (m/s).
-        wetting_front_suction_head_m: Wetting front suction head (Δθ) [L].
+        wetting_front_suction_head_m: Wetting front suction head ψ (m).
         moisture_deficit: Moisture deficit [-].
         adjust_for_coarse_soils: Whether to apply adjustment for coarse soils. For coarse soils,
             and very long times, the Sageghi et al. formula can be slightly more off than the
@@ -618,6 +618,19 @@ def infiltration(
             wetting_front_depth_m * wetting_front_moisture_deficit
         )
 
+        saturated_conductivity_of_most_restrictive_layer = (
+            saturated_hydraulic_conductivity_m_per_s[0]
+        ) * np.float32(
+            0.2
+        )  # Apply a crust factor to the top layer to account for surface sealing.
+
+        # Loop through other layers up to the active layer to find the most restrictive conductivity.
+        for i in range(1, green_ampt_active_layer_idx + 1):
+            saturated_conductivity_of_most_restrictive_layer = min(
+                saturated_conductivity_of_most_restrictive_layer,
+                saturated_hydraulic_conductivity_m_per_s[i],
+            )
+
         # Calculate effective time since start of infiltration event
         # If wetting_front_depth is negligible, we start at t=0
         if wetting_front_depth_m == np.float32(0.0):
@@ -626,9 +639,7 @@ def infiltration(
             effective_seconds_since_start_infiltration: np.float32 = (
                 calculate_green_ampt_time_from_infiltration(
                     current_cumulative_infiltration,
-                    saturated_hydraulic_conductivity_m_per_s[
-                        green_ampt_active_layer_idx
-                    ],
+                    saturated_conductivity_of_most_restrictive_layer,
                     wetting_front_suction_head_m,
                     wetting_front_moisture_deficit,
                 )
@@ -643,7 +654,7 @@ def infiltration(
         potential_cumulative_infiltration = (
             calculate_green_ampt_potential_cumulative_infiltration(
                 seconds_since_start_of_infiltration,
-                saturated_hydraulic_conductivity_m_per_s[green_ampt_active_layer_idx],
+                saturated_conductivity_of_most_restrictive_layer,
                 wetting_front_suction_head_m,
                 wetting_front_moisture_deficit,
                 adjust_for_coarse_soils=False,
