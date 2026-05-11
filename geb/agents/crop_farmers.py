@@ -449,7 +449,7 @@ class CropFarmers(AgentBaseClass):
             ]["expected_utility"]["water_price"]["water_costs_m3_reservoir"]
             self.water_costs_m3_groundwater = self.model.config["agent_settings"][
                 "farmers"
-            ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+            ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
         else:
             self.water_price_dict = load_economic_data(
                 self.model.files["dict"]["socioeconomics/water_price"]
@@ -523,10 +523,10 @@ class CropFarmers(AgentBaseClass):
         ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
         self.var.water_costs_m3_reservoir = self.model.config["agent_settings"][
             "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
+        ]["expected_utility"]["water_price"]["water_costs_m3_reservoir"]
         self.var.water_costs_m3_groundwater = self.model.config["agent_settings"][
             "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+        ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
 
         # Irr efficiency variables
         self.var.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
