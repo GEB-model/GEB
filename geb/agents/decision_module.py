@@ -1254,10 +1254,7 @@ class DecisionModule:
             p_wind=p_wind,
         )
 
-        #premium = np.asarray(premium, dtype=np.float32).reshape(-1)  # NEW
-        wealth_after_premium = wealth.astype(np.float32) - premium.astype(
-            np.float32
-        ) 
+        wealth_after_premium = wealth.astype(np.float32) - premium.astype(np.float32)
 
         EU_flood_ins = self.calcEU_do_nothing_flood(
             geom_id=kwargs.get("geom_id", "NoID"),

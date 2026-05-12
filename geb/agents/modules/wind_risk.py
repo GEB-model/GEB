@@ -143,7 +143,7 @@ class WindRiskModule:
         wind_threshold = float(
             self.model.config.get("hazards", {})
             .get("windstorm", {})
-            .get("wind_threshold_ms", 30.0)
+            .get("wind_threshold_ms", 20.0)
         )
     
         rps = list(self.households.windstorm_return_periods)

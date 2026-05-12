@@ -617,6 +617,10 @@ class Households(AgentBaseClass):
         self.var.suppressed_shutters = np.zeros(self.n, dtype=bool)
         self.var.suppressed_insurance = np.zeros(self.n, dtype=bool)
 
+        # Effective EAD per household (updated annually after adaptation decisions)
+        self.var.ead_flood = np.zeros(self.n, dtype=np.float32)
+        self.var.ead_wind = np.zeros(self.n, dtype=np.float32)
+
         self.model.logger.info(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
@@ -868,8 +872,13 @@ class Households(AgentBaseClass):
             out_of_bounds_value=np.nan,
         )
 
-        # Use a wind speed threshold to determine affected households (e.g., >30 m/s)
-        minimum_wind_speed_ms = 30.0
+        # Use a wind speed threshold to determine affected households — must match
+        # the wind_threshold_ms used in wind_risk.py for damage prefiltering
+        minimum_wind_speed_ms = float(
+            self.model.config.get("hazards", {})
+            .get("windstorm", {})
+            .get("wind_threshold_ms", 20.0)
+        )
         windstorm_building_indices = np.where(sampled_values > minimum_wind_speed_ms)[0]
         #get building IDs of affected buildings
         windstorm_building_ids = self.buildings.loc[
@@ -2193,19 +2202,58 @@ class Households(AgentBaseClass):
         w = self.var.wealth.data.astype(np.float32)
         budget = 0.5 * inc * np.float32(exp_cap) + (0.1 * w * np.float32(exp_cap))
 
-        flood_cost = self.var.adaptation_costs.data.astype(
-            np.float32
-        )  # annual payment in your model
-        shutters_cost = self.var.adaptation_costs_shutters.data.astype(
-            np.float32
-        )  # one-time in your EU (still treated as cash-out)
+        flood_cost = (
+            self.var.adaptation_costs.data.astype(np.float32)
+            / loan_duration_flood
+        )  # annualized, consistent with how EU amortizes over loan_duration_flood
+        shutters_cost_annual = (
+            self.var.adaptation_costs_shutters.data.astype(np.float32)
+            / loan_duration_wind
+        )  # annualized, consistent with how EU amortizes over loan_duration_wind
+        shutters_cost = shutters_cost_annual  # used in budget check
         prem_cost = np.asarray(premium, dtype=np.float32).reshape(-1)
 
 
-        # OLD CODE
         # initial choices (before shared-budget reconciliation)
         choose_flood = (EU_adapt > EU_do_not_adapt) | (self.var.adapted.data == 1)
         choose_shutters = (EU_adapt_shutters > EU_unprotected_w) | (self.var.adapted_shutters.data == 1)
+
+        # DIAGNOSTIC: shutter EU breakdown
+        not_yet_adapted = self.var.adapted_shutters.data == 0
+        eu_positive = (EU_adapt_shutters > EU_unprotected_w) & not_yet_adapted
+        print(
+            f"[shutters diag] not_yet_adapted={int(not_yet_adapted.sum())}, "
+            f"EU_positive(new)={int(eu_positive.sum())}, "
+            f"already_adapted={int((self.var.adapted_shutters.data == 1).sum())}"
+        )
+        gain_s = (EU_adapt_shutters - EU_unprotected_w)[not_yet_adapted]
+        print(
+            f"[shutters diag] gain among non-adapted: "
+            f"p5={float(np.percentile(gain_s, 5)):.4f}, "
+            f"p50={float(np.median(gain_s)):.4f}, "
+            f"p95={float(np.percentile(gain_s, 95)):.4f}, "
+            f"max={float(np.max(gain_s)):.4f}"
+        )
+        print(
+            f"[shutters diag] risk_perc_wind: "
+            f"mean={float(np.mean(self.var.risk_perception_windstorm.data)):.4f}, "
+            f"max={float(np.max(self.var.risk_perception_windstorm.data)):.4f}"
+        )
+        wind_ead_nonadapted = self.decision_module.calc_EAD(
+            damages_unprotected_w[:, not_yet_adapted],
+            1.0 / self.windstorm_return_periods,
+        )
+        print(
+            f"[shutters diag] wind EAD (non-adapted): "
+            f"p50={float(np.median(wind_ead_nonadapted)):.2f}, "
+            f"p95={float(np.percentile(wind_ead_nonadapted, 95)):.2f}, "
+            f"max={float(np.max(wind_ead_nonadapted)):.2f}"
+        )
+        print(
+            f"[shutters diag] shutter cost annual (non-adapted): "
+            f"p50={float(np.median(shutters_cost[not_yet_adapted])):.2f}, "
+            f"p95={float(np.percentile(shutters_cost[not_yet_adapted], 95)):.2f}"
+        )
         
 
         if self.var.insurance_scheme == "private":
@@ -2264,8 +2312,28 @@ class Households(AgentBaseClass):
             choose_shutters[drop_s] = False
             choose_ins[drop_i] = False
 
-        
-     
+        # DIAGNOSTIC: how many of the new EU_positive shutter households got budget-dropped?
+        new_eu_positive_shutters = eu_positive  # eu_positive was computed above (EU+ & not_yet_adapted)
+        budget_dropped_shutters = new_eu_positive_shutters & ~choose_shutters
+        print(
+            f"[shutters diag] EU_positive(new)={int(new_eu_positive_shutters.sum())}, "
+            f"survived budget={int((new_eu_positive_shutters & choose_shutters).sum())}, "
+            f"budget-dropped={int(budget_dropped_shutters.sum())}"
+        )
+        if np.any(budget_dropped_shutters):
+            bd_inc = inc[budget_dropped_shutters]
+            bd_prem = prem_cost[budget_dropped_shutters]
+            bd_shut = shutters_cost[budget_dropped_shutters]
+            bd_bud = budget[budget_dropped_shutters]
+            print(
+                f"[shutters diag] budget-dropped households: "
+                f"income p50={float(np.median(bd_inc)):.0f}, "
+                f"premium p50={float(np.median(bd_prem)):.0f}, "
+                f"shutter_cost p50={float(np.median(bd_shut)):.0f}, "
+                f"budget p50={float(np.median(bd_bud)):.0f}, "
+                f"total_cost p50={float(np.median(bd_shut + bd_prem)):.0f}"
+            )
+
         # DEBUG: shared-cap diagnostics
         
         # pre_flood = gain_flood > 0
@@ -2406,6 +2474,23 @@ class Households(AgentBaseClass):
         #     "C:/Users/nxu279/GitHub/GEB_try/models/etaple/base/output/flood_maps/coastal_0500.zarr"
         # )
         # ds.rio.to_raster("C:/Users/nxu279/GitHub/Data/coastal_0500.tif")
+
+        # Compute effective EAD per household using current adaptation status.
+        # Adapted households get reduced damages; others get full damages.
+        eff_damages_flood = damages_do_not_adapt.copy()
+        adapted_flood_mask = self.var.adapted.data[: self.n] == 1
+        eff_damages_flood[:, adapted_flood_mask] = damages_adapt[:, adapted_flood_mask]
+
+        eff_damages_wind = damages_unprotected_w.copy()
+        adapted_wind_mask = self.var.adapted_shutters.data[: self.n] == 1
+        eff_damages_wind[:, adapted_wind_mask] = damages_adapt_w[:, adapted_wind_mask]
+
+        self.var.ead_flood = self.decision_module.calc_EAD(
+            eff_damages_flood, 1.0 / self.return_periods
+        ).astype(np.float32)
+        self.var.ead_wind = self.decision_module.calc_EAD(
+            eff_damages_wind, 1.0 / self.windstorm_return_periods
+        ).astype(np.float32)
 
         n_households = self.n
         print(f"Total N households: {n_households}")
