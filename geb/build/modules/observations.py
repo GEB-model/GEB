@@ -425,7 +425,7 @@ class Observations(BuildModelBase):
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
 
-    @build_method(depends_on=["setup_hydrography"], required=False)
+    @build_method(depends_on=["setup_hydrography"], required=True)
     def setup_meteorological_stations_observations(self) -> None:
         """Set up meteorological tower observations. Currently only latent heat."""
         # Fetch metadata to find towers in region
@@ -439,7 +439,7 @@ class Observations(BuildModelBase):
         )
         self.set_geom(stations, name="observations/meteorological_station_locations")
 
-    @build_method(depends_on=["setup_hydrography"], required=False)
+    @build_method(depends_on=["setup_hydrography"], required=True)
     def setup_groundwater_well_observations(self) -> None:
         """Set up groundwater level observations from the GROW dataset.
 

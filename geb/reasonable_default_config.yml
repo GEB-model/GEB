@@ -204,11 +204,12 @@ report:
   _water_storage: false
   _energy_balance: false
   _discharge_stations: true
+  _meteorological_stations: true
   _outflow_points: true
 
 parameters:
   mannings_n_multiplier: 1.0
-  crop_factor_multiplier: 1.0
+  crop_factor_multiplier: 1.5
   saturated_hydraulic_conductivity_multiplier: 1.0
   reservoir_release_factor: 0.1
   lake_outflow_multiplier: 1.0

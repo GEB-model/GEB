@@ -28,8 +28,8 @@ def test_distribute_soil_water_ross_basic() -> None:
 
     # Hydraulic properties
     ksat = np.full(n_layers, 0.01 / np.float32(3600.0), dtype=np.float32)  # m/s
-    bubbling_pressure_m = np.full(
-        n_layers, -0.6666, dtype=np.float32
+    bubbling_pressure_m_positive = np.full(
+        n_layers, 0.6666, dtype=np.float32
     )  # -1 / 0.015 (cm to m)
     lambda_ = np.full(n_layers, 1.3 - 1.0, dtype=np.float32)
     pore_size_index = np.float32(3.0) + (np.float32(2.0) / lambda_)
@@ -59,7 +59,7 @@ def test_distribute_soil_water_ross_basic() -> None:
         saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
-        bubbling_pressure_m=bubbling_pressure_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
         pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.01),
@@ -77,6 +77,9 @@ def test_distribute_soil_water_ross_basic() -> None:
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
 
 
 def test_distribute_soil_water_ross_active_layer_masking() -> None:
@@ -100,7 +103,7 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
     enth = np.full(n_layers, 1e7, dtype=np.float32)
     hc = np.full(n_layers, 1e6, dtype=np.float32)
     ksat = np.full(n_layers, 0.1 / np.float32(3600.0), dtype=np.float32)
-    bubbling_pressure_m = np.full(n_layers, -0.5, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(n_layers, 0.5, dtype=np.float32)
     lambda_ = np.full(n_layers, 1.5 - 1.0, dtype=np.float32)
     pore_size_index = np.float32(3.0) + (np.float32(2.0) / lambda_)
 
@@ -124,7 +127,7 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
         ksat,
         interface_dist_m,
         soil_layer_height_m,
-        bubbling_pressure_m,
+        bubbling_pressure_m_positive,
         lambda_,
         pore_size_index,
         np.float32(0.01),
@@ -143,6 +146,9 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
 
 
 def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
@@ -163,7 +169,7 @@ def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
     enth = np.full(n_layers, 1e7, dtype=np.float32)
     hc = np.full(n_layers, 1e6, dtype=np.float32)
     ksat = np.full(n_layers, 0.1 / np.float32(3600.0), dtype=np.float32)
-    bubbling_pressure_m = np.full(n_layers, -0.5, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(n_layers, 0.5, dtype=np.float32)
     lambda_ = np.full(n_layers, 1.5 - 1.0, dtype=np.float32)
     pore_size_index = np.float32(3.0) + (np.float32(2.0) / lambda_)
 
@@ -187,7 +193,7 @@ def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
         ksat,
         interface_dist_m,
         soil_layer_height_m,
-        bubbling_pressure_m,
+        bubbling_pressure_m_positive,
         lambda_,
         pore_size_index,
         np.float32(0.01),
@@ -202,6 +208,9 @@ def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
     # Water should have moved from saturated layers to dry layers
     assert w_new[0] < w[0]
     assert w_new[5] < w[5]
@@ -230,7 +239,7 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
     hc = np.full(N_SOIL_LAYERS, 1e6, dtype=np.float32)
 
     ksat = np.full(N_SOIL_LAYERS, 0.01 / np.float32(3600.0), dtype=np.float32)  # m/s
-    bubbling_pressure_m = np.full(N_SOIL_LAYERS, -0.6666, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(N_SOIL_LAYERS, 0.6666, dtype=np.float32)
     lambda_ = np.full(N_SOIL_LAYERS, 1.3 - 1.0, dtype=np.float32)
     pore_size_index = np.float32(3.0) + (np.float32(2.0) / lambda_)
 
@@ -249,7 +258,7 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
         saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
-        bubbling_pressure_m=bubbling_pressure_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
         pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.1),
@@ -274,7 +283,7 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
         saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
-        bubbling_pressure_m=bubbling_pressure_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
         pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.1),
@@ -319,7 +328,7 @@ def test_distribute_soil_water_ross_interflow_dry_soil() -> None:
     hc = np.full(N_SOIL_LAYERS, 1e6, dtype=np.float32)
 
     ksat = np.full(N_SOIL_LAYERS, 0.01 / np.float32(3600.0), dtype=np.float32)
-    bubbling_pressure_m = np.full(N_SOIL_LAYERS, -0.6666, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(N_SOIL_LAYERS, 0.6666, dtype=np.float32)
     lambda_ = np.full(N_SOIL_LAYERS, 1.3 - 1.0, dtype=np.float32)
     pore_size_index = np.float32(3.0) + (np.float32(2.0) / lambda_)
 
@@ -335,7 +344,7 @@ def test_distribute_soil_water_ross_interflow_dry_soil() -> None:
         saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
-        bubbling_pressure_m=bubbling_pressure_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
         pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.1),
@@ -373,7 +382,7 @@ def test_distribute_soil_water_ross_frozen_barrier() -> None:
 
     hc = np.full(n_layers, 1e6, dtype=np.float32)
     ksat = np.full(n_layers, 0.1 / np.float32(3600.0), dtype=np.float32)
-    bubbling_pressure_m = np.full(n_layers, -0.5, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(n_layers, 0.5, dtype=np.float32)
     lambda_ = np.full(n_layers, 1.5 - 1.0, dtype=np.float32)
     pore_size_index = np.float32(3.0) + (np.float32(2.0) / lambda_)
 
@@ -397,7 +406,7 @@ def test_distribute_soil_water_ross_frozen_barrier() -> None:
         ksat,
         interface_dist_m,
         soil_layer_height_m,
-        bubbling_pressure_m,
+        bubbling_pressure_m_positive,
         lambda_,
         pore_size_index,
         np.float32(0.01),
@@ -412,6 +421,9 @@ def test_distribute_soil_water_ross_frozen_barrier() -> None:
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
 
     # Layer 2 is frozen, it should act as a barrier.
     assert w_new[3] == pytest.approx(w[3], abs=1e-5)
@@ -434,7 +446,7 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
 
     # Hydraulic properties
     ksat_arr = np.full(n_layers, ksat / np.float32(3600.0), dtype=np.float32)
-    bubbling_pressure_m_val = np.full(n_layers, -0.5, dtype=np.float32)
+    bubbling_pressure_m_positive_val = np.full(n_layers, 0.5, dtype=np.float32)
     lambda_ = np.full(n_layers, 1.5 - 1.0, dtype=np.float32)
     pore_size_index = np.float32(3.0) + (np.float32(2.0) / lambda_)
     wr_vol, ws_vol = 0.05, 0.5
@@ -485,7 +497,7 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
                 saturated_hydraulic_conductivity_m_per_s=ksat_arr,
                 interface_dist_m=interface_dist_m,
                 soil_layer_height=soil_layer_height_m,
-                bubbling_pressure_m=bubbling_pressure_m_val,
+                bubbling_pressure_m_positive=bubbling_pressure_m_positive_val,
                 lambda_=lambda_,
                 pore_size_index=pore_size_index,
                 slope_m_per_m=np.float32(1),
@@ -564,7 +576,7 @@ def test_distribute_soil_water_ross_percolation_to_groundwater() -> None:
     hc = np.full(n_layers, 1e6, dtype=np.float32)
     # High Ksat allows significant percolation
     ksat = np.full(n_layers, 0.1 / np.float32(3600.0), dtype=np.float32)
-    bubbling_pressure_m = np.full(n_layers, -0.5, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(n_layers, 0.5, dtype=np.float32)
     lambda_ = np.full(n_layers, 1.5 - 1.0, dtype=np.float32)
     pore_size_index = np.float32(3.0) + (np.float32(2.0) / lambda_)
 
@@ -591,7 +603,7 @@ def test_distribute_soil_water_ross_percolation_to_groundwater() -> None:
         ksat,
         interface_dist_m,
         soil_layer_height_m,
-        bubbling_pressure_m,
+        bubbling_pressure_m_positive,
         lambda_,
         pore_size_index,
         np.float32(0.01),
@@ -608,6 +620,10 @@ def test_distribute_soil_water_ross_percolation_to_groundwater() -> None:
     assert np.float32(np.sum(w_new) + perc_gw + lateral_outflow) == pytest.approx(
         np.float32(np.sum(w)), abs=1e-7
     )
+    # Check water content bounds
+    assert np.all(w_new >= wr)
+    assert np.all(w_new <= ws)
+
     # Check that enthalpy was also advected out
     assert np.sum(e_new) < np.sum(enth)
     assert perc_gw_e > 0

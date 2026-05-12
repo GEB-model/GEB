@@ -346,9 +346,7 @@ def test_calculate_bare_soil_evaporation() -> None:
     open_water_evaporation = np.float32(0.0)
     w_cell = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres_cell = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
-    wfc_cell = np.array([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], dtype=np.float32)
     ws_cell = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
-    unsaturated_hydraulic_conductivity = np.float32(0.001)
 
     evaporation = calculate_bare_soil_evaporation(
         soil_is_frozen=soil_is_frozen,
@@ -357,8 +355,7 @@ def test_calculate_bare_soil_evaporation() -> None:
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
-        wfc_m=wfc_cell,
-        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
+        ws_m=ws_cell,
     )
 
     # Basic checks
@@ -374,8 +371,7 @@ def test_calculate_bare_soil_evaporation() -> None:
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
-        wfc_m=wfc_cell,
-        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
+        ws_m=ws_cell,
     )
     assert evaporation_frozen == 0.0
 
@@ -505,7 +501,6 @@ def test_calculate_bare_soil_evaporation_paddy() -> None:
 
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
-    wfc = np.array([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], dtype=np.float32)
     ws = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
     unsaturated_hydraulic_conductivity = np.float32(0.001)
 
@@ -516,8 +511,7 @@ def test_calculate_bare_soil_evaporation_paddy() -> None:
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
-        wfc_m=wfc,
-        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
+        ws_m=ws,
     )
 
     # Should be 0 for paddy irrigation
@@ -530,7 +524,6 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
 
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
-    wfc = np.array([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], dtype=np.float32)
     ws = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
     unsaturated_hydraulic_conductivity = np.float32(0.001)
 
@@ -542,8 +535,7 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
         open_water_evaporation_m=0.0005,  # Half of potential
         w_m=w,
         wres_m=wres,
-        wfc_m=wfc,
-        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
+        ws_m=ws,
     )
 
     evaporation_no_open_water = calculate_bare_soil_evaporation(
@@ -553,8 +545,7 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
-        wfc_m=wfc,
-        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
+        ws_m=ws,
     )
 
     # Should be less with open water evaporation

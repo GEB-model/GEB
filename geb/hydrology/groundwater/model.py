@@ -123,7 +123,7 @@ def get_groundwater_storage_m(
     Args:
         layer_boundary_elevation: Elevation of the layer boundaries, in m.
         head: The heads of the model grid, in m.
-        specific_yield: The specific yield of the model grid, in m-1.
+        specific_yield: The specific yield of the model grid (-).
         min_remaining_layer_storage_m: The minimum remaining layer storage in m.
             More storage cannot be abstracted with wells.
 
@@ -164,7 +164,7 @@ def distribute_well_abstraction_m3_per_layer(
         well_rate: The well rate, in m3/step. Negative values indicate abstraction.
         layer_boundary_elevation: Elevation of the layer boundaries, in m.
         heads: The heads of the model grid, in m.
-        specific_yield: The specific yield of the model grid, in m-1.
+        specific_yield: The specific yield of the model grid (-).
         area: The area of each cell, in m2.
         min_remaining_layer_storage_m: The minimum remaining layer storage in m.
             More storage cannot be abstracted with wells.
