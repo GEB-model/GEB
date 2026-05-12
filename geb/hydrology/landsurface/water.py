@@ -451,8 +451,9 @@ TABLE_SIZE: int = 1024
 assert (TABLE_SIZE & (TABLE_SIZE - 1)) == 0, "TABLE_SIZE must be a power of two"
 MASK: np.uint64 = np.uint64(TABLE_SIZE - 1)
 
-np.random.seed(42)
-_RAINFALL_LOOKUP_TABLE_NON_NORMALIZED: TwoDArrayFloat64 = np.random.lognormal(
+_RAINFALL_LOOKUP_TABLE_NON_NORMALIZED: TwoDArrayFloat64 = np.random.default_rng(
+    42
+).lognormal(
     mean=0,
     sigma=1.2,
     size=(TABLE_SIZE, 6),
@@ -578,9 +579,6 @@ def infiltration(
 
     n_substeps: int = 6
     substep_time_s: np.float32 = np.float32(3600.0) / np.float32(n_substeps)
-    liquid_water_input_for_enthalpy_per_step_m: np.float32 = (
-        liquid_water_input_for_enthalpy_m / np.float32(n_substeps)
-    )
 
     # If starting with a new wetting front, calculate initial parameters
     if wetting_front_depth_m == np.float32(0.0):
@@ -624,13 +622,17 @@ def infiltration(
         )
     for substep_i in range(n_substeps):
         # Calculate the amount of water available for infiltration in this substep based on the rainfall distribution.
-        topwater_step: np.float32 = topwater_m * rainfall_lookup_table_row[substep_i]
+        rainfall_ratio_substep: np.float32 = rainfall_lookup_table_row[substep_i]
+        topwater_step: np.float32 = topwater_m * rainfall_ratio_substep
+        liquid_water_input_for_enthalpy_m_step = (
+            liquid_water_input_for_enthalpy_m * rainfall_ratio_substep
+        )
 
         # Add enthalpy from newly reaching rain/irrigation to the top-soil control volume.
         # This water enters at rain_temperature_C and equilibrates with the top layer.
         soil_enthalpy_top_layer_J_per_m2 = apply_rain_heat_advection(
             soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
-            liquid_water_input_m=liquid_water_input_for_enthalpy_per_step_m,
+            liquid_water_input_m=liquid_water_input_for_enthalpy_m_step,
             rain_temperature_C=max(rain_temperature_C, np.float32(0.0)),
         )
 
@@ -639,7 +641,7 @@ def infiltration(
                 enthalpy_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
                 solid_heat_capacity_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
                 water_content_m=w[0],
-                topwater_m=liquid_water_input_for_enthalpy_per_step_m,
+                topwater_m=liquid_water_input_for_enthalpy_m_step,
             )
         )
         liquid_fraction_top_layer = np.float32(1.0) - np.minimum(

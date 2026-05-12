@@ -2058,7 +2058,7 @@ class Hydrology:
         self.model = model
         self.evaluator = evaluator
 
-    def get_dicharge_per_river(
+    def get_discharge_per_river(
         self, run_name: str
     ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
         """Get the discharge per river from the report directory.
@@ -2126,7 +2126,7 @@ class Hydrology:
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
-        rivers_of_interest, discharge = self.get_dicharge_per_river(run_name)
+        rivers_of_interest, discharge = self.get_discharge_per_river(run_name)
         for river_id in discharge.columns:
             rivers_of_interest.loc[river_id, "discharge_m3_per_s"] = discharge[
                 river_id
@@ -2399,7 +2399,7 @@ class Hydrology:
                 region_geom = read_geom(
                     self.model.files["geom"]["mask"]
                 )  # load the region shapefile
-                rivers, discharge = self.get_dicharge_per_river(
+                rivers, discharge = self.get_discharge_per_river(
                     run_name
                 )  # load the river geometries and discharge data
                 for river_id in discharge.columns:

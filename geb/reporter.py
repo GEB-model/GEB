@@ -813,7 +813,7 @@ class Reporter:
                                 station_info,
                             ) in meteorological_station_locations.iterrows():
                                 station_reporters: dict[str, dict[str, str | int]] = {
-                                    f"evapotranspiration_{station_ID}": {
+                                    f"evapotranspiration_m_per_hour{station_ID}": {
                                         "varname": f".evapotranspiration_m",
                                         "type": "HRU",
                                         "function": f"sample_lonlat,{station_info['geometry'].x},{station_info['geometry'].y}",
