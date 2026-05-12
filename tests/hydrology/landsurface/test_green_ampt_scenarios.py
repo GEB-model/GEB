@@ -158,7 +158,7 @@ def run_infiltration_simulation(
             w[i] += flux
 
         # Bottom drainage (free drainage condition)
-        k_bottom = np.float32(ksat_m_per_s * (w[-1] / ws[-1]) ** 4)
+        k_bottom = np.float32(ksat_m_per_s * np.float32(3600) * (w[-1] / ws[-1]) ** 4)
         flux_out = min(k_bottom, w[-1])
         w[-1] -= flux_out
 

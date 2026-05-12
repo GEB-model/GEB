@@ -535,6 +535,7 @@ def infiltration(
             top-soil thermal control volume during this timestep (m). This should
             include rain and similar new surface inputs, but exclude pre-existing
             ponded water so heat advection is not double counted.
+        distribute_rainfall_lognormally: Whether to distribute rainfall across substeps using a log-normal distribution to simulate temporal variability. If False, rainfall is distributed evenly.
 
     Returns:
         A tuple containing:
