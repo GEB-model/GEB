@@ -16,6 +16,8 @@ VERSION_UPDATES: dict[str, list[str]] = {
         "[update-method;setup_hydrography]",
         "[update-method;setup_geomorphology]",
         "[update-method;setup_discharge_observations]",
+        "[update-method;setup_meteorological_stations_observations]",
+        "[update-method;setup_groundwater_well_observations]",
     ],
     "1.0.0b21": [
         "[manual] Remove `setup_irrigation_sources` from your `build.yml`. Only required if you don't use the new build.yml format that inherits (see changelog.md)",

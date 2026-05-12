@@ -31,7 +31,12 @@
 - All other configuration options that essentially tried to do some of these things above per study area (like custom abstraction) are removed now. Hopefully we can simply reduce the need for configuration options with better defaults!
 - Change units that industry and livestock water demand return (now m3/day, was m/day).
 - Add surface area ratio to setup_geomorphology.
-- Fixes to infiltration.
+- Use surface area ratio to set variable runoff.
+- Improvement of variable names and unit conventions in land surface model.
+- Limit infiltration to most restricted layer and set a simple surface crust to limit infiltration to 20% of saturated conductivity for top layer. Can be improved upon.
+- Export evapotranspiration for locations with flux towers.
+- Improve visualisation of discharge_evaluation.html. Several things to make it look better, but also make it roughly 33-40% of original size while making it faster loading.
+- Report monthly discharge evaluation values too.
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).
