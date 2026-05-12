@@ -659,9 +659,6 @@ def evaluate(
     i = 0
     while i < len(ctx.args):
         arg = ctx.args[i]
-        key = None
-        value = None
-
         if arg.startswith("--"):
             if "=" in arg:
                 # Handle --key=value
@@ -704,6 +701,8 @@ def evaluate(
                     except ValueError:
                         # Keep as string
                         pass
+
+            key = key.replace("-", "_")
             extra_args[key] = value
 
     if profile_ram and IS_WINDOWS:

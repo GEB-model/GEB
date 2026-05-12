@@ -159,7 +159,13 @@ class GROW(Adapter):
         timeseries: pd.DataFrame = pd.read_parquet(
             self._timeseries_path,
             filters=[
-                ("GROW_ID", "in", region_wells.index.tolist()),
+                (
+                    "GROW_ID",
+                    "in",
+                    region_wells.index.tolist()
+                    if len(region_wells) > 0
+                    else ["placeholder_id_that_shouldn't_match_anything"],
+                ),
             ],
             columns=[
                 "GROW_ID",

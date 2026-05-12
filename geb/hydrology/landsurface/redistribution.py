@@ -27,7 +27,7 @@ def distribute_soil_water_ross(
     saturated_hydraulic_conductivity_m_per_s: np.ndarray,
     interface_dist_m: np.ndarray,
     soil_layer_height: np.ndarray,
-    bubbling_pressure_m: np.ndarray,
+    bubbling_pressure_m_positive: np.ndarray,
     lambda_: np.ndarray,
     pore_size_index: np.ndarray,
     slope_m_per_m: np.float32,
@@ -49,7 +49,7 @@ def distribute_soil_water_ross(
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for each layer (m/s).
         interface_dist_m: Distance between centers of soil layers (m).
         soil_layer_height: Height of each soil layer (m).
-        bubbling_pressure_m: Bubbling pressure in each layer (m).
+        bubbling_pressure_m_positive: Bubbling pressure in each layer (m). Must be positive.
         lambda_: van Genuchten n parameter minus one (lambda) (-).
         pore_size_index: Pore size index (3 + 2/lambda) (-).
         slope_m_per_m: Hillslope slope (m/m).
@@ -78,10 +78,6 @@ def distribute_soil_water_ross(
     phi = stack_empty(N_SOIL_LAYERS, np.float32)
     dK_dS = stack_empty(N_SOIL_LAYERS, np.float32)
     dphi_dS = stack_empty(N_SOIL_LAYERS, np.float32)
-    water_content_m_initial = stack_empty(N_SOIL_LAYERS, np.float32)
-
-    for i in range(N_SOIL_LAYERS):
-        water_content_m_initial[i] = water_content_m[i]
 
     q = stack_empty(_N_SOIL_LAYERS_PLUS_ONE, np.float32)
     q_interflow = stack_empty(N_SOIL_LAYERS, np.float32)
@@ -98,7 +94,7 @@ def distribute_soil_water_ross(
 
     for i in range(N_SOIL_LAYERS):
         # Effective saturation and suction potential, limit to [0.001, 0.999] for numerical stability.
-        s_eff = (water_content_m_initial[i] - water_content_residual_m[i]) / (
+        s_eff = (water_content_m[i] - water_content_residual_m[i]) / (
             water_content_saturated_m[i] - water_content_residual_m[i]
         )
         s_eff = max(np.float32(0.001), min(np.float32(0.999), s_eff))
@@ -106,7 +102,7 @@ def distribute_soil_water_ross(
 
         # Frozen fraction: only the latent-heat window matters; no temperature needed.
         topwater_frac_m = topwater_m if i == 0 else np.float32(0.0)
-        water_depth_frac_m = water_content_m_initial[i] + topwater_frac_m
+        water_depth_frac_m = water_content_m[i] + topwater_frac_m
         latent_heat_frac_J_per_m2 = (
             water_depth_frac_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
         )
@@ -144,7 +140,9 @@ def distribute_soil_water_ross(
         # https://doi.org/10.2134/agronj2003.1352
 
         # The equation between 2 and 3 in Ross (2003) for matric flux potential phi is:
-        phi_e_val = (sat_cond_s * bubbling_pressure_m[i]) / (
+        # bubbling_pressure_m_positive is positive, in the paper it says:
+        # h_e is pressure head at air entry (negative), so we add -1
+        phi_e_val = (sat_cond_s * -bubbling_pressure_m_positive[i]) / (
             np.float32(1.0) - lambda_[i] * pore_size_index[i]
         )
         # Then equation 2 gives:
@@ -177,7 +175,7 @@ def distribute_soil_water_ross(
         # q_interflow = C * S^(p+1)
         free_water_m = max(
             np.float32(0.0),
-            water_content_m_initial[i] - water_content_residual_m[i],
+            water_content_m[i] - water_content_residual_m[i],
         )
 
         q_interflow[i] = interflow_drainage_rate_s * free_water_m * liquid_fractions[i]
@@ -219,7 +217,7 @@ def distribute_soil_water_ross(
         # conductivity term is taken from layer i versus layer i+1.
         # The model stores suction head as a negative pressure head, but this
         # formulation uses its magnitude as a capillary length scale.
-        suction_head_magnitude_m = -bubbling_pressure_m[i] * (
+        suction_head_magnitude_m = bubbling_pressure_m_positive[i] * (
             effective_saturation[i] ** (-(np.float32(1.0) / lambda_[i]))
         )
         # Dimensionless ratio (m/m): larger values push the Ross blend toward
@@ -371,20 +369,29 @@ def distribute_soil_water_ross(
         # Interface flux: positive is downward (i -> i+1), negative is upward (i+1 -> i)
         # We cap the flux by the available water in the source layer.
         # This is a safety check for the linear approximation.
-        # Since we use in-place updates, we must use the INITIAL water content
-        # for available water checks to maintain symmetry and pass tests.
         available_layer_i: np.float32 = max(
-            np.float32(0.0), water_content_m_initial[i] - water_content_residual_m[i]
+            np.float32(0.0), water_content_m[i] - water_content_residual_m[i]
         )
         available_layer_iplus1: np.float32 = max(
             np.float32(0.0),
-            water_content_m_initial[i + 1] - water_content_residual_m[i + 1],
+            water_content_m[i + 1] - water_content_residual_m[i + 1],
+        )
+
+        # Flux is limited by available capacity in the sink layer
+        capacity_layer_i: np.float32 = max(
+            np.float32(0.0),
+            water_content_saturated_m[i] - water_content_m[i],
+        )
+        capacity_layer_iplus1: np.float32 = max(
+            np.float32(0.0),
+            water_content_saturated_m[i + 1] - water_content_m[i + 1],
         )
 
         # flux_m > 0: source is i, sink is i+1, cap is available_layer_i
         # flux_m < 0: source is i+1, sink is i, cap is available_layer_i+1
         actual_flux_m: np.float32 = max(
-            -available_layer_iplus1, min(flux_m, available_layer_i)
+            -min(available_layer_iplus1, capacity_layer_i),
+            min(flux_m, min(available_layer_i, capacity_layer_iplus1)),
         )
 
         # Track percolation/rise for the top interface (between layer 0 and 1)
@@ -393,7 +400,11 @@ def distribute_soil_water_ross(
             top_soil_rise_from_layer_2_m = max(np.float32(0.0), -actual_flux_m)
 
         water_content_m[i] = water_content_m[i] - actual_flux_m
+        water_content_m[i] = max(water_content_m[i], water_content_residual_m[i])
         water_content_m[i + 1] = water_content_m[i + 1] + actual_flux_m
+        water_content_m[i + 1] = min(
+            water_content_m[i + 1], water_content_saturated_m[i + 1]
+        )
 
         # Advective heat transport
         # We need the temperature of the source layer.
@@ -450,10 +461,7 @@ def distribute_soil_water_ross(
     # We use initial water content for the available water cap at the bottom boundary.
     available_water_source = max(
         np.float32(0.0),
-        (
-            water_content_m_initial[bottom_layer]
-            - water_content_residual_m[bottom_layer]
-        ),
+        (water_content_m[bottom_layer] - water_content_residual_m[bottom_layer]),
     )
 
     # We allow downward flux (positive) capped by available water, or zero (upward flux is handled in land surface).
@@ -468,6 +476,9 @@ def distribute_soil_water_ross(
     # Remove the water from the source
     water_content_m[bottom_layer] = (
         water_content_m[bottom_layer] - percolation_to_groundwater_m
+    )
+    water_content_m[bottom_layer] = max(
+        water_content_m[bottom_layer], water_content_residual_m[bottom_layer]
     )
 
     # Apply interflow changes to water content and enthalpy.

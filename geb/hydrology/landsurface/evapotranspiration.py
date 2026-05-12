@@ -218,6 +218,8 @@ def calculate_transpiration(
             - topwater_m: Updated topwater [m] after transpiration.
     """
     transpiration: np.float32 = np.float32(0.0)
+    if potential_transpiration_m <= np.float32(0.0):
+        return transpiration, topwater_m
 
     remaining_potential_transpiration: np.float32 = potential_transpiration_m
     if land_use_type == PADDY_IRRIGATED:
@@ -394,8 +396,7 @@ def calculate_bare_soil_evaporation(
     open_water_evaporation_m: np.float32,
     w_m: npt.NDArray[np.float32],
     wres_m: npt.NDArray[np.float32],
-    wfc_m: npt.NDArray[np.float32],
-    unsaturated_hydraulic_conductivity_m_per_hour: np.float32,
+    ws_m: npt.NDArray[np.float32],
 ) -> np.float32:
     """Calculate bare soil evaporation for a single soil cell.
 
@@ -406,8 +407,7 @@ def calculate_bare_soil_evaporation(
         open_water_evaporation_m: Actual open water evaporation (m).
         w_m: Soil water content (m), shape (N_SOIL_LAYERS,).
         wres_m: Residual soil moisture content (m), shape (N_SOIL_LAYERS,).
-        wfc_m: Field capacity soil moisture content (m), shape (N_SOIL_LAYERS,).
-        unsaturated_hydraulic_conductivity_m_per_hour: Unsaturated hydraulic conductivity (m/h).
+        ws_m: Saturation soil moisture content (m), shape (N_SOIL_LAYERS,).
 
     Returns:
         Actual bare soil evaporation (m).
@@ -421,21 +421,10 @@ def calculate_bare_soil_evaporation(
     ):
         # Apply an additional correction due to dust mulch
         # reduction based on relative moisture of the top layer.
-        relative_moisture = max(
-            np.float32(0.0),
-            (w_m[0] - wres_m[0]) / (wfc_m[0] - wres_m[0]),
-        )
-        dust_mulch_reduction = min(np.float32(1.0), relative_moisture**2)
+        dust_mulch_reduction: np.float32 = (w_m[0] - wres_m[0]) / (ws_m[0] - wres_m[0])
 
         potential_direct_evaporation_m = (
             potential_direct_evaporation_m * dust_mulch_reduction
-        )
-
-        # Limit potential evaporation by the unsaturated hydraulic conductivity
-        # This accounts for the reduced ability of the soil to transport water to the surface
-        potential_direct_evaporation_m = min(
-            potential_direct_evaporation_m,
-            unsaturated_hydraulic_conductivity_m_per_hour,
         )
 
         # Subtract open water evaporation (though it's expected to be 0 for these land uses)
