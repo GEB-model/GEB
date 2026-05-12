@@ -114,6 +114,7 @@ def map_date_to_dekad(dt: datetime) -> int:
 
 @njit(parallel=True, cache=True, fastmath=True)
 def land_surface_model(
+    unix_time_seconds: np.int64,
     land_use_type: ArrayInt32,
     slope_m_per_m: ArrayFloat32,
     hillslope_length_m: ArrayFloat32,
@@ -205,6 +206,7 @@ def land_surface_model(
     - Evapotranspiration
 
     Args:
+        unix_time_seconds: Current model time in seconds since the Unix epoch (January 1, 1970). Can be negative for dates before the epoch.
         land_use_type: Land use type of the hydrological response unit.
         slope_m_per_m: Slope of the hydrological response unit in m/m.
         hillslope_length_m: Hillslope length of the hydrological response unit in m.
@@ -588,6 +590,7 @@ def land_surface_model(
                     green_ampt_active_layer_idx[i],
                     soil_enthalpy_J_per_m2[i, 0],
                 ) = infiltration(
+                    seed=(unix_time_seconds + hour * np.int64(3600)) ^ np.int64(i),
                     ws=water_content_saturated_m[i, :],
                     wres=water_content_residual_m[i, :],
                     saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
@@ -855,6 +858,7 @@ class LandSurfaceInputs(NamedTuple):
     ordered, named fields for both pathways.
     """
 
+    unix_time_seconds: np.int64
     land_use_type: ArrayInt32
     slope_m_per_m: ArrayFloat32
     hillslope_length_m: ArrayFloat32
@@ -1003,6 +1007,7 @@ class LandSurface(Module):
     def _build_land_surface_inputs(
         self,
         *,
+        unix_time_seconds: np.int64,
         root_depth_m: ArrayFloat32,
         interception_capacity_m: ArrayFloat32,
         pr_kg_per_m2_per_s: TwoDArrayFloat32,
@@ -1017,6 +1022,7 @@ class LandSurface(Module):
         """Build the input bundle for `land_surface_model`.
 
         Args:
+            unix_time_seconds: Current model time in unix seconds.
             root_depth_m: Root depth for each HRU (m).
             interception_capacity_m: Interception capacity per HRU (m).
             pr_kg_per_m2_per_s: Precipitation rate per hour (kg/m2/s).
@@ -1061,6 +1067,7 @@ class LandSurface(Module):
         ).astype(np.float32)
 
         unpadded_inputs = LandSurfaceInputs(
+            unix_time_seconds=unix_time_seconds,
             land_use_type=self.HRU.var.land_use_type,
             slope_m_per_m=self.HRU.var.slope_m_per_m,
             hillslope_length_m=self.HRU.var.hillslope_length_m,
@@ -1804,6 +1811,7 @@ class LandSurface(Module):
         pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.HRU.pr_kg_per_m2_per_s
 
         land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(
+            unix_time_seconds=np.int64(self.model.current_time.timestamp()),
             root_depth_m=root_depth_m,
             interception_capacity_m=interception_capacity_m,
             pr_kg_per_m2_per_s=pr_kg_per_m2_per_s,

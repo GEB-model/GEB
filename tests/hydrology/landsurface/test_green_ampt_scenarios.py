@@ -112,6 +112,7 @@ def run_infiltration_simulation(
             green_ampt_active_layer_idx,
             soil_enthalpy_top_layer,
         ) = infiltration(
+            np.int64(42),
             ws,
             wres,
             saturated_hydraulic_conductivity,
@@ -395,6 +396,7 @@ def test_ga_full_column_saturation_processes() -> None:
             green_ampt_active_layer_idx,
             soil_enthalpy_top_layer,
         ) = infiltration(
+            np.int64(42),
             ws,
             wres,
             saturated_hydraulic_conductivity,
@@ -536,6 +538,7 @@ def test_ga_top_layer_refill_priority() -> None:
         green_ampt_active_layer_idx,
         soil_enthalpy_top_layer,
     ) = infiltration(
+        np.int64(42),
         ws,
         wres,
         ksat,
@@ -656,6 +659,7 @@ def test_ga_saturation_excess_runoff() -> None:
         green_ampt_active_layer_idx,
         soil_enthalpy_top_layer,
     ) = infiltration(
+        np.int64(42),
         ws,
         wres,
         ksat,

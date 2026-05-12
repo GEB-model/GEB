@@ -215,6 +215,7 @@ def test_infiltration() -> None:
         _,
         updated_enthalpy,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -279,6 +280,7 @@ def test_infiltration() -> None:
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -326,6 +328,7 @@ def test_infiltration() -> None:
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -374,6 +377,7 @@ def test_infiltration() -> None:
         _,
         updated_soil_enthalpy_top_layer_J_per_m2,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -417,6 +421,7 @@ def test_infiltration() -> None:
         _,
         updated_enthalpy_without_new_input_J_per_m2,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -459,6 +464,7 @@ def test_infiltration() -> None:
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -504,6 +510,7 @@ def test_infiltration() -> None:
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -551,6 +558,7 @@ def test_infiltration() -> None:
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -596,6 +604,7 @@ def test_infiltration() -> None:
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -647,6 +656,7 @@ def test_infiltration() -> None:
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -712,6 +722,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         wres,
         saturated_hydraulic_conductivity_m_per_s,
@@ -754,6 +765,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         _,
         _,
     ) = infiltration(
+        np.int64(42),
         ws,
         wres,
         saturated_hydraulic_conductivity_m_per_s,
@@ -787,6 +799,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     # 1. Higher conductivity
     gw_ksat_high = np.float32(0.02 / 3600.0)
     res_high = infiltration(
+        np.int64(42),
         ws,
         wres,
         saturated_hydraulic_conductivity_m_per_s,
@@ -814,6 +827,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     # 2. Lower conductivity
     gw_ksat_low = np.float32(0.005 / 3600.0)
     res_low = infiltration(
+        np.int64(42),
         ws,
         wres,
         saturated_hydraulic_conductivity_m_per_s,
@@ -941,6 +955,7 @@ def test_infiltration_variable_runoff_integration() -> None:
     lam_arr = np.full_like(ws, 0.5)
 
     _, runoff_variable, _, infil_variable, _, _, _, _, _ = infiltration(
+        np.int64(42),
         ws,
         np.zeros_like(ws),
         saturated_hydraulic_conductivity_m_per_s,
@@ -994,6 +1009,7 @@ def test_infiltration_variable_runoff_plot() -> None:
         infiltration_results = []
         for rainfall_amount in rainfall_amounts_m:
             _, direct_runoff, _, infiltration_amount, _, _, _, _, _ = infiltration(
+                np.int64(42),
                 ws,
                 np.zeros_like(ws),
                 saturated_hydraulic_conductivity_m_per_s,

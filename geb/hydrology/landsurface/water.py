@@ -3,7 +3,8 @@
 import numpy as np
 from numba import njit
 
-from geb.geb_types import ArrayFloat32, Shape
+from geb.geb_types import ArrayFloat32, Shape, TwoDArrayFloat64
+from geb.hydrology import TwoDArrayFloat32
 
 from ..landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 from .constants import N_SOIL_LAYERS
@@ -425,8 +426,48 @@ def get_green_ampt_params(
     return idx, abs(psi), delta_theta
 
 
+@njit(inline="always")
+def splitmix64(x: np.uint64) -> np.uint64:
+    """Deterministic stateless hash.
+
+    Args:
+        x: Input integer to hash.
+
+    Returns:
+        A hashed integer output.
+    """
+    x: np.uint64 = (x ^ (x >> 30)) * np.uint64(0xBF58476D1CE4E5B9)
+    x: np.uint64 = (x ^ (x >> 27)) * np.uint64(0x94D049BB133111EB)
+    return x ^ (x >> 31)
+
+
+# Precompute lognormal weights for rainfall distribution over substeps.
+# Each row of LUT corresponds to a different random distribution of rainfall across
+# the 6 substeps, simulating temporal variability in infiltration capacity.
+# Generate continuous log-normal noise
+
+# Table size MUST be a power of two
+TABLE_SIZE: int = 1024
+assert (TABLE_SIZE & (TABLE_SIZE - 1)) == 0, "TABLE_SIZE must be a power of two"
+MASK: np.uint64 = np.uint64(TABLE_SIZE - 1)
+
+np.random.seed(42)
+_RAINFALL_LOOKUP_TABLE_NON_NORMALIZED: TwoDArrayFloat64 = np.random.lognormal(
+    mean=0,
+    sigma=1.2,
+    size=(TABLE_SIZE, 6),
+)
+# Normalize rows to sum to 1.0
+RAINFALL_LOOKUP_TABLE: TwoDArrayFloat32 = (
+    _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED
+    / _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED.sum(axis=1)[:, np.newaxis]
+).astype(np.float32)
+del _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED  # Free memory
+
+
 @njit(cache=True, inline="always")
 def infiltration(
+    seed: np.int64,
     ws: ArrayFloat32,
     wres: ArrayFloat32,
     saturated_hydraulic_conductivity_m_per_s: ArrayFloat32,
@@ -469,6 +510,7 @@ def infiltration(
     moisture deficit.
 
     Args:
+        seed: A seed for random number generation.
         ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
         wres: Residual soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity in each layer for the cell in m/s, shape (N_SOIL_LAYERS,).
@@ -534,7 +576,6 @@ def infiltration(
 
     n_substeps: int = 6
     substep_time_s: np.float32 = np.float32(3600.0) / np.float32(n_substeps)
-    topwater_per_step: np.float32 = topwater_m / np.float32(n_substeps)
     liquid_water_input_for_enthalpy_per_step_m: np.float32 = (
         liquid_water_input_for_enthalpy_m / np.float32(n_substeps)
     )
@@ -566,7 +607,18 @@ def infiltration(
     for i in range(green_ampt_active_layer_idx + 1):
         current_layer_depth_limit += soil_layer_height_m[i]
 
-    for _ in range(n_substeps):
+    # rainfall is given per 1 hour, but in reality it is more likely to come in bursts. This
+    # can lead to uneven infiltration and more runoff. To simulate this, we use a pre-generated lookup table of
+    # log-normally distributed rainfall patterns across the 6 substeps. We use the seed to select a random row from the table,
+    # which gives us a unique but deterministic rainfall distribution for this cell and timestep.
+    # The total rainfall across the substeps is normalized to match the input rainfall for the timestep,
+    # so we are not changing the total amount of water, just how it is distributed within the hour.
+    idx: np.uint64 = splitmix64(seed)
+    rainfall_lookup_table_row = RAINFALL_LOOKUP_TABLE[idx & MASK]
+    for substep_i in range(n_substeps):
+        # Calculate the amount of water available for infiltration in this substep based on the rainfall distribution.
+        topwater_step: np.float32 = topwater_m * rainfall_lookup_table_row[substep_i]
+
         # Add enthalpy from newly reaching rain/irrigation to the top-soil control volume.
         # This water enters at rain_temperature_C and equilibrates with the top layer.
         soil_enthalpy_top_layer_J_per_m2 = apply_rain_heat_advection(
@@ -675,7 +727,7 @@ def infiltration(
             infiltration_capacity_mean=max(
                 np.float32(0.0), infiltration_capacity_m_step
             ),
-            available_water=topwater_per_step,
+            available_water=topwater_step,
             shape_parameter_beta=variable_runoff_shape_beta,
         )
 
@@ -759,7 +811,7 @@ def infiltration(
             enthalpy_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
             solid_heat_capacity_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
             water_content_m=w[0],
-            topwater_m=topwater_per_step,
+            topwater_m=topwater_step,
         )
         # Only advect sensible heat (T > 0). If frozen, runoff doesn't remove latent heat
         # from the soil state because runoff is liquid.
