@@ -126,7 +126,7 @@ class RunoffConcentrator(Module):
         model: GEBModel,
         hydrology: Hydrology,
         lag_time_hours: int = 48,
-        runoff_peak_hour: float = 3.0,
+        runoff_peak_hour: float = 0.0,
     ) -> None:
         """Initialize the runoff concentrator model.
 
