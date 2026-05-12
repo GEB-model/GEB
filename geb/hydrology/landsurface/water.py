@@ -488,6 +488,7 @@ def infiltration(
     solid_heat_capacity_top_layer_J_per_m2_K: np.float32,
     rain_temperature_C: np.float32,
     liquid_water_input_for_enthalpy_m: np.float32,
+    distribute_rainfall_lognormally: bool = True,
 ) -> tuple[
     np.float32,
     np.float32,
@@ -614,7 +615,12 @@ def infiltration(
     # The total rainfall across the substeps is normalized to match the input rainfall for the timestep,
     # so we are not changing the total amount of water, just how it is distributed within the hour.
     idx: np.uint64 = splitmix64(seed)
-    rainfall_lookup_table_row = RAINFALL_LOOKUP_TABLE[idx & MASK]
+    if distribute_rainfall_lognormally:
+        rainfall_lookup_table_row: ArrayFloat32 = RAINFALL_LOOKUP_TABLE[idx & MASK]
+    else:
+        rainfall_lookup_table_row: ArrayFloat32 = np.full(
+            n_substeps, 1.0 / n_substeps, dtype=np.float32
+        )
     for substep_i in range(n_substeps):
         # Calculate the amount of water available for infiltration in this substep based on the rainfall distribution.
         topwater_step: np.float32 = topwater_m * rainfall_lookup_table_row[substep_i]

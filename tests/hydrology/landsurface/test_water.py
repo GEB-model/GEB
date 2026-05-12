@@ -711,6 +711,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     groundwater_toplayer_conductivity_m_per_s = np.float32(0.02 / 3600.0)
     total_soil_depth_m = np.float32(np.sum(soil_layer_height_m))
 
+    very_high_topwater = topwater_m * 10
     (
         _,
         direct_runoff,
@@ -725,11 +726,11 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.int64(42),
         ws,
         wres,
-        saturated_hydraulic_conductivity_m_per_s,
+        saturated_hydraulic_conductivity_m_per_s * 1000,  # very high soil conductivity
         groundwater_toplayer_conductivity_m_per_s,
         np.int32(NON_PADDY_IRRIGATED),
         w,
-        topwater_m,
+        very_high_topwater,  # very high topwater
         np.float32(0.0),
         total_soil_depth_m,
         np.float32(10.0 / 3600.0),
@@ -750,7 +751,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         abs(groundwater_recharge - groundwater_toplayer_conductivity_m_per_s * 3600)
         < 1e-6
     )
-    assert abs(direct_runoff - (topwater_m - groundwater_recharge)) < 1e-6
+    assert abs(direct_runoff - (very_high_topwater - groundwater_recharge)) < 1e-6
 
     # If there is capillary rise, groundwater recharge should be suppressed.
     w = ws.copy()

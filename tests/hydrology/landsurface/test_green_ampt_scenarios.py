@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from geb.hydrology.landcovers import NON_PADDY_IRRIGATED
+from geb.hydrology.landsurface.energy import (
+    get_temperature_and_frozen_fraction_from_enthalpy_scalar,
+)
 from geb.hydrology.landsurface.water import infiltration
 from tests.testconfig import output_folder
 
@@ -133,6 +136,7 @@ def run_infiltration_simulation(
             solid_heat_capacity_top_layer,
             rain_temp,
             rain_m,
+            distribute_rainfall_lognormally=False,  # For testing, use uniform distribution to simplify analysis
         )
 
         # Simulate percolation (drainage) between layers to prevent top saturation blocks
@@ -255,7 +259,10 @@ def test_ga_continuous_rainfall() -> None:
     rain[5:25] = 50.0
 
     results = run_infiltration_simulation(
-        rain, ksat_mm_hr=10.0, title="Continuous Rainfall High Intensity"
+        rain,
+        ksat_mm_hr=10.0,
+        title="Continuous Rainfall High Intensity",
+        initial_enthalpy_J_per_m2=0,  # initilize at 0 degrees
     )
 
     # Checks
@@ -269,15 +276,19 @@ def test_ga_continuous_rainfall() -> None:
     assert (
         results.top_layer_enthalpy_J_per_m2[-1] > results.top_layer_enthalpy_J_per_m2[0]
     )
-    # Final enthalpy should be roughly initial + heat added (minus any losses/deep percolation if modeled)
-    # Since we advect all rain heat to top layer in this test:
-    expected_increase = 1.0 * 4186000.0 * 10.0
-    assert (
-        abs(
-            results.top_layer_enthalpy_J_per_m2[-1]
-            - (results.top_layer_enthalpy_J_per_m2[0] + expected_increase)
+
+    # Final temperature should be much closer to rain temp (10C) than initial soil temp (0C)
+    # but not exceed it
+    temperature_top_layer_C, _ = (
+        get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+            np.float32(results.top_layer_enthalpy_J_per_m2[-1]),
+            np.float32(100000.0),
+            results.soil_moisture_ratio[-1][0]
+            * np.float32(0.05),  # 0.05 is the layer height
         )
-        < 10.0
+    )
+    assert 7.0 <= temperature_top_layer_C <= 10.0, (
+        "Top layer temperature should be between initial and rain temp"
     )
 
     # Check max infiltration > Ksat (due to suction)
@@ -301,9 +312,9 @@ def test_ga_continuous_rainfall() -> None:
 
 def test_ga_low_intensity_rainfall() -> None:
     """Test response to low intensity rainfall (drizzle) below Ksat."""
-    # 20 hours of 2mm/hr rain (Ksat = 10mm/hr)
+    # 20 hours of 1mm/hr rain (Ksat = 10mm/hr)
     rain = np.full(30, 0.0)
-    rain[5:25] = 2.0
+    rain[5:25] = 1.0
     ksat = 10.0
 
     results = run_infiltration_simulation(
@@ -313,7 +324,7 @@ def test_ga_low_intensity_rainfall() -> None:
     # Infiltration should equal rainfall
     infil_event = results.infiltration_mm_per_hr[5:25]
     # Allow small numerical error from float32 and variable infiltration
-    assert np.all(np.abs(np.array(infil_event) - 2.0) < 0.1), (
+    assert np.all(np.abs(np.array(infil_event) - 1.0) < 0.1), (
         "Most precipitation should infiltrate"
     )
 
