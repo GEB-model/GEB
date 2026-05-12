@@ -21,6 +21,7 @@ from .flood_damage_model import (
     GeulFloodDamageModel,
     GlobalFloodDamageModel,
 )
+from .fluxnet import Fluxnet
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
 from .gebco import GEBCO
@@ -31,6 +32,7 @@ from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
+from .grow import GROW
 from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
@@ -49,6 +51,7 @@ from .soilgrids import SoilGridsV1, SoilGridsV2
 from .superwell import GCAMElectricityRates
 from .sword import Sword
 from .undp import HumanDevelopmentIndex
+from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
@@ -215,6 +218,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://www.whymap.org/whymap/EN/Maps_Data/Gwr/gwr_node_en.html",
         },
     },
+    "fluxnet": {
+        "adapter": Fluxnet(
+            folder="fluxnet",
+            local_version=1,
+            filename="fluxnet_stations.geoparquet",
+            cache="global",
+        ),
+        "url": "https://fluxnet.org/fluxnet-data-system/",
+        "source": {
+            "name": "FLUXNET",
+            "author": "FLUXNET Shuttle",
+            "license": "CC-BY-4.0",
+            "url": "https://fluxnet.org/",
+        },
+    },
     "lowder_farm_size_distribution": {
         "adapter": Lowder(
             folder="lowder_farm_size_distribution",
@@ -245,6 +263,31 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "Commercial",
             "url": "https://medium.com/sentinel-hub/automatic-field-delineation-new-release-1c2938399f0",
         },
+    },
+    **{
+        f"hrl_crop_types_{year}": {
+            "adapter": WEkEOCopernicus(
+                folder="hrl_crop_types",
+                local_version=1,
+                filename="tiles",
+                cache="global",
+                dataset_id="EO:EEA:DAT:HRL:CRL",
+                default_query={
+                    "productType": "Crop Types",
+                    "resolution": "10m",
+                    "itemsPerPage": 200,
+                    "startIndex": 0,
+                },
+            ),
+            "url": None,
+            "source": {
+                "name": "HRL crop types",
+                "author": "Copernicus Land Monitoring Service",
+                "license": "CC BY 4.0",
+                "url": "https://land.copernicus.eu/en/products/high-resolution-layer-croplands/crop-types-2023-raster-10-m-europe-yearly",
+            },
+        }
+        for year in ["2017", "2018", "2019", "2020", "2021", "2022", "2023"]
     },
     "gebco": {
         "adapter": GEBCO(
@@ -1060,6 +1103,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "OpenStreetMap contributors",
             "license": "ODbL 1.0",
             "url": "https://www.openstreetmap.org/copyright",
+        },
+    },
+    "grow": {
+        "adapter": GROW(
+            folder="grow",
+            local_version=1,
+            filename="grow_attributes.geoparquet",
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/15149480/files/data.zip",
+        "source": {
+            "name": "GROW",
+            "author": "Bäthge et al. (2026)",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://doi.org/10.5281/zenodo.15149480",
+            "paper_doi": "10.5281/zenodo.15149480",
         },
     },
     "glopop-sg": {

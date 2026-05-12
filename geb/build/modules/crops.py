@@ -1861,11 +1861,11 @@ class Crops(BuildModelBase):
         OIL_PALM = 13
         RAPESEED = 14
         GROUNDNUTS = 15
-        # PULSES = 16
-        # CITRUS = 17
-        # # DATE_PALM = 18
-        # # GRAPES = 19
-        # COTTON = 20
+        PULSES = 16
+        CITRUS = 17
+        DATE_PALM = 18
+        GRAPES = 19
+        COTTON = 20
         COCOA = 21
         COFFEE = 22
         OTHERS_PERENNIAL = 23
@@ -2010,12 +2010,46 @@ class Crops(BuildModelBase):
             # Representing farmer irrigated crop area adaptation in a large-scale hydrological model. Hydrology and Earth
             # System Sciences, 28(4), 899–916. https://doi.org/10.5194/hess-28-899-2024
 
-            # Replace fodder with the most common grain crop
+            # Assign fodder grasses the price proxy of the most common local feed cereal.
+            # FAOSTAT Producer Prices do not include a direct fodder-grass price in the
+            # dataset used here. Barley, rye, millet, and sorghum are used as cereal
+            # proxies because their cultivation and harvest dynamics are closer to fodder
+            # grasses than broader crop-price categories.
             most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
             replaced_value = [FODDER_GRASSES]
+
+            # If there are no barley, rye , millet or sorghum, replace with most common other crop
+            crop_ids = crop_calendar_per_farmer[:, :, 0]
+            if not np.isin(crop_ids, most_common_check).any():
+                most_common_check = [
+                    WHEAT,
+                    MAIZE,
+                    RICE,
+                    SOYBEANS,
+                    SUNFLOWER,
+                    POTATOES,
+                    CASSAVA,
+                    SUGAR_CANE,
+                    SUGAR_BEETS,
+                    OIL_PALM,
+                    RAPESEED,
+                    GROUNDNUTS,
+                    PULSES,
+                    CITRUS,
+                    DATE_PALM,
+                    GRAPES,
+                    COTTON,
+                    COCOA,
+                    COFFEE,
+                    OTHERS_PERENNIAL,
+                    OTHERS_ANNUAL,
+                ]
+
             crop_calendar_per_farmer = replace_crop(
                 crop_calendar_per_farmer, most_common_check, replaced_value
             )
+
+            # If fodder persists due to no barley
 
             # Change the grain crops to one
             most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
@@ -2059,13 +2093,14 @@ class Crops(BuildModelBase):
                 crop_calendar_per_farmer, most_common_check, replaced_value
             )
 
-            # Replace others_annual by potatoes as it has the most similar hydrological parameters
-            # Is replaced because others annual is difficult to parametrize (in terms of costs)
-            most_common_check = [POTATOES]
-            replaced_value = [OTHERS_ANNUAL]
-            crop_calendar_per_farmer = replace_crop(
-                crop_calendar_per_farmer, most_common_check, replaced_value
-            )
+            # Currently removed to keep water balance at larger scale priority
+            # # Replace others_annual by potatoes as it has the most similar hydrological parameters
+            # # Is replaced because others annual is difficult to parametrize (in terms of costs)
+            # most_common_check = [POTATOES]
+            # replaced_value = [OTHERS_ANNUAL]
+            # crop_calendar_per_farmer = replace_crop(
+            #     crop_calendar_per_farmer, most_common_check, replaced_value
+            # )
 
             unique_rows = np.unique(crop_calendar_per_farmer, axis=0)
             values = unique_rows[:, 0, 0]

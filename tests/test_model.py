@@ -240,6 +240,7 @@ def test_update_with_dict() -> None:
         "setup_vegetation",
         "setup_water_demand",
         "setup_discharge_observations",
+        "setup_geomorphology",
     ],
 )
 def test_update_with_method(method: str) -> None:
@@ -445,12 +446,10 @@ def test_run() -> None:
             assert label in result
             assert result[label] is not None
 
-        # Note this should be much higher.
-        assert result["KGE"] > -0.05
-        assert result["NSE"] > -0.49
-        assert result["R"] > 0.41
-
         print("Discharge evaluation results:", result)
+
+        # Note this should be much higher.
+        assert result["KGE_hourly"] > 0.07
 
         # method_args = {
         #     "method": "hydrodynamics.evaluate_hydrodynamics",

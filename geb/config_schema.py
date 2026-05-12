@@ -590,9 +590,6 @@ class ParametersConfig(BaseModel):
     reservoir_release_factor: float = Field(
         0.1, description="Reservoir release factor."
     )
-    water_demand_multiplier_industry: float = Field(
-        1.0, description="Water demand multiplier for industry."
-    )
     lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
 
 

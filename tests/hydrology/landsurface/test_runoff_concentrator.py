@@ -21,6 +21,16 @@ def test_triangular_weights_normalization() -> None:
     assert np.isclose(weights.sum(), 1.0, atol=1e-10)
 
 
+def test_triangular_weights_zero_peak() -> None:
+    """Test that peak_hour=0 results in immediate runoff."""
+    lag_time_hours = 24
+    peak_hour = 0.0
+    weights = triangular_weights(peak_hour, lag_time_hours)
+    assert weights[0] == 1.0
+    assert np.all(weights[1:] == 0.0)
+    assert weights.sum() == 1.0
+
+
 def test_triangular_weights_shape() -> None:
     """Test that the peak occurs at the expected location."""
     lag_time_hours = 48
