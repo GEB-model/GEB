@@ -744,6 +744,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        distribute_rainfall_lognormally=False,
     )
 
     assert infiltration_amount == 0.0
@@ -787,6 +788,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        distribute_rainfall_lognormally=False,
     )
     assert infiltration_amount == 0.0
     assert groundwater_recharge_with_rise == 0.0
@@ -821,6 +823,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        distribute_rainfall_lognormally=False,
     )
     runoff_high = res_high[1]
     recharge_high = res_high[2]
