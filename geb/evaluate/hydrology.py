@@ -1,14 +1,9 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
-import base64
-import json
-import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import branca.colormap as cm
 import contextily as ctx
-import folium
 import geopandas as gpd
 import matplotlib as mpl
 import matplotlib.colors as mcolors
@@ -16,14 +11,13 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from folium import MacroElement, TileLayer
-from jinja2 import Template
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
+from geb.evaluate.workflows.dashboard import create_discharge_folium_map
 from geb.hydrology.routing import read_discharge_per_river
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
 from geb.workflows.visualise import plot_sunburst
@@ -881,268 +875,6 @@ def _plot_discharge_validation_map(
     )
     plt.show()
     plt.close()
-
-
-def _create_discharge_folium_map(
-    evaluation_gdf: gpd.GeoDataFrame,
-    eval_plot_folder: Path,
-    eval_result_folder: Path,
-    region_geom: gpd.GeoDataFrame,
-    rivers: gpd.GeoDataFrame,
-) -> folium.Map:
-    """Create a folium map with station metrics and station plots in popups.
-
-    Args:
-        evaluation_gdf: Per-station evaluation metrics and geometries.
-        eval_plot_folder: Directory with generated station PNG plots.
-        eval_result_folder: Output directory where the HTML map is saved.
-        region_geom: Basin/region boundary geometry.
-        rivers: River network geometries.
-
-    Returns:
-        Folium map object.
-    """
-    min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
-    map_center = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-    tiles = TileLayer(
-        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-        attr="Sources: Esri, HERE, Garmin, Intermap, INCREMENT P, GEBCO, USGS, FAO, NPS, NRCan, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Mapwithyou, NOSTRA, © OpenStreetMap contributors, and the GIS user community",
-        name="Topographic Map",
-    )
-    m = folium.Map(
-        location=map_center,
-        tiles=tiles,
-    )
-
-    # Fit the map to these boundaries
-    m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
-
-    folium.GeoJson(
-        region_geom,
-        name="Catchment",
-        style_function=lambda x: {
-            "fillColor": "none",
-            "color": "black",
-            "weight": 2,
-        },
-        z_index=1,
-    ).add_to(m)
-
-    max_discharge = np.nanmax(rivers["discharge_m3_per_s"])
-    if np.isnan(max_discharge):
-        max_discharge_sqrt = None
-    else:
-        max_discharge_sqrt = math.sqrt(max_discharge.item())
-
-    min_line_weight = 0.5
-    max_line_weight = 5.0
-
-    folium.GeoJson(
-        rivers[
-            [
-                "geometry",
-                "discharge_m3_per_s",
-            ]
-        ].to_json(),
-        name="Rivers",
-        style_function=lambda x: {
-            "color": "blue"
-            if x["properties"]["discharge_m3_per_s"] is not None
-            else "gray",
-            "weight": math.sqrt(x["properties"]["discharge_m3_per_s"])
-            / max_discharge_sqrt
-            * (max_line_weight - min_line_weight)
-            + min_line_weight
-            if x["properties"]["discharge_m3_per_s"] is not None
-            else min_line_weight,
-        },
-        z_index=2,
-    ).add_to(m)
-
-    colormap_r = cm.LinearColormap(
-        colors=["red", "orange", "yellow", "blue", "green"],
-        vmin=0,
-        vmax=1,
-        caption="R",
-    )
-    colormap_kge = cm.LinearColormap(
-        colors=["red", "orange", "yellow", "blue", "green"],
-        vmin=0,
-        vmax=1,
-        caption="KGE",
-    )
-    colormap_nse = cm.LinearColormap(
-        colors=["red", "orange", "yellow", "blue", "green"],
-        vmin=0,
-        vmax=1,
-        caption="NSE",
-    )
-
-    colormap_r.add_to(m)
-    colormap_kge.add_to(m)
-    colormap_nse.add_to(m)
-
-    layer_upstream: folium.FeatureGroup | None = None
-    colormap_upstream: cm.LinearColormap | None = None
-    if (
-        not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
-        .isna()
-        .any()
-    ):
-        colormap_upstream = cm.LinearColormap(
-            colors=["red", "orange", "yellow", "blue", "green"],
-            vmin=0.5,
-            vmax=2.0,
-            caption="Upstream Area Ratio",
-        )
-        colormap_upstream.add_to(m)
-        layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
-
-    layer_kge = folium.FeatureGroup(name="KGE", show=True)
-    layer_nse = folium.FeatureGroup(name="NSE", show=False)
-    layer_r = folium.FeatureGroup(name="R", show=False)
-
-    largest_upstream_area_sqrt = math.sqrt(evaluation_gdf["upstream_area_GEB"].max())
-    # Collects base64 image data keyed by station_id. Injected into the map as a single
-    # JS global after the loop so the heavy image data is stored only once per station.
-    station_images: dict[str, dict[str, str]] = {}
-
-    for station_id, row in evaluation_gdf.iterrows():
-        coords: list[float] = [row.geometry.y, row.geometry.x]
-
-        return_period_fit_path = (
-            eval_plot_folder / f"return_period_fit_{station_id}.png"
-        )
-        time_series_plot_path = eval_plot_folder / f"timeseries_plot_{station_id}.png"
-
-        with open(return_period_fit_path, "rb") as img_file:
-            encoded_image_return_period = base64.b64encode(img_file.read()).decode(
-                "utf-8"
-            )
-        with open(time_series_plot_path, "rb") as img_file:
-            encoded_image_time_series = base64.b64encode(img_file.read()).decode(
-                "utf-8"
-            )
-
-        popup_width: int = 800
-
-        # Accumulate image data for the post-loop JS injection.
-        station_images[str(station_id)] = {
-            "returnPeriod": f"data:image/png;base64,{encoded_image_return_period}",
-            "timeSeries": f"data:image/png;base64,{encoded_image_time_series}",
-        }
-
-        # Popup HTML carries only text metrics and empty <img> placeholders.
-        # A MutationObserver (injected after the loop) populates their src from
-        # window._stationImages when Leaflet adds the popup to the DOM.
-        popup_html = (
-            f"<div data-station-id='{station_id}' style='width:{popup_width}px;'>"
-            f"<img class='rp-img' style='width:100%;height:auto;display:block;'>"
-            f"<img class='ts-img' style='width:100%;height:auto;display:block;'>"
-            f"</div>"
-        )
-
-        # scale circle radius by upstream area, with a minimum of 5 and a maximum of 10
-        circle_radius: int = (
-            5 + math.sqrt(row["upstream_area_GEB"]) / largest_upstream_area_sqrt * 5
-        )
-
-        color_r = colormap_r(row["R"])
-        folium.CircleMarker(
-            location=coords,
-            radius=circle_radius,
-            color="black",
-            fill=True,
-            fill_color=color_r,
-            fill_opacity=0.9,
-            popup=folium.Popup(popup_html, max_width=popup_width),
-            z_index=1000,
-        ).add_to(layer_r)
-
-        color_kge = colormap_kge(row["KGE"])
-        folium.CircleMarker(
-            location=coords,
-            radius=circle_radius,
-            color="black",
-            fill=True,
-            fill_color=color_kge,
-            fill_opacity=0.9,
-            popup=folium.Popup(popup_html, max_width=popup_width),
-            z_index=1000,
-        ).add_to(layer_kge)
-
-        color_nse = colormap_nse(row["NSE"])
-        folium.CircleMarker(
-            location=coords,
-            radius=circle_radius,
-            color="black",
-            fill=True,
-            fill_color=color_nse,
-            fill_opacity=0.9,
-            popup=folium.Popup(popup_html, max_width=popup_width),
-            z_index=1000,
-        ).add_to(layer_nse)
-
-        if layer_upstream is not None and colormap_upstream is not None:
-            color_upstream = colormap_upstream(
-                float(row["discharge_observations_to_GEB_upstream_area_ratio"])
-            )
-            if not isinstance(color_upstream, str) or color_upstream == "nan":
-                continue
-
-            folium.CircleMarker(
-                location=coords,
-                radius=10,
-                color="black",
-                fill=True,
-                fill_color=color_upstream,
-                fill_opacity=0.9,
-                popup=folium.Popup(popup_html, max_width=popup_width),
-                z_index=1000,
-            ).add_to(layer_upstream)
-
-    layer_kge.add_to(m)
-    layer_nse.add_to(m)
-    layer_r.add_to(m)
-    colormap_kge.add_to(m)
-    colormap_nse.add_to(m)
-    colormap_r.add_to(m)
-
-    if layer_upstream is not None and colormap_upstream is not None:
-        layer_upstream.add_to(m)
-        colormap_upstream.add_to(m)
-
-    # Inject all station image data as a single JS global and use Leaflet's popupopen
-    # event to populate the placeholder <img> tags.
-    images_js = json.dumps(station_images)
-
-    class _StationImagesMacro(MacroElement):
-        def __init__(self, images: str) -> None:
-            super().__init__()
-            self._template = Template(
-                "{%- macro script(this, kwargs) -%}\n"
-                "window._stationImages=" + images + ";\n"
-                "{{this._parent.get_name()}}.on('popupopen', function(e) {\n"
-                "  var content = e.popup.getContent();\n"
-                "  if (!content || !content.querySelector) return;\n"
-                "  var el = content.querySelector('[data-station-id]');\n"
-                "  if (!el) return;\n"
-                "  var sid = el.getAttribute('data-station-id');\n"
-                "  var data = window._stationImages[sid];\n"
-                "  if (!data) return;\n"
-                "  var rp = el.querySelector('.rp-img');\n"
-                "  var ts = el.querySelector('.ts-img');\n"
-                "  if (rp) rp.src = data.returnPeriod;\n"
-                "  if (ts) ts.src = data.timeSeries;\n"
-                "});\n"
-                "{%- endmacro -%}"
-            )
-
-    _StationImagesMacro(images_js).add_to(m)
-
-    folium.LayerControl().add_to(m)
-    m.save(eval_result_folder / "discharge_evaluation_map.html")
-    return m
 
 
 def create_validation_df(
@@ -2407,10 +2139,10 @@ class Hydrology:
                         river_id
                     ].mean()
 
-                _create_discharge_folium_map(
+                create_discharge_folium_map(
                     evaluation_gdf=evaluation_gdf,
+                    output_path=self.output_folder / "discharge_evaluation_map.html",
                     eval_plot_folder=self.output_folder,
-                    eval_result_folder=self.output_folder,
                     region_geom=region_geom,
                     rivers=rivers,
                 )

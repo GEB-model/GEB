@@ -1,0 +1,380 @@
+"""Functions for creating interactive Folium discharge evaluation maps."""
+
+from __future__ import annotations
+
+import base64
+import json
+import math
+from pathlib import Path
+
+import branca.colormap as cm
+import folium
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+from folium import MacroElement, TileLayer
+from jinja2 import Template
+
+_ESRI_TOPO_TILES = (
+    "https://server.arcgisonline.com/ArcGIS/rest/services/"
+    "World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
+)
+_ESRI_TOPO_ATTR = (
+    "Sources: Esri, HERE, Garmin, Intermap, INCREMENT P, GEBCO, USGS, FAO, "
+    "NPS, NRCan, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, "
+    "METI, Mapwithyou, NOSTRA, © OpenStreetMap contributors, and the GIS "
+    "user community"
+)
+
+
+def _inject_station_images_macro(
+    m: folium.Map,
+    station_images: dict[str, dict[str, str]],
+) -> None:
+    """Inject a JS global containing station image data and a lazy-load handler.
+
+    Images are stored once in ``window._stationImages`` and populated into
+    popup ``<img>`` placeholders via a Leaflet ``popupopen`` event listener.
+    This avoids duplicating base64 data across KGE/NSE/R marker layers.
+
+    Args:
+        m: Folium map to inject the macro into.
+        station_images: Mapping of station ID string to a dict with keys
+            ``"returnPeriod"`` and ``"timeSeries"`` holding
+            ``data:image/png;base64,…`` URIs.
+    """
+    images_js = json.dumps(station_images)
+
+    class _StationImagesMacro(MacroElement):
+        def __init__(self, images: str) -> None:
+            super().__init__()
+            self._template = Template(
+                "{%- macro script(this, kwargs) -%}\n"
+                "window._stationImages=" + images + ";\n"
+                "{{this._parent.get_name()}}.on('popupopen', function(e) {\n"
+                "  var content = e.popup.getContent();\n"
+                "  if (!content || !content.querySelector) return;\n"
+                "  var el = content.querySelector('[data-station-id]');\n"
+                "  if (!el) return;\n"
+                "  var sid = el.getAttribute('data-station-id');\n"
+                "  var data = window._stationImages[sid];\n"
+                "  if (!data) return;\n"
+                "  var rp = el.querySelector('.rp-img');\n"
+                "  var ts = el.querySelector('.ts-img');\n"
+                "  if (rp) rp.src = data.returnPeriod;\n"
+                "  if (ts) ts.src = data.timeSeries;\n"
+                "});\n"
+                "{%- endmacro -%}"
+            )
+
+    _StationImagesMacro(images_js).add_to(m)
+
+
+def _build_metric_colormaps() -> tuple[
+    cm.LinearColormap, cm.LinearColormap, cm.LinearColormap
+]:
+    """Create the standard KGE, NSE, and R colormaps (0 red → 1 green).
+
+    Returns:
+        Tuple of (colormap_r, colormap_kge, colormap_nse).
+    """
+    colors = ["red", "orange", "yellow", "blue", "green"]
+    colormap_r = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="R")
+    colormap_kge = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="KGE")
+    colormap_nse = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="NSE")
+    return colormap_r, colormap_kge, colormap_nse
+
+
+def create_discharge_folium_map(
+    evaluation_gdf: gpd.GeoDataFrame,
+    output_path: Path,
+    eval_plot_folder: Path | None = None,
+    finished_regions: dict[str, Path] | None = None,
+    region_geom: gpd.GeoDataFrame | None = None,
+    rivers: gpd.GeoDataFrame | None = None,
+) -> folium.Map:
+    """Create an interactive Folium discharge evaluation map.
+
+    Supports two modes:
+
+    * **Single-region**: pass ``region_geom``, ``rivers``, and
+      ``eval_plot_folder``.  Markers are sized by upstream area; river widths
+      are scaled by mean discharge; an optional upstream-area-ratio layer is
+      included when data are available.
+    * **Multi-region**: pass ``finished_regions`` (a mapping of region name →
+      base directory).  River and catchment layers are loaded from each
+      region's input files.  Station images are loaded gracefully (missing
+      files are silently skipped). The ``evaluation_gdf`` must contain a
+      ``region`` column.
+
+    In both modes stations are shown as circle markers coloured by KGE, NSE,
+    or R (switchable via layer control).  Station PNG plots are lazy-loaded
+    via a JS global to avoid duplicating large base64 strings across metric
+    layers.
+
+    Args:
+        evaluation_gdf: Per-station GeoDataFrame with columns KGE, NSE, R,
+            and a point geometry.  For single-region mode also requires
+            ``upstream_area_GEB`` and
+            ``discharge_observations_to_GEB_upstream_area_ratio``.  For
+            multi-region mode also requires a ``region`` column.
+        output_path: Full path (including filename) where the HTML file is
+            saved.
+        eval_plot_folder: Directory containing ``timeseries_plot_<id>.png``
+            and ``return_period_fit_<id>.png``.  Required for single-region
+            mode; in multi-region mode the folder is resolved per-station
+            from ``finished_regions``.
+        finished_regions: Mapping of region name → region ``base`` directory.
+            When provided, multi-region mode is used.  Used to locate
+            river/mask geometry and per-station PNG plots.
+        region_geom: Basin/region boundary GeoDataFrame used to fit the map
+            extent and render the catchment outline.  Required for
+            single-region mode.
+        rivers: River network GeoDataFrame with a ``discharge_m3_per_s``
+            column used to scale river line widths.  Required for
+            single-region mode.
+
+    Returns:
+        The Folium map object (already saved to ``output_path``).
+
+    Raises:
+        ValueError: If neither ``finished_regions`` nor both ``region_geom``
+            and ``rivers`` are provided.
+    """
+    multi_region = finished_regions is not None
+    if not multi_region and (region_geom is None or rivers is None):
+        raise ValueError(
+            "Provide either 'finished_regions' (multi-region mode) or both "
+            "'region_geom' and 'rivers' (single-region mode)."
+        )
+
+    if multi_region:
+        map_center: list[float] = [
+            float(evaluation_gdf.geometry.y.mean()),
+            float(evaluation_gdf.geometry.x.mean()),
+        ]
+        m = folium.Map(
+            location=map_center,
+            zoom_start=5,
+            tiles=TileLayer(
+                tiles=_ESRI_TOPO_TILES,
+                attr=_ESRI_TOPO_ATTR,
+                name="Topographic Map",
+            ),
+        )
+
+        # Add per-region river and catchment layers as toggleable overlays.
+        for region_name, base_dir in sorted(finished_regions.items()):
+            rivers_path = base_dir / "input" / "geom" / "routing" / "rivers.geoparquet"
+            mask_path = base_dir / "input" / "geom" / "mask.geoparquet"
+
+            if rivers_path.exists():
+                rivers_gdf = gpd.read_parquet(rivers_path)
+                folium.GeoJson(
+                    rivers_gdf["geometry"],
+                    name=f"Rivers – {region_name}",
+                    style_function=lambda x: {
+                        "color": "#6baed6",
+                        "weight": 1,
+                        "opacity": 0.7,
+                    },
+                    show=True,
+                ).add_to(m)
+
+            if mask_path.exists():
+                mask_gdf = gpd.read_parquet(mask_path)
+                folium.GeoJson(
+                    mask_gdf,
+                    name=f"Catchment – {region_name}",
+                    style_function=lambda x: {
+                        "fillColor": "none",
+                        "color": "#74c476",
+                        "weight": 2,
+                        "opacity": 0.8,
+                    },
+                    show=True,
+                ).add_to(m)
+    else:
+        assert region_geom is not None and rivers is not None  # narrowed above
+        min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
+        map_center = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
+        m = folium.Map(
+            location=map_center,
+            tiles=TileLayer(
+                tiles=_ESRI_TOPO_TILES,
+                attr=_ESRI_TOPO_ATTR,
+                name="Topographic Map",
+            ),
+        )
+
+        # Fit the map to these boundaries
+        m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
+
+        folium.GeoJson(
+            region_geom,
+            name="Catchment",
+            style_function=lambda x: {
+                "fillColor": "none",
+                "color": "black",
+                "weight": 2,
+            },
+            z_index=1,
+        ).add_to(m)
+
+        max_discharge = np.nanmax(rivers["discharge_m3_per_s"])
+        if np.isnan(max_discharge):
+            max_discharge_sqrt: float | None = None
+        else:
+            max_discharge_sqrt = math.sqrt(max_discharge.item())
+
+        min_line_weight = 0.5
+        max_line_weight = 5.0
+
+        def _river_style(feature: dict) -> dict:
+            discharge = feature["properties"]["discharge_m3_per_s"]
+            if discharge is None or max_discharge_sqrt is None:
+                return {"color": "gray", "weight": min_line_weight}
+            return {
+                "color": "blue",
+                "weight": math.sqrt(discharge)
+                / max_discharge_sqrt
+                * (max_line_weight - min_line_weight)
+                + min_line_weight,
+            }
+
+        folium.GeoJson(
+            rivers[["geometry", "discharge_m3_per_s"]].to_json(),
+            name="Rivers",
+            style_function=_river_style,
+            z_index=2,
+        ).add_to(m)
+
+    colormap_r, colormap_kge, colormap_nse = _build_metric_colormaps()
+
+    layer_upstream: folium.FeatureGroup | None = None
+    colormap_upstream: cm.LinearColormap | None = None
+    largest_upstream_area_sqrt: float | None = None
+    if not multi_region:
+        if (
+            not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
+            .isna()
+            .any()
+        ):
+            colormap_upstream = cm.LinearColormap(
+                colors=["red", "orange", "yellow", "blue", "green"],
+                vmin=0.5,
+                vmax=2.0,
+                caption="Upstream Area Ratio",
+            )
+            layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
+        largest_upstream_area_sqrt = math.sqrt(
+            evaluation_gdf["upstream_area_GEB"].max()
+        )
+
+    layer_kge = folium.FeatureGroup(name="KGE", show=True)
+    layer_nse = folium.FeatureGroup(name="NSE", show=False)
+    layer_r = folium.FeatureGroup(name="R", show=False)
+
+    popup_width = 800
+
+    # Collects base64 image data keyed by station_id. Injected into the map as a single
+    # JS global after the loop so the heavy image data is stored only once per station.
+    station_images: dict[str, dict[str, str]] = {}
+
+    for station_id, row in evaluation_gdf.iterrows():
+        coords: list[float] = [row.geometry.y, row.geometry.x]
+
+        if multi_region:
+            region: str = row["region"]
+            eval_folder = finished_regions[region] / "output" / "evaluate" / "hydrology"
+        else:
+            assert eval_plot_folder is not None  # required for single-region mode
+            eval_folder = eval_plot_folder
+
+        rp_path = eval_folder / f"return_period_fit_{station_id}.png"
+        ts_path = eval_folder / f"timeseries_plot_{station_id}.png"
+        with open(rp_path, "rb") as img_file:
+            encoded_rp = base64.b64encode(img_file.read()).decode("utf-8")
+        with open(ts_path, "rb") as img_file:
+            encoded_ts = base64.b64encode(img_file.read()).decode("utf-8")
+
+        # Accumulate image data for the post-loop JS injection.
+        station_images[str(station_id)] = {
+            "returnPeriod": f"data:image/png;base64,{encoded_rp}",
+            "timeSeries": f"data:image/png;base64,{encoded_ts}",
+        }
+
+        # Popup HTML carries only text metrics and empty <img> placeholders.
+        # A MutationObserver (injected after the loop) populates their src from
+        # window._stationImages when Leaflet adds the popup to the DOM.
+        popup_html = (
+            f"<div data-station-id='{station_id}' style='width:{popup_width}px;'>"
+            f"<img class='rp-img' style='width:100%;height:auto;display:block;'>"
+            f"<img class='ts-img' style='width:100%;height:auto;display:block;'>"
+            f"</div>"
+        )
+
+        if multi_region:
+            circle_radius: float = 8
+        else:
+            assert largest_upstream_area_sqrt is not None  # set in single-region setup
+            # scale circle radius by upstream area, with a minimum of 5 and maximum of 10
+            circle_radius = (
+                5 + math.sqrt(row["upstream_area_GEB"]) / largest_upstream_area_sqrt * 5
+            )
+
+        for layer, colormap, metric in [
+            (layer_r, colormap_r, "R"),
+            (layer_kge, colormap_kge, "KGE"),
+            (layer_nse, colormap_nse, "NSE"),
+        ]:
+            fill_color = colormap(row[metric]) if pd.notna(row[metric]) else "gray"
+            folium.CircleMarker(
+                location=coords,
+                radius=circle_radius,
+                color="black",
+                fill=True,
+                fill_color=fill_color,
+                fill_opacity=0.9,
+                popup=folium.Popup(popup_html, max_width=popup_width),
+                z_index=1000,
+            ).add_to(layer)
+
+        if layer_upstream is not None and colormap_upstream is not None:
+            color_upstream = colormap_upstream(
+                float(row["discharge_observations_to_GEB_upstream_area_ratio"])
+            )
+            if not isinstance(color_upstream, str) or color_upstream == "nan":
+                continue
+
+            folium.CircleMarker(
+                location=coords,
+                radius=10,
+                color="black",
+                fill=True,
+                fill_color=color_upstream,
+                fill_opacity=0.9,
+                popup=folium.Popup(popup_html, max_width=popup_width),
+                z_index=1000,
+            ).add_to(layer_upstream)
+
+    for colormap, layer in [
+        (colormap_r, layer_r),
+        (colormap_kge, layer_kge),
+        (colormap_nse, layer_nse),
+    ]:
+        colormap.add_to(m)
+        layer.add_to(m)
+
+    if layer_upstream is not None and colormap_upstream is not None:
+        colormap_upstream.add_to(m)
+        layer_upstream.add_to(m)
+
+    # Inject all station image data as a single JS global and use Leaflet's popupopen
+    # event to populate the placeholder <img> tags.
+    _inject_station_images_macro(m, station_images)
+
+    folium.LayerControl(collapsed=multi_region).add_to(m)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    m.save(str(output_path))
+    return m
