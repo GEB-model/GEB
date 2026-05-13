@@ -1082,10 +1082,6 @@ def plant(
     Returns:
         plant: Subarray map of what crops are planted this day.
         farmers_selling_land: Indices of farmers selling land (currently always empty).
-
-    Raises:
-        ValueError: If cultivation cost is NaN for a farmer's region/crop combination,
-            indicating missing data in the cultivation cost input.
     """
     assert farmers_going_out_of_business is False, (
         "Farmers going out of business not implemented."
@@ -1131,13 +1127,7 @@ def plant(
                     cultivation_cost[farmer_region_id, farmer_crop]
                     * field_size_per_farmer[farmer_idx]
                 )
-            if np.isnan(cultivation_cost_farmer):
-                raise ValueError(
-                    f"Cultivation cost is NaN for farmer {farmer_idx} "
-                    f"(region {farmer_region_id}, crop {farmer_crop}). "
-                    f"This indicates missing data in the cultivation cost input "
-                    f"for this region/crop combination."
-                )
+            assert not np.isnan(cultivation_cost_farmer)
 
             interest_rate_farmer = interest_rate[farmer_idx]
             loan_duration = 1
