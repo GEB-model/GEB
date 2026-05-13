@@ -209,8 +209,13 @@ class LandSurface(BuildModelBase):
         target: xr.DataArray = self.subgrid["mask"].chunk({"x": 5000, "y": 5000})
         assert target.rio.crs is not None, "target grid must have a crs"
 
+        subgrid_elevation = resample_chunked(fabdem, target, method="nearest")
+        # fill nan values with 0
+        subgrid_elevation = subgrid_elevation.where(
+            ~np.isnan(subgrid_elevation) & ~self.subgrid["mask"], 0
+        )
         self.set_subgrid(
-            resample_chunked(fabdem, target, method="nearest"),
+            subgrid_elevation,
             name="landsurface/elevation",
         )
 
