@@ -2090,6 +2090,7 @@ class Hydrology:
                         "station_name",
                         "x",
                         "y",
+                        "upstream_area_GEB",
                         "discharge_observations_to_GEB_upstream_area_ratio",
                         "KGE_monthly",
                         "NSE_monthly",

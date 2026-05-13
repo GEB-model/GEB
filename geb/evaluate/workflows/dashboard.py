@@ -88,188 +88,103 @@ def _build_metric_colormaps() -> tuple[
 def create_discharge_folium_map(
     evaluation_gdf: gpd.GeoDataFrame,
     output_path: Path,
-    eval_plot_folder: Path | None = None,
-    finished_regions: dict[str, Path] | None = None,
-    region_geom: gpd.GeoDataFrame | None = None,
-    rivers: gpd.GeoDataFrame | None = None,
+    eval_plot_folder: Path,
+    region_geom: gpd.GeoDataFrame,
+    rivers: gpd.GeoDataFrame,
 ) -> folium.Map:
     """Create an interactive Folium discharge evaluation map.
 
-    Supports two modes:
-
-    * **Single-region**: pass ``region_geom``, ``rivers``, and
-      ``eval_plot_folder``.  Markers are sized by upstream area; river widths
-      are scaled by mean discharge; an optional upstream-area-ratio layer is
-      included when data are available.
-    * **Multi-region**: pass ``finished_regions`` (a mapping of region name →
-      base directory).  River and catchment layers are loaded from each
-      region's input files.  Station images are loaded gracefully (missing
-      files are silently skipped). The ``evaluation_gdf`` must contain a
-      ``region`` column.
-
-    In both modes stations are shown as circle markers coloured by KGE, NSE,
-    or R (switchable via layer control).  Station PNG plots are lazy-loaded
-    via a JS global to avoid duplicating large base64 strings across metric
-    layers.
+    Stations are shown as circle markers coloured by KGE, NSE, or R
+    (switchable via layer control) and sized by upstream area.  River widths
+    are scaled by mean discharge.  An optional upstream-area-ratio layer is
+    included when all stations have the ratio available.  Station PNG plots
+    are lazy-loaded via a JS global to avoid duplicating large base64 strings
+    across metric layers.
 
     Args:
-        evaluation_gdf: Per-station GeoDataFrame with columns KGE, NSE, R,
-            and a point geometry.  For single-region mode also requires
-            ``upstream_area_GEB`` and
-            ``discharge_observations_to_GEB_upstream_area_ratio``.  For
-            multi-region mode also requires a ``region`` column.
+        evaluation_gdf: Per-station GeoDataFrame with columns ``KGE``,
+            ``NSE``, ``R``, ``upstream_area_GEB``,
+            ``discharge_observations_to_GEB_upstream_area_ratio``, and a
+            point geometry.
         output_path: Full path (including filename) where the HTML file is
             saved.
-        eval_plot_folder: Directory containing ``timeseries_plot_<id>.png``
-            and ``return_period_fit_<id>.png``.  Required for single-region
-            mode; in multi-region mode the folder is resolved per-station
-            from ``finished_regions``.
-        finished_regions: Mapping of region name → region ``base`` directory.
-            When provided, multi-region mode is used.  Used to locate
-            river/mask geometry and per-station PNG plots.
+        eval_plot_folder: Directory containing
+            ``timeseries_plot_<id>.png`` and
+            ``return_period_fit_<id>.png`` for each station.
         region_geom: Basin/region boundary GeoDataFrame used to fit the map
-            extent and render the catchment outline.  Required for
-            single-region mode.
+            extent and render the catchment outline.
         rivers: River network GeoDataFrame with a ``discharge_m3_per_s``
-            column used to scale river line widths.  Required for
-            single-region mode.
+            column used to scale river line widths.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
-
-    Raises:
-        ValueError: If neither ``finished_regions`` nor both ``region_geom``
-            and ``rivers`` are provided.
     """
-    multi_region = finished_regions is not None
-    if not multi_region and (region_geom is None or rivers is None):
-        raise ValueError(
-            "Provide either 'finished_regions' (multi-region mode) or both "
-            "'region_geom' and 'rivers' (single-region mode)."
-        )
+    min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
+    map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
+    m = folium.Map(
+        location=map_center,
+        tiles=TileLayer(
+            tiles=_ESRI_TOPO_TILES,
+            attr=_ESRI_TOPO_ATTR,
+            name="Topographic Map",
+        ),
+    )
+    m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
 
-    if multi_region:
-        map_center: list[float] = [
-            float(evaluation_gdf.geometry.y.mean()),
-            float(evaluation_gdf.geometry.x.mean()),
-        ]
-        m = folium.Map(
-            location=map_center,
-            zoom_start=5,
-            tiles=TileLayer(
-                tiles=_ESRI_TOPO_TILES,
-                attr=_ESRI_TOPO_ATTR,
-                name="Topographic Map",
-            ),
-        )
+    folium.GeoJson(
+        region_geom,
+        name="Catchment",
+        style_function=lambda x: {"fillColor": "none", "color": "black", "weight": 2},
+        z_index=1,
+    ).add_to(m)
 
-        # Add per-region river and catchment layers as toggleable overlays.
-        for region_name, base_dir in sorted(finished_regions.items()):
-            rivers_path = base_dir / "input" / "geom" / "routing" / "rivers.geoparquet"
-            mask_path = base_dir / "input" / "geom" / "mask.geoparquet"
+    max_discharge = np.nanmax(rivers["discharge_m3_per_s"])
+    max_discharge_sqrt: float | None = (
+        None if np.isnan(max_discharge) else math.sqrt(max_discharge.item())
+    )
+    min_line_weight, max_line_weight = 0.5, 5.0
 
-            if rivers_path.exists():
-                rivers_gdf = gpd.read_parquet(rivers_path)
-                folium.GeoJson(
-                    rivers_gdf["geometry"],
-                    name=f"Rivers – {region_name}",
-                    style_function=lambda x: {
-                        "color": "#6baed6",
-                        "weight": 1,
-                        "opacity": 0.7,
-                    },
-                    show=True,
-                ).add_to(m)
-
-            if mask_path.exists():
-                mask_gdf = gpd.read_parquet(mask_path)
-                folium.GeoJson(
-                    mask_gdf,
-                    name=f"Catchment – {region_name}",
-                    style_function=lambda x: {
-                        "fillColor": "none",
-                        "color": "#74c476",
-                        "weight": 2,
-                        "opacity": 0.8,
-                    },
-                    show=True,
-                ).add_to(m)
-    else:
-        assert region_geom is not None and rivers is not None  # narrowed above
-        min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
-        map_center = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-        m = folium.Map(
-            location=map_center,
-            tiles=TileLayer(
-                tiles=_ESRI_TOPO_TILES,
-                attr=_ESRI_TOPO_ATTR,
-                name="Topographic Map",
-            ),
-        )
-
-        # Fit the map to these boundaries
-        m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
-
-        folium.GeoJson(
-            region_geom,
-            name="Catchment",
-            style_function=lambda x: {
-                "fillColor": "none",
-                "color": "black",
-                "weight": 2,
-            },
-            z_index=1,
-        ).add_to(m)
-
-        max_discharge = np.nanmax(rivers["discharge_m3_per_s"])
-        if np.isnan(max_discharge):
-            max_discharge_sqrt: float | None = None
-        else:
-            max_discharge_sqrt = math.sqrt(max_discharge.item())
-
-        min_line_weight = 0.5
-        max_line_weight = 5.0
-
-        def _river_style(feature: dict) -> dict:
-            discharge = feature["properties"]["discharge_m3_per_s"]
-            if discharge is None or max_discharge_sqrt is None:
-                return {"color": "gray", "weight": min_line_weight}
-            return {
-                "color": "blue",
-                "weight": math.sqrt(discharge)
+    def _river_style(feature: dict) -> dict:
+        discharge = feature["properties"]["discharge_m3_per_s"]
+        if discharge is None or max_discharge_sqrt is None:
+            return {"color": "gray", "weight": min_line_weight}
+        return {
+            "color": "blue",
+            "weight": (
+                math.sqrt(discharge)
                 / max_discharge_sqrt
                 * (max_line_weight - min_line_weight)
-                + min_line_weight,
-            }
+                + min_line_weight
+            ),
+        }
 
-        folium.GeoJson(
-            rivers[["geometry", "discharge_m3_per_s"]].to_json(),
-            name="Rivers",
-            style_function=_river_style,
-            z_index=2,
-        ).add_to(m)
+    folium.GeoJson(
+        rivers[["geometry", "discharge_m3_per_s"]].to_json(),
+        name="Rivers",
+        style_function=_river_style,
+        z_index=2,
+    ).add_to(m)
 
     colormap_r, colormap_kge, colormap_nse = _build_metric_colormaps()
 
     layer_upstream: folium.FeatureGroup | None = None
     colormap_upstream: cm.LinearColormap | None = None
-    largest_upstream_area_sqrt: float | None = None
-    if not multi_region:
-        if (
-            not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
-            .isna()
-            .any()
-        ):
-            colormap_upstream = cm.LinearColormap(
-                colors=["red", "orange", "yellow", "blue", "green"],
-                vmin=0.5,
-                vmax=2.0,
-                caption="Upstream Area Ratio",
-            )
-            layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
-        largest_upstream_area_sqrt = math.sqrt(
-            evaluation_gdf["upstream_area_GEB"].max()
+    if (
+        not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
+        .isna()
+        .any()
+    ):
+        colormap_upstream = cm.LinearColormap(
+            colors=["red", "orange", "yellow", "blue", "green"],
+            vmin=0.5,
+            vmax=2.0,
+            caption="Upstream Area Ratio",
         )
+        layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
+
+    largest_upstream_area_sqrt: float = math.sqrt(
+        evaluation_gdf["upstream_area_GEB"].max()
+    )
 
     layer_kge = folium.FeatureGroup(name="KGE", show=True)
     layer_nse = folium.FeatureGroup(name="NSE", show=False)
@@ -284,21 +199,13 @@ def create_discharge_folium_map(
     for station_id, row in evaluation_gdf.iterrows():
         coords: list[float] = [row.geometry.y, row.geometry.x]
 
-        if multi_region:
-            region: str = row["region"]
-            eval_folder = finished_regions[region] / "output" / "evaluate" / "hydrology"
-        else:
-            assert eval_plot_folder is not None  # required for single-region mode
-            eval_folder = eval_plot_folder
-
-        rp_path = eval_folder / f"return_period_fit_{station_id}.png"
-        ts_path = eval_folder / f"timeseries_plot_{station_id}.png"
+        rp_path = eval_plot_folder / f"return_period_fit_{station_id}.png"
+        ts_path = eval_plot_folder / f"timeseries_plot_{station_id}.png"
         with open(rp_path, "rb") as img_file:
             encoded_rp = base64.b64encode(img_file.read()).decode("utf-8")
         with open(ts_path, "rb") as img_file:
             encoded_ts = base64.b64encode(img_file.read()).decode("utf-8")
 
-        # Accumulate image data for the post-loop JS injection.
         station_images[str(station_id)] = {
             "returnPeriod": f"data:image/png;base64,{encoded_rp}",
             "timeSeries": f"data:image/png;base64,{encoded_ts}",
@@ -314,14 +221,10 @@ def create_discharge_folium_map(
             f"</div>"
         )
 
-        if multi_region:
-            circle_radius: float = 8
-        else:
-            assert largest_upstream_area_sqrt is not None  # set in single-region setup
-            # scale circle radius by upstream area, with a minimum of 5 and maximum of 10
-            circle_radius = (
-                5 + math.sqrt(row["upstream_area_GEB"]) / largest_upstream_area_sqrt * 5
-            )
+        # Scale circle radius by upstream area (range 5–10 px).
+        circle_radius: float = (
+            5 + math.sqrt(row["upstream_area_GEB"]) / largest_upstream_area_sqrt * 5
+        )
 
         for layer, colormap, metric in [
             (layer_r, colormap_r, "R"),
@@ -346,7 +249,6 @@ def create_discharge_folium_map(
             )
             if not isinstance(color_upstream, str) or color_upstream == "nan":
                 continue
-
             folium.CircleMarker(
                 location=coords,
                 radius=10,
@@ -374,7 +276,7 @@ def create_discharge_folium_map(
     # event to populate the placeholder <img> tags.
     _inject_station_images_macro(m, station_images)
 
-    folium.LayerControl(collapsed=multi_region).add_to(m)
+    folium.LayerControl(collapsed=False).add_to(m)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     m.save(str(output_path))
     return m
