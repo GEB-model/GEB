@@ -744,8 +744,8 @@ class KinematicWave(Router):
                     # Discharge before diversion, to compare against activation thresholds; convert to flow rate (m3/s)
                     Q_before_diversion = discharge_at_retention_basin / dt
 
-                    # limit inflow into basins (10% per timestep (hour))
-                    inflow_limit = 0.1 * retention_max_storage_m3[node_retention_id]
+                    # limit inflow into basins (5% per timestep (hour))
+                    inflow_limit = 0.05 * retention_max_storage_m3[node_retention_id]
 
                     # determine available storage in the retention basin every hour; can not be negative
                     available_storage = max(
@@ -1171,8 +1171,8 @@ class Accuflux(Router):
                 # Compute discharge before diversion into ret. basins to check against activation threshold
                 Q_before_diversion = inflow_volume / dt
 
-                # define inflow limit of 10% per ts of max capacity per timestep
-                inflow_limit = 0.1 * retention_max_storage_m3[node_retention_id]
+                # define inflow limit of 5% per ts of max capacity per timestep
+                inflow_limit = 0.05 * retention_max_storage_m3[node_retention_id]
 
                 # Check available storage per timestep in each retention basin to determine how much water can be diverted; available storage can not be negative
                 available_storage = max(
