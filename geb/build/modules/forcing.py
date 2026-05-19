@@ -36,6 +36,7 @@ from geb.workflows.raster import (
     clip_with_grid,
     create_temp_zarr,
     interpolate_na_along_dim,
+    resample_like,
     snap_to_grid,
 )
 
@@ -1101,14 +1102,43 @@ class Forcing(BuildModelBase):
             **kwargs,
         )
 
-    def setup_forcing_ERA5(self, create_plots: bool = False) -> None:
+    def setup_deltas_CMIP6(self, representative_year: int) -> xr.DataArray:
+        """Sets up the CMIP6 deltas for GEB.
+
+        CMIP6 deltas are used to adjust the historical ERA5 forcing data to reflect future climate conditions. This method fetches the CMIP6 deltas from the data catalog for the specified representative year and the spatial bounds of the model grid.
+        Args:
+            representative_year: The representative year for which to fetch the CMIP6 deltas. This is typically a year in the future (e.g., 2050) for which climate projections are available.
+        Returns:
+            The CMIP6 deltas as an xarray DataArray, which can be used to adjust the ERA5 forcing data.
+        """
+        cmip6_deltas = self.data_catalog.fetch(
+            "cmip6",
+            bounds=self.grid["mask"].rio.bounds(recalc=True),
+            start_year=self.start_date.year - 1,
+            end_year=self.end_date.year,
+            representative_year=representative_year,
+        ).read()
+        cmip6_deltas["time"] = cmip6_deltas.indexes["time"].to_datetimeindex()
+        cmip6_deltas = cmip6_deltas.rename(
+            {"lon": "x", "lat": "y"}
+        )  # rename lat and lon to x and y for broadcasting
+
+        return cmip6_deltas
+
+    def setup_forcing_ERA5(
+        self, create_plots: bool = False, representative_year: int = None
+    ) -> None:
         """Sets up the ERA5 forcing data for GEB.
 
         Args:
             create_plots: If True, create plots for the forcing data.
+            representative_year: The representative year for which to fetch the CMIP6 deltas.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+
+        Raises:
+            ValueError: If representative_year is provided but the CMIP6 deltas cannot be properly applied to the ERA5 data (e.g., due to NaN values in the deltas or issues with regridding).
         """
         era5_store: Adapter = self.data_catalog.fetch("era5")
         era5_loader: partial = partial(
@@ -1120,6 +1150,82 @@ class Forcing(BuildModelBase):
         )
 
         pr_hourly: xr.DataArray = era5_loader(variable="tp")
+        tas: xr.DataArray = era5_loader("t2m")
+        all_nans_tas = np.isnan(tas.values).sum()
+        all_nans_pr = np.isnan(pr_hourly.values).sum()
+
+        if representative_year:
+            cmip6_deltas = self.setup_deltas_CMIP6(
+                representative_year=representative_year
+            )
+
+            if len(cmip6_deltas.x) == 1 and len(cmip6_deltas.y) == 1:
+                cmip6_aligned = (
+                    cmip6_deltas.resample(time="1H")
+                    .ffill()
+                    .sel(
+                        time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1])
+                    )
+                )
+                # Single-point CMIP6 deltas: broadcast along the ERA5 grid via xarray alignment.
+                delta_pr: xr.DataArray = cmip6_aligned["precipitation_delta"].isel(
+                    x=0, y=0, drop=True
+                )
+                delta_tas: xr.DataArray = cmip6_aligned[
+                    "near_surface_air_temperature_delta"
+                ].isel(x=0, y=0, drop=True)
+                assert not delta_pr.isnull().any()
+                assert not delta_tas.isnull().any()
+                tas = tas + delta_tas
+                pr_hourly = pr_hourly * delta_pr
+
+            else:
+                # Spatial CMIP6 deltas: regrid to the ERA5 grid using xarray interpolation.
+                delta_pr = cmip6_deltas["precipitation_delta"].rio.write_crs(4326)
+                delta_tas = cmip6_deltas[
+                    "near_surface_air_temperature_delta"
+                ].rio.write_crs(4326)
+
+                target_pr_grid = pr_hourly.isel(time=0, drop=True)
+                target_tas_grid = tas.isel(time=0, drop=True)
+
+                delta_pr_regridded = resample_like(
+                    source=delta_pr, target=target_pr_grid, method="nearest"
+                )
+                delta_tas_regridded = resample_like(
+                    source=delta_tas, target=target_tas_grid, method="nearest"
+                )
+                # check for NaNs in the regridded deltas, which would indicate a problem with the regridding (e.g., missing weights)
+                if np.isnan(delta_pr_regridded.values).any():
+                    raise ValueError(
+                        "NaN values found in regridded precipitation deltas."
+                    )
+                if np.isnan(delta_tas_regridded.values).any():
+                    raise ValueError(
+                        "NaN values found in regridded temperature deltas."
+                    )
+                delta_pr_regridded = (
+                    delta_pr_regridded.resample(time="1H")
+                    .ffill()
+                    .sel(
+                        time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1])
+                    )
+                )
+                delta_tas_regridded = (
+                    delta_tas_regridded.resample(time="1H")
+                    .ffill()
+                    .sel(time=slice(tas.time.values[0], tas.time.values[-1]))
+                )
+                # assert dimensions are equal
+                tas = tas + delta_tas_regridded
+                pr_hourly = pr_hourly * delta_pr_regridded
+
+            # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
+            assert np.isnan(tas.values).sum() == all_nans_tas
+            assert np.isnan(pr_hourly.values).sum() == all_nans_pr
+
+        tas = tas.chunk({"y": -1, "x": -1})
+        pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
         )  # convert from m/hr to kg/m2/s
@@ -1129,6 +1235,7 @@ class Forcing(BuildModelBase):
         pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(
             pr_hourly, create_plots=create_plots
         )
+        self.set_tas_2m_K(tas, create_plots=create_plots)
 
         climate_grid = self.other["climate/pr_kg_per_m2_per_s_mask"]
 
@@ -1144,9 +1251,6 @@ class Forcing(BuildModelBase):
         geopotential = snap_to_grid(geopotential, climate_grid).compute()
         assert (geopotential.x.values == climate_grid.x.values).all()
         assert (geopotential.y.values == climate_grid.y.values).all()
-
-        tas: xr.DataArray = era5_loader("t2m")
-        self.set_tas_2m_K(tas, create_plots=create_plots)
 
         dew_point_tas: xr.DataArray = era5_loader("d2m")
         self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
@@ -1188,12 +1292,14 @@ class Forcing(BuildModelBase):
         self,
         forcing: str = "ERA5",
         create_plots: bool = False,
+        representative_year: int = None,
     ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
             forcing: The data source to use for the forcing data. Currently only ERA5 is supported.
             create_plots: If True, create plots for the forcing data.
+            representative_year: The representative year for which to fetch the CMIP6 deltas. Only used if forcing is 'ERA5' to adjust the historical data to future conditions.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
@@ -1206,7 +1312,9 @@ class Forcing(BuildModelBase):
                 "ISIMIP forcing is not supported anymore. We switched fully to hourly forcing data."
             )
         elif forcing == "ERA5":
-            self.setup_forcing_ERA5(create_plots=create_plots)
+            self.setup_forcing_ERA5(
+                create_plots=create_plots, representative_year=representative_year
+            )
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
