@@ -44,7 +44,7 @@ class CMIP6(Adapter):
              A dictionary containing the parameters for the GTSM API call.
         """
         # Add a buffer to the bounds to ensure we match the extent of the ERA5 data (see buffer in destination_earth.py)
-        buffer: float = 0.5
+        buffer: float = 3.0
         buffered_bounds: tuple[float, float, float, float] = (
             bounds[0] - buffer,
             bounds[1] - buffer,
