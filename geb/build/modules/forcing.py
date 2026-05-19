@@ -36,6 +36,7 @@ from geb.workflows.raster import (
     clip_with_grid,
     create_temp_zarr,
     interpolate_na_along_dim,
+    resample_like,
     snap_to_grid,
 )
 
@@ -1135,6 +1136,9 @@ class Forcing(BuildModelBase):
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+
+        Raises:
+            ValueError: If representative_year is provided but the CMIP6 deltas cannot be properly applied to the ERA5 data (e.g., due to NaN values in the deltas or issues with regridding).
         """
         era5_store: Adapter = self.data_catalog.fetch("era5")
         era5_loader: partial = partial(
@@ -1174,9 +1178,52 @@ class Forcing(BuildModelBase):
                 assert not delta_tas.isnull().any()
                 tas = tas + delta_tas
                 pr_hourly = pr_hourly * delta_pr
+
+            else:
+                # Spatial CMIP6 deltas: regrid to the ERA5 grid using xarray interpolation.
+                delta_pr = cmip6_deltas["precipitation_delta"].rio.write_crs(4326)
+                delta_tas = cmip6_deltas[
+                    "near_surface_air_temperature_delta"
+                ].rio.write_crs(4326)
+
+                target_pr_grid = pr_hourly.isel(time=0, drop=True)
+                target_tas_grid = tas.isel(time=0, drop=True)
+
+                delta_pr_regridded = resample_like(
+                    source=delta_pr, target=target_pr_grid, method="nearest"
+                )
+                delta_tas_regridded = resample_like(
+                    source=delta_tas, target=target_tas_grid, method="nearest"
+                )
+                # check for NaNs in the regridded deltas, which would indicate a problem with the regridding (e.g., missing weights)
+                if np.isnan(delta_pr_regridded.values).any():
+                    raise ValueError(
+                        "NaN values found in regridded precipitation deltas."
+                    )
+                if np.isnan(delta_tas_regridded.values).any():
+                    raise ValueError(
+                        "NaN values found in regridded temperature deltas."
+                    )
+                delta_pr_regridded = (
+                    delta_pr_regridded.resample(time="1H")
+                    .ffill()
+                    .sel(
+                        time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1])
+                    )
+                )
+                delta_tas_regridded = (
+                    delta_tas_regridded.resample(time="1H")
+                    .ffill()
+                    .sel(time=slice(tas.time.values[0], tas.time.values[-1]))
+                )
+                # assert dimensions are equal
+                tas = tas + delta_tas_regridded
+                pr_hourly = pr_hourly * delta_pr_regridded
+
             # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
             assert np.isnan(tas.values).sum() == all_nans_tas
             assert np.isnan(pr_hourly.values).sum() == all_nans_pr
+
         tas = tas.chunk({"y": -1, "x": -1})
         pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
         pr_hourly: xr.DataArray = pr_hourly * (
