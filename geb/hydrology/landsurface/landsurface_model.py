@@ -1486,6 +1486,23 @@ class LandSurface(Module):
             thetar * self.HRU.var.soil_layer_height_m
         )
 
+        assert (self.HRU.var.water_content_residual_m > 0).all()
+        assert (
+            self.HRU.var.water_content_wilting_point_m
+            > self.HRU.var.water_content_residual_m
+        ).all()
+        assert (
+            self.HRU.var.water_content_field_capacity_m
+            > self.HRU.var.water_content_wilting_point_m
+        ).all()
+        assert (
+            self.HRU.var.water_content_saturated_m
+            > self.HRU.var.water_content_field_capacity_m
+        ).all()
+        assert (
+            self.HRU.var.water_content_saturated_m < self.HRU.var.soil_layer_height_m
+        ).all()
+
         self.HRU.var.water_content_m = np.asfortranarray(
             np.where(
                 self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
@@ -1634,6 +1651,8 @@ class LandSurface(Module):
             self.HRU.var.variable_runoff_shape_beta[:] = (
                 (surface_area_ratio - np.float32(1)) + np.float32(0.2)
             ) * 5
+            assert not np.isnan(self.HRU.var.variable_runoff_shape_beta).any()
+            assert (self.HRU.var.variable_runoff_shape_beta > 0).all()
 
         timer = TimingModule("Land surface model")
         if __debug__:
