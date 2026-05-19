@@ -2162,6 +2162,41 @@ class CropFarmers(AgentBaseClass):
             )
             actual_profit_per_field = actual_yield_per_field * crop_price_per_field
 
+            # DEBUG: yield and profit for wheat/maize
+            if 2014 <= self.model.current_time.year <= 2024:
+                for crop_id, crop_name in [(0, "wheat"), (1, "maize")]:
+                    mask = harvested_crops == crop_id
+                    if np.any(mask):
+                        actual_yield_kg_m2 = (
+                            actual_yield_per_field[mask] / harvested_area[mask]
+                        )
+                        potential_yield_kg_m2 = (
+                            potential_yield_per_field[mask] / harvested_area[mask]
+                        )
+                        profit_usd_m2 = (
+                            actual_profit_per_field[mask] / harvested_area[mask]
+                        )
+
+                        print(
+                            "DEBUG_CROP_YIELD_PROFIT",
+                            "date",
+                            self.model.current_time,
+                            "crop",
+                            crop_name,
+                            "n_fields",
+                            mask.sum(),
+                            "actual_yield_kg_m2_mean",
+                            actual_yield_kg_m2.mean(),
+                            "potential_yield_kg_m2_mean",
+                            potential_yield_kg_m2.mean(),
+                            "yield_ratio_mean",
+                            yield_ratio_per_field[mask].mean(),
+                            "crop_price_usd_kg_mean",
+                            crop_price_per_field[mask].mean(),
+                            "profit_usd_m2_mean",
+                            profit_usd_m2.mean(),
+                        )
+
             assert (potential_profit_per_field > 0).all()
             assert (actual_profit_per_field >= 0).all()
 
@@ -2472,6 +2507,58 @@ class CropFarmers(AgentBaseClass):
             assert cultivation_cost.shape[0] == len(self.model.regions)
             assert cultivation_cost.shape[1] == len(self.var.crop_ids)
 
+        # DEBUG: cultivation costs used by regular planting
+        if 2014 <= self.model.current_time.year <= 2024:
+            day_index = self.model.current_time.timetuple().tm_yday - 1
+
+            crop_calendar = self.var.crop_calendar.data
+            current_rotation_year = (
+                self.var.current_crop_calendar_rotation_year_index.data[:, np.newaxis]
+            )
+            field_size_per_farmer = self.field_size_per_farmer
+
+            planting_farmers_per_season = (crop_calendar[:, :, 1] == day_index) & (
+                crop_calendar[:, :, 3] == current_rotation_year
+            )
+            planting_farmers_idx = np.where(
+                planting_farmers_per_season.sum(axis=1) == 1
+            )[0]
+
+            if planting_farmers_idx.size > 0:
+                crop_rotation = np.argmax(
+                    planting_farmers_per_season[planting_farmers_idx], axis=1
+                )
+                planting_crops = crop_calendar[
+                    planting_farmers_idx, crop_rotation, 0
+                ].astype(int)
+
+                for crop_id, crop_name in [(0, "wheat"), (1, "maize")]:
+                    crop_mask = planting_crops == crop_id
+                    if np.any(crop_mask):
+                        farmers = planting_farmers_idx[crop_mask]
+                        crop_cost_usd_m2 = cultivation_cost[
+                            self.var.region_id.data[farmers], crop_id
+                        ]
+                        crop_cost_usd_farmer = (
+                            crop_cost_usd_m2 * field_size_per_farmer[farmers]
+                        )
+
+                        print(
+                            "DEBUG_PLANT_CULTIVATION_COST",
+                            "date",
+                            self.model.current_time,
+                            "crop",
+                            crop_name,
+                            "n_farmers",
+                            farmers.size,
+                            "cultivation_cost_usd_m2_mean",
+                            crop_cost_usd_m2.mean(),
+                            "cultivation_cost_usd_farmer_mean",
+                            crop_cost_usd_farmer.mean(),
+                            "field_size_m2_mean",
+                            field_size_per_farmer[farmers].mean(),
+                        )
+
         plant_map, farmers_selling_land = plant(
             n=self.var.n,
             day_index=self.model.current_time.timetuple().tm_yday - 1,  # 0-indexed
@@ -2615,6 +2702,67 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_water_costs_by_farmer[
             mask_groundwater, TOTAL_IRRIGATION, 0
         ] += water_costs_groundwater
+
+        # DEBUG: water use and water cost
+        if 2014 <= self.model.current_time.year <= 2024:
+            total_water_m3 = self.var.yearly_abstraction_m3_by_farmer[
+                :, TOTAL_IRRIGATION, 0
+            ]
+            total_water_cost_usd = self.var.yearly_water_costs_by_farmer[
+                :, TOTAL_IRRIGATION, 0
+            ]
+            area_m2 = self.field_size_per_farmer
+
+            valid = total_water_m3 > 0
+            if np.any(valid):
+                print(
+                    "DEBUG_WATER_COST",
+                    "date",
+                    self.model.current_time,
+                    "n_farmers",
+                    valid.sum(),
+                    "water_m3_farmer_mean",
+                    total_water_m3[valid].mean(),
+                    "water_m3_m2_mean",
+                    (total_water_m3[valid] / area_m2[valid]).mean(),
+                    "water_cost_usd_farmer_mean",
+                    total_water_cost_usd[valid].mean(),
+                    "water_cost_usd_m2_mean",
+                    (total_water_cost_usd[valid] / area_m2[valid]).mean(),
+                    "implied_water_price_usd_m3_mean",
+                    (total_water_cost_usd[valid] / total_water_m3[valid]).mean(),
+                )
+
+            if np.any(mask_channel):
+                print(
+                    "DEBUG_WATER_PRICE",
+                    "date",
+                    self.model.current_time,
+                    "source",
+                    "channel",
+                    "price_usd_m3_mean",
+                    np.asarray(price_channel).mean(),
+                )
+            if np.any(mask_reservoir):
+                print(
+                    "DEBUG_WATER_PRICE",
+                    "date",
+                    self.model.current_time,
+                    "source",
+                    "reservoir",
+                    "price_usd_m3_mean",
+                    np.asarray(price_reservoir).mean(),
+                )
+            if np.any(mask_groundwater):
+                print(
+                    "DEBUG_WATER_PRICE",
+                    "date",
+                    self.model.current_time,
+                    "source",
+                    "groundwater",
+                    "price_usd_m3_mean",
+                    np.asarray(price_groundwater).mean(),
+                )
 
         # Adds the water costs to the annual loan for farmers
         interest_rate_farmer = 0.0001  # Annual interest rate
@@ -3016,6 +3164,24 @@ class CropFarmers(AgentBaseClass):
         cultivation_costs_current_rotation = np.bincount(
             rows, weights=costs, minlength=current_crop_calendar.shape[0]
         ).astype(np.float32)
+
+        # DEBUG: cultivation costs for wheat/maize
+        if 2014 <= self.model.current_time.year <= 2024:
+            for crop_id, crop_name in [(0, "wheat"), (1, "maize")]:
+                crop_mask = current_crop_calendar[rows, cols] == crop_id
+                if np.any(crop_mask):
+                    crop_cost_usd_m2 = costs[crop_mask]
+                    print(
+                        "DEBUG_CULTIVATION_COST",
+                        "date",
+                        self.model.current_time,
+                        "crop",
+                        crop_name,
+                        "n_fields",
+                        crop_mask.sum(),
+                        "cultivation_cost_usd_m2_mean",
+                        crop_cost_usd_m2.mean(),
+                    )
 
         annual_cost_empty = np.zeros(self.var.n, dtype=np.float32)
 
@@ -4000,6 +4166,20 @@ class CropFarmers(AgentBaseClass):
             capital_cost_sprinkler * annuity_factor + operation_cost_sprinkler
         )
         annual_cost_drip = capital_cost_drip * annuity_factor + operation_cost_drip
+
+        # DEBUG: irrigation efficiency / drip costs
+        if 2014 <= self.model.current_time.year <= 2024:
+            print(
+                "DEBUG_DRIP_COST",
+                "date",
+                self.model.current_time,
+                "operation_cost_drip_usd_m2_year_mean",
+                (operation_cost_drip / self.field_size_per_farmer).mean(),
+                "capital_cost_drip_usd_m2_mean",
+                (capital_cost_drip / self.field_size_per_farmer).mean(),
+                "annual_cost_drip_usd_m2_year_mean",
+                (annual_cost_drip / self.field_size_per_farmer).mean(),
+            )
 
         return annual_cost_surface, annual_cost_sprinkler, annual_cost_drip
 
