@@ -1156,70 +1156,41 @@ class Forcing(BuildModelBase):
                 representative_year=representative_year
             )
 
-            if len(cmip6_deltas.x) == 1 and len(cmip6_deltas.y) == 1:
-                cmip6_aligned = (
-                    cmip6_deltas.resample(time="1H")
-                    .ffill()
-                    .sel(
-                        time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1])
-                    )
-                )
-                # Single-point CMIP6 deltas: broadcast along the ERA5 grid via xarray alignment.
-                delta_pr: xr.DataArray = cmip6_aligned["precipitation_delta"].isel(
-                    x=0, y=0, drop=True
-                )
-                delta_tas: xr.DataArray = cmip6_aligned[
-                    "near_surface_air_temperature_delta"
-                ].isel(x=0, y=0, drop=True)
-                assert not delta_pr.isnull().any()
-                assert not delta_tas.isnull().any()
-                tas = tas + delta_tas
-                pr_hourly = pr_hourly * delta_pr
+            # Spatial CMIP6 deltas: regrid to the ERA5 grid using xarray interpolation.
+            delta_pr = cmip6_deltas.sel(variable="precipitation_delta")
+            delta_tas = cmip6_deltas.sel(variable="near_surface_air_temperature_delta")
 
-            else:
-                # Spatial CMIP6 deltas: regrid to the ERA5 grid using xarray interpolation.
-                delta_pr = cmip6_deltas.sel(variable="precipitation_delta")
-                delta_tas = cmip6_deltas.sel(
-                    variable="near_surface_air_temperature_delta"
-                )
+            target_pr_grid = pr_hourly.isel(time=0, drop=True)
+            target_tas_grid = tas.isel(time=0, drop=True)
 
-                target_pr_grid = pr_hourly.isel(time=0, drop=True)
-                target_tas_grid = tas.isel(time=0, drop=True)
+            delta_pr_regridded = resample_like(
+                source=delta_pr, target=target_pr_grid, method="nearest"
+            )
+            delta_tas_regridded = resample_like(
+                source=delta_tas, target=target_tas_grid, method="nearest"
+            )
+            # check for NaNs in the regridded deltas, which would indicate a problem with the regridding (e.g., missing weights)
+            if np.isnan(delta_pr_regridded.values).any():
+                raise ValueError("NaN values found in regridded precipitation deltas.")
+            if np.isnan(delta_tas_regridded.values).any():
+                raise ValueError("NaN values found in regridded temperature deltas.")
+            delta_pr_regridded = (
+                delta_pr_regridded.resample(time="1H")
+                .ffill()
+                .sel(time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1]))
+            )
+            delta_tas_regridded = (
+                delta_tas_regridded.resample(time="1H")
+                .ffill()
+                .sel(time=slice(tas.time.values[0], tas.time.values[-1]))
+            )
+            # assert dimensions are equal
+            tas = tas + delta_tas_regridded
+            pr_hourly = pr_hourly * delta_pr_regridded
 
-                delta_pr_regridded = resample_like(
-                    source=delta_pr, target=target_pr_grid, method="nearest"
-                )
-                delta_tas_regridded = resample_like(
-                    source=delta_tas, target=target_tas_grid, method="nearest"
-                )
-                # check for NaNs in the regridded deltas, which would indicate a problem with the regridding (e.g., missing weights)
-                if np.isnan(delta_pr_regridded.values).any():
-                    raise ValueError(
-                        "NaN values found in regridded precipitation deltas."
-                    )
-                if np.isnan(delta_tas_regridded.values).any():
-                    raise ValueError(
-                        "NaN values found in regridded temperature deltas."
-                    )
-                delta_pr_regridded = (
-                    delta_pr_regridded.resample(time="1H")
-                    .ffill()
-                    .sel(
-                        time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1])
-                    )
-                )
-                delta_tas_regridded = (
-                    delta_tas_regridded.resample(time="1H")
-                    .ffill()
-                    .sel(time=slice(tas.time.values[0], tas.time.values[-1]))
-                )
-                # assert dimensions are equal
-                tas = tas + delta_tas_regridded
-                pr_hourly = pr_hourly * delta_pr_regridded
-
-            # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
-            assert np.isnan(tas.values).sum() == all_nans_tas
-            assert np.isnan(pr_hourly.values).sum() == all_nans_pr
+        # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
+        assert np.isnan(tas.values).sum() == all_nans_tas
+        assert np.isnan(pr_hourly.values).sum() == all_nans_pr
 
         tas = tas.chunk({"y": -1, "x": -1})
         pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
