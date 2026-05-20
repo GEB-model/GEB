@@ -1147,8 +1147,9 @@ class Forcing(BuildModelBase):
 
         pr_hourly: xr.DataArray = era5_loader(variable="tp")
         tas: xr.DataArray = era5_loader("t2m")
-        all_nans_tas = np.isnan(tas.values).sum()
-        all_nans_pr = np.isnan(pr_hourly.values).sum()
+        # Keep the reduction lazy so large forcing arrays are not materialized in memory.
+        all_nans_tas = tas.isnull().sum().compute().item()
+        all_nans_pr = pr_hourly.isnull().sum().compute().item()
 
         if representative_year:
             cmip6_deltas = self.setup_deltas_CMIP6(
