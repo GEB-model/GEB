@@ -405,16 +405,11 @@ class FloodRiskModule:
         )
 
         for i, return_period in enumerate(self.households.return_periods):
-            flood_map: xr.DataArray = self.households.flood_maps[return_period]
+            flood_map: xr.DataArray = self.reproject_to_utm(
+                self.households.flood_maps[return_period]
+            )
 
-            building_multicurve = building_geometries.copy()
-
-            # Ensure building geometries are in the same CRS as the flood map, as the
-            # damage scanner assumes aligned CRSs between vector and raster data.
-            flood_crs = flood_map.rio.crs
-            if building_multicurve.crs is not None and flood_crs is not None:
-                if building_multicurve.crs != flood_crs:
-                    building_multicurve = building_multicurve.to_crs(flood_crs)
+            building_multicurve = building_geometries.copy().to_crs(flood_map.rio.crs)
 
             multi_curves = {
                 "damages_structure": self.households.buildings_structure_curve[
@@ -484,7 +479,19 @@ class FloodRiskModule:
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
         return damages_do_not_adapt, damages_adapt
-
+    
+    @staticmethod
+    def reproject_to_utm(hazard: xr.DataArray) -> xr.DataArray:
+        """Reproject the hazard map to a metric (UTM) CRS if it is in a geographic CRS."""
+        if not hazard.rio.crs.is_geographic:
+            return hazard
+        bounds = hazard.rio.bounds()
+        center_lon = (bounds[0] + bounds[2]) / 2
+        center_lat = (bounds[1] + bounds[3]) / 2
+        utm_zone = int((center_lon + 180) / 6) + 1
+        utm_epsg = 32600 + utm_zone if center_lat >= 0 else 32700 + utm_zone
+        return hazard.rio.reproject(f"EPSG:{utm_epsg}")
+    
     def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
 
@@ -500,7 +507,7 @@ class FloodRiskModule:
                 "The flood function is not implemented for the global damage model yet."
             )
 
-        flood_depth: xr.DataArray = flood_depth.compute()
+        flood_depth: xr.DataArray = self.reproject_to_utm(flood_depth.compute())
 
         # subset building to those exposed to flooding
         buildings_centroids = gpd.GeoDataFrame(
@@ -511,8 +518,7 @@ class FloodRiskModule:
             crs="EPSG:4326",
         )
 
-        # get the building ids of the flooded buildings
-        # reproject centroids to the flood raster CRS so we can sample depths directly
+        # reproject centroids to the flood raster CRS 
         buildings_centroids = buildings_centroids.to_crs(flood_depth.rio.crs)
 
         # extract centroid coordinates in raster CRS

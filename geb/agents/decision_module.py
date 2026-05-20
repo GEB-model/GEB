@@ -1426,7 +1426,7 @@ class DecisionModule:
         expected_damages_wind: np.ndarray,
         p_wind: np.ndarray,
         operating_insurer: float = 0.3,
-        solidarity_share: float = 0.4,
+        #solidarity_share: float = 0.4,
         #catnat_surcharge: float = 0.15,
         reinsurance_share: float = 0.5,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

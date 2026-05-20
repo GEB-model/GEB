@@ -896,54 +896,6 @@ class Households(AgentBaseClass):
         """Update the risk perceptions of households based on the latest flood data."""
         self.var.years_since_last_windstorm.data += 1
 
-        # # if adapt_to_actual_windstorms:
-        # if self.config["adapt_to_actual_windstorms"]:  # NEW
-        #     for event in self.windstorm_events:  # NEW
-        #         end: datetime = event["end_time"]  # NEW
-
-        #         if self.model.current_time == end + timedelta(days=14):
-        #             windstorm_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.tif"
-        #             windstorm_map_path: Path = (
-        #                 self.model.output_folder / "wind_maps" / windstorm_map_name
-        #             )
-
-        #             windstorm_map: xr.DataArray = xr.open_dataarray(
-        #                 windstorm_map_path, engine="rasterio"
-        #             ).squeeze()
-
-        #             buildings = self.buildings.copy()
-        #             buildings_proj = buildings.to_crs(windstorm_map.rio.crs)
-
-        #             xs = buildings_proj.geometry.centroid.x.values
-        #             ys = buildings_proj.geometry.centroid.y.values
-
-        #             speed = windstorm_map.interp(
-        #                 x=("points", xs), y=("points", ys)
-        #             ).values
-        #             speed = np.nan_to_num(speed, nan=0.0)
-
-        #             buildings_proj["windstorm_hit"] = speed > 30.0
-
-        #             windstorm_hit_building_ids = set(
-        #                 buildings_proj.loc[buildings_proj["windstorm_hit"], "id"]
-        #             )
-
-        #             hit_households = np.isin(
-        #                 self.var.building_id_of_household,
-        #                 list(windstorm_hit_building_ids),
-        #             )
-
-        #             self.var.years_since_last_windstorm.data[hit_households] = 0
-
-        #             n_buildings = len(buildings_proj)
-        #             n_hit_buildings = buildings_proj["windstorm_hit"].sum()
-        #             n_hit_households = hit_households.sum()
-
-        #             print(
-        #                 f"Windstorm hit buildings: {n_hit_buildings}/{n_buildings}, "
-        #                 f"Hit households: {n_hit_households}"
-        #             )
-        # else:
         windstorm_household_indices = self.return_period_windstorm()
         self.var.years_since_last_windstorm.data[windstorm_household_indices] = 0
 
@@ -2261,8 +2213,6 @@ class Households(AgentBaseClass):
         else:
             choose_ins = np.ones(self.n,dtype=bool)
 
-        # if self.var.insurance_scheme == "catnat":
-        #     choose_ins[:] = True
 
         # "benefit" of each choice (used to decide what to drop if over budget)
         # OLD CODE
@@ -2311,28 +2261,6 @@ class Households(AgentBaseClass):
             choose_flood[drop_f] = False
             choose_shutters[drop_s] = False
             choose_ins[drop_i] = False
-
-        # DIAGNOSTIC: how many of the new EU_positive shutter households got budget-dropped?
-        new_eu_positive_shutters = eu_positive  # eu_positive was computed above (EU+ & not_yet_adapted)
-        budget_dropped_shutters = new_eu_positive_shutters & ~choose_shutters
-        print(
-            f"[shutters diag] EU_positive(new)={int(new_eu_positive_shutters.sum())}, "
-            f"survived budget={int((new_eu_positive_shutters & choose_shutters).sum())}, "
-            f"budget-dropped={int(budget_dropped_shutters.sum())}"
-        )
-        if np.any(budget_dropped_shutters):
-            bd_inc = inc[budget_dropped_shutters]
-            bd_prem = prem_cost[budget_dropped_shutters]
-            bd_shut = shutters_cost[budget_dropped_shutters]
-            bd_bud = budget[budget_dropped_shutters]
-            print(
-                f"[shutters diag] budget-dropped households: "
-                f"income p50={float(np.median(bd_inc)):.0f}, "
-                f"premium p50={float(np.median(bd_prem)):.0f}, "
-                f"shutter_cost p50={float(np.median(bd_shut)):.0f}, "
-                f"budget p50={float(np.median(bd_bud)):.0f}, "
-                f"total_cost p50={float(np.median(bd_shut + bd_prem)):.0f}"
-            )
 
         # DEBUG: shared-cap diagnostics
         
@@ -2477,19 +2405,19 @@ class Households(AgentBaseClass):
 
         # Compute effective EAD per household using current adaptation status.
         # Adapted households get reduced damages; others get full damages.
-        eff_damages_flood = damages_do_not_adapt.copy()
+        effective_damages_flood = damages_do_not_adapt.copy()
         adapted_flood_mask = self.var.adapted.data[: self.n] == 1
-        eff_damages_flood[:, adapted_flood_mask] = damages_adapt[:, adapted_flood_mask]
+        effective_damages_flood[:, adapted_flood_mask] = damages_adapt[:, adapted_flood_mask]
 
-        eff_damages_wind = damages_unprotected_w.copy()
+        effective_damages_wind = damages_unprotected_w.copy()
         adapted_wind_mask = self.var.adapted_shutters.data[: self.n] == 1
-        eff_damages_wind[:, adapted_wind_mask] = damages_adapt_w[:, adapted_wind_mask]
+        effective_damages_wind[:, adapted_wind_mask] = damages_adapt_w[:, adapted_wind_mask]
 
         self.var.ead_flood = self.decision_module.calc_EAD(
-            eff_damages_flood, 1.0 / self.return_periods
+            effective_damages_flood, 1.0 / self.return_periods
         ).astype(np.float32)
         self.var.ead_wind = self.decision_module.calc_EAD(
-            eff_damages_wind, 1.0 / self.windstorm_return_periods
+            effective_damages_wind, 1.0 / self.windstorm_return_periods
         ).astype(np.float32)
 
         n_households = self.n
@@ -2543,14 +2471,7 @@ class Households(AgentBaseClass):
         ).fillna(0)
         damages_do_not_adapt = merged["damages"].to_numpy()
         damages_adapt = merged["damages_flood_proofed"].to_numpy()
-        # damages_unprotected_w = merged["damages_unprotected"].to_numpy()
-        # damages_shutters_w = merged["damages_wind_shutters"].to_numpy()
-
-        # return (
-        #     damages_do_not_adapt,
-        #     damages_adapt,
-        #     damages_unprotected_w,
-        #     damages_shutters_w,
+        
 
         return damages_do_not_adapt, damages_adapt
 
