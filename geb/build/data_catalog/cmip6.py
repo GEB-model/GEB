@@ -48,7 +48,7 @@ class CMIP6(Adapter):
              experiment: The CMIP6 experiment to retrieve data for (e.g., "historical", "ssp5_8_5").
              model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
         Returns:
-             A dictionary containing the parameters for the GTSM API call.
+             A dictionary containing the parameters for the CMIP6/CDS API call.
         """
         # Add a buffer to the bounds to ensure we match the extent of the ERA5 data
         buffer: float = 3.0
