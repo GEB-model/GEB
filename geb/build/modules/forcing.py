@@ -1147,14 +1147,15 @@ class Forcing(BuildModelBase):
 
         pr_hourly: xr.DataArray = era5_loader(variable="tp")
         tas: xr.DataArray = era5_loader("t2m")
-        # Keep the reduction lazy so large forcing arrays are not materialized in memory.
-        all_nans_tas = tas.isnull().sum().compute().item()
-        all_nans_pr = pr_hourly.isnull().sum().compute().item()
 
         if representative_year:
             cmip6_deltas = self.setup_deltas_CMIP6(
                 representative_year=representative_year
             )
+            # Calculate the number of NaNs in the original ERA5 data before applying deltas.
+            # This allows us to check that the application of the deltas does not introduce any new NaN values.
+            all_nans_tas = tas.isnull().sum().compute().item()
+            all_nans_pr = pr_hourly.isnull().sum().compute().item()
 
             # Spatial CMIP6 deltas: regrid to the ERA5 grid using xarray interpolation.
             delta_pr = cmip6_deltas.sel(variable="precipitation_delta")
@@ -1188,9 +1189,9 @@ class Forcing(BuildModelBase):
             tas = tas + delta_tas_regridded
             pr_hourly = pr_hourly * delta_pr_regridded
 
-        # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
-        assert np.isnan(tas.values).sum() == all_nans_tas
-        assert np.isnan(pr_hourly.values).sum() == all_nans_pr
+            # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
+            assert tas.isnull().sum().compute().item() == all_nans_tas
+            assert pr_hourly.isnull().sum().compute().item() == all_nans_pr
 
         tas = tas.chunk({"y": -1, "x": -1})
         pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
