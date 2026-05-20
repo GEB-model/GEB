@@ -744,7 +744,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": CMIP6(
             folder="cmip6",
             local_version=1,
-            filename="cmip6_combined_deltas.nc",
+            filename="cmip6_combined_deltas.zarr",
             cache="local",
         ),
         "url": "https://cds.climate.copernicus.eu/datasets/projections-cmip6?tab=download",

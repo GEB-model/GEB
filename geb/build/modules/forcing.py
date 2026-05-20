@@ -1177,10 +1177,10 @@ class Forcing(BuildModelBase):
 
             else:
                 # Spatial CMIP6 deltas: regrid to the ERA5 grid using xarray interpolation.
-                delta_pr = cmip6_deltas["precipitation_delta"].rio.write_crs(4326)
-                delta_tas = cmip6_deltas[
-                    "near_surface_air_temperature_delta"
-                ].rio.write_crs(4326)
+                delta_pr = cmip6_deltas.sel(variable="precipitation_delta")
+                delta_tas = cmip6_deltas.sel(
+                    variable="near_surface_air_temperature_delta"
+                )
 
                 target_pr_grid = pr_hourly.isel(time=0, drop=True)
                 target_tas_grid = tas.isel(time=0, drop=True)

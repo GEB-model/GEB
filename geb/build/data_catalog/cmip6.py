@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import cdsapi
+import numpy as np
 import xarray as xr
 
 from .base import Adapter
@@ -15,6 +16,10 @@ mapping_variables_to_cdf = {
     "near_surface_air_temperature": "tas",
     "precipitation": "pr",
 }
+from ...workflows.io import (
+    read_zarr,
+    write_zarr,
+)
 
 
 class CMIP6(Adapter):
@@ -192,10 +197,14 @@ class CMIP6(Adapter):
         for variable, delta in deltas.items():
             combined[variable + "_delta"] = delta
         combined["time"] = combined.indexes["time"].to_datetimeindex()
-        combined = combined.rename(
-            {"lon": "x", "lat": "y"}
-        )  # rename lat and lon to x and y for broadcasting
-        combined.to_netcdf(self.path)
+        combined = combined.rename({"lon": "x", "lat": "y"}).to_array()
+        combined.attrs["_FillValue"] = (
+            np.nan
+        )  # Set fill value attribute for missing data
+        combined = combined.rio.write_crs(
+            "EPSG:4326"
+        )  # ensure the combined dataset has a CRS
+        write_zarr(da=combined, path=self.path, crs=combined.rio.crs)
 
     def unzip_and_load(self, zip_path: Path) -> xr.Dataset:
         """Unzip the downloaded CMIP6 data and load it into an xarray Dataset.
@@ -290,10 +299,10 @@ class CMIP6(Adapter):
         self.combine_deltas_and_write_to_file(deltas)
         return self
 
-    def read(self) -> xr.Dataset:
+    def read(self) -> xr.DataArray:
         """Read the processed CMIP6 deltas from the local cache.
 
         Returns:
-            An xarray Dataset containing the CMIP6 deltas.
+            An xarray DataArray containing the CMIP6 deltas.
         """
-        return xr.open_dataset(self.path)
+        return read_zarr(self.path)
