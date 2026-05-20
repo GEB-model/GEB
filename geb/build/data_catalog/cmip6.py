@@ -95,15 +95,6 @@ class CMIP6(Adapter):
             )
             shutil.move(temporary_file.name, output_path)
 
-    def download_data(self, request: dict[str, Any], output_path: str) -> None:
-        """Download GTSM data using the CDS API.
-
-        Args:
-            request: A dictionary containing the parameters for the GTSM API call.
-            output_path: The file path where the downloaded data will be saved.
-        """
-        self._retrieve(request, output_path)
-
     def calculate_deltas(
         self,
         variable: str,
@@ -271,11 +262,9 @@ class CMIP6(Adapter):
                     experiment="historical",
                     model="gfdl_esm4",
                 )
-
-                self.download_data(request, str(historical_data_path))
+                self._retrieve(request, str(historical_data_path))
 
             # future data
-
             future_data_path = self.root / f"cmip6_future_{variable}.zip"
             if not future_data_path.exists():
                 request = self.construct_request(
@@ -286,7 +275,7 @@ class CMIP6(Adapter):
                     model="gfdl_esm4",
                 )
 
-                self.download_data(request, str(future_data_path))
+                self._retrieve(request, str(future_data_path))
 
             deltas[variable] = self.calculate_deltas(
                 variable=variable,
