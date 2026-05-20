@@ -9,6 +9,7 @@ from typing import Any
 import cdsapi
 import numpy as np
 import xarray as xr
+import rioxarray  # noqa: F401
 
 from .base import Adapter
 
@@ -16,7 +17,6 @@ mapping_variables_to_cdf = {
     "near_surface_air_temperature": "tas",
     "precipitation": "pr",
 }
-import rioxarray  # noqa: F401
 
 from ...workflows.io import (
     read_zarr,
