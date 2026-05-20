@@ -106,6 +106,11 @@ class CMIP6(Adapter):
     ) -> xr.Dataset:
         """Calculate the {variable} deltas from the historical and future CMIP6 data.
 
+        Temperature deltas are computed as absolute monthly differences, while precipitation deltas are
+        computed as monthly future-to-historical ratios.
+        To ensure temporal alignment, the future period is shifted onto the historical reference timeline
+        before the delta calculation for the selected representative year.
+
         Args:
             variable: The variable to compute deltas for (e.g., "tas" for near-surface air temperature, "pr" for precipitation).
             historical_data_path: The path to the ZIP file containing the historical CMIP6 data.
