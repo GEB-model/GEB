@@ -5,7 +5,7 @@ import datetime
 import logging
 import warnings
 from pathlib import Path
-from time import time
+from time import perf_counter, time
 from types import TracebackType
 from typing import Any, cast, overload
 
@@ -500,8 +500,17 @@ class GEBModel(Module):
 
     def step_to_end(self) -> None:
         """Run the model to the end of the simulation period."""
-        for _ in range(self.n_timesteps - self.current_timestep):
+        t0 = None
+        n_timesteps = self.n_timesteps - self.current_timestep
+        for step in range(n_timesteps):
+            if step == 1:
+                t0: float = perf_counter()  # set the timer after the first step, to avoid including initialization time
             self.step()
+        t1: float = perf_counter()
+        if t0 is not None:
+            self.logger.debug(
+                f"Model took {round(t1 - t0, 4)}s to run {n_timesteps - 1} steps. Average: {round((t1 - t0) / (n_timesteps - 1), 4)}s per step. The first step is not included in this timing."
+            )
 
     def run(self, initialize_only: bool = False) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario.
