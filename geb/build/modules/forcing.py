@@ -1118,10 +1118,6 @@ class Forcing(BuildModelBase):
             end_year=self.end_date.year,
             representative_year=representative_year,
         ).read()
-        cmip6_deltas["time"] = cmip6_deltas.indexes["time"].to_datetimeindex()
-        cmip6_deltas = cmip6_deltas.rename(
-            {"lon": "x", "lat": "y"}
-        )  # rename lat and lon to x and y for broadcasting
 
         return cmip6_deltas
 

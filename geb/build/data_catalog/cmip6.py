@@ -191,6 +191,10 @@ class CMIP6(Adapter):
         combined = xr.Dataset()
         for variable, delta in deltas.items():
             combined[variable + "_delta"] = delta
+        combined["time"] = combined.indexes["time"].to_datetimeindex()
+        combined = combined.rename(
+            {"lon": "x", "lat": "y"}
+        )  # rename lat and lon to x and y for broadcasting
         combined.to_netcdf(self.path)
 
     def unzip_and_load(self, zip_path: Path) -> xr.Dataset:
