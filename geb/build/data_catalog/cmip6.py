@@ -104,7 +104,7 @@ class CMIP6(Adapter):
         future_data_path: Path,
         start_year: int,
         end_year: int,
-        representative_year: int = 2050,
+        representative_forcing_year: int = 2050,
     ) -> xr.Dataset:
         """Calculate the {variable} deltas from the historical and future CMIP6 data.
 
@@ -119,7 +119,7 @@ class CMIP6(Adapter):
             future_data_path: The path to the ZIP file containing the future CMIP6 data.
             start_year: The start year for calculating deltas.
             end_year: The end year for calculating deltas.
-            representative_year: The year to use as a representative future projection of forcing data (e.g., 2050).
+            representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
         Returns:
             An xarray Dataset containing the calculated deltas for the specified variable.
         """
@@ -152,7 +152,7 @@ class CMIP6(Adapter):
         merged = xr.concat([historical, future], dim="time").sortby("time")
 
         # Define periods and compute representative year shift
-        shift = representative_year - end_year  # years
+        shift = representative_forcing_year - end_year  # years
         initial_start, initial_end = start_year, end_year
         new_start, new_end = initial_start + shift, initial_end + shift
         # Select subsets for historical and future periods
@@ -235,7 +235,7 @@ class CMIP6(Adapter):
         bounds: tuple[float, float, float, float],
         start_year: int,
         end_year: int,
-        representative_year: int = 2050,
+        representative_forcing_year: int = 2050,
         url: str | None = None,
     ) -> CMIP6:
         """Fetch CMIP6 data and save it to the cache directory.
@@ -245,7 +245,7 @@ class CMIP6(Adapter):
             bounds: A tuple containing the bounding coordinates (min_lon, min_lat, max_lon, max_lat).
             start_year: The start year for calculating deltas.
             end_year: The end year for the data range.
-            representative_year: The year to use as a representative future projection of forcing data (e.g., 2050).
+            representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
             url: Not used for CMIP6, included for compatibility with base class.
         Returns:
             The current instance of the CMIP6 adapter.
@@ -288,7 +288,7 @@ class CMIP6(Adapter):
                 variable=variable,
                 start_year=start_year,
                 end_year=end_year,
-                representative_year=representative_year,
+                representative_forcing_year=representative_forcing_year,
                 historical_data_path=historical_data_path,
                 future_data_path=future_data_path,
             )

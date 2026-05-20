@@ -1102,12 +1102,12 @@ class Forcing(BuildModelBase):
             **kwargs,
         )
 
-    def setup_deltas_CMIP6(self, representative_year: int) -> xr.DataArray:
+    def setup_deltas_CMIP6(self, representative_forcing_year: int) -> xr.DataArray:
         """Sets up the CMIP6 deltas for GEB.
 
         CMIP6 deltas are used to adjust the historical ERA5 forcing data to reflect future climate conditions. This method fetches the CMIP6 deltas from the data catalog for the specified representative year and the spatial bounds of the model grid.
         Args:
-            representative_year: The representative year for which to fetch the CMIP6 deltas. This is typically a year in the future (e.g., 2050) for which climate projections are available.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. This is typically a year in the future (e.g., 2050) for which climate projections are available.
         Returns:
             The CMIP6 deltas as an xarray DataArray, which can be used to adjust the ERA5 forcing data.
         """
@@ -1116,25 +1116,25 @@ class Forcing(BuildModelBase):
             bounds=self.grid["mask"].rio.bounds(recalc=True),
             start_year=self.start_date.year - 1,
             end_year=self.end_date.year,
-            representative_year=representative_year,
+            representative_forcing_year=representative_forcing_year,
         ).read()
 
         return cmip6_deltas
 
     def setup_forcing_ERA5(
-        self, create_plots: bool = False, representative_year: int = None
+        self, create_plots: bool = False, representative_forcing_year: int = None
     ) -> None:
         """Sets up the ERA5 forcing data for GEB.
 
         Args:
             create_plots: If True, create plots for the forcing data.
-            representative_year: The representative year for which to fetch the CMIP6 deltas.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
 
         Raises:
-            ValueError: If representative_year is provided but the CMIP6 deltas cannot be properly applied to the ERA5 data (e.g., due to NaN values in the deltas or issues with regridding).
+            ValueError: If representative_forcing_year is provided but the CMIP6 deltas cannot be properly applied to the ERA5 data (e.g., due to NaN values in the deltas or issues with regridding).
         """
         era5_store: Adapter = self.data_catalog.fetch("era5")
         era5_loader: partial = partial(
@@ -1148,9 +1148,9 @@ class Forcing(BuildModelBase):
         pr_hourly: xr.DataArray = era5_loader(variable="tp")
         tas: xr.DataArray = era5_loader("t2m")
 
-        if representative_year:
+        if representative_forcing_year:
             cmip6_deltas = self.setup_deltas_CMIP6(
-                representative_year=representative_year
+                representative_forcing_year=representative_forcing_year
             )
             # Calculate the number of NaNs in the original ERA5 data before applying deltas.
             # This allows us to check that the application of the deltas does not introduce any new NaN values.
@@ -1261,14 +1261,14 @@ class Forcing(BuildModelBase):
         self,
         forcing: str = "ERA5",
         create_plots: bool = False,
-        representative_year: int = None,
+        representative_forcing_year: int = None,
     ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
             forcing: The data source to use for the forcing data. Currently only ERA5 is supported.
             create_plots: If True, create plots for the forcing data.
-            representative_year: The representative year for which to fetch the CMIP6 deltas. Only used if forcing is 'ERA5' to adjust the historical data to future conditions.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. Only used if forcing is 'ERA5' to adjust the historical data to future conditions.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
@@ -1282,7 +1282,8 @@ class Forcing(BuildModelBase):
             )
         elif forcing == "ERA5":
             self.setup_forcing_ERA5(
-                create_plots=create_plots, representative_year=representative_year
+                create_plots=create_plots,
+                representative_forcing_year=representative_forcing_year,
             )
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
