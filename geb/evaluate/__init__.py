@@ -6,6 +6,7 @@ Contains the Evaluate class which contains evaluation routines for model runs.
 
 from __future__ import annotations
 
+from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,6 +27,7 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
     def __init__(self, model: GEBModel) -> None:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
+        self.meteorological_forecasts = MeteorologicalForecasts(model, self)
 
     def run(
         self,
@@ -71,9 +73,11 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
             )
 
         for method in methods:
-            if hasattr(self, method):
-                attr = getattr(self, method)
-            else:
+            # if hasattr(self, method):
+            #     attr = getattr(self, method)
+            try:
+                attr = attrgetter(method)(self)
+            except AttributeError:
                 raise ValueError(
                     f"Method {method} is not implemented in Evaluate class."
                 )
