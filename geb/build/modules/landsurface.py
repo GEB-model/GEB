@@ -221,6 +221,9 @@ class LandSurface(BuildModelBase):
                     raise ValueError("DEM path must be a string.")
 
                 DEM_raster: xr.DataArray = xr.open_dataarray(Path(DEM["path"]))
+                DEM_raster.attrs["_FillValue"] = DEM_raster.encoding.get(
+                    "_FillValue", -9999
+                )
 
                 # Handle CRS for custom DEMs
                 # Zarrs need special handling to set the CRS

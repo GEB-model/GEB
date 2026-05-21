@@ -219,10 +219,14 @@ class Observations(BuildModelBase):
 
                 # Add data to the correct DataFrame
                 if Q_station.index.to_series().diff().median() <= pd.Timedelta(hours=1):
-                    obs_hourly[station_id] = Q_station["Q"]
+                    obs_hourly = pd.concat(
+                        [obs_hourly, Q_station["Q"].rename(station_id)], axis=1
+                    )
                     hourly_ids.add(station_id)
                 else:
-                    obs_daily[station_id] = Q_station["Q"]
+                    obs_daily = pd.concat(
+                        [obs_daily, Q_station["Q"].rename(station_id)], axis=1
+                    )
                     daily_ids.add(station_id)
 
         # Filter metadata by region
