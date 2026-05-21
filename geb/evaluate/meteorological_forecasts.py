@@ -5,8 +5,10 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -17,16 +19,28 @@ import xarray
 # from matplotlib_scalebar.scalebar import ScaleBar
 from geb.workflows.io import read_zarr
 
+if TYPE_CHECKING:
+    from geb.evaluate import Evaluate
+    from geb.model import GEBModel
+
 
 class MeteorologicalForecasts:
     """Implements several functions to evaluate the meteorological forecasts inside GEB."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: GEBModel, evaluator: Evaluate) -> None:
         """Initialize MeteorologicalForecasts."""
-        pass
+        self.model = model
+        self.evaluator = evaluator
 
     def evaluate_forecasts(
-        self, model: Any, output_folder: Path, *args: Any, **kwargs: Any
+        self,
+        spinup_name: str = "spinup",
+        run_name: str = "default",
+        include_spinup: bool = False,
+        include_yearly_plots: bool = False,
+        correct_Q_obs: bool = False,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         """Evaluate meteorological forecasts by comparing different forecast types at different initialisation times (00:00 (not yet vs 12:00) UTC).
 
@@ -42,16 +56,12 @@ class MeteorologicalForecasts:
             ValueError: If the forecast model path does not exist.
         """
         # Create forecast output folder within the evaluate folder
-        forecast_folder: Path = output_folder / "forecasts"
+        forecast_folder: Path = self.output_folder_evaluate / "forecasts"
         forecast_folder.mkdir(parents=True, exist_ok=True)
 
         # Base path for forecast data
         forecast_base_path: Path = (
-            model.input_folder
-            / "other"
-            / "forecasts"
-            / "ECMWF"
-            / "merged_control_ensemble"
+            self.model.input_folder / "other" / "forecasts" / "ECMWF"
         )
 
         if not forecast_base_path.exists():
@@ -82,7 +92,9 @@ class MeteorologicalForecasts:
                 )
 
             def load_forecast_data(
-                init_folder: Path, plot_type: str = "intensity"
+                init_folder: Path,
+                plot_type: str = "intensity",
+                spatial_aggregation: str = "mean",
             ) -> tuple[
                 xarray.DataArray, xarray.DataArray, np.ndarray, xarray.DataArray
             ]:
@@ -102,23 +114,33 @@ class MeteorologicalForecasts:
                 Raises:
                     FileNotFoundError: If no precipitation zarr file found in init_folder.
                 """
-                zarr_files: list[Path] = list(init_folder.glob("*.zarr"))
+                # If init_folder is already a .zarr store, use it directly
+                if init_folder.suffix == ".zarr":
+                    pr_file = init_folder
+                else:
+                    zarr_files: list[Path] = list(init_folder.glob("*.zarr"))
 
-                # Look for files containing 'pr' (precipitation)
-                pr_files: list[Path] = [f for f in zarr_files if "pr" in f.name.lower()]
+                    # Look for files containing 'pr' (precipitation)
+                    pr_files: list[Path] = [
+                        f for f in zarr_files if "pr" in f.name.lower()
+                    ]
 
-                if not pr_files:
-                    raise FileNotFoundError(
-                        f"No precipitation zarr file found in {init_folder}"
-                    )
+                    if not pr_files:
+                        raise FileNotFoundError(
+                            f"No precipitation zarr file found in {init_folder}"
+                        )
 
-                if len(pr_files) > 1:
-                    print(
-                        f"Warning: Multiple precipitation files found in {init_folder}, using first: {pr_files[0]}"
-                    )
+                    if len(pr_files) > 1:
+                        print(
+                            f"Warning: Multiple precipitation files found in {init_folder}, using first: {pr_files[0]}"
+                        )
+                    pr_file = pr_files[0]
 
                 era5_path = (
-                    model.input_folder / "other" / "climate" / "pr_kg_per_m2_per_s.zarr"
+                    self.model.input_folder
+                    / "other"
+                    / "climate"
+                    / "pr_kg_per_m2_per_s.zarr"
                 )
 
                 # ERA5
@@ -126,49 +148,50 @@ class MeteorologicalForecasts:
                 era5_mm_per_h: xarray.DataArray = (
                     era5_ds * 3600
                 )  # Convert from m/s to mm/h
-                era5_max_mm_per_h: xarray.DataArray = era5_mm_per_h.max(dim=["y", "x"])
 
                 # Load ensemble data (including control)
-                ens_ds = read_zarr(init_folder / pr_files[0].name)
+                ens_ds = read_zarr(pr_file)
                 ens_time = ens_ds["time"].values
                 ens_mm_per_h: xarray.DataArray = (
                     ens_ds * 3600
                 )  # Convert from m/s to mm/h
-                ens_max_mm_per_h: xarray.DataArray = ens_mm_per_h.max(dim=["y", "x"])
+
+                if spatial_aggregation == "max":
+                    era5_spatial: xarray.DataArray = era5_mm_per_h.max(dim=["y", "x"])
+                    ens_spatial: xarray.DataArray = ens_mm_per_h.max(dim=["y", "x"])
+                else:  # mean
+                    era5_spatial = era5_mm_per_h.mean(dim=["y", "x"])
+                    ens_spatial = ens_mm_per_h.mean(dim=["y", "x"])
 
                 # ERA5 clip on time range control
-                era5_clipped = era5_max_mm_per_h.sel(
-                    time=slice(ens_time[0], ens_time[-1])
-                )
+                era5_clipped = era5_spatial.sel(time=slice(ens_time[0], ens_time[-1]))
 
                 # Apply cumulative sum if requested
                 if plot_type == "cumulative":
                     era5_processed: xarray.DataArray = era5_clipped.cumsum(dim="time")
-                    ens_processed: xarray.DataArray = ens_max_mm_per_h.cumsum(
-                        dim="time"
-                    )
+                    ens_processed: xarray.DataArray = ens_spatial.cumsum(dim="time")
                 else:
                     era5_processed: xarray.DataArray = era5_clipped
-                    ens_processed: xarray.DataArray = ens_max_mm_per_h
+                    ens_processed: xarray.DataArray = ens_spatial
 
                 # Control is member 0
-                control_processed: xarray.DataArray = ens_processed.isel(member=0)
+                # control_processed: xarray.DataArray = ens_processed.isel(member=0)
 
                 # Ensemble data (all members)
-                ensemble_processed: xarray.DataArray = ens_processed.isel(
-                    member=slice(1, None)
-                )
+                ensemble_processed: xarray.DataArray = ens_processed
+                # ensemble_processed: xarray.DataArray = ens_processed.isel(
+                #     member=slice(1, None)
+                # )
 
-                return era5_processed, control_processed, ens_time, ensemble_processed
+                # return era5_processed, control_processed, ens_time, ensemble_processed
+                return era5_processed, ens_time, ensemble_processed
 
             def format_time_axis(
                 ax: plt.Axes,
-                x_start: pd.Timestamp,
-                x_end: pd.Timestamp,
-                x_ticks: list[pd.Timestamp],
+                x_ticks: pd.DatetimeIndex,
             ) -> None:
                 """Format the time axis for the plots."""
-                ax.set_xlim(x_start, x_end)
+                ax.set_xlim(x_ticks[0], x_ticks[-1])
                 ax.set_xticks(x_ticks)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m %H:%M"))
                 ax.tick_params(axis="x", rotation=45)
@@ -177,14 +200,14 @@ class MeteorologicalForecasts:
             def plot_rainfall_data(
                 ax: plt.Axes,
                 era5_data: xarray.DataArray,
-                control_data: xarray.DataArray,
                 ensemble_data: xarray.DataArray,
                 control_time: np.ndarray,
                 init_time_str: str,
-                plot_type: str = "intensity",
+                ensemble_spread: bool = False,
+                plot_type: str = "cumulative",
                 show_legend: bool = False,
-                x_start: pd.Timestamp = pd.Timestamp("2024-04-26 00:00"),
-                x_end: pd.Timestamp = pd.Timestamp("2024-05-16 00:00"),
+                x_start: pd.Timestamp = pd.Timestamp("2021-07-11 00:00"),
+                x_end: pd.Timestamp = pd.Timestamp("2021-07-17 00:00"),
             ) -> None:
                 """Plot precipitation data (intensity or cumulative) for a single subplot.
 
@@ -205,6 +228,7 @@ class MeteorologicalForecasts:
                     init_time_str, format="%Y%m%dT%H%M%S"
                 )
                 init_time_readable: str = init_datetime.strftime("%d %B %Y, %H:%M UTC")
+
                 # Plot ERA5 and control
                 ax.plot(
                     control_time,
@@ -214,39 +238,51 @@ class MeteorologicalForecasts:
                     linewidth=2,
                     alpha=0.8,
                 )
-                ax.plot(
-                    control_time,
-                    control_data,
-                    color="green",
-                    label="Control",
-                    linewidth=2,
-                    alpha=0.8,
-                )
+                # ax.plot(
+                #     control_time,
+                #     control_data,
+                #     color="green",
+                #     label="Control",
+                #     linewidth=2,
+                #     alpha=0.8,
+                # )
 
-                # Calculate min and max across all ensemble members for each time step
-                ensemble_min: xarray.DataArray = ensemble_data.min(dim="member")
-                ensemble_max: xarray.DataArray = ensemble_data.max(dim="member")
+                if ensemble_spread:
+                    # Calculate min and max across all ensemble members for each time step
+                    ensemble_min: xarray.DataArray = ensemble_data.min(dim="member")
+                    ensemble_max: xarray.DataArray = ensemble_data.max(dim="member")
 
-                # Plot ensemble spread as filled area between min and max
-                ax.fill_between(
-                    control_time,
-                    ensemble_min,
-                    ensemble_max,
-                    color="blue",
-                    alpha=0.2,
-                    label="Ensemble spread of all the members",
-                )
+                    # Plot ensemble spread as filled area between min and max
+                    ax.fill_between(
+                        control_time,
+                        ensemble_min,
+                        ensemble_max,
+                        color="blue",
+                        alpha=0.2,
+                        label="Ensemble spread of all the members",
+                    )
+                else:
+                    # Plot each ensemble member as a thin line
+                    for member in range(ensemble_data.sizes["member"]):
+                        ax.plot(
+                            control_time,
+                            ensemble_data.isel(member=member),
+                            color="blue",
+                            alpha=0.3,
+                            linewidth=0.5,
+                            label="Ensemble members" if member == 0 else None,
+                        )
 
                 # Add moment of flooding line
                 moment_of_inundation: pd.Timestamp = pd.Timestamp(
-                    "2024-05-06T00:00:00.000000000"
+                    "2021-07-14T22:00:00.000000000"
                 )
                 ax.axvline(
-                    moment_of_inundation,
+                    moment_of_inundation,  # ty:ignore[invalid-argument-type]
                     color="red",
                     linestyle="--",
                     linewidth=2,
-                    label="Moment of Flooding Guaíba Lake",
+                    label="Flood event",
                 )
 
                 # Set title and formatting
@@ -256,23 +292,29 @@ class MeteorologicalForecasts:
 
                 if plot_type == "cumulative":
                     ax.set_yticks(
-                        range(0, 1501, 250)
+                        range(0, 200, 50)
                     )  # Adjusted for cumulative mm values
+                    ax.set_ylim(
+                        0, 200
+                    )  # Adjust y-axis limit for cumulative precipitation
                 else:
-                    ax.set_yticks(range(0, 47, 5))  # For intensity mm/h values
+                    ax.set_yticks(range(0, 25, 5))  # For intensity mm/h values
 
-                x_ticks: list[pd.Timestamp] = pd.date_range(
+                x_ticks: pd.DatetimeIndex = pd.date_range(
                     start=x_start, end=x_end, freq="12h"
                 )
-                format_time_axis(ax, x_start, x_end, x_ticks)
+                format_time_axis(ax, x_ticks)
 
                 if show_legend:
                     ax.legend(fontsize=12, loc="upper right")
 
             # Main evaluation logic
-            forecast_initialisations: list[str] = [
-                item.name for item in forecast_base_path.iterdir() if item.is_dir()
-            ]
+            # forecast_initialisations: list[str] = [
+            #     item.name for item in forecast_base_path.iterdir() if item.is_dir()
+            # ]
+            forecast_initialisations: list[Path] = sorted(
+                forecast_base_path.glob("pr_*.zarr")
+            )
             print(f"Found forecast initialisations: {forecast_initialisations}")
 
             num_forecasts: int = len(forecast_initialisations)
@@ -299,9 +341,13 @@ class MeteorologicalForecasts:
 
             # Handle single subplot case
             if num_forecasts == 1:
-                axes = [axes]
+                axes = np.array([axes])
 
-            for idx, init_time in enumerate(forecast_initialisations):
+            for idx, init_folder in enumerate(forecast_initialisations):
+                init_time_str = init_folder.stem.split("_")[-1]
+                init_time = pd.to_datetime(
+                    init_time_str, format="%Y%m%dT%H%M%S"
+                )  # Validate format
                 print(
                     f"Processing forecast initialisation: {init_time}"
                 )  # Log the iteration of forecasts
@@ -310,12 +356,15 @@ class MeteorologicalForecasts:
                 row_idx: int = idx // num_cols
                 col_idx: int = idx % num_cols
 
-                init_folder: Path = forecast_base_path / init_time
+                # init_folder: Path = forecast_base_path / init_time
 
                 # Load data for this initialisation
-                era5_data, control_data, time_data, ensemble_data = load_forecast_data(
+                era5_data, time_data, ensemble_data = load_forecast_data(
                     init_folder, plot_type=plot_type
                 )
+                # era5_data, control_data, time_data, ensemble_data = load_forecast_data(
+                #     init_folder, plot_type=plot_type
+                # )
 
                 show_legend_flag: bool = row_idx == 0 and col_idx == 1
                 # Get the correct axis
@@ -330,7 +379,6 @@ class MeteorologicalForecasts:
                 plot_rainfall_data(
                     ax=current_ax,
                     era5_data=era5_data,
-                    control_data=control_data,
                     ensemble_data=ensemble_data,
                     control_time=time_data,
                     init_time_str=init_time,
@@ -371,11 +419,11 @@ class MeteorologicalForecasts:
             if plot_type == "cumulative":
                 plot_title: str = "ERA5 vs ECMWF Control & Probabilistic Cumulative Precipitation Forecasts"
                 output_filename: str = "ERA5_vs_ECMWF_Control_&_Probabilistic_Cumulative_Precipitation_Forecasts.png"
-                ylabel: str = "Cumulative Rainfall [mm]"
+                ylabel: str = "Cumulative Rainfall (mm)"
             else:
                 plot_title: str = "ERA5 vs ECMWF Control & Probabilistic Maximum Intensity Precipitation Forecasts"
                 output_filename: str = "ERA5_vs_ECMWF_Control_&_Probabilistic_Precipitation_Forecasts_Maximum_Intensity.png"
-                ylabel: str = "Rainfall intensity [mm/h]"
+                ylabel: str = "Rainfall intensity (mm/h)"
             fig.suptitle(plot_title, fontsize=22, y=0.95)
             fig.text(0.5, 0.02, "Date (UTC)", ha="center", fontsize=18)
             fig.text(0.02, 0.5, ylabel, va="center", rotation="vertical", fontsize=18)
