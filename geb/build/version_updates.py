@@ -138,17 +138,12 @@ def get_and_maybe_do_version_updates(
 
                         assert methods is not None
                         assert build_model is not None
-                        update_method = getattr(build_model, method_name, None)
-                        if update_method is None:
-                            raise ValueError(
-                                f"Method {method_name} not found in geb.cli.update module"
-                            )
 
                         build_model.logger.info(
                             f"Performing auto-update for method {method_name}..."
                         )
 
-                        update_method(**(methods[method_name] or {}))
+                        build_model.update({method_name: methods[method_name]})
 
                     elif update_type == "create-file":
                         if len(update_type_arguments) != 1:
