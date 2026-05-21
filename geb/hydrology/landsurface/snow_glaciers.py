@@ -15,9 +15,6 @@ from .energy import (
     calculate_aerodynamic_conductance_W_per_m2_K,
 )
 
-# Numbers of tracked snow layers (0 = top/fresh, 1 = bottom/old compacted).
-N_SNOW_LAYERS: int = 2
-
 # Max top-layer SWE that can accumulate before excess flows to the bottom
 MAX_TOP_LAYER_SWE_M: np.float64 = np.float64(0.05)
 

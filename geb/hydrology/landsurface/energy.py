@@ -3,7 +3,7 @@
 import numpy as np
 from numba import njit
 
-from geb.geb_types import ArrayFloat32, Shape
+from geb.geb_types import ArrayFloat32, ArrayFloat64, Shape
 from geb.workflows.numba_stack_array import stack_empty
 
 from .constants import (
@@ -12,6 +12,7 @@ from .constants import (
     LATENT_HEAT_FUSION_J_PER_KG,
     LATENT_HEAT_SUBLIMATION_J_PER_KG,
     LATENT_HEAT_VAPORIZATION_J_PER_KG,
+    N_SNOW_LAYERS,
     N_SOIL_LAYERS,
     RHO_MINERAL_KG_PER_M3,
     RHO_WATER_KG_PER_M3,
@@ -25,7 +26,6 @@ from .constants import (
 )
 from .potential_evapotranspiration import get_canopy_radiation_attenuation
 
-N_SNOW_LAYERS: int = 2
 _N_COUPLED_SURFACE_LAYERS: int = N_SOIL_LAYERS + N_SNOW_LAYERS
 MIN_ACTIVE_SNOW_SWE_M: np.float64 = np.float64(1.0e-6)
 
@@ -845,7 +845,7 @@ def solve_soil_enthalpy_column(
     soil_emissivity: np.float32,
     soil_albedo: np.float32,
     leaf_area_index: np.float32,
-    snow_water_equivalent_m: ArrayFloat32,
+    snow_water_equivalent_m: ArrayFloat64,
     snow_enthalpy_J_per_m2: ArrayFloat32,
     snow_density_kg_per_m3: ArrayFloat32,
     topwater_m: np.float32,
@@ -867,7 +867,7 @@ def solve_soil_enthalpy_column(
         soil_enthalpies_J_per_m2: Current layer enthalpies (J/m2).
         layer_thicknesses_m: Layer thicknesses (m).
         thermal_conductivity_dry_soil_W_per_m_K: Thermal conductivity of dry soil per layer (W/m/K).
-        solid_heat_capacities_J_per_m2_K: Areal heat capacity of the solid fraction (J/m2/K). Areal heat capacity of the solid fraction (J/m2/K).
+        solid_heat_capacities_J_per_m2_K: Areal heat capacity of the solid fraction (J/m2/K).
         thermal_conductivity_saturated_unfrozen_W_per_m_K: Saturated conductivity in
             unfrozen state (W/m/K).
         thermal_conductivity_saturated_frozen_W_per_m_K: Saturated conductivity in

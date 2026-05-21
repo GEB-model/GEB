@@ -52,3 +52,4 @@ C_MINERAL_VOLUMETRIC_J_PER_M3_K: np.float32 = np.float32(2.13e6)
 RHO_MINERAL_KG_PER_M3: np.float32 = np.float32(2650.0)
 
 N_SOIL_LAYERS: int = 6
+N_SNOW_LAYERS: int = 2

@@ -23,6 +23,7 @@ from geb.workflows.io import read_grid
 from ..landcovers import FOREST, GRASSLAND_LIKE, PADDY_IRRIGATED, SEALED
 from .constants import (
     KELVIN_OFFSET,
+    N_SNOW_LAYERS,
     N_SOIL_LAYERS,
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
@@ -63,7 +64,6 @@ from .redistribution import (
 )
 from .snow_glaciers import (
     FRESH_SNOW_DENSITY_KG_PER_M3,
-    N_SNOW_LAYERS,
     apply_precipitation_compaction_and_top_layer_transfer,
     update_snow_mass_and_phase,
 )
@@ -274,29 +274,45 @@ def land_surface_model(
 
     Returns:
         Tuple of:
-        - reference_evapotranspiration_grass_m: Reference evapotranspiration for
-            grass in meters.
-        - reference_evapotranspiration_water_m: Reference evapotranspiration for
-            water in meters.
-        - snow_water_equivalent_m: Snow water equivalent in meters.
-        - liquid_water_in_snow_m: Liquid water in snow in meters.
-        - sublimation_m: Sublimation in meters.
-        - snow_enthalpy_J_per_m2: Snow enthalpy in J/m2.
-        - interception_storage_m: Interception storage in meters.
-        - interception_evaporation_m: Evaporation from interception storage in meters.
-        - open_water_evaporation_m: Evaporation from open water in meters.
-        - bare_soil_evaporation: Evaporation from bare soil in meters.
-        - transpiration_m: Transpiration in meters.
-        - potential_transpiration_m: Potential transpiration in meters.
-        - potential_evapotranspiration_m: Potential evapotranspiration in meters.
-        - top_soil_infiltration_m: Infiltration into the top soil layer in meters.
+        - rain_m: Precipitation reaching the surface as rain (m).
+        - snow_m: Precipitation reaching the surface as snow (m).
+        - topwater_m: Updated depth of surface water (m).
+        - reference_evapotranspiration_grass_m: Reference evapotranspiration for grass (m).
+        - reference_evapotranspiration_water_m: Reference evapotranspiration for water (m).
+        - snow_water_equivalent_m: Snow water equivalent (m).
+        - liquid_water_in_snow_m: Liquid water in snow (m).
+        - sublimation_m: Sublimation (m).
+        - snow_enthalpy_J_per_m2: Snow enthalpy (J/m2).
+        - snow_density_kg_per_m3: Snow density (kg/m3).
+        - interception_storage_m: Interception storage (m).
+        - interception_evaporation_m: Evaporation from interception storage (m).
+        - open_water_evaporation_m: Evaporation from open water (m).
+        - runoff_m: Surface runoff (m).
+        - groundwater_recharge_m: Groundwater recharge (m).
+        - interflow_m: Lateral subsurface flow (m).
+        - bare_soil_evaporation: Evaporation from bare soil (m).
+        - transpiration_m: Total transpiration (m).
+        - potential_transpiration_m: Potential transpiration (m).
+        - potential_evapotranspiration_m: Potential evapotranspiration (m).
+        - soil_boundary_enthalpy_flux_J_per_m2: Net enthalpy flux entering the soil
+            from the boundary (J/m2).
+        - rain_advection_enthalpy_flux_J_per_m2: Enthalpy carried into the soil by
+            rain (J/m2).
+        - evaporative_cooling_enthalpy_loss_J_per_m2: Enthalpy loss due to
+            evaporative cooling (J/m2).
+        - interflow_enthalpy_loss_J_per_m2: Enthalpy loss carried by interflow (J/m2).
+        - groundwater_recharge_enthalpy_loss_J_per_m2: Enthalpy loss carried by
+            groundwater recharge (J/m2).
+        - transpiration_enthalpy_loss_J_per_m2: Enthalpy loss carried by
+            transpiration (J/m2).
+        - top_soil_infiltration_m: Infiltration into the top soil layer (m).
         - top_soil_rise_from_layer_2_m: Upward redistribution from the second soil
-            layer into the top soil layer in meters.
+            layer into the top soil layer (m).
         - top_soil_percolation_to_layer_2_m: Percolation from the top soil layer to
-            layer 2 in meters.
+            layer 2 (m).
         - top_soil_transpiration_m: Transpiration extracted specifically from the
-            top soil layer in meters.
-        - evapotranspiration_m: Actual evapotranspiration in meters, per hour.
+            top soil layer (m).
+        - evapotranspiration_m: Actual hourly evapotranspiration (m/hour).
     """
     CO2_induced_crop_factor_adustment = get_CO2_induced_crop_factor_adustment(CO2_ppm)
 
@@ -1247,6 +1263,7 @@ class LandSurface(Module):
         snow_water_equivalent_prev: TwoDArrayFloat64,
         liquid_water_in_snow_prev: TwoDArrayFloat64,
         snow_enthalpy_J_per_m2_prev: TwoDArrayFloat32,
+        snow_density_kg_per_m3_prev: TwoDArrayFloat32,
         interception_storage_prev: ArrayFloat32,
         soil_enthalpy_J_per_m2_prev: TwoDArrayFloat32,
         deep_soil_temperature_C_prev: ArrayFloat32,
@@ -1265,6 +1282,7 @@ class LandSurface(Module):
             snow_water_equivalent_prev: Pre-call snow water equivalent (m).
             liquid_water_in_snow_prev: Pre-call liquid water in snow (m).
             snow_enthalpy_J_per_m2_prev: Pre-call snow enthalpy (J/m2).
+            snow_density_kg_per_m3_prev: Pre-call snow density (kg/m3).
             interception_storage_prev: Pre-call interception storage (m).
             soil_enthalpy_J_per_m2_prev: Pre-call soil enthalpy (J/m2).
             deep_soil_temperature_C_prev: Pre-call deep soil temperature (C).
@@ -1306,9 +1324,7 @@ class LandSurface(Module):
             snow_water_equivalent_m=snow_water_equivalent_prev[index : index + 1, :],
             liquid_water_in_snow_m=liquid_water_in_snow_prev[index : index + 1, :],
             snow_enthalpy_J_per_m2=snow_enthalpy_J_per_m2_prev[index : index + 1, :],
-            snow_density_kg_per_m3=land_surface_inputs.snow_density_kg_per_m3[
-                index : index + 1, :
-            ],
+            snow_density_kg_per_m3=snow_density_kg_per_m3_prev[index : index + 1, :],
             interception_storage_m=interception_storage_prev[index : index + 1],
             soil_enthalpy_J_per_m2=np.ascontiguousarray(
                 soil_enthalpy_J_per_m2_prev[:, index : index + 1].T
@@ -1739,17 +1755,26 @@ class LandSurface(Module):
     ]:
         """Step function for the land surface module.
 
-        Currently, this function calculates the reference evapotranspiration
-        for grass and water surfaces using meteorological data.
+        Executes the daily time step for the land surface, coordinating
+        vegetation state, water demand, and the land surface model.
 
         Returns:
             A tuple containing:
-            - snow_melt_m: Snow melt in meters.
-            - rain_m: Rainfall in meters.
-            - sublimation_m: Sublimation in meters.
+            - reference_evapotranspiration_water_m: Reference evapotranspiration for
+                water per hour (m).
+            - interflow_m: Lateral subsurface flow per hour (m/hour).
+            - runoff_m: Surface runoff per hour (m/hour).
+            - groundwater_recharge_m: Groundwater recharge per day (m).
+            - groundwater_abstraction_m3: Groundwater abstraction for irrigation per day (m3).
+            - channel_abstraction_m3: Surface water abstraction for irrigation per day (m3).
+            - return_flow_m: Return flow to surface water per day (m).
+            - total_water_demand_loss_m3: Total water demand loss per day (m3).
+            - actual_evapotranspiration_m: Actual evapotranspiration per day (m).
+            - sublimation_or_deposition_m: Sublimation or deposition per day (m).
+            - pr_total_m3: Total precipitation volume per day (m3).
 
         Raises:
-            AssertionError: If any of the debug assertions fail.
+            AssertionError: If any of the balance checks fail.
         """
         if self.model.current_timestep == 0:
             surface_area_ratio = self.grid.load2d(
@@ -1777,6 +1802,9 @@ class LandSurface(Module):
             topwater_m_prev: ArrayFloat32 = self.HRU.var.topwater_m.copy()
             snow_enthalpy_J_per_m2_prev: TwoDArrayFloat32 = (
                 self.HRU.var.snow_enthalpy_J_per_m2.copy()
+            )
+            snow_density_kg_per_m3_prev: TwoDArrayFloat32 = (
+                self.HRU.var.snow_density_kg_per_m3.copy()
             )
             soil_enthalpy_J_per_m2_prev: TwoDArrayFloat32 = (
                 self.HRU.var.soil_enthalpy_J_per_m2.copy()
@@ -2096,6 +2124,7 @@ class LandSurface(Module):
                     snow_water_equivalent_prev=snow_water_equivalent_prev,
                     liquid_water_in_snow_prev=liquid_water_in_snow_prev,
                     snow_enthalpy_J_per_m2_prev=snow_enthalpy_J_per_m2_prev,
+                    snow_density_kg_per_m3_prev=snow_density_kg_per_m3_prev,
                     interception_storage_prev=interception_storage_prev,
                     soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
                     deep_soil_temperature_C_prev=deep_soil_temperature_C_prev,
@@ -2140,6 +2169,7 @@ class LandSurface(Module):
                     snow_water_equivalent_prev=snow_water_equivalent_prev,
                     liquid_water_in_snow_prev=liquid_water_in_snow_prev,
                     snow_enthalpy_J_per_m2_prev=snow_enthalpy_J_per_m2_prev,
+                    snow_density_kg_per_m3_prev=snow_density_kg_per_m3_prev,
                     interception_storage_prev=interception_storage_prev,
                     soil_enthalpy_J_per_m2_prev=soil_enthalpy_J_per_m2_prev,
                     deep_soil_temperature_C_prev=deep_soil_temperature_C_prev,
