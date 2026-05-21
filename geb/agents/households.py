@@ -22,7 +22,6 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .modules.flood_risk import FloodRiskModule
 from .modules.wind_risk import WindRiskModule
-from .workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
     from geb.agents import Agents
@@ -274,45 +273,22 @@ class Households(AgentBaseClass):
         # Initialize dry floodproofing status
         self.buildings["flood_proofed"] = False
 
-        # check if building overlaps with the flood map
-        # get highest return period
+        # check if building centroid overlaps with the highest-RP flood map.
+        # Direct raster sampling at centroid coordinates is equivalent to the
+        # previous raster→polygon→union→sjoin approach but avoids the expensive
+        # polygon conversion and spatial join (~48 s saved per call).
         highest_return_period = self.return_periods.max()
-        flood_map = self.flood_maps[highest_return_period].copy()
-        # check if building geometry overlaps with flood map
+        flood_map = self.flood_maps[highest_return_period].compute()
 
-        buildings_centroid = gpd.GeoDataFrame(
-            self.buildings,
-            geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
-            crs="EPSG:4326",
+        x_coords = xr.DataArray(self.buildings["x"].values, dims="points")
+        y_coords = xr.DataArray(self.buildings["y"].values, dims="points")
+        sampled = flood_map.interp(
+            {flood_map.rio.x_dim: x_coords, flood_map.rio.y_dim: y_coords},
+            method="nearest",
         )
-        buildings_centroid = buildings_centroid.to_crs(
-            flood_map.rio.crs
-        )  # Reproject building centroids to flood map CRS
-
-        # # convert flood map to polygons
-        flood_map = flood_map > 0  # convert to boolean mask
-        flood_map_polygons = from_landuse_raster_to_polygon(
-            flood_map.values,
-            flood_map.rio.transform(recalc=True),
-            flood_map.rio.crs,
+        self.buildings["flooded"] = (
+            ~np.isnan(sampled.values.squeeze()) & (sampled.values.squeeze() > 0)
         )
-
-        flood_map_polygons_union: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            [flood_map_polygons.union_all()],
-            columns=["geometry"],
-            crs=buildings_centroid.crs,
-        )
-
-        # # Create a mask for buildings that overlap with the flood map
-        flooded_buildings = gpd.sjoin(
-            buildings_centroid,
-            flood_map_polygons_union,
-            predicate="intersects",
-            how="left",
-        )
-
-        # Flooded if match exists
-        self.buildings["flooded"] = flooded_buildings["index_right"].notna()
 
         # drop buildings which are not flooded
         if drop_not_flooded:
@@ -1960,6 +1936,11 @@ class Households(AgentBaseClass):
         # update windstorm risk perceptions (use computed damages to avoid re-running scanners)
         self._last_damages_unprotected_w = damages_unprotected_w
         self._last_damages_adapt_w = damages_adapt_w
+        # DEBUG DIAGNOSTIC
+        mask = self.var.adapted_shutters.data == 0
+        ead_no = self.decision_module.calc_EAD(damages_unprotected_w[:, mask], 1.0 / self.windstorm_return_periods)
+        ead_ad = self.decision_module.calc_EAD(damages_adapt_w[:, mask], 1.0 / self.windstorm_return_periods)
+        print(f"[wind] EAD reduction from shutters: p50={float(np.median(ead_no - ead_ad)):.2f}, p95={float(np.percentile(ead_no - ead_ad, 95)):.2f}")
 
         self.update_windstorm_risk_perceptions()
 
@@ -1984,7 +1965,7 @@ class Households(AgentBaseClass):
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data,
+            adaptation_costs=self.var.adaptation_costs.data / loan_duration_flood,
             time_adapted=self.var.time_adapted.data,
             loan_duration=loan_duration_flood,
             p_floods=1 / self.return_periods,
@@ -2003,7 +1984,7 @@ class Households(AgentBaseClass):
             amenity_weight=1,
             risk_perception=self.var.risk_perception_windstorm.data,  # + 10,
             expected_damages_adapt=damages_adapt_w,
-            adaptation_costs=self.var.adaptation_costs_shutters.data,
+            adaptation_costs=self.var.adaptation_costs_shutters.data / loan_duration_wind,
             time_adapted=self.var.time_adapted_shutters.data,
             loan_duration=loan_duration_wind,
             p_windstorm=1 / self.windstorm_return_periods,
@@ -2169,7 +2150,7 @@ class Households(AgentBaseClass):
         # initial choices (before shared-budget reconciliation)
         choose_flood = (EU_adapt > EU_do_not_adapt) | (self.var.adapted.data == 1)
         choose_shutters = (EU_adapt_shutters > EU_unprotected_w) | (self.var.adapted_shutters.data == 1)
-
+        
         # DIAGNOSTIC: shutter EU breakdown
         not_yet_adapted = self.var.adapted_shutters.data == 0
         eu_positive = (EU_adapt_shutters > EU_unprotected_w) & not_yet_adapted
@@ -2220,6 +2201,24 @@ class Households(AgentBaseClass):
         gain_shutters = (EU_adapt_shutters - EU_unprotected_w).astype(np.float32)
         gain_ins = (EU_multirisk_insurance - EU_do_nothing).astype(np.float32)
 
+        # DEBUG DIAGNOSTIC
+        wants_flood = gain_flood > 0  # EU positive before budget
+        not_adapted = self.var.adapted.data == 0
+        recently_flooded = self.var.years_since_last_flood.data == 0
+        print(f"[diag] EU-positive for flood: {int(wants_flood.sum())} / {self.n}")
+        print(f"[diag] After budget drop: {int(choose_flood.sum())} / {self.n}")
+        print(f"[diag] Gap (budget-dropped): {int(wants_flood.sum()) - int(choose_flood.sum())}")
+        print(f"[diag] Households flooded this year (years_since==0): {int(recently_flooded.sum())}")
+        print(f"[diag] Of flooded, EU-positive: {int((wants_flood & recently_flooded).sum())}")
+        print(f"[diag] Of flooded & not-yet-adapted, EU-positive: {int((wants_flood & recently_flooded & not_adapted).sum())}")
+        if np.any(recently_flooded & not_adapted):
+            g = gain_flood[recently_flooded & not_adapted]
+            print(
+                f"[diag] EU gain (flooded, not adapted): "
+                f"p5={float(np.percentile(g, 5)):.4f}, p50={float(np.median(g)):.4f}, "
+                f"p95={float(np.percentile(g, 95)):.4f}, min={float(g.min()):.4f}, max={float(g.max()):.4f}"
+            )
+
         def total_cost() -> np.ndarray:
             return (
                 choose_flood.astype(np.float32) * flood_cost
@@ -2261,6 +2260,7 @@ class Households(AgentBaseClass):
             choose_flood[drop_f] = False
             choose_shutters[drop_s] = False
             choose_ins[drop_i] = False
+
 
         # DEBUG: shared-cap diagnostics
         

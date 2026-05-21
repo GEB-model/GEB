@@ -404,27 +404,35 @@ class FloodRiskModule:
             how="left",
         )
 
+        # All flood maps cover the same region → same UTM zone. Reproject building
+        # geometries once before the loop instead of once per return period.
+        utm_flood_map = self.reproject_to_utm(
+            self.households.flood_maps[self.households.return_periods[0]]
+        )
+        building_geometries = building_geometries.to_crs(utm_flood_map.rio.crs)
+
+        # Damage curves are the same for every return period — build once.
+        multi_curves = {
+            "damages_structure": self.households.buildings_structure_curve[
+                "building_unprotected"
+            ],
+            "damages_content": self.households.buildings_content_curve[
+                "building_unprotected"
+            ],
+            "damages_structure_flood_proofed": self.households.buildings_structure_curve[
+                "building_flood_proofed"
+            ],
+            "damages_content_flood_proofed": self.households.buildings_content_curve[
+                "building_flood_proofed"
+            ],
+        }
+
         for i, return_period in enumerate(self.households.return_periods):
             flood_map: xr.DataArray = self.reproject_to_utm(
                 self.households.flood_maps[return_period]
             )
 
-            building_multicurve = building_geometries.copy().to_crs(flood_map.rio.crs)
-
-            multi_curves = {
-                "damages_structure": self.households.buildings_structure_curve[
-                    "building_unprotected"
-                ],
-                "damages_content": self.households.buildings_content_curve[
-                    "building_unprotected"
-                ],
-                "damages_structure_flood_proofed": self.households.buildings_structure_curve[
-                    "building_flood_proofed"
-                ],
-                "damages_content_flood_proofed": self.households.buildings_content_curve[
-                    "building_flood_proofed"
-                ],
-            }
+            building_multicurve = building_geometries.copy()
             building_multicurve_renamed: gpd.GeoDataFrame = building_multicurve.rename(
                 columns={
                     "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",

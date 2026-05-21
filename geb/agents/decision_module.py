@@ -703,7 +703,7 @@ class DecisionModule:
         x = p_all_events
         EU_adapt_array = np.trapezoid(y=y, x=x, axis=0)
 
-        # set EU of adapt to -np.inf for thuse unable to afford it [maybe move this earlier to reduce array sizes]
+        # set EU of adapt to -np.inf for those unable to afford the annual loan payment
         constrained = np.where(income * expendature_cap <= adaptation_costs)
         EU_adapt_array[constrained] = -np.inf
         # EU_adapt_array *= self.error_terms_stay
@@ -914,7 +914,7 @@ class DecisionModule:
         x = p_all_windstorms
         EU_shutters_array = np.trapezoid(y=y, x=x, axis=0)
 
-        # Constrained affordability -> set EU of adapt to -np.inf for those unable to afford it
+        # Constrained affordability -> set EU of adapt to -np.inf for those unable to afford the annual loan payment
         constrained = np.where(income * expendature_cap <= adaptation_costs)
         EU_shutters_array[constrained] = -np.inf
 

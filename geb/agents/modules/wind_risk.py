@@ -234,7 +234,19 @@ class WindRiskModule:
                 "building_window_shutters"
             ],
         }
-    
+
+        # All wind maps cover the same region → same UTM zone. Reproject point
+        # features and compute cell area once before the return-period loop.
+        wind_map_ref = self.reproject_to_utm(
+            self.households.windstorm_maps[rps[0]].where(
+                self.households.windstorm_maps[rps[0]] >= wind_threshold
+            )
+        )
+        utm_crs = wind_map_ref.rio.crs
+        features_pts_utm = features_pts_wgs84.to_crs(utm_crs)
+        transform_ref = wind_map_ref.rio.transform(recalc=True)
+        cell_area_m2 = float(abs(transform_ref.a * transform_ref.e))
+
         # return period loop scan ONLY exposed point-features
         for i, rp in enumerate(rps):
             ids = exposed_ids_by_rp[rp]
@@ -248,16 +260,10 @@ class WindRiskModule:
                     print(f"Wind Damages adapt rp{rp}: 0 million (no exposed buildings)")
                 continue
     
-            # wind_map: xr.DataArray = self.households.windstorm_maps[rp]
-            # wind_crs = wind_map.rio.crs
             wind_map: xr.DataArray = self.households.windstorm_maps[rp]
             wind_map_masked = self.reproject_to_utm(wind_map.where(wind_map >= wind_threshold))
 
-            features_pts = features_pts_wgs84.loc[ids].copy().to_crs(wind_map_masked.rio.crs)
-
-            # Cell area in m2 from UTM transform (dx_m * dy_m)
-            transform = wind_map_masked.rio.transform(recalc=True)
-            cell_area_m2 = float(abs(transform.a * transform.e)) #What?
+            features_pts = features_pts_utm.loc[ids].copy()
 
             # Pre-scale max damage so that (coverage_m2 * max_damage_structure) ~= footprint_m2 * cost_per_m2
             fp = footprint_m2.reindex(features_pts.index).to_numpy(np.float32)
