@@ -143,9 +143,7 @@ def get_and_maybe_do_version_updates(
                             f"Performing auto-update for method {method_name}..."
                         )
 
-                        # Delegate to build_model.update() — the same pathway as
-                        # `geb update` — so parameter logging, file-library writes,
-                        # and validate_order=False are all handled consistently.
+                        # Delegate to build_model.update()
                         build_model.update({method_name: methods[method_name]})
                     else:
                         updates_to_print.append(
