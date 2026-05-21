@@ -2,6 +2,7 @@
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
+- Remove unused config reading in `geb update-version` that prevented using working directory update version too.
 
 
 # v1.0.0b24
