@@ -22,7 +22,9 @@ from geb.workflows.io import (
     calculate_scaling,
     create_hash_from_parameters,
     get_window,
+    read_array,
     read_hash,
+    write_array,
     write_hash,
     write_zarr,
 )
@@ -448,6 +450,26 @@ def test_get_window() -> None:
     da_slice = da.isel(window)
     assert (da_slice.x.values == x[1:-1]).all()
     assert (da_slice.y.values == y[1:-1]).all()
+
+
+def test_write_and_read_scalar_array() -> None:
+    """Test that scalar numpy arrays are stored and restored correctly.
+
+    This regression test ensures 0D numpy arrays can be written to Zarr and
+    read back without index-shape errors.
+    """
+    scalar_array: np.ndarray = np.array(3.5, dtype=np.float32)
+    scalar_path: Path = tmp_folder / "scalar.array.zarr"
+
+    if scalar_path.exists():
+        shutil.rmtree(scalar_path)
+
+    write_array(scalar_array, scalar_path)
+    restored_array: np.ndarray = read_array(scalar_path)
+
+    assert restored_array.ndim == 0
+    assert restored_array.dtype == np.float32
+    assert restored_array.item() == pytest.approx(3.5)
 
 
 def zarr_file(varname: str) -> Path:

@@ -105,8 +105,12 @@ def read_array(
     Returns:
         The numpy array, or a tuple of the array and its attributes if return_attributes is True.
     """
-    zarr_object = zarr.open_array(fp, mode="r")
-    array = zarr_object[:]
+    zarr_object: zarr.Array = zarr.open_array(fp, mode="r")
+    if zarr_object.ndim == 0:
+        # Scalar zarr arrays must be read with () instead of [:].
+        array = np.asarray(zarr_object[()])
+    else:
+        array = zarr_object[:]
     assert isinstance(array, np.ndarray)
     if return_attributes:
         return array, dict(zarr_object.attrs)
@@ -123,7 +127,20 @@ def write_array(
         fp: The path to the output .zarr file.
         attributes: Optional dictionary of attributes to store with the array.
     """
-    zarr.save_array(fp, arr, overwrite=True, attributes=attributes)  # ty:ignore[invalid-argument-type]
+    # zarr.save_array writes through slice(None), which raises for 0D arrays.
+    # Handle scalars explicitly to support store snapshots during multiverse.
+    if arr.ndim == 0:
+        zarr_array: zarr.Array = zarr.open_array(
+            store=fp,
+            mode="w",
+            shape=arr.shape,
+            dtype=arr.dtype,
+        )
+        zarr_array[()] = arr
+        if attributes is not None:
+            zarr_array.attrs.update(attributes)
+    else:
+        zarr.save_array(fp, arr, overwrite=True, attributes=attributes)  # ty:ignore[invalid-argument-type]
 
 
 @overload

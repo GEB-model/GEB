@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 import os
 from pathlib import Path
@@ -766,6 +767,389 @@ def create_validation_df(
     return validation_df
 
 
+def create_validation_df_for_forecast_member(
+    routing_dir: Path,
+    station_id: str | int,
+    observed_discharge: pd.Series,
+    correct_discharge_observations: bool,
+    discharge_observations_to_GEB_upstream_area_ratio: float,
+) -> pd.DataFrame:
+    """Create station validation dataframe for one forecast member.
+
+    Args:
+        routing_dir: Path to forecast member routing output.
+        station_id: Station identifier.
+        observed_discharge: Observed discharge series (m3/s).
+        correct_discharge_observations: Whether to apply upstream area correction.
+        discharge_observations_to_GEB_upstream_area_ratio: Upstream area ratio
+            (dimensionless).
+
+    Returns:
+        DataFrame with observed and simulated discharge columns.
+
+    Raises:
+        FileNotFoundError: If the station file is missing.
+        ValueError: If the observed index has no inferable frequency.
+    """
+    station_file_name: str = f"discharge_hourly_m3_per_s_{station_id}.csv"
+    station_file_path: Path = routing_dir / station_file_name
+    if not station_file_path.exists():
+        raise FileNotFoundError(
+            f"Forecast station file does not exist: {station_file_path}"
+        )
+
+    simulated_discharge_df: pd.DataFrame = pd.read_csv(
+        station_file_path,
+        index_col=0,
+        parse_dates=True,
+    )
+    station_column_name: str = f"discharge_hourly_m3_per_s_{station_id}"
+    if station_column_name in simulated_discharge_df.columns:
+        simulated_discharge: pd.Series = simulated_discharge_df[station_column_name]
+    else:
+        simulated_discharge = simulated_discharge_df.squeeze()
+
+    if simulated_discharge.empty or np.isnan(simulated_discharge.values).all():
+        return pd.DataFrame(columns=["discharge_observations", "discharge_simulations"])
+
+    simulated_discharge = simulated_discharge.sort_index()
+    observed_discharge = observed_discharge.sort_index()
+
+    if correct_discharge_observations:
+        simulated_discharge = (
+            simulated_discharge * discharge_observations_to_GEB_upstream_area_ratio
+        )
+
+    observed_frequency = observed_discharge.index.freq
+    if observed_frequency is None:
+        inferred_observed_frequency: str | None = pd.infer_freq(
+            observed_discharge.index
+        )
+        if inferred_observed_frequency is None:
+            raise ValueError(
+                "Observed discharge index must have a defined or inferable frequency."
+            )
+        observed_frequency = pd.tseries.frequencies.to_offset(
+            inferred_observed_frequency
+        )
+
+    simulated_discharge = simulated_discharge.resample(observed_frequency).mean()
+
+    start_time: pd.Timestamp = max(
+        observed_discharge.index.min(), simulated_discharge.index.min()
+    )
+    end_time: pd.Timestamp = min(
+        observed_discharge.index.max(), simulated_discharge.index.max()
+    )
+
+    return pd.DataFrame(
+        {
+            "discharge_observations": observed_discharge.loc[start_time:end_time],
+            "discharge_simulations": simulated_discharge.loc[start_time:end_time],
+        }
+    )
+
+
+def plot_forecast_discharge_metric_spread(
+    forecast_metrics_df: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """Plot forecast metric spread and mean per forecast initialization.
+
+    Args:
+        forecast_metrics_df: Dataframe with columns `forecast_init`, `frequency`,
+            `KGE`, `NSE`, and `R`.
+        output_path: Target path for the exported figure.
+    """
+    if forecast_metrics_df.empty:
+        return
+
+    grouped_stats_df: pd.DataFrame = (
+        forecast_metrics_df.groupby(["forecast_init", "frequency"])[["KGE", "NSE", "R"]]
+        .agg(["mean", "min", "max"])
+        .reset_index()
+    )
+
+    grouped_stats_df["forecast_init_dt"] = pd.to_datetime(
+        grouped_stats_df["forecast_init"],
+        format="%Y%m%dT%H%M%S",
+        errors="coerce",
+    )
+    grouped_stats_df = grouped_stats_df.sort_values("forecast_init_dt")
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 11), sharex=True)
+    fig.suptitle(
+        "Forecast discharge skill per initialization",
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    metric_specs: list[tuple[str, str]] = [
+        ("KGE", "Kling-Gupta efficiency [-]"),
+        ("NSE", "Nash-Sutcliffe efficiency [-]"),
+        ("R", "Pearson correlation coefficient [-]"),
+    ]
+
+    for axis, (metric_name, y_label) in zip(axes, metric_specs, strict=True):
+        for frequency in sorted(grouped_stats_df["frequency"].unique()):
+            frequency_df: pd.DataFrame = grouped_stats_df[
+                grouped_stats_df["frequency"] == frequency
+            ]
+            axis.fill_between(
+                frequency_df["forecast_init_dt"],
+                frequency_df[(metric_name, "min")],
+                frequency_df[(metric_name, "max")],
+                alpha=0.2,
+                label=f"{frequency} spread",
+            )
+            axis.plot(
+                frequency_df["forecast_init_dt"],
+                frequency_df[(metric_name, "mean")],
+                linewidth=2,
+                marker="o",
+                label=f"{frequency} mean",
+            )
+
+        axis.set_ylabel(y_label)
+        axis.grid(True, alpha=0.3)
+        axis.legend()
+
+    axes[-1].set_xlabel("Forecast initialization")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+
+def parse_grid_xy(grid_xy_raw: Any) -> tuple[int, int] | None:
+    """Parse raw grid-cell coordinates into integer `(x, y)` indices.
+
+    Args:
+        grid_xy_raw: Raw grid-coordinate container from geometry attributes.
+
+    Returns:
+        Parsed `(x, y)` tuple or None if parsing fails.
+    """
+    if isinstance(grid_xy_raw, (list, tuple, np.ndarray)) and len(grid_xy_raw) >= 2:
+        return int(grid_xy_raw[0]), int(grid_xy_raw[1])
+
+    if isinstance(grid_xy_raw, str):
+        try:
+            parsed_value: Any = ast.literal_eval(grid_xy_raw)
+        except (ValueError, SyntaxError):
+            return None
+        return parse_grid_xy(parsed_value)
+
+    return None
+
+
+def extract_station_grid_targets(
+    snapped_locations: gpd.GeoDataFrame,
+) -> dict[str, tuple[int, int]]:
+    """Extract station grid-cell targets from snapped station locations.
+
+    Args:
+        snapped_locations: Snapped discharge station geometries with
+            `snapped_grid_pixel_xy` information.
+
+    Returns:
+        Mapping from station label to `(x, y)` grid-cell indices.
+    """
+    if (
+        snapped_locations.empty
+        or "snapped_grid_pixel_xy" not in snapped_locations.columns
+    ):
+        return {}
+
+    station_targets: dict[str, tuple[int, int]] = {}
+    for station_id, station_row in snapped_locations.iterrows():
+        grid_xy: tuple[int, int] | None = parse_grid_xy(
+            station_row["snapped_grid_pixel_xy"]
+        )
+        if grid_xy is None:
+            continue
+        station_targets[f"station_{station_id}"] = grid_xy
+
+    return station_targets
+
+
+def plot_member_spread_timeline(
+    member_timeseries: dict[str, pd.Series],
+    title: str,
+    output_path: Path,
+) -> None:
+    """Plot member spread (min-max) and mean discharge over time.
+
+    Args:
+        member_timeseries: Mapping from member identifier to hourly discharge
+            series (m3/s).
+        title: Plot title.
+        output_path: Path where the figure is saved.
+    """
+    if not member_timeseries:
+        return
+
+    timeseries_df: pd.DataFrame = pd.DataFrame(member_timeseries).sort_index()
+    timeseries_df = timeseries_df.dropna(how="all")
+    if timeseries_df.empty:
+        return
+
+    spread_min: pd.Series = timeseries_df.min(axis=1)
+    spread_max: pd.Series = timeseries_df.max(axis=1)
+    spread_mean: pd.Series = timeseries_df.mean(axis=1)
+
+    fig, ax = plt.subplots(figsize=(11, 4))
+
+    for member_id in sorted(timeseries_df.columns):
+        ax.plot(
+            timeseries_df.index,
+            timeseries_df[member_id],
+            color="gray",
+            linewidth=0.5,
+            alpha=0.25,
+        )
+
+    ax.fill_between(
+        timeseries_df.index,
+        spread_min,
+        spread_max,
+        color="tab:blue",
+        alpha=0.25,
+        label="Member spread (min-max)",
+    )
+    ax.plot(
+        timeseries_df.index,
+        spread_mean,
+        color="black",
+        linewidth=1.5,
+        label="Member mean",
+    )
+
+    ax.set_title(title)
+    ax.set_ylabel("Discharge [m3/s]")
+    ax.set_xlabel("Time")
+    ax.set_ylim(0, None)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+
+def plot_station_forecast_stack(
+    station_name: str,
+    forecast_member_timeseries: dict[str, dict[str, pd.Series]],
+    output_path: Path,
+) -> None:
+    """Plot one figure per station with forecasts stacked vertically.
+
+    Args:
+        station_name: Name of the station shown in the figure title.
+        forecast_member_timeseries: Mapping
+            `forecast_init -> member -> hourly discharge series (m3/s)`.
+        output_path: Path where the figure is saved.
+    """
+    if not forecast_member_timeseries:
+        return
+
+    sorted_forecast_inits: list[str] = sorted(forecast_member_timeseries)
+    n_forecasts: int = len(sorted_forecast_inits)
+    fig, axes = plt.subplots(
+        n_forecasts,
+        1,
+        figsize=(13, max(3 * n_forecasts, 4)),
+        sharex=False,
+    )
+    if n_forecasts == 1:
+        axes = [axes]
+
+    for axis, forecast_init in zip(axes, sorted_forecast_inits, strict=True):
+        member_timeseries: dict[str, pd.Series] = forecast_member_timeseries[
+            forecast_init
+        ]
+        if not member_timeseries:
+            continue
+
+        timeseries_df: pd.DataFrame = pd.DataFrame(member_timeseries).sort_index()
+        timeseries_df = timeseries_df.dropna(how="all")
+        if timeseries_df.empty:
+            continue
+
+        for member_id in sorted(timeseries_df.columns):
+            axis.plot(
+                timeseries_df.index,
+                timeseries_df[member_id],
+                color="gray",
+                linewidth=0.5,
+                alpha=0.25,
+            )
+
+        axis.fill_between(
+            timeseries_df.index,
+            timeseries_df.min(axis=1),
+            timeseries_df.max(axis=1),
+            color="tab:blue",
+            alpha=0.2,
+            label="Member spread (min-max)",
+        )
+        axis.plot(
+            timeseries_df.index,
+            timeseries_df.mean(axis=1),
+            color="black",
+            linewidth=1.4,
+            label="Member mean",
+        )
+        axis.set_title(f"Forecast init: {forecast_init}")
+        axis.set_ylabel("Q [m3/s]")
+        axis.set_ylim(0, None)
+        axis.grid(True, alpha=0.3)
+        axis.legend(loc="upper right")
+
+    axes[-1].set_xlabel("Time")
+    fig.suptitle(f"Forecast discharge per station: {station_name}", fontweight="bold")
+    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+
+def select_requested_station_names(
+    available_station_names: list[str],
+    requested_station_names: str | list[str],
+) -> set[str]:
+    """Resolve selected station names against the available station list.
+
+    Args:
+        available_station_names: Station names that exist in snapped locations.
+        requested_station_names: One station name, a list of station names,
+            or `"all"`.
+
+    Returns:
+        Set of selected station names. Only names that exist in
+        `available_station_names` are returned.
+    """
+    available_name_lookup: dict[str, str] = {
+        station_name.lower(): station_name for station_name in available_station_names
+    }
+
+    if isinstance(requested_station_names, str):
+        if requested_station_names.lower() == "all":
+            return set(available_station_names)
+        requested_names: list[str] = [requested_station_names]
+    else:
+        requested_names = requested_station_names
+
+    selected_station_names: set[str] = set()
+    for requested_name in requested_names:
+        requested_name_normalized: str = requested_name.strip().lower()
+        if requested_name_normalized == "all":
+            return set(available_station_names)
+        if requested_name_normalized in available_name_lookup:
+            selected_station_names.add(available_name_lookup[requested_name_normalized])
+
+    return selected_station_names
+
+
 def _plot_discharge_validation_graphs(
     station_id: Any,
     validation_df: pd.DataFrame,
@@ -954,13 +1338,13 @@ def _plot_discharge_validation_graphs(
             plt.show()
             plt.close()
 
-    _plot_validation_return_periods(
-        validation_df=validation_df,
-        station_id=station_id,
-        station_name=station_name,
-        eval_plot_folder=eval_plot_folder,
-        frequency=frequency,
-    )
+    # _plot_validation_return_periods(
+    #     validation_df=validation_df,
+    #     station_id=station_id,
+    #     station_name=station_name,
+    #     eval_plot_folder=eval_plot_folder,
+    #     frequency=frequency,
+    # )
 
 
 def calculate_hit_rate(model: xr.DataArray, observations: xr.DataArray) -> float:
@@ -1087,6 +1471,295 @@ class Hydrology:
         plt.savefig(
             self.evaluator.output_folder_evaluate / "mean_discharge_m3_per_s.png",
             dpi=300,
+        )
+
+    def forecast_discharge(
+        self,
+        run_name: str = "default",
+        station_names: str | list[str] | None = None,
+        include_yearly_plots: bool = True,
+        create_plots: bool = True,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Visualize discharge forecast spread per initialization and member.
+
+        This method only creates forecast visualizations and spread exports.
+        It does not compute station validation metrics (KGE, NSE, R).
+
+        Args:
+            run_name: Name of the simulation run that contains forecast member
+                outputs under `report/<run_name>/forecast_*/member_*`.
+            station_names: Station selection by name. Provide one name,
+                a list of names, `"all"`, or None for outflow-only mode.
+            include_yearly_plots: Unused, kept for backward-compatible API.
+            create_plots: Whether to export station/outflow spread figures.
+            *args: Additional positional arguments (ignored).
+            **kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            FileNotFoundError: If the report folder for the selected run does not exist.
+        """
+        eval_forecast_root: Path = (
+            Path(self.evaluator.output_folder_evaluate) / "discharge" / "forecasts"
+        )
+        eval_plot_folder: Path = eval_forecast_root / "plots"
+        eval_result_folder: Path = eval_forecast_root / "evaluation_results"
+
+        eval_plot_folder.mkdir(parents=True, exist_ok=True)
+        eval_result_folder.mkdir(parents=True, exist_ok=True)
+
+        if self.model.config["general"]["forecasts"]["use"] is not True:
+            print(
+                "Forecasting is not enabled in the model configuration. "
+                "Skipping discharge forecast evaluation."
+            )
+            return
+
+        run_report_folder: Path = self.model.output_folder / "report" / run_name
+        if not run_report_folder.exists():
+            raise FileNotFoundError(
+                f"Run folder '{run_name}' does not exist in the report directory."
+            )
+
+        forecast_dirs: list[Path] = sorted(run_report_folder.glob("forecast_*"))
+        if not forecast_dirs:
+            print(
+                f"No forecast directories found under {run_report_folder}. "
+                "Skipping discharge forecast evaluation."
+            )
+            return
+
+        station_grid_targets: dict[str, tuple[int, int]] = {}
+        station_name_by_id_str: dict[str, str] = {}
+        outflow_only_mode: bool = station_names is None
+
+        if not outflow_only_mode:
+            snapped_locations: gpd.GeoDataFrame = read_geom(
+                self.model.files["geom"]["discharge/discharge_snapped_locations"]
+            )
+            station_grid_targets = extract_station_grid_targets(snapped_locations)
+
+            station_name_by_id: dict[Any, str] = {
+                station_id: str(station_row.discharge_observations_station_name)
+                for station_id, station_row in snapped_locations.iterrows()
+            }
+            station_name_by_id_str = {
+                str(station_id): station_name
+                for station_id, station_name in station_name_by_id.items()
+            }
+            available_station_names: list[str] = sorted(
+                set(station_name_by_id.values())
+            )
+            selected_station_names: set[str] = select_requested_station_names(
+                available_station_names=available_station_names,
+                requested_station_names=station_names,
+            )
+
+            if available_station_names and not selected_station_names:
+                print(
+                    "No requested station names matched snapped locations. "
+                    "Use station_names='all' or provide exact station names."
+                )
+                return
+
+            selected_station_ids: set[Any] = {
+                station_id
+                for station_id, station_name in station_name_by_id.items()
+                if station_name in selected_station_names
+            }
+            station_grid_targets = {
+                station_label: grid_xy
+                for station_label, grid_xy in station_grid_targets.items()
+                if station_label.removeprefix("station_")
+                in {str(i) for i in selected_station_ids}
+            }
+
+        use_basin_outflow_fallback: bool = (
+            outflow_only_mode or len(station_grid_targets) == 0
+        )
+        if use_basin_outflow_fallback:
+            print("Using basin outflow points for forecast spread analysis.")
+
+        spread_summary_records: list[dict[str, Any]] = []
+        station_forecast_stack_data: dict[str, dict[str, dict[str, pd.Series]]] = {}
+        for forecast_dir in forecast_dirs:
+            forecast_init: str = forecast_dir.name.removeprefix("forecast_")
+            member_dirs: list[Path] = sorted(
+                member_dir
+                for member_dir in forecast_dir.glob("member_*")
+                if member_dir.is_dir()
+            )
+
+            member_timeseries_by_location: dict[str, dict[str, pd.Series]] = {}
+
+            for member_dir in member_dirs:
+                routing_dir: Path = member_dir / "hydrology.routing"
+                if not routing_dir.exists():
+                    continue
+
+                if use_basin_outflow_fallback:
+                    outflow_files: list[Path] = sorted(
+                        routing_dir.glob("river_outflow_hourly_m3_per_s_*.csv")
+                    )
+                    for outflow_file in outflow_files:
+                        outflow_label: str = outflow_file.stem.replace(
+                            "river_outflow_hourly_m3_per_s_", "outflow_"
+                        )
+                        outflow_series: pd.Series = pd.read_csv(
+                            outflow_file,
+                            index_col=0,
+                            parse_dates=True,
+                        ).squeeze()
+                        if outflow_series.empty:
+                            continue
+
+                        if outflow_label not in member_timeseries_by_location:
+                            member_timeseries_by_location[outflow_label] = {}
+                        member_timeseries_by_location[outflow_label][
+                            member_dir.name
+                        ] = outflow_series
+                        if outflow_label not in station_forecast_stack_data:
+                            station_forecast_stack_data[outflow_label] = {}
+                        if (
+                            forecast_init
+                            not in station_forecast_stack_data[outflow_label]
+                        ):
+                            station_forecast_stack_data[outflow_label][
+                                forecast_init
+                            ] = {}
+                        station_forecast_stack_data[outflow_label][forecast_init][
+                            member_dir.name
+                        ] = outflow_series
+                else:
+                    discharge_hourly_path: Path = routing_dir / "discharge_hourly.zarr"
+                    if discharge_hourly_path.exists():
+                        discharge_hourly_da: xr.DataArray = read_zarr(
+                            discharge_hourly_path
+                        )
+                        data_var_name: str = (
+                            discharge_hourly_da.name
+                            if discharge_hourly_da.name is not None
+                            else "discharge_hourly"
+                        )
+
+                        for location_label, (
+                            x_index,
+                            y_index,
+                        ) in station_grid_targets.items():
+                            if location_label not in member_timeseries_by_location:
+                                member_timeseries_by_location[location_label] = {}
+
+                            location_series: pd.Series = discharge_hourly_da.isel(
+                                y=y_index,
+                                x=x_index,
+                            ).to_dataframe()[data_var_name]
+                            member_timeseries_by_location[location_label][
+                                member_dir.name
+                            ] = location_series
+                            station_id_label: str = location_label.removeprefix(
+                                "station_"
+                            )
+                            station_name_label: str = station_name_by_id_str.get(
+                                station_id_label,
+                                location_label,
+                            )
+                            if station_name_label not in station_forecast_stack_data:
+                                station_forecast_stack_data[station_name_label] = {}
+                            if (
+                                forecast_init
+                                not in station_forecast_stack_data[station_name_label]
+                            ):
+                                station_forecast_stack_data[station_name_label][
+                                    forecast_init
+                                ] = {}
+                            station_forecast_stack_data[station_name_label][
+                                forecast_init
+                            ][member_dir.name] = location_series
+
+            spread_folder: Path = eval_plot_folder / forecast_dir.name / "spread"
+            spread_folder.mkdir(parents=True, exist_ok=True)
+            for (
+                location_label,
+                member_timeseries,
+            ) in member_timeseries_by_location.items():
+                if not member_timeseries:
+                    continue
+
+                location_df: pd.DataFrame = pd.DataFrame(member_timeseries).sort_index()
+                location_df = location_df.dropna(how="all")
+                if location_df.empty:
+                    continue
+
+                location_slug: str = "".join(
+                    character if character.isalnum() or character in ("-", "_") else "_"
+                    for character in location_label
+                )
+                location_slug = location_slug.strip("_")
+                if not location_slug:
+                    location_slug = "location"
+
+                spread_stats_df: pd.DataFrame = pd.DataFrame(
+                    {
+                        "min_m3_per_s": location_df.min(axis=1),
+                        "mean_m3_per_s": location_df.mean(axis=1),
+                        "max_m3_per_s": location_df.max(axis=1),
+                    }
+                )
+                spread_stats_df.index.name = "time"
+                spread_stats_df.to_csv(
+                    eval_result_folder
+                    / f"{forecast_dir.name}_{location_slug}_member_spread.csv"
+                )
+
+                spread_summary_records.append(
+                    {
+                        "forecast_init": forecast_init,
+                        "location": location_label,
+                        "n_members": int(location_df.shape[1]),
+                        "overall_mean_m3_per_s": float(location_df.mean().mean()),
+                        "overall_min_m3_per_s": float(location_df.min().min()),
+                        "overall_max_m3_per_s": float(location_df.max().max()),
+                    }
+                )
+
+                if create_plots:
+                    plot_member_spread_timeline(
+                        member_timeseries=member_timeseries,
+                        title=(
+                            f"Discharge forecast spread ({forecast_dir.name}) - "
+                            f"{location_label}"
+                        ),
+                        output_path=spread_folder
+                        / f"{location_slug}_member_spread.png",
+                    )
+
+        if create_plots and station_forecast_stack_data:
+            station_stack_folder: Path = eval_plot_folder / "station_forecast_stacks"
+            station_stack_folder.mkdir(parents=True, exist_ok=True)
+            for station_name, station_forecasts in station_forecast_stack_data.items():
+                station_slug: str = "".join(
+                    character if character.isalnum() or character in ("-", "_") else "_"
+                    for character in station_name
+                ).strip("_")
+                if not station_slug:
+                    station_slug = "station"
+                plot_station_forecast_stack(
+                    station_name=station_name,
+                    forecast_member_timeseries=station_forecasts,
+                    output_path=station_stack_folder
+                    / f"{station_slug}_forecast_stack.png",
+                )
+
+        if spread_summary_records:
+            pd.DataFrame(spread_summary_records).to_csv(
+                eval_result_folder / "forecast_discharge_member_spread_summary.csv",
+                index=False,
+            )
+
+        print(
+            "Forecast discharge visualization completed. "
+            f"Saved {len(spread_summary_records)} spread records."
         )
 
     def evaluate_discharge(
@@ -1577,7 +2250,7 @@ class Hydrology:
 
     def evaluate_hydrodynamics(
         self, run_name: str = "default", *args: Any, **kwargs: Any
-    ) -> None:
+    ) -> dict[str, float | dict[str, float]]:
         """Evaluate hydrodynamic model performance against flood observations.
 
         This method loads modelled flood maps and corresponding observations,
@@ -1588,6 +2261,11 @@ class Hydrology:
             run_name: Name of the simulation run to evaluate.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            Dictionary with:
+                - csi: Mean critical success index across all evaluated flood-map runs (%).
+                - csi_per_run: Per-run CSI values (%) keyed by event and run identifier.
 
         Raises:
             FileNotFoundError: If the flood map folder does not exist in the output directory.
@@ -1670,34 +2348,50 @@ class Hydrology:
             Raises:
                 ValueError: If the observation file is not in .zarr format.
             """
-            # Step 1: Open needed datasets
+            # Step 1: Open needed datasets and reproject everything to a single
+            # consistent CRS (Mercator) before any masking or comparison.
+            # Mixing CRSes between rasters is the primary source of spatial misalignment.
+            crs_mercator = CRS.from_epsg(3857)
+
             flood_map = read_zarr(flood_map_path)
             obs = read_zarr(observation)
-            print("obs CRS", obs.rio.crs)
+
+            print(
+                f"flood_map CRS: {flood_map.rio.crs}, bounds: {flood_map.rio.bounds()}"
+            )
+            print(f"obs CRS: {obs.rio.crs}, bounds: {obs.rio.bounds()}")
+
+            # Reproject both source rasters to Mercator as the shared working CRS.
+            # Observation rasters are binary (0/1); nearest-neighbor preserves class
+            # values and avoids interpolation artefacts outside observed flood pixels.
+            flood_map = flood_map.rio.reproject(crs_mercator)
+            obs = obs.rio.reproject(crs_mercator)
+
+            # Reproject flood_map to exactly match obs grid so pixel-wise operations
+            # are valid. This is done AFTER both are in the same CRS.
             sim = flood_map.rio.reproject_match(obs)
+
             rivers = read_geom(
                 Path("simulation_root")
                 / run_name
-                / "SFINCS"
                 / "group_0"
-                / "rivers.geoparquet"
-            ).to_crs(obs.rio.crs)
+                / "rivers_with_widths_and_depths.geoparquet"
+            )  # .to_crs(crs_mercator)
             region = read_geom(
-                Path("simulation_root")
-                / run_name
-                / "SFINCS"
-                / "group_0"
-                / "region.geoparquet"
-            ).to_crs(obs.rio.crs)
+                Path("simulation_root") / run_name / "group_0" / "subbasins.geoparquet"
+            ).to_crs(crs_mercator)
+            region = region.union_all()
+            region = gpd.GeoDataFrame(geometry=[region], crs=crs_mercator)
 
-            crs_mercator = CRS.from_epsg(3857)
-            gdf_mercator = rivers.to_crs(crs_mercator)
-            gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
+            # Buffer rivers by half their width for masking (Mercator preserves distances)
+            rivers_buffered = rivers.copy()
+            rivers_buffered["geometry"] = rivers_buffered.buffer(
+                rivers_buffered["width"] / 2
+            )
 
             # Create river mask for simulation data
-            gdf_buffered_sim = gdf_mercator.to_crs(sim.rio.crs)
             rivers_mask_sim = ~geometry_mask(
-                gdf_buffered_sim.geometry,
+                rivers_buffered.geometry,
                 out_shape=sim.rio.shape,
                 transform=sim.rio.transform(),
                 all_touched=True,
@@ -1706,9 +2400,8 @@ class Hydrology:
             sim_no_rivers = sim.where(~rivers_mask_sim).fillna(0)
 
             # Create river mask for observation data
-            gdf_buffered_obs = gdf_mercator.to_crs(obs.rio.crs)
             rivers_mask_obs = ~geometry_mask(
-                gdf_buffered_obs.geometry,
+                rivers_buffered.geometry,
                 out_shape=obs.rio.shape,
                 transform=obs.rio.transform(),
                 all_touched=True,
@@ -1717,7 +2410,9 @@ class Hydrology:
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
             # Clip out region from observations
-            obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
+            obs_region = obs_no_rivers.rio.clip(
+                region.geometry.values, region.crs, drop=True
+            )
 
             # Optionally clip using extra validation region from config yml
             extra_validation_path = self.config["floods"].get(
@@ -1743,9 +2438,26 @@ class Hydrology:
                 sim_extra_clipped = sim_no_rivers
                 clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
 
-            sim_extra_clipped = sim_extra_clipped.rio.reproject_like(obs_region)
-            simulation_final = sim_extra_clipped > hmin
-            observation_final = obs_region > 0
+            sim_extra_clipped = sim_extra_clipped.rio.reproject_match(obs_region)
+            simulation_final = (sim_extra_clipped > hmin).squeeze(drop=True)
+            observation_final = (obs_region > 0.5).squeeze(drop=True)
+
+            # Enforce that both boolean maps are only valid inside the catchment.
+            # This prevents plotting/metric artefacts outside the region boundary.
+            region_mask = geometry_mask(
+                region.geometry,
+                out_shape=observation_final.rio.shape,
+                transform=observation_final.rio.transform(),
+                all_touched=False,
+                invert=True,
+            )
+            region_mask_da = xr.DataArray(
+                region_mask,
+                coords=observation_final.coords,
+                dims=observation_final.dims,
+            )
+            observation_final = observation_final & region_mask_da
+            simulation_final = simulation_final & region_mask_da
 
             xmin, ymin, xmax, ymax = region.total_bounds
             catchment_extent = [xmin, xmax, ymin, ymax]
@@ -2283,6 +2995,7 @@ class Hydrology:
         )
 
         eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
+        csi_per_run: dict[str, float] = {}
 
         # Calculate performance metrics for every event in config file
         for event in self.config["floods"]["events"]:
@@ -2293,9 +3006,7 @@ class Hydrology:
             if self.model.config["general"]["forecasts"]["use"]:
                 event_folder = eval_hydrodynamics_folders / "forecasts" / event_name
                 event_folder.mkdir(parents=True, exist_ok=True)
-                flood_maps_folder = (
-                    self.model.output_folder / "flood_maps" / "forecasts"
-                )
+                flood_maps_folder = self.model.output_folder / "flood_maps"
             else:
                 event_folder = eval_hydrodynamics_folders / event_name
                 event_folder.mkdir(parents=True, exist_ok=True)
@@ -2330,139 +3041,224 @@ class Hydrology:
                     "Flood observation file is not in the correct format. Please provide a .zarr file."
                 )
 
-            # Find all flood maps corresponding to the event
-            all_flood_map_files = list(flood_maps_folder.glob("*.zarr"))
+            zarr_filename = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
+
+            if self.model.config["general"]["forecasts"]["use"]:
+                # Forecast structure: flood_maps/forecast_{date}/member_{n}/EVENT.zarr
+                # Collect paths and extract forecast_init / member from directory names
+                all_flood_map_files = [
+                    (
+                        forecast_dir.name[len("forecast_") :],
+                        member_dir.name[len("member_") :],
+                        member_dir / zarr_filename,
+                    )
+                    for forecast_dir in sorted(flood_maps_folder.glob("forecast_*"))
+                    for member_dir in sorted(forecast_dir.glob("member_*"))
+                    if (member_dir / zarr_filename).exists()
+                ]
+            else:
+                all_flood_map_files = list(flood_maps_folder.glob("*.zarr"))
 
             # Filter flood_map_files for the current event only
             flood_map_files = []
-            for flood_map_path in all_flood_map_files:
-                parsed = parse_flood_forecast_initialisation(flood_map_path.name)
+            if self.model.config["general"]["forecasts"]["use"]:
+                flood_map_files = (
+                    all_flood_map_files  # already filtered by zarr_filename
+                )
+            else:
+                for flood_map_path in all_flood_map_files:
+                    parsed = parse_flood_forecast_initialisation(flood_map_path.name)
 
-                # Skip files that do not match the expected format
-                if parsed is None:
-                    continue
+                    # Skip files that do not match the expected format
+                    if parsed is None:
+                        continue
 
-                file_forecast_init, _, _, _, parsed_event_name = parsed
-                # Check if file matches current event
-                if parsed_event_name == event_name:
-                    flood_map_files.append(flood_map_path)
+                    file_forecast_init, _, _, _, parsed_event_name = parsed
+                    # Check if file matches current event
+                    if parsed_event_name == event_name:
+                        flood_map_files.append(flood_map_path)
 
             print(
                 f"Found {len(flood_map_files)} flood map files for event {event_name}"
             )
 
-            if len(flood_map_files) == 1:
-                print(
-                    "Only one flood map found, assuming no forecasts were included in the simulation."
-                )
-                flood_map_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
-                flood_map_path = (
-                    Path(self.model.output_folder) / "flood_maps" / flood_map_name
-                )
-                calculate_performance_metrics(
-                    observation=str(obs_file),
-                    flood_map_path=flood_map_path,
-                    output_folder=event_folder,
-                    visualization_type="OSM",
-                )
-                print(f"Successfully evaluated: {flood_map_path.name}")
+            if not self.model.config["general"]["forecasts"]["use"]:
+                if len(flood_map_files) == 1:
+                    print(
+                        "Only one flood map found, assuming no forecasts were included in the simulation."
+                    )
+                    flood_map_path = (
+                        Path(self.model.output_folder) / "flood_maps" / zarr_filename
+                    )
+                    metrics = calculate_performance_metrics(
+                        observation=str(obs_file),
+                        flood_map_path=flood_map_path,
+                        output_folder=event_folder,
+                        visualization_type="OSM",
+                    )
+                    if metrics is not None:
+                        run_key = f"{event_name} | {flood_map_path.name}"
+                        csi_per_run[run_key] = float(metrics["csi"])
+                    print(f"Successfully evaluated: {flood_map_path.name}")
 
-            elif len(flood_map_files) == 0:
-                raise FileNotFoundError(
-                    "No flood map files found for this event. Did you run the hydrodynamic model?"
-                )
+                elif len(flood_map_files) == 0:
+                    raise FileNotFoundError(
+                        "No flood map files found for this event. Did you run the hydrodynamic model?"
+                    )
+
+                else:
+                    print(
+                        f"Multiple flood maps found ({len(flood_map_files)}), processing each."
+                    )
+                    unique_forecast_inits = set()
+                    unique_members = set()
+                    performance_metrics_list = []
+
+                    # Identify unique forecast initializations
+                    for flood_map_name in flood_map_files:
+                        print(f"flood_map_name: {flood_map_name}")
+                        (
+                            forecast_init,
+                            member,
+                            event_start,
+                            event_end,
+                            parsed_event_name,
+                        ) = parse_flood_forecast_initialisation(flood_map_name.name)
+                        unique_forecast_inits.add(forecast_init)
+
+                    # Convert to sorted list for consistent processing order
+                    unique_forecast_inits_list = sorted(
+                        [init for init in unique_forecast_inits if init is not None]
+                    )
+                    print(
+                        f"Found {len(unique_forecast_inits_list)} unique forecast initializations: {unique_forecast_inits_list}"
+                    )
+
+                    # Process each unique forecast initialization
+                    for forecast_init in unique_forecast_inits_list:
+                        print(f"Processing forecast initialization: {forecast_init}")
+
+                        forecast_folder = event_folder / forecast_init
+                        forecast_folder.mkdir(parents=True, exist_ok=True)
+
+                        matching_flood_maps = []
+                        for flood_map_path in flood_map_files:
+                            parsed = parse_flood_forecast_initialisation(
+                                flood_map_path.name
+                            )
+
+                            if parsed is None:
+                                continue
+
+                            file_forecast_init, _, _, _, parsed_event_name = parsed
+
+                            if (
+                                file_forecast_init == forecast_init
+                                and parsed_event_name == event_name
+                            ):
+                                matching_flood_maps.append(flood_map_path)
+
+                        print(
+                            f"Found {len(matching_flood_maps)} flood maps for forecast initialization {forecast_init}"
+                        )
+                        forecast_metrics_list = []
+
+                        for flood_map_path in matching_flood_maps:
+                            print(f"   Evaluating: {flood_map_path.name}")
+
+                            metrics = calculate_performance_metrics(
+                                observation=str(obs_file),
+                                flood_map_path=flood_map_path,
+                                visualization_type="OSM",
+                                output_folder=forecast_folder,
+                            )
+                            print("   Flood map evaluation complete.")
+                            if metrics is None:
+                                continue
+                            forecast_init_parsed, member, _, _, _ = (
+                                parse_flood_forecast_initialisation(flood_map_path.name)
+                            )
+                            metrics_with_metadata = {
+                                "forecast_init": forecast_init_parsed,
+                                "member": member,
+                                "filename": flood_map_path.name,
+                                **metrics,
+                            }
+
+                            performance_metrics_list.append(metrics_with_metadata)
+                            forecast_metrics_list.append(metrics)
+                            run_key = (
+                                f"{event_name} | "
+                                f"{forecast_init_parsed} - member {member} - {flood_map_path.name}"
+                            )
+                            csi_per_run[run_key] = float(metrics["csi"])
+                            print(f"   Successfully evaluated: {flood_map_path.name}")
+
+                    if performance_metrics_list:
+                        performance_df = pd.DataFrame(performance_metrics_list)
+
+                        create_forecast_performance_plots(
+                            performance_df, event_name, event_folder
+                        )
+
+                        detailed_filename = f"{event_name.replace(':', '_')}_detailed_performance_metrics.csv"
+                        performance_df.to_csv(
+                            event_folder / detailed_filename, index=False
+                        )
+                        print(
+                            f"Detailed performance metrics saved as: {event_folder / detailed_filename}"
+                        )
 
             else:
-                print(
-                    f"Multiple flood maps found ({len(flood_map_files)}), processing each."
-                )
-                unique_forecast_inits = set()
-                performance_metrics_list = []
-
-                # Identify unique forecast initializations
-                for flood_map_name in flood_map_files:
-                    # Parse the flood map filename to extract components
-                    print(f"flood_map_name: {flood_map_name}")
-                    forecast_init, member, event_start, event_end, parsed_event_name = (
-                        parse_flood_forecast_initialisation(flood_map_name.name)
+                # Forecast mode: flood_maps/forecast_{date}/member_{n}/EVENT.zarr
+                if len(flood_map_files) == 0:
+                    raise FileNotFoundError(
+                        f"No forecast flood maps found for event '{event_name}'. "
+                        "Did you run the hydrodynamic model?"
                     )
-                    unique_forecast_inits.add(forecast_init)
 
-                # Convert to sorted list for consistent processing order
-                unique_forecast_inits_list = sorted(
-                    [init for init in unique_forecast_inits if init is not None]
-                )
-                print(
-                    f"Found {len(unique_forecast_inits_list)} unique forecast initializations: {unique_forecast_inits_list}"
-                )
+                performance_metrics_list = []
+                processed_forecast_inits: set[str] = set()
 
-                # Process each unique forecast initialization
-                for forecast_init in unique_forecast_inits_list:
-                    print(f"Processing forecast initialization: {forecast_init}")
+                for forecast_date, member_id, flood_map_path in flood_map_files:
+                    if forecast_date not in processed_forecast_inits:
+                        print(f"Processing forecast initialization: {forecast_date}")
+                        processed_forecast_inits.add(forecast_date)
 
-                    # Create forecast initialization folder
-                    forecast_folder = event_folder / forecast_init
+                    forecast_folder = (
+                        event_folder / forecast_date / f"member_{member_id}"
+                    )
                     forecast_folder.mkdir(parents=True, exist_ok=True)
 
-                    matching_flood_maps = []
-                    for flood_map_path in flood_map_files:
-                        parsed = parse_flood_forecast_initialisation(
-                            flood_map_path.name
-                        )
-
-                        # Skip files that do not match the expected format
-                        if parsed is None:
-                            continue
-
-                        file_forecast_init, _, _, _, parsed_event_name = parsed
-
-                        # Only include files that match current forecast init and event
-                        if (
-                            file_forecast_init == forecast_init
-                            and parsed_event_name == event_name
-                        ):
-                            matching_flood_maps.append(flood_map_path)
-
-                    print(
-                        f"Found {len(matching_flood_maps)} flood maps for forecast initialization {forecast_init}"
+                    print(f"   Evaluating member {member_id}: {flood_map_path}")
+                    metrics = calculate_performance_metrics(
+                        observation=str(obs_file),
+                        flood_map_path=flood_map_path,
+                        visualization_type="OSM",
+                        output_folder=forecast_folder,
                     )
-                    # Evaluate each matching flood map
-                    forecast_metrics_list = []
-
-                    for flood_map_path in matching_flood_maps:
-                        print(f"   Evaluating: {flood_map_path.name}")
-
-                        metrics = calculate_performance_metrics(
-                            observation=str(obs_file),
-                            flood_map_path=flood_map_path,
-                            visualization_type="OSM",
-                            output_folder=forecast_folder,
-                        )
-                        print("   Flood map evaluation complete.")
-                        # Add metadata to metrics
-                        forecast_init_parsed, member, _, _, _ = (
-                            parse_flood_forecast_initialisation(flood_map_path.name)
-                        )
-                        metrics_with_metadata = {
-                            "forecast_init": forecast_init_parsed,
-                            "member": member,
+                    print("   Flood map evaluation complete.")
+                    if metrics is None:
+                        continue
+                    performance_metrics_list.append(
+                        {
+                            "forecast_init": forecast_date,
+                            "member": member_id,
                             "filename": flood_map_path.name,
                             **metrics,
                         }
-
-                        performance_metrics_list.append(metrics_with_metadata)
-                        forecast_metrics_list.append(metrics)
-                        print(f"   Successfully evaluated: {flood_map_path.name}")
+                    )
+                    run_key = f"{event_name} | {forecast_date} - member {member_id} - {flood_map_path.name}"
+                    csi_per_run[run_key] = float(metrics["csi"])
+                    print(f"   Successfully evaluated: {flood_map_path.name}")
 
                 if performance_metrics_list:
                     performance_df = pd.DataFrame(performance_metrics_list)
 
-                    # Create forecast performance plots
                     create_forecast_performance_plots(
                         performance_df, event_name, event_folder
                     )
 
-                    # Save detailed performance metrics
                     detailed_filename = f"{event_name.replace(':', '_')}_detailed_performance_metrics.csv"
                     performance_df.to_csv(event_folder / detailed_filename, index=False)
                     print(
@@ -2472,6 +3268,16 @@ class Hydrology:
             print(f"Completed processing event: {event_name}\n")
 
         print("Flood map performance metrics calculated for all events.")
+        if csi_per_run:
+            mean_csi = float(
+                np.mean(np.array(list(csi_per_run.values()), dtype=np.float64))
+            )
+        else:
+            mean_csi = float("nan")
+        return {
+            "csi": mean_csi,
+            "csi_per_run": csi_per_run,
+        }
 
     def water_balance(
         self,

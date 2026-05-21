@@ -122,34 +122,85 @@ toolbox.register("select", tools.selNSGA2)
 random.seed(42)
 
 def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") -> str | None:
-    """Helper function to run a GEB command, log output, and return captured stdout."""
+    """Run a GEB command with live log streaming and return combined output."""
     env = os.environ.copy()
     env["GEB_OVERRIDE_PROGRESSBAR_DT"] = "10"
 
-    # print(f"[GEB] Running: {cmd}")
-    
-    process = subprocess.run(
-        cmd, 
-        shell=True, 
-        capture_output=True,
-        env=env,
-        text=True
-    )
-    
+    combined_output_lines: list[str] = []
+
     with open(log_path, "a") as log_file:
         log_file.write(f"\n[{pd.Timestamp.now()}] Running: {cmd}\n")
-        if process.stdout:
-            log_file.write("--- STDOUT ---\n")
-            log_file.write(process.stdout)
-        if process.stderr:
-            log_file.write("--- STDERR ---\n")
-            log_file.write(process.stderr)
+        log_file.write("--- LIVE OUTPUT (stdout+stderr) ---\n")
+        log_file.flush()
+
+        # Stream both stdout and stderr in chronological order to avoid long silent periods.
+        process = subprocess.Popen(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            text=True,
+            bufsize=1,
+        )
+
+        assert process.stdout is not None
+        for line in process.stdout:
+            combined_output_lines.append(line)
+            log_file.write(line)
+            log_file.flush()
+
+        process.wait()
         log_file.write(f"Return code: {process.returncode}\n")
-        
+        log_file.flush()
+
+    combined_output = "".join(combined_output_lines)
+
     if process.returncode != 0:
         raise RuntimeError(f"{error_msg}. Check logs at: {log_path}")
 
-    return process.stdout
+    return combined_output
+
+
+def ensure_calibration_report_config(model_config_path: Path) -> None:
+    """Ensure calibration runs write the routing discharge reports needed by floods.
+
+    Args:
+        model_config_path: Path to the run-specific model configuration file.
+
+    Raises:
+        ValueError: If the model configuration file cannot be parsed as a mapping.
+    """
+    with open(model_config_path, "r") as config_file:
+        model_config: dict[str, object] | None = yaml.safe_load(config_file)
+
+    if model_config is None:
+        model_config = {}
+    if not isinstance(model_config, dict):
+        raise ValueError(f"Expected mapping in model config: {model_config_path}")
+
+    report_config = model_config.setdefault("report", {})
+    if not isinstance(report_config, dict):
+        raise ValueError(f"Expected 'report' section to be a mapping in {model_config_path}")
+
+    report_config["_discharge_stations"] = True
+    routing_report_config = report_config.setdefault("hydrology.routing", {})
+    if not isinstance(routing_report_config, dict):
+        raise ValueError(
+            f"Expected 'report.hydrology.routing' to be a mapping in {model_config_path}"
+        )
+
+    # Flood-event spinup reads this exact report path and variable definition.
+    routing_report_config["discharge_hourly"] = {
+        "varname": "grid.var.discharge_m3_s_per_substep",
+        "type": "grid",
+        "function": None,
+        "format": "zarr",
+        "single_file": True,
+    }
+
+    with open(model_config_path, "w") as config_file:
+        yaml.dump(model_config, config_file, default_flow_style=False, sort_keys=False)
 
 rule init_base:
     output: touch("base_init.done")
@@ -255,20 +306,22 @@ rule set_individual_parameters:
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         
         param_args = " ".join(f"{k}={v}" for k, v in actual_params.items())
-        model_config = parse_config(run_dir / "model.yml")
         
         datetime_args = "general.spinup_time={0} general.start_time={1} general.end_time={2}".format(
             CALIBRATION_CONFIG["spinup_time"], CALIBRATION_CONFIG["start_time"], CALIBRATION_CONFIG["end_time"]
         )
         
-        cmd = "geb set -c model.yml --working-directory {0} {1} {2} report=null report._discharge_stations+=true".format(
+        cmd = "geb set -c model.yml --working-directory {0} {1} {2}".format(
             run_dir, param_args, datetime_args
         )
         run_command(cmd, log[0], f"Failed to set parameters for {wildcards.gen}_{wildcards.ind}")
+        ensure_calibration_report_config(run_dir / "model.yml")
 
 rule spinup_individual:
     input: RUNS_DIR + "/{gen}_{ind}/params_set.done"
     output: touch(RUNS_DIR + "/{gen}_{ind}/spinup.done")
+    # Limit concurrent heavy jobs via: --resources heavy_jobs=<N>
+    resources: heavy_jobs=2
     log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_spinup.log"
     run:
         print(get_progress_message(wildcards, "Performing spinup"))
@@ -278,12 +331,13 @@ rule spinup_individual:
 rule run_individual:
     input: RUNS_DIR + "/{gen}_{ind}/spinup.done"
     output: touch(RUNS_DIR + "/{gen}_{ind}/run.done")
+    # Limit concurrent heavy jobs via: --resources heavy_jobs=<N>
+    resources: heavy_jobs=2
     log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_run.log"
     run:
         print(get_progress_message(wildcards, "Performing run"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         run_command(f"geb run -wd {run_dir}", log[0], f"Main run failed for {wildcards.gen}_{wildcards.ind}")
-        shutil.rmtree(run_dir / "simulation_root")
 
 rule evaluate_individual:
     input: RUNS_DIR + "/{gen}_{ind}/run.done"
@@ -316,7 +370,8 @@ rule evaluate_individual:
         with open(output[0], "w") as f:
             yaml.dump({"targets": all_metrics}, f)
 
-        shutil.rmtree(run_dir / "input")
+        shutil.rmtree(run_dir / "input", ignore_errors=True)
+        shutil.rmtree(run_dir / "simulation_root", ignore_errors=True)
 
 checkpoint create_next_generation:
     input:

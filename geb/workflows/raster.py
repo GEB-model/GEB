@@ -618,6 +618,7 @@ def convert_nodata(
     Raises:
         ValueError: If the input DataArray does not have a '_FillValue' attribute.
     """
+    da.attrs["_FillValue"] = da.encoding.get("_FillValue", -9999)
     if "_FillValue" not in da.attrs:
         raise ValueError("Input DataArray must have a '_FillValue' attribute")
     da_new = da.where(da != da.attrs["_FillValue"], new_nodata)

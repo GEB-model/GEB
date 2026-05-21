@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import datetime
 import logging
+import shutil
 import warnings
 from pathlib import Path
 from time import time
@@ -223,10 +224,9 @@ class GEBModel(Module):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
-        original_is_activated: bool = (
-            self.reporter.is_activated
-        )  # store original reporter state
-        self.reporter.is_activated = False  # disable reporting during multiverse runs
+        original_report_folder: Path = (
+            self.reporter.report_folder
+        )  # remember where the main run writes its output
 
         if return_mean_discharge:
             mean_discharge: dict[
@@ -237,6 +237,9 @@ class GEBModel(Module):
         forecast_members: list[str] | None = None
         forecast_end_dt: datetime.datetime | None = None
         forecast_data: dict[str, xr.DataArray] = {}
+        self.logger.info(
+            f"Starting to load forecast data for {len(self.forcing.loaders)} variables..."
+        )
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 # open one forecast to see the number of members
@@ -245,6 +248,8 @@ class GEBModel(Module):
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
+                    / self.config["general"]["forecasts"]["ensemble"]
+                    / forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
                 # these are the forecast members to loop over
@@ -284,32 +289,83 @@ class GEBModel(Module):
             forecast_end_day - self.simulation_start.date()
         ).days  # set the number of timesteps to the end of the forecast
 
+        # Flush the main run report so member runs can clone a complete history
+        # up to (but excluding) the forecast issue timestep.
+        self.reporter.finalize()
+
         for member in forecast_members:  # loop over all forecast members
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
 
-            for loader_name, loader in self.forcing.loaders.items():
-                if loader.supports_forecast:
-                    loader.set_forecast(
-                        forecast_issue_datetime=forecast_issue_datetime,
-                        da=forecast_data[loader_name].sel(member=member),
+            # redirect the reporter to a per-member subfolder so outputs do not
+            # overwrite the main-run zarrs or each other
+            saved_runtime_state, saved_variables = (
+                self.reporter._save_and_clear_runtime_state()
+            )  # snapshot and clear all open zarr handles / indices
+            member_report_folder: Path = (
+                original_report_folder / self.multiverse_name
+            )  # one dedicated output folder per forecast member
+            self.reporter.report_folder = member_report_folder
+            member_report_folder.mkdir(parents=True, exist_ok=True)
+
+            # Clone the base run report snapshot into the member folder so
+            # forecast outputs contain the full model history from simulation
+            # start up to the current timestep.
+            for source_item in original_report_folder.iterdir():
+                if source_item.name.startswith("forecast_"):
+                    continue
+
+                target_item = member_report_folder / source_item.name
+                if source_item.is_dir():
+                    shutil.copytree(
+                        source_item,
+                        target_item,
+                        dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("*.csv"),
                     )
+                else:
+                    if source_item.suffix != ".csv":
+                        shutil.copy2(source_item, target_item)
 
-            self.logger.info(f"Running forecast member {member}")
-            self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
+            # Tell the reporter to resume writing from the current model index
+            # when opening pre-existing zarr files in the member folder.
+            self._report_resume_from_timestep = store_timestep
 
-            if return_mean_discharge:
-                mean_discharge[member] = (
-                    self.hydrology.routing.grid.var.discharge_m3_s.mean()
-                ).item()  # calculate the mean discharge for the member
+            try:
+                for loader_name, loader in self.forcing.loaders.items():
+                    if loader.supports_forecast:
+                        loader.set_forecast(
+                            forecast_issue_datetime=forecast_issue_datetime,
+                            da=forecast_data[loader_name].sel(member=member),
+                        )
 
-            # restore the model to the state before the forecast for the next member
-            # so the n_timesteps is restored to the number of timesteps at
-            # the end of the forecast period
-            self.restore(
-                store_location=store_location,
-                timestep=store_timestep,
-                n_timesteps=self.n_timesteps,
-            )  # restore the initial state of the multiverse
+                self.logger.info(f"Running forecast member {member}")
+                self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
+
+                if return_mean_discharge:
+                    mean_discharge[member] = (
+                        self.hydrology.routing.grid.var.discharge_m3_s.mean()
+                    ).item()  # calculate the mean discharge for the member
+
+                self.reporter.finalize()  # flush all buffered member outputs to member_report_folder
+
+                # restore the model to the state before the forecast for the next member
+                # so the n_timesteps is restored to the number of timesteps at
+                # the end of the forecast period
+                self.restore(
+                    store_location=store_location,
+                    timestep=store_timestep,
+                    n_timesteps=self.n_timesteps,
+                )  # restore the initial state of the multiverse
+            finally:
+                # discard any partially-written member state and restore the
+                # main-run reporter regardless of whether the member succeeded
+                if hasattr(self, "_report_resume_from_timestep"):
+                    delattr(self, "_report_resume_from_timestep")
+                self.reporter._save_and_clear_runtime_state()
+                self.reporter._restore_runtime_state(
+                    saved_runtime_state, saved_variables
+                )
+                self.reporter.report_folder = original_report_folder
 
         self.logger.info("Forecast finished, restoring all conditions...")
 
@@ -320,10 +376,6 @@ class GEBModel(Module):
             timestep=store_timestep,
             n_timesteps=store_n_timesteps,
         )  # restore the initial state of the multiverse
-
-        self.reporter.is_activated = (
-            original_is_activated  # restore original reporter state
-        )
 
         # after all forecast members have been processed, restore the original forcing data
         for loader in self.forcing.loaders.values():
@@ -345,6 +397,19 @@ class GEBModel(Module):
         Raises:
             RuntimeError: If forecast file for the current timestep is not found when forecasts are enabled in the config.
         """
+        forecasts_enabled: bool = self.config["general"]["forecasts"]["use"]
+        is_in_multiverse: bool = self.multiverse_name is not None
+        current_date_truthy: bool = bool(self.current_time.date())
+
+        self.logger.debug(
+            "Multiverse pre-check: forecasts_enabled=%s, multiverse_name=%s, current_time=%s, current_time_date=%s, date_truthy=%s",
+            forecasts_enabled,
+            self.multiverse_name,
+            self.current_time,
+            self.current_time.date().isoformat(),
+            current_date_truthy,
+        )
+
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
         if (
@@ -353,41 +418,64 @@ class GEBModel(Module):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            forecast_files: list[Path] = list(
-                (
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                ).glob("*.zarr")
-            )  # get all forecast files in the input folder
+            # forecast issue dates are stored as subdirectories named after the issue datetime
+            # (e.g. forecasts/ECMWF/merged_control_ensemble/20210710T000000/)
+            forecast_issue_dir: Path = (
+                self.input_folder
+                / "other"
+                / "forecasts"
+                / self.config["general"]["forecasts"]["provider"]
+                / self.config["general"]["forecasts"]["ensemble"]
+            )
+            forecast_date_dirs: list[Path] = (
+                [d for d in forecast_issue_dir.iterdir() if d.is_dir()]
+                if forecast_issue_dir.exists()
+                else []
+            )
+            self.logger.debug(
+                "Found %s forecast issue date directories in %s",
+                len(forecast_date_dirs),
+                forecast_issue_dir,
+            )
             forecast_issue_dates: list[
-                datetime.date
-            ] = []  # list to store forecast issue dates
-            for f in forecast_files:
-                datetime_str = f.stem.split("_")[
-                    -1
-                ]  # extract the datetime string from the filename
+                datetime.datetime
+            ] = []  # list to store forecast issue datetimes
+            for d in forecast_date_dirs:
+                datetime_str = d.name  # directory name is the issue datetime string
                 if (
                     datetime_str.replace("T", "").replace(":", "").isdigit()
                 ):  # Check if datetime string contains only digits, T, and colons (valid format)
                     dt = datetime.datetime.strptime(
                         datetime_str, "%Y%m%dT%H%M%S"
                     )  # convert the string to a datetime object
-                    forecast_issue_dates.append(dt)  # append the date to the list
+                    forecast_issue_dates.append(dt)
                 else:
                     raise RuntimeError(
-                        f"Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
+                        f"Forecast directory {d.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
                     )
 
             forecast_issue_dates = list(
                 set(forecast_issue_dates)
             )  # only keep unique dates
-
+            self.logger.debug(
+                "Unique forecast issue datetimes available: %s",
+                [dt.isoformat() for dt in sorted(forecast_issue_dates)],
+            )
+            forecast_issue_dates.sort()  # sort the datetimes in ascending order
             for dt in forecast_issue_dates:
+                self.logger.debug(
+                    "Checking forecast issue datetime: %s vs current model time: %s",
+                    dt,
+                    self.current_time,
+                )
+
                 if (
                     dt == self.current_time
                 ):  # change to include hours (for when we move to hourly)
+                    self.logger.debug(
+                        "Forecast issue datetime matched current model time: %s",
+                        dt.isoformat(),
+                    )
                     forecast_datetime = datetime.datetime.combine(
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
@@ -417,6 +505,19 @@ class GEBModel(Module):
                         self.agents.households.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
+                else:
+                    self.logger.debug(
+                        "No forecast match for current_time=%s against issue_datetime=%s",
+                        self.current_time.isoformat(),
+                        dt.isoformat(),
+                    )
+        else:
+            self.logger.debug(
+                "Skipping multiverse check: forecasts_enabled=%s, is_in_multiverse=%s, current_time_date_truthy=%s",
+                forecasts_enabled,
+                is_in_multiverse,
+                current_date_truthy,
+            )
 
         t0 = time()
         self.agents.step()

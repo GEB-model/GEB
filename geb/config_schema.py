@@ -595,6 +595,10 @@ class ParametersConfig(BaseModel):
         1.0, description="Water demand multiplier for industry."
     )
     lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
+    variable_runoff_shape_beta: float = Field(
+        0.0,
+        description="Shape parameter for variable infiltration capacity runoff.",
+    )
 
 
 class PlantFATEConfig(BaseModel):

@@ -887,7 +887,13 @@ class Reporter:
             store = zarr.storage.LocalStore(zarr_path, read_only=False)
             config["_store"] = store
 
-            root_group = zarr.open_group(store, mode="w")
+            resume_from_timestep = getattr(
+                self.model, "_report_resume_from_timestep", None
+            )
+            resume_existing = (
+                resume_from_timestep is not None and zarr_path.exists()
+            )
+            root_group = zarr.open_group(store, mode="r+" if resume_existing else "w")
             config["_root_group"] = root_group
 
             config["_index"] = 0
@@ -931,37 +937,68 @@ class Reporter:
                     else:
                         raster = self.hydrology.grid
 
-                    time = create_time_array(
-                        start=self.model.simulation_start,
-                        end=self.model.simulation_end,
-                        timestep=self.model.timestep_length,
-                        conf=config,
-                        substeps=substeps,
+                    resume_from_timestep = getattr(
+                        self.model, "_report_resume_from_timestep", None
                     )
+                    root_group = config["_root_group"]
+                    if (
+                        resume_from_timestep is not None
+                        and name in root_group
+                        and "time" in root_group
+                    ):
+                        zarr_array = root_group[name]
+                        assert isinstance(zarr_array, zarr.Array)
+                        chunk_size = int(zarr_array.chunks[0])
+                        config["_index"] = int(resume_from_timestep) * substeps
 
-                    chunk_size: int = get_time_chunk_size(
-                        value.dtype,
-                        raster.lat.size,
-                        raster.lon.size,
-                        target_size_bytes=self.config["chunk_target_size_bytes"],
-                    )
-                    chunk_size: int = min(chunk_size, time.size)
+                        fill_value = get_fill_value(value)[0]
+                        chunk_shape = (chunk_size, raster.lat.size, raster.lon.size)
+                        chunk_dtype = zarr_array.dtype
+                        buffer_fill_value = np.nan if fill_value is None else fill_value
+                        config["_chunk_data"] = np.full(
+                            chunk_shape,
+                            buffer_fill_value,
+                            dtype=chunk_dtype,
+                        )
 
-                    # ensure chunk size is multiple of substeps
-                    chunk_size: int = max(chunk_size // substeps, 1) * substeps
+                        chunk_remainder = config["_index"] % chunk_size
+                        if chunk_remainder > 0:
+                            chunk_start = (config["_index"] // chunk_size) * chunk_size
+                            config["_chunk_data"][:chunk_remainder, ...] = zarr_array[
+                                chunk_start : chunk_start + chunk_remainder, ...
+                            ]
+                    else:
+                        time = create_time_array(
+                            start=self.model.simulation_start,
+                            end=self.model.simulation_end,
+                            timestep=self.model.timestep_length,
+                            conf=config,
+                            substeps=substeps,
+                        )
 
-                    assert isinstance(raster.crs, str)
-                    prepare_gridded_group(
-                        name,
-                        config,
-                        raster.lon,
-                        raster.lat,
-                        raster.crs,
-                        value,
-                        time,
-                        chunk_size,
-                        self.config["compression_level"],
-                    )
+                        chunk_size = get_time_chunk_size(
+                            value.dtype,
+                            raster.lat.size,
+                            raster.lon.size,
+                            target_size_bytes=self.config["chunk_target_size_bytes"],
+                        )
+                        chunk_size = min(chunk_size, time.size)
+
+                        # ensure chunk size is multiple of substeps
+                        chunk_size = max(chunk_size // substeps, 1) * substeps
+
+                        assert isinstance(raster.crs, str)
+                        prepare_gridded_group(
+                            name,
+                            config,
+                            raster.lon,
+                            raster.lat,
+                            raster.crs,
+                            value,
+                            time,
+                            chunk_size,
+                            self.config["compression_level"],
+                        )
 
                 root_group = config["_root_group"]
 
@@ -1075,21 +1112,64 @@ class Reporter:
         elif type_ == "agents":
             if config["function"] is None:
                 if config["_index"] == 0:
-                    time = create_time_array(
-                        start=self.model.simulation_start,
-                        end=self.model.simulation_end,
-                        timestep=self.model.timestep_length,
-                        conf=config,
+                    resume_from_timestep = getattr(
+                        self.model, "_report_resume_from_timestep", None
                     )
+                    root_group = config["_root_group"]
+                    if (
+                        resume_from_timestep is not None
+                        and name in root_group
+                        and "time" in root_group
+                    ):
+                        zarr_array = root_group[name]
+                        assert isinstance(zarr_array, zarr.Array)
+                        chunk_size = int(zarr_array.chunks[0])
+                        config["_index"] = int(resume_from_timestep)
 
-                    prepare_agent_group(
-                        name,
-                        config,
-                        time,
-                        value,
-                        self.config["chunk_target_size_bytes"],
-                        self.config["compression_level"],
-                    )
+                        if zarr_array.ndim == 1:
+                            fill_value, _ = get_fill_value(np.asarray(value))
+                            buffer_fill_value = np.nan if fill_value is None else fill_value
+                            config["_chunk_data"] = np.full(
+                                (chunk_size,),
+                                buffer_fill_value,
+                                dtype=zarr_array.dtype,
+                            )
+                        else:
+                            if isinstance(value, DynamicArray):
+                                example_size = value.size
+                                fill_value, _ = get_fill_value(value)
+                            else:
+                                example_size = np.asarray(value).size
+                                fill_value, _ = get_fill_value(np.asarray(value))
+                            buffer_fill_value = np.nan if fill_value is None else fill_value
+                            config["_chunk_data"] = np.full(
+                                (chunk_size, example_size),
+                                buffer_fill_value,
+                                dtype=zarr_array.dtype,
+                            )
+
+                        chunk_remainder = config["_index"] % chunk_size
+                        if chunk_remainder > 0:
+                            chunk_start = (config["_index"] // chunk_size) * chunk_size
+                            config["_chunk_data"][:chunk_remainder, ...] = zarr_array[
+                                chunk_start : chunk_start + chunk_remainder, ...
+                            ]
+                    else:
+                        time = create_time_array(
+                            start=self.model.simulation_start,
+                            end=self.model.simulation_end,
+                            timestep=self.model.timestep_length,
+                            conf=config,
+                        )
+
+                        prepare_agent_group(
+                            name,
+                            config,
+                            time,
+                            value,
+                            self.config["chunk_target_size_bytes"],
+                            self.config["compression_level"],
+                        )
 
                 root_group = config["_root_group"]
                 value_store_array = root_group[name]
@@ -1170,8 +1250,9 @@ class Reporter:
     ) -> None:
         """Flush a specific chunk for grid/HRU variables.
 
-        We write directly to the zarr blocks to avoid the overhead of zarr's
-        indexing and slicing. This is possible because we are writing full chunks.
+        We write directly to zarr blocks for full chunks. For incomplete final
+        chunks, we fall back to slice-based writes because zarr blocks only
+        accept full chunk shapes.
 
         Args:
             group: The zarr group where the variable is stored.
@@ -1181,7 +1262,14 @@ class Reporter:
         """
         zarr_array = group[name]
         assert isinstance(zarr_array, zarr.Array)
-        zarr_array.blocks[chunk_index, ...] = buffer
+        time_chunk_size: int = int(zarr_array.chunks[0])
+        if buffer.shape[0] == time_chunk_size:
+            zarr_array.blocks[chunk_index, ...] = buffer
+            return
+
+        chunk_start: int = chunk_index * time_chunk_size
+        chunk_end: int = chunk_start + buffer.shape[0]
+        zarr_array[chunk_start:chunk_end, ...] = buffer
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
@@ -1193,7 +1281,11 @@ class Reporter:
         # Flush any remaining buffers
         for module_name, configs in self.model.config["report"].items():
             for name, config in configs.items():
-                if "function" in config and config["function"] is None:
+                if (
+                    "function" in config
+                    and config["function"] is None
+                    and "_chunk_data" in config  # guard: variable may never have been written
+                ):
                     chunk_time_size: int = config["_chunk_data"].shape[0]
                     buffer_end: int = config["_index"] % chunk_time_size
                     if buffer_end == 0:
@@ -1261,3 +1353,58 @@ class Reporter:
     @is_activated.setter
     def is_activated(self, value: bool) -> None:
         self._is_activated = value
+
+    # Keys lazily written into each variable's config dict during a run.
+    # These must be cleared when redirecting output to a different folder.
+    _RUNTIME_KEYS: tuple[str, ...] = (
+        "path",
+        "_store",
+        "_root_group",
+        "_index",
+        "_chunk_data",
+        "substeps",
+    )
+
+    def _save_and_clear_runtime_state(
+        self,
+    ) -> tuple[dict[str, dict[str, dict[str, Any]]], dict[str, Any]]:
+        """Save and remove all lazily-initialized runtime keys from every variable config.
+
+        This is used at the start of each forecast member run so the reporter
+        creates fresh zarr files in the member-specific output folder, while
+        the original run's state is preserved for later restoration.
+
+        Returns:
+            A tuple of (saved_config_state, saved_variables) that can be passed
+            to _restore_runtime_state once the member run is finalised.
+        """
+        saved_state: dict[str, dict[str, dict[str, Any]]] = {}
+        for module_name, configs in self.model.config["report"].items():
+            saved_state[module_name] = {}
+            for var_name, config in configs.items():
+                saved_state[module_name][var_name] = {
+                    k: config.pop(k) for k in self._RUNTIME_KEYS if k in config
+                }
+        saved_variables = self.variables
+        self.variables = {}
+        return saved_state, saved_variables
+
+    def _restore_runtime_state(
+        self,
+        saved_state: dict[str, dict[str, dict[str, Any]]],
+        saved_variables: dict[str, Any],
+    ) -> None:
+        """Restore previously saved runtime keys into variable configs.
+
+        Called after a forecast member run has been finalised to reinstate the
+        original run's zarr stores, indices and buffers so the main run can
+        continue writing to its own report folder.
+
+        Args:
+            saved_state: The config-key snapshot returned by _save_and_clear_runtime_state.
+            saved_variables: The variables snapshot returned by _save_and_clear_runtime_state.
+        """
+        for module_name, var_states in saved_state.items():
+            for var_name, state in var_states.items():
+                self.model.config["report"][module_name][var_name].update(state)
+        self.variables = saved_variables
