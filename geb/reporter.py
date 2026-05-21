@@ -266,6 +266,16 @@ WATER_STORAGE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
             "type": "HRU",
             "function": "weightedmean",
         },
+        "_snow_water_equivalent_m_top": {
+            "varname": "HRU.var.snow_water_equivalent_m[:,0]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_snow_water_equivalent_m_bottom": {
+            "varname": "HRU.var.snow_water_equivalent_m[:,1]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
     },
 }
 

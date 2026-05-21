@@ -3,25 +3,157 @@
 import numpy as np
 from numba import njit
 
-from geb.geb_types import Shape
+from geb.geb_types import ArrayFloat32, Shape
 from geb.workflows.numba_stack_array import stack_empty
 
 from .constants import (
     C_MINERAL_VOLUMETRIC_J_PER_M3_K,
+    KELVIN_OFFSET,
     L_FUSION_J_PER_KG,
     L_SUBLIMATION_J_PER_KG,
     L_VAPORIZATION_J_PER_KG,
-    LAMBDA_OTHER_FINE,
-    LAMBDA_QUARTZ,
     N_SOIL_LAYERS,
     RHO_MINERAL_KG_PER_M3,
     RHO_WATER_KG_PER_M3,
+    SNOW_EMISSIVITY,
+    SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
     STEFAN_BOLTZMANN_W_PER_M2_K4,
+    THERMAL_CONDUCTIVITY_NON_QUARTZ_WATT_PER_MKELVIN,
+    THERMAL_CONDUCTIVITY_QUARTZ_WATT_PER_MKELVIN,
     VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K,
     VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K,
 )
 from .potential_evapotranspiration import get_canopy_radiation_attenuation
-from .snow_glaciers import calculate_snow_thermal_properties
+
+N_SNOW_LAYERS: int = 2
+_N_COUPLED_SURFACE_LAYERS: int = N_SOIL_LAYERS + N_SNOW_LAYERS
+MIN_ACTIVE_SNOW_SWE_M: np.float64 = np.float64(1.0e-6)
+
+
+@njit(cache=True, inline="always")
+def calculate_snow_thermal_properties(
+    snow_water_equivalent_m: np.float64,
+) -> tuple[np.float32, np.float64, np.float32]:
+    """Calculate snow density, depth, and thermal conductivity.
+
+    This local helper mirrors the snow-module parameterization so the energy
+    module can remain independent from snow module imports.
+
+    Args:
+        snow_water_equivalent_m: Snow water equivalent [m].
+
+    Returns:
+        Tuple of:
+            - Snow density [kg/m3].
+            - Snow depth [m].
+            - Thermal conductivity [W/m/K].
+    """
+    snow_density_kg_per_m3: np.float32 = min(
+        np.float32(550.0),
+        np.float32(150.0)
+        + np.float32(400.0)
+        * np.float32(
+            snow_water_equivalent_m,
+        ),
+    )
+
+    # Based on Anderson (2019)
+    # Full report: https://repository.library.noaa.gov/view/noaa/6392
+    # Implementation in Community Firn Model:
+    # https://github.com/UWGlaciology/CommunityFirnModel/blob/main/CFM_main/diffusion.py
+    snow_thermal_conductivity: np.float32 = (
+        np.float32(0.021)
+        + np.float32(2.5) * (snow_density_kg_per_m3 / np.float32(1000.0)) ** 2
+    )
+    snow_depth_m: np.float64 = snow_water_equivalent_m / (
+        snow_density_kg_per_m3 / np.float32(1000.0)
+    )
+    return snow_density_kg_per_m3, snow_depth_m, snow_thermal_conductivity
+
+
+@njit(cache=True, inline="always")
+def calculate_snow_thermal_conductivity_from_density(
+    snow_density_kg_per_m3: np.float32,
+) -> np.float32:
+    """Calculate snow thermal conductivity from bulk density.
+
+    Args:
+        snow_density_kg_per_m3: Snow density (kg/m3).
+
+    Returns:
+        Snow thermal conductivity (W/m/K).
+    """
+    # See Sturm et al. 1997;  equation in abstract
+    # https://doi.org/10.3189/S0022143000002781
+    rho_g_per_cm3: np.float32 = snow_density_kg_per_m3 / np.float32(1000.0)
+    if rho_g_per_cm3 < np.float32(0.156):
+        return np.float32(0.023) + np.float32(0.234) * rho_g_per_cm3
+    else:
+        return (
+            np.float32(0.138)
+            - np.float32(1.01) * rho_g_per_cm3
+            + np.float32(3.233) * (rho_g_per_cm3**2)
+        )
+
+
+@njit(cache=True, inline="always", fastmath=True)
+def calculate_snow_net_radiation_flux(
+    shortwave_radiation_W_per_m2: np.float32,
+    longwave_radiation_W_per_m2: np.float32,
+    snow_temperature_C: np.float32,
+    total_snow_water_equivalent_m: np.float32,
+    snow_albedo_min: np.float32 = np.float32(0.4),
+    snow_albedo_max: np.float32 = np.float32(0.9),
+    snow_albedo_decay_per_mm: np.float32 = np.float32(0.01),
+    snow_radiation_coefficient: np.float32 = np.float32(1.0),
+) -> tuple[np.float32, np.float32]:
+    """Calculate net snow radiation flux and its derivative.
+
+    Args:
+        shortwave_radiation_W_per_m2: Incoming shortwave radiation (W/m2).
+        longwave_radiation_W_per_m2: Incoming longwave radiation (W/m2).
+        snow_temperature_C: Snow surface-layer temperature (C).
+        total_snow_water_equivalent_m: Total snow water equivalent (m).
+        snow_albedo_min: Minimum snow albedo (-).
+        snow_albedo_max: Maximum snow albedo (-).
+        snow_albedo_decay_per_mm: Snow albedo decay coefficient (per mm SWE).
+        snow_radiation_coefficient: Multiplier applied to net shortwave radiation (-).
+
+    Returns:
+        Tuple of:
+            - Net radiation flux into snow (W/m2).
+            - Derivative of the net radiation with respect to snow temperature (W/m2/K).
+    """
+    # Albedo should approach snow_albedo_max as SWE increases,
+    # and approach snow_albedo_min (ground influence) as SWE -> 0.
+    albedo: np.float32 = snow_albedo_max - (snow_albedo_max - snow_albedo_min) * np.exp(
+        -snow_albedo_decay_per_mm
+        * min(total_snow_water_equivalent_m, np.float32(10.0))
+        * np.float32(1000.0)
+    )
+
+    absorbed_shortwave_W_per_m2: np.float32 = (
+        (np.float32(1.0) - albedo)
+        * snow_radiation_coefficient
+        * shortwave_radiation_W_per_m2
+    )
+
+    snow_temperature_K: np.float32 = snow_temperature_C + KELVIN_OFFSET
+    outgoing_longwave_W_per_m2: np.float32 = (
+        SNOW_EMISSIVITY * STEFAN_BOLTZMANN_W_PER_M2_K4 * (snow_temperature_K**4)
+    )
+    net_radiation_flux_W_per_m2: np.float32 = (
+        absorbed_shortwave_W_per_m2
+        + longwave_radiation_W_per_m2
+        - outgoing_longwave_W_per_m2
+    )
+    conductance_W_per_m2_K: np.float32 = (
+        np.float32(4.0)
+        * SNOW_EMISSIVITY
+        * STEFAN_BOLTZMANN_W_PER_M2_K4
+        * (snow_temperature_K**3)
+    )
+    return net_radiation_flux_W_per_m2, conductance_W_per_m2_K
 
 
 @njit(cache=True)
@@ -64,6 +196,7 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
     r"""Calculate the thermal conductivity of the solid fraction of soil [W/(m·K)].
 
     Based on: https://apps.dtic.mil/sti/tr/pdf/ADA044002.pdf
+    See equation 2 on page 102.
 
     The thermal conductivity of the solid fraction ($\lambda_s$) is calculated as a
     geometric mean of the conductivity of quartz ($\lambda_q$) and other minerals ($\lambda_o$):
@@ -82,8 +215,6 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
     Returns:
         Thermal conductivity of the solid fraction [W/(m·K)].
     """
-    # Estimate from sand if not provided (ensuring it is bounded between 0 and 1)
-    # Ensure it's bounded [0, 1]
     quartz_ratio = np.minimum(
         np.maximum(sand_percentage / np.float32(100.0), np.float32(0.0)),
         np.float32(1.0),
@@ -91,30 +222,85 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
 
     # Geometric mean calculation
     # lambda_s = (lambda_quartz^q) * (lambda_other^(1-q))
-    lambda_s = (LAMBDA_QUARTZ**quartz_ratio) * (
-        LAMBDA_OTHER_FINE ** (np.float32(1.0) - quartz_ratio)
+    thermal_conductivity_solid_fraction = (
+        THERMAL_CONDUCTIVITY_QUARTZ_WATT_PER_MKELVIN**quartz_ratio
+    ) * (
+        THERMAL_CONDUCTIVITY_NON_QUARTZ_WATT_PER_MKELVIN
+        ** (np.float32(1.0) - quartz_ratio)
     )
 
-    return lambda_s
+    return thermal_conductivity_solid_fraction
+
+
+@njit(cache=True)
+def calculate_thermal_conductivity_dry_soil_johansen_watt_per_meter_kelvin(
+    bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
+    """Calculate the dry thermal conductivity of soil using Johansen (1975) [W/(m·K)].
+
+    Formula: lambda_dry = (0.135 * rho_d + 64.7) / (2700 - 0.947 * rho_d)
+    where rho_d is the dry bulk density in kg/m3.
+
+    Args:
+        bulk_density_kg_per_dm3: Soil bulk density [kg/dm3].
+
+    Returns:
+        Dry thermal conductivity [W/(m·K)].
+    """
+    bulk_density_kg_per_m3 = bulk_density_kg_per_dm3 * np.float32(1000.0)
+    thermal_conductivity_dry = (
+        np.float32(0.135) * bulk_density_kg_per_m3 + np.float32(64.7)
+    ) / (np.float32(2700.0) - np.float32(0.947) * bulk_density_kg_per_m3)
+    return thermal_conductivity_dry
+
+
+@njit(cache=True)
+def calculate_thermal_conductivity_saturated_soil_johansen_watt_per_meter_kelvin(
+    thermal_conductivity_solid_fraction: np.ndarray[Shape, np.dtype[np.float32]],
+    porosity: np.ndarray[Shape, np.dtype[np.float32]],
+    thermal_conductivity_fluid: np.float32,
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
+    """Calculate the saturated thermal conductivity of soil using Johansen (1975).
+
+    Formula: lambda = lambda_s^(1-n) * lambda_fluid^n
+    where n is porosity and lambda_s is the solid-fraction conductivity.
+
+    Args:
+        thermal_conductivity_solid_fraction: Conductivity of the solid fraction [W/(m·K)].
+        porosity: Soil porosity [-].
+        thermal_conductivity_fluid: Conductivity of the fluid phase (water or ice) [W/(m·K)].
+
+    Returns:
+        Saturated thermal conductivity [W/(m·K)].
+    """
+    thermal_conductivity_saturated = (
+        thermal_conductivity_solid_fraction ** (np.float32(1.0) - porosity)
+    ) * (thermal_conductivity_fluid**porosity)
+    return thermal_conductivity_saturated
 
 
 @njit(cache=True, inline="always", fastmath=True)
 def calculate_soil_thermal_conductivity(
     thermal_conductivity_saturated_unfrozen: np.float32,
     thermal_conductivity_saturated_frozen: np.float32,
-    bulk_density_kg_per_dm3: np.float32,
+    thermal_conductivity_dry_soil_W_per_m_K: np.float32,
     degree_of_saturation: np.float32,
     sand_percentage: np.float32,
     frozen_fraction: np.float32,
 ) -> np.float32:
     """Calculate the effective thermal conductivity of the soil layer [W/(m·K)].
 
-        This function calculates the effective thermal conductivity of a soil layer based on the Côté-Konrad model, which accounts for the effects of soil texture, moisture content, and freezing.
+    Uses the Côté-Konrad (2005) model:
+
+        λ = Ke · (λ_sat - λ_dry) + λ_dry
+
+    which interpolates linearly between λ_dry (at Sr = 0) and λ_sat (at Sr = 1)
+    via the Kersten number Ke.
 
     Args:
         thermal_conductivity_saturated_unfrozen: Thermal conductivity of the soil when fully saturated and unfrozen [W/(m·K)].
         thermal_conductivity_saturated_frozen: Thermal conductivity of the soil when fully saturated and frozen [W/(m·K)].
-        bulk_density_kg_per_dm3: Soil bulk density [kg/dm3].
+        thermal_conductivity_dry_soil_W_per_m_K: Thermal conductivity of dry soil [W/(m·K)].
         degree_of_saturation: Degree of saturation (Sr) [0-1].
         sand_percentage: Percentage of sand in the soil [0-100].
         frozen_fraction: Fraction of the soil water that is frozen [0-1].
@@ -122,19 +308,13 @@ def calculate_soil_thermal_conductivity(
     Returns:
         Effective thermal conductivity of the soil layer [W/(m·K)].
     """
-    # Formula developed by Johansen (1975): https://apps.dtic.mil/sti/tr/pdf/ADA044002.pdf
-    # Constants from NoahLSM: https://github.com/NOAA-EMC/NoahLSM/blob/a1644011e3e0428396eeb8340d878c32a5bbcae6/sorc/sflx.f#L2910
-    # bulk_density converted from kg/dm3 (g/cm3) to kg/m3
-    rho_d = bulk_density_kg_per_dm3 * np.float32(1000.0)
-    lambda_dry: np.float32 = (np.float32(0.135) * rho_d + np.float32(64.7)) / (
-        np.float32(2700.0) - np.float32(0.947) * rho_d
-    )
-
     # Calculate Côté-Konrad kappa (https://doi.org/10.1139/t04-106)
-    # Unfrozen: 1.9 (silt/clay) to 4.6 (sand)
     sand_fraction: np.float32 = sand_percentage * np.float32(0.01)
+    # Unfrozen: 1.9 (silt/clay) to 4.6 (sand)
+    # 1.9 * (1 - sand_fraction) + 4.6 * sand_fraction = 1.9 + 2.7 * sand_fraction
     kappa_unfrozen: np.float32 = np.float32(1.9) + np.float32(2.7) * sand_fraction
     # Frozen: 0.85 (silt/clay) to 1.7 (sand)
+    # 0.85 * (1 - sand_fraction) + 1.7 * sand_fraction = 0.85 + 0.85 * sand_fraction
     kappa_frozen: np.float32 = np.float32(0.85) + np.float32(0.85) * sand_fraction
 
     # Linearly combine kappa based on the frozen fraction
@@ -150,12 +330,19 @@ def calculate_soil_thermal_conductivity(
     )
 
     # Combine saturated conductivities linearly
-    lambda_sat: np.float32 = (
+    thermal_conductivity_saturated_soil: np.float32 = (
         frozen_fraction * thermal_conductivity_saturated_frozen
         + (np.float32(1.0) - frozen_fraction) * thermal_conductivity_saturated_unfrozen
     )
 
-    return Ke * (lambda_sat - lambda_dry) + lambda_dry
+    return (
+        Ke
+        * (
+            thermal_conductivity_saturated_soil
+            - thermal_conductivity_dry_soil_W_per_m_K
+        )
+        + thermal_conductivity_dry_soil_W_per_m_K
+    )
 
 
 @njit(cache=True, inline="always", fastmath=True)
@@ -170,9 +357,9 @@ def calculate_net_radiation_flux(
 ) -> tuple[np.float32, np.float32]:
     """Calculate the net radiation energy flux and its derivative.
 
-    Calculates absorbed incoming radiation - outgoing longwave radiation.
-    Also returns the derivative of the outgoing longwave radiation with respect to temperature,
-    which can be used for stability calculations in explicit schemes or damping in implicit schemes.
+    Calculates absorbed incoming radiation and outgoing longwave radiation,
+    and the derivative of the outgoing longwave radiation with respect to
+    soil temperature (conductance equivalent).
 
     Args:
         shortwave_radiation_W_per_m2: Incoming shortwave [W/m2].
@@ -188,13 +375,14 @@ def calculate_net_radiation_flux(
             - Net radiation flux [W/m2]. Positive = warming (incoming > outgoing).
             - Derivative of outgoing radiation flux [W/m2/K] (Conductance equivalent).
     """
-    # Calculate Fluxes
-    temperature_K = soil_temperature_C + np.float32(273.15)
+    temperature_K: np.float32 = soil_temperature_C + KELVIN_OFFSET
 
-    # Beer's law attenuation factor
-    attenuation_factor = get_canopy_radiation_attenuation(leaf_area_index)
+    # Beer's law attenuation factor, i.e., the fraction of radiation reaching the soil surface
+    # after canopy attenuation
+    attenuation_factor: np.float32 = get_canopy_radiation_attenuation(leaf_area_index)
 
-    absorbed_shortwave_W = (
+    # Shortwave radiation absorbed by the soil
+    absorbed_shortwave_W: np.float32 = (
         (np.float32(1.0) - soil_albedo)
         * shortwave_radiation_W_per_m2
         * attenuation_factor
@@ -202,28 +390,43 @@ def calculate_net_radiation_flux(
 
     # Longwave radiation reaching the soil
     # Atmospheric longwave transmitted through canopy
-    transmitted_longwave_W = longwave_radiation_W_per_m2 * attenuation_factor
+    transmitted_longwave_W: np.float32 = (
+        longwave_radiation_W_per_m2 * attenuation_factor
+    )
 
-    # Emissions from canopy
-    # We assume canopy temperature ~= air temperature
-    canopy_longwave_W = (
+    # The canopy emits longwave radiation based on its temperature and emissivity,
+    # and some of that reaches the soil surface. We assume canopy temperature is
+    # equal to air temperature.
+    canopy_longwave_W: np.float32 = (
         STEFAN_BOLTZMANN_W_PER_M2_K4
         * (air_temperature_K**4)
         * (np.float32(1.0) - attenuation_factor)
     )
 
-    incoming_longwave_at_soil_surface_W = transmitted_longwave_W + canopy_longwave_W
+    incoming_longwave_at_soil_surface_W: np.float32 = (
+        transmitted_longwave_W + canopy_longwave_W
+    )
 
-    absorbed_longwave_W = soil_emissivity * incoming_longwave_at_soil_surface_W
+    absorbed_longwave_W: np.float32 = (
+        soil_emissivity * incoming_longwave_at_soil_surface_W
+    )
 
-    incoming_W = absorbed_shortwave_W + absorbed_longwave_W
-    outgoing_W = soil_emissivity * STEFAN_BOLTZMANN_W_PER_M2_K4 * (temperature_K**4)
+    # Total incoming radiation is the sum of absorbed shortwave and absorbed longwave
+    incoming_W: np.float32 = absorbed_shortwave_W + absorbed_longwave_W
 
-    net_flux_W = incoming_W - outgoing_W
+    # Outing longwave radiation from the soil surface (Stefan-Boltzmann law)
+    outgoing_W: np.float32 = (
+        soil_emissivity * STEFAN_BOLTZMANN_W_PER_M2_K4 * (temperature_K**4)
+    )
+
+    net_flux_W: np.float32 = incoming_W - outgoing_W
 
     # Calculate Derivative of Outgoing Radiation with respect to T:
     # d(sigma * eps * T^4)/dT = 4 * sigma * eps * T^3
-    conductance_W_per_m2_K = (
+    # Note that the derivate below only includes the temperature-dependent outgoing flux
+    # However, because these are assumed to be constant with respect to soil temperature,
+    # we treat them as constants and thus their derivative is zero.
+    conductance_W_per_m2_K: np.float32 = (
         np.float32(4.0)
         * soil_emissivity
         * STEFAN_BOLTZMANN_W_PER_M2_K4
@@ -231,6 +434,57 @@ def calculate_net_radiation_flux(
     )
 
     return net_flux_W, conductance_W_per_m2_K
+
+
+@njit(cache=True, inline="always")
+def calculate_aerodynamic_conductance_W_per_m2_K(
+    air_temperature_K: np.float32,
+    wind_speed_10m_m_per_s: np.float32,
+    surface_pressure_pa: np.float32,
+) -> np.float32:
+    """Calculate the aerodynamic conductance for sensible and latent heat.
+
+    Args:
+        air_temperature_K: Air temperature at reference height [K].
+        wind_speed_10m_m_per_s: Wind speed at 10m height [m/s].
+        surface_pressure_pa: Surface air pressure [Pa].
+
+    Returns:
+        Aerodynamic conductance [W/m2/K].
+    """
+    # Physics Constants
+    SPECIFIC_HEAT_AIR_J_KG_K: np.float32 = np.float32(1005.0)
+    GAS_CONSTANT_AIR_J_KG_K: np.float32 = np.float32(287.058)
+    VON_KARMAN_CONSTANT: np.float32 = np.float32(0.41)
+
+    # Assumptions for Aerodynamic Resistance over bare soil/snow
+    WIND_MEASUREMENT_HEIGHT_M: np.float32 = np.float32(10.0)
+    TEMP_MEASUREMENT_HEIGHT_M: np.float32 = np.float32(2.0)
+    ROUGHNESS_LENGTH_M: np.float32 = np.float32(0.001)
+
+    # Calculate Air Density [kg/m3]
+    air_density_kg_per_m3: np.float32 = surface_pressure_pa / (
+        GAS_CONSTANT_AIR_J_KG_K * air_temperature_K
+    )
+
+    # Use minimum wind speed to avoid extreme resistances and numerical instability
+    wind_speed_10m_m_per_s = np.maximum(wind_speed_10m_m_per_s, np.float32(0.1))
+
+    log_wind_height_over_roughness = np.log(
+        WIND_MEASUREMENT_HEIGHT_M / ROUGHNESS_LENGTH_M
+    )
+    log_temp_height_over_roughness = np.log(
+        TEMP_MEASUREMENT_HEIGHT_M / ROUGHNESS_LENGTH_M
+    )
+
+    aerodynamic_resistance_s_per_m = (
+        log_wind_height_over_roughness * log_temp_height_over_roughness
+    ) / (VON_KARMAN_CONSTANT**2 * wind_speed_10m_m_per_s)
+
+    # Calculate Conductance [W/m2/K]
+    return (
+        air_density_kg_per_m3 * SPECIFIC_HEAT_AIR_J_KG_K
+    ) / aerodynamic_resistance_s_per_m
 
 
 @njit(cache=True, inline="always", fastmath=True)
@@ -253,54 +507,20 @@ def calculate_sensible_heat_flux(
             - Sensible heat flux [W/m2]. Positive = warming (Heat flow from Air to Soil).
             - Aerodynamic conductance [W/m2/K].
     """
-    # Physics Constants
-    SPECIFIC_HEAT_AIR_J_KG_K: np.float32 = np.float32(1005.0)
-    GAS_CONSTANT_AIR_J_KG_K: np.float32 = np.float32(287.058)
-    VON_KARMAN_CONSTANT: np.float32 = np.float32(0.41)
-
-    # Assumptions for Aerodynamic Resistance over bare soil
-    WIND_MEASUREMENT_HEIGHT_M: np.float32 = np.float32(10.0)
-    TEMP_MEASUREMENT_HEIGHT_M: np.float32 = np.float32(2.0)
-    ROUGHNESS_LENGTH_M: np.float32 = np.float32(0.001)
-
-    # Calculate Air Density [kg/m3]
-    # Ideal Gas Law: rho = P / (R * T)
-    # Using air temperature for density calculation
-    air_density_kg_per_m3: np.float32 = surface_pressure_pa / (
-        GAS_CONSTANT_AIR_J_KG_K * air_temperature_K
+    conductance_W_per_m2_K: np.float32 = calculate_aerodynamic_conductance_W_per_m2_K(
+        air_temperature_K,
+        wind_speed_10m_m_per_s,
+        surface_pressure_pa,
     )
-
-    # Calculate Aerodynamic Resistance (ra) [s/m]
-    # For neutral conditions: ra = (ln((zm-d)/z0m) * ln((zh-d)/z0h)) / (k^2 * u)
-    # Assuming d=0, z0m=z0h=z0
-    # where zm = wind measurement height, zh = temp measurement height, z0 = roughness length, u = wind speed
-
-    # Ensure minimum wind speed to avoid division by zero
-    wind_speed_safe = np.maximum(wind_speed_10m_m_per_s, np.float32(0.1))
-
-    log_wind_height_over_roughness = np.log(
-        WIND_MEASUREMENT_HEIGHT_M / ROUGHNESS_LENGTH_M
-    )
-    log_temp_height_over_roughness = np.log(
-        TEMP_MEASUREMENT_HEIGHT_M / ROUGHNESS_LENGTH_M
-    )
-
-    aerodynamic_resistance_s_per_m = (
-        log_wind_height_over_roughness * log_temp_height_over_roughness
-    ) / (VON_KARMAN_CONSTANT**2 * wind_speed_safe)
-
-    # Calculate Conductance [W/m2/K]
-    # Conductance = rho * Cp / ra
-    conductance_W_per_m2_K = (
-        air_density_kg_per_m3 * SPECIFIC_HEAT_AIR_J_KG_K
-    ) / aerodynamic_resistance_s_per_m
 
     # Calculate Explicit Sensible Heat Flux [W/m2]
     # H = Conductance * (Ta - Ts)
-    air_temperature_C = air_temperature_K - np.float32(273.15)
-    temperature_difference_C = air_temperature_C - soil_temperature_C
+    air_temperature_C: np.float32 = air_temperature_K - KELVIN_OFFSET
+    temperature_difference_C: np.float32 = air_temperature_C - soil_temperature_C
 
-    sensible_heat_flux_W_per_m2 = conductance_W_per_m2_K * temperature_difference_C
+    sensible_heat_flux_W_per_m2: np.float32 = (
+        conductance_W_per_m2_K * temperature_difference_C
+    )
 
     return sensible_heat_flux_W_per_m2, conductance_W_per_m2_K
 
@@ -602,17 +822,17 @@ def apply_rain_heat_advection(
 _N_SOIL_LAYERS_PLUS_ONE: int = N_SOIL_LAYERS + 1
 
 
-@njit(cache=True, inline="always")
+@njit(cache=True)
 def solve_soil_enthalpy_column(
-    soil_enthalpies_J_per_m2: np.ndarray,
-    layer_thicknesses_m: np.ndarray,
-    bulk_density_kg_per_dm3: np.ndarray,
-    solid_heat_capacities_J_per_m2_K: np.ndarray,
-    thermal_conductivity_saturated_unfrozen_W_per_m_K: np.ndarray,
-    thermal_conductivity_saturated_frozen_W_per_m_K: np.ndarray,
-    water_content_saturated_m: np.ndarray,
-    sand_percentage: np.ndarray,
-    water_content_m: np.ndarray,
+    soil_enthalpies_J_per_m2: ArrayFloat32,
+    layer_thicknesses_m: ArrayFloat32,
+    thermal_conductivity_dry_soil_W_per_m_K: ArrayFloat32,
+    solid_heat_capacities_J_per_m2_K: ArrayFloat32,
+    thermal_conductivity_saturated_unfrozen_W_per_m_K: ArrayFloat32,
+    thermal_conductivity_saturated_frozen_W_per_m_K: ArrayFloat32,
+    water_content_saturated_m: ArrayFloat32,
+    sand_percentage: ArrayFloat32,
+    water_content_m: ArrayFloat32,
     shortwave_radiation_W_per_m2: np.float32,
     longwave_radiation_W_per_m2: np.float32,
     air_temperature_K: np.float32,
@@ -623,32 +843,29 @@ def solve_soil_enthalpy_column(
     soil_emissivity: np.float32,
     soil_albedo: np.float32,
     leaf_area_index: np.float32,
-    snow_water_equivalent_m: np.float64,
-    snow_temperature_C: np.float32,
+    snow_water_equivalent_m: ArrayFloat32,
+    snow_enthalpy_J_per_m2: ArrayFloat32,
+    snow_density_kg_per_m3: ArrayFloat32,
     topwater_m: np.float32,
 ) -> tuple[np.float32, np.float32]:
-    """Solve the soil enthalpy profile with an implicit scheme.
-
-    The prognostic state is enthalpy H (J/m2) per layer. Temperature and frozen fraction
-    are derived diagnostically each nonlinear iteration using a sharp-freezing enthalpy
-    formulation (0°C plateau).
+    """Solve the coupled snow-soil enthalpy profile with an implicit scheme.
 
     Notes:
-        The diffusion term depends on temperature gradients, so we linearize temperature
-        w.r.t. enthalpy each iteration using $T \approx \alpha H + \beta$ where
-        $\alpha = \partial T/\partial H$.
-
-        For performance and robustness, the soil thermal conductivity is held fixed
-        over the timestep. It is computed once from the start-of-timestep frozen
-        fraction and then reused for all nonlinear iterations.
-
-        The input `soil_enthalpies_J_per_m2` is updated in place.
+        The solver uses a two-step approach for snow thermal coupling:
+        1.  Active snow layers (SWE > MIN_ACTIVE_SNOW_SWE_M) are fully coupled
+            into the tridiagonal matrix as part of the thermal column.
+        2.  Inactive snow layers (trace SWE below the threshold) are excluded
+            from the matrix for numerical stability. However, they are thermally
+            synchronized with the top soil layer (assigned the same temperature).
+            This synchronization prevents "zombie snow" where trace mass is
+            thermally isolated and stuck at 0°C, ensuring it eventually melts or
+            sublimates when the soil warms up.
 
     Args:
         soil_enthalpies_J_per_m2: Current layer enthalpies (J/m2).
         layer_thicknesses_m: Layer thicknesses (m).
-        bulk_density_kg_per_dm3: Soil bulk density (kg/dm3).
-        solid_heat_capacities_J_per_m2_K: Areal heat capacity of the solid fraction (J/m2/K).
+        thermal_conductivity_dry_soil_W_per_m_K: Thermal conductivity of dry soil per layer (W/m/K).
+        solid_heat_capacities_J_per_m2_K: Areal heat capacity of the solid fraction (J/m2/K). Areal heat capacity of the solid fraction (J/m2/K).
         thermal_conductivity_saturated_unfrozen_W_per_m_K: Saturated conductivity in
             unfrozen state (W/m/K).
         thermal_conductivity_saturated_frozen_W_per_m_K: Saturated conductivity in
@@ -666,8 +883,9 @@ def solve_soil_enthalpy_column(
         soil_emissivity: Soil emissivity (-).
         soil_albedo: Soil albedo (-).
         leaf_area_index: Leaf area index (-).
-        snow_water_equivalent_m: Snow water equivalent (m).
-        snow_temperature_C: Snow temperature (C).
+        snow_water_equivalent_m: Snow water equivalent per snow layer (m).
+        snow_enthalpy_J_per_m2: Snow enthalpy per snow layer (J/m2).
+        snow_density_kg_per_m3: Snow density per snow layer (kg/m3).
         topwater_m: Standing water depth (m).
 
     Returns:
@@ -675,28 +893,67 @@ def solve_soil_enthalpy_column(
             - Soil heat flux (W/m2).
             - Top-layer frozen fraction (0-1).
     """
-    lower_diagonal_a = stack_empty(N_SOIL_LAYERS, np.float32)
-    main_diagonal_b = stack_empty(N_SOIL_LAYERS, np.float32)
-    upper_diagonal_c = stack_empty(N_SOIL_LAYERS, np.float32)
-    rhs_vector_d = stack_empty(N_SOIL_LAYERS, np.float32)
+    lower_diagonal_a = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
+    main_diagonal_b = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
+    upper_diagonal_c = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
+    rhs_vector_d = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
     thermal_conductances_between_layer_centers_W_per_m2_K = stack_empty(
-        _N_SOIL_LAYERS_PLUS_ONE, dtype=np.float32
+        _N_COUPLED_SURFACE_LAYERS, dtype=np.float32
     )
-    dT_dH_linearized = stack_empty(N_SOIL_LAYERS, dtype=np.float32)
-    beta_linearized = stack_empty(N_SOIL_LAYERS, dtype=np.float32)
+    dT_dH_linearized = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
+    beta_linearized = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
+    conductivities_W_per_m_K = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
+    half_layer_thicknesses_m = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
+    enthalpies_at_start_of_timestep = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, dtype=np.float32
+    )
+    enthalpies_updated = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
 
-    # Keep start-of-step values for the implicit system RHS and linearization.
-    # The enthalpy array is updated in place by the tridiagonal solve.
-    enthalpies_at_start_of_timestep = soil_enthalpies_J_per_m2
-    enthalpies_updated = soil_enthalpies_J_per_m2
+    n_active_snow_layers = 0
+    for snow_layer_idx in range(N_SNOW_LAYERS):
+        if snow_water_equivalent_m[
+            snow_layer_idx
+        ] > MIN_ACTIVE_SNOW_SWE_M and snow_density_kg_per_m3[
+            snow_layer_idx
+        ] > np.float32(0.0):
+            n_active_snow_layers += 1
 
-    surface_temperature_guess_C = np.float32(0.0)
-    top_layer_latent_heat_areal_J_per_m2 = np.float32(0.0)
-    top_layer_heat_capacity_liquid_J_per_m2_K = np.float32(0.0)
-    top_layer_heat_capacity_frozen_J_per_m2_K = np.float32(0.0)
+    n_total_layers: int = n_active_snow_layers + N_SOIL_LAYERS
 
-    lambda_previous_layer_W_per_m_K = np.float32(0.0)
+    surface_temperature_guess_C: np.float32 = np.float32(0.0)
+    top_layer_latent_heat_areal_J_per_m2: np.float32 = np.float32(0.0)
+    top_layer_heat_capacity_liquid_J_per_m2_K: np.float32 = np.float32(0.0)
+    top_layer_heat_capacity_frozen_J_per_m2_K: np.float32 = np.float32(0.0)
+
+    for snow_layer_idx in range(n_active_snow_layers):
+        swe_m: np.float64 = snow_water_equivalent_m[snow_layer_idx]
+        enthalpy_J_per_m2: np.float32 = snow_enthalpy_J_per_m2[snow_layer_idx]
+        density_kg_per_m3: np.float32 = snow_density_kg_per_m3[snow_layer_idx]
+        heat_capacity_J_per_m2_K: np.float32 = (
+            np.float32(swe_m)
+            * RHO_WATER_KG_PER_M3
+            * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
+        )
+        temperature_C: np.float32 = enthalpy_J_per_m2 / heat_capacity_J_per_m2_K
+
+        enthalpies_at_start_of_timestep[snow_layer_idx] = enthalpy_J_per_m2
+        dT_dH_linearized[snow_layer_idx] = np.float32(1.0) / heat_capacity_J_per_m2_K
+        beta_linearized[snow_layer_idx] = np.float32(0.0)
+        conductivities_W_per_m_K[snow_layer_idx] = (
+            calculate_snow_thermal_conductivity_from_density(density_kg_per_m3)
+        )
+        snow_depth_m: np.float32 = np.float32(swe_m) / max(
+            density_kg_per_m3 / np.float32(1000.0), np.float32(1e-6)
+        )
+        half_layer_thicknesses_m[snow_layer_idx] = np.float32(0.5) * max(
+            snow_depth_m, np.float32(0.01)
+        )
+
+        if snow_layer_idx == 0:
+            surface_temperature_guess_C: np.float32 = temperature_C
+
     for layer_idx in range(N_SOIL_LAYERS):
+        combined_layer_idx = n_active_snow_layers + layer_idx
         topwater_layer_m = topwater_m if layer_idx == 0 else np.float32(0.0)
         water_depth_m = water_content_m[layer_idx] + topwater_layer_m
         latent_heat_areal_J_per_m2 = (
@@ -711,18 +968,25 @@ def solve_soil_enthalpy_column(
             + water_depth_m * VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K
         )
 
+        enthalpy_J_per_m2 = soil_enthalpies_J_per_m2[layer_idx]
         temperature_C, frozen_fraction, dT_dH, beta = get_phase_state(
-            enthalpy_J_per_m2=enthalpies_at_start_of_timestep[layer_idx],
+            enthalpy_J_per_m2=enthalpy_J_per_m2,
             latent_heat_areal_J_per_m2=latent_heat_areal_J_per_m2,
             heat_capacity_liquid_J_per_m2_K=heat_capacity_liquid_J_per_m2_K,
             heat_capacity_frozen_J_per_m2_K=heat_capacity_frozen_J_per_m2_K,
         )
-        dT_dH_linearized[layer_idx] = dT_dH
-        beta_linearized[layer_idx] = beta
+        enthalpies_at_start_of_timestep[combined_layer_idx] = enthalpy_J_per_m2
+        dT_dH_linearized[combined_layer_idx] = dT_dH
+        beta_linearized[combined_layer_idx] = beta
 
-        if layer_idx == 0:
-            surface_temperature_guess_C = temperature_C
+        if combined_layer_idx == n_active_snow_layers:
+            # The iterative flux balance must be linearized around the temperature
+            # of the top layer (either snow surface or soil surface).
+            if n_active_snow_layers == 0:
+                surface_temperature_guess_C = temperature_C
 
+            # These properties are specifically needed for the top soil layer's
+            # phase state diagnostics returned by this function.
             top_layer_latent_heat_areal_J_per_m2 = latent_heat_areal_J_per_m2
             top_layer_heat_capacity_liquid_J_per_m2_K = heat_capacity_liquid_J_per_m2_K
             top_layer_heat_capacity_frozen_J_per_m2_K = heat_capacity_frozen_J_per_m2_K
@@ -734,65 +998,65 @@ def solve_soil_enthalpy_column(
             thermal_conductivity_saturated_frozen=thermal_conductivity_saturated_frozen_W_per_m_K[
                 layer_idx
             ],
-            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3[layer_idx],
+            thermal_conductivity_dry_soil_W_per_m_K=thermal_conductivity_dry_soil_W_per_m_K[
+                layer_idx
+            ],
             degree_of_saturation=water_content_m[layer_idx]
             / water_content_saturated_m[layer_idx],
             sand_percentage=sand_percentage[layer_idx],
             frozen_fraction=frozen_fraction,
         )
 
-        if layer_idx == 0:
-            lambda_previous_layer_W_per_m_K = lambda_layer_W_per_m_K
-        else:
-            resistance_upper_half_layer = (
-                np.float32(0.5) * layer_thicknesses_m[layer_idx - 1]
-            ) / lambda_previous_layer_W_per_m_K
-            resistance_lower_half_layer = (
-                np.float32(0.5) * layer_thicknesses_m[layer_idx]
-            ) / lambda_layer_W_per_m_K
-            thermal_conductances_between_layer_centers_W_per_m2_K[layer_idx - 1] = (
-                np.float32(1.0)
-                / (resistance_upper_half_layer + resistance_lower_half_layer)
+        conductivities_W_per_m_K[combined_layer_idx] = lambda_layer_W_per_m_K
+        half_layer_thicknesses_m[combined_layer_idx] = (
+            np.float32(0.5) * layer_thicknesses_m[layer_idx]
+        )
+
+    for combined_layer_idx in range(1, n_total_layers):
+        lambda_upper = conductivities_W_per_m_K[combined_layer_idx - 1]
+        lambda_lower = conductivities_W_per_m_K[combined_layer_idx]
+
+        resistance_upper_half_layer = half_layer_thicknesses_m[
+            combined_layer_idx - 1
+        ] / max(lambda_upper, np.float32(1e-6))
+        resistance_lower_half_layer = half_layer_thicknesses_m[
+            combined_layer_idx
+        ] / max(lambda_lower, np.float32(1e-6))
+        thermal_conductances_between_layer_centers_W_per_m2_K[
+            combined_layer_idx - 1
+        ] = np.float32(1.0) / (
+            resistance_upper_half_layer + resistance_lower_half_layer
+        )
+
+    lambda_bottom_layer_W_per_m_K: np.float32 = conductivities_W_per_m_K[
+        n_total_layers - 1
+    ]
+
+    inv_dt: np.float32 = np.float32(1.0) / timestep_seconds
+
+    if n_active_snow_layers > 0:
+        total_snow_water_equivalent_m = np.float32(0.0)
+        for snow_layer_idx in range(n_active_snow_layers):
+            total_snow_water_equivalent_m += np.float32(
+                snow_water_equivalent_m[snow_layer_idx]
             )
-            lambda_previous_layer_W_per_m_K = lambda_layer_W_per_m_K
 
-    # After the loop, lambda_previous_layer_W_per_m_K is the conductivity of the
-    # bottom soil layer (layer n_soil_layers - 1).
-    lambda_bottom_layer_W_per_m_K: np.float32 = lambda_previous_layer_W_per_m_K
-
-    inv_dt = np.float32(1.0) / timestep_seconds
-
-    # Snow thermal conductance depends only on snow_water_equivalent_m for this timestep.
-    if snow_water_equivalent_m > np.float64(0.0):
-        (
-            _,
-            snow_depth_m,
-            snow_thermal_conductivity_W_per_m_K,
-        ) = calculate_snow_thermal_properties(snow_water_equivalent_m)
-
-        # Very thin residual snow can otherwise produce unrealistically large
-        # conductive coupling and destabilize the float32 tridiagonal solve.
-        # We mirror the 1 cm lower bound already used in the snow temperature
-        # update so that trace snow still insulates weakly rather than acting as
-        # an almost-zero-thickness conductive sheet.
-        effective_snow_depth_m: np.float32 = max(
-            np.float32(snow_depth_m), np.float32(0.01)
+        net_radiation_flux_W_per_m2, derivative_net_radiation_W_per_m2_K = (
+            calculate_snow_net_radiation_flux(
+                shortwave_radiation_W_per_m2=shortwave_radiation_W_per_m2,
+                longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
+                snow_temperature_C=surface_temperature_guess_C,
+                total_snow_water_equivalent_m=total_snow_water_equivalent_m,
+            )
         )
-        conductance_distance_m: np.float32 = effective_snow_depth_m * np.float32(0.5)
-        snow_conductance_W_per_m2_K = (
-            snow_thermal_conductivity_W_per_m_K / conductance_distance_m
+        sensible_heat_flux_W_per_m2, derivative_sensible_heat_W_per_m2_K = (
+            calculate_sensible_heat_flux(
+                soil_temperature_C=surface_temperature_guess_C,
+                air_temperature_K=air_temperature_K,
+                wind_speed_10m_m_per_s=wind_speed_10m_m_per_s,
+                surface_pressure_pa=surface_pressure_pa,
+            )
         )
-    else:
-        snow_conductance_W_per_m2_K = np.float32(0.0)
-
-    if snow_water_equivalent_m > np.float64(0.0):
-        net_radiation_flux_W_per_m2 = np.float32(0.0)
-        derivative_net_radiation_W_per_m2_K = np.float32(0.0)
-
-        sensible_heat_flux_W_per_m2 = snow_conductance_W_per_m2_K * (
-            snow_temperature_C - surface_temperature_guess_C
-        )
-        derivative_sensible_heat_W_per_m2_K = snow_conductance_W_per_m2_K
     else:
         net_radiation_flux_W_per_m2, derivative_net_radiation_W_per_m2_K = (
             calculate_net_radiation_flux(
@@ -849,7 +1113,7 @@ def solve_soil_enthalpy_column(
     )
 
     # Intermediate layers
-    for layer_idx in range(1, N_SOIL_LAYERS - 1):
+    for layer_idx in range(1, n_total_layers - 1):
         conductance_to_layer_above = (
             thermal_conductances_between_layer_centers_W_per_m2_K[layer_idx - 1]
         )
@@ -877,12 +1141,12 @@ def solve_soil_enthalpy_column(
         )
 
     # Bottom layer (Dirichlet)
-    last_idx = N_SOIL_LAYERS - 1
+    last_idx = n_total_layers - 1
     conductance_to_layer_above = thermal_conductances_between_layer_centers_W_per_m2_K[
         last_idx - 1
     ]
     conductance_to_deep_soil_boundary_W_per_m2_K = lambda_bottom_layer_W_per_m_K / (
-        np.float32(0.5) * layer_thicknesses_m[last_idx]
+        np.float32(0.5) * max(layer_thicknesses_m[last_idx], np.float32(1e-6))
     )
 
     alpha_last = dT_dH_linearized[last_idx]
@@ -906,42 +1170,78 @@ def solve_soil_enthalpy_column(
     )
 
     # Thomas forward/back substitution using compact loops.
-    c_prime = stack_empty(N_SOIL_LAYERS, np.float32)
-    d_prime = stack_empty(N_SOIL_LAYERS, np.float32)
+    c_prime = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
+    d_prime = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
 
-    c_prime[0] = upper_diagonal_c[0] / main_diagonal_b[0]
-    d_prime[0] = rhs_vector_d[0] / main_diagonal_b[0]
+    if main_diagonal_b[0] == np.float32(0.0):
+        c_prime[0] = np.float32(0.0)
+        d_prime[0] = np.float32(0.0)
+    else:
+        c_prime[0] = upper_diagonal_c[0] / main_diagonal_b[0]
+        d_prime[0] = rhs_vector_d[0] / main_diagonal_b[0]
 
-    for layer_idx in range(1, N_SOIL_LAYERS):
+    for layer_idx in range(1, n_total_layers):
         denominator = (
             main_diagonal_b[layer_idx]
             - lower_diagonal_a[layer_idx] * c_prime[layer_idx - 1]
         )
-        if layer_idx < N_SOIL_LAYERS - 1:
+        if layer_idx < n_total_layers - 1:
             c_prime[layer_idx] = upper_diagonal_c[layer_idx] / denominator
         d_prime[layer_idx] = (
             rhs_vector_d[layer_idx]
             - lower_diagonal_a[layer_idx] * d_prime[layer_idx - 1]
         ) / denominator
 
-    enthalpies_updated[N_SOIL_LAYERS - 1] = d_prime[N_SOIL_LAYERS - 1]
-    for layer_idx in range(N_SOIL_LAYERS - 2, -1, -1):
+    enthalpies_updated[n_total_layers - 1] = d_prime[n_total_layers - 1]
+    for layer_idx in range(n_total_layers - 2, -1, -1):
         enthalpies_updated[layer_idx] = (
             d_prime[layer_idx]
             - c_prime[layer_idx] * (enthalpies_updated[layer_idx + 1])
         )
 
+    for snow_layer_idx in range(n_active_snow_layers):
+        snow_enthalpy_J_per_m2[snow_layer_idx] = enthalpies_updated[snow_layer_idx]
+
+    for soil_layer_idx in range(N_SOIL_LAYERS):
+        soil_enthalpies_J_per_m2[soil_layer_idx] = enthalpies_updated[
+            n_active_snow_layers + soil_layer_idx
+        ]
+
+    # Calculate final surface state (top soil layer or active snow if present).
+    # This is needed for the surface flux and for synchronizing inactive snow layers.
     surface_temperature_final_C, frozen_fraction_top_layer_final, _, _ = (
         get_phase_state(
-            enthalpy_J_per_m2=enthalpies_updated[0],
+            enthalpy_J_per_m2=enthalpies_updated[n_active_snow_layers],
             latent_heat_areal_J_per_m2=top_layer_latent_heat_areal_J_per_m2,
             heat_capacity_liquid_J_per_m2_K=top_layer_heat_capacity_liquid_J_per_m2_K,
             heat_capacity_frozen_J_per_m2_K=top_layer_heat_capacity_frozen_J_per_m2_K,
         )
     )
+
+    # Handle inactive snow layers (trace mass below MIN_ACTIVE_SNOW_SWE_M).
+    # We synchronize their enthalpy (and thus temperature) with the top soil layer.
+    # This prevents "zombie snow" where trace amounts of snow never melt because
+    # they are excluded from the thermal column solver and were previously reset to 0°C.
+    # By assigning the soil surface temperature, these trace layers will correctly
+    # melt or sublimate in the subsequent mass-balance step.
+    for snow_layer_idx in range(n_active_snow_layers, N_SNOW_LAYERS):
+        swe_m = snow_water_equivalent_m[snow_layer_idx]
+        if swe_m > 0:
+            snow_enthalpy_J_per_m2[snow_layer_idx] = (
+                np.float32(swe_m)
+                * RHO_WATER_KG_PER_M3
+                * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
+                * surface_temperature_final_C
+            )
+        else:
+            snow_enthalpy_J_per_m2[snow_layer_idx] = np.float32(0.0)
+
+    surface_temperature_for_flux_C: np.float32 = (
+        dT_dH_linearized[0] * enthalpies_updated[0] + beta_linearized[0]
+    )
     soil_heat_flux_W_per_m2 = (
         flux_star_W_per_m2
-        - surface_thermal_conductance_W_per_m2_K * surface_temperature_final_C
+        - surface_thermal_conductance_W_per_m2_K * surface_temperature_for_flux_C
     )
 
     return soil_heat_flux_W_per_m2, frozen_fraction_top_layer_final
