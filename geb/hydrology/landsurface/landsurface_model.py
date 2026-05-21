@@ -120,7 +120,7 @@ def map_date_to_dekad(dt: datetime) -> int:
     return dekadal_index
 
 
-@njit(parallel=True, cache=False, fastmath=False)
+@njit(parallel=True, cache=True, fastmath=True)
 def land_surface_model(
     unix_time_seconds: np.int64,
     land_use_type: ArrayInt32,
