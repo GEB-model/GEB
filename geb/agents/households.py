@@ -1428,7 +1428,7 @@ class Households(AgentBaseClass):
         else:
             return buildings
 
-    def water_level_warning_strategy3(
+    def water_level_warning_strategy_impact(
         self,
         date_time: datetime.datetime,
         prob_threshold: float = 0.6,
@@ -1545,114 +1545,7 @@ class Households(AgentBaseClass):
         )
         pd.DataFrame(warning_log).to_csv(path, index=False)
 
-    def water_level_warning_strategy2(
-        self,
-        date_time: datetime.datetime,
-        prob_threshold: float = 0.6,
-        buildings_hit_threshold: float = 0.1,
-        strategy_id: int = 1,
-    ) -> None:
-        """Implements the water level warning strategy based on flood probability maps.
-
-        Args:
-            date_time: The forecast date time for which to implement the warning strategy.
-            prob_threshold: The probability threshold above which a warning is issued.
-            area_threshold: The area threshold (percentage of area) above which a warning is issued.
-            strategy_id: Identifier of the warning strategy (1 for water level ranges with measures).
-        """
-        # Get the range ids and initialize the warning_log
-        range_ids = list(self.var.wlranges_and_measures.keys())
-        warning_log = []
-
-        # Create probability maps
-        # TODO: Only create flood probability maps if they do not exist yet
-        self.create_flood_probability_maps(strategy=strategy_id, date_time=date_time)
-
-        # Load households and postal codes
-        households = self.var.household_points.copy()
-        postal_codes = self.postal_codes.copy()
-        buildings = self.var.buildings.copy()
-
-        for range_id in range_ids:
-            # Build path to probability map
-            prob_map = Path(
-                self.model.output_folder
-                / "flood_prob_maps"
-                / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
-                / f"prob_map_range{range_id}_strategy{strategy_id}.zarr"
-            )
-
-            # Open the probability map
-            prob_map = read_zarr(prob_map)
-
-            buildings = self.identify_flooded_buildings(
-                buildings, prob_map, prob_threshold
-            )
-
-            # Iterate through each postal code and check the fraction of flooded buildings
-            for _, row in postal_codes.iterrows():
-                postal_code = row["postcode"]
-
-                # All buildings in this postal code
-                buildings_in_postal_code = buildings[
-                    buildings["postcode"] == postal_code
-                ]
-
-                n_total = len(buildings_in_postal_code)
-
-                if n_total == 0:
-                    percentage_flooded = 0
-                else:
-                    # Flooded buildings in this postal code
-                    flooded_in_postal_code = buildings[
-                        (buildings["postcode"] == postal_code) & (buildings["flooded"])
-                    ]
-
-                    percentage_flooded = len(flooded_in_postal_code) / n_total
-
-                if percentage_flooded >= buildings_hit_threshold:
-                    # Filter the affected households based on the postal code
-                    affected_households = households[
-                        households["postcode"] == postal_code
-                    ]
-
-                    # Get the measures and evacuation flag from the json dictionary to use in the warning communication function
-                    measures = self.var.wlranges_and_measures[range_id]["measure"]
-                    evacuate = self.var.wlranges_and_measures[range_id]["evacuate"]
-
-                    # Communicate the warning to the target households
-                    print(
-                        f"Warning issued to postal code {postal_code} on {date_time.strftime('%d-%m-%Y T%H:%M:%S')} for range {range_id}: {percentage_flooded:.0%} of buildings hit"
-                    )
-
-                    n_warned_households = self.warning_communication(
-                        target_households=affected_households,
-                        measures=measures,
-                        evacuate=evacuate,
-                        trigger="water_levels",
-                    )
-
-                    warning_log.append(
-                        {
-                            "date_time": date_time.isoformat(),
-                            "postcode": postal_code,
-                            "range": range_id,
-                            "n_affected_households": len(affected_households),
-                            "n_warned_households": n_warned_households,
-                            "percentage_flooded_buildings": f"{percentage_flooded:.2f}",
-                        }
-                    )
-
-        # Save the warning log to a csv file
-        warnings_folder = self.model.output_folder / "warning_logs"
-        warnings_folder.mkdir(exist_ok=True, parents=True)
-        path = (
-            warnings_folder
-            / f"warning_log_water_levels_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
-        )
-        pd.DataFrame(warning_log).to_csv(path, index=False)
-
-    def water_level_warning_strategy(
+    def water_level_warning_strategy_area(
         self,
         date_time: datetime,
         exceedance: bool = False,
