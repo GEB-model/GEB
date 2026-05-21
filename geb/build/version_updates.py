@@ -141,17 +141,13 @@ def get_and_maybe_do_version_updates(
                     if perform_auto_update:
                         assert methods is not None
                         assert build_model is not None
-                        update_method = getattr(build_model, method_name, None)
-                        if update_method is None:
-                            raise ValueError(
-                                f"Method {method_name} not found in geb.cli.update module"
-                            )
 
                         build_model.logger.info(
                             f"Performing auto-update for method {method_name}..."
                         )
 
-                        update_method(**(methods[method_name] or {}))
+                        # Delegate to build_model.update()
+                        build_model.update({method_name: methods[method_name]})
                     else:
                         updates_to_print.append(
                             f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."

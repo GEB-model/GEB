@@ -2,7 +2,8 @@
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
-
+- Include a delta approach to account for changes in precipitation and temperature under climate change in creating return period maps. To adjust forcing data to future climate, add the `representative_forcing_year` argument to `setup_forcing` in the build.yml to indicate the year for which you want to fast-forward the forcing data.
+- Fix a bug where update-version would not write newly created files to `files.yml`.
 
 # v1.0.0b24
 - Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
