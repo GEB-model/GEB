@@ -8,8 +8,8 @@ from typing import Any
 
 import cdsapi
 import numpy as np
-import xarray as xr
 import rioxarray  # noqa: F401
+import xarray as xr
 
 from .base import Adapter
 
