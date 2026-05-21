@@ -13,8 +13,10 @@ from geb.workflows.raster import (
     resample_like,
 )
 
+from .base import BuildModelBase
 
-class GroundWater:
+
+class GroundWater(BuildModelBase):
     """Contains all build methods for the groundwater for GEB."""
 
     def __init__(self) -> None:
@@ -147,13 +149,13 @@ class GroundWater:
 
         # because hydraulic conductivity is log-normally distributed, we interpolate the log values
         # after log transformation and then back-transform after interpolation
-        hydraulic_conductivity_log = np.log(hydraulic_conductivity)
-        hydraulic_conductivity_log = resample_like(
+        hydraulic_conductivity_log: xr.DataArray = np.log(hydraulic_conductivity)
+        hydraulic_conductivity_log: xr.DataArray = resample_like(
             hydraulic_conductivity_log,
             aquifer_top_elevation,
             method="bilinear",
         )
-        hydraulic_conductivity = np.exp(hydraulic_conductivity_log)
+        hydraulic_conductivity: xr.DataArray = np.exp(hydraulic_conductivity_log)  # ty:ignore[invalid-assignment]  See: https://github.com/numpy/numpy/issues/21737
 
         if two_layers:
             hydraulic_conductivity = xr.concat(
@@ -310,7 +312,7 @@ class GroundWater:
 
             initial_depth = resample_like(
                 initial_depth_static,
-                self.grid,
+                self.grid["mask"],
                 method="bilinear",
             )
 

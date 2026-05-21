@@ -1,0 +1,102 @@
+inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
+
+###
+# This section contains several general model settings.
+general:
+  ###
+  # model start time (YYYY-MM-DD).
+  start_time: 2021-01-01
+  ###
+  # model end time (YYYY-MM-DD).
+  end_time: 2024-12-30
+  # end_time: 2030-01-01
+  ###
+  # start of the spinup time (YYYY-MM-DD).
+  # spinup_time: 1999-01-01
+  # spinup_time: 1980-01-01
+  spinup_time: 1990-01-01
+  # spinup_time: 2020-01-01
+  ###
+  # base folder where to report output data to
+  region:
+    subbasin: 23011134
+hazards:
+  floods:
+    simulate: false
+    grid_size_multiplier: 4
+    subgrid: true
+    flood_risk: false
+    gpu: auto
+    ncpus: auto # can be number or 'auto', use less cpus when running on interactive session
+    force_overwrite: true
+    coastal_only: false
+    return_periods:
+      - 2
+      - 1000
+    events:
+      - start_time: 2021-07-12 09:00:00
+        end_time: 2021-07-20 09:00:00
+
+report:
+  hydrology.landsurface:
+    bare_soil_evaporation_weighted_sum_m:
+      varname: .bare_soil_evaporation_m
+      type: HRU
+      function: weightednanmean
+    runoff_m:
+      varname: .runoff_m
+      type: HRU
+      function: weightednanmean
+  hydrology.routing:
+    discharge_daily:
+      varname: grid.var.discharge_m3_s
+      type: grid
+      function: null
+      format: zarr
+      single_file: true
+    discharge_hourly:
+      varname: grid.var.discharge_m3_s_per_substep
+      type: grid
+      function: null
+      format: zarr
+      single_file: true
+  agents.crop_farmers:
+    channel_abstraction_m3_by_farmer_mean:
+      varname: var.channel_abstraction_m3_by_farmer
+      type: agents
+      function: mean
+
+calibration:
+  calibration_targets:
+    KGE_discharge: 1
+  DEAP:
+    ngen: 10
+    mu: 20
+    lambda_: 10
+    select_best: 10
+    crossover_prob: 0.7
+    mutation_prob: 0.3
+    blend_alpha: 0.15
+    gaussian_sigma: 0.3
+    gaussian_indpb: 0.3
+  parameters:
+    mannings_n_multiplier:
+        variable: parameters.mannings_n_multiplier
+        min: 0.1
+        max: 10.0
+    crop_factor_multiplier:
+        variable: parameters.crop_factor_multiplier
+        min: 0.5
+        max: 2
+    saturated_hydraulic_conductivity_multiplier:
+        variable: parameters.saturated_hydraulic_conductivity_multiplier
+        min: 0.5
+        max: 2
+    reservoir_M_factor:
+        variable: agents.reservoir_operators.reservoir_M_factor
+        min: 0.05
+        max: 0.4
+    return_fraction:
+        variable: agent_settings.farmers.return_fraction
+        min: 0.3
+        max: 0.8

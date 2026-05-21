@@ -16,6 +16,7 @@ general:
   forecasts:
     use: false
     provider: ECMWF
+    processing: merged_control_ensemble  # options: merged_control_ensemble, control_forecast, probabilistic_forecast
 
 hazards:
   floods:
@@ -25,7 +26,7 @@ hazards:
     flood_map_output_interval_seconds: null  # interval in seconds to output flood maps. null means no output.
     grid_size_multiplier: 1  # must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.
     subgrid: false
-    force_overwrite: true
+    overwrite: auto  # whether to overwrite existing flood model. True, False, "auto". If "auto", it will check if the model input parameters have changed.
     coastal_only: false
     write_figures: true  # whether to generate and save diagnostic figures
     return_periods:
@@ -40,6 +41,13 @@ hazards:
       - 1000
     SFINCS:
       gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
+    detect_floods_from_discharge: false # If True, floods are detected based on discharge thresholds at a specific location.
+    discharge_threshold: 30  # discharge threshold in m3/s for flood detection
+    threshold_location: 
+    - lon
+    - lat  # [lon, lat] of the location where the discharge threshold is applied.
+    observation_files:
+    - 20210712T090000 - 20210720T090000.zarr # list of observations files for all floods, should be formatted start date - end date.zarr
   damage:
     simulate: false
   erosion:
@@ -60,11 +68,26 @@ agent_settings:
     dynamic_market: false
     price_frequency: yearly
   households:
-    adapt: false
+    adapt: false # If True households adapt their houses based on random floods, like DYNAMO-M
+    adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
     warning_response: false
     water_demand:
       method: default
-    adjust_demand_factor: 1
+    adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand
+    warning_system:
+      probability_threshold: 0.6 # Flood probability threshold for issuing warnings (0.0-1.0)  
+      area_threshold: 0.1 # Area threshold (percentage of postal code area) for warnings (0.0-1.0)
+      building_threshold: 0.1 # Building threshold (percentage of buildings in postal code) for warnings (0.0-1.0)
+      communication_efficiency: 0.78 # Communication efficiency: fraction of households that can be reached (0.0-1.0)
+      evacuation_lead_time_threshold: 24 # Lead time threshold for evacuation warnings (hours)
+      response_rates: # Response rates for different warning types
+        flood_general_warnings: 0.35 # Response rate for flood general warnings (0.0-1.0)
+        impact_based_warnings: 0.4 # Response rate for impact-based warnings with specific measures (0.0-1.0)
+      strategies: # Warning strategy settings
+        water_level_warnings: true # Enable water level based warnings with measures
+        critical_infrastructure_warnings: false  # Enable critical infrastructure based evacuation warnings  
+        warning_type: "flood_general" # Type of warnings: "flood_general" for basic flood warnings or "impact_based" for measure-specific warnings
+
     expected_utility:
       flood_risk_calculations:
         risk_perception:
@@ -167,15 +190,13 @@ draw:
       draw_every_nth: 1
 
 report:
+  _config:
+    compression_level: 9  # 1 (min) to 22 (max)
+    chunk_target_size_bytes: 100000000  # target chunk size in bytes
   _water_circle: false
+  _energy_balance: true
   _discharge_stations: true
-  hydrology.routing:
-    discharge_daily:
-      varname: grid.var.discharge_m3_s
-      type: grid
-      function: null
-      format: zarr
-      single_file: true
+  _outflow_points: true
 
 parameters:
   mannings_n_multiplier: 1.0

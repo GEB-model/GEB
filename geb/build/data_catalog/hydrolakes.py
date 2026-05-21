@@ -28,7 +28,7 @@ class HydroLakes(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> Path:
+    def fetch(self, url: str) -> Adapter:
         """Process HydroLAKES zip file to extract and convert to parquet.
 
         Args:

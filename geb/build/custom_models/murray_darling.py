@@ -17,7 +17,7 @@ class Agents(BaseAgents):
     def setup_water_prices_australia(self: Any, start_year: int, end_year: int) -> None:
         """Build and store observed monthly water prices (USD) and annual diversions.
 
-        Creates two dictionaries under ``self.dict`` via ``self.set_dict``:
+        Creates two dictionaries under ``self.params`` via ``self.set_params``:
 
         - ``economics/water_price``: monthly USD prices per region (YYYY-MM-01 steps)
         - ``economics/diversions``: annual diversions per region (integers years)
@@ -143,7 +143,9 @@ class Agents(BaseAgents):
                 else:
                     rows.append(
                         pd.DataFrame(
-                            np.nan, index=[0], columns=annual_price_pivot.columns
+                            np.nan,
+                            index=np.array([0]),
+                            columns=annual_price_pivot.columns,
                         ).assign(time=m)
                     )
             annual_as_monthly = pd.concat(rows, ignore_index=True).set_index("time")
@@ -201,6 +203,7 @@ class Agents(BaseAgents):
             "water_price": df_price_monthly_usd,  # monthly
         }
 
+        out_data = {}
         for key, df in sources.items():
             if key == "water_price":
                 monthly_dates = pd.date_range(
@@ -210,10 +213,9 @@ class Agents(BaseAgents):
                 )
                 out = {
                     "time": [d.strftime("%Y-%m-%d") for d in monthly_dates],
-                    "data": {},
                 }
             else:
-                out = {"time": list(range(start_year, end_year + 1)), "data": {}}
+                out = {"time": list(range(start_year, end_year + 1))}
 
             # Expect self.geoms["areamaps/regions"] with columns: region_id, NAME_1 (state)
             for _, row in self.geoms["areamaps/regions"].iterrows():
@@ -223,9 +225,9 @@ class Agents(BaseAgents):
                 if state_name not in df.columns:
                     # If a region/state has no column, fill with zeros to avoid KeyErrors
                     if key == "water_price":
-                        out["data"][region_id] = [0.0] * len(out["time"])
+                        out_data[region_id] = [0.0] * len(out["time"])
                     else:
-                        out["data"][region_id] = [0.0] * len(out["time"])
+                        out_data[region_id] = [0.0] * len(out["time"])
                     continue
 
                 series = df[state_name].sort_index()
@@ -234,7 +236,7 @@ class Agents(BaseAgents):
                     # keep annual values mapped into the requested window, fallback to baseline
                     years_available = series.index.year
                     if len(years_available) == 0:
-                        out["data"][region_id] = [0.0] * len(out["time"])
+                        out_data[region_id] = [0.0] * len(out["time"])
                         continue
 
                     min_obs, max_obs = years_available.min(), years_available.max()
@@ -272,7 +274,7 @@ class Agents(BaseAgents):
                             # inside gap → baseline (simple)
                             out_series.loc[y] = baseline
 
-                    out["data"][region_id] = out_series.tolist()
+                    out_data[region_id] = out_series.tolist()
 
                 else:  # water_price (monthly)
                     # prepare inflation helper (apply once when crossing a year)
@@ -333,9 +335,10 @@ class Agents(BaseAgents):
                     else:
                         prices[:] = baseline
 
-                    out["data"][region_id] = prices.tolist()
+                    out_data[region_id] = prices.tolist()
 
-            self.set_dict(out, name=f"economics/{key}")
+            out["data"] = out_data
+            self.set_params(out, name=f"economics/{key}")
 
     def setup_drip_irrigation_prices_by_reference_year(
         self: Any,
@@ -389,4 +392,4 @@ class Agents(BaseAgents):
 
             out["data"][region] = series.tolist()
 
-        self.set_dict(out, name=f"economics/{price_name}")
+        self.set_params(out, name=f"economics/{price_name}")

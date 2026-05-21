@@ -43,36 +43,35 @@ class Lowder(Adapter):
         Returns:
             A pandas DataFrame containing the processed farm size distribution data.
         """
-        df = (
-            super()
-            .read(
-                sheet_name="WEB table 3",
-                skiprows=4,
-                skipfooter=2,
-                header=None,
-                names=[
-                    "Country",
-                    "Census Year",
-                    "Holdings/ agricultural area",
-                    "Total",
-                    "< 1 Ha",
-                    "1 - 2 Ha",
-                    "2 - 5 Ha",
-                    "5 - 10 Ha",
-                    "10 - 20 Ha",
-                    "20 - 50 Ha",
-                    "50 - 100 Ha",
-                    "100 - 200 Ha",
-                    "200 - 500 Ha",
-                    "500 - 1000 Ha",
-                    "> 1000 Ha",
-                    "empty",
-                    "income class",
-                ],
-                **kwargs,
-            )
-            .dropna(subset=["Total"], axis=0)
-            .drop(["empty", "income class"], axis=1)
+        df = super().read(
+            sheet_name="WEB table 3",
+            skiprows=4,
+            skipfooter=2,
+            header=None,
+            names=[
+                "Country",
+                "Census Year",
+                "Holdings/ agricultural area",
+                "Total",
+                "< 1 Ha",
+                "1 - 2 Ha",
+                "2 - 5 Ha",
+                "5 - 10 Ha",
+                "10 - 20 Ha",
+                "20 - 50 Ha",
+                "50 - 100 Ha",
+                "100 - 200 Ha",
+                "200 - 500 Ha",
+                "500 - 1000 Ha",
+                "> 1000 Ha",
+                "empty",
+                "income class",
+            ],
+            **kwargs,
+        )
+        assert isinstance(df, pd.DataFrame)
+        df: pd.DataFrame = df.dropna(subset=["Total"], axis=0).drop(
+            ["empty", "income class"], axis=1
         )
         df["Country"] = df["Country"].ffill()
         # Remove preceding and trailing white space from country names

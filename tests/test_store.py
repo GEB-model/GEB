@@ -410,6 +410,37 @@ def test_reduce_ufunc(array: DynamicArray) -> None:
     assert result == 15
 
 
+def test_stack_dynamic_arrays() -> None:
+    """Test stacking multiple DynamicArrays using np.stack.
+
+    Verifies that np.stack works correctly with a list of DynamicArrays,
+    returning a numpy array with the expected shape and values.
+    """
+    d1 = DynamicArray(np.array([1, 2, 3]), max_n=10)
+    d2 = DynamicArray(np.array([4, 5, 6]), max_n=10)
+
+    stacked = np.stack([d1, d2])
+
+    assert isinstance(stacked, np.ndarray)
+    assert stacked.shape == (2, 3)
+    np.testing.assert_array_equal(stacked, np.array([[1, 2, 3], [4, 5, 6]]))
+
+
+def test_concatenate_dynamic_arrays() -> None:
+    """Test concatenating multiple DynamicArrays using np.concatenate.
+
+    Verifies that np.concatenate works correctly with a list of DynamicArrays.
+    """
+    d1 = DynamicArray(np.array([1, 2, 3]), max_n=10)
+    d2 = DynamicArray(np.array([4, 5, 6]), max_n=10)
+
+    concatenated = np.concatenate([d1, d2])
+
+    assert isinstance(concatenated, np.ndarray)
+    assert concatenated.shape == (6,)
+    np.testing.assert_array_equal(concatenated, np.array([1, 2, 3, 4, 5, 6]))
+
+
 def test_save_and_restore(array: DynamicArray) -> None:
     """Test saving to disk and restoring a DynamicArray.
 
@@ -426,3 +457,33 @@ def test_save_and_restore(array: DynamicArray) -> None:
     assert array.n == array2.n
     assert (array.extra_dims_names == array2.extra_dims_names).all()
     os.remove(tmp_folder / "test.storearray.npz")
+
+
+def test_dynamic_array_where() -> None:
+    """Test np.where usage with DynamicArray.
+
+    Verifies that np.where(condition, x, y) returns a DynamicArray when inputs are
+    DynamicArrays, and that the result preserves properties like max_n.
+    """
+    da1 = DynamicArray(np.array([1, 2, 3]), max_n=10)
+    da2 = DynamicArray(np.array([10, 20, 30]), max_n=10)
+    cond = DynamicArray(np.array([True, False, True]), max_n=10)
+
+    # Test where with DynamicArray condition
+    res = np.where(cond, da1, da2)
+    assert isinstance(res, DynamicArray)
+    assert np.array_equal(res.data, np.array([1, 20, 3]))
+    assert res.max_n == 10
+    assert res.n == 3
+
+    # Test with numpy array condition
+    res_np_cond = np.where(cond.data, da1, da2)
+    assert isinstance(res_np_cond, DynamicArray)
+    assert np.array_equal(res_np_cond.data, np.array([1, 20, 3]))
+    assert res_np_cond.max_n == 10
+
+    # Test with mixed scalar/array
+    res_scalar = np.where(cond, da1, 0)
+    assert isinstance(res_scalar, DynamicArray)
+    assert np.array_equal(res_scalar.data, np.array([1, 0, 3]))
+    assert res_scalar.max_n == 10

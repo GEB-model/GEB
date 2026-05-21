@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from geb.types import TwoDArrayBool, TwoDArrayInt64
+from geb.geb_types import TwoDArrayBool, TwoDArrayInt64
 
 
 def trace_border_4_connectivity(

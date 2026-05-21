@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from numba import njit, prange
 
@@ -201,7 +203,7 @@ class DecisionModule:
         discount_rate: float,
         sigma: float,
         subjective: bool = True,
-        **kwargs: dict,
+        **kwargs: Any,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -217,10 +219,10 @@ class DecisionModule:
         n_floods, n_agents = total_profits.shape
 
         # Prepare arrays
-        max_T = np.int32(np.max(T))
+        max_T = int(np.max(T))
 
         # Part njit, iterate through floods
-        n_agents = np.int32(n_agents)
+        n_agents = int(n_agents)
         NPV_summed = self.IterateThroughEvents(
             n_events=n_floods,
             total_profits=total_profits,
@@ -417,7 +419,7 @@ class DecisionModule:
 
         return EU_adapt
 
-    def calcEU_adapt_drought(self, **kwargs: dict) -> np.ndarray:
+    def calcEU_adapt_drought(self, **kwargs: Any) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
         Returns:
@@ -441,7 +443,7 @@ class DecisionModule:
         time_adapted: np.ndarray,
         loan_duration: int,
         p_floods: np.ndarray,
-        T: np.ndarray,
+        T: np.ndarray | int | float,
         r: float,
         sigma: float,
         **kwargs: dict,
@@ -482,10 +484,10 @@ class DecisionModule:
         p_all_events[0, :] = 0
 
         # Prepare arrays
-        max_T = np.int32(np.max(T))
+        max_T = int(np.max(T))
 
         # Part njit, iterate through events
-        n_agents = np.int32(n_agents)
+        n_agents = int(n_agents)
         NPV_summed = self.IterateThroughEvents(
             n_events=n_floods,
             n_agents=n_agents,
@@ -552,12 +554,12 @@ class DecisionModule:
         wealth: np.ndarray,
         income: np.ndarray,
         amenity_value: np.ndarray,
-        amenity_weight: np.ndarray,
+        amenity_weight: np.ndarray | float,
         risk_perception: np.ndarray,
         expected_damages: np.ndarray,
         adapted: np.ndarray,
         p_floods: np.ndarray,
-        T: np.ndarray,
+        T: np.ndarray | float | int,
         r: float,
         sigma: float,
         **kwargs: dict,
@@ -598,10 +600,10 @@ class DecisionModule:
         p_all_events[0, :] = 0
 
         # Prepare arrays
-        max_T = np.int32(np.max(T))
+        max_T = int(np.max(T))
 
         # Part njit, iterate through events
-        n_agents = np.int32(n_agents)
+        n_agents = int(n_agents)
         NPV_summed = self.IterateThroughEvents(
             n_events=n_floods,
             n_agents=n_agents,

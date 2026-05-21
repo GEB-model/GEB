@@ -439,6 +439,7 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     capillar_rise_m = np.array([capillar_rise_m_data], dtype=flt)
     frost_index = np.array([frost_index_data], dtype=flt)
     natural_crop_groups = np.array([natural_crop_groups_data], dtype=flt)
+    arno_shape_parameter = np.array([0.0], dtype=flt)  # not used in this test
 
     # 2D arrays: add cell dimension and set dtype
     w = w_data.reshape(-1, 1).astype(flt)
@@ -471,6 +472,9 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
     minimum_effective_root_depth_m = flt(minimum_effective_root_depth_m_data)
     crop_group_number_per_group = crop_group_number_per_group_data.astype(flt)
 
+    soil_temperature_C = np.full_like(w, -5.0)  # Assume frozen/cold
+    solid_heat_capacity_J_per_m2_K = np.full_like(w, 2e5)
+
     # Capture previous values before calling the model (arrays get modified in-place)
     snow_water_equivalent_prev = snow_water_equivalent_m.copy()
     liquid_water_in_snow_prev = liquid_water_in_snow_m.copy()
@@ -486,10 +490,13 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         wwp=wwp,
         wfc=wfc,
         ws=ws,
+        soil_temperature_C=soil_temperature_C,
+        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
         delta_z=delta_z,
         soil_layer_height=soil_layer_height,
         root_depth_m=root_depth_m,
         topwater_m=topwater_m,
+        arno_shape_parameter=arno_shape_parameter,
         snow_water_equivalent_m=snow_water_equivalent_m,
         liquid_water_in_snow_m=liquid_water_in_snow_m,
         snow_temperature_C=snow_temperature_C,
@@ -538,7 +545,6 @@ def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -
         transpiration_m,
         potential_transpiration_m,
     ) = results
-
     # Construct the balance check parameters
     influxes = [
         (pr_kg_per_m2_per_s.sum(axis=0) * 3.6).astype(np.float64),  # kg/m2/s -> m/hr

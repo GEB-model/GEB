@@ -4,7 +4,9 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-import rioxarray as rxr
+import rioxarray
+import rioxarray.merge
+import xarray as xr
 
 from geb.workflows.io import fetch_and_save, write_zarr
 
@@ -27,7 +29,7 @@ class GEBCO(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> Path:
+    def fetch(self, url: str) -> Adapter:
         """Process GEBCO zip file to extract, combine tiles and convert to zarr.
 
         Args:
@@ -48,11 +50,13 @@ class GEBCO(Adapter):
                     zip_ref.extract(tile, self.root)
 
             print("Merging tiles into single DataArray. This may take a while...")
-            das: list[xr.DataArray] = [
-                rxr.open_rasterio(self.root / path) for path in tile_paths
-            ]
-            das: list[xr.DataArray] = [da.sel(band=1) for da in das]
-            da: xr.DataArray = rxr.merge.merge_arrays(das)
+            das: list[xr.DataArray] = []
+            for path in tile_paths:
+                da = rioxarray.open_rasterio(self.root / path)
+                assert isinstance(da, xr.DataArray)
+                das.append(da.sel(band=1))
+
+            da: xr.DataArray = rioxarray.merge.merge_arrays(das)
 
             da.attrs = {
                 k: v

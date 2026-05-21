@@ -19,10 +19,11 @@ import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
 from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from scipy.stats import genpareto, kstest
-from shapely.geometry import LineString, Point
+from shapely import line_locate_point
+from shapely.geometry import GeometryCollection, LineString, Point
 from tqdm import tqdm
 
-from geb.types import ArrayFloat32, ArrayInt64
+from geb.geb_types import ArrayFloat32, ArrayInt64
 
 
 def export_rivers(
@@ -128,9 +129,11 @@ def read_flood_depth(
         else:
             raise ValueError(f"Unknown method: {method}")
         # read subgrid elevation
-        surface_elevation: xr.DataArray = xr.open_dataarray(
-            model_root / "subgrid" / "dep_subgrid.tif"
-        ).sel(band=1)
+        surface_elevation: xr.DataArray = (
+            xr.open_dataarray(model_root / "subgrid" / "dep_subgrid.tif")
+            .sel(band=1)
+            .drop_vars(["band"])
+        )
 
         flood_depth_m: xr.DataArray = utils.downscale_floodmap(
             zsmax=water_surface_elevation,
@@ -145,6 +148,10 @@ def read_flood_depth(
             flood_depth_m: xr.Dataset | xr.DataArray = model.results["hmax"].max(
                 dim="timemax"
             )
+            fig, ax = plt.subplots()
+            flood_depth_m.plot(ax=ax)
+            ax.set_title("Maximum Water Surface Elevation over all time steps")
+            fig.savefig(model_root / "maximum_water_surface_elevation.png")
             assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
             flood_depth_m_all_steps: xr.Dataset | xr.DataArray = model.results["h"]
@@ -269,25 +276,25 @@ def run_sfincs_subprocess(
     """
     print(f"Running SFINCS with: {cmd}")
     with open(file=log_file, mode="w") as log:
-        process: subprocess.Popen[str] = subprocess.Popen(
+        with subprocess.Popen(
             args=cmd,
             cwd=working_directory,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-        )
+        ) as process:
+            stdout = process.stdout
+            stderr = process.stderr
+            assert stdout is not None
+            assert stderr is not None
 
-        # Continuously read lines from stdout and stderr
-        for line in iter(
-            lambda: process.stdout.readline() or process.stderr.readline(), ""
-        ):
-            print(line.rstrip())
-            log.write(line)
-            log.flush()
+            # Continuously read lines from stdout and stderr
+            for line in iter(lambda: stdout.readline() or stderr.readline(), ""):
+                print(line.rstrip())
+                log.write(line)
+                log.flush()
 
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
+            process.wait()
 
     return process.returncode
 
@@ -434,14 +441,26 @@ def run_sfincs_simulation(
         else:
             print("No GPU detected, running SFINCS without GPU support.")
 
+    # Automatically set container environment variables if not already set
     if gpu:
         version: str | None = os.getenv(key="SFINCS_CONTAINER_GPU")
-        assert version is not None, (
-            "SFINCS_CONTAINER_GPU environment variable is not set"
-        )
+        if version is None:
+            # Auto-set GPU container if not explicitly configured
+            version = "deltares/sfincs-gpu:latest"
+            os.environ["SFINCS_CONTAINER_GPU"] = version
+            print(f"Auto-set SFINCS_CONTAINER_GPU to: {version}")
     else:
         version: str | None = os.getenv(key="SFINCS_CONTAINER")
-        assert version is not None, "SFINCS_CONTAINER environment variable is not set"
+        if version is None:
+            # Auto-set CPU container if not explicitly configured
+            version = "deltares/sfincs-cpu:latest"
+            os.environ["SFINCS_CONTAINER"] = version
+            print(f"Auto-set SFINCS_CONTAINER to: {version}")
+
+    # Verify we have a valid container version
+    assert version is not None and len(version) > 0, (
+        f"Container version not set. Expected SFINCS_CONTAINER{'_GPU' if gpu else ''} environment variable."
+    )
 
     if platform.system() == "Linux":
         # If not a apptainer image, add docker:// prefix
@@ -449,30 +468,46 @@ def run_sfincs_simulation(
         if not version.endswith(".sif"):
             version: str = "docker://" + version
 
-        c = (
+        c: int = (
             int(
-                os.getenv("SLURM_CPUS_PER_TASK")
-                or os.getenv("SLURM_CPUS_ON_NODE")
-                or os.cpu_count()
+                os.getenv("SLURM_CPUS_PER_TASK", None)
+                or os.getenv("SLURM_CPUS_ON_NODE", None)
+                or os.cpu_count()  # returns none if cannot be determined
+                or 1
             )
             if ncpus == "auto"
             else int(ncpus)
         )
-        ncpus_str = "0" if c == 1 else f"0-{c - 1}"
 
-        cmd: list[str] = [
-            "taskset",
-            "-c",
-            ncpus_str,  # get user defined or automatically detected number of CPUs
-            "apptainer",
-            "run",
-            "-B",  ## Bind mount
-            f"{model_root.resolve()}:/data",
-            "--pwd",  ## Set working directory inside container
-            f"/data/{simulation_root.relative_to(model_root)}",
-            "--nv",
-            version,
-        ]
+        cmd: list[str] = []
+
+        # Use taskset only when GPU is not detected (CPU-only mode)
+        if not gpu:
+            ncpus_str: str = "0" if c == 1 else f"0-{c - 1}"
+            cmd.extend(
+                [
+                    "taskset",
+                    "-c",
+                    ncpus_str,  # get user defined or automatically detected number of CPUs
+                ]
+            )
+
+        cmd.extend(
+            [
+                "apptainer",
+                "run",
+                "-B",  ## Bind mount
+                f"{model_root.resolve()}:/data",
+                "--pwd",  ## Set working directory inside container
+                f"/data/{simulation_root.relative_to(model_root)}",
+            ]
+        )
+
+        # Only add GPU support if gpu=True and it's actually available
+        if gpu:
+            cmd.append("--nv")
+
+        cmd.append(version)
 
     else:
         assert check_docker_running(), "Docker is not running"
@@ -644,8 +679,10 @@ def get_discharge_and_river_parameters_by_river(
 
     discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
     river_parameters: pd.DataFrame = pd.DataFrame(
-        index=river_IDs,
-        columns=["river_width_alpha", "river_width_beta"],
+        index=np.array(river_IDs),
+        columns=np.array(
+            ["river_width_alpha", "river_width_beta"],
+        ),
     )
 
     i: int = 0
@@ -963,7 +1000,9 @@ def gpd_pot_ad_auto(
     diag_df = (
         pd.DataFrame(
             diagnostics,
-            columns=["u", "sigma", "xi", "n_exc", "p_ad", "ks_p", "mrl_err", "A_R2"],
+            columns=np.array(
+                ["u", "sigma", "xi", "n_exc", "p_ad", "ks_p", "mrl_err", "A_R2"]
+            ),
         )
         .sort_values("u")
         .reset_index(drop=True)
@@ -1152,3 +1191,45 @@ def assign_return_periods(
             rivers.loc[idx, f"{prefix}_{T}"] = discharge_value
 
     return rivers
+
+
+def select_most_downstream_point(
+    river: gpd.GeoDataFrame, outflow_points: GeometryCollection
+) -> Point:
+    """Select the most downstream point from a collection of outflow points.
+
+    Args:
+        river: GeoDataFrame containing the river geometry.
+        outflow_points: GeometryCollection of outflow points (can contain Points and LineStrings).
+
+    Returns:
+        The most downstream Point from the outflow_points.
+
+    Raises:
+        TypeError: If an unsupported geometry type is found in outflow_points.
+    """
+    points: list[Point] = []
+    for geom in outflow_points.geoms:
+        if isinstance(geom, Point):
+            points.append(geom)
+        elif isinstance(geom, LineString):
+            for coord in geom.coords:
+                points.append(Point(coord))
+        else:
+            raise TypeError(
+                f"Unsupported geometry type in outflow_points: {type(geom)}"
+            )
+
+    most_downstream_point: Point = points[0]
+    most_downstream_point_loc: float = line_locate_point(
+        river.geometry, most_downstream_point
+    )
+    for point in points[1:]:
+        loc = line_locate_point(river.geometry, point)
+        if loc > most_downstream_point_loc:
+            most_downstream_point = point
+            most_downstream_point_loc = loc
+
+    outflow_point: Point = most_downstream_point
+
+    return outflow_point

@@ -3,7 +3,6 @@
 import copy
 import datetime
 import logging
-import os
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -15,6 +14,7 @@ import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 
+from geb import GEB_PACKAGE_DIR
 from geb.agents import Agents
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
@@ -22,15 +22,22 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 )
 from geb.module import Module
 from geb.reporter import Reporter
-from geb.store import Store
-from geb.workflows.io import read_dict, read_geom, read_zarr
+from geb.store import Bucket, Store
+from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
 from .hydrology import Hydrology
 
 
-class GEBModel(Module, HazardDriver):
+class GEBModelVariables(Bucket):
+    """Class to hold GEB model variables."""
+
+    _spinup_start: datetime.datetime
+    _run_start: datetime.datetime
+
+
+class GEBModel(Module):
     """GEB parent class.
 
     Args:
@@ -39,6 +46,9 @@ class GEBModel(Module, HazardDriver):
         mode: Mode of the model. Either `w` (write) or `r` (read).
         timing: Boolean indicating if the model steps should be timed.
     """
+
+    var: GEBModelVariables
+    plantFATE: list[Any]
 
     def __init__(
         self,
@@ -160,44 +170,69 @@ class GEBModel(Module, HazardDriver):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
+        original_is_activated: bool = (
+            self.reporter.is_activated
+        )  # store original reporter state
+        self.reporter.is_activated = False  # disable reporting during multiverse runs
+
         if return_mean_discharge:
             mean_discharge: dict[
                 Any, float
             ] = {}  # dictionary to store mean discharge for each member
 
-        # load all zarr files for all forecast variables for the given issue date
+        # load all zarr files for forecast data for all supported variables
         forecast_members: list[str] | None = None
         forecast_end_dt: datetime.datetime | None = None
         forecast_data: dict[str, xr.DataArray] = {}
+        print(
+            f"DEBUG: Starting to load forecast data for {len(self.forcing.loaders)} loaders",
+            flush=True,
+        )
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
-                # open one forecast to see the number of members
-                forecast_data[loader_name] = read_zarr(
+                forecast_file_path = (
                     self.input_folder
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
+                    / self.config["general"]["forecasts"]["processing"]
+                    / forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
-                )  # open the forecast data for the variable
-                # these are the forecast members to loop over
-                variable_forecast_members: list[str] = [
-                    i.item() for i in forecast_data[loader_name].member.values
-                ]
-                variable_forecast_end_dt = (
-                    forecast_data[loader_name].time.values[-1]
-                ).item()  # get the end datetime of the forecast
-                if forecast_members is None:
-                    forecast_members: list[str] = variable_forecast_members
-                    forecast_end_dt = variable_forecast_end_dt
+                )
+
+                # Check if forecast file exists for this variable
+                if forecast_file_path.exists():
+                    print(
+                        f"DEBUG: Forecast file exists for {loader_name}, loading...",
+                        flush=True,
+                    )
+                    # open one forecast to see the number of members
+                    forecast_data[loader_name] = read_zarr(forecast_file_path)
+                    # these are the forecast members to loop over
+                    variable_forecast_members: list[str] = [
+                        i.item() for i in forecast_data[loader_name].member.values
+                    ]
+                    variable_forecast_end_dt = (
+                        forecast_data[loader_name].time.values[-1]
+                    ).item()  # get the end datetime of the forecast
+
+                    if forecast_members is None:
+                        forecast_members: list[str] = variable_forecast_members
+                        forecast_end_dt = variable_forecast_end_dt
+                    else:
+                        if forecast_members != variable_forecast_members:
+                            raise ValueError(
+                                "Forecast members do not match between variables."
+                            )
+                        if forecast_end_dt != variable_forecast_end_dt:
+                            raise ValueError(
+                                "Forecast end datetimes do not match between variables."
+                            )
                 else:
-                    if forecast_members != variable_forecast_members:
-                        raise ValueError(
-                            "Forecast members do not match between variables."
-                        )
-                    if forecast_end_dt != variable_forecast_end_dt:
-                        raise ValueError(
-                            "Forecast end datetimes do not match between variables."
-                        )
+                    print(
+                        f"DEBUG: Forecast file does NOT exist for {loader_name}",
+                        flush=True,
+                    )
 
         assert len(forecast_data) > 0, (
             "No forecast data found for any variable. Please check the forecast files."
@@ -220,13 +255,13 @@ class GEBModel(Module, HazardDriver):
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
 
             for loader_name, loader in self.forcing.loaders.items():
-                if loader.supports_forecast:
+                if loader.supports_forecast and loader_name in forecast_data:
                     loader.set_forecast(
                         forecast_issue_datetime=forecast_issue_datetime,
                         da=forecast_data[loader_name].sel(member=member),
                     )
 
-            print(f"Running forecast member {member}")  # debugging print
+            print(f"Running forecast member {member}", flush=True)  # debugging print
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
 
             if return_mean_discharge:
@@ -253,8 +288,12 @@ class GEBModel(Module, HazardDriver):
             n_timesteps=store_n_timesteps,
         )  # restore the initial state of the multiverse
 
+        self.reporter.is_activated = (
+            original_is_activated  # restore original reporter state
+        )
+
         # after all forecast members have been processed, restore the original forcing data
-        for loader in self.forcing.loaders.values():
+        for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 loader.unset_forecast()  # unset forecast mode
 
@@ -270,6 +309,8 @@ class GEBModel(Module, HazardDriver):
         If configured, this function will also run the model in multiverse mode
         for the current timestep, using forecast data if available.
 
+        Raises:
+            ValueError: If forecast directories do not have the expected datetime format.
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
@@ -279,70 +320,94 @@ class GEBModel(Module, HazardDriver):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            forecast_files: list[Path] = list(
-                (
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                ).glob("*.zarr")
-            )  # get all forecast files in the input folder
+            # Discover all available forecast initialization directories
+            forecast_base_path = (
+                self.input_folder
+                / "other"
+                / "forecasts"
+                / self.config["general"]["forecasts"]["provider"]
+                / self.config["general"]["forecasts"]["processing"]
+            )
+
+            if forecast_base_path.exists():
+                forecast_dirs: list[Path] = [
+                    d
+                    for d in forecast_base_path.iterdir()
+                    if d.is_dir()
+                    and d.name.startswith(
+                        "2024"
+                    )  # assuming forecasts start with year 2024
+                ]  # get all forecast initialization directories
+            else:
+                forecast_dirs = []
             forecast_issue_dates: list[
-                datetime.date
+                datetime.datetime
             ] = []  # list to store forecast issue dates
-            for f in forecast_files:
-                datetime_str = f.stem.split("_")[
-                    -1
-                ]  # extract the datetime string from the filename
+
+            for forecast_dir in forecast_dirs:
                 if (
-                    datetime_str.replace("T", "").replace(":", "").isdigit()
-                ):  # Check if datetime string contains only digits, T, and colons (valid format)
-                    dt = datetime.datetime.strptime(
-                        datetime_str, "%Y%m%dT%H%M%S"
-                    )  # convert the string to a datetime object
-                    forecast_issue_dates.append(dt)  # append the date to the list
+                    len(forecast_dir.name) == 15 and forecast_dir.name[8] == "T"
+                ):  # YYYYMMDDTHHMMSS format
+                    dt = datetime.datetime.strptime(forecast_dir.name, "%Y%m%dT%H%M%S")
+
+                    # Check if this forecast directory contains precipitation data
+                    forecast_files = list(forecast_dir.glob("**/*.zarr"))
+
+                    if (
+                        forecast_files
+                    ):  # Only include forecasts that have precipitation data
+                        forecast_issue_dates.append(dt)
                 else:
-                    print(
-                        f"Warning: Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'. Skipping this file."
+                    raise ValueError(
+                        f"Warning: Forecast directory {forecast_dir.name} does not have a valid datetime format. Expected format: 'forecast_YYYYMMDDTHHMMSS'. Skipping this directory."
                     )  # print a warning if the format is invalid
 
             forecast_issue_dates = list(
                 set(forecast_issue_dates)
             )  # only keep unique dates
-
             for dt in forecast_issue_dates:
                 if (
-                    dt == self.current_time
-                ):  # change to include hours (for when we move to hourly)
-                    forecast_datetime = datetime.datetime.combine(
-                        dt, datetime.time(0)
-                    )  # Convert date back to datetime for the multiverse method
+                    dt.date() == self.current_time.date()
+                ):  # Check if forecast was issued for the current date
+                    print(
+                        f"Found forecast issued at {dt.strftime('%Y-%m-%d %H:%M:%S')} for current time {self.current_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
 
-                    # self.multiverse(
-                    #     forecast_issue_datetime=forecast_datetime,
-                    #     return_mean_discharge=True,
-                    # )  # run the multiverse for the current timestep
+                    self.multiverse(
+                        forecast_issue_datetime=dt,
+                        return_mean_discharge=True,
+                    )  # run the multiverse for the current timestep
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
                         print(
                             f"\nRunning flood early warning system for date time {self.current_time.isoformat()}..."
                         )
-                        self.agents.households.water_level_warning_strategy3(
-                            date_time=self.current_time
-                        )
-                        # self.agents.households.create_flood_probability_maps(
-                        #     date_time=self.current_time, strategy=1, exceedance=True
-                        # )
-                        # self.agents.households.water_level_warning_strategy(
-                        #     date_time=self.current_time
-                        # )
-                        # self.agents.households.critical_infrastructure_warning_strategy(
-                        #     date_time=self.current_time
-                        # )
+                        # Run warning strategies based on config settings
+                        if (
+                            self.config.get("warning_system", {})
+                            .get("water_level_strategy", {})
+                            .get("enabled", True)
+                        ):
+                            self.agents.households.water_level_warning_strategy(
+                                date_time=self.current_time, exceedance=True
+                            )
+
+                        if (
+                            self.config.get("warning_system", {})
+                            .get("critical_infrastructure_strategy", {})
+                            .get("enabled", True)
+                        ):
+                            self.agents.households.critical_infrastructure_warning_strategy(
+                                date_time=self.current_time, exceedance=True
+                            )
+
+                        # Run household decision-making to convert warnings into actions
                         self.agents.households.household_decision_making(
                             date_time=self.current_time
                         )
+
+                        # Update household geodataframe with warning parameters
                         self.agents.households.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
@@ -353,7 +418,7 @@ class GEBModel(Module, HazardDriver):
         if self.simulate_hydrology:
             self.hydrology.step()
 
-        HazardDriver.step(self)
+        self.hazard_driver.step()
 
         self.report(locals())
 
@@ -404,7 +469,7 @@ class GEBModel(Module, HazardDriver):
 
         self.hydrology: Hydrology = Hydrology(self)
 
-        HazardDriver.__init__(self)
+        self.hazard_driver = HazardDriver(self)
 
         self.agents = Agents(self)
 
@@ -523,6 +588,47 @@ class GEBModel(Module, HazardDriver):
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
+    def refresh_agent_attributes(self, agent_type: str = "households") -> None:
+        """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
+
+        This function is only included for development purposes.
+
+        Args:
+            agent_type: Type of agent to refresh attributes for. Examples: "households", "crop_farmers", etc.
+
+        """
+        # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
+        current_time = self.spinup_start
+        end_time_exclusive = self.run_start
+
+        timestep_length = datetime.timedelta(days=1)
+        n_timesteps = (end_time_exclusive - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
+
+        # create var bucket
+        self.var: GEBModelVariables = self.store.create_bucket("var")
+
+        # initialize the model
+        self._initialize(
+            create_reporter=True,
+            current_time=current_time,
+            n_timesteps=n_timesteps,
+            timestep_length=datetime.timedelta(days=1),
+            load_data_from_store=False,
+            clean_report_folder=False,
+            in_spinup=True,
+        )
+
+        # save initial household attributes
+        print(f"Refreshing household attributes for {agent_type}...")
+        path: Path = self.store.path
+        name = getattr(self.agents, agent_type).name
+        self.logger.debug(f"Saving {name}.var")
+        bucket = self.store.buckets[f"{name}.var"]
+        bucket.save(path / f"{name}.var")
+
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
 
@@ -560,7 +666,7 @@ class GEBModel(Module, HazardDriver):
         #     }
         # }
 
-        self.var = self.store.create_bucket("var")
+        self.var: GEBModelVariables = self.store.create_bucket("var")
 
         self.check_time_range()
         self._initialize(
@@ -607,10 +713,10 @@ class GEBModel(Module, HazardDriver):
                 f"Spinup start time does not match the stored time range. Stored: {self.var._spinup_start}, Configured: {self.spinup_start}"
             )
 
-        if self.var._run_start != self.run_start:
-            raise ValueError(
-                f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
-            )
+        # if self.var._run_start != self.run_start:
+        #    raise ValueError(
+        #        f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
+        #    )
 
     def estimate_return_periods(self) -> None:
         """Estimate flood maps for different return periods."""
@@ -630,10 +736,10 @@ class GEBModel(Module, HazardDriver):
 
         # ugly switch to determine whether model has coastal basins
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
-        if subbasins["is_coastal_basin"].any():
+        if subbasins["is_coastal"].any():
             generate_storm_surge_hydrographs(self)
 
-        self.floods.get_return_period_maps()
+        self.hazard_driver.floods.get_return_period_maps()
 
     def evaluate(self, *args: Any, **kwargs: Any) -> None:
         """Call the evaluator to evaluate the model results."""
@@ -741,7 +847,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             Path to the folder containing GEB binaries.
         """
-        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
+        return GEB_PACKAGE_DIR / "bin"
 
     @property
     def diagnostics_folder(self) -> Path:
@@ -816,7 +922,7 @@ class GEBModel(Module, HazardDriver):
 
             # Close all async forcing readers
             if hasattr(self, "forcing"):
-                for forcing_loader in self.forcing._loaders.values():
+                for forcing_loader in self.forcing.forcing_loaders.values():
                     if hasattr(forcing_loader, "reader"):
                         forcing_loader.reader.close()
 
@@ -861,7 +967,7 @@ class GEBModel(Module, HazardDriver):
             ValueError: If the spinup start date is before the model build start date.
             ValueError: If the run end date is after the model build end date.
         """
-        model_build_time_range: dict[str, str] = read_dict(
+        model_build_time_range: dict[str, str] = read_params(
             self.files["dict"]["model_time_range"]
         )
 
@@ -880,15 +986,15 @@ class GEBModel(Module, HazardDriver):
                 model_build_end_date
             )
 
-        if self.spinup_start.date() < model_build_start_date:
-            raise ValueError(
-                "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
-            )
+        # if self.spinup_start.date() < model_build_start_date:
+        #    raise ValueError(
+        #        "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
+        #    )
 
-        if self.run_end.date() > model_build_end_date:
-            raise ValueError(
-                "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
-            )
+        # if self.run_end.date() > model_build_end_date:
+        #    raise ValueError(
+        #        "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
+        #    )
 
     @property
     def spinup_start(self) -> datetime.datetime:

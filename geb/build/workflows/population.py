@@ -22,7 +22,7 @@ def load_GLOPOP_S(
     Returns:
         A tuple with a DataFrame containing the GLOPOP-S data and a DataArray with the GLOPOP grid.
     """
-    GLOPOP_S_attribute_names = [
+    GLOPOP_S_attribute_names: list[str] = [
         "HID",
         "RELATE_HEAD",
         "INCOME",
@@ -52,6 +52,7 @@ def load_GLOPOP_S(
         # Open the GLOPOP_SG grid file
         with zip_ref.open(file_name_tif) as file:
             GLOPOP_GRID_region = rioxarray.open_rasterio(file)
+            assert isinstance(GLOPOP_GRID_region, xr.DataArray)
         # Open the GLOPOP_SG synthpop file
         with zip_ref.open(file_name_gz) as file:
             with gzip.open(file, "rb") as f:
@@ -64,15 +65,15 @@ def load_GLOPOP_S(
     # Drop extra values to make sure length is exact multiple of n_attr
     trimmed_GLOPOP = GLOPOP_S_region[: n_people * n_attr]
 
-    GLOPOP_S_region = pd.DataFrame(
+    GLOPOP_S_region: pd.DataFrame = pd.DataFrame(
         np.reshape(trimmed_GLOPOP, (n_attr, n_people)).transpose(),
-        columns=GLOPOP_S_attribute_names,
+        columns=np.array(GLOPOP_S_attribute_names),
     )
 
     # Get coordinates of each GRID_CELL in GLOPOP_GRID_region
     grid_coords = pd.DataFrame(
         np.stack(np.where(GLOPOP_GRID_region.values[0] > -1), axis=1),
-        columns=["GRID_Y", "GRID_X"],
+        columns=np.array(["GRID_Y", "GRID_X"]),
     )
     grid_coords["GRID_CELL"] = GLOPOP_GRID_region.values[0][
         GLOPOP_GRID_region.values[0] > -1
@@ -85,12 +86,14 @@ def load_GLOPOP_S(
     # no nans in GRID_Y
 
     # Merge the coordinates onto GLOPOP_S_region
-    GLOPOP_S_region = GLOPOP_S_region.merge(grid_coords, on="GRID_CELL", how="left")
+    GLOPOP_S_region: pd.DataFrame = GLOPOP_S_region.merge(
+        grid_coords, on="GRID_CELL", how="left"
+    )
     # assert not GLOPOP_S_region["GRID_Y"].isna().any(), (
     #     "GRID_Y contains NaN values, CHECK GLOPOP DATA"
     # )
     if GLOPOP_S_region["GRID_Y"].isna().any():
-        GLOPOP_S_region = GLOPOP_S_region[~GLOPOP_S_region.GRID_Y.isna()]
+        GLOPOP_S_region: pd.DataFrame = GLOPOP_S_region[~GLOPOP_S_region.GRID_Y.isna()]
         print(
             f"WARNING: GRID_Y contains NaN values, CHECK GLOPOP DATA. REGION: {GDL_region}"
         )

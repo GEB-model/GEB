@@ -1,0 +1,151 @@
+# Voorbeeld configuratie voor sensitivity analysis van warning systeem
+# Dit kun je toevoegen onder agent_settings.households.warning_system in je model.yml
+
+warning_response: true
+warning_system:
+  # ===== BASIS CONFIGURATIE =====
+  # Deze waardes worden gebruikt als sensitivity uitstaat
+  probability_threshold: 0.6
+  area_threshold: 0.1
+  building_threshold: 0.1
+  communication_efficiency: 0.78
+  evacuation_lead_time_threshold: 24
+  
+  response_rates:
+    flood_general_warnings: 1.0
+    impact_based_warnings: 0.51
+  
+  strategies:
+    water_level_warnings: true
+    critical_infrastructure_warnings: false
+    warning_type: "impact_based"  # "impact_based" of "flood_general"
+  
+  # ===== SENSITIVITY ANALYSIS CONFIGURATIE =====
+  sensitivity:
+    enabled: true  # Zet op false om normale run te doen
+    auto_run: true  # Zet op true om automatisch bij model init te draaien
+    method: "grid_search"  # Opties: "grid_search", "latin_hypercube", "monte_carlo"
+    n_samples: null  # Alleen voor latin_hypercube of monte_carlo (bijv. 100)
+    
+    # BELANGRIJK: Forecast dates worden automatisch gedetecteerd!
+    # Het systeem zoekt alle flood_prob_exceedance_maps/forecast_* folders
+    # en gebruikt die automatisch voor de sensitivity analysis
+    
+    # Welke parameters wil je testen?
+    parameters:
+      # Parameter 1: Probability threshold (numeriek)
+      probability_threshold:
+        enabled: true
+        type: "numeric"
+        base_value: 0.6
+        test_values: [0.5, 0.6, 0.7]  # 3 waardes
+        # Of gebruik min/max/step:
+        # min: 0.5
+        # max: 0.8
+        # step: 0.1
+      
+      # Parameter 2: Area threshold (numeriek)
+      area_threshold:
+        enabled: true
+        type: "numeric"
+        base_value: 0.1
+        test_values: [0.1, 0.15, 0.2]  # 3 waardes
+      
+      # Parameter 3: Building threshold (numeriek) - UITGESCHAKELD
+      building_threshold:
+        enabled: false  # Deze wordt niet getest, houdt base_value
+        type: "numeric"
+        base_value: 0.1
+      
+      # Parameter 4: Communication efficiency (numeriek)
+      communication_efficiency:
+        enabled: true
+        type: "numeric"
+        base_value: 0.78
+        test_values: [0.65, 0.78, 0.9]  # 3 waardes
+      
+      # Parameter 5: Warning type (CATEGORISCH!) - DIT IS DE BELANGRIJKE VOOR JOUW VRAAG
+      warning_type:
+        enabled: true
+        type: "categorical"  # Let op: dit is GEEN numerieke parameter!
+        base_value: "impact_based"
+        test_values: ["impact_based", "flood_general"]  # 2 waardes
+    
+    # Totaal aantal runs met grid_search: 3 × 3 × 3 × 2 = 54 runs
+    
+    # Output configuratie
+    output:
+      folder: "sensitivity_analysis"  # Subfolder onder output/
+      format: "parquet"  # Of "csv", "both"
+      save_intermediate: true  # Sla elke run apart op (handig voor debugging)
+      
+      # Welke metrics wil je tracken?
+      metrics:
+        - n_households_warned
+        - n_households_evacuated
+        - n_possessions_elevated
+        - warning_coverage_pct
+        # Je kunt hier meer metrics toevoegen als je die in run_single_combination berekent
+
+
+# ===== ALTERNATIEVE CONFIGURATIES =====
+
+# Configuratie A: Minimale grid search (snel testen)
+# sensitivity:
+#   enabled: true
+#   method: "grid_search"
+#   parameters:
+#     probability_threshold:
+#       enabled: true
+#       type: "numeric"
+#       test_values: [0.5, 0.7]  # 2 waardes
+#     warning_type:
+#       enabled: true
+#       type: "categorical"
+#       test_values: ["impact_based", "flood_general"]  # 2 waardes
+#   # Totaal: 2 × 2 = 4 runs
+
+
+# Configuratie B: Latin Hypercube (veel parameters, efficiënt)
+# sensitivity:
+#   enabled: true
+#   method: "latin_hypercube"
+#   n_samples: 50  # Vaste aantal runs ongeacht aantal parameters
+#   parameters:
+#     probability_threshold:
+#       enabled: true
+#       type: "numeric"
+#       min: 0.4
+#       max: 0.8
+#     area_threshold:
+#       enabled: true
+#       type: "numeric"
+#       min: 0.05
+#       max: 0.2
+#     communication_efficiency:
+#       enabled: true
+#       type: "numeric"
+#       min: 0.5
+#       max: 0.95
+#     warning_type:
+#       enabled: true
+#       type: "categorical"
+#       test_values: ["impact_based", "flood_general"]
+#   # Totaal: 50 runs voor 4 parameters
+
+
+# Configuratie C: Monte Carlo (random sampling)
+# sensitivity:
+#   enabled: true
+#   method: "monte_carlo"
+#   n_samples: 100
+#   parameters:
+#     probability_threshold:
+#       enabled: true
+#       type: "numeric"
+#       test_values: [0.4, 0.5, 0.6, 0.7, 0.8]
+#     warning_type:
+#       enabled: true
+#       type: "categorical"
+#       test_values: ["impact_based", "flood_general"]
+#   # Totaal: 100 willekeurige combinaties

@@ -23,13 +23,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import platform
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, overload
 
 import flopy
 import numpy as np
@@ -39,13 +37,23 @@ from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
 from xmipy.errors import InputError
 
-from geb.types import (
+from geb.geb_types import (
     ArrayFloat32,
     ArrayFloat64,
+    ArrayWithScalar,
+    ThreeDArrayFloat32,
+    ThreeDArrayWithScalar,
+    TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayFloat64,
+    TwoDArrayWithScalar,
 )
-from geb.workflows.io import WorkingDirectory
+from geb.workflows.io import (
+    WorkingDirectory,
+    create_hash_from_parameters,
+    read_hash,
+    write_hash,
+)
 from geb.workflows.raster import decompress_with_mask
 
 if TYPE_CHECKING:
@@ -207,22 +215,6 @@ def distribute_well_abstraction_m3_per_layer(
 class ModFlowSimulation:
     """Implements an instance of the MODFLOW model as well as methods to interact with it.
 
-    Args:
-        model: The GEB model instance.
-        topography: The topography or surface elevation of the model grid.
-        gt: The geotransform of the model grid (GDAL-style).
-        specific_storage: The specific storage of the model grid, in m-1.
-        specific_yield: The specific yield of the model grid, in m-1.
-        layer_boundary_elevation: The elevation of the layer boundaries, in m.
-        basin_mask: A boolean mask indicating the active cells in the model grid.
-        hydraulic_conductivity: The hydraulic conductivity of the model grid, in m/day.
-        heads: The initial heads of the model grid, in m.
-        heads_update_callback: A callback function to update the heads in the GEB model after each time step.
-        min_remaining_layer_storage_m: The minimum remaining layer storage in m, defaults to 0.1. More storage cannot be abstracted with wells.
-        verbose: Whether to print debug information, defaults to False.
-        never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input
-            will be loaded from disk if it exists and the input parameters have not changed.
-
     Note:
         Communication of fluxes should only be done in m3. This is because the calculation
         of area in MODFLOW is slightly different from the area in GEB, which can lead to
@@ -230,18 +222,21 @@ class ModFlowSimulation:
         why all public methods of this class communicate in m3, and not in m.
     """
 
+    area: ArrayFloat32
+    heads: TwoDArrayFloat64
+
     def __init__(
         self,
         working_directory: Path,
         modflow_bin_folder: Path,
-        topography: npt.NDArray[np.float32],
+        topography: ArrayFloat32,
         gt: tuple[float, float, float, float, float, float],
-        specific_storage: npt.NDArray[np.float32],
-        specific_yield: npt.NDArray[np.float32],
-        layer_boundary_elevation: npt.NDArray[np.float32],
-        basin_mask: npt.NDArray[np.bool_],
-        hydraulic_conductivity: npt.NDArray[np.float32],
-        heads: npt.NDArray[np.float64],
+        specific_storage: TwoDArrayFloat32,
+        specific_yield: TwoDArrayFloat32,
+        layer_boundary_elevation: TwoDArrayFloat32,
+        basin_mask: TwoDArrayBool,
+        hydraulic_conductivity: TwoDArrayFloat32,
+        heads: TwoDArrayFloat64,
         heads_update_callback: Callable,
         min_remaining_layer_storage_m: float = 0.1,
         verbose: bool = False,
@@ -312,7 +307,7 @@ class ModFlowSimulation:
                 )
 
                 sim.write_simulation()
-                self.write_hash_to_disk()
+                write_hash(self.hash_file, self.hash)
             except:
                 if self.hash_file.exists():
                     self.hash_file.unlink()
@@ -546,7 +541,7 @@ class ModFlowSimulation:
         )
 
         # Node property flow
-        k: TwoDArrayFloat32 = self.decompress(hydraulic_conductivity)
+        k: ThreeDArrayFloat32 = self.decompress(hydraulic_conductivity)
 
         # Initial conditions
         flopy.mf6.ModflowGwfic(
@@ -581,8 +576,8 @@ class ModFlowSimulation:
             },
         )
 
-        specific_storage: TwoDArrayFloat32 = self.decompress(specific_storage)
-        specific_yield: TwoDArrayFloat32 = self.decompress(specific_yield)
+        specific_storage: ThreeDArrayFloat32 = self.decompress(specific_storage)
+        specific_yield: ThreeDArrayFloat32 = self.decompress(specific_yield)
 
         # Storage
         # Somehow modeltime is not available when loading_package is set to False (the default) and what it should be.
@@ -726,14 +721,6 @@ class ModFlowSimulation:
 
         return sim
 
-    def write_hash_to_disk(self) -> None:
-        """Write the hash of the model input to disk.
-
-        This is used to check if the model input has changed next run
-        and if the model can be loaded from disk.
-        """
-        self.hash_file.write_text(self.hash.hex())
-
     def load_from_disk(self, arguments: dict[str, Any]) -> bool:
         """Check if the model input has changed and load from disk if not.
 
@@ -751,11 +738,9 @@ class ModFlowSimulation:
                 value = str(value.tobytes())
             hashable_dict[key] = value
 
-        self.hash = hashlib.md5(
-            json.dumps(hashable_dict, sort_keys=True).encode()
-        ).digest()
+        self.hash = create_hash_from_parameters(arguments, code_path=Path(__file__))
         if self.hash_file.exists():
-            prev_hash = bytes.fromhex(self.hash_file.read_text())
+            prev_hash = read_hash(self.hash_file)
         else:
             prev_hash = None
 
@@ -776,9 +761,7 @@ class ModFlowSimulation:
         with open("mfsim.stdout") as f:
             return f.readlines()
 
-    def load_bmi(
-        self, heads: npt.NDArray[np.float64], modflow_bin_folder: Path
-    ) -> None:
+    def load_bmi(self, heads: TwoDArrayFloat64, modflow_bin_folder: Path) -> None:
         """Load the Basic Model Interface.
 
         Args:
@@ -843,7 +826,7 @@ class ModFlowSimulation:
                 print("MODFLOW model initialized")
 
         area_tag: str = self.mf6.get_var_address("AREA", self.name, "DIS")
-        area: npt.NDArray[np.float64] = self.mf6.get_value_ptr(area_tag).reshape(
+        area: TwoDArrayFloat64 = self.mf6.get_value_ptr(area_tag).reshape(
             self.nlay, self.n_active_cells
         )
 
@@ -851,13 +834,13 @@ class ModFlowSimulation:
         assert (np.diff(area, axis=0) == 0).all()
 
         # so we can use the area of the top layer
-        self.area: npt.NDArray[np.float32] = area[0].astype(np.float32)
+        self.area = area[0].astype(np.float32)
 
         self.prepare_time_step()
 
         # because modflow rounds heads when they are written to file, we set the modflow heads
         # to the actual model heads to ensure that the model is in the same state as the modflow model
-        self.heads: npt.NDArray[np.float64] = heads
+        self.heads = heads
         assert not np.isnan(self.heads).any()
 
     @property
@@ -1217,10 +1200,22 @@ class ModFlowSimulation:
         """
         self.heads = heads
 
+    @overload
     def decompress(
         self,
-        array: TwoDArrayFloat32,
-    ) -> TwoDArrayFloat32:
+        array: TwoDArrayWithScalar,
+    ) -> ThreeDArrayWithScalar: ...
+
+    @overload
+    def decompress(
+        self,
+        array: ArrayWithScalar,
+    ) -> TwoDArrayWithScalar: ...
+
+    def decompress(
+        self,
+        array: TwoDArrayWithScalar | ArrayWithScalar,
+    ) -> ThreeDArrayWithScalar | TwoDArrayWithScalar:
         """Decompress a compressed array using the model's grid.
 
         Args:

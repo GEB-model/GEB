@@ -17,6 +17,8 @@ Notes:
 
 """
 
+from __future__ import annotations
+
 import os
 import tarfile
 import time
@@ -260,15 +262,19 @@ class MeritHydro(Adapter):
 
         Returns:
             xarray DataArray with merged tiles, preserving CRS and coordinates.
-
         """
-        das: list[xr.DataArray] = [rxr.open_rasterio(path) for path in tile_paths]
-        das: list[xr.DataArray] = [da.sel(band=1) for da in das]
+        das: list[xr.DataArray] = []
+        for path in tile_paths:
+            src = rxr.open_rasterio(path)
+            assert isinstance(src, xr.DataArray)
+            das.append(src.sel(band=1))
+
         da: xr.DataArray = merge.merge_arrays(das)
         return da
 
     def fetch(
         self,
+        *,
         xmin: float,
         xmax: float,
         ymin: float,
@@ -279,7 +285,7 @@ class MeritHydro(Adapter):
         session: requests.Session | None = None,
         request_timeout_s: float = 60.0,
         attempts: int = 3,
-    ) -> None:
+    ) -> MeritHydro:
         """Download MERIT Hydro tiles intersecting a bbox by streaming tars.
 
         The function downloads only the GeoTIFFs needed for a single MERIT variable
@@ -305,6 +311,9 @@ class MeritHydro(Adapter):
             request_timeout_s: Timeout per HTTP request (seconds).
             attempts: Number of attempts for transient failures (errors are raised after this many tries).
 
+        Returns:
+            The MeritHydro instance.
+
         Raises:
             ValueError: If inputs are invalid or auth variables are missing.
             RuntimeError: If the HTTP client dependency is not available.
@@ -325,7 +334,9 @@ class MeritHydro(Adapter):
 
         # Helper to get missing marker path for a tile name
         def missing_marker_path(tile_name: str) -> Path:
-            return self.root / f"{tile_name}.missing.txt"
+            root = self.root
+            assert root is not None
+            return root / f"{tile_name}.missing.txt"
 
         # Prepare HTTP session
         if session is None:
@@ -538,7 +549,7 @@ class MeritHydroDir(MeritHydro):
         MeritHydro: Base class for MERIT Hydro datasets.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the adapter for flow direction data.
 
         Args:
@@ -546,17 +557,23 @@ class MeritHydroDir(MeritHydro):
             **kwargs: Keyword arguments passed to the base class.
 
         """
-        super().__init__(variable="dir", *args, **kwargs)
+        super().__init__(variable="dir", **kwargs)
 
-    def fetch(self, *args: Any, **kwargs: Any) -> None:
+    def fetch(self, **kwargs: Any) -> MeritHydro:
         """Process and download flow direction data with specific fill value.
 
         Args:
-            *args: Positional arguments passed to the base class fetcher.
             **kwargs: Keyword arguments passed to the base class fetcher.
 
+        Returns:
+            The MeritHydro instance.
+
         """
-        return super().fetch(*args, **kwargs, source_nodata=247, target_nodata=247)
+        return super().fetch(
+            source_nodata=247,
+            target_nodata=247,
+            **kwargs,
+        )
 
 
 class MeritHydroElv(MeritHydro):
@@ -566,7 +583,7 @@ class MeritHydroElv(MeritHydro):
         MeritHydro: Base class for MERIT Hydro datasets.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the adapter for elevation data.
 
         Args:
@@ -574,16 +591,20 @@ class MeritHydroElv(MeritHydro):
             **kwargs: Keyword arguments passed to the base class.
 
         """
-        super().__init__(variable="elv", *args, **kwargs)
+        super().__init__(variable="elv", **kwargs)
 
-    def fetch(self, *args: Any, **kwargs: Any) -> None:
+    def fetch(self, **kwargs: Any) -> MeritHydro:
         """Process and download elevation data with specific fill value.
 
         Args:
-            *args: Positional arguments passed to the base class fetcher.
             **kwargs: Keyword arguments passed to the base class fetcher.
+
+        Returns:
+            The MeritHydro instance.
 
         """
         return super().fetch(
-            *args, **kwargs, source_nodata=-9999.0, target_nodata=np.nan
+            source_nodata=-9999.0,
+            target_nodata=np.nan,
+            **kwargs,
         )

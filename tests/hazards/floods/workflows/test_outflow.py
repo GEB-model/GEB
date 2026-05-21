@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
+from geb.geb_types import TwoDArrayBool
 from geb.hazards.floods.workflows.outflow import create_outflow_in_mask
-from geb.types import TwoDArrayBool
 
 
 @pytest.fixture

@@ -21,9 +21,10 @@ from geb.workflows.raster import (
 )
 
 from ..workflows.soilgrids import load_soilgrids
+from .base import BuildModelBase
 
 
-class LandSurface:
+class LandSurface(BuildModelBase):
     """Implements land surface submodel, responsible for land surface characteristics and processes."""
 
     def __init__(self) -> None:
@@ -51,8 +52,9 @@ class LandSurface:
             mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
 
+        height, width = cell_area.shape
         cell_area.data = calculate_cell_area(
-            mask.rio.transform(recalc=True), mask.shape
+            mask.rio.transform(recalc=True), height, width
         )
         cell_area = cell_area.where(~mask, cell_area.attrs["_FillValue"])
         self.set_grid(cell_area, name="cell_area")
@@ -76,9 +78,11 @@ class LandSurface:
             dtype=np.float32,
         )
 
+        height, width = region_subgrid_cell_area.shape
         region_subgrid_cell_area.data = calculate_cell_area(
             region_subgrid_cell_area.rio.transform(recalc=True),
-            region_subgrid_cell_area.shape,
+            height,
+            width,
         )
 
         # set the cell area for the region subgrid
@@ -95,6 +99,7 @@ class LandSurface:
                 "name": "fabdem",
                 "zmin": 0.001,
                 "fill_depressions": True,
+                "nodata": np.nan,
             },
             {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
         ],
@@ -154,11 +159,11 @@ class LandSurface:
                 else:
                     if DEM["name"] == "geul_dem":
                         DEM_raster = read_zarr(
-                            self.data_catalog.get_source(DEM["name"]).path
+                            self.data_catalog.get_source(DEM["name"]).path  # ty:ignore[invalid-argument-type]
                         )
                     else:
                         DEM_raster = xr.open_dataarray(
-                            self.data_catalog.get_source(DEM["name"]).path,
+                            self.data_catalog.get_source(DEM["name"]).path,  # ty:ignore[invalid-argument-type]
                         )
                 if "bands" in DEM_raster.dims:
                     DEM_raster = DEM_raster.isel(band=0)
@@ -183,12 +188,13 @@ class LandSurface:
             )
 
             if "fill_depressions" in DEM and DEM["fill_depressions"]:
-                DEM_raster.values, d8 = fill_depressions(DEM_raster.values)
+                DEM_raster.values, d8 = fill_depressions(
+                    DEM_raster.values, nodata=DEM["nodata"]
+                )
 
             self.set_other(
                 DEM_raster,
                 name=f"DEM/{DEM['name']}",
-                byteshuffle=True,
             )
             DEM["path"] = f"DEM/{DEM['name']}"
         low_elevation_coastal_zone = DEM_raster < 10
@@ -198,7 +204,7 @@ class LandSurface:
         self.set_other(
             low_elevation_coastal_zone, name="landsurface/low_elevation_coastal_zone"
         )  # Maybe remove this
-        self.set_dict(DEMs, name="hydrodynamics/DEM_config")
+        self.set_params(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])
     def setup_regions_and_land_use(
@@ -265,7 +271,7 @@ class LandSurface:
         }
         regions["region_id"] = regions["region_id"].map(region_id_mapping)
 
-        self.set_dict(region_id_mapping, name="region_id_mapping")
+        self.set_params(region_id_mapping, name="region_id_mapping")
 
         assert "ISO3" in regions.columns, (
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
@@ -434,7 +440,7 @@ class LandSurface:
 
         forest_kc = (
             xr.open_dataarray(
-                self.data_catalog.get_source("cwatm_forest_5min").path.format(
+                self.data_catalog.get_source("cwatm_forest_5min").path.format(  # ty:ignore[possibly-missing-attribute]
                     variable="cropCoefficientForest_10days"
                 ),
             )
@@ -470,7 +476,7 @@ class LandSurface:
                 xr.open_dataarray(
                     self.data_catalog.get_source(
                         f"cwatm_{land_use_type}_5min"
-                    ).path.format(variable=parameter),
+                    ).path.format(variable=parameter),  # ty:ignore[possibly-missing-attribute]
                 )
                 .rename({"lat": "y", "lon": "x"})
                 .rio.write_crs(4326)
@@ -529,7 +535,7 @@ class LandSurface:
 
         crop_group = (
             xr.open_dataarray(
-                self.data_catalog.get_source("cwatm_soil_5min").path.format(
+                self.data_catalog.get_source("cwatm_soil_5min").path.format(  # ty:ignore[possibly-missing-attribute]
                     variable="cropgrp"
                 ),
             )

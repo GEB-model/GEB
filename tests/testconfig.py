@@ -10,12 +10,8 @@ This is useful for tests that are too memory or data intensive to run in the lim
 import os
 from pathlib import Path
 
-# Get the GEB package directory from the environment variable
-GEB_PACKAGE_DIR_ENV: str | None = os.environ.get("GEB_PACKAGE_DIR", None)
-if GEB_PACKAGE_DIR_ENV is None:
-    raise RuntimeError("GEB_PACKAGE_DIR environment variable is not set.")
+from geb import GEB_PACKAGE_DIR
 
-GEB_PACKAGE_DIR: Path = Path(GEB_PACKAGE_DIR_ENV)
 GEB_TEST_DIR: Path = GEB_PACKAGE_DIR.parent / "tests"
 
 # Ensure the testing files end in up in the tests folder of the GEB package directory

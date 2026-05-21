@@ -176,7 +176,7 @@ class MeritBasins(Adapter):
                 "Too many users have viewed or downloaded this file recently. Please try accessing the file again later. If the file you are trying to access is particularly large or is shared with many people, it may take up to 24 hours to be able to view or download the file."
             )
 
-    def fetch(self, url: str) -> Path:
+    def fetch(self, url: str) -> Adapter:
         """Process HydroLAKES zip file to extract and convert to parquet.
 
         Args:
@@ -257,19 +257,17 @@ class MeritBasins(Adapter):
                 gdf: gpd.GeoDataFrame = gpd.read_file(shp_path)
                 gdfs.append(gdf)
 
-            merged: gpd.GeoDataFrame = pd.concat(gdfs, ignore_index=True)
+            merged: gpd.GeoDataFrame = pd.concat(gdfs, ignore_index=True)  # ty:ignore[invalid-assignment]
 
             # clean memory
             for gdf in gdfs:
                 del gdf
             del gdfs
 
-            merged: gpd.GeoDataFrame = merged.set_crs("EPSG:4326")
+            merged = merged.set_crs("EPSG:4326")  # ty:ignore[invalid-assignment]
 
             ascending: bool = True
-            merged: gpd.GeoDataFrame = merged.sort_values(
-                by="COMID", ascending=ascending
-            )  # sort by COMID
+            merged = merged.sort_values(by="COMID", ascending=ascending)  # ty:ignore[invalid-assignment]
 
             # Use a temporary file to avoid partial writes in case of errors
             with tempfile.NamedTemporaryFile(

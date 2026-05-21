@@ -464,7 +464,7 @@ def plot_geohash_shifts(
     latd = (maxlat - minlat) / 10
     lond = (maxlon - minlon) / 10
 
-    ax.set_extent((minlon - lond, maxlon + lond, minlat - latd, maxlat + latd))
+    ax.set_extent((minlon - lond, maxlon + lond, minlat - latd, maxlat + latd))  # ty:ignore[unresolved-attribute]
     ax.add_image(imagery, 14)  # ty: ignore[too-many-positional-arguments,invalid-argument-type]  add image is enhanced by cartopy, but not in typeshed
 
     ax.set_title(
