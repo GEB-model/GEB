@@ -1082,7 +1082,7 @@ def test_snowpack_development_scenario() -> None:
     )
 
 
-def test_extreme_sublimation_cooling_regression():
+def test_extreme_sublimation_cooling_regression() -> None:
     """Test case to reproduce extreme negative temperatures due to sublimation.
 
     Regression test for a bug where sublimation on very thin snow layers
