@@ -1415,11 +1415,66 @@ class Routing(Module):
             A tuple containing:
             - alpha: The alpha parameter for the kinematic wave routing, which is a 1D array with the same shape as the grid.
             - beta_array: The beta parameter for the kinematic wave routing, which is a 1D array with the same shape as the grid.
+
+        Raises:
+            ValueError: If any river cell has zero average discharge after 10 days of simulation,
+                which would cause division-by-zero when computing alpha.
         """
         # for all rivers we use the default beta value.
         beta_array: ArrayFloat32 = np.full_like(
             self.observed_average_river_width, beta, dtype=np.float32
         )
+
+        # DEBUGGING: after 10 days of simulation, check for zero average discharge.
+        # Zero discharge will cause division-by-zero when computing alpha later on,
+        # so we surface the affected river locations here while we still have enough
+        # context to be useful.
+        if self.var.discharge_step_count > 10 * 24:
+            average_discharge_debug: ArrayFloat32 = (
+                self.var.sum_of_all_discharge_steps / self.var.discharge_step_count
+            ).astype(np.float64)
+
+            # Only check river cells — non-river cells (river_ids == -1) are
+            # expected to have zero discharge and must not trigger a false positive.
+            river_cell_mask: np.ndarray = self.river_ids != -1
+            if (average_discharge_debug[river_cell_mask] == 0).any():
+                zero_mask: np.ndarray = (
+                    average_discharge_debug == 0
+                ) & river_cell_mask
+                zero_compressed_indices: np.ndarray = np.where(zero_mask)[0]
+
+                # Map compressed indices back to MERIT COMID via river_ids.
+                # river_ids is a compressed 1D array (same ordering as other grid vars)
+                # where each entry is the MERIT basin COMID of that grid cell, or -1.
+                merit_comids: np.ndarray = self.river_ids[zero_compressed_indices]
+
+                # Reconstruct 2D (row, col) grid coordinates for map cross-referencing.
+                rows_2d, cols_2d = np.where(~self.grid.mask)
+                zero_rows: np.ndarray = rows_2d[zero_compressed_indices]
+                zero_cols: np.ndarray = cols_2d[zero_compressed_indices]
+
+                # Look up the river segment metadata from the rivers GeoDataFrame
+                # (indexed by MERIT COMID) for any recognised COMID (≠ -1).
+                matched_rivers = self.rivers.loc[
+                    self.rivers.index.isin(merit_comids[merit_comids != -1])
+                ]
+
+                debug_lines: list[str] = [
+                    f"  compressed_idx={idx}, row={r}, col={c}, MERIT_COMID={cid}"
+                    for idx, r, c, cid in zip(
+                        zero_compressed_indices, zero_rows, zero_cols, merit_comids
+                    )
+                ]
+                raise ValueError(
+                    f"Average discharge is zero for {zero_mask.sum()} river cell(s) after "
+                    f"{self.var.discharge_step_count} routing sub-steps. "
+                    "This will cause division-by-zero when computing the river-width alpha. "
+                    "Affected cells (compressed index, 2-D grid row/col, MERIT COMID):\n"
+                    + "\n".join(debug_lines)
+                    + f"\nMatched river segments in GeoDataFrame:\n{matched_rivers}\n"
+                    "Check whether these cells are genuinely dry or whether upstream "
+                    "connectivity / LDD routing is broken."
+                )
 
         # for the first year of simulation, we use the default alpha value for all rivers
         if self.var.discharge_step_count < 365 * 24:
