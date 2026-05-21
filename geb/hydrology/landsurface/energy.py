@@ -9,9 +9,9 @@ from geb.workflows.numba_stack_array import stack_empty
 from .constants import (
     C_MINERAL_VOLUMETRIC_J_PER_M3_K,
     KELVIN_OFFSET,
-    L_FUSION_J_PER_KG,
-    L_SUBLIMATION_J_PER_KG,
-    L_VAPORIZATION_J_PER_KG,
+    LATENT_HEAT_FUSION_J_PER_KG,
+    LATENT_HEAT_SUBLIMATION_J_PER_KG,
+    LATENT_HEAT_VAPORIZATION_J_PER_KG,
     N_SOIL_LAYERS,
     RHO_MINERAL_KG_PER_M3,
     RHO_WATER_KG_PER_M3,
@@ -565,7 +565,7 @@ def get_temperature_and_frozen_fraction_from_enthalpy(
         water_depth_cell_m = water_depth_flat[flat_idx]
 
         latent_heat_areal_J_per_m2 = (
-            water_depth_cell_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+            water_depth_cell_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
         )
         heat_capacity_liquid_J_per_m2_K = solid_heat_capacity_flat[flat_idx] + (
             water_depth_cell_m * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
@@ -671,7 +671,9 @@ def get_temperature_and_frozen_fraction_from_enthalpy_scalar(
             - frozen_fraction: Frozen fraction of water mass (0-1).
     """
     water_depth_m = water_content_m + topwater_m
-    latent_heat_areal_J_per_m2 = water_depth_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+    latent_heat_areal_J_per_m2 = (
+        water_depth_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
+    )
 
     heat_capacity_liquid_J_per_m2_K = (
         solid_heat_capacity_J_per_m2_K
@@ -779,8 +781,8 @@ def apply_evaporative_cooling(
     # If liquid: Vaporization energy
     # If ice: Sublimation energy (Fusion + Vaporization)
     latent_heat = (
-        fraction_unfrozen * L_VAPORIZATION_J_PER_KG
-        + (np.float32(1.0) - fraction_unfrozen) * L_SUBLIMATION_J_PER_KG
+        fraction_unfrozen * LATENT_HEAT_VAPORIZATION_J_PER_KG
+        + (np.float32(1.0) - fraction_unfrozen) * LATENT_HEAT_SUBLIMATION_J_PER_KG
     )
 
     energy_loss_J_per_m2 = evaporation_m * RHO_WATER_KG_PER_M3 * latent_heat
@@ -957,7 +959,7 @@ def solve_soil_enthalpy_column(
         topwater_layer_m = topwater_m if layer_idx == 0 else np.float32(0.0)
         water_depth_m = water_content_m[layer_idx] + topwater_layer_m
         latent_heat_areal_J_per_m2 = (
-            water_depth_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+            water_depth_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
         )
         heat_capacity_liquid_J_per_m2_K = (
             solid_heat_capacities_J_per_m2_K[layer_idx]
