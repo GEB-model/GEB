@@ -390,7 +390,7 @@ class Households(AgentBaseClass):
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
 
-        # load household points (only in use for damagescanner, could be removed)
+        # load household points
         household_points = gpd.GeoDataFrame(
             geometry=gpd.points_from_xy(
                 self.var.locations.data[:, 0], self.var.locations.data[:, 1]
@@ -408,34 +408,52 @@ class Households(AgentBaseClass):
 
     def assign_households_and_buildings_to_postal_codes(self) -> None:
         """This function associates the household points and buildings with their postal codes to get the correct geometry for the warning function."""
-        # Associate households with their postal codes to use it later in the warning function
         postal_codes: gpd.GeoDataFrame = gpd.read_parquet(
             self.model.files["geom"]["postal_codes"]
         )
         postal_codes["postcode"] = postal_codes["postcode"].astype(str)
 
-        households = self.var.household_points.copy()
+        # Buildings
         buildings = self.buildings.copy()
-
+        # Associate buildings with their postal codes to use it later in the warning function
         buildings.to_crs(
             postal_codes.crs, inplace=True
         )  # Change to the same CRS as the postal codes
 
-        buildings_with_postal_codes = gpd.sjoin(
-            buildings,
-            postal_codes[["postcode", "geometry"]],
-            how="left",
-            predicate="intersects",
+        # Use representative points of the building geometries to check which postal code they are in
+        # This is done to avoid issues with sliver polygons and to ensure that each building is assigned to a single postal code
+        representative_points = buildings.copy()
+        representative_points["building_geometry"] = representative_points.geometry
+        representative_points["geometry"] = (
+            representative_points.geometry.representative_point()
         )
 
-        # Drop columns that are not needed
-        buildings_with_postal_codes.drop(columns=["index_right"], inplace=True)
+        buildings_with_postal_codes = gpd.sjoin(
+            representative_points,
+            postal_codes[["postcode", "geometry"]],
+            how="left",
+            predicate="within",
+        )
+
+        buildings_with_postal_codes["geometry"] = buildings_with_postal_codes[
+            "building_geometry"
+        ]
+        buildings_with_postal_codes = buildings_with_postal_codes.set_geometry(
+            "geometry"
+        )
+        buildings_with_postal_codes.drop(
+            columns=["building_geometry", "index_right"], inplace=True
+        )
+
         buildings_with_postal_codes.to_parquet(
             self.model.output_folder / "buildings_w_postal_codes.geoparquet"
         )
         # TODO: Understand why it does not work if it is just self.buildings
         self.var.buildings = buildings_with_postal_codes
 
+        # Households
+        # Associate households with their postal codes to use it later in the warning function
+        households = self.var.household_points.copy()
         households.to_crs(
             postal_codes.crs, inplace=True
         )  # Change to the same CRS as the postal codes
@@ -450,6 +468,32 @@ class Households(AgentBaseClass):
         # Drop columns that are not needed
         households_with_postal_codes.drop(columns=["index_right"], inplace=True)
 
+        # TODO: Move this to build>agents
+        # Change the location of households to the representative point of the building they are in
+        # This is done to avoid issues with sliver polygons
+        # rep_points_lookup = representative_points[["id", "geometry"]].copy()
+        # rep_points_lookup.to_parquet(
+        #     self.model.output_folder / "rep_points_lookup.geoparquet"
+        # )
+        # rep_points_lookup.rename(columns={"geometry": "rep_geometry"}, inplace=True)
+
+        # households_with_postal_codes["b_id"] = self.var.building_id_of_household
+
+        # # Merge based on the building id to get the representative point geometry for each household
+        # households_with_postal_codes = households_with_postal_codes.merge(
+        #     rep_points_lookup,
+        #     left_on="b_id",
+        #     right_on="id",
+        #     how="left",
+        # )
+
+        # # Replace the geometry of the household with the representative point geometry of the building
+        # households_with_postal_codes["geometry"] = households_with_postal_codes["rep_geometry"]
+        # households_with_postal_codes = households_with_postal_codes.set_geometry("geometry")
+
+        # # Drop columns that are not needed
+        # households_with_postal_codes.drop(columns=["rep_geometry", "b_id"], inplace=True, errors="ignore")
+
         households_with_postal_codes.to_parquet(
             self.model.output_folder / "household_points_w_postal_codes.geoparquet"
         )
@@ -459,13 +503,6 @@ class Households(AgentBaseClass):
         print(
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
-
-        # debugging
-        buildings_w_h = buildings.sjoin(households, how="left", predicate="contains")
-        buildings_w_h.to_parquet(
-            self.model.output_folder / "buildings_with_households.geoparquet"
-        )
-        print()
 
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
@@ -738,6 +775,7 @@ class Households(AgentBaseClass):
     def identify_flooded_buildings(
         self, buildings, prob_map, prob_threshold, return_series=False
     ):
+        """Identifies which buildings are flooded based on the flood probability map and a specified probability threshold."""
         prob_map = prob_map >= prob_threshold  # convert to boolean mask
 
         buildings["flooded"] = False  # Initialize the flooded column
@@ -774,7 +812,7 @@ class Households(AgentBaseClass):
         Args:
             date_time: The forecast date time for which to implement the warning strategy.
             prob_threshold: The probability threshold above which a warning is issued.
-            area_threshold: The area threshold (percentage of area) above which a warning is issued.
+            buildings_hit_threshold: The threshold (percentage of buildings hit) above which a warning is issued.
             strategy_id: Identifier of the warning strategy (1 for water level ranges with measures).
         """
         # Get the range ids and initialize the warning_log
@@ -1698,6 +1736,7 @@ class Households(AgentBaseClass):
                 act on warnings.
         """
         print("Running emergency response decision-making for households...")
+        print(f"Responsive ratio: {responsive_ratio * 100:.2f}%")
 
         # Get lead time in hours
         lead_time = self.compute_lead_time()
@@ -2092,7 +2131,6 @@ class Households(AgentBaseClass):
         self.assign_household_attributes()
         if self.model.config["agent_settings"]["households"]["warning_response"]:
             self.assign_households_and_buildings_to_postal_codes()
-        print()
 
     def assign_damages_to_agents(
         self, agent_df: pd.DataFrame, buildings_with_damages: pd.DataFrame
@@ -2321,6 +2359,9 @@ class Households(AgentBaseClass):
 
             # Assign object types for buildings centroid based on protective measures taken
             buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+            # buildings_centroid = buildings.to_crs(flood_depth.rio.crs)
+            # buildings_centroid["geometry"] = buildings.geometry.centroid
+
             buildings_centroid["object_type"] = np.select(
                 [
                     (
@@ -2338,7 +2379,6 @@ class Households(AgentBaseClass):
                 default="building_unprotected",
             )
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
         else:
             household_points["protect_building"] = False
 
@@ -2354,6 +2394,14 @@ class Households(AgentBaseClass):
             )
 
             buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+
+            # buildings_centroid = buildings.to_crs(flood_depth.rio.crs)
+            # buildings_centroid["geometry"] = buildings.geometry.centroid
+            # buildings_centroid.to_parquet(
+            #     self.model.output_folder
+            #     / "buildings_centroid_for_content_damage.geoparquet"
+            # )
+
             buildings_centroid["object_type"] = buildings_centroid[
                 "protect_building"
             ].apply(lambda x: "building_protected" if x else "building_unprotected")
