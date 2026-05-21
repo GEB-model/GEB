@@ -5,8 +5,10 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import shapely
 import xarray as xr
 from pyflwdir.dem import fill_depressions
+from shapely.ops import linemerge
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window, parse_and_set_zarr_CRS
@@ -23,7 +25,7 @@ from geb.workflows.raster import (
     resample_like,
 )
 
-from ..workflows.soilgrids import load_soilgrids_v2
+from ..workflows.soilgrids import process_soilgrids
 from .base import BuildModelBase
 
 
@@ -160,8 +162,27 @@ class LandSurface(BuildModelBase):
                     DEM["zmax"] = DEM["coastal_zmax"]
 
             coastlines = self.geom["coastal/coastlines"]
+
+            # coastlines is a very complex geometry that can cause issues with clipping and masking operations
+            # therefore we take various steps to simplify
+            coastlines = gpd.GeoDataFrame(
+                geometry=shapely.set_precision(
+                    coastlines.geometry, grid_size=0.01, mode="keep_collapsed"
+                ),
+                crs=coastlines.crs,
+            )
+            coastlines = gpd.GeoDataFrame(
+                geometry=[linemerge(coastlines.geometry.union_all())],
+                crs=coastlines.crs,
+            )
+
+            # buffer coastlines with 0.2 degrees
+            coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+            coastlines_with_buffer = coastlines_with_buffer.union_all()
+
+            # merge the buffered coastlines with the potential flood area with buffer
             potential_flood_area_with_buffer = potential_flood_area_with_buffer.union(
-                coastlines.buffer(0.2).union_all()
+                coastlines_with_buffer
             )
 
             delta_dtm: xr.DataArray = self.data_catalog.fetch(
@@ -183,14 +204,18 @@ class LandSurface(BuildModelBase):
 
         fabdem: xr.DataArray = self.data_catalog.fetch(
             "fabdem",
-            mask=potential_flood_area_with_buffer,
-        ).read()
+        ).read(mask=potential_flood_area_with_buffer)
 
         target: xr.DataArray = self.subgrid["mask"].chunk({"x": 5000, "y": 5000})
         assert target.rio.crs is not None, "target grid must have a crs"
 
+        subgrid_elevation = resample_chunked(fabdem, target, method="nearest")
+        # fill nan values with 0
+        subgrid_elevation = subgrid_elevation.where(
+            ~np.isnan(subgrid_elevation) & ~self.subgrid["mask"], 0
+        )
         self.set_subgrid(
-            resample_chunked(fabdem, target, method="nearest"),
+            subgrid_elevation,
             name="landsurface/elevation",
         )
 
@@ -431,6 +456,48 @@ class LandSurface(BuildModelBase):
             "setup_land_use_parameters is removed, please remove it from your build configuration"
         )
 
+    def _load_soilgrids_variable_by_layer(
+        self,
+        subgrid_mask: xr.DataArray,
+        variable_name: str,
+        conversion_factor: float,
+        soil_layer_names: list[str],
+    ) -> xr.DataArray:
+        """Load a SoilGrids variable for all configured soil layers.
+
+        Args:
+            subgrid_mask: Target subgrid mask used to request SoilGrids data.
+            variable_name: SoilGrids variable name.
+            conversion_factor: Multiplier used to convert the source units to the
+                model units.
+            soil_layer_names: SoilGrids layer labels in top-to-bottom order.
+
+        Returns:
+            SoilGrids variable concatenated along the ``soil_layer`` dimension.
+        """
+        soilgrids_source = self.data_catalog.fetch("soilgridsv2")
+        soilgrids_layers: list[xr.DataArray] = []
+        for layer_name in soil_layer_names:
+            da = soilgrids_source.read(variable=variable_name, depth=layer_name)
+            da = da.astype(np.float32)
+            soilgrids_layers.append(
+                process_soilgrids(
+                    da=da,
+                    mask=subgrid_mask,
+                    region=self.region,
+                )
+            )
+
+        soil_layer_numbers: list[int] = list(range(1, len(soil_layer_names) + 1))
+        return (
+            xr.concat(
+                soilgrids_layers,
+                dim=xr.Variable("soil_layer", soil_layer_numbers),
+                compat="equals",
+            )
+            * conversion_factor
+        )
+
     @build_method(depends_on=[], required=True)
     def setup_soil(self) -> None:
         """Sets up the soil parameters for the model.
@@ -485,24 +552,14 @@ class LandSurface(BuildModelBase):
         ]
 
         for variable_name, conversion_factor in soilgrids_conversion_factors.items():
-            soilgrids_variables: list[xr.DataArray] = []
-            for soil_layer, layer_name in enumerate(soil_layer_names, start=1):
-                soilgrids_variables.append(
-                    load_soilgrids_v2(
-                        self.data_catalog,
-                        subgrid_mask,
-                        variable_name=variable_name,
-                        layer_name=layer_name,
-                    )
-                    * conversion_factor
-                )
-
-            soilgrids_variable: xr.DataArray = xr.concat(
-                soilgrids_variables,
-                dim=xr.Variable("soil_layer", [1, 2, 3, 4, 5, 6]),
-                compat="equals",
+            soilgrids_variable: xr.DataArray = self._load_soilgrids_variable_by_layer(
+                subgrid_mask=subgrid_mask,
+                variable_name=variable_name,
+                conversion_factor=conversion_factor,
+                soil_layer_names=soil_layer_names,
             )
-            self.set_subgrid(
+
+            soilgrids_variable: xr.DataArray = self.set_subgrid(
                 soilgrids_variable,
                 name=soilgrids_output_names[variable_name],
             )
@@ -515,31 +572,34 @@ class LandSurface(BuildModelBase):
         soil_layer_height_m = soil_layer_height_per_layer_m.broadcast_like(
             soilgrids_variable
         )
+        soil_layer_height_m = soil_layer_height_m.chunk({"soil_layer": 1})
         soil_layer_height_m.attrs["units"] = "m"
         soil_layer_height_m.attrs["description"] = "Height of each soil layer"
         soil_layer_height_m.attrs["_FillValue"] = np.nan
-        soil_layer_height_per_layer_m = soil_layer_height_per_layer_m.rio.write_crs(
+        soil_layer_height_m = soil_layer_height_m.rio.write_crs(
             soilgrids_variable.rio.crs
         )
 
         self.set_subgrid(soil_layer_height_m, name="soil/soil_layer_height_m")
+
+        # clean up memory
+        del soil_layer_height_m
+        del soilgrids_variable
 
         depth_to_bedrock_cm = (
             self.data_catalog.fetch("soilgridsv1")
             .read(variable="BDTICM_M_250m_ll")
             .astype(np.float32)
         )
+        depth_to_bedrock_cm = process_soilgrids(
+            da=depth_to_bedrock_cm,
+            mask=subgrid_mask,
+            region=self.region,
+        )
         assert isinstance(depth_to_bedrock_cm, xr.DataArray)
-        depth_to_bedrock_cm: xr.DataArray = resample_like(
-            depth_to_bedrock_cm, subgrid_mask
-        ).chunk({"x": -1, "y": -1})
-        depth_to_bedrock_cm: xr.DataArray = convert_nodata(depth_to_bedrock_cm, np.nan)
-
         depth_to_bedrock_m: xr.DataArray = (
             depth_to_bedrock_cm / 100
         )  # convert from cm to m
-
-        depth_to_bedrock_m: xr.DataArray = interpolate_na_2d(depth_to_bedrock_m)
 
         self.set_subgrid(depth_to_bedrock_m, name="soil/depth_to_bedrock_m")
 

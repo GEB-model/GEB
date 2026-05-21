@@ -3,8 +3,6 @@
 Useful for simple files that only need to be downloaded and stored without additional processing.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from geb.workflows.io import fetch_and_save

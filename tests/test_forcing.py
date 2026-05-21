@@ -3,8 +3,12 @@
 import numpy as np
 import pytest
 from scipy.interpolate import RegularGridInterpolator
+from scipy.sparse import csr_matrix
 
-from geb.forcing import generate_bilinear_interpolation_weights
+from geb.forcing import (
+    apply_bilinear_interpolation_weights,
+    generate_bilinear_interpolation_weights,
+)
 
 
 def test_bilinear_interpolation_ascending_coordinates() -> None:
@@ -235,3 +239,67 @@ def test_bilinear_interpolation_bounds_error() -> None:
 
     with pytest.raises(ValueError, match="Target x-coordinates are outside"):
         generate_bilinear_interpolation_weights(src_x, src_y, tgt_x_bad, tgt_y_good)
+
+
+def _reference_interpolate(
+    indices: np.ndarray,
+    weights: np.ndarray,
+    data: np.ndarray,
+) -> np.ndarray:
+    """Reference implementation using fancy indexing (the original approach).
+
+    Args:
+        indices: Shape (N_target, 4) integer corner indices into flattened source data.
+        weights: Shape (N_target, 4) bilinear weights for each corner.
+        data: Shape (n_source_cells, n_timesteps) source data.
+
+    Returns:
+        Interpolated array of shape (N_target, n_timesteps).
+    """
+    corner_values = data[indices, :]  # (N_target, 4, n_timesteps)
+    return np.sum(corner_values * weights[:, :, np.newaxis], axis=1)
+
+
+def test_apply_bilinear_interpolation_weights_matches_reference() -> None:
+    """Verify that the sparse-matmul implementation is numerically correct."""
+    rng = np.random.default_rng(42)
+
+    for descending_y in (False, True):
+        src_x = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float64)
+        src_y = (
+            np.array([2.0, 1.0, 0.0], dtype=np.float64)
+            if descending_y
+            else np.array([0.0, 1.0, 2.0], dtype=np.float64)
+        )
+
+        tgt_x = np.array([0.3, 1.1, 2.7], dtype=np.float64)
+        tgt_y = np.array([0.4, 1.6], dtype=np.float64)
+
+        indices, weights = generate_bilinear_interpolation_weights(
+            src_x, src_y, tgt_x, tgt_y
+        )
+
+        n_source = len(src_x) * len(src_y)
+        n_target = indices.shape[0]
+        n_timesteps = 24
+        data = rng.random((n_source, n_timesteps), dtype=np.float32)
+
+        # Reference: original fancy-indexing approach
+        reference = _reference_interpolate(indices, weights, data)
+
+        # New implementation: prebuilt sparse matrix
+        row_idx = np.repeat(np.arange(n_target, dtype=np.int32), 4)
+        interp_matrix = csr_matrix(
+            (weights.ravel(), (row_idx, indices.ravel())),
+            shape=(n_target, n_source),
+            dtype=np.float32,
+        )
+        result = apply_bilinear_interpolation_weights(interp_matrix, data)
+
+        np.testing.assert_allclose(
+            result,
+            reference,
+            rtol=1e-5,
+            atol=1e-6,
+            err_msg=f"Mismatch with descending_y={descending_y}",
+        )

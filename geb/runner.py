@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, TextIO, TypeVar, cast
 
 import geopandas as gpd
+import pandas as pd
 import yaml
 from pydantic import BaseModel, ValidationError
 from shapely.geometry import box
@@ -28,12 +29,12 @@ from geb.build.__init__ import (
     create_cluster_visualization_map,
     create_multi_basin_configs,
     get_all_downstream_subbasins_in_geom,
-    get_river_graph,
     save_clusters_as_merged_geometries,
     save_clusters_to_geoparquet,
 )
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
+from geb.build.workflows.hydrography import get_river_graph
 from geb.config_schema import Config
 from geb.model import GEBModel
 from geb.workflows.io import WorkingDirectory, read_params
@@ -188,9 +189,10 @@ def create_logger(name: str) -> logging.Logger:
     folder = Path("logs")
     folder.mkdir(exist_ok=True, parents=True)
     fp = folder / f"{name}.log"
-    if fp.exists():
-        fp.unlink()  # remove existing log file if it exists
-    fh = logging.FileHandler(fp)
+    # mode='w' clears the existing file rather than deleting and recreating it.
+    # Deleting it would cause the shell and Python to write to different files,
+    # so error messages would never appear in build.log.
+    fh = logging.FileHandler(fp, mode="w")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
@@ -337,14 +339,60 @@ def _dump_speed_profile(profile: cProfile.Profile, name: str, date: str) -> None
     profiling_folder.mkdir(exist_ok=True)
 
     # Save binary data for visualization in tools like SnakeViz or RunSnakeRun
-    binary_path = profiling_folder / f"{name}_speed_{date}.prof"
+    binary_path: Path = profiling_folder / f"{name}_speed_{date}.prof"
     profile.dump_stats(binary_path)
 
-    # Save human-readable summary
+    ps = pstats.Stats(profile)
+    data: list[dict[str, str]] = []
+
+    for func, (cc, nc, tt, ct, callers) in ps.stats.items():  # ty:ignore[unresolved-attribute]
+        filename: str
+        filename, line, func_name = func
+
+        if "geb/" in filename:
+            filename: str = "geb/" + filename.split("geb/")[-1]
+        elif ".venv/" in filename:
+            filename: str = ".venv/" + filename.split(".venv/")[-1]
+        elif ".lib/" in filename:
+            filename: str = ".lib/" + filename.split(".lib/")[-1]
+
+        def format_caller(caller_tuple: tuple | None) -> str:
+            if not caller_tuple:
+                return "N/A"
+            func_info, stats = caller_tuple
+            # stats[0] is ncalls, stats[3] is cumtime, func_info[2] is function name
+            return f"{func_info[2][:30]} ({stats[0]} calls, {stats[3]:.4f}s)"
+
+        # Sort the callers dictionary by ncalls (index 0) and cumtime (index 3)
+        sorted_by_freq: list = sorted(
+            callers.items(), key=lambda x: x[1][0], reverse=True
+        )
+        sorted_by_cum: list = sorted(
+            callers.items(), key=lambda x: x[1][3], reverse=True
+        )
+
+        data.append(
+            {
+                "function": func_name[:30],
+                "cumtime": ct,
+                "tottime": tt,
+                "ncalls": f"{nc}/{cc}" if nc != cc else nc,
+                "filename": filename[-30:],
+                "lineno": line,
+                # "top_freq_caller": format_caller(sorted_by_freq[0])
+                # if sorted_by_freq
+                # else "N/A",
+                "top_cum_caller": format_caller(sorted_by_cum[0])
+                if sorted_by_cum
+                else "N/A",
+            }
+        )
+
+    df: pd.DataFrame = pd.DataFrame(data).sort_values("cumtime", ascending=False)
+    string_formatted: str = df.head(200).to_string(index=False, justify="left")
     text_path = profiling_folder / f"{name}_speed_summary_{date}.txt"
-    with open(text_path, "w", encoding="utf-8") as stream:
-        stats = pstats.Stats(profile, stream=stream)
-        stats.strip_dirs().sort_stats("cumtime").print_stats()
+    text_path.parent.mkdir(exist_ok=True)
+    text_path.write_text(string_formatted + "\n", encoding="utf-8")
 
     print(f"Speed profile saved to: {binary_path}")
     print(f"Speed profile summary saved to: {text_path}")
@@ -486,7 +534,7 @@ def _dump_ram_object_profile(name: str, date: str, keep_alive: Any = None) -> No
                 usage = obj.memory_usage(deep=True)
                 return int(usage.sum() if hasattr(usage, "sum") else usage)
             return sys.getsizeof(obj)
-        except (ReferenceError, AttributeError):
+        except ReferenceError, AttributeError:
             # If the object died or is inaccessible, it's essentially 0 bytes now
             return 0
 
@@ -509,7 +557,7 @@ def _dump_ram_object_profile(name: str, date: str, keep_alive: Any = None) -> No
             size = get_deep_size(obj)
             if size > 0:
                 objects_with_sizes.append((obj, size))
-        except (ReferenceError, AttributeError):
+        except ReferenceError, AttributeError:
             continue
 
     # Get total memory and count
@@ -768,6 +816,13 @@ def init_fn(
                     "column": "GID_0",
                 }
             }
+        else:
+            # if the default region is given, also copy the data folder with specific data for that
+            shutil.copytree(
+                example_folder / "data",
+                working_directory / "data",
+                dirs_exist_ok=True,
+            )
 
         with open(config, "w") as f:
             # do not sort keys, to keep the order of the config file
@@ -890,6 +945,7 @@ def build_fn(
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     continue_: bool = False,
+    debug_method: str | None = None,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
@@ -904,6 +960,7 @@ def build_fn(
         build_config: Path to the model build configuration file.
         working_directory: Working directory for the model.
         continue_: Continue previous build if it was interrupted or failed.
+        debug_method: Filter the build to only run this method and its dependencies.
         profile_speed: If True, run the build with speed profiling.
         profile_ram: If True, run the build with RAM profiling.
         optimize: If True, run the build in optimized mode.
@@ -912,10 +969,8 @@ def build_fn(
     """
     _restart_if_needed(optimize=optimize, cores=cores)
 
-    build_config_input: Path | dict[str, Any] = build_config
-
     def build_operation(logger: logging.Logger, **kwargs: Any) -> None:
-        parsed_build_config = parse_config(build_config_input)
+        parsed_build_config = parse_config(build_config)
         model = get_builder(
             config,
             logger=logger,
@@ -928,10 +983,44 @@ def build_fn(
             for method, args in parsed_build_config.items()
             if not method.startswith("_")
         }
+
+        if debug_method:
+            if debug_method not in methods:
+                raise ValueError(
+                    f"Debug method '{debug_method}' not found in build config."
+                )
+
+            # setup_region is always required
+            try:
+                debug_methods = {"setup_region": methods["setup_region"]}
+            except KeyError:
+                raise ValueError(
+                    f"Required method 'setup_region' not found in build config."
+                )
+            dependencies = build_method.get_dependencies(debug_method)
+            for dep in dependencies:
+                if dep in methods:
+                    debug_methods[dep] = methods[dep]
+                else:
+                    raise ValueError(
+                        f"Dependency '{dep}' of debug method '{debug_method}' not found in build config."
+                    )
+            debug_methods[debug_method] = methods[debug_method]
+
+            # Re-order methods to match original build config order
+            methods = {k: v for k, v in methods.items() if k in debug_methods}
+            logger.info(
+                f"Debug mode enabled for method '{debug_method}'. Running with dependencies: {list(methods.keys())}"
+            )
+            check_required_methods: bool = False
+        else:
+            check_required_methods: bool = True
+
         model.build(
             methods=methods,
             region=parse_config(config, schema=Config)["general"]["region"],
             continue_=continue_,
+            check_required_methods=check_required_methods,
         )
 
     with WorkingDirectory(working_directory):
@@ -1065,6 +1154,7 @@ def alter_fn(
 def update_version_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
+    build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
@@ -1083,6 +1173,7 @@ def update_version_fn(
     config_parsed = parse_config(config)
 
     def update_version_operation(logger: logging.Logger, **kwargs: Any) -> None:
+        parsed_build_config = parse_config(build_config)
         parsed_config = parse_config(config, schema=Config)
         input_folder = Path(parsed_config["general"]["input_folder"])
         custom_model = (
@@ -1091,11 +1182,17 @@ def update_version_fn(
             else None
         )
 
+        methods: dict[str, Any] = {
+            method: args
+            for method, args in parsed_build_config.items()
+            if not method.startswith("_")
+        }
+
         builder_class = get_model_builder_class(custom_model)
         builder_class(
             logger=logger,
             root=input_folder,
-        )
+        ).update_version(methods=methods)
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
@@ -1304,6 +1401,113 @@ def share_fn(
             print("Done!")
 
 
+def clean_fn(
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    scenario: str = "base",
+    yes: bool = False,
+) -> list[Path]:
+    """Clean generated files from a GEB model, keeping only initialization files.
+
+    Deletes all files and directories produced by 'geb build', 'geb spinup',
+    'geb run', and 'geb evaluate' from the specified scenario folder(s), while
+    preserving the model initialization files (model.yml, build.yml, and
+    update.yml).
+
+    Notes:
+        Symlinks are unlinked directly, never followed. This prevents accidental
+        deletion of data outside the model directory if a symlink-to-directory exists.
+
+    Args:
+        working_directory: Model directory to clean. Defaults to the current
+            working directory, so run this command from inside the model folder.
+        scenario: Scenario subdirectory to clean. Defaults to 'base'. Use the
+            name of the folder created by 'geb alter' to clean an alternative
+            scenario.
+        yes: If True, skip the confirmation prompt and delete immediately.
+
+    Returns:
+        List of paths that were deleted.
+
+    Raises:
+        FileNotFoundError: If the working directory or matching scenario folder
+            cannot be found.
+    """
+    model_dir: Path = Path(working_directory).resolve()
+    if not model_dir.is_dir():
+        raise FileNotFoundError(f"Model directory not found: {model_dir}")
+
+    files_to_keep: set[str] = {"model.yml", "build.yml", "update.yml"}
+
+    # Detect whether this is a multi-basin or single model.
+    if any(
+        (d / scenario / "model.yml").exists() for d in model_dir.iterdir() if d.is_dir()
+    ):
+        # Multi-basin: each cluster subdir contains the scenario subdir with init
+        # files (e.g. large_scale6/Europe_000/base/model.yml).
+        scenario_dirs: list[Path] = [
+            d / scenario
+            for d in sorted(model_dir.iterdir())
+            if d.is_dir() and (d / scenario / "model.yml").exists()
+        ]
+    elif (model_dir / scenario / "model.yml").exists():
+        # Single-model with scenario subdir (e.g. france/base/model.yml).
+        scenario_dirs = [model_dir / scenario]
+    elif (model_dir / "model.yml").exists():
+        # Single-model, flat: init files sit directly in model_dir.
+        scenario_dirs = [model_dir]
+    else:
+        raise FileNotFoundError(
+            f"No '{scenario}' scenario found in {model_dir}. "
+            "Check that the model name and scenario name are correct."
+        )
+
+    items_to_delete: list[Path] = []
+
+    for scenario_dir in scenario_dirs:
+        for item in sorted(scenario_dir.iterdir()):
+            if item.name not in files_to_keep:
+                items_to_delete.append(item)
+
+    if not items_to_delete:
+        print(f"Nothing to clean in scenario '{scenario}' of model '{model_dir.name}'.")
+        return []
+
+    folders_affected: int = len({item.parent for item in items_to_delete})
+    print(
+        f"The following items will be deleted from the '{scenario}' scenario of model '{model_dir.name}':"
+    )
+    for item in items_to_delete:
+        print(f"  [{'dir' if item.is_dir() else 'file'}] {item.relative_to(model_dir)}")
+
+    # Require explicit 'y' so that pressing Enter alone safely aborts.
+    if not yes:
+        response: str = (
+            input(
+                f"\nDelete {len(items_to_delete)} item(s) across {folders_affected} folder(s)? [y/N] "
+            )
+            .strip()
+            .lower()
+        )
+        if response != "y":
+            print("Aborted.")
+            return []
+
+    for item in items_to_delete:
+        # Always treat symlinks first: never follow them, just unlink.
+        if item.is_symlink():
+            item.unlink()
+        elif item.is_dir():
+            # Only delete real directories, not symlinks-to-directories.
+            shutil.rmtree(item)
+        elif item.is_file():
+            item.unlink()
+
+    print(
+        f"Successfully cleaned {len(items_to_delete)} item(s) from {folders_affected} folder(s) in '{model_dir.name}/{scenario}'."
+    )
+    return items_to_delete
+
+
 def init_multiple_fn(
     config: str | Path,
     build_config: str | Path,
@@ -1351,6 +1555,8 @@ def init_multiple_fn(
     """
     _restart_if_needed(optimize=optimize, cores=cores)
 
+    logger = create_logger("init_multiple")
+
     # set paths
     config: Path = Path(config)
     build_config: Path = Path(build_config)
@@ -1358,7 +1564,7 @@ def init_multiple_fn(
     working_directory: Path = Path(working_directory)
 
     # Initialize data catalog and logger
-    data_catalog_instance = DataCatalog()
+    data_catalog_instance = DataCatalog(logger=logger)
     with WorkingDirectory(working_directory):
         logger = create_logger("init_multiple")
 

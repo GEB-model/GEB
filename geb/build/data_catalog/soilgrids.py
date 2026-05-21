@@ -1,7 +1,5 @@
 """SoilGrids data catalog adapter and workflow."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import rioxarray as rxr

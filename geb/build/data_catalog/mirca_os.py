@@ -1,9 +1,8 @@
 """Adapter for MIRCA-OS datasets."""
 
-from __future__ import annotations
-
 from typing import Any
 
+import numpy as np
 import rioxarray  # noqa: F401
 
 from .base import Adapter
@@ -66,6 +65,8 @@ class MIRCAOS(Adapter):
         """
         da = super().read(**kwargs)
         da = da.sel(band=1)
+        da = da.drop_vars(["band"])
+        da.attrs["_FillValue"] = np.nan
         assert da.rio.crs is not None, "CRS information is missing in the dataset."
 
         return da

@@ -1,5 +1,6 @@
 """Module containing build methods for the agents for GEB."""
 
+import difflib
 import unicodedata
 import warnings
 from datetime import datetime
@@ -12,6 +13,7 @@ import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 
+from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
 from geb.geb_types import TwoDArrayBool, TwoDArrayInt32
@@ -433,6 +435,92 @@ class Agents(BuildModelBase):
         )
         self.set_table(income_distributions_pd, "income/national_distribution")
 
+    @build_method(depends_on=["setup_income_distribution_parameters"], required=True)
+    def setup_subnational_income_distribution(
+        self,
+        skip_countries_ISO3: list[str] = [],
+    ) -> None:
+        """Set up subnational income distributions for GDL regions based on GLOPOP-S.
+
+        It combines wealth and income data from GLOPOP-S into a single index, assigns income
+        percentiles based on this index, and then uses the national income distribution parameters
+        to generate subnational income distributions for each GDL region. The resulting subnational
+        income distribution parameters are stored in the model table. These parameters can be used to
+        generate synthetic income distributions for each region, which can then be used in the model
+        to model migration decisions towards other regions.
+
+        Args:
+            skip_countries_ISO3: A list of ISO3 country codes to skip when setting up subnational income distributions.
+        Raises:
+            ValueError: If no regions are processed for subnational income distribution.
+        """
+        wealth_index_to_income_percentile = {
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
+            5: (80, 100),
+        }
+
+        national_dist = self.table["income/national_distribution"]
+
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+        results = []
+
+        for code in GDL_regions["GDLcode"]:
+            iso3 = code[:3]
+            self.logger.info(f"Processing {code}...")
+
+            if iso3 in skip_countries_ISO3:
+                self.logger.info(f"Skipping {iso3}")
+                continue
+
+            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg").read(code)
+
+            # combine wealth/income into one index
+            GLOPOP_S_region["wealth_index"] = (
+                GLOPOP_S_region[["WEALTH", "INCOME"]].sum(axis=1) + 1
+            )
+
+            # vectorized percentile assignment
+            GLOPOP_S_region["income_percentile"] = np.uint16(0)
+            for w, (low, high) in wealth_index_to_income_percentile.items():
+                mask = GLOPOP_S_region["wealth_index"] == w
+                GLOPOP_S_region.loc[mask, "income_percentile"] = np.random.randint(
+                    low, high, size=mask.sum()
+                )
+
+            # sanity check
+            assert (GLOPOP_S_region["income_percentile"] > 0).all()
+
+            disp_income = np.percentile(
+                np.asarray(national_dist[iso3]),
+                GLOPOP_S_region["income_percentile"],
+            )
+
+            results.append(
+                pd.DataFrame(
+                    {
+                        "mean_disp_income": [disp_income.mean()],
+                        "median_disp_income": [np.median(disp_income)],
+                    },
+                    index=pd.Index([code]),
+                )
+            )
+
+        # assert regions is not empty
+        if len(results) == 0:
+            raise ValueError(
+                "No regions to process for subnational income distribution"
+            )
+
+        self.set_table(
+            pd.concat(results),
+            name="income/subnational_distribution_parameters",
+        )
+
     @build_method(
         depends_on=["setup_regions_and_land_use", "set_time_range"], required=True
     )
@@ -721,14 +809,17 @@ class Agents(BuildModelBase):
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 
-    @build_method(required=True)
-    def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
-        """Sets up the irrigation sources for GEB.
+    @build_method(required=False)
+    def setup_irrigation_sources(self, *args: Any, **kwargs: Any) -> None:
+        """Deprecated method for setting up irrigation sources.
 
         Args:
-            irrigation_sources: A dictionary mapping irrigation source names to their corresponding IDs.
+            *args: Positional arguments (not used).
+            **kwargs: Keyword arguments (not used).
         """
-        self.set_params(irrigation_sources, name="agents/farmers/irrigation_sources")
+        self.logger.warning(
+            "This method is deprecated and will be removed in future versions. Please remove it from your build sequence and set up irrigation sources directly in the model configuration."
+        )
 
     @build_method(depends_on=["set_time_range", "setup_economic_data"], required=False)
     def setup_irrigation_prices_by_reference_year(
@@ -855,7 +946,7 @@ class Agents(BuildModelBase):
 
         # Iterate over each price type and calculate the prices across years for each region
         for price_type, initial_price in price_types.items():
-            prices_dict = {
+            prices_dict: dict[str, Any] = {
                 "time": list(range(start_year, end_year + 1)),
             }
             prices_dict_data: dict[str, list] = {}
@@ -897,7 +988,7 @@ class Agents(BuildModelBase):
 
         electricity_rates = self.data_catalog.fetch("gcam_electricity_rates").read()
 
-        electricity_rates_dict = {
+        electricity_rates_dict: dict[str, Any] = {
             "time": list(range(start_year, end_year + 1)),
         }
         electricity_rates_dict_data: dict[str, list] = {}
@@ -1234,17 +1325,42 @@ class Agents(BuildModelBase):
     def canon(self, string_to_normalize: str) -> str:
         """Canonicalizes a string by normalizing it to ASCII and stripping whitespace.
 
+        Some characters (e.g. Polish Ł/ł) do not decompose to ASCII via NFKD
+        and would be silently dropped, causing mismatches (e.g. "Łódź" → "odz").
+        These are mapped to their closest ASCII equivalents first.
+
+        Trailing administrative suffixes such as " Oblast" are also stripped so
+        that GEM names like "Leningrad Oblast" and GADM names like "Leningrad"
+        both normalise to the same key regardless of which side carries the suffix.
+
         Args:
             string_to_normalize: The string to canonicalize.
         Returns:
             The canonicalized string.
         """
-        return (
-            unicodedata.normalize("NFKD", string_to_normalize)
+        # æ/Æ are ligatures that NFKD cannot expand to two ASCII characters
+        # (one-to-one only); substitute before normalization.
+        s = string_to_normalize.replace("æ", "ae").replace("Æ", "Ae")
+        # ı (U+0131, Turkish dotless i) and Ł/ł/Ø/ø/Ð/ð have no NFKD
+        # decomposition to ASCII; map them explicitly before normalisation.
+        _non_decomposable = str.maketrans("ŁłØøÐð\u0131", "LlOoDdi")
+        s = s.translate(_non_decomposable)
+        s = (
+            unicodedata.normalize("NFKD", s)
             .encode("ascii", "ignore")
             .decode("ascii")
             .strip()
         )
+        # Normalise ALL-CAPS strings (e.g. GEM Turkey uses "ADANA", GADM uses
+        # "Adana") so that both sides produce the same canon key.
+        if s.isupper():
+            s = s.title()
+        # Strip the trailing " oblast" suffix (case-insensitive) so that GEM
+        # names like "Leningrad Oblast" and GADM names like "Leningrad" both
+        # resolve to the same key without manually enumerating every oblast.
+        if s.lower().endswith(" oblast"):
+            s = s[: -len(" oblast")]
+        return s
 
     def setup_building_reconstruction_costs(
         self, buildings: gpd.GeoDataFrame
@@ -1256,8 +1372,8 @@ class Agents(BuildModelBase):
         Returns:
             A GeoDataFrame with reconstruction costs assigned to each building.
         Raises:
-            ValueError: If a region in GADM level 1 is not found in the global exposure model or
-                        if some buildings do not have reconstruction costs assigned.
+            ValueError: If one or more GADM level-1 regions cannot be matched
+                to the global exposure model, or if some buildings do not have reconstruction costs assigned.
         """
         # load GADM level 1 within model domain (older version for compatibility with global exposure model)
         gadm_level1 = self.data_catalog.fetch("gadm_28").read(
@@ -1306,30 +1422,84 @@ class Agents(BuildModelBase):
 
         # Iterate over unique admin-1 region names to avoid redundant checks and assignments
         buildings["NAME_1"] = buildings["NAME_1"].apply(self.canon)
-        for name_1 in gadm_level1["NAME_1"].dropna().unique():
-            # clean up name
-            name_1 = self.canon(name_1)
-            # check if region is in global exposure model
-            if name_1 not in global_exposure_model:
-                raise ValueError(
-                    f"Region {name_1} not found in global exposure model. Please check if the region name has changed."
-                )
-            exposure_model_region = global_exposure_model[name_1]
-            for reconstruction_type in exposure_model_region:
-                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
-                    float(exposure_model_region[reconstruction_type])
-                )
-        # assert all buildings have reconstruction costs assigned (i.e., no null values in the reconstruction cost columns)
-        reconstruction_cost_columns = list(exposure_model_region.keys())
-        if buildings[reconstruction_cost_columns].isnull().any().any():
-            # get NAME_1 values for buildings with null reconstruction costs
-            buildings_with_null_costs = buildings[
-                buildings[reconstruction_cost_columns].isnull().any(axis=1)
+
+        # Separate proxy-country averages (stored by read()) from per-region data.
+        # These are used as fallbacks for aliased territories and must not appear
+        # as real region keys.
+        country_averages: dict[str, dict[str, float]] = {
+            k.removeprefix("_country_avg_"): v
+            for k, v in global_exposure_model.items()
+            if k.startswith("_country_avg_")
+        }
+        exposure_model: dict[str, dict[str, float]] = {
+            k: v
+            for k, v in global_exposure_model.items()
+            if not k.startswith("_country_avg_")
+        }
+
+        gadm_names: list[str] = [
+            self.canon(n) for n in gadm_level1["NAME_1"].dropna().unique()
+        ]
+        missing: set[str] = {n for n in gadm_names if n not in exposure_model}
+
+        # For regions from aliased territories (e.g. Faroe Islands districts
+        # proxied to Denmark) their GADM NAME_1 values won't appear in the proxy
+        # CSV; fall back to the proxy country's national average.
+        for n in sorted(missing.copy()):
+            name_0_series = gadm_level1.loc[
+                gadm_level1["NAME_1"].apply(self.canon) == n, "NAME_0"
             ]
-            missing_name_1_values = buildings_with_null_costs["NAME_1"].unique()
-            raise ValueError(
-                f"Some buildings with NAME_1 values {missing_name_1_values} do not have reconstruction costs assigned. Please check the global exposure model and the region names."
+            if name_0_series.empty:
+                continue
+            proxy = gem_country_name_aliases.get(
+                self.canon(name_0_series.iloc[0].replace(" ", "_")),
+                self.canon(name_0_series.iloc[0].replace(" ", "_")),
             )
+            if proxy in country_averages:
+                exposure_model[n] = country_averages[proxy]
+                warnings.warn(
+                    f"GADM region '{n}' not found in GEM; using national average for '{proxy}'.",
+                    stacklevel=2,
+                )
+                missing.discard(n)
+
+        if missing:
+            region_keys = list(exposure_model)
+
+            def _candidates(name: str) -> list[str]:
+                return difflib.get_close_matches(name, region_keys, n=3, cutoff=0.6)
+
+            lines: list[str] = []
+            for n in sorted(missing):
+                hits = _candidates(n)
+                suggestion = f'"{hits[0]}"' if hits else "???"
+                lines.append(
+                    f'    {suggestion}: "{n}",'
+                    + (
+                        f"  # also consider: {', '.join(hits)}"
+                        if hits
+                        else "  # no close match — check GEM CSV manually"
+                    )
+                )
+            raise ValueError(
+                f"{len(missing)} GADM region(s) could not be matched to the global exposure model.\n"
+                f"Add the correct entries to gadm_converter in\n"
+                f"geb/build/data_catalog/global_exposure_model.py:\n\n"
+                f"{{\n{chr(10).join(lines)}\n}}"
+            )
+
+        exposure_df = pd.DataFrame.from_dict(exposure_model, orient="index")
+        buildings = gpd.GeoDataFrame(buildings.join(exposure_df, on="NAME_1"))
+        reconstruction_cost_columns = exposure_df.columns.tolist()
+        if buildings[reconstruction_cost_columns].isnull().any().any():
+            missing_regions = buildings.loc[
+                buildings[reconstruction_cost_columns].isnull().any(axis=1), "NAME_1"
+            ].unique()
+            raise ValueError(
+                f"Buildings in {missing_regions} have no reconstruction costs. "
+                f"Check the global exposure model and region names."
+            )
+
         return buildings
 
     @build_method(required=True)
@@ -1337,11 +1507,9 @@ class Agents(BuildModelBase):
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
         # load region mask
         mask = self.region.union_all()
-        buildings = self.data_catalog.fetch(
-            "open_building_map",
+        buildings = self.data_catalog.fetch("open_building_map").read(
             geom=mask,
-            prefix="assets",
-        ).read()
+        )
         buildings = self.setup_building_reconstruction_costs(buildings)
 
         # reset id column to avoid issues with duplicate ids
@@ -1349,6 +1517,61 @@ class Agents(BuildModelBase):
 
         # write to disk
         self.set_geom(buildings, name="assets/open_building_map")
+
+    @build_method(required=True)
+    def setup_flood_damage_model(self, region: str = "geul") -> None:
+        """This method sets up the damage functions for flood events for the specified region.
+
+        It retrieves the damage functions from the data catalog, processes them, and saves them as
+        parquet files for use in the model.
+
+        Args:
+            region: The region for which to set up the damage functions. Default is 'geul', selecting
+                the damage model constructed by Endendijk. Other accepted region identifiers are determined by
+                the underlying 'global_flood_damage_model' dataset and include: europe, north america,
+                central&south america, asia, africa, oceania, and 'global'; representing the global average curves.
+        """
+        # clear model files for damage model to avoid issues with old files when changing region
+        for key in list(self.files["table"]):
+            if key.startswith("damage_model/"):
+                del self.files["table"][key]
+        for key in list(self.files["dict"]):
+            if key.startswith("damage_model/"):
+                del self.files["dict"][key]
+
+        if region == "geul":
+            parameters = self.data_catalog.fetch("geul_flood_damage_model").read()
+            for hazard, hazard_parameters in parameters.items():
+                for asset_type, asset_parameters in hazard_parameters.items():
+                    for component, asset_components in asset_parameters.items():
+                        curve = pd.DataFrame(
+                            asset_components["curve"],
+                            columns=np.array(["depth", "damage_ratio"]),
+                        )
+
+                        self.set_table(
+                            curve,
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/curve",
+                        )
+                        maximum_damage = {
+                            "maximum_damage": asset_components["maximum_damage"]
+                        }
+
+                        self.set_params(
+                            maximum_damage,
+                            name=f"damage_model/{hazard}/{asset_type}/{component}/maximum_damage",
+                        )
+                return
+
+        damage_functions = self.data_catalog.fetch("global_flood_damage_model").read(
+            region=region
+        )
+        # save the cleaned dataframe as parquet
+        for damage_class, df_damage_class in damage_functions.items():
+            self.set_table(
+                df_damage_class,
+                name=f"damage_model/flood/{damage_class}/structure/curve",
+            )
 
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
@@ -1371,9 +1594,9 @@ class Agents(BuildModelBase):
         buildings["lat"] = centroids.y
 
         for _, GDL_region in GDL_regions.iterrows():
-            _, GLOPOP_GRID_region = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_region["GDLcode"]
-            ).read(GDL_region["GDLcode"])
+            _, GLOPOP_GRID_region = self.data_catalog.fetch("glopop-sg").read(
+                region=GDL_region["GDLcode"]
+            )
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
 
             # subset buildings to those within the GLOPOP_GRID_region
@@ -1435,10 +1658,10 @@ class Agents(BuildModelBase):
 
         # create income percentile based on wealth index mapping
         wealth_index_to_income_percentile = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
+            1: (1, 20),
+            2: (20, 40),
+            3: (40, 60),
+            4: (60, 80),
             5: (80, 100),
         }
 
@@ -1487,7 +1710,7 @@ class Agents(BuildModelBase):
                 continue
 
             GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_code
+                "glopop-sg"
             ).read(GDL_code)
 
             # get size of household
@@ -1762,9 +1985,7 @@ class Agents(BuildModelBase):
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            GLOPOP_S_region, _ = self.data_catalog.fetch(
-                "glopop-sg", region=GDL_region
-            ).read(GDL_region)
+            GLOPOP_S_region, _ = self.data_catalog.fetch("glopop-sg").read(GDL_region)
 
             # select farmers only
             GLOPOP_S_region = GLOPOP_S_region[GLOPOP_S_region["RURAL"] == 1].drop(

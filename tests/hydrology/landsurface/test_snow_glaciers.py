@@ -21,7 +21,7 @@ from geb.hydrology.landsurface.snow_glaciers import (
 from ...testconfig import output_folder
 
 output_folder_snow = output_folder / "snow_glaciers"
-output_folder_snow.mkdir(exist_ok=True)
+output_folder_snow.mkdir(exist_ok=True, parents=True)
 
 
 def test_discriminate_precipitation() -> None:
@@ -49,6 +49,44 @@ def test_discriminate_precipitation() -> None:
     assert not isinstance(snowfall_r, np.float64)
     assert isinstance(rainfall_r, (np.float32, float))
     assert not isinstance(rainfall_r, np.float64)
+
+    # Test exact threshold uses snowfall
+    snowfall_threshold, rainfall_threshold = discriminate_precipitation(
+        precip,
+        np.float32(0.0),
+        threshold,
+    )
+
+    assert math.isclose(snowfall_threshold, 0.005, abs_tol=1e-6)
+    assert math.isclose(rainfall_threshold, 0.0, abs_tol=1e-6)
+
+
+def test_snow_model_uses_threshold_temperature_for_snowfall() -> None:
+    """Test that snow_model treats precipitation at the default threshold as snow."""
+    precipitation_rate_kg_per_m2_per_s = np.float32(1e-6)
+
+    results = snow_model(
+        precipitation_rate_kg_per_m2_per_s,
+        np.float32(0.0),
+        np.float64(0.0),
+        np.float64(0.0),
+        np.float32(0.0),
+        np.float32(0.0),
+        np.float32(0.0),
+        np.float32(0.0),
+        np.float32(101325.0),
+        np.float32(0.0),
+    )
+
+    rainfall_m_per_hour = results[0]
+    snowfall_m_per_hour = results[1]
+    new_snow_water_equivalent_m = results[2]
+    direct_rainfall_m_per_hour = results[7]
+
+    assert math.isclose(rainfall_m_per_hour, 0.0, abs_tol=1e-9)
+    assert math.isclose(snowfall_m_per_hour, 3.6e-6, rel_tol=0, abs_tol=1e-9)
+    assert new_snow_water_equivalent_m >= snowfall_m_per_hour
+    assert math.isclose(direct_rainfall_m_per_hour, 0.0, abs_tol=1e-9)
 
 
 def test_update_snow_temperature() -> None:

@@ -1,7 +1,5 @@
 """Implementation of the abstract base class for model components."""
 
-from __future__ import annotations
-
 import datetime
 from abc import ABC, abstractmethod
 from logging import Logger
@@ -230,6 +228,7 @@ class BuildModelBase(ABC):
         """Abstract method to get subgrid factor."""
         pass
 
+    @property
     @abstractmethod
     def ldd_scale_factor(self) -> int:
         """Abstract method to get LDD scale factor."""

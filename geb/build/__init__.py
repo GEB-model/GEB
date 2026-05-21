@@ -27,7 +27,6 @@ import xarray as xr
 import yaml
 import zarr
 from affine import Affine
-from packaging.version import Version
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
 from shapely.geometry import Point, shape
@@ -36,7 +35,7 @@ from shapely.ops import unary_union
 from geb import GEB_PACKAGE_DIR, __version__
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
-from geb.build.version_updates import VERSION_UPDATES
+from geb.build.version_updates import get_and_maybe_do_version_updates
 from geb.workflows.io import (
     read_params,
     write_array,
@@ -69,7 +68,10 @@ from .modules import (
 )
 from .modules.hydrography import (
     create_river_raster_from_river_lines,
-    extend_rivers_into_ocean,
+    extend_rivers_into_pits_and_set_pit_type,
+)
+from .workflows.hydrography import (
+    get_river_graph,
 )
 
 # Set environment options for robustness
@@ -177,49 +179,6 @@ def boolean_mask_to_graph(
                 G.add_edge((y, x), (ny, nx))
 
     return G
-
-
-def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
-    """Create a directed graph for the river network.
-
-    Args:
-        data_catalog: Data catalog containing the MERIT basins.
-
-    Returns:
-        A directed graph where nodes are COMID values and edges point downstream.
-    """
-    # load river network data
-    river_network = (
-        data_catalog.fetch("merit_basins_rivers")
-        .read(columns=["COMID", "NextDownID"])
-        .set_index("COMID")
-    )
-    assert isinstance(river_network, pd.DataFrame)
-    assert river_network.index.name == "COMID", (
-        "The index of the river network is not the COMID column"
-    )
-
-    # create a directed graph for the river network
-    river_graph: networkx.DiGraph = networkx.DiGraph()
-
-    # add rivers with downstream connection
-    river_network_with_downstream_connection = river_network[
-        river_network["NextDownID"] != 0
-    ]
-
-    river_network_with_downstream_connection = (
-        river_network_with_downstream_connection.itertuples(index=True, name=None)
-    )
-
-    river_graph.add_edges_from(river_network_with_downstream_connection)
-
-    river_network_without_downstream_connection = river_network[
-        river_network["NextDownID"] == 0
-    ]
-
-    river_graph.add_nodes_from(river_network_without_downstream_connection.index)
-
-    return river_graph
 
 
 def get_subbasin_id_from_coordinate(
@@ -645,7 +604,9 @@ def cluster_subbasins_following_coastline(
             outlet_coords = [
                 (oid, coords_array[subbasin_to_idx[oid]]) for oid in remaining_outlets
             ]
-            outlet_coords.sort(key=lambda x: (-x[1][1], -x[1][0]))  # Sort by -lat, -lon
+            outlet_coords.sort(
+                key=lambda x: (-x[1][1], -x[1][0])
+            )  # Sort by -lat, -lon (top-right corner)
             start_outlet = outlet_coords[0][0]
             logger.info(f"  Starting outlet: {start_outlet} (top-right corner)")
         else:
@@ -1102,9 +1063,9 @@ def create_cluster_visualization_map(
     print("Dissolving clusters into merged boundaries...")
 
     # Use a colormap with very distinct colors
-    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))  # type: ignore[attr-defined]
+    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
     if len(clusters) > 20:
-        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))  # type: ignore[attr-defined]
+        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
 
     # Process clusters sequentially
     merged_cluster_data = []
@@ -1287,14 +1248,12 @@ def create_multi_basin_configs(
     # Create full build.yml in init_multiple_dir directory
     print("Creating build.yml in main init multiple directory...")
     build_config_path = working_directory / "build.yml"
-    # Read build config from geul example and automatically copy it
-    geul_build_path = GEB_PACKAGE_DIR / "examples" / "geul" / "build.yml"
 
-    print(f"Reading build configuration from: {geul_build_path}")
-
-    # Copy geul build.yml content directly to init_multiple_dir build.yml
-    with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
-        dst.write(src.read())
+    # Write a build.yml that inherits from the geul example, mirroring
+    # how model.yml inherits from reasonable_default_config.yml
+    build_config_content = 'inherits: "{GEB_PACKAGE_DIR}/examples/geul/build.yml"\n'
+    with open(build_config_path, "w") as f:
+        f.write(build_config_content)
 
     print(f"Created build.yml in {working_directory}")
 
@@ -1855,19 +1814,6 @@ def create_riverine_mask(
 
     riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
 
-    # MERIT-Basins rivers don't always extend all the way into coastline pits.
-    # To extend these rivers, we first find all downstream cells of the area
-    # within the initial riverine mask. Then we find all pits within these
-    # downstream cells, and set these pits to be part of the riverine mask.
-    downstream_indices_of_area_in_mask = ldd_network.idxs_ds[
-        riverine_mask.values.ravel()
-    ]
-    all_pits_in_area = ldd_network.idxs_pit
-    downstream_indices_that_are_pits = np.intersect1d(
-        downstream_indices_of_area_in_mask, all_pits_in_area
-    )
-    riverine_mask.values.ravel()[downstream_indices_that_are_pits] = True
-
     # because the basin mask from the source is not perfect and has some holes
     # we need to extend the riverine mask to include all cells upstream of any
     # riverine cell. This is done by creating a flow raster from the masked
@@ -1885,6 +1831,19 @@ def create_riverine_mask(
     riverine_mask.values[ldd_network.basins(idxs=ldd_network_masked.idxs_pit) > 0] = (
         True
     )
+
+    # MERIT-Basins rivers don't always extend all the way into coastline pits.
+    # To extend these rivers, we first find all downstream cells of the area
+    # within the initial riverine mask. Then we find all pits within these
+    # downstream cells, and set these pits to be part of the riverine mask.
+    downstream_indices_of_area_in_mask = ldd_network.idxs_ds[
+        riverine_mask.values.ravel()
+    ]
+    all_pits_in_area = ldd_network.idxs_pit
+    downstream_indices_that_are_pits = np.intersect1d(
+        downstream_indices_of_area_in_mask, all_pits_in_area
+    )
+    riverine_mask.values.ravel()[downstream_indices_that_are_pits] = True
 
     return riverine_mask
 
@@ -1975,7 +1934,7 @@ class GEBModel(
 
         self.root = root
         self.epsg = epsg
-        self._data_catalog = DataCatalog()
+        self._data_catalog = DataCatalog(logger=logger)
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
@@ -1990,8 +1949,6 @@ class GEBModel(
         self.params = DelayedReader(reader=read_params)
         self.other = DelayedReader(reader=read_zarr)
         self.files = {}
-
-        self.maybe_update_version()
 
     def set_current_version(self) -> None:
         """Set the current version in the version file."""
@@ -2010,48 +1967,6 @@ class GEBModel(
             return False
         version_info = self.version_path.read_text()
         return version_info == __version__
-
-    def maybe_update_version(self) -> None:
-        """Check if the version in the version file is the same as the current version.
-
-        If the version is not current, print a warning with the updates that need to be made to update to the current version.
-
-        Raises:
-            RuntimeError: If the version is not current and updates need to be made.
-        """
-        # No version file exists, so we create one with the current version
-        if not self.version_path.exists():
-            self.set_current_version()
-            return
-        version_info = self.version_path.read_text()
-        if self.version_is_current():
-            self.logger.info("Version is already current.")
-        else:
-            self.logger.warning(
-                f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
-            )
-            # Find and print all updates between the stored version and the current version
-            current_v = Version(__version__)
-            stored_v = Version(version_info)
-
-            versions = sorted(VERSION_UPDATES.keys(), key=Version)
-            updates_to_print = []
-            for v_str in versions:
-                v = Version(v_str)
-                if v > stored_v and v <= current_v:
-                    updates_to_print.extend(VERSION_UPDATES[v_str])
-
-            if updates_to_print:
-                updates_msg = "\n- ".join(updates_to_print)
-                self.set_current_version()
-                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
-                self.logger.error(error)
-                raise RuntimeError(error)
-            else:
-                self.logger.info(
-                    "No specific updates found for this version. Updated version file."
-                )
-                self.set_current_version()
 
     @property
     def logger(self) -> logging.Logger:
@@ -2248,7 +2163,9 @@ class GEBModel(
             latlon=True,
         )
 
-        rivers: gpd.GeoDataFrame = extend_rivers_into_ocean(rivers, ldd_network)
+        rivers: gpd.GeoDataFrame = extend_rivers_into_pits_and_set_pit_type(
+            rivers, ldd_network, ldd.values
+        )
 
         self.logger.info("Preparing 2D grid.")
         if "outflow" in region:
@@ -2312,7 +2229,7 @@ class GEBModel(
                 rivers[rivers["is_downstream_outflow"]].index
             )
             subbasins["is_coastal"] = subbasins.apply(
-                lambda subbasin: rivers.loc[subbasin.name, "downstream_ID"] == -1,
+                lambda subbasin: rivers.loc[subbasin.name, "is_coastal"],
                 axis=1,
             )
 
@@ -2324,7 +2241,7 @@ class GEBModel(
             # while the shape of the polygons becomes vastly different, the area is preserved mostly.
             # usable between 86°S and 86°N.
             self.logger.info(
-                f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
+                f"Approximate riverine basin size: {round(geom.to_crs('ESRI:54009').area.sum() / 1e6, 2)} km2"
             )
 
             riverine_mask = create_riverine_mask(ldd, ldd_network, geom)
@@ -2364,7 +2281,7 @@ class GEBModel(
 
         assert ldd_elevation.shape == ldd.shape == mask.shape
 
-        ldd_elevation = xr.where(
+        ldd_elevation: xr.DataArray = xr.where(
             mask,
             ldd_elevation,
             ldd_elevation.attrs["_FillValue"],
@@ -2769,53 +2686,6 @@ class GEBModel(
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
 
-    @build_method(required=True)
-    def setup_damage_parameters(
-        self,
-        parameters: dict[
-            str, dict[str, dict[str, dict[str, list[tuple[float, float]] | float]]]
-        ],
-    ) -> None:
-        """Sets up damage parameters for different hazards and asset types.
-
-        Args:
-            parameters: A nested dictionary containing damage parameters. The structure is:
-                {
-                    "hazard_type": {
-                        "asset_type": {
-                            "component": {
-                                "curve": [(severity, damage_ratio), ...],
-                                "maximum_damage": float
-                            },
-                            ...
-                        },
-                        ...
-                    },
-                    ...
-                }
-        """
-        for hazard, hazard_parameters in parameters.items():
-            for asset_type, asset_parameters in hazard_parameters.items():
-                for component, asset_compontents in asset_parameters.items():
-                    curve = pd.DataFrame(
-                        asset_compontents["curve"],
-                        columns=np.array(["severity", "damage_ratio"]),
-                    )
-
-                    self.set_table(
-                        curve,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/curve",
-                    )
-
-                    maximum_damage = {
-                        "maximum_damage": asset_compontents["maximum_damage"]
-                    }
-
-                    self.set_params(
-                        maximum_damage,
-                        name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
-                    )
-
     @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors: list[tuple[float, float]]
@@ -2870,7 +2740,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["array"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            write_array(data, fp_with_root)
+            write_array(data, fp_with_root, compression_level=18)
 
         self.array[name] = fp_with_root
 
@@ -3130,7 +3000,6 @@ class GEBModel(
         assert isinstance(data, xr.DataArray)
 
         if name in grid:
-            self.logger.warning(f"Replacing grid map: {name}")
             grid = grid.drop_vars(name)
 
         if len(grid) == 0:
@@ -3172,14 +3041,15 @@ class GEBModel(
                     data,
                     name=grid_name + "_" + "tmp",
                 ) as tmp_zarr_path:
-                    data = write_zarr(
+                    del data
+                    data: xr.DataArray = write_zarr(
                         tmp_zarr_path.chunk({"x": -1, "y": -1}),
                         path=self.root / fn,
                         crs=4326,
                         **kwargs,
                     )
             else:
-                data = write_zarr(
+                data: xr.DataArray = write_zarr(
                     data,
                     path=self.root / fn,
                     crs=4326,
@@ -3403,9 +3273,7 @@ class GEBModel(
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        methods = build_method.validate_methods(
-            methods, validate_order=validate_order, fix_order_if_broken=True
-        )
+        methods = build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (
@@ -3425,13 +3293,42 @@ class GEBModel(
                         f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
                     )
 
+        build_run_started_at: datetime = datetime.now()
+
+        # For cluster builds (large_scale6/<cluster>/<scenario>/<input_folder>),
+        # detect the top-level model dir by looking for model.yml three levels up.
+        root_abs: Path = Path(self.root).resolve()
+        scenario_dir: Path = root_abs.parent
+        cluster_dir: Path = scenario_dir.parent
+        model_dir: Path = cluster_dir.parent
+        stats_path: Path | None = None
+        cluster_name_for_stats: str = ""
+        if record_progress and (model_dir / "model.yml").exists():
+            cluster_name_for_stats = cluster_dir.name
+            # Each cluster writes its own CSV to avoid corrupt conditions when
+            # multiple Snakemake jobs build clusters in parallel.
+            stats_path = (
+                model_dir / "build_memory_stats" / f"{cluster_name_for_stats}.csv"
+            )
+
         for method in methods:
             if method in completed_methods:
                 self.logger.info(f"Skipping already completed method: {method}")
                 continue
 
             kwargs = {} if methods[method] is None else methods[method]
-            self.run_method(method, **kwargs)
+            try:
+                self.run_method(method, **kwargs)
+            finally:
+                # Write memory stats after every method regardless of success or
+                # failure so partial results survive job crashes.
+                if stats_path is not None:
+                    build_method.write_build_stats(
+                        stats_path=stats_path,
+                        cluster_name=cluster_name_for_stats,
+                        run_timestamp=build_run_started_at,
+                        cluster_dir=scenario_dir,  # measure subdirs of base/, not input/
+                    )
             self.write_file_library()
 
             if record_progress:
@@ -3445,7 +3342,11 @@ class GEBModel(
         build_method.log_statistics()
 
     def build(
-        self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
+        self,
+        region: dict,
+        methods: dict[str, dict[str, Any]],
+        continue_: bool,
+        check_required_methods: bool = True,
     ) -> None:
         """Build the model with the specified region and methods.
 
@@ -3453,6 +3354,7 @@ class GEBModel(
             region: A dictionary defining the region to build the model for.
             methods: A dictionary with method names as keys and their parameters as values.
             continue_: Continue previous build if it was interrupted or failed.
+            check_required_methods: If True, check if all required methods are present in methods.
 
         Raises:
             ValueError: If "setup_region" is not in methods when building a new model.
@@ -3465,10 +3367,13 @@ class GEBModel(
             )
         methods["setup_region"].update(region=region)
 
-        build_method.check_required_methods(methods.keys())
+        if check_required_methods:
+            build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
-        if continue_:
+        if (
+            continue_ and self.progress_path.exists()
+        ):  # check if continue and already some progress was made
             if not self.version_is_current():
                 raise ValueError(
                     "Cannot continue build: version mismatch. The version of the existing build is different from the current version of the code. This likely means that the code was updated since the last build. To continue, either restore the old version of the code or start a new build."
@@ -3493,6 +3398,45 @@ class GEBModel(
         )
 
         self.write_build_complete()
+
+    def update_version(self, methods: dict[str, Any]) -> None:
+        """Check if the version in the version file is the same as the current version.
+
+        If the version is not current, print a warning with the updates that need to be made to update to the current version.
+
+        Raises:
+            RuntimeError: If the version is not current and updates need to be made.
+        """
+        # No version file exists, so we create one with the current version
+        if not self.version_path.exists():
+            self.set_current_version()
+            return
+        version_info = self.version_path.read_text()
+        if self.version_is_current():
+            self.logger.info("Version is already current.")
+        else:
+            self.read()
+            # Find and print all updates between the stored version and the current version
+            updates_to_print_to_user: list[str] = get_and_maybe_do_version_updates(
+                version_info,
+                perform_auto_update=True,
+                build_model=self,
+                methods=methods,
+            )
+            if updates_to_print_to_user:
+                self.logger.warning(
+                    f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
+                )
+                updates_msg = "\n- ".join(updates_to_print_to_user)
+                self.set_current_version()
+                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
+                self.logger.error(error)
+                raise RuntimeError(error)
+            else:
+                self.logger.info(
+                    "No specific updates found for this version or auto-updated. Updated version file."
+                )
+                self.set_current_version()
 
     def update(
         self,

@@ -10,8 +10,6 @@ Notes:
       temperature difference to the 0°C reference).
 """
 
-from __future__ import annotations
-
 import numpy as np
 
 # Densities
@@ -49,3 +47,5 @@ LAMBDA_OTHER_FINE: np.float32 = np.float32(2.0)
 # Soil properties
 C_MINERAL_VOLUMETRIC_J_PER_M3_K: np.float32 = np.float32(2.13e6)
 RHO_MINERAL_KG_PER_M3: np.float32 = np.float32(2650.0)
+
+N_SOIL_LAYERS: int = 6

@@ -567,8 +567,6 @@ def snow_model(
     np.float32,
     np.float32,
     np.float32,
-    np.float32,
-    np.float32,
 ]:
     """
     Calculate snow accumulation and melt based on a simple energy balance model.

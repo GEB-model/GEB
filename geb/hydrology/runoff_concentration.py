@@ -1,7 +1,5 @@
 """Module for concentrating runoff from different sources."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -25,6 +23,11 @@ def triangular_weights(peak_hour: float, lag_time_hours: int) -> ArrayFloat32:
     Returns:
         1D array of shape (lag_time_hours,) containing the weights.
     """
+    if peak_hour == 0.0:
+        weights: ArrayFloat32 = np.zeros(lag_time_hours, dtype=np.float32)
+        weights[0] = 1.0
+        return weights
+
     weights: ArrayFloat32 = np.zeros(lag_time_hours, dtype=np.float32)
     accumulated_area_prev: float = 0.0
     normalization_factor: float = 2.0 * peak_hour**2
@@ -123,7 +126,7 @@ class RunoffConcentrator(Module):
         model: GEBModel,
         hydrology: Hydrology,
         lag_time_hours: int = 48,
-        runoff_peak_hour: float = 3.0,
+        runoff_peak_hour: float = 0.0,
     ) -> None:
         """Initialize the runoff concentrator model.
 

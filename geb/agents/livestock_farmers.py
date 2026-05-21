@@ -1,21 +1,17 @@
 """Module for livestock farmers agent-based simulation."""
 
-from __future__ import annotations
-
 import calendar
 import datetime
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
-import numpy.typing as npt
 import xarray as xr
 
 from geb.geb_types import ArrayFloat32
 from geb.hydrology.HRUs import load_water_demand_xr
 from geb.store import Bucket
 
-from ..hydrology.landcovers import GRASSLAND_LIKE
-from .general import AgentBaseClass, downscale_volume
+from .general import AgentBaseClass
 
 if TYPE_CHECKING:
     from geb.agents import Agents
@@ -26,12 +22,16 @@ class LiveStockFarmersVariables(Bucket):
     """Variables for the LivestockFarmers agent."""
 
     current_water_demand: ArrayFloat32
-    current_efficiency: np.float32
+    current_return_flow: ArrayFloat32
     last_water_demand_update: datetime.datetime
 
 
 class LiveStockFarmers(AgentBaseClass):
-    """This class is used to simulate the government.
+    """This class is used to simulate livestock farmers.
+
+    Note:
+        Currently, this module is not actually agent-based but rather
+        uses aggregated pre-defined water demand data.
 
     Args:
         model: The GEB model.
@@ -61,15 +61,17 @@ class LiveStockFarmers(AgentBaseClass):
 
         self.agents = agents
         self.config = (
-            self.model.config["agent_settings"]["town_managers"]
-            if "town_managers" in self.model.config["agent_settings"]
+            self.model.config["agent_settings"]["livestock_farmers"]
+            if "livestock_farmers" in self.model.config["agent_settings"]
             else {}
         )
 
         self.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
-
+        self.hydrological_year_start_month = self.model.config["general"][
+            "hydrological_year_start_month"
+        ]
         if self.model.in_spinup:
             self.spinup()
 
@@ -86,26 +88,20 @@ class LiveStockFarmers(AgentBaseClass):
 
     def spinup(self) -> None:
         """Set initial water demand values during spinup."""
-        water_demand, efficiency = self.update_water_demand()
-        self.var.current_water_demand = water_demand
-        self.var.current_efficiency = efficiency
+        self.var.current_water_demand, self.var.current_return_flow = (
+            self.update_water_demand()
+        )
 
-    def update_water_demand(self) -> tuple[ArrayFloat32, np.float32]:
-        """Update the water demand for livestock farmers at the HRU level.
+    def update_water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
+        """Update the water demand for livestock farmers at the grid level.
 
         Returns:
             A tuple containing:
-            - The updated water demand as a numpy array (in m3/day).
-            - The current efficiency as a float.
+            - The current water demand as a numpy array (m/day).
+            - The current return flow as a numpy array (m/day).
         """
         days_in_year: Literal[366, 365] = (
             366 if calendar.isleap(self.model.current_time.year) else 365
-        )
-
-        # grassland/non-irrigated land that is not owned by a crop farmer
-        land_use_type = self.HRU.var.land_use_type
-        downscale_mask = (land_use_type != GRASSLAND_LIKE) | (
-            self.HRU.var.land_owners != -1
         )
 
         # transform from mio m3 per year to m3/day
@@ -130,42 +126,32 @@ class LiveStockFarmers(AgentBaseClass):
             )
             ** 2
         )
-        water_consumption: npt.NDArray[np.float32] = (
-            downscale_volume(
-                water_consumption.rio.transform().to_gdal(),
-                self.model.hydrology.grid.gt,
-                water_consumption.values,
-                self.model.hydrology.grid.mask,
-                self.model.hydrology.mapping_grid_to_HRU_uncompressed,
-                downscale_mask,
-                self.HRU.var.land_use_ratio,
-            )
-            / self.HRU.var.cell_area
-        )  # convert to m/day
+        water_consumption: ArrayFloat32 = self.grid.compress(water_consumption.values)
 
-        efficiency: np.float32 = np.float32(1.0)
-        water_demand = water_consumption / efficiency
+        water_demand: ArrayFloat32 = water_consumption
+        water_return_flow: ArrayFloat32 = self.grid.full_compressed(0, dtype=np.float32)
+
         self.var.last_water_demand_update = self.model.current_time
-        return water_demand, efficiency
+        return water_demand, water_return_flow
 
-    def water_demand(self) -> tuple[ArrayFloat32, np.float32]:
-        """Get the current water demand for livestock farmers at the HRU level.
+    def water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
+        """Get the current water demand for livestock farmers at the grid level.
 
-        Updates the water demand only if data for this timestep is available.
+        Updates the water demand at the start of each hydrological year.
         Otherwise, assumes the last known water demand.
 
         Returns:
             A tuple containing:
-            - The current water demand as a numpy array (in m3/day).
-            - The current efficiency as a float.
+            - The current water demand as a numpy array (m3/day).
+            - The current return flow as a numpy array (m3/day).
         """
         if (
-            np.datetime64(self.model.current_time, "ns")
-            in self.livestock_water_consumption_ds.time
+            self.model.current_time.day == 1
+            and self.model.current_time.month == self.hydrological_year_start_month
         ):
-            water_demand, efficiency = self.update_water_demand()
-            self.var.current_water_demand = water_demand
-            self.var.current_efficiency = efficiency
+            self.var.current_water_demand, self.var.current_return_flow = (
+                self.update_water_demand()
+            )
 
         assert (
             self.model.current_time - self.var.last_water_demand_update
@@ -173,7 +159,7 @@ class LiveStockFarmers(AgentBaseClass):
             "Water demand has not been updated for over a year. "
             "Please check the livestock water demand datasets."
         )
-        return self.var.current_water_demand, self.var.current_efficiency
+        return self.var.current_water_demand, self.var.current_return_flow
 
     def step(self) -> None:
         """This function is run each timestep."""

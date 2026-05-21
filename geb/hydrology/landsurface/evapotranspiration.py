@@ -7,15 +7,11 @@ from numba import njit
 from geb.geb_types import ArrayFloat32
 
 from ..landcovers import (
-    FOREST,
-    GRASSLAND_LIKE,
     OPEN_WATER,
     PADDY_IRRIGATED,
     SEALED,
 )
-
-# TODO: Load this dynamically as global var (see model.py)
-N_SOIL_LAYERS: int = 6
+from .constants import N_SOIL_LAYERS
 
 
 @njit(cache=True, inline="always")
@@ -182,85 +178,6 @@ def get_fraction_easily_available_soil_water(
     return p
 
 
-@njit(inline="always", cache=True)
-def get_transpiration_factor_per_layer(
-    soil_layer_height_m: npt.NDArray[np.float32],
-    effective_root_depth_m: np.float32,
-    w_m: npt.NDArray[np.float32],
-    wfc_m: npt.NDArray[np.float32],
-    wwp_m: npt.NDArray[np.float32],
-    p: np.float32,
-    correct_root_mass: bool = True,
-) -> npt.NDArray[np.float32]:
-    """Calculate the transpiration factor for each soil layer based on the available water and root ratios.
-
-    Args:
-        soil_layer_height_m: height of each soil layer in meters.
-        effective_root_depth_m: root depth in meters, which is the maximum depth where roots can extract water.
-        w_m: soil water content in each layer in m.
-        wfc_m: field capacity in each layer in m.
-        wwp_m: wilting point in each layer in m.
-        p: ratio of easily available soil water, which is a measure of how easily plants can extract water from the soil.
-        correct_root_mass: If True, the root mass ratio is corrected assuming a triangular root distribution.
-
-    Returns:
-        A numpy array of transpiration factors [0-1] for each soil layer, where each factor
-            is the proportion of the available water in that layer that can be used
-            for transpiration. If plenty of water available, sums to 1, else less than 1.
-    """
-    root_ratios = get_root_ratios(
-        effective_root_depth_m,
-        soil_layer_height_m,
-    )
-
-    if correct_root_mass:
-        root_mass_ratio_per_layer = get_root_mass_ratios(
-            effective_root_depth_m,
-            root_ratios,
-            soil_layer_height_m,
-        )
-    else:
-        root_mass_ratio_per_layer = (
-            soil_layer_height_m * root_ratios / effective_root_depth_m
-        )
-
-    w_available = (w_m * root_ratios).sum()
-    wfc_available = (wfc_m * root_ratios).sum()
-    wwp_available = (wwp_m * root_ratios).sum()
-
-    # Compute total water stress factor based on the available water in the soil
-    critical_soil_moisture_content = get_critical_soil_moisture_content(
-        p, wfc_available, wwp_available
-    )
-    transpiration_factor_total = get_transpiration_factor(
-        w_available, wwp_available, critical_soil_moisture_content
-    )
-    if transpiration_factor_total == np.float32(0):
-        return np.zeros_like(w_m)
-
-    transpiration_factor_per_layer = np.zeros_like(w_m)
-
-    for layer in range(N_SOIL_LAYERS):
-        critical_soil_moisture_content_layer = get_critical_soil_moisture_content(
-            p, wfc_m[layer], wwp_m[layer]
-        )
-
-        transpiration_factor_per_layer[layer] = (
-            get_transpiration_factor(
-                w_m[layer], wwp_m[layer], critical_soil_moisture_content_layer
-            )
-            * root_mass_ratio_per_layer[layer]
-        )
-
-    transpiration_factor_per_layer = (
-        transpiration_factor_per_layer
-        / transpiration_factor_per_layer.sum()
-        * transpiration_factor_total
-    )
-
-    return transpiration_factor_per_layer
-
-
 @njit(cache=True, inline="always")
 def calculate_transpiration(
     soil_is_frozen: bool,
@@ -270,12 +187,9 @@ def calculate_transpiration(
     soil_layer_height_m: npt.NDArray[np.float32],  # [m]
     land_use_type: np.int32,
     root_depth_m: np.float32,  # [m]
-    crop_map: np.int32,
-    crop_group_forest: np.float32,
-    crop_group_grassland_like: np.float32,
+    crop_group_number: np.float32,
     potential_transpiration_m: np.float32,  # [m]
     reference_evapotranspiration_grass_m_hour: np.float32,  # [m]
-    crop_group_number_per_group: npt.NDArray[np.float32],
     w_m: npt.NDArray[np.float32],  # [m]
     topwater_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
@@ -290,12 +204,10 @@ def calculate_transpiration(
         soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
         land_use_type: Land use type of the hydrological response unit.
         root_depth_m: The root depth [m].
-        crop_map: Crop map indicating the crop type for the hydrological response unit. -1 indicates no crop.
-        crop_group_forest: Crop group numbers for forest (see WOFOST 6.0).
-        crop_group_grassland_like: Crop group numbers for grassland-like areas (see WOFOST 6.0).
+        crop_group_number: Crop group number for this HRU, pre-resolved from land use type
+            and crop map (see WOFOST 6.0).
         potential_transpiration_m: Potential transpiration [m].
         reference_evapotranspiration_grass_m_hour: Reference evapotranspiration for grass [m/hour]. This is an hourly value that will be converted to a daily value for the calculation.
-        crop_group_number_per_group: Crop group numbers for each crop type.
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
@@ -306,6 +218,8 @@ def calculate_transpiration(
             - topwater_m: Updated topwater [m] after transpiration.
     """
     transpiration: np.float32 = np.float32(0.0)
+    if potential_transpiration_m <= np.float32(0.0):
+        return transpiration, topwater_m
 
     remaining_potential_transpiration: np.float32 = potential_transpiration_m
     if land_use_type == PADDY_IRRIGATED:
@@ -317,14 +231,6 @@ def calculate_transpiration(
         transpiration += transpiration_from_topwater
 
     if not soil_is_frozen:
-        # get group group numbers for natural areas
-        if land_use_type == FOREST:
-            crop_group_number: np.float32 = crop_group_forest
-        elif land_use_type == GRASSLAND_LIKE:
-            crop_group_number: np.float32 = crop_group_grassland_like
-        else:  #
-            crop_group_number: np.float32 = crop_group_number_per_group[crop_map]
-
         # vegetation-specific factor for easily available soil water
         fraction_easily_available_soil_water: np.float32 = get_fraction_easily_available_soil_water(
             crop_group_number=crop_group_number,
@@ -339,33 +245,145 @@ def calculate_transpiration(
             fraction_easily_available_soil_water
         )
 
-        transpiration_factor_per_layer: npt.NDArray[np.float32] = (
-            get_transpiration_factor_per_layer(
-                soil_layer_height_m,
-                effective_root_depth,
-                w_m,
-                wfc_m,
-                wwp_m,
-                fraction_easily_available_soil_water,
+        remaining_root_depth_m: np.float32 = effective_root_depth
+        w_available_m: np.float32 = np.float32(0.0)
+        wfc_available_m: np.float32 = np.float32(0.0)
+        wwp_available_m: np.float32 = np.float32(0.0)
+
+        for layer in range(N_SOIL_LAYERS):
+            root_ratio: np.float32 = min(
+                remaining_root_depth_m / soil_layer_height_m[layer], np.float32(1.0)
             )
+            if root_ratio < np.float32(0.0):
+                root_ratio = np.float32(0.0)
+
+            w_available_m += w_m[layer] * root_ratio
+            wfc_available_m += wfc_m[layer] * root_ratio
+            wwp_available_m += wwp_m[layer] * root_ratio
+
+            remaining_root_depth_m -= soil_layer_height_m[layer]
+            if remaining_root_depth_m < np.float32(0.0):
+                break
+
+        critical_soil_moisture_content_m: np.float32 = (
+            get_critical_soil_moisture_content(
+                fraction_easily_available_soil_water,
+                wfc_available_m,
+                wwp_available_m,
+            )
+        )
+        transpiration_factor_total: np.float32 = get_transpiration_factor(
+            w_available_m,
+            wwp_available_m,
+            critical_soil_moisture_content_m,
+        )
+        if transpiration_factor_total == np.float32(0.0):
+            return transpiration, topwater_m
+
+        # A first pass is needed to normalize the layer weights without allocating
+        # a temporary factor array for every HRU.
+        normalization_factor: np.float32 = np.float32(0.0)
+        current_depth_m: np.float32 = np.float32(0.0)
+        remaining_root_depth_m = effective_root_depth
+        root_triangle_area_m2: np.float32 = (
+            np.float32(0.5) * effective_root_depth * effective_root_depth
         )
 
         for layer in range(N_SOIL_LAYERS):
+            root_ratio = min(
+                remaining_root_depth_m / soil_layer_height_m[layer], np.float32(1.0)
+            )
+            if root_ratio <= np.float32(0.0):
+                break
+
+            triangle_block_height_m: np.float32 = (
+                soil_layer_height_m[layer] * root_ratio
+            )
+            triangle_block_center_depth_m: np.float32 = (
+                triangle_block_height_m / np.float32(2.0) + current_depth_m
+            )
+            triangle_block_width_m: np.float32 = (
+                effective_root_depth - triangle_block_center_depth_m
+            )
+            root_mass_ratio: np.float32 = (
+                triangle_block_height_m * triangle_block_width_m / root_triangle_area_m2
+            )
+
+            critical_soil_moisture_content_layer_m: np.float32 = (
+                get_critical_soil_moisture_content(
+                    fraction_easily_available_soil_water,
+                    wfc_m[layer],
+                    wwp_m[layer],
+                )
+            )
+            normalization_factor += (
+                get_transpiration_factor(
+                    w_m[layer],
+                    wwp_m[layer],
+                    critical_soil_moisture_content_layer_m,
+                )
+                * root_mass_ratio
+            )
+
+            current_depth_m += soil_layer_height_m[layer]
+            remaining_root_depth_m -= soil_layer_height_m[layer]
+            if remaining_root_depth_m < np.float32(0.0):
+                break
+
+        if normalization_factor == np.float32(0.0):
+            return transpiration, topwater_m
+
+        current_depth_m = np.float32(0.0)
+        remaining_root_depth_m = effective_root_depth
+        for layer in range(N_SOIL_LAYERS):
+            root_ratio = min(
+                remaining_root_depth_m / soil_layer_height_m[layer], np.float32(1.0)
+            )
+            if root_ratio <= np.float32(0.0):
+                break
+
+            triangle_block_height_m = soil_layer_height_m[layer] * root_ratio
+            triangle_block_center_depth_m = (
+                triangle_block_height_m / np.float32(2.0) + current_depth_m
+            )
+            triangle_block_width_m = (
+                effective_root_depth - triangle_block_center_depth_m
+            )
+            root_mass_ratio = (
+                triangle_block_height_m * triangle_block_width_m / root_triangle_area_m2
+            )
+
+            critical_soil_moisture_content_layer_m = get_critical_soil_moisture_content(
+                fraction_easily_available_soil_water,
+                wfc_m[layer],
+                wwp_m[layer],
+            )
+            transpiration_factor_layer: np.float32 = (
+                get_transpiration_factor(
+                    w_m[layer],
+                    wwp_m[layer],
+                    critical_soil_moisture_content_layer_m,
+                )
+                * root_mass_ratio
+                / normalization_factor
+                * transpiration_factor_total
+            )
+
             transpiration_layer: np.float32 = (
-                remaining_potential_transpiration
-                * transpiration_factor_per_layer[layer]
+                remaining_potential_transpiration * transpiration_factor_layer
             )
-            # limit the transpiration to the available water in the soil
-            transpiration_layer = min(
-                transpiration_layer,
-                w_m[layer] - wres_m[layer],
-            )
+            transpiration_layer = min(transpiration_layer, w_m[layer] - wres_m[layer])
 
             w_m[layer] -= transpiration_layer
             w_m[layer] = max(
                 w_m[layer], wres_m[layer]
             )  # soil moisture can never be lower than wres
             transpiration += transpiration_layer
+
+            current_depth_m += soil_layer_height_m[layer]
+            remaining_root_depth_m -= soil_layer_height_m[layer]
+            if remaining_root_depth_m < np.float32(0.0):
+                break
 
     return transpiration, topwater_m
 
@@ -378,8 +396,7 @@ def calculate_bare_soil_evaporation(
     open_water_evaporation_m: np.float32,
     w_m: npt.NDArray[np.float32],
     wres_m: npt.NDArray[np.float32],
-    wfc_m: npt.NDArray[np.float32],
-    unsaturated_hydraulic_conductivity_m_per_hour: np.float32,
+    ws_m: npt.NDArray[np.float32],
 ) -> np.float32:
     """Calculate bare soil evaporation for a single soil cell.
 
@@ -390,8 +407,7 @@ def calculate_bare_soil_evaporation(
         open_water_evaporation_m: Actual open water evaporation (m).
         w_m: Soil water content (m), shape (N_SOIL_LAYERS,).
         wres_m: Residual soil moisture content (m), shape (N_SOIL_LAYERS,).
-        wfc_m: Field capacity soil moisture content (m), shape (N_SOIL_LAYERS,).
-        unsaturated_hydraulic_conductivity_m_per_hour: Unsaturated hydraulic conductivity (m/h).
+        ws_m: Saturation soil moisture content (m), shape (N_SOIL_LAYERS,).
 
     Returns:
         Actual bare soil evaporation (m).
@@ -405,21 +421,10 @@ def calculate_bare_soil_evaporation(
     ):
         # Apply an additional correction due to dust mulch
         # reduction based on relative moisture of the top layer.
-        relative_moisture = max(
-            np.float32(0.0),
-            (w_m[0] - wres_m[0]) / (wfc_m[0] - wres_m[0]),
-        )
-        dust_mulch_reduction = min(np.float32(1.0), relative_moisture**2)
+        dust_mulch_reduction: np.float32 = (w_m[0] - wres_m[0]) / (ws_m[0] - wres_m[0])
 
         potential_direct_evaporation_m = (
             potential_direct_evaporation_m * dust_mulch_reduction
-        )
-
-        # Limit potential evaporation by the unsaturated hydraulic conductivity
-        # This accounts for the reduced ability of the soil to transport water to the surface
-        potential_direct_evaporation_m = min(
-            potential_direct_evaporation_m,
-            unsaturated_hydraulic_conductivity_m_per_hour,
         )
 
         # Subtract open water evaporation (though it's expected to be 0 for these land uses)

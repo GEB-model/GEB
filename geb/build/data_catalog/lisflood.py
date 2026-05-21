@@ -1,7 +1,5 @@
 """Adapter for LISFLOOD vegetation properties datasets."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import numpy as np

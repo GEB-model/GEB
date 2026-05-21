@@ -1,7 +1,5 @@
 """Adapter for ESA WorldCover datasets using direct AWS S3 access."""
 
-from __future__ import annotations
-
 import math
 from typing import Any
 
