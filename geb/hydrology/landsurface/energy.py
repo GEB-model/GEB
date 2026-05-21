@@ -1146,7 +1146,7 @@ def solve_soil_enthalpy_column(
         last_idx - 1
     ]
     conductance_to_deep_soil_boundary_W_per_m2_K = lambda_bottom_layer_W_per_m_K / (
-        np.float32(0.5) * max(layer_thicknesses_m[last_idx], np.float32(1e-6))
+        np.float32(0.5) * max(layer_thicknesses_m[N_SOIL_LAYERS - 1], np.float32(1e-6))
     )
 
     alpha_last = dT_dH_linearized[last_idx]
