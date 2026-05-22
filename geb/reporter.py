@@ -7,18 +7,18 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import zarr.storage
 from dateutil.relativedelta import relativedelta
 from xarray.backends.zarr import FillValueCoder
-from zarr.abc.codec import BytesBytesCodec
+from zarr.abc.codec import ArrayArrayCodec, BytesBytesCodec
 from zarr.codecs import ZstdCodec
 from zarr.codecs.numcodecs import (
     BitRound,
     PackBits,
     Shuffle,
-    _NumcodecsArrayArrayCodec,
 )
 
 from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
@@ -34,76 +34,76 @@ if TYPE_CHECKING:
 
 WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
     "hydrology": {
-        "_water_circle_storage": {
+        "_current_storage": {
             "varname": ".current_storage",
             "type": "scalar",
         },
-        "_water_circle_routing_loss": {
+        "_routing_loss_m3": {
             "varname": ".routing_loss_m3",
             "type": "scalar",
         },
     },
     "hydrology.landsurface": {
-        "_water_circle_rain": {
+        "_rain_m": {
             "varname": ".rain_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_circle_snow": {
+        "_snow_m": {
             "varname": ".snow_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_circle_transpiration": {
+        "_transpiration_m": {
             "varname": ".transpiration_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_circle_bare_soil_evaporation": {
+        "_bare_soil_evaporation_m": {
             "varname": ".bare_soil_evaporation_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_circle_open_water_evaporation": {
+        "_open_water_evaporation_m": {
             "varname": ".open_water_evaporation_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_circle_interception_evaporation": {
+        "_interception_evaporation_m": {
             "varname": ".interception_evaporation_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_circle_sublimation_or_deposition": {
+        "_sublimation_or_deposition_m": {
             "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
             "function": "weightedsum",
         },
     },
     "hydrology.routing": {
-        "_water_circle_river_evaporation": {
+        "_total_evaporation_in_rivers_m3": {
             "varname": ".total_evaporation_in_rivers_m3",
             "type": "scalar",
         },
-        "_water_circle_waterbody_evaporation": {
+        "_total_waterbody_evaporation_m3": {
             "varname": ".total_waterbody_evaporation_m3",
             "type": "scalar",
         },
-        "_water_circle_river_outflow": {
+        "_total_outflow_at_pits_m3": {
             "varname": ".total_outflow_at_pits_m3",
             "type": "scalar",
         },
     },
     "hydrology.water_demand": {
-        "_water_circle_domestic_water_loss": {
+        "_domestic_water_loss_m3": {
             "varname": ".domestic_water_loss_m3",
             "type": "scalar",
         },
-        "_water_circle_industry_water_loss": {
+        "_industry_water_loss_m3": {
             "varname": ".industry_water_loss_m3",
             "type": "scalar",
         },
-        "_water_circle_livestock_water_loss": {
+        "_livestock_water_loss_m3": {
             "varname": ".livestock_water_loss_m3",
             "type": "scalar",
         },
@@ -112,131 +112,122 @@ WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
 
 WATER_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology": {
-        "_water_balance_storage": {
+        "_current_storage": {
             "varname": ".current_storage",
             "type": "scalar",
         },
-        "_water_balance_routing_loss": {
+        "_routing_loss_m3": {
             "varname": ".routing_loss_m3",
             "type": "scalar",
         },
     },
     "hydrology.landsurface": {
-        "_water_balance_rain": {
+        "_rain_m": {
             "varname": ".rain_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_snow": {
+        "_snow_m": {
             "varname": ".snow_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_transpiration": {
+        "_transpiration_m": {
             "varname": ".transpiration_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_bare_soil_evaporation": {
+        "_bare_soil_evaporation_m": {
             "varname": ".bare_soil_evaporation_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_open_water_evaporation": {
+        "_open_water_evaporation_m": {
             "varname": ".open_water_evaporation_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_interception_evaporation": {
+        "_interception_evaporation_m": {
             "varname": ".interception_evaporation_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_potential_evapotranspiration": {
+        "_potential_evapotranspiration_m": {
             "varname": ".potential_evapotranspiration_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_sublimation_or_deposition": {
+        "_sublimation_or_deposition_m": {
             "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_interflow": {
+        "_interflow_m": {
             "varname": ".interflow_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_top_soil_storage": {
+        # _rain_m and _snow_m above already cover top-soil precipitation and snow inputs
+        "_top_soil_water_content_m": {
             "varname": "HRU.var.water_content_m[0]",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_top_soil_precipitation": {
-            "varname": ".rain_m",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_balance_top_soil_snow": {
-            "varname": ".snow_m",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_balance_top_soil_runoff": {
+        "_runoff_m_daily": {
             "varname": ".runoff_m_daily",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_top_soil_evaporation": {
+        "_top_soil_evaporation_m": {
             "varname": ".top_soil_evaporation_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_top_soil_infiltration": {
+        "_top_soil_infiltration_m": {
             "varname": ".top_soil_infiltration_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_top_soil_rise_from_layer_2": {
+        "_top_soil_rise_from_layer_2_m": {
             "varname": ".top_soil_rise_from_layer_2_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_top_soil_percolation_to_layer_2": {
+        "_top_soil_percolation_to_layer_2_m": {
             "varname": ".top_soil_percolation_to_layer_2_m",
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_balance_top_soil_transpiration": {
+        "_top_soil_transpiration_m": {
             "varname": ".top_soil_transpiration_m",
             "type": "HRU",
             "function": "weightedsum",
         },
     },
     "hydrology.routing": {
-        "_water_balance_river_evaporation": {
+        "_total_evaporation_in_rivers_m3": {
             "varname": ".total_evaporation_in_rivers_m3",
             "type": "scalar",
         },
-        "_water_balance_waterbody_evaporation": {
+        "_total_waterbody_evaporation_m3": {
             "varname": ".total_waterbody_evaporation_m3",
             "type": "scalar",
         },
-        "_water_balance_river_outflow": {
+        "_total_outflow_at_pits_m3": {
             "varname": ".total_outflow_at_pits_m3",
             "type": "scalar",
         },
     },
     "hydrology.water_demand": {
-        "_water_balance_domestic_water_loss": {
+        "_domestic_water_loss_m3": {
             "varname": ".domestic_water_loss_m3",
             "type": "scalar",
         },
-        "_water_balance_industry_water_loss": {
+        "_industry_water_loss_m3": {
             "varname": ".industry_water_loss_m3",
             "type": "scalar",
         },
-        "_water_balance_livestock_water_loss": {
+        "_livestock_water_loss_m3": {
             "varname": ".livestock_water_loss_m3",
             "type": "scalar",
         },
@@ -245,32 +236,32 @@ WATER_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
 
 WATER_STORAGE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology.landsurface": {
-        "_water_storage_soil_water_content_layer_0_m": {
+        "_soil_water_content_layer_0_m": {
             "varname": "HRU.var.water_content_m[0]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_water_storage_soil_water_content_layer_1_m": {
+        "_soil_water_content_layer_1_m": {
             "varname": "HRU.var.water_content_m[1]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_water_storage_soil_water_content_layer_2_m": {
+        "_soil_water_content_layer_2_m": {
             "varname": "HRU.var.water_content_m[2]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_water_storage_soil_water_content_layer_3_m": {
+        "_soil_water_content_layer_3_m": {
             "varname": "HRU.var.water_content_m[3]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_water_storage_soil_water_content_layer_4_m": {
+        "_soil_water_content_layer_4_m": {
             "varname": "HRU.var.water_content_m[4]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_water_storage_soil_water_content_layer_5_m": {
+        "_soil_water_content_layer_5_m": {
             "varname": "HRU.var.water_content_m[5]",
             "type": "HRU",
             "function": "weightedmean",
@@ -280,7 +271,7 @@ WATER_STORAGE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
 
 OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology.landsurface": {
-        "_outflow_plot_top_soil_frozen_fraction": {
+        "_top_soil_frozen_fraction": {
             "varname": ".top_soil_frozen_fraction",
             "type": "HRU",
             "function": "weightedmean",
@@ -290,32 +281,32 @@ OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
 
 ENERGY_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology.landsurface": {
-        "_energy_balance_soil_temperature_layer_0_C": {
+        "_soil_temperature_layer_0_C": {
             "varname": ".soil_temperature_C[0]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_energy_balance_soil_temperature_layer_1_C": {
+        "_soil_temperature_layer_1_C": {
             "varname": ".soil_temperature_C[1]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_energy_balance_soil_temperature_layer_2_C": {
+        "_soil_temperature_layer_2_C": {
             "varname": ".soil_temperature_C[2]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_energy_balance_soil_temperature_layer_3_C": {
+        "_soil_temperature_layer_3_C": {
             "varname": ".soil_temperature_C[3]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_energy_balance_soil_temperature_layer_4_C": {
+        "_soil_temperature_layer_4_C": {
             "varname": ".soil_temperature_C[4]",
             "type": "HRU",
             "function": "weightedmean",
         },
-        "_energy_balance_soil_temperature_layer_5_C": {
+        "_soil_temperature_layer_5_C": {
             "varname": ".soil_temperature_C[5]",
             "type": "HRU",
             "function": "weightedmean",
@@ -456,7 +447,7 @@ def create_time_array(
 def get_filters_and_compressors(
     dtype: np.dtype,
     compression_level: int,
-) -> tuple[list[_NumcodecsArrayArrayCodec], list[BytesBytesCodec]]:
+) -> tuple[list[ArrayArrayCodec], list[BytesBytesCodec]]:
     """Select zarr filters and compressors appropriate for a given dtype.
 
     The chosen pipeline balances precision loss, byte-shuffle efficiency,
@@ -478,7 +469,7 @@ def get_filters_and_compressors(
         compressors: Bytes-to-bytes codecs applied after filters, always
             ending with ZstdCodec at the given compression level.
     """
-    filters: list[_NumcodecsArrayArrayCodec]
+    filters: list[ArrayArrayCodec]
     compressors: list[BytesBytesCodec]
     if dtype == bool:
         filters = [PackBits()]
@@ -741,6 +732,7 @@ class Reporter:
         There are also several pre-defined report configurations that can be activated by adding
         special keys to the report configuration. These are:
         - _discharge_stations: if set to True, discharge at all discharge stations is reported.
+        - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported.
         - _outflow_points: if set to True, outflow at all outflow points is reported.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
@@ -784,61 +776,88 @@ class Reporter:
             to_delete: list[str] = []
             for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
-                    if module_name == "_discharge_stations" and module_values is True:
-                        stations = read_geom(
-                            self.model.files["geom"][
-                                "discharge/discharge_snapped_locations"
-                            ]
-                        )
-
-                        station_reporters = {}
-                        for station_ID, station_info in stations.iterrows():
-                            xy_grid = station_info["snapped_grid_pixel_xy"]
-                            station_reporters[
-                                f"discharge_hourly_m3_per_s_{station_ID}"
-                            ] = {
-                                "varname": f"grid.var.discharge_m3_s_per_substep",
-                                "type": "grid",
-                                "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
-                                "substeps": 24,
-                            }
-                        report_config = multi_level_merge(
-                            report_config,
-                            {"hydrology.routing": station_reporters},
-                        )
-                    elif module_name == "_outflow_points" and module_values is True:
-                        routing = self.model.hydrology.routing
-                        outflow_rivers = (
-                            routing.get_active_and_downstream_outflow_rivers()
-                        )
-                        all_rivers = routing.rivers
-
-                        outflow_reporters = {}
-
-                        for river_ID, river in outflow_rivers.iterrows():
-                            assert isinstance(river_ID, int)
-                            xys: list[tuple[int, int]] = get_upstream_represented_xys(
-                                river_ID, all_rivers
+                    if module_name == "_discharge_stations":
+                        if module_values is True:
+                            stations = read_geom(
+                                self.model.files["geom"][
+                                    "discharge/discharge_snapped_locations"
+                                ]
                             )
-                            for i, xy in enumerate(xys):
-                                # if there are multiple branches, we append a suffix to the name
-                                suffix = f"_{i}" if len(xys) > 1 else ""
-                                outflow_reporters[
-                                    f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
+
+                            station_reporters = {}
+                            for station_ID, station_info in stations.iterrows():
+                                xy_grid = station_info["snapped_grid_pixel_xy"]
+                                station_reporters[
+                                    f"discharge_hourly_m3_per_s_{station_ID}"
                                 ] = {
-                                    "varname": "grid.var.discharge_m3_s_per_substep",
+                                    "varname": f"grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
-                                    "function": f"sample_xy,{xy[0]},{xy[1]}",
+                                    "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
                                     "substeps": 24,
                                 }
-                        report_config = multi_level_merge(
-                            report_config,
-                            {"hydrology.routing": outflow_reporters},
-                        )
-                        report_config = multi_level_merge(
-                            report_config,
-                            OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
-                        )
+                            report_config = multi_level_merge(
+                                report_config,
+                                {"hydrology.routing": station_reporters},
+                            )
+                    elif module_name == "_meteorological_stations":
+                        if module_values is True:
+                            meteorological_station_locations: gpd.GeoDataFrame = (
+                                read_geom(
+                                    self.model.files["geom"][
+                                        "observations/meteorological_station_locations"
+                                    ]
+                                )
+                            )
+                            for (
+                                station_ID,
+                                station_info,
+                            ) in meteorological_station_locations.iterrows():
+                                station_reporters: dict[str, dict[str, str | int]] = {
+                                    f"evapotranspiration_m_per_hour{station_ID}": {
+                                        "varname": f".evapotranspiration_m",
+                                        "type": "HRU",
+                                        "function": f"sample_lonlat,{station_info['geometry'].x},{station_info['geometry'].y}",
+                                        "substeps": 24,
+                                    },
+                                }
+                                report_config = multi_level_merge(
+                                    report_config,
+                                    {"hydrology.landsurface": station_reporters},
+                                )
+                    elif module_name == "_outflow_points":
+                        if module_values is True:
+                            routing = self.model.hydrology.routing
+                            outflow_rivers = (
+                                routing.get_active_and_downstream_outflow_rivers()
+                            )
+                            all_rivers = routing.rivers
+
+                            outflow_reporters = {}
+
+                            for river_ID, river in outflow_rivers.iterrows():
+                                assert isinstance(river_ID, int)
+                                xys: list[tuple[int, int]] = (
+                                    get_upstream_represented_xys(river_ID, all_rivers)
+                                )
+                                for i, xy in enumerate(xys):
+                                    # if there are multiple branches, we append a suffix to the name
+                                    suffix = f"_{i}" if len(xys) > 1 else ""
+                                    outflow_reporters[
+                                        f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
+                                    ] = {
+                                        "varname": "grid.var.discharge_m3_s_per_substep",
+                                        "type": "grid",
+                                        "function": f"sample_xy,{xy[0]},{xy[1]}",
+                                        "substeps": 24,
+                                    }
+                            report_config = multi_level_merge(
+                                report_config,
+                                {"hydrology.routing": outflow_reporters},
+                            )
+                            report_config = multi_level_merge(
+                                report_config,
+                                OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
+                            )
                     elif module_name == "_water_circle":
                         if module_values is True:
                             report_config = multi_level_merge(
@@ -1520,7 +1539,11 @@ class Reporter:
                 future.result()
 
     def report(
-        self, module: Module, local_variables: dict[str, Any], module_name: str
+        self,
+        module: Module,
+        local_variables: dict[str, Any],
+        module_name: str,
+        variables_to_report: dict[str, Any],
     ) -> None:
         """This method is in every step function to report data to disk.
 
@@ -1529,12 +1552,12 @@ class Reporter:
             local_variables: A dictionary of local variables from the function
                 that calls this one.
             module_name: The name of the module.
+            variables_to_report: A dictionary of variable names to report for this module, with their configurations.
         """
         if not self.is_activated:
             return None
-        report = self.model.config["report"].get(module_name, None)
-        if report is not None:
-            for name, config in report.items():
+        if variables_to_report is not None:
+            for name, config in variables_to_report.items():
                 self.maybe_report_value(
                     module_name=module_name,
                     name=name,

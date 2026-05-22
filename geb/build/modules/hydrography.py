@@ -22,7 +22,10 @@ from geb.build.data_catalog import DataCatalog
 from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
 from geb.build.workflows.command_areas import derive_command_areas_from_routing
-from geb.build.workflows.hydrography import get_river_graph
+from geb.build.workflows.hydrography import (
+    calculate_shreve_stream_order,
+    get_river_graph,
+)
 from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
     ArrayBool,
@@ -231,7 +234,7 @@ def get_rivers_geometry(
     ).set_index("COMID")
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
     rivers["is_headwater_catchment"] = rivers["maxup"] == 0
-    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
+    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])  # ty:ignore[invalid-assignment]
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
 
     # reverse the river lines to have the downstream direction
@@ -454,7 +457,10 @@ class Hydrography(BuildModelBase):
         """Initializes the Hydrography class."""
         pass
 
-    @build_method(depends_on=["setup_hydrography", "setup_cell_area"], required=True)
+    @build_method(
+        depends_on=["setup_hydrography", "setup_cell_area", "setup_elevation"],
+        required=True,
+    )
     def setup_geomorphology(self) -> None:
         """Sets up the Manning's coefficient for the model.
 
@@ -470,6 +476,34 @@ class Hydrography(BuildModelBase):
             The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
             `set_grid()` method.
         """
+        subgrid_elevation: xr.DataArray = self.subgrid["landsurface/elevation"]
+        slope_high_res: npt.NDArray[np.float64] = pyflwdir.dem.slope(
+            subgrid_elevation.values,
+            nodata=np.nan,
+            latlon=True,
+            transform=subgrid_elevation.rio.transform(recalc=True),
+        )
+
+        surface_area_ratio_high_res = xr.DataArray(
+            np.sqrt(1 + slope_high_res**2),
+            coords=subgrid_elevation.coords,
+            dims=subgrid_elevation.dims,
+        )
+
+        surface_area_ratio: xr.DataArray = surface_area_ratio_high_res.coarsen(
+            x=self.subgrid_factor,
+            y=self.subgrid_factor,
+            boundary="exact",
+            coord_func="mean",
+        ).mean()  # ty:ignore[unresolved-attribute]
+        surface_area_ratio.attrs["_FillValue"] = np.nan
+
+        surface_area_ratio: xr.DataArray = snap_to_grid(
+            surface_area_ratio, self.grid["mask"], relative_tolerance=0.03
+        )
+
+        self.set_grid(surface_area_ratio, name="landsurface/surface_area_ratio")
+
         a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
             "routing/upstream_area_m2"
         ]
@@ -670,8 +704,8 @@ class Hydrography(BuildModelBase):
         )
 
         streams_length_low_res = streams_length_high_res.coarsen(
-            x=self.ldd_scale_factor,  # ty:ignore[invalid-argument-type]
-            y=self.ldd_scale_factor,  # ty:ignore[invalid-argument-type]
+            x=self.ldd_scale_factor,
+            y=self.ldd_scale_factor,
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
@@ -779,6 +813,7 @@ class Hydrography(BuildModelBase):
 
         self.logger.info("Retrieving river data")
         rivers: gpd.GeoDataFrame = self.geom["routing/rivers"]
+        rivers["shreve_stream_order"] = calculate_shreve_stream_order(rivers)
 
         self.logger.info("Processing river data")
 
@@ -1620,7 +1655,7 @@ class Hydrography(BuildModelBase):
             # extrapolate missing values by forward and backward filling
             inflow_df_m3_per_s: pd.DataFrame = inflow_df_m3_per_s.ffill().bfill()
 
-        if inflow_df_m3_per_s.isnull().any().any():
+        if inflow_df_m3_per_s.isnull().any():
             raise ValueError(
                 "Inflow hydrograph contains missing values. "
                 "Set interpolate=True to interpolate missing values. "

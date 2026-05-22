@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b23"
+version = "1.0.0b25"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -60,7 +60,7 @@ dependencies = [
     "xarray-regrid[accel]>=0.4.1",
     "xclim>=0.56.0",
     "xmipy>=1.5.0",
-    "zarr>=3.1.5",
+    "zarr[cast-value-rs]>=3.2.1",
     "ty>=0.0.17",
     "ecmwf-api-client>=1.6.5",
     "ruff>=0.14.0",
@@ -84,6 +84,7 @@ dependencies = [
     "simplejson>=3.20.2",
     "eccodes==2.44.0",  # pin until https://github.com/ecmwf/eccodes-python/issues/150 is fixed
     "pystac>=1.14.3",
+    "hda>=2.39",
 ]
 requires-python = ">=3.14.4, <3.15"
 readme = "README.md"
@@ -108,6 +109,7 @@ required-environments = [
     "sys_platform == 'win32'",
     "sys_platform == 'darwin'"
 ]
+exclude-newer = "3 days"
 
 [dependency-groups]
 dashboard = [

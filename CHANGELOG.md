@@ -1,5 +1,14 @@
 # dev
-- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode="lakes_only"` or `mode="reservoirs_only"`.
+- Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
+- Recently, there have been a lot of supply chain effects, where packages contained malicious code or instructions. To avoid most of these issues, but at the same time get relatively new updates (including those with important security updates) we limit any package updates to packages that are at least 3 days old in the uv.lock file. Here we use uv's exclude-newer option.
+
+# v1.0.0b25
+- Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
+- Include a delta approach to account for changes in precipitation and temperature under climate change in creating return period maps. To adjust forcing data to future climate, add the `representative_forcing_year` argument to `setup_forcing` in the build.yml to indicate the year for which you want to fast-forward the forcing data.
+- Fix a bug where update-version would not write newly created files to `files.yml`.
+
+# v1.0.0b24
+- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
 - Add `--debug-method "method_name"` to `geb build` to filter the build to only run the setup region and any other methods that are required to run that specific method. For debugging purposes only.
 - Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
 - Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
@@ -7,6 +16,34 @@
 - Fix "Inflation not set when model runs to final year of data that was created in build process" ([#808](https://github.com/GEB-model/GEB/issues/808)).
 - Flood events could not and still cannot be simulated during the spinup. However, this was not clear and a funny error about missing files was raised. Now this situation is detected and a clear error is raised ([#806](https://github.com/GEB-model/GEB/issues/806)).
 - Simplify and speed up reading of forcing data. Before we used chunks of only 24 hours and used complex async reading to make it fast. Now that we use much larger chunks and efficient masking, the asynchronous reading made things overly complex and error prone. Simplifying the reading (e.g., dropping the async reader) while optimizing the indexing makes the model 10-20% faster in the test region. The difference is negligible in large regions.
+- Switch to Ross methodology for vertical soil water balance. This improves stability model speed.
+- Switch to Côté-Konrad kappa-based method for calculating soil/water heat conductivity. This uses no power functions and is much faster to compute.
+- Use titles for names in GRDC discharge plots.
+- Several updates for visualization of discharge evaluation. Switch to different background, use consistent coloring, replace scatter plot with return period plot.
+- Large number of optimizations in LSM making the model significantly faster again.
+- Speed up sampling from subgrid to HRUs using multi-processing.
+- Support 0 delay of runoff concentration.
+- Set variable runoff concentration variable to 1.0 by default (needs spatial discretization).
+- Improved layout of profiling txt file.
+- Export less data by default.
+- Combine various reporter outputs more efficiently.
+- Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point).
+- Return median metrics for KGE, NSE etc rather than mean.
+- Add FLUXNET (https://fluxnet.org) and GROW (https://zenodo.org/records/15149480) observations to build process. Not yet used in evaluation.
+- Export less data by default. If you miss any files that you relied on they can be explicitly turned on in your `model.yml`. See the `reasonable_default_config.yml` for references. This makes the model ~10% faster.
+- Combine various reporter outputs more efficiently reducing the amount of (duplicate) files exported. Naming conventions have changed slightly, but code in the evaluation functions was updated accordingly.
+- Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point). Also they are faster.
+- Do not convert from grid to HRU and then back to grid for livestock water consumption.
+- Abstraction from industry is now assumed to be abstracted from larger rivers only. If we let industry abstract from each grid cell that has any industry, the industrial users abstract water from very small rivers, which also leads to very high groundwater abstraction in those cells because the demand is not satisfiable from the river. This is highly unrealistic. Therefore, we define abstraction areas based on the river network. Each abstraction area is associated with a river of shreve stream order above a set threshold. All water demands from industry are essentially transferred downstream to the river of the abstraction area, and abstraction is assumed to occur from that river.
+- All other configuration options that essentially tried to do some of these things above per study area (like custom abstraction) are removed now. Hopefully we can simply reduce the need for configuration options with better defaults!
+- Change units that industry and livestock water demand return (now m3/day, was m/day).
+- Add surface area ratio to setup_geomorphology.
+- Use surface area ratio to set variable runoff.
+- Improvement of variable names and unit conventions in land surface model.
+- Limit infiltration to most restricted layer and set a simple surface crust to limit infiltration to 20% of saturated conductivity for top layer. Can be improved upon.
+- Export evapotranspiration for locations with flux towers.
+- Improve visualisation of discharge_evaluation.html. Several things to make it look better, but also make it roughly 33-40% of original size while making it faster loading.
+- Report monthly discharge evaluation values too.
 
 # v1.0.0b23
 - Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).

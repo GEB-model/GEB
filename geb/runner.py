@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, TextIO, TypeVar, cast
 
 import geopandas as gpd
+import pandas as pd
 import yaml
 from pydantic import BaseModel, ValidationError
 from shapely.geometry import box
@@ -338,14 +339,60 @@ def _dump_speed_profile(profile: cProfile.Profile, name: str, date: str) -> None
     profiling_folder.mkdir(exist_ok=True)
 
     # Save binary data for visualization in tools like SnakeViz or RunSnakeRun
-    binary_path = profiling_folder / f"{name}_speed_{date}.prof"
+    binary_path: Path = profiling_folder / f"{name}_speed_{date}.prof"
     profile.dump_stats(binary_path)
 
-    # Save human-readable summary
+    ps = pstats.Stats(profile)
+    data: list[dict[str, str]] = []
+
+    for func, (cc, nc, tt, ct, callers) in ps.stats.items():  # ty:ignore[unresolved-attribute]
+        filename: str
+        filename, line, func_name = func
+
+        if "geb/" in filename:
+            filename: str = "geb/" + filename.split("geb/")[-1]
+        elif ".venv/" in filename:
+            filename: str = ".venv/" + filename.split(".venv/")[-1]
+        elif ".lib/" in filename:
+            filename: str = ".lib/" + filename.split(".lib/")[-1]
+
+        def format_caller(caller_tuple: tuple | None) -> str:
+            if not caller_tuple:
+                return "N/A"
+            func_info, stats = caller_tuple
+            # stats[0] is ncalls, stats[3] is cumtime, func_info[2] is function name
+            return f"{func_info[2][:30]} ({stats[0]} calls, {stats[3]:.4f}s)"
+
+        # Sort the callers dictionary by ncalls (index 0) and cumtime (index 3)
+        sorted_by_freq: list = sorted(
+            callers.items(), key=lambda x: x[1][0], reverse=True
+        )
+        sorted_by_cum: list = sorted(
+            callers.items(), key=lambda x: x[1][3], reverse=True
+        )
+
+        data.append(
+            {
+                "function": func_name[:30],
+                "cumtime": ct,
+                "tottime": tt,
+                "ncalls": f"{nc}/{cc}" if nc != cc else nc,
+                "filename": filename[-30:],
+                "lineno": line,
+                # "top_freq_caller": format_caller(sorted_by_freq[0])
+                # if sorted_by_freq
+                # else "N/A",
+                "top_cum_caller": format_caller(sorted_by_cum[0])
+                if sorted_by_cum
+                else "N/A",
+            }
+        )
+
+    df: pd.DataFrame = pd.DataFrame(data).sort_values("cumtime", ascending=False)
+    string_formatted: str = df.head(200).to_string(index=False, justify="left")
     text_path = profiling_folder / f"{name}_speed_summary_{date}.txt"
-    with open(text_path, "w", encoding="utf-8") as stream:
-        stats = pstats.Stats(profile, stream=stream)
-        stats.strip_dirs().sort_stats("cumtime").print_stats()
+    text_path.parent.mkdir(exist_ok=True)
+    text_path.write_text(string_formatted + "\n", encoding="utf-8")
 
     print(f"Speed profile saved to: {binary_path}")
     print(f"Speed profile summary saved to: {text_path}")

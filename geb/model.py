@@ -138,7 +138,9 @@ class GEBModel(Module):
         if Version(version_info) == Version(__version__):
             return
 
-        updates: list[str] = get_and_maybe_do_version_updates(version_info)
+        updates: list[str] = get_and_maybe_do_version_updates(
+            version_info, logger=self.logger
+        )
         if updates:
             error = f"Version mismatch and updating is required: input data version is {version_info}, but current model version is {__version__}. Please run 'geb update-version' to update the model to the current version."
             self.logger.error(error)
@@ -490,7 +492,6 @@ class GEBModel(Module):
             self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
-            self.hydrology.landsurface.set_global_variables()
 
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
 
