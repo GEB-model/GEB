@@ -3046,13 +3046,12 @@ class CropFarmers(AgentBaseClass):
                     y_pred = a * np.exp(b * Xv)
                     r2 = _r2(yv, y_pred)
             else:
-                a, b, r2 = np.nan, np.nan, np.nan
+                a, b, r2 = 1.0, 0.0, 0.0
+                print(f"WARNING: Group {g} has insufficient valid data for yield-SPEI fitting. Using fallback (constant yield).")
 
             a_array[g] = a
             b_array[g] = b
             r_squared_array[g] = r2
-            if np.isnan(r2):
-                raise ValueError(f"Group {g} has insufficient valid data for fitting.")
 
         # Assign per farmer (cols: intercept=a, slope=b)
         farmer_params = np.column_stack(

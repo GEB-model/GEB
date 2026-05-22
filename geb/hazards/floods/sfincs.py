@@ -177,12 +177,16 @@ class SFINCSRootModel:
         grid_size_multiplier: int,
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
+        extra_mannings_datasets: list[dict] | None = None,
+        subgrid_DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]]
+        | None = None,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_river_outflow_boundary: bool = True,
         outflow_boundary_width_m: float = 500.0,
         initial_water_level: float | None = 0.0,
+        downstream_basin_gpkg: Path | str | None = "/scistor/ivm/tsa221/Paper_2/Downstream/GEB/model/meuse_base_2021/input/geom/pyflwdir_down_basin.gpkg",
         custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
         overwrite: bool | Literal["auto"] = True,
         p_value_threshold: float = 0.05,
@@ -311,6 +315,16 @@ class SFINCSRootModel:
         self.subbasins, subbasins_burned = self.burn_and_align_subbasins(
             subbasins=subbasins, mask=mask
         )
+
+        # Optionally clip to a downstream basin of interest
+        if downstream_basin_gpkg is not None:
+            downstream_basin = gpd.read_file(downstream_basin_gpkg).to_crs(
+                self.subbasins.crs
+            )
+            self.subbasins = self.subbasins[
+                self.subbasins.centroid.within(downstream_basin.union_all())
+            ]
+
         self.subbasins.to_parquet(self.path / "subbasins_processed.geoparquet")
 
         # delete mask and subbasins to ensure we don't accidentally use them later
@@ -325,7 +339,7 @@ class SFINCSRootModel:
         crs = subbasins_burned.rio.crs
         if not crs.is_epsg_code:
             raise ValueError("CRS must be an EPSG code")
-
+        print("setting up grid from region")
         sf.setup_grid_from_region(
             {"geom": self.subbasins}, res=100, rotated=False, crs="utm"
         )
@@ -353,9 +367,9 @@ class SFINCSRootModel:
             DEM.pop("path", None)
             DEM.pop("fill_depressions", None)
             DEM["reproj_method"] = "bilinear"
-
+        print("setting up dep")
         sf.setup_dep(datasets_dep=DEMs)
-
+        print("dep completed")
         # Re-rasterize subbasins onto the new UTM grid (setup_grid_from_region may have
         # changed the resolution/CRS relative to the original geographic mask used in
         # burn_and_align_subbasins, so subbasins_burned must be regenerated here).
@@ -429,7 +443,14 @@ class SFINCSRootModel:
                     river_len=0,
                     btype="waterlevel",
                 )
-
+                fig, _ = sf.plot_basemap(
+                    fn_out=str((self.figures_path / "basemap.png").resolve()),
+                    vmin=math.floor(self.elevation.min()),
+                    vmax=max(
+                        math.ceil(self.elevation.max()), 1
+                    ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
+                )
+                plt.close(fig)
                 outflow_points = river_source_points(
                     gdf_riv=self.rivers.to_crs(sf.crs),
                     gdf_mask=sf.region,
@@ -438,7 +459,23 @@ class SFINCSRootModel:
                     river_upa=0,
                     river_len=0,
                 )
-                assert len(outflow_points) == 1, "Only one outflow point is expected"
+                if len(outflow_points) > 1:
+                    # Multiple exits can appear when a high-res DEM fills cells near the
+                    # domain edge that were nodata in the coarser DEM, shifting the active
+                    # mask boundary and creating spurious river-boundary intersections.
+                    # Keep only the most downstream point (highest upstream area).
+                    rivers_crs = self.rivers.to_crs(sf.crs)
+                    upareas = [
+                        rivers_crs.loc[rivers_crs.distance(geom).idxmin(), "uparea_m2"]
+                        for geom in outflow_points.geometry
+                    ]
+                    best = int(np.argmax(upareas))
+                    self.logger.warning(
+                        f"{len(outflow_points)} outflow points found; selecting the most "
+                        f"downstream one (uparea_m2={upareas[best]:.3e})"
+                    )
+                    outflow_points = outflow_points.iloc[[best]].reset_index(drop=True)
+                assert len(outflow_points) == 1, "No outflow point found"
                 assert outflow_points.crs == sf.crs, (
                     "CRS of outflow_points does not match the model CRS"
                 )
@@ -453,9 +490,9 @@ class SFINCSRootModel:
                     x=x_coord, y=y_coord, method="nearest"
                 ).values.item()
 
-                if elevation_value is None or elevation_value <= 0:
+                if elevation_value is None or np.isnan(float(elevation_value)):
                     raise ValueError(
-                        f"Invalid outflow elevation ({elevation_value}), must be > 0"
+                        f"Invalid outflow elevation ({elevation_value}), outflow point may be outside the DEM domain"
                     )
 
                 outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
@@ -580,13 +617,11 @@ class SFINCSRootModel:
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
             # only burn rivers that are wider than the subgrid pixel size
+            _rgh = list(extra_mannings_datasets) if extra_mannings_datasets else []
+            _rgh.append({"manning": mannings.to_dataset(name="manning")})
             sf.setup_subgrid(
-                datasets_dep=DEMs,
-                datasets_rgh=[
-                    {
-                        "manning": mannings.to_dataset(name="manning"),
-                    }
-                ],
+                datasets_dep=subgrid_DEMs,
+                datasets_rgh=_rgh,
                 datasets_riv=[
                     {
                         "centerlines": rivers_to_burn.rename(
@@ -610,13 +645,9 @@ class SFINCSRootModel:
             )
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
-            sf.setup_manning_roughness(
-                datasets_rgh=[
-                    {
-                        "manning": mannings.to_dataset(name="manning"),
-                    }
-                ]
-            )
+            _rgh = list(extra_mannings_datasets) if extra_mannings_datasets else []
+            _rgh.append({"manning": mannings.to_dataset(name="manning")})
+            sf.setup_manning_roughness(datasets_rgh=_rgh)
 
             if rivers_to_burn is not None:
                 # retrieve the elevation and mannings grids
@@ -1909,9 +1940,9 @@ class SFINCSSimulation:
             dem_values = json.load(f)
 
         elevation = dem_values.get("outflow_elevation", None)
-        if elevation is None or elevation <= 0:
+        if elevation is None or np.isnan(float(elevation)):
             raise AssertionError(
-                "Elevation should have a positive value to set up outflow waterlevel boundary"
+                "Elevation is NaN or missing; outflow point may be outside the DEM domain"
             )
 
         outflow_points = outflow.copy()
@@ -2006,18 +2037,17 @@ class SFINCSSimulation:
         Raises:
             ValueError: If forcing locations are outside the model subbasins.
         """
+        region_geom = self.sfincs_model.region.union_all()
+        in_region = region_geom.contains(nodes.geometry.to_crs(self.sfincs_model.crs))
+        nodes = nodes[in_region]
+        timeseries = timeseries[nodes.index]
+
         assert set(timeseries.columns) == set(nodes.index)
 
         if "dis" in self.sfincs_model.forcing:
             assert not np.isin(
                 nodes.index, self.sfincs_model.forcing["dis"].index
             ).any(), "This forcing would overwrite existing discharge forcing points"
-
-        assert (
-            self.sfincs_model.region.union_all()
-            .contains(nodes.geometry.to_crs(self.sfincs_model.crs))
-            .all()
-        ), "All forcing locations must be within the model subbasins"
 
         reprojected_nodes = nodes.to_crs(self.sfincs_model.grid["msk"].rio.crs)
         x_points: xr.DataArray = xr.DataArray(

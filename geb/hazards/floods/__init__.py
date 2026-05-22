@@ -181,6 +181,12 @@ class Floods(Module):
             self.model.files["dict"]["hydrodynamics/DEM_config"]
         )
 
+        self.subgrid_DEM_config: list[dict[str, Any]] | None = (
+            read_params(self.model.files["dict"]["hydrodynamics/subgrid_DEM_config"])
+            if "hydrodynamics/subgrid_DEM_config" in self.model.files["dict"]
+            else None
+        )
+
         self.HRU = model.hydrology.HRU
 
         if self.model.simulate_hydrology:
@@ -275,9 +281,18 @@ class Floods(Module):
                 self.model.files["other"][entry["path"]]
             ).to_dataset(name="elevtn")
 
+        subgrid_DEMs = self.DEM_config  # default: same as computational grid
+        if self.subgrid_DEM_config is not None:
+            subgrid_DEMs = [dict(e) for e in self.subgrid_DEM_config]
+            for entry in subgrid_DEMs:
+                entry["elevtn"] = read_zarr(
+                    self.model.files["other"][entry["path"]]
+                ).to_dataset(name="elevtn")
+
         sfincs_model.build(
             subbasins=subbasins,
             DEMs=self.DEM_config,
+            subgrid_DEMs=subgrid_DEMs,
             rivers=rivers,
             discharge=self.discharge_spinup_ds,
             river_width_alpha=self.model.hydrology.grid.decompress(
@@ -287,6 +302,7 @@ class Floods(Module):
                 self.model.hydrology.grid.var.river_width_beta
             ),
             mannings=self.mannings,
+            extra_mannings_datasets=self.trachytope_mannings_datasets,
             grid_size_multiplier=self.config["grid_size_multiplier"],
             subgrid=self.config["subgrid"],
             depth_calculation_method=self.model.config["hydrology"]["routing"][
@@ -302,6 +318,7 @@ class Floods(Module):
             coastal=coastal,
             setup_river_outflow_boundary=not coastal,
             initial_water_level=initial_water_level,
+            downstream_basin_gpkg=self.config.get("downstream_basin_gpkg", "/scistor/ivm/tsa221/Paper_2/Downstream/GEB/model/meuse_base_2021/input/geom/pyflwdir_down_basin.gpkg"),
             custom_rivers_to_burn=read_geom(
                 self.model.files["geom"]["routing/custom_rivers"]
             )
@@ -803,6 +820,21 @@ class Floods(Module):
             method="lookup",
         )
         return mannings
+
+    @property
+    def trachytope_mannings_datasets(self) -> list[dict] | None:
+        """Return trachytope-derived Manning's n as a priority roughness layer, or None.
+
+        Configured via hazards.floods.trachytope_mannings in model.yml, which should be
+        a key in files.yml under 'other' pointing to a GeoTIFF (e.g. roughness/mannings_j95).
+        """
+        key = self.config.get("trachytope_mannings")
+        if not key:
+            return None
+        path = self.model.files["other"].get(key)
+        if path is None:
+            return None
+        return [{"manning": path}]
 
     @property
     def land_cover(self) -> xr.DataArray:

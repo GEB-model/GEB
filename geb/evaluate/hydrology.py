@@ -1056,6 +1056,8 @@ def create_validation_df(
     observed_discharge: pd.Series,
     correct_discharge_observations: bool,
     discharge_observations_to_GEB_upstream_area_ratio: float,
+    start_time: str | None = None,
+    end_time: str | None = None,
 ) -> pd.DataFrame:
     """Create a validation dataframe with the discharge observations and the GEB discharge simulation for the selected station.
 
@@ -1068,6 +1070,8 @@ def create_validation_df(
         correct_discharge_observations: Whether to correct the discharge_observations discharge timeseries for the difference in upstream
             area between the discharge_observations station and the discharge from GEB.
         discharge_observations_to_GEB_upstream_area_ratio: The ratio of the upstream area of the discharge_observations station to the upstream area of the GEB discharge grid cell. This is used to correct
+        start_time: Optional start date string (e.g. "1970-01-01") to trim the evaluation period.
+        end_time: Optional end date string to trim the evaluation period.
 
     Returns:
         DataFrame with the discharge observations and the GEB discharge simulation for the selected station.
@@ -1077,7 +1081,7 @@ def create_validation_df(
         ValueError: If NaN values are found in the GEB discharge data after loading.
     """
     # Check if the hydrology.routing directory exists
-    routing_dir = output_folder / "report" / run_name / "hydrology.routing"
+    routing_dir = output_folder / "report" / "spinup" / "hydrology.routing"
     if not routing_dir.exists():
         raise FileNotFoundError(
             f"Hydrology routing directory does not exist: {routing_dir}"
@@ -1133,10 +1137,14 @@ def create_validation_df(
     ).mean()
 
     # cut both observed and simulated discharge to the same time range
-    start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
-    end_time = min(observed_discharge.index.max(), simulated_discharge.index.max())
-    observed_discharge = observed_discharge.loc[start_time:end_time]
-    simulated_discharge = simulated_discharge.loc[start_time:end_time]
+    _start = max(observed_discharge.index.min(), simulated_discharge.index.min())
+    _end = min(observed_discharge.index.max(), simulated_discharge.index.max())
+    if start_time is not None:
+        _start = max(_start, pd.Timestamp(start_time))
+    if end_time is not None:
+        _end = min(_end, pd.Timestamp(end_time))
+    observed_discharge = observed_discharge.loc[_start:_end]
+    simulated_discharge = simulated_discharge.loc[_start:_end]
 
     # Create a combined dataframe with the union of all timestamps.
     # Values will be NaN where data is missing in either series.
@@ -2102,6 +2110,8 @@ class Hydrology:
         include_yearly_plots: bool = True,
         correct_discharge_observations: bool = False,
         create_plots: bool = True,
+        start_time: str | None = None,
+        end_time: str | None = None,
     ) -> dict[str, float | None]:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
@@ -2121,6 +2131,8 @@ class Hydrology:
             correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
                 in upstream area between the discharge observations station and the discharge from GEB.
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
+            start_time: Optional start date string (e.g. "1970-01-01") to trim the evaluation period. Useful to skip the initial spinup warmup years.
+            end_time: Optional end date string to trim the evaluation period.
 
         Returns:
             Dictionary containing mean metrics (KGE, NSE, R). In addition, the returned dictionary contains
@@ -2207,6 +2219,8 @@ class Hydrology:
                     discharge_obs_series,
                     correct_discharge_observations,
                     discharge_observations_to_GEB_upstream_area_ratio,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
 
                 # Check if validation_df is empty (station was skipped due to all NaN values)
@@ -2376,6 +2390,7 @@ class Hydrology:
 
     def plot_skill_scores(
         self,
+        run_name: str = "default",
         export: bool = True,
     ) -> None:
         """Create skill score boxplot graphs for hydrological model evaluation metrics.
@@ -2390,6 +2405,7 @@ class Hydrology:
             graph creation and return early.
 
         Args:
+            run_name: Unused; accepted for CLI compatibility.
             export: Whether to save the skill score graphs to PNG files.
         """
         evaluation_df = pd.read_excel(self.output_folder / "evaluation_metrics.xlsx")

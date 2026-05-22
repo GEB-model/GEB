@@ -1830,6 +1830,8 @@ def create_hash_from_parameters(
             value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
         elif isinstance(value, np.generic):
             value = value.item()
+        elif isinstance(value, Path):
+            value = str(value)
         try:
             json.dumps(value)
         except TypeError, ValueError:
