@@ -626,12 +626,12 @@ class KinematicWave(Router):
         river_storage_alpha: ArrayFloat32,
         river_storage_beta: ArrayFloat32,
         river_length: ArrayFloat32,
-        retention_storage_m3: ArrayFloat32,  # retention logic
-        retention_max_storage_m3: ArrayFloat32,  # retention logic
-        retention_node_id: ArrayInt32,  # retention logic
-        controlled_retention: ArrayBool,  # retention logic
-        retention_activation_threshold_controlled_m3_s: ArrayFloat32,  # retention logic
-        retention_activation_threshold_uncontrolled_m3_s: ArrayFloat32,  # retention logic
+        retention_storage_m3: ArrayFloat32,
+        retention_max_storage_m3: ArrayFloat32,
+        retention_node_id: ArrayInt32,
+        controlled_retention: ArrayBool,
+        retention_activation_threshold_controlled_m3_s: ArrayFloat32,
+        retention_activation_threshold_uncontrolled_m3_s: ArrayFloat32,
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat32,
@@ -730,74 +730,91 @@ class KinematicWave(Router):
                 waterbody_inflow_m3_node = Qin * dt + sideflow_node_m3
                 waterbody_storage_m3[node_waterbody_id] += waterbody_inflow_m3_node
                 waterbody_inflow_m3[node_waterbody_id] += waterbody_inflow_m3_node
-                assert evaporation_m3[node] == 0.0
+                assert evaporation_m3[node] == np.float32(0.0)
             else:
-                ##########################
-                ## RETENTION DIVERSION ###
-                ##########################
                 node_retention_id = retention_node_id[node]
                 # if the node is associated with a retention basin (not -1), we apply the retention logic
                 if node_retention_id != -1:
                     # total discharge entering the retention basin river cell during timestep, including sideflow
-                    discharge_at_retention_basin = Qin * dt + sideflow_node_m3
+                    discharge_at_retention_basin_m3_per_timestep: np.float32 = (
+                        Qin * dt + sideflow_node_m3
+                    )
 
                     # Discharge before diversion, to compare against activation thresholds; convert to flow rate (m3/s)
-                    Q_before_diversion = discharge_at_retention_basin / dt
+                    discharge_before_diversion_m3_per_s: np.float32 = (
+                        discharge_at_retention_basin_m3_per_timestep / dt
+                    )
 
                     # limit inflow into basins (5% per timestep (hour))
-                    inflow_limit = 0.05 * retention_max_storage_m3[node_retention_id]
+                    inflow_limit_m3_per_timestep: np.float32 = (
+                        np.float32(0.05) * retention_max_storage_m3[node_retention_id]
+                    )
 
                     # determine available storage in the retention basin every hour; can not be negative
-                    available_storage = max(
-                        0.0,
+                    available_storage_m3: np.float32 = max(
+                        np.float32(0.0),
                         retention_max_storage_m3[node_retention_id]
                         - retention_storage_m3[node_retention_id],
                     )
 
                     # Define basin activation for controlled and uncontrolled retention basins
                     if controlled_retention[node_retention_id]:
-                        threshold = retention_activation_threshold_controlled_m3_s[
-                            node_retention_id
-                        ]
+                        activation_threshold_m3_per_s: np.float32 = (
+                            retention_activation_threshold_controlled_m3_s[
+                                node_retention_id
+                            ]
+                        )
                     else:
-                        threshold = retention_activation_threshold_uncontrolled_m3_s[
-                            node_retention_id
-                        ]
+                        activation_threshold_m3_per_s: np.float32 = (
+                            retention_activation_threshold_uncontrolled_m3_s[
+                                node_retention_id
+                            ]
+                        )
 
                     # Decide based on activation threshold and discharge at retention basin (Q_before_diversion) whether diversion into
                     # retention basins happens or not (0 inflow) (can't be higher than discharge_at_retention_basin, available_storage, and inflow limit)
-                    if Q_before_diversion > threshold:
-                        diverted_volume = min(
-                            discharge_at_retention_basin,
-                            available_storage,
-                            inflow_limit,
+                    if (
+                        discharge_before_diversion_m3_per_s
+                        > activation_threshold_m3_per_s
+                    ):
+                        diverted_volume_m3: np.float32 = min(
+                            discharge_at_retention_basin_m3_per_timestep,
+                            available_storage_m3,
+                            inflow_limit_m3_per_timestep,
                         )
                     else:
-                        diverted_volume = np.float32(0.0)
+                        diverted_volume_m3: np.float32 = np.float32(0.0)
 
                     # when retention basins are activated, water is diverted from river into basins (storage is updated),
                     # and inflow volume is reduced by this amount
-                    if diverted_volume > 0.0:
-                        retention_inflow_m3[node_retention_id] += diverted_volume
-                        retention_storage_m3[node_retention_id] += diverted_volume
-                        discharge_at_retention_basin -= diverted_volume
+                    if diverted_volume_m3 > np.float32(0.0):
+                        retention_inflow_m3[node_retention_id] += diverted_volume_m3
+                        retention_storage_m3[node_retention_id] += diverted_volume_m3
+                        discharge_at_retention_basin_m3_per_timestep -= (
+                            diverted_volume_m3
+                        )
 
                     # the basins also release water once they have started filling up, by 1% of the current storage per timestep
                     # thereby, retention basin release is slowing down once the river flow is below activation threshold (outflow can not be negative)
                     # retention storage is updated accordingly, as well as retention outflow. Outflow is added to discharge_at_retention_basin (back to river)
-                    if retention_storage_m3[node_retention_id] > 0.0:
-                        outflow_volume = 0.01 * retention_storage_m3[node_retention_id]
-                        outflow_volume = min(
-                            outflow_volume, retention_storage_m3[node_retention_id]
+                    if retention_storage_m3[node_retention_id] > np.float32(0.0):
+                        outflow_volume_m3: np.float32 = (
+                            np.float32(0.01) * retention_storage_m3[node_retention_id]
                         )
-                        retention_storage_m3[node_retention_id] -= outflow_volume
-                        retention_outflow_m3[node_retention_id] += outflow_volume
-                        discharge_at_retention_basin += outflow_volume
+                        outflow_volume_m3 = min(
+                            outflow_volume_m3, retention_storage_m3[node_retention_id]
+                        )
+                        retention_storage_m3[node_retention_id] -= outflow_volume_m3
+                        retention_outflow_m3[node_retention_id] += outflow_volume_m3
+                        discharge_at_retention_basin_m3_per_timestep += (
+                            outflow_volume_m3
+                        )
 
                     # we subract retained water from sideflow (water added/subtracted locally) to not break upstream routing logic
                     # Qin cant be modified since it represents upstream routing
-                    sideflow_node_m3 = discharge_at_retention_basin - Qin * dt
-                #########################################################################
+                    sideflow_node_m3 = (
+                        discharge_at_retention_basin_m3_per_timestep - Qin * dt
+                    )
 
                 Qnew[node], actual_evaporation_m3_dt = update_node_kinematic(
                     Qin,
@@ -1125,7 +1142,7 @@ class Accuflux(Router):
             node = idxs_up_to_downstream[i]
             upstream_nodes = upstream_matrix_from_up_to_downstream[i]
 
-            inflow_volume = np.float32(0.0)
+            inflow_volume_m3 = np.float32(0.0)
 
             for upstream_node in upstream_nodes:
                 if upstream_node == -1:
@@ -1149,7 +1166,7 @@ class Accuflux(Router):
                     # make sure that the waterbody storage does not go below 0
                     assert waterbody_storage_m3[upstream_node_waterbody_id] >= 0
 
-                    inflow_volume += waterbody_outflow_m3
+                    inflow_volume_m3 += waterbody_outflow_m3
 
                 elif (
                     waterbody_id[upstream_node] != -1
@@ -1157,26 +1174,24 @@ class Accuflux(Router):
                     assert sideflow_m3[upstream_node] == 0
 
                 else:  # in normal case, just take the inflow from upstream
-                    inflow_volume += Qold[upstream_node] * dt
+                    inflow_volume_m3 += Qold[upstream_node] * dt
 
             node_waterbody_id = waterbody_id[node]
-
-            ############################
-            # Retention node diversion #
-            ############################
             node_retention_id = retention_node_id[node]
 
             # if the node is associated with a retention basin (not -1), we apply the retention logic
             if node_retention_id != -1:
                 # Compute discharge before diversion into ret. basins to check against activation threshold
-                Q_before_diversion = inflow_volume / dt
+                Q_before_diversion_m3_per_s = inflow_volume_m3 / dt
 
                 # define inflow limit of 5% per ts of max capacity per timestep
-                inflow_limit = 0.05 * retention_max_storage_m3[node_retention_id]
+                inflow_limit_m3: np.float32 = (
+                    np.float32(0.05) * retention_max_storage_m3[node_retention_id]
+                )
 
                 # Check available storage per timestep in each retention basin to determine how much water can be diverted; available storage can not be negative
-                available_storage = max(
-                    0.0,
+                available_storage_m3: np.float32 = max(
+                    np.float32(0.0),
                     retention_max_storage_m3[node_retention_id]
                     - retention_storage_m3[node_retention_id],
                 )
@@ -1184,48 +1199,52 @@ class Accuflux(Router):
                 # Define basin activation thresholds for controlled and uncontrolled retention basins (comes from input data, see hydrography.py)
                 if controlled_retention[node_retention_id]:
                     # if retention is controlled, check activation threshold
-                    threshold = retention_activation_threshold_controlled_m3_s[
-                        node_retention_id
-                    ]
-                else:
-                    threshold = retention_activation_threshold_uncontrolled_m3_s[
-                        node_retention_id
-                    ]
-
-                # Check if retention basins are activated based on thresholds for controlled and uncontrolled basins, and determine diverted volume (can not be higher than inflow volume, available storage, and inflow limit)
-                if Q_before_diversion > threshold:
-                    diverted_volume = min(
-                        inflow_volume, inflow_limit, available_storage
+                    activation_threshold_m3_per_s = (
+                        retention_activation_threshold_controlled_m3_s[
+                            node_retention_id
+                        ]
                     )
                 else:
-                    diverted_volume = np.float32(0.0)
+                    activation_threshold_m3_per_s = (
+                        retention_activation_threshold_uncontrolled_m3_s[
+                            node_retention_id
+                        ]
+                    )
+
+                # Check if retention basins are activated based on thresholds for controlled and uncontrolled basins, and determine diverted volume (can not be higher than inflow volume, available storage, and inflow limit)
+                if Q_before_diversion_m3_per_s > activation_threshold_m3_per_s:
+                    diverted_volume_m3: np.float32 = min(
+                        inflow_volume_m3, inflow_limit_m3, available_storage_m3
+                    )
+                else:
+                    diverted_volume_m3: np.float32 = np.float32(0.0)
 
                 # When retention basins are activated, water is diverted from river into basins (storage is updated),
                 # and inflow volume (which is river discharge at the retention node) is reduced by this amount
-                if diverted_volume > 0.0:
-                    retention_storage_m3[node_retention_id] += diverted_volume
-                    retention_inflow_m3[node_retention_id] += diverted_volume
+                if diverted_volume_m3 > np.float32(0.0):
+                    retention_storage_m3[node_retention_id] += diverted_volume_m3
+                    retention_inflow_m3[node_retention_id] += diverted_volume_m3
                     # Reduce the flow remaining to the river
-                    inflow_volume -= diverted_volume
+                    inflow_volume_m3 -= diverted_volume_m3
 
                 # Outflow: 1% of current storage per timestep when basin has storage > 0, so outflow naturally slows down; retention basin storage is updated, as well as retention outflow.
-                if retention_storage_m3[node_retention_id] > 0.0:
-                    outflow_volume = 0.01 * retention_storage_m3[node_retention_id]
-                    outflow_volume = min(
+                if retention_storage_m3[node_retention_id] > np.float32(0.0):
+                    outflow_volume: np.float32 = (
+                        np.float32(0.01) * retention_storage_m3[node_retention_id]
+                    )
+                    outflow_volume: np.float32 = min(
                         outflow_volume, retention_storage_m3[node_retention_id]
                     )
                     retention_storage_m3[node_retention_id] -= outflow_volume
                     retention_outflow_m3[node_retention_id] += outflow_volume
                     # outflow is returned to river discharge at the node
-                    inflow_volume += outflow_volume
-
-            ##########################################################################################
+                    inflow_volume_m3 += outflow_volume
 
             if node_waterbody_id != -1:
-                waterbody_storage_m3[node_waterbody_id] += inflow_volume
-                waterbody_inflow_m3[node_waterbody_id] += inflow_volume
+                waterbody_storage_m3[node_waterbody_id] += inflow_volume_m3
+                waterbody_inflow_m3[node_waterbody_id] += inflow_volume_m3
             else:
-                Qnew_node = inflow_volume / dt
+                Qnew_node = inflow_volume_m3 / dt
                 if Qnew_node < 0.0:
                     # if the new discharge is negative, we have over-abstraction
                     over_abstraction_m3[node] = -Qnew_node * dt
@@ -1350,12 +1369,12 @@ class Accuflux(Router):
             idxs_up_to_downstream=self.idxs_up_to_downstream,
             is_waterbody_outflow=self.is_waterbody_outflow,
             waterbody_id=self.waterbody_id,
-            retention_storage_m3=retention_storage_m3,  # retention logic
-            retention_max_storage_m3=retention_max_storage_m3,  # retention logic
-            retention_node_id=retention_node_id,  # retention logic
-            controlled_retention=controlled_retention,  # retention logic
-            retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,  # retention logic
-            retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,  # retention logic
+            retention_storage_m3=retention_storage_m3,
+            retention_max_storage_m3=retention_max_storage_m3,
+            retention_node_id=retention_node_id,
+            controlled_retention=controlled_retention,
+            retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
+            retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
         )
 
         return (
