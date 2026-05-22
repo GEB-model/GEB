@@ -236,10 +236,9 @@ def test_accuflux(
     assert (waterbody_inflow_m3 == 0).all()
     assert outflow_at_pits_m3 == 2
     assert waterbody_storage_m3.size == 0
-    # check that retention arrays are empty ---
     assert retention_storage_m3_out.size == 0
     assert retention_inflow_m3.size == 0
-    # assert retention_outflow_m3.size == 0
+    assert retention_outflow_m3.size == 0
 
 
 def test_accuflux_with_retention_basins(
@@ -432,12 +431,10 @@ def test_accuflux_with_sideflow(
         ]
     )[mask]
 
-    # --- NEW: empty retention arrays for "no retention" case ---
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
     controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
     retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
     retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
 
@@ -670,7 +667,6 @@ def test_kinematic(
         river_storage_beta=np.full_like(mask[mask], np.float32(0.6), dtype=np.float32),
     )
 
-    # Optional: simple assertions to check results are numeric and non-negative
     assert Q_new.shape[0] == mask.sum()
     assert not np.isnan(Q_new).any()
     assert (Q_new >= 0.0).all()
