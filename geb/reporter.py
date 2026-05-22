@@ -799,6 +799,36 @@ class Reporter:
                                 report_config,
                                 {"hydrology.routing": station_reporters},
                             )
+                    elif module_name == "_retention_basins":
+                        if module_values is True:
+                            retention_basins = self.model.hydrology.grid.load2d(
+                                self.model.files["grid"]["routing/retention_basin_ids"],
+                                compress=False,
+                            )
+
+                            retention_basin_yx = np.where(retention_basins != -1)
+                            retentinion_basin_IDs = retention_basins[retention_basin_yx]
+
+                            retention_basin_reporters: dict[
+                                str, dict[str, str | int]
+                            ] = {}
+                            for basin_ID, yx in zip(
+                                retentinion_basin_IDs, zip(*retention_basin_yx)
+                            ):
+                                retention_basin_reporters[
+                                    f"retention_basin_discharge_m3_per_s_{basin_ID}"
+                                ] = {
+                                    "varname": "grid.var.discharge_m3_s_per_substep",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{yx[1]},{yx[0]}",
+                                    "substeps": 24,
+                                }
+
+                            report_config = multi_level_merge(
+                                report_config,
+                                {"hydrology.routing": retention_basin_reporters},
+                            )
+
                     elif module_name == "_meteorological_stations":
                         if module_values is True:
                             meteorological_station_locations: gpd.GeoDataFrame = (
