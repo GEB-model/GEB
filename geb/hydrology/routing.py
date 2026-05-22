@@ -1492,9 +1492,15 @@ class Routing(Module):
 
             # re-arranged formula for alpha, where we use the observed average river width and the average discharge to calculate alpha
             alpha: ArrayFloat32 = np.where(
-                ~np.isnan(self.observed_average_river_width),
+                (
+                    (~np.isnan(self.observed_average_river_width))
+                    & (self.grid.var.waterbody_ids == -1)
+                ),
                 self.observed_average_river_width / (average_discharge**beta_array),
                 default_alpha,
+            )
+            alpha: ArrayFloat32 = np.where(
+                self.grid.var.waterbody_ids == -1, alpha, np.float32(np.nan)
             )
 
         return alpha, beta_array
