@@ -1950,6 +1950,15 @@ class GEBModel(
         self.other = DelayedReader(reader=read_zarr)
         self.files = {}
 
+    def set_version(self, version: str) -> None:
+        """Set the version in the version file.
+
+        Args:
+            version: The version to set in the version file.
+        """
+        self.logger.info(f"Setting version in version file to: {version}")
+        self.version_path.write_text(version)
+
     def set_current_version(self) -> None:
         """Set the current version in the version file."""
         self.logger.info(
@@ -3403,9 +3412,6 @@ class GEBModel(
         """Check if the version in the version file is the same as the current version.
 
         If the version is not current, print a warning with the updates that need to be made to update to the current version.
-
-        Raises:
-            RuntimeError: If the version is not current and updates need to be made.
         """
         # No version file exists, so we create one with the current version
         if not self.version_path.exists():
@@ -3417,26 +3423,11 @@ class GEBModel(
         else:
             self.read()
             # Find and print all updates between the stored version and the current version
-            updates_to_print_to_user: list[str] = get_and_maybe_do_version_updates(
+            get_and_maybe_do_version_updates(
                 version_info,
-                perform_auto_update=True,
                 build_model=self,
                 methods=methods,
             )
-            if updates_to_print_to_user:
-                self.logger.warning(
-                    f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
-                )
-                updates_msg = "\n- ".join(updates_to_print_to_user)
-                self.set_current_version()
-                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
-                self.logger.error(error)
-                raise RuntimeError(error)
-            else:
-                self.logger.info(
-                    "No specific updates found for this version or auto-updated. Updated version file."
-                )
-                self.set_current_version()
 
     def update(
         self,

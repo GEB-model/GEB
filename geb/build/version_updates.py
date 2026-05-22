@@ -73,15 +73,13 @@ VERSION_UPDATES: dict[str, list[str]] = {
 
 def get_and_maybe_do_version_updates(
     version_info: str,
-    perform_auto_update: bool = False,
-    build_model: GEBModelBuild | None = None,
+    build_model: GEBModelBuild,
     methods: dict[str, Any] | None = None,
 ) -> list[str]:
     """Get the version updates that need to be made to update from the stored version to the current version.
 
     Args:
         version_info: The version string stored in the version file, e.g. "1.2.3".
-        perform_auto_update: Whether to perform auto updates.
         build_model: The GEB model instance for building. Must be provided if perform_auto_update is True.
         methods: A dictionary of loaded methods from the build configuration. Must be provided if perform_auto_update is True.
 
@@ -90,13 +88,8 @@ def get_and_maybe_do_version_updates(
 
     Raises:
         ValueError: If the version update text is not in the expected format.
+        RuntimeError: If an error occurs during auto-update.
     """
-    if perform_auto_update and build_model is None:
-        raise ValueError("build_model must be provided if perform_auto_update is True")
-
-    if perform_auto_update and methods is None:
-        raise ValueError("methods must be provided if perform_auto_update is True")
-
     current_v = Version(__version__)
     stored_v = Version(version_info)
 
@@ -104,59 +97,66 @@ def get_and_maybe_do_version_updates(
         VERSION_UPDATES.keys(), key=Version
     )  # iterate from oldest to newest version
     updates_to_print: list[str] = []
-    for v_str in versions:
-        v = Version(v_str)
-        if v > stored_v and v <= current_v:
-            version_updates: list[str] = VERSION_UPDATES[v_str]
-            for version_update in version_updates:
-                match: re.Match[str] | None = re.search(r"^\[(.*?)\]", version_update)
-                if match is None:
-                    raise ValueError(
-                        f"Version update text should start with the update type in square brackets, e.g. [update-python], but got: {version_update}"
-                    )
-                update_type, *update_type_arguments = match.group(1).split(";")
-                if update_type == "update-python":
-                    if len(update_type_arguments) != 1:
-                        raise ValueError(
-                            f"update-python update type should have exactly one argument, the python version to update to, but got: {update_type_arguments}"
-                        )
-                    python_version: str = update_type_arguments[0]
-                    # if current version is lower than the required python version, we need to update python
-                    if Version(python_version) > Version(
-                        ".".join(map(str, sys.version_info[:3]))
-                    ):
-                        updates_to_print.append(
-                            f"Update to Python {python_version}. If you use uv, ensure your uv is updated first: `uv self update`. Then use `uv sync`."
-                        )
+    error_occurred: bool = False
 
-                elif update_type == "update-method":
-                    if len(update_type_arguments) != 1:
+    succesfull_version_updates: list[str] = []
+
+    try:
+        for update_version in versions:
+            v = Version(update_version)
+            if v > stored_v and v <= current_v:
+                version_updates: list[str] = VERSION_UPDATES[update_version]
+                for version_update in version_updates:
+                    match: re.Match[str] | None = re.search(
+                        r"^\[(.*?)\]", version_update
+                    )
+                    if match is None:
                         raise ValueError(
-                            f"update-method update type should have exactly one argument, the method to update, but got: {update_type_arguments}"
+                            f"Version update text should start with the update type in square brackets, e.g. [update-python], but got: {version_update}"
                         )
-                    method_name: str = update_type_arguments[0]
-                    if perform_auto_update:
+                    update_type, *update_type_arguments = match.group(1).split(";")
+                    if update_type == "update-python":
+                        if len(update_type_arguments) != 1:
+                            raise ValueError(
+                                f"update-python update type should have exactly one argument, the python version to update to, but got: {update_type_arguments}"
+                            )
+                        python_version: str = update_type_arguments[0]
+                        # if current version is lower than the required python version, we need to update python
+                        if Version(python_version) > Version(
+                            ".".join(map(str, sys.version_info[:3]))
+                        ):
+                            updates_to_print.append(
+                                f"Update to Python {python_version}. If you use uv, ensure your uv is updated first: `uv self update`. Then use `uv sync`."
+                            )
+
+                    elif update_type == "update-method":
+                        if len(update_type_arguments) != 1:
+                            raise ValueError(
+                                f"update-method update type should have exactly one argument, the method to update, but got: {update_type_arguments}"
+                            )
+                        method_name: str = update_type_arguments[0]
+
                         assert methods is not None
                         assert build_model is not None
+                        update_method = getattr(build_model, method_name, None)
+                        if update_method is None:
+                            raise ValueError(
+                                f"Method {method_name} not found in geb.cli.update module"
+                            )
 
                         build_model.logger.info(
                             f"Performing auto-update for method {method_name}..."
                         )
 
-                        # Delegate to build_model.update()
-                        build_model.update({method_name: methods[method_name]})
-                    else:
-                        updates_to_print.append(
-                            f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
-                        )
+                        update_method(**(methods[method_name] or {}))
 
-                elif update_type == "create-file":
-                    if len(update_type_arguments) != 1:
-                        raise ValueError(
-                            f"create-file update type should have exactly one argument, the file to create, but got: {update_type_arguments}"
-                        )
-                    file_path: str = update_type_arguments[0]
-                    if perform_auto_update:
+                    elif update_type == "create-file":
+                        if len(update_type_arguments) != 1:
+                            raise ValueError(
+                                f"create-file update type should have exactly one argument, the file to create, but got: {update_type_arguments}"
+                            )
+                        file_path: str = update_type_arguments[0]
+
                         assert build_model is not None
                         build_model.logger.info(
                             f"Creating file {file_path} as part of auto-update..."
@@ -164,21 +164,55 @@ def get_and_maybe_do_version_updates(
                         full_file_path = build_model.root / file_path
                         full_file_path.parent.mkdir(parents=True, exist_ok=True)
                         full_file_path.touch(exist_ok=True)
-                    else:
+
+                    elif update_type == "manual":
+                        if len(update_type_arguments) != 0:
+                            raise ValueError(
+                                f"manual update type should have no arguments, but got: {update_type_arguments}"
+                            )
                         updates_to_print.append(
-                            f"Add a new file called '{file_path}' in your input folder. In future versions this file will be made automatically."
+                            version_update.replace(f"[{match.group(1)}]", "").strip()
                         )
 
-                elif update_type == "manual":
-                    if len(update_type_arguments) != 0:
-                        raise ValueError(
-                            f"manual update type should have no arguments, but got: {update_type_arguments}"
-                        )
-                    updates_to_print.append(
-                        version_update.replace(f"[{match.group(1)}]", "").strip()
-                    )
+                    else:
+                        raise ValueError(f"Unknown update type: {update_type}")
 
-                else:
-                    raise ValueError(f"Unknown update type: {update_type}")
+                succesfull_version_updates.append(update_version)
+                build_model.set_version(update_version)
+
+    except Exception:
+        error_occurred = True
+        build_model.logger.exception(
+            f"An error occurred while performing version updates."
+        )
+        if succesfull_version_updates:
+            build_model.logger.error(
+                f"Version updates for versions {', '.join(succesfull_version_updates)} were performed successfully, but the update for version {update_version} failed. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
+            )
+        else:
+            build_model.logger.error(
+                f"No version updates were performed successfully. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the updates and update the version file."
+            )
+    else:
+        # In some cases, when the current version has no updates, the version file might not be updated to the most
+        # current version. To ensure the version file is always updated when all updates are performed successfully,
+        # we set the version to the current version at the end.
+        build_model.set_current_version()
+
+    if updates_to_print:
+        updates_msg = "\n- ".join(updates_to_print)
+        error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
+        build_model.logger.error(error)
+        if error_occurred:
+            error += "\n\nIn addition, an error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
+        raise RuntimeError(error)
+    elif not error_occurred:
+        build_model.logger.info(
+            "Successfully auto-updated. No further manual updates are required. Version file is updated to the current version."
+        )
+    else:  # error occurred but no updates to print
+        build_model.logger.error(
+            "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
+        )
 
     return updates_to_print
