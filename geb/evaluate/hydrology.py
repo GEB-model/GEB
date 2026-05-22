@@ -142,8 +142,10 @@ def _plot_validation_return_periods(
         fontsize=14,
         fontweight="bold",
     )
+    folder = eval_plot_folder / "return_period_fit"
+    folder.mkdir(parents=True, exist_ok=True)
     plt.savefig(
-        eval_plot_folder / f"return_period_fit_{station_id}.png",
+        folder / f"return_period_fit_{station_id}.png",
         bbox_inches="tight",
         dpi=100,
     )
@@ -1013,7 +1015,8 @@ def _create_discharge_folium_map(
         return_period_fit_path = (
             eval_plot_folder / f"return_period_fit_{station_id}.png"
         )
-        time_series_plot_path = eval_plot_folder / f"timeseries_plot_{station_id}.png"
+        folder = eval_plot_folder / f"timeseries_{station_id}"
+        time_series_plot_path = folder / f"timeseries_plot_{station_id}.png"
 
         with open(return_period_fit_path, "rb") as img_file:
             encoded_image_return_period = base64.b64encode(img_file.read()).decode(
@@ -1323,12 +1326,14 @@ def _plot_discharge_validation_graphs(
         fontsize=12,
     )
     plt.title(f"Discharge vs observations for station {station_name}")
+    folder = eval_plot_folder / f"timeseries_{station_id}"
+    folder.mkdir(parents=True, exist_ok=True)
     plt.savefig(
-        eval_plot_folder / f"timeseries_plot_{station_id}.svg",
+        folder / f"timeseries_plot_{station_id}.svg",
         bbox_inches="tight",
     )
     plt.savefig(
-        eval_plot_folder / f"timeseries_plot_{station_id}.png",
+        folder / f"timeseries_plot_{station_id}.png",
         bbox_inches="tight",
         dpi=100,
     )
@@ -1376,8 +1381,10 @@ def _plot_discharge_validation_graphs(
             plt.title(
                 f"GEB discharge vs observations for {year} at station {station_name}"
             )
+            folder = eval_plot_folder / f"timeseries_{station_id}"
+            folder.mkdir(parents=True, exist_ok=True)
             plt.savefig(
-                eval_plot_folder / f"timeseries_plot_{station_id}_{year}.svg",
+                folder / f"timeseries_plot_{station_id}_{year}.svg",
                 bbox_inches="tight",
             )
             plt.show()
