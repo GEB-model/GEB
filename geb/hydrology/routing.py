@@ -1425,7 +1425,7 @@ class Routing(Module):
         # Zero discharge will cause division-by-zero when computing alpha later on,
         # so we surface the affected river locations here while we still have enough
         # context to be useful.
-        if self.var.discharge_step_count >= 60 * 24:
+        if self.var.discharge_step_count == 300 * 24:
             average_discharge_debug: np.ndarray = (
                 self.var.sum_of_all_discharge_steps / self.var.discharge_step_count
             ).astype(np.float64)
