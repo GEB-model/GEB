@@ -105,6 +105,8 @@ class ECMWFForecasts(Adapter):
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
+        forecast_product: str,
+        mars_stream: str | None = None,
     ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
@@ -223,7 +225,10 @@ class ECMWFForecasts(Adapter):
                         f"Forecast timestep {forecast_timestep_hours} is not supported. Please use 1 or >=6."
                     )
 
-                mars_stream: str = "enfo"  # Ensemble forecast stream
+                if forecast_product == "hindcast":
+                    mars_stream = "enfh"  # Ensemble hindcast stream
+                else:
+                    mars_stream: str = "enfo"  # Ensemble forecast stream
                 mars_time: str = forecast_date.strftime(
                     "%H"
                 )  # Extract hour from forecast date for initialization time

@@ -1361,6 +1361,191 @@ class Forcing:
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
+        forecast_product: str = "hindcast",  # "forecast" or "hindcast"
+    ) -> None:
+        if forecast_provider == "ECMWF":
+            self.setup_forecasts_ECMWF(
+                forecast_start,
+                forecast_end,
+                forecast_model,
+                forecast_resolution,
+                forecast_horizon,
+                forecast_timestep_hours,
+                n_ensemble_members,
+                forecast_product,
+            )
+
+    def setup_forecasts_ECMWF(
+        self,
+        forecast_start: date | datetime,
+        forecast_end: date | datetime,
+        forecast_model: str,
+        forecast_resolution: float,
+        forecast_horizon: int,
+        forecast_timestep_hours: int,
+        n_ensemble_members: int = 50,
+        forecast_product: str = "hindcast",  # "forecast" or "hindcast"
+    ) -> None:
+        """Sets up ECMWF forecast or hindcast data.
+
+        For medium-range ECMWF hindcasts:
+        - stream should be "enfh"
+        - horizon is usually up to 15 days = 360 hours
+        - hindcasts use hdate in the MARS request
+        """
+        MARS_codes: dict[str, float] = {
+            "tp": 228.128,
+            "t2m": 167.128,
+            "d2m": 168.128,
+            "ssrd": 169.128,
+            "strd": 175.128,
+            "sp": 134.128,
+            "u10": 165.128,
+            "v10": 166.128,
+        }
+
+        if forecast_product not in ["forecast", "hindcast"]:
+            raise ValueError(
+                "forecast_product must be either 'forecast' or 'hindcast'."
+            )
+
+        if forecast_product == "hindcast":
+            mars_stream = "enfh"
+            forecast_horizon = min(forecast_horizon, 360)
+
+            # ECMWF medium-range forecasts are issued at 00 and 12 UTC.
+            # Hindcasts should be requested for matching issue dates/times.
+            forecast_issue_dates = pd.date_range(
+                start=forecast_start,
+                end=forecast_end,
+                freq="12H",
+            )
+
+            base_folder = "hindcasts"
+
+        else:
+            mars_stream = None
+
+            forecast_issue_dates = pd.date_range(
+                start=forecast_start,
+                end=forecast_end,
+                freq="24H",
+            )
+
+            base_folder = "forecasts"
+
+        self.logger.info(
+            f"Processing ECMWF {forecast_product}s using model={forecast_model}..."
+        )
+
+        ECMWF_forecasts_store = self.new_data_catalog.fetch(
+            "ecmwf_forecasts",
+            forecast_variables=list(MARS_codes.values()),
+            bounds=self.bounds,
+            forecast_start=forecast_start,
+            forecast_end=forecast_end,
+            forecast_model=forecast_model,
+            forecast_resolution=forecast_resolution,
+            forecast_horizon=forecast_horizon,
+            forecast_timestep_hours=forecast_timestep_hours,
+            n_ensemble_members=n_ensemble_members,
+            # New arguments that your ECMWF catalog adapter should use
+            forecast_product=forecast_product,
+            mars_stream=mars_stream,
+        )
+
+        for forecast_issue_date in forecast_issue_dates:
+            forecast_issue_date_str = forecast_issue_date.strftime("%Y%m%dT%H%M%S")
+
+            self.logger.info(
+                f"Processing ECMWF {forecast_product} issued at {forecast_issue_date}..."
+            )
+
+            ECMWF_forecast = ECMWF_forecasts_store.read(
+                bounds=self.bounds,
+                forecast_issue_date=forecast_issue_date,
+                forecast_model=forecast_model,
+                forecast_resolution=forecast_resolution,
+                forecast_horizon=forecast_horizon,
+                forecast_timestep_hours=forecast_timestep_hours,
+                n_ensemble_members=n_ensemble_members,
+                reproject_like=self.other["climate/pr_kg_per_m2_per_s"],
+                # New arguments for hindcast retrieval
+                forecast_product=forecast_product,
+                mars_stream=mars_stream,
+            )
+
+            if forecast_model == "both_control_and_probabilistic":
+                base_name = (
+                    f"{base_folder}/ECMWF/merged_control_ensemble/"
+                    f"{forecast_issue_date_str}"
+                )
+            else:
+                base_name = (
+                    f"{base_folder}/ECMWF/{forecast_model}/{forecast_issue_date_str}"
+                )
+
+            pr = ECMWF_forecast["tp"].rename("precipitation")
+            pr = pr.where(pr >= 0, 0)
+            self.set_pr_kg_per_m2_per_s(
+                pr,
+                name=f"{base_name}/pr_kg_per_m2_per_s_{forecast_issue_date_str}",
+            )
+
+            tas = ECMWF_forecast["t2m"].rename("tas")
+            self.set_tas_2m_K(
+                tas,
+                name=f"{base_name}/tas_2m_K_{forecast_issue_date_str}",
+            )
+
+            dew_point_tas = ECMWF_forecast["d2m"].rename("dew_point_tas")
+            self.set_dewpoint_tas_2m_K(
+                dew_point_tas,
+                name=f"{base_name}/dewpoint_tas_2m_K_{forecast_issue_date_str}",
+            )
+
+            rsds = ECMWF_forecast["ssrd"].rename("rsds")
+            self.set_rsds_W_per_m2(
+                rsds,
+                name=f"{base_name}/rsds_W_per_m2_{forecast_issue_date_str}",
+            )
+
+            rlds = ECMWF_forecast["strd"].rename("rlds")
+            self.set_rlds_W_per_m2(
+                rlds,
+                name=f"{base_name}/rlds_W_per_m2_{forecast_issue_date_str}",
+            )
+
+            pressure = ECMWF_forecast["sp"].rename("ps")
+            self.set_ps_pascal(
+                pressure,
+                name=f"{base_name}/ps_pascal_{forecast_issue_date_str}",
+            )
+
+            u_wind = ECMWF_forecast["u10"].rename("u10")
+            self.set_wind_10m_m_per_s(
+                u_wind,
+                direction="u",
+                name=f"{base_name}/wind_u10m_m_per_s_{forecast_issue_date_str}",
+            )
+
+            v_wind = ECMWF_forecast["v10"].rename("v10")
+            self.set_wind_10m_m_per_s(
+                v_wind,
+                direction="v",
+                name=f"{base_name}/wind_v10m_m_per_s_{forecast_issue_date_str}",
+            )
+
+    def setup_forecasts2(
+        self,
+        forecast_start: date | datetime,
+        forecast_end: date | datetime,
+        forecast_provider: str,
+        forecast_model: str,
+        forecast_resolution: float,
+        forecast_horizon: int,
+        forecast_timestep_hours: int,
+        n_ensemble_members: int,
     ) -> None:
         """Sets up forecast data for the model based on configuration.
 
@@ -1378,7 +1563,7 @@ class Forcing:
         if (
             forecast_provider == "ECMWF"
         ):  # Check if ECMWF is the selected forecast provider
-            self.setup_forecasts_ECMWF(  # Call ECMWF-specific setup method
+            self.setup_forecasts_ECMWF2(  # Call ECMWF-specific setup method
                 forecast_start,  # Pass forecast start date
                 forecast_end,  # Pass forecast end date
                 forecast_model,  # Pass forecast model type
@@ -1388,7 +1573,7 @@ class Forcing:
                 n_ensemble_members,  # Pass number of ensemble members
             )
 
-    def setup_forecasts_ECMWF(
+    def setup_forecasts_ECMWF2(
         self,
         forecast_start: date | datetime,
         forecast_end: date | datetime,
