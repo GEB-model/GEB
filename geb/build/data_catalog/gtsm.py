@@ -6,7 +6,7 @@ import tempfile
 import zipfile
 from itertools import batched
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import cdsapi
 import geopandas as gpd
@@ -14,11 +14,30 @@ import numpy as np
 import pandas as pd
 import tqdm
 import xarray as xr
-from zarr.codecs.numcodecs import FixedScaleOffset
+from zarr.abc.codec import ArrayArrayCodec
+from zarr.codecs import CastValue, ScaleOffset
+from zarr.codecs.numcodecs import Delta
 
-from geb.workflows.io import read_geom, write_geom, write_zarr
+from geb.workflows.io import read_geom, read_zarr, write_geom, write_zarr
 
 from .base import Adapter
+
+gtsm_filters: list[ArrayArrayCodec] = [
+    ScaleOffset(
+        offset=0,  # 0 offset for sea level data, as it is defined relative to a reference level (e.g., mean sea level)
+        scale=1000,  # gtsm has a precision of 0.001, so multiplying by 1000 allows us to store as int16 without losing any precision
+    ),
+    CastValue(
+        data_type="int16",  # int16 has sufficient range here. The int16 range of -32768 to 32767, so can store values from -32.768 to 32.767 with a scale of 1000, which is sufficient for the GTSM data
+        rounding="nearest-even",
+        out_of_range=None,  # raise error if value exceeds the range of the output dtype
+        scalar_map={
+            "encode": {"NaN": np.iinfo(np.int16).max},
+            "decode": {np.iinfo(np.int16).max: np.nan},
+        },
+    ),
+    Delta(dtype="int16", astype="int16"),
+]
 
 
 def _retrieve(request: dict[str, Any], output_path: str) -> None:
@@ -216,14 +235,6 @@ class GTSM_timeseries(Adapter):
             name_to_check = variable
 
         years = [str(year) for year in range(self.start_year, self.end_year + 1)]
-        filters: list = [
-            FixedScaleOffset(
-                offset=0,
-                scale=1000,  # gtsm has a precision of 0.001, so multiplying by 1000 allows us to store as int16 without losing any precision
-                dtype="float32",  # float 32 is sufficient to store the data with the given scale and offset
-                astype="int16",  # int16 has sufficient range here. The int16 range of -32768 to 32767, so can store values from -32.768 to 32.767 with a scale of 1000, which is sufficient for the GTSM data
-            ),
-        ]
 
         for year_batch in batched(years, 5):
             final_zarr_fp = (
@@ -233,39 +244,40 @@ class GTSM_timeseries(Adapter):
             if final_zarr_fp.exists():
                 continue
 
-            zip_fp = (
-                variable_dir
-                / f"reanalysis_{variable}_10min_{year_batch[0]}_{year_batch[-1]}.zip"
-            )
-            if not zip_fp.exists():
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_dir_path = Path(temp_dir)
+                zip_fp = (
+                    temp_dir_path
+                    / f"reanalysis_{variable}_10min_{year_batch[0]}_{year_batch[-1]}.zip"
+                )
                 self.logger.info(
                     f"Downloading GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]}"
                 )
                 request = self.construct_request(year_batch, variable)
                 self.download_data(request, str(zip_fp))
 
-            with zipfile.ZipFile(zip_fp, "r") as zip_ref:
-                nc_files = [
-                    Path(f"reanalysis_{name_to_check}_10min_{year}_{month:02d}_v3.nc")
-                    for month in range(1, 13)
-                    for year in year_batch
-                ]
+                with zipfile.ZipFile(zip_fp, "r") as zip_ref:
+                    nc_files = [
+                        Path(
+                            f"reanalysis_{name_to_check}_10min_{year}_{month:02d}_v3.nc"
+                        )
+                        for month in range(1, 13)
+                        for year in year_batch
+                    ]
 
-                self.logger.info(
-                    f"Processing GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]}"
-                )
-                self.logger.debug(
-                    f"Extracting and processing {len(nc_files)} netCDF files in batches. This will take a while but only has to be done once."
-                )
+                    self.logger.info(
+                        f"Processing GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]}"
+                    )
+                    self.logger.debug(
+                        f"Extracting and processing {len(nc_files)} netCDF files in batches. This will take a while but only has to be done once."
+                    )
 
-                station_chunksize = 1000
-                zarr_das: list[xr.DataArray] = []
-                for nc_file in tqdm.tqdm(nc_files):
-                    # decompress nc file to temporary file
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        temp_dir = Path(temp_dir)
-                        temp_nc_path = temp_dir / nc_file.name
-                        zip_ref.extract(str(nc_file), path=temp_dir)
+                    station_chunksize = 100
+                    zarr_das: list[xr.DataArray] = []
+                    for nc_file in tqdm.tqdm(nc_files):
+                        # decompress nc file to temporary file
+                        temp_nc_path = temp_dir_path / nc_file.name
+                        zip_ref.extract(str(nc_file), path=temp_dir_path)
 
                         da: xr.DataArray = xr.open_dataarray(
                             temp_nc_path, engine="netcdf4"
@@ -280,14 +292,11 @@ class GTSM_timeseries(Adapter):
                                 path=None,
                                 crs=4326,
                                 compression_level=1,
-                                shards={
-                                    "stations": len(da.stations) // station_chunksize
-                                    + 1
-                                },
-                                filters=filters,
+                                filters=gtsm_filters,
                                 progress=False,
                             )
                         )
+                        temp_nc_path.unlink()  # delete the temporary nc file
 
                         if not variable_station_locations_file.exists():
                             station_locations: gpd.GeoDataFrame = gpd.GeoDataFrame(
@@ -300,35 +309,34 @@ class GTSM_timeseries(Adapter):
                                 ),
                                 crs="EPSG:4326",
                             ).set_index("station_id")  # ty:ignore[invalid-assignment]
-                            # Keep a variable-local copy next to the cached data so each
-                            # variable directory is self-contained.
                             write_geom(
                                 station_locations,
                                 variable_station_locations_file,
                                 write_covering_bbox=True,
                             )
 
-                da: xr.DataArray = xr.concat(
-                    zarr_das, dim="time", combine_attrs="drop_conflicts"
-                ).chunk({"time": -1})
-                da.attrs["_FillValue"] = np.nan
+                    da_merged: xr.DataArray = xr.concat(
+                        zarr_das, dim="time", combine_attrs="drop_conflicts"
+                    ).chunk({"time": -1})
+                    da_merged.attrs["_FillValue"] = np.nan
 
-                self.logger.info(
-                    f"Writing merged GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]} to Zarr format. This will take a while but only has to be done once."
-                )
-                write_zarr(
-                    da,
-                    final_zarr_fp,
-                    crs=4326,
-                    compression_level=22,
-                    filters=filters,
-                )
-
-            zip_fp.unlink()
+                    self.logger.info(
+                        f"Writing merged GTSM data for {variable} from {year_batch[0]} to {year_batch[-1]} to Zarr format. This will take a while but only has to be done once."
+                    )
+                    write_zarr(
+                        da_merged,
+                        final_zarr_fp,
+                        crs=4326,
+                        compression_level=22,
+                        filters=gtsm_filters,
+                        shards={"stations": 20},
+                    )
 
         return self
 
-    def construct_request(self, year_batch: list[str], variable: str) -> dict[str, Any]:
+    def construct_request(
+        self, year_batch: Iterable[str], variable: str
+    ) -> dict[str, Any]:
         """Construct the API call dictionary for GTSM data retrieval.
 
         Args:
@@ -380,7 +388,9 @@ class GTSM_timeseries(Adapter):
             variable: The variable to read from the GTSM data.
 
         Returns:
-            A tuple containing a pandas DataFrame with the GTSM time series data clipped to the specified bounds and a GeoDataFrame with station information.
+            A tuple containing:
+            - a xarray DataArray containing the GTSM data clipped to the specified bounds.
+            - a GeoDataFrame containing the station locations for the GTSM data clipped to the specified bounds.
 
         Raises:
             FileNotFoundError: If the station metadata for the requested variable
@@ -419,13 +429,12 @@ class GTSM_timeseries(Adapter):
 
         das: list[xr.DataArray] = []
         for zarr_path in zarr_paths:
-            das.append(xr.open_dataarray(zarr_path, engine="zarr", chunks={"time": -1}))
+            das.append(
+                read_zarr(zarr_path).sel(stations=station_locations.index).compute()
+            )
 
-        da = xr.concat(das, dim="time", combine_attrs="drop_conflicts").sel(
-            stations=station_locations.index
-        )
+        da: xr.DataArray = xr.concat(das, dim="time")
+        da: xr.DataArray = da.chunk({"stations": 1, "time": -1})
 
-        gtsm_data_region_pd: pd.DataFrame = da.to_pandas()
-
-        assert isinstance(gtsm_data_region_pd, pd.DataFrame)
-        return gtsm_data_region_pd, station_locations
+        assert isinstance(da, xr.DataArray)
+        return da, station_locations

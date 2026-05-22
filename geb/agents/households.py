@@ -74,12 +74,21 @@ class HouseholdVariables(Bucket):
     region_id: DynamicArray
     water_demand_per_household_year: int
     water_demand_per_household_m3_gridded: ArrayFloat32
+    households_with_postal_codes: gpd.GeoDataFrame
 
 
 class Households(AgentBaseClass):
     """This class implements the household agents."""
 
     var: HouseholdVariables
+    buildings: pd.DataFrame
+    roads: gpd.GeoDataFrame
+    rail: gpd.GeoDataFrame
+    buildings_structure_curve: pd.DataFrame
+    buildings_content_curve: pd.DataFrame
+    flood_maps: dict[int, xr.DataArray]
+    return_periods: np.ndarray
+    config: dict
 
     def __init__(self, model: GEBModel, agents: Agents, reduncancy: float) -> None:
         """Initialize the Households agent module.
@@ -147,7 +156,7 @@ class Households(AgentBaseClass):
         )
 
         # Load roads
-        self.roads = read_geom(self.model.files["geom"]["assets/roads"]).rename(
+        self.roads = read_geom(self.model.files["geom"]["assets/roads"]).rename(  # ty:ignore[invalid-assignment]
             columns={"highway": "object_type"}
         )
 
@@ -1066,7 +1075,7 @@ class Households(AgentBaseClass):
         # Define the queries for vulnerable and emergency facilities
         # These queries are based on OSM tags, you can modify them as needed
         # OSMnx considers an AND statement across different tag keys, so we need to split queries and then combine them later
-        queries = {
+        queries: dict[str, dict[str, bool | str | list[str]]] = {
             "vulnerable_facilities_query": {
                 "amenity": [
                     "hospital",

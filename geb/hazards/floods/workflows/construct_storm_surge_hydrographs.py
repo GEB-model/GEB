@@ -17,7 +17,7 @@ from pandas.plotting import (
     register_matplotlib_converters,
 )
 
-from geb.workflows.io import read_geom
+from geb.workflows.io import read_geom, read_zarr
 
 from ....workflows.io import read_table
 
@@ -108,18 +108,20 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
     percentile = 0.99
     offset = 0
     rps = read_table(model.files["table"]["coast_rp"])
-    waterlevels = read_table(model.files["table"]["gtsm/waterlevels"])
-    surge = read_table(model.files["table"]["gtsm/surge"])
+    waterlevels = read_zarr(model.files["other"]["gtsm/waterlevels"])
+    surge = read_zarr(model.files["other"]["gtsm/surge"])
     return_periods = [int(rp) for rp in rps.columns.tolist()]
     df_event = {}
     df_event_spring = {}
 
-    for station in station_ids["station_id"]:
+    for station in station_ids.index.values:
         df_event[station] = {}
         df_event_spring[station] = {}
-        waterlevelpd = waterlevels[int(station)]
-        surgepd = surge[int(station)]
-        tidepd = waterlevelpd - surgepd
+        waterlevelpd = waterlevels.sel(stations=station).to_pandas()
+        assert isinstance(waterlevelpd, pd.Series)
+        surgepd = surge.sel(stations=station).to_pandas()
+        assert isinstance(surgepd, pd.Series)
+        tidepd: pd.Series = waterlevelpd - surgepd
         # detrend the tide signal to remove any long-term trends that might be present in the data, which could affect the analysis of the tidal cycles and the surge hydrograph
         _m, result = linear_detrend_with_nan(
             tidepd,
@@ -429,11 +431,11 @@ def generate_surge_hydrograph(
         xx = (
             np.arange(-len(normalized_before_25) + 1, len(normalized_after_25_plot)) / 6
         )
-        if k == 0:
+        if k == 0 and make_plot:
             plt.plot(
                 xx, yy, linewidth=0.5, color="grey", alpha=0.5, label="storm surges"
             )
-        else:
+        elif k != 0 and make_plot:
             plt.plot(xx, yy, linewidth=0.5, color="grey", alpha=0.5)
 
         for l in df_before_peak.index.values:
@@ -482,7 +484,7 @@ def generate_surge_hydrograph(
     if make_plot:
         plt.plot(
             -df_before_peak["mean"].values * (1 / 6),
-            df_before_peak.index.values,
+            df_before_peak.index.values,  # ty:ignore[invalid-argument-type]
             label="surge hydrograph",
             color="green",
             linewidth=3,

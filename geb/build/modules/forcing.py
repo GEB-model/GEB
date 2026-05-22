@@ -2,7 +2,6 @@
 
 import math
 import re
-import warnings
 from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
@@ -24,8 +23,8 @@ from dateutil.relativedelta import relativedelta
 from matplotlib import colormaps as mcolormaps
 from matplotlib.colors import ListedColormap
 from numba import njit
-from zarr.codecs.numcodecs import FixedScaleOffset
-from zarr.errors import ZarrUserWarning
+from zarr.abc.codec import ArrayArrayCodec
+from zarr.codecs import CastValue, ScaleOffset
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
@@ -37,6 +36,7 @@ from geb.workflows.raster import (
     clip_with_grid,
     create_temp_zarr,
     interpolate_na_along_dim,
+    resample_like,
     snap_to_grid,
 )
 
@@ -720,20 +720,21 @@ class Forcing(BuildModelBase):
             da, min_value, max_value, offset=offset, precision=precision
         )
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                category=ZarrUserWarning,
-                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
-            )
-            filters: list = [
-                FixedScaleOffset(
-                    offset=offset,
-                    scale=scaling_factor,
-                    dtype=in_dtype,
-                    astype=out_dtype,
-                ),
-            ]
+        max_encodedable_value = np.iinfo(
+            out_dtype
+        ).max  # in forcing, the max is never used
+        filters: list[ArrayArrayCodec] = [
+            ScaleOffset(offset=offset, scale=scaling_factor),
+            CastValue(
+                data_type=out_dtype,
+                rounding="nearest-even",
+                out_of_range=None,  # raise error if value exceeds the range of the output dtype
+                scalar_map={
+                    "encode": {"NaN": max_encodedable_value},
+                    "decode": {max_encodedable_value: np.nan},
+                },
+            ),
+        ]
 
         time_chunksize: int = 100_000_000 // (
             math.prod(
@@ -749,21 +750,15 @@ class Forcing(BuildModelBase):
         )  # ensure at least 24 time steps per chunk
         da = da.chunk({"time": time_chunksize})
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                category=ZarrUserWarning,
-                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
-            )
-            da: xr.DataArray = self.set_other(
-                da,
-                name=name,
-                filters=filters,
-                shards={
-                    "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
-                },
-                **kwargs,
-            )
+        da: xr.DataArray = self.set_other(
+            da,
+            name=name,
+            filters=filters,
+            shards={
+                "time": 10,  # with 100 MB chunks (see above) about 1 GB on disk
+            },
+            **kwargs,
+        )
 
         if create_plots:
             plot_forcing(mask, self.geom["mask"], self.report_dir, da, name)
@@ -1107,14 +1102,39 @@ class Forcing(BuildModelBase):
             **kwargs,
         )
 
-    def setup_forcing_ERA5(self, create_plots: bool = False) -> None:
+    def setup_deltas_CMIP6(self, representative_forcing_year: int) -> xr.DataArray:
+        """Sets up the CMIP6 deltas for GEB.
+
+        CMIP6 deltas are used to adjust the historical ERA5 forcing data to reflect future climate conditions. This method fetches the CMIP6 deltas from the data catalog for the specified representative year and the spatial bounds of the model grid.
+        Args:
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. This is typically a year in the future (e.g., 2050) for which climate projections are available.
+        Returns:
+            The CMIP6 deltas as an xarray DataArray, which can be used to adjust the ERA5 forcing data.
+        """
+        cmip6_deltas = self.data_catalog.fetch(
+            "cmip6",
+            bounds=self.grid["mask"].rio.bounds(recalc=True),
+            start_year=self.start_date.year - 1,
+            end_year=self.end_date.year,
+            representative_forcing_year=representative_forcing_year,
+        ).read()
+
+        return cmip6_deltas
+
+    def setup_forcing_ERA5(
+        self, create_plots: bool = False, representative_forcing_year: int = None
+    ) -> None:
         """Sets up the ERA5 forcing data for GEB.
 
         Args:
             create_plots: If True, create plots for the forcing data.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+
+        Raises:
+            ValueError: If representative_forcing_year is provided but the CMIP6 deltas cannot be properly applied to the ERA5 data (e.g., due to NaN values in the deltas or issues with regridding).
         """
         era5_store: Adapter = self.data_catalog.fetch("era5")
         era5_loader: partial = partial(
@@ -1126,6 +1146,55 @@ class Forcing(BuildModelBase):
         )
 
         pr_hourly: xr.DataArray = era5_loader(variable="tp")
+        tas: xr.DataArray = era5_loader("t2m")
+
+        if representative_forcing_year:
+            cmip6_deltas = self.setup_deltas_CMIP6(
+                representative_forcing_year=representative_forcing_year
+            )
+            # Calculate the number of NaNs in the original ERA5 data before applying deltas.
+            # This allows us to check that the application of the deltas does not introduce any new NaN values.
+            all_nans_tas = tas.isnull().sum().compute().item()
+            all_nans_pr = pr_hourly.isnull().sum().compute().item()
+
+            # Spatial CMIP6 deltas: regrid to the ERA5 grid using xarray interpolation.
+            delta_pr = cmip6_deltas.sel(variable="precipitation_delta")
+            delta_tas = cmip6_deltas.sel(variable="near_surface_air_temperature_delta")
+
+            target_pr_grid = pr_hourly.isel(time=0, drop=True)
+            target_tas_grid = tas.isel(time=0, drop=True)
+
+            delta_pr_regridded = resample_like(
+                source=delta_pr, target=target_pr_grid, method="nearest"
+            )
+            delta_tas_regridded = resample_like(
+                source=delta_tas, target=target_tas_grid, method="nearest"
+            )
+            # check for NaNs in the regridded deltas, which would indicate a problem with the regridding (e.g., missing weights)
+            if np.isnan(delta_pr_regridded.values).any():
+                raise ValueError("NaN values found in regridded precipitation deltas.")
+            if np.isnan(delta_tas_regridded.values).any():
+                raise ValueError("NaN values found in regridded temperature deltas.")
+            delta_pr_regridded = (
+                delta_pr_regridded.resample(time="1H")
+                .ffill()
+                .sel(time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1]))
+            )
+            delta_tas_regridded = (
+                delta_tas_regridded.resample(time="1H")
+                .ffill()
+                .sel(time=slice(tas.time.values[0], tas.time.values[-1]))
+            )
+            # assert dimensions are equal
+            tas = tas + delta_tas_regridded
+            pr_hourly = pr_hourly * delta_pr_regridded
+
+            # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
+            assert tas.isnull().sum().compute().item() == all_nans_tas
+            assert pr_hourly.isnull().sum().compute().item() == all_nans_pr
+
+        tas = tas.chunk({"y": -1, "x": -1})
+        pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
         pr_hourly: xr.DataArray = pr_hourly * (
             1000 / 3600
         )  # convert from m/hr to kg/m2/s
@@ -1135,6 +1204,7 @@ class Forcing(BuildModelBase):
         pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(
             pr_hourly, create_plots=create_plots
         )
+        self.set_tas_2m_K(tas, create_plots=create_plots)
 
         climate_grid = self.other["climate/pr_kg_per_m2_per_s_mask"]
 
@@ -1150,9 +1220,6 @@ class Forcing(BuildModelBase):
         geopotential = snap_to_grid(geopotential, climate_grid).compute()
         assert (geopotential.x.values == climate_grid.x.values).all()
         assert (geopotential.y.values == climate_grid.y.values).all()
-
-        tas: xr.DataArray = era5_loader("t2m")
-        self.set_tas_2m_K(tas, create_plots=create_plots)
 
         dew_point_tas: xr.DataArray = era5_loader("d2m")
         self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
@@ -1194,12 +1261,14 @@ class Forcing(BuildModelBase):
         self,
         forcing: str = "ERA5",
         create_plots: bool = False,
+        representative_forcing_year: int = None,
     ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
             forcing: The data source to use for the forcing data. Currently only ERA5 is supported.
             create_plots: If True, create plots for the forcing data.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. Only used if forcing is 'ERA5' to adjust the historical data to future conditions.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
@@ -1212,7 +1281,10 @@ class Forcing(BuildModelBase):
                 "ISIMIP forcing is not supported anymore. We switched fully to hourly forcing data."
             )
         elif forcing == "ERA5":
-            self.setup_forcing_ERA5(create_plots=create_plots)
+            self.setup_forcing_ERA5(
+                create_plots=create_plots,
+                representative_forcing_year=representative_forcing_year,
+            )
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
@@ -1418,10 +1490,23 @@ class Forcing(BuildModelBase):
                 # to ensure they are saved on the regular model grid.
                 grid_mask = self.other["climate/pr_kg_per_m2_per_s_mask"]
                 for param in ["c", "loc", "scale"]:
+                    values_1d = GEV.sel(dparams=param).values.astype(np.float32)
+                    mask_2d = grid_mask.values.astype(bool)
+
+                    assert values_1d.ndim == 1
+                    assert np.count_nonzero(mask_2d) == len(values_1d)
+
+                    out = np.full(mask_2d.shape, np.nan, dtype=np.float32)
+                    out[mask_2d] = values_1d
+
                     param_da = self.full_like(
-                        grid_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+                        grid_mask,
+                        fill_value=np.nan,
+                        nodata=np.nan,
+                        dtype=np.float32,
                     )
-                    param_da.values[grid_mask.values] = GEV.sel(dparams=param).values
+                    param_da.values = out
+
                     self.set_other(param_da, name=f"climate/gev_{param}")
 
     @build_method(depends_on=["setup_forcing"], required=True)
@@ -1434,22 +1519,17 @@ class Forcing(BuildModelBase):
             self.other["climate/pr_kg_per_m2_per_s"] * 3600
         )  # convert to mm/hour
 
-        self.logger.info("Calculating yearly maximum monthly precipitation ")
+        self.logger.info("Calculating yearly total precipitation")
         # with ProgressBar():
-        # Calculate monthly totals and then yearly max.
-        pr_yearly_max = (
-            pr.resample(time="MS")  # MS = Month Start
-            .sum(method="blockwise")
-            .resample(time="YS")  # YS = Year Start
-            .max(method="blockwise")
+        pr_yearly_total = (
+            pr.resample(time="YS").sum(method="blockwise")  # YS = Year Start
         ).compute()
 
         self.logger.info(
-            "Calculating GEV parameters for yearly maximum monthly precipitation"
+            "Calculating GEV parameters for low annual precipitation totals using Y = -X"
         )
-        # with ProgressBar():
         gev_pr = xcistats.fit(
-            pr_yearly_max,
+            -pr_yearly_total,
             dist="genextreme",
         ).compute()
 
@@ -1457,10 +1537,22 @@ class Forcing(BuildModelBase):
         # to ensure they are saved on the regular model grid.
         grid_mask = self.other["climate/pr_kg_per_m2_per_s_mask"]
         for param in ["c", "loc", "scale"]:
-            param_da: xr.DataArray = self.full_like(
-                grid_mask, np.nan, nodata=np.nan, dtype=np.float32
+            values_1d = gev_pr.sel(dparams=param).values.astype(np.float32)
+            mask_2d = grid_mask.values.astype(bool)
+
+            assert values_1d.ndim == 1
+            assert np.count_nonzero(mask_2d) == len(values_1d)
+
+            out = np.full(mask_2d.shape, np.nan, dtype=np.float32)
+            out[mask_2d] = values_1d
+
+            param_da = self.full_like(
+                grid_mask,
+                fill_value=np.nan,
+                nodata=np.nan,
+                dtype=np.float32,
             )
-            param_da.values[grid_mask.values] = gev_pr.sel(dparams=param).values
+            param_da.values = out
             self.set_other(param_da, name=f"climate/pr_gev_{param}")
 
     @build_method(depends_on=["set_ssp", "set_time_range"], required=True)

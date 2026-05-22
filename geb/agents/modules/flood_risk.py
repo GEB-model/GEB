@@ -15,19 +15,19 @@ from ...workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
-    from geb.agents import Agents
+    from geb.agents.households import Households
     from geb.model import GEBModel
 
 
 class FloodRiskModule:
     """Module responsible for loading and managing flood risk data for the households in the model."""
 
-    def __init__(self, model: GEBModel, households: Agents) -> None:
+    def __init__(self, model: GEBModel, households: Households) -> None:
         """Initialize the FloodRiskModule with the model and households, and load all necessary data.
 
         Args:
             model (GEBModel): The main model instance containing configuration and file paths.
-            households (Agents): The households agent instance where the loaded data will be stored.
+            households (Households): The households agent instance where the loaded data will be stored.
         """
         self.model = model
         self.households = households
@@ -430,13 +430,14 @@ class FloodRiskModule:
                     "building_flood_proofed"
                 ],
             }
+            building_multicurve_renamed: gpd.GeoDataFrame = building_multicurve.rename(
+                columns={
+                    "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
+                    "COST_CONTENTS_USD_SQM": "maximum_damage_content",
+                }
+            )  # ty:ignore[invalid-assignment]
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
-                features=building_multicurve.rename(
-                    columns={
-                        "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-                        "COST_CONTENTS_USD_SQM": "maximum_damage_content",
-                    }
-                ),
+                features=building_multicurve_renamed,
                 hazard=flood_map,
                 multi_curves=multi_curves,
             )
@@ -759,7 +760,7 @@ class FloodRiskModule:
 
         roads = self.households.roads.to_crs(flood_depth.rio.crs)
         damages_roads = VectorScanner(
-            features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
+            features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
             vulnerability_curves=self.households.var.road_curves,
         )
@@ -768,7 +769,7 @@ class FloodRiskModule:
 
         rail = self.households.rail.to_crs(flood_depth.rio.crs)
         damages_rail = VectorScanner(
-            features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
+            features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
             vulnerability_curves=self.households.var.rail_curve,
         )

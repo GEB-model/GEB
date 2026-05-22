@@ -1,6 +1,6 @@
 """Functions for visualizing GEB model outputs."""
 
-from typing import Any
+from typing import Any, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -46,7 +46,7 @@ def plot_sunburst(
     # The original water_circle seems to sum up 'in' and 'out' and 'storage change'.
 
     def get_total_value(d: dict[str, Any] | float) -> float:
-        if isinstance(d, (int, float)):
+        if isinstance(d, (int, float, np.floating)):
             return float(d)
         total = 0.0
         for k, v in d.items():
@@ -87,11 +87,6 @@ def plot_sunburst(
                 continue
 
             width = (val / segment_total) * total_span
-            display_ratio = width / (2 * np.pi)
-
-            if display_ratio < min_display_ratio:
-                current_angle += width
-                continue
 
             # Use root level's color as foundation if not in 'colors'
             seg_color = colors.get(name, p_color)
@@ -139,13 +134,19 @@ def plot_sunburst(
         )
 
     fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
+    renderer = fig.canvas.get_renderer()  # ty:ignore[unresolved-attribute]
 
     for seg in segments:
         level = seg["level"]
         start = seg["start"]
         width = seg["width"]
         label = seg["label"]
+
+        display_ratio = width / (2 * np.pi)
+
+        if display_ratio < min_display_ratio:
+            continue
+
         mid_angle = start + width / 2
 
         r_inner = inner_radius + level * level_width
@@ -153,8 +154,8 @@ def plot_sunburst(
         r_mid = r_inner + level_width / 2
 
         # Define styles
-        fontsize = 8 if level > 0 else 9
-        style = dict(
+        fontsize: Literal[8, 9] = 8 if level > 0 else 9
+        style: dict[str, str | int] = dict(
             fontweight="bold" if level == 0 else "normal",
             fontsize=fontsize,
             color="white" if level < 1 else "black",
@@ -183,7 +184,7 @@ def plot_sunburst(
         placed = False
 
         # 1. Try Horizontal
-        t = ax.text(mid_angle, r_mid, label, rotation=0, **style)
+        t = ax.text(mid_angle, r_mid, label, rotation=0, **style)  # ty:ignore[invalid-argument-type]
         if check_fit(t, r_inner, r_outer, start, start + width):
             placed = True
         else:
@@ -194,7 +195,7 @@ def plot_sunburst(
             rot = np.degrees(mid_angle) - 90
             if 90 < rot <= 270:
                 rot -= 180
-            t = ax.text(mid_angle, r_mid, label, rotation=rot, **style)
+            t = ax.text(mid_angle, r_mid, label, rotation=rot, **style)  # ty:ignore[invalid-argument-type]
             if check_fit(t, r_inner, r_outer, start, start + width):
                 placed = True
             else:
@@ -205,7 +206,7 @@ def plot_sunburst(
             rot = np.degrees(mid_angle)
             if 90 < rot <= 270:
                 rot -= 180
-            t = ax.text(mid_angle, r_mid, label, rotation=rot, **style)
+            t = ax.text(mid_angle, r_mid, label, rotation=rot, **style)  # ty:ignore[invalid-argument-type]
             if check_fit(t, r_inner, r_outer, start, start + width):
                 placed = True
             else:

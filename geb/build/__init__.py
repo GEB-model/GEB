@@ -70,6 +70,9 @@ from .modules.hydrography import (
     create_river_raster_from_river_lines,
     extend_rivers_into_pits_and_set_pit_type,
 )
+from .workflows.hydrography import (
+    get_river_graph,
+)
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
@@ -176,49 +179,6 @@ def boolean_mask_to_graph(
                 G.add_edge((y, x), (ny, nx))
 
     return G
-
-
-def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
-    """Create a directed graph for the river network.
-
-    Args:
-        data_catalog: Data catalog containing the MERIT basins.
-
-    Returns:
-        A directed graph where nodes are COMID values and edges point downstream.
-    """
-    # load river network data
-    river_network = (
-        data_catalog.fetch("merit_basins_rivers")
-        .read(columns=["COMID", "NextDownID"])
-        .set_index("COMID")
-    )
-    assert isinstance(river_network, pd.DataFrame)
-    assert river_network.index.name == "COMID", (
-        "The index of the river network is not the COMID column"
-    )
-
-    # create a directed graph for the river network
-    river_graph: networkx.DiGraph = networkx.DiGraph()
-
-    # add rivers with downstream connection
-    river_network_with_downstream_connection = river_network[
-        river_network["NextDownID"] != 0
-    ]
-
-    river_network_with_downstream_connection = (
-        river_network_with_downstream_connection.itertuples(index=True, name=None)
-    )
-
-    river_graph.add_edges_from(river_network_with_downstream_connection)
-
-    river_network_without_downstream_connection = river_network[
-        river_network["NextDownID"] == 0
-    ]
-
-    river_graph.add_nodes_from(river_network_without_downstream_connection.index)
-
-    return river_graph
 
 
 def get_subbasin_id_from_coordinate(
@@ -1103,9 +1063,9 @@ def create_cluster_visualization_map(
     print("Dissolving clusters into merged boundaries...")
 
     # Use a colormap with very distinct colors
-    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))  # type: ignore[attr-defined]
+    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
     if len(clusters) > 20:
-        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))  # type: ignore[attr-defined]
+        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
 
     # Process clusters sequentially
     merged_cluster_data = []
@@ -1990,6 +1950,15 @@ class GEBModel(
         self.other = DelayedReader(reader=read_zarr)
         self.files = {}
 
+    def set_version(self, version: str) -> None:
+        """Set the version in the version file.
+
+        Args:
+            version: The version to set in the version file.
+        """
+        self.logger.info(f"Setting version in version file to: {version}")
+        self.version_path.write_text(version)
+
     def set_current_version(self) -> None:
         """Set the current version in the version file."""
         self.logger.info(
@@ -2321,7 +2290,7 @@ class GEBModel(
 
         assert ldd_elevation.shape == ldd.shape == mask.shape
 
-        ldd_elevation = xr.where(
+        ldd_elevation: xr.DataArray = xr.where(
             mask,
             ldd_elevation,
             ldd_elevation.attrs["_FillValue"],
@@ -2780,7 +2749,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["array"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            write_array(data, fp_with_root)
+            write_array(data, fp_with_root, compression_level=18)
 
         self.array[name] = fp_with_root
 
@@ -3313,9 +3282,7 @@ class GEBModel(
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        methods = build_method.validate_methods(
-            methods, validate_order=validate_order, fix_order_if_broken=True
-        )
+        methods = build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (
@@ -3384,7 +3351,11 @@ class GEBModel(
         build_method.log_statistics()
 
     def build(
-        self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
+        self,
+        region: dict,
+        methods: dict[str, dict[str, Any]],
+        continue_: bool,
+        check_required_methods: bool = True,
     ) -> None:
         """Build the model with the specified region and methods.
 
@@ -3392,6 +3363,7 @@ class GEBModel(
             region: A dictionary defining the region to build the model for.
             methods: A dictionary with method names as keys and their parameters as values.
             continue_: Continue previous build if it was interrupted or failed.
+            check_required_methods: If True, check if all required methods are present in methods.
 
         Raises:
             ValueError: If "setup_region" is not in methods when building a new model.
@@ -3404,7 +3376,8 @@ class GEBModel(
             )
         methods["setup_region"].update(region=region)
 
-        build_method.check_required_methods(methods.keys())
+        if check_required_methods:
+            build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
         if (
@@ -3439,9 +3412,6 @@ class GEBModel(
         """Check if the version in the version file is the same as the current version.
 
         If the version is not current, print a warning with the updates that need to be made to update to the current version.
-
-        Raises:
-            RuntimeError: If the version is not current and updates need to be made.
         """
         # No version file exists, so we create one with the current version
         if not self.version_path.exists():
@@ -3453,26 +3423,12 @@ class GEBModel(
         else:
             self.read()
             # Find and print all updates between the stored version and the current version
-            updates_to_print_to_user: list[str] = get_and_maybe_do_version_updates(
+            get_and_maybe_do_version_updates(
                 version_info,
-                perform_auto_update=True,
                 build_model=self,
                 methods=methods,
+                logger=self.logger,
             )
-            if updates_to_print_to_user:
-                self.logger.warning(
-                    f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
-                )
-                updates_msg = "\n- ".join(updates_to_print_to_user)
-                self.set_current_version()
-                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
-                self.logger.error(error)
-                raise RuntimeError(error)
-            else:
-                self.logger.info(
-                    "No specific updates found for this version or auto-updated. Updated version file."
-                )
-                self.set_current_version()
 
     def update(
         self,
