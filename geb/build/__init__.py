@@ -3427,6 +3427,7 @@ class GEBModel(
                 version_info,
                 build_model=self,
                 methods=methods,
+                logger=self.logger,
             )
 
     def update(

@@ -1,5 +1,6 @@
 """This module contains the version updates for the GEB model. It is used to keep track of the changes that need to be made when updating the model to a new version. The VERSION_UPDATES dictionary contains the version as the key and a list of updates as the value. Each update is a string that describes the change that needs to be made. This module is imported in the build module and used to display the updates when running `geb update-version`."""
 
+import logging
 import re
 import sys
 from typing import TYPE_CHECKING, Any
@@ -73,14 +74,16 @@ VERSION_UPDATES: dict[str, list[str]] = {
 
 def get_and_maybe_do_version_updates(
     version_info: str,
-    build_model: GEBModelBuild,
+    logger: logging.Logger,
+    build_model: GEBModelBuild | None = None,
     methods: dict[str, Any] | None = None,
 ) -> list[str]:
     """Get the version updates that need to be made to update from the stored version to the current version.
 
     Args:
         version_info: The version string stored in the version file, e.g. "1.2.3".
-        build_model: The GEB model instance for building. Must be provided if perform_auto_update is True.
+        logger: The logger instance for logging messages.
+        build_model: The GEB model instance for building. If not provided, the function will only return the updates that need to be made, but will not perform the auto-update. If provided and perform_auto_update is True, the function will perform the auto-update by updating the version file after each successful update and using the provided build model to perform the updates that can be performed automatically.
         methods: A dictionary of loaded methods from the build configuration. Must be provided if perform_auto_update is True.
 
     Returns:
@@ -136,14 +139,16 @@ def get_and_maybe_do_version_updates(
                             )
                         method_name: str = update_type_arguments[0]
 
-                        assert methods is not None
-                        assert build_model is not None
-
-                        build_model.logger.info(
-                            f"Performing auto-update for method {method_name}..."
-                        )
-
-                        build_model.update({method_name: methods[method_name]})
+                        if build_model is not None:
+                            assert methods is not None
+                            logger.info(
+                                msg=f"Performing auto-update for method {method_name}..."
+                            )
+                            build_model.update({method_name: methods[method_name]})
+                        else:
+                            updates_to_print.append(
+                                f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
+                            )
 
                     elif update_type == "create-file":
                         if len(update_type_arguments) != 1:
@@ -152,14 +157,18 @@ def get_and_maybe_do_version_updates(
                             )
                         file_path: str = update_type_arguments[0]
 
-                        assert build_model is not None
-                        build_model.logger.info(
-                            f"Creating file {file_path} as part of auto-update..."
-                        )
-                        full_file_path = build_model.root / file_path
-                        full_file_path.parent.mkdir(parents=True, exist_ok=True)
-                        full_file_path.touch(exist_ok=True)
-
+                        if build_model is not None:
+                            assert build_model is not None
+                            logger.info(
+                                msg=f"Creating file {file_path} as part of auto-update..."
+                            )
+                            full_file_path = build_model.root / file_path
+                            full_file_path.parent.mkdir(parents=True, exist_ok=True)
+                            full_file_path.touch(exist_ok=True)
+                        else:
+                            updates_to_print.append(
+                                f"Add a new file called '{file_path}' in your input folder. In future versions this file will be made automatically."
+                            )
                     elif update_type == "manual":
                         if len(update_type_arguments) != 0:
                             raise ValueError(
@@ -172,41 +181,45 @@ def get_and_maybe_do_version_updates(
                     else:
                         raise ValueError(f"Unknown update type: {update_type}")
 
-                succesfull_version_updates.append(update_version)
-                build_model.set_version(update_version)
+                if build_model is not None:
+                    succesfull_version_updates.append(update_version)
+                    build_model.set_version(update_version)
 
-    except Exception:
+    except Exception as e:
         error_occurred = True
-        build_model.logger.exception(
-            f"An error occurred while performing version updates."
-        )
-        if succesfull_version_updates:
-            build_model.logger.error(
-                f"Version updates for versions {', '.join(succesfull_version_updates)} were performed successfully, but the update for version {update_version} failed. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
-            )
+        if build_model is not None:
+            logger.exception(f"An error occurred while performing version updates.")
+            if succesfull_version_updates:
+                logger.error(
+                    f"Version updates for versions {', '.join(succesfull_version_updates)} were performed successfully, but the update for version {update_version} failed. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
+                )
         else:
-            build_model.logger.error(
-                f"No version updates were performed successfully. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the updates and update the version file."
-            )
+            raise
     else:
-        # In some cases, when the current version has no updates, the version file might not be updated to the most
-        # current version. To ensure the version file is always updated when all updates are performed successfully,
-        # we set the version to the current version at the end.
-        build_model.set_current_version()
+        if build_model is not None:
+            # In some cases, when the current version has no updates, the version file might not be updated to the most
+            # current version. To ensure the version file is always updated when all updates are performed successfully,
+            # we set the version to the current version at the end.
+            build_model.set_current_version()
 
     if updates_to_print:
-        updates_msg = "\n- ".join(updates_to_print)
-        error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
-        build_model.logger.error(error)
-        if error_occurred:
-            error += "\n\nIn addition, an error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
-        raise RuntimeError(error)
+        if build_model is not None:
+            updates_msg = "\n- ".join(updates_to_print)
+            error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
+            logger.error(error)
+            if error_occurred:
+                error += "\n\nIn addition, an error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
+            raise RuntimeError(error)
+        else:
+            logger.info(
+                "Updates are required to update to the current version. Run geb update-version to perform them."
+            )
     elif not error_occurred:
-        build_model.logger.info(
+        logger.info(
             "Successfully auto-updated. No further manual updates are required. Version file is updated to the current version."
         )
     else:  # error occurred but no updates to print
-        build_model.logger.error(
+        logger.error(
             "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
         )
 
