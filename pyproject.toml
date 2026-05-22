@@ -109,6 +109,7 @@ required-environments = [
     "sys_platform == 'win32'",
     "sys_platform == 'darwin'"
 ]
+exclude-newer = "3 days"
 
 [dependency-groups]
 dashboard = [
