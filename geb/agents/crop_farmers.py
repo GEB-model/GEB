@@ -1151,15 +1151,14 @@ class CropFarmers(AgentBaseClass):
         # available globally. Thus, in generalized setups we set cultivation
         # costs as a fraction of sell prices. If you have local data, set this
         # to false.
-        if (
-            "calibration" in self.model.config
-            and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
-        ) or self.model.config["agent_settings"]["farmers"][
-            "cultivation_cost_fraction"
-        ]:
-            self.var.cultivation_costs = self.adjust_cultivation_costs()
+        cultivation_costs_config = self.model.config["agent_settings"]["farmers"][
+            "cultivation_costs"
+        ]
+
+        if cultivation_costs_config["adjust_cultivation_costs"]:
+            self.cultivation_costs = self.adjust_cultivation_costs()
         else:
-            self.var.cultivation_costs = load_regional_crop_data_from_dict(
+            self.cultivation_costs = load_regional_crop_data_from_dict(
                 self.model, "crops/cultivation_costs"
             )
 
@@ -1257,6 +1256,8 @@ class CropFarmers(AgentBaseClass):
             self.model, "crops/cultivation_costs"
         )
         cultivation_cost_fraction = self.model.config["agent_settings"]["farmers"][
+            "cultivation_costs"
+        ][
             "cultivation_cost_fraction"
         ]  # Cultivation costs are set as a fraction of crop prices
         date_index, cultivation_costs_array = cultivation_costs
