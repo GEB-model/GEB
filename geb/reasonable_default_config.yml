@@ -109,7 +109,9 @@ agent_settings:
     ruleset: base
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
-    cultivation_cost_fraction: 0.1
+    cultivation_costs:
+      adjust_cultivation_costs: true
+      cultivation_cost_fraction: 0.1
     microcredit:
       ruleset: no-adaptation
       interest_rate: 0.2

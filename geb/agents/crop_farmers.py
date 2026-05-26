@@ -345,10 +345,6 @@ class CropFarmers(AgentBaseClass):
             self.model, "crops/crop_prices"
         )
 
-        self.cultivation_costs = load_regional_crop_data_from_dict(
-            self.model, "crops/cultivation_costs"
-        )
-
         # ruleset variables
         self.wells_adaptation_active = (
             not self.config["expected_utility"]["adaptation_well"]["ruleset"]
@@ -1150,7 +1146,21 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.update_field_indices()
-        self.adjust_cultivation_costs()
+
+        # To set cultivation costs local observations are needed as it is not
+        # available globally. Thus, in generalized setups we set cultivation
+        # costs as a fraction of sell prices. If you have local data, set this
+        # to false.
+        cultivation_costs_config = self.model.config["agent_settings"]["farmers"][
+            "cultivation_costs"
+        ]
+
+        if cultivation_costs_config["adjust_cultivation_costs"]:
+            self.cultivation_costs = self.adjust_cultivation_costs()
+        else:
+            self.cultivation_costs = load_regional_crop_data_from_dict(
+                self.model, "crops/cultivation_costs"
+            )
 
     @staticmethod
     @njit(cache=True)
@@ -1242,14 +1252,15 @@ class CropFarmers(AgentBaseClass):
         ``cultivation_cost_fraction``. The updated values overwrite
         ``self.cultivation_costs`` in place.
         """
-        # Set the cultivation costs
-        self.cultivation_costs = load_regional_crop_data_from_dict(
+        cultivation_costs = load_regional_crop_data_from_dict(
             self.model, "crops/cultivation_costs"
         )
         cultivation_cost_fraction = self.model.config["agent_settings"]["farmers"][
+            "cultivation_costs"
+        ][
             "cultivation_cost_fraction"
         ]  # Cultivation costs are set as a fraction of crop prices
-        date_index, cultivation_costs_array = self.cultivation_costs
+        date_index, cultivation_costs_array = cultivation_costs
 
         if (
             "calibration" in self.model.config
@@ -1271,7 +1282,8 @@ class CropFarmers(AgentBaseClass):
             cultivation_costs_array = (
                 cultivation_costs_array * cultivation_cost_fraction
             )
-        self.cultivation_costs = (date_index, cultivation_costs_array)
+
+        return (date_index, cultivation_costs_array)
 
     @property
     def activation_order_by_elevation(self) -> DynamicArray:
