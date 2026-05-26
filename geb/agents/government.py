@@ -125,21 +125,21 @@ class Government(AgentBaseClass):
     def step(self) -> None:
         """This function is run each timestep."""
         adaptation_enabled = self.config.get("adaptation", {}).get("enabled", False)
-        if (
-            self.model.current_timestep == 0
-            and self.config.get("plant_forest", False)
-            and not adaptation_enabled
-        ):
-            self.prepare_modified_soil_maps_for_forest()
+        # if (
+        #     self.model.current_timestep == 0
+        #     and self.config.get("plant_forest", False)
+        #     and not adaptation_enabled
+        # ):
+        #     self.prepare_modified_soil_maps_for_forest()
         # if self.model.current_timestep == 0 and self.config.get("plant_forest", False):
         #     self.prepare_modified_soil_maps_for_forest()
-
-        self.adaptation()
         self.set_irrigation_limit()
 
         self.adaptation()
 
-        if self.model.current_time >= self.model.run_end:
+        if self.model.current_time >= self.model.run_end and self.config.get(
+            "adaptation", {}
+        ).get("enabled", True):
             self.plot_indicators()
 
         self.report(locals())
@@ -230,6 +230,9 @@ class Government(AgentBaseClass):
 
         land_use_type_before = hydrology.HRU.var.land_use_type.copy()
 
+        area_per_hru_m2: np.ndarray = hydrology.HRU.var.cell_area
+        converted_area_m2: float = float(area_per_hru_m2[suitability_HRU].sum())
+
         forest_mask = hydrology.HRU.var.land_use_type == FOREST
         for prop in (
             "water_content_saturated_m",
@@ -275,6 +278,8 @@ class Government(AgentBaseClass):
         self._save_forest_planting_figure(
             land_use_type_before, suitability_HRU, output_folder, threshold
         )
+
+        return converted_area_m2
 
     def _save_forest_planting_figure(
         self,
@@ -431,9 +436,13 @@ class Government(AgentBaseClass):
         output_folder = self.model.output_folder / "adaptation"
         output_folder.mkdir(parents=True, exist_ok=True)
         csv_file = output_folder / "adaptation_indicators_timeseries.csv"
-        write_header = not csv_file.exists()
+        # Overwrite (not append) on the first Jan 1 of the run so that re-running the
+        # model does not accumulate duplicate rows from previous runs.
+        is_first_write = self.model.current_time.year == self.model.run_start.year
+        file_mode = "w" if is_first_write else "a"
+        write_header = is_first_write
 
-        with open(csv_file, "a", newline="") as f:
+        with open(csv_file, file_mode, newline="") as f:
             writer = csv.DictWriter(
                 f, fieldnames=["year", "EAD", "equity_indicator", "ecosystem_indicator"]
             )
@@ -557,10 +566,10 @@ class Government(AgentBaseClass):
 
         values_per_land_use_type = {
             FOREST: 1.0,  # highest ecosystem quality
-            GRASSLAND_LIKE: 0.7,
-            OPEN_WATER: 0.6,
-            PADDY_IRRIGATED: 0.3,
-            NON_PADDY_IRRIGATED: 0.3,
+            GRASSLAND_LIKE: 0.4,
+            OPEN_WATER: 0.3,
+            PADDY_IRRIGATED: 0.1,
+            NON_PADDY_IRRIGATED: 0.1,
             SEALED: 0.0,  # lowest ecosystem quality
         }
 
@@ -604,7 +613,7 @@ class Government(AgentBaseClass):
             ) * 100
 
             print(
-                f"Indicator percentual difference: {indicator} : {percentual_differences[indicator]:.4f}%"
+                f"Percentual difference {indicator} : {percentual_differences[indicator]:.4f}%"
             )
 
         # Select the indicator whose value deviates most from its threshold, regardless
@@ -659,9 +668,8 @@ class Government(AgentBaseClass):
             # apply reforestation --> to do: but maybe a percentage of the suitable areas instead of all suitable areas
             # the threshold for the reforestation amount can be set in the config file under forest_reforestation_potential_threshold, set to 0.9 to convert only the top 10% suitable areas in the model.yml
             converted_area_m2 = self.prepare_modified_soil_maps_for_forest()
-            converted_area_km2 = converted_area_m2 / 1e6
             print(
-                f"the government adapted by planting {converted_area_km2} km2 of forest in the most suitable areas to improve the ecosystem health"
+                f"the government adapted by planting {converted_area_m2} m2 of forest in the most suitable areas to improve the ecosystem health"
             )
 
     def plot_indicators(self):
