@@ -125,22 +125,29 @@ class Government(AgentBaseClass):
     def step(self) -> None:
         """This function is run each timestep."""
         adaptation_enabled = self.config.get("adaptation", {}).get("enabled", False)
-        # if (
-        #     self.model.current_timestep == 0
-        #     and self.config.get("plant_forest", False)
-        #     and not adaptation_enabled
-        # ):
-        #     self.prepare_modified_soil_maps_for_forest()
-        # if self.model.current_timestep == 0 and self.config.get("plant_forest", False):
-        #     self.prepare_modified_soil_maps_for_forest()
+
+        if (
+            self.model.current_timestep == 0
+            and self.config["plant_forest"]
+            and not adaptation_enabled
+        ):
+            self.prepare_modified_soil_maps_for_forest()
+
         self.set_irrigation_limit()
 
         self.adaptation()
 
-        if self.model.current_time >= self.model.run_end and self.config.get(
-            "adaptation", {}
-        ).get("enabled", True):
+        if (
+            self.model.current_time == self.model.run_start and adaptation_enabled
+        ):  # plot the sigmoids that will be used ot make the adaptation decision for the run.
+            steepness = self.config["sigmoid_parameters"]["steepness"]
+            infliction_point = self.config["sigmoid_parameters"]["infliction_point"]
+            self.plot_sigmoid(steepness, infliction_point)
+
+        if self.model.current_time == self.model.run_end and adaptation_enabled:
             self.plot_indicators()
+            self.plot_normalised_indicators()
+            self.plot_adaptation_pathway()
 
         self.report(locals())
 
@@ -153,11 +160,9 @@ class Government(AgentBaseClass):
         The threshold is read from the config key ``forest_restoration_potential_threshold``
         and defaults to 0.5.
 
-        When ``increment_fraction`` is set, the model automatically determines which
-        chunk to plant based on current land use. Suitable HRUs are sorted by potential
+        When adaptation is enabled, the model automatically determines how much area to plant based on the available budget and reforestation costs. Suitable HRUs are sorted by potential
         value (highest first); those already classified as FOREST (from previous years
-        or the initial state) are skipped, and the next
-        ``increment_fraction * n_suitable`` HRUs are planted. Calling the function again
+        or the initial state) are skipped, and HRUs are planted until there is no more affordable are for that year. Calling the function again
         the following year therefore plants the next batch automatically — compatible
         with the annual adaptation pathway that calls this on every January 1st.
 
@@ -170,10 +175,8 @@ class Government(AgentBaseClass):
             threshold = plant_forest_config.get(
                 "forest_restoration_potential_threshold", 0.5
             )
-            increment_fraction = plant_forest_config.get("increment_fraction", None)
         else:
             threshold = 0.5
-            increment_fraction = None
 
         forest_potential = hydrology.grid.load(
             self.model.files["grid"]["landsurface/forest_restoration_potential_ratio"]
@@ -181,11 +184,34 @@ class Government(AgentBaseClass):
         suitability_grid = forest_potential >= threshold
         suitability_HRU = hydrology.to_HRU(data=suitability_grid).astype(bool)
 
-        if increment_fraction is not None:
+        # compute suitable area so we can use that for the incremental fraction --> based on the suitable area divided by the affordable area
+        area_per_hru_m2: np.ndarray = hydrology.HRU.var.cell_area
+        suitable_area_m2 = float(area_per_hru_m2[suitability_HRU].sum())
+
+        adaptation_enabled = self.config.get("adaptation", {}).get("enabled", False)
+
+        # Only use budget-driven incremental planting when adaptation is enabled.
+        # Otherwise, keep legacy "all at once" behavior by setting None.
+        incremental_planting: bool = False
+        affordable_area_m2: float = 0.0
+        if adaptation_enabled:
+            incremental_planting = True
+            available_budget = self.config["adaptation_costs"].get("available_budget")
+            reforestation_cost_per_m2 = self.config["adaptation_costs"].get(
+                "reforestation_cost_per_m2"
+            )
+
+            # if this is all defined we can calculate the affordable area.
+            if suitable_area_m2 > 0 and reforestation_cost_per_m2:
+                affordable_area_m2 = available_budget / reforestation_cost_per_m2
+
+            print(f"Suitable area for reforestation: {suitable_area_m2:.2f} m2")
+            print(f"Affordable area for reforestation: {affordable_area_m2:.2f} m2")
+
+        if incremental_planting:
             # Sort suitable HRUs by potential value descending (best areas first).
             # Skip any already classified as FOREST (planted in prior years or
-            # originally forest), then take the next chunk of
-            # increment_fraction * n_suitable HRUs.
+            # originally forest), then take the next chunk
             forest_potential_HRU = hydrology.to_HRU(data=forest_potential)
             suitable_indices = np.where(suitability_HRU)[0]
             suitable_potentials = forest_potential_HRU[suitable_indices]
@@ -202,21 +228,36 @@ class Government(AgentBaseClass):
                     "forest. No planting applied.",
                     n_suitable,
                 )
-                return
+                return 0.0
 
-            # chunk is 10% of what remains, not 10% of the fixed total
-            chunk_size = max(1, int(np.round(increment_fraction * len(remaining))))
-            chunk_indices = remaining[:chunk_size]
+            # chunk is incremental_fraction of what remains, not 10% of the fixed total
+            remaining_area_m2 = area_per_hru_m2[remaining]
+            cumulative_area_m2 = np.cumsum(remaining_area_m2)
+
+            n_to_convert = int(
+                np.searchsorted(cumulative_area_m2, affordable_area_m2, side="right")
+            )
+
+            if n_to_convert == 0:
+                self.model.logger.info(
+                    "Incremental reforestation: budget allows 0 HRUs this year "
+                    "(available area %.2f m2).",
+                    affordable_area_m2,
+                )
+                return 0.0
+
+            chunk_indices = remaining[:n_to_convert]
             n_already = n_suitable - len(remaining)
             self.model.logger.info(
                 "Incremental reforestation: planting %d HRUs (rank %d–%d of %d "
-                "suitable; %d already forest, %d remaining).",
+                "suitable; %d already forest, %d remaining; %.2f m2 converted).",
                 len(chunk_indices),
                 n_already,
                 n_already + len(chunk_indices) - 1,
                 n_suitable,
                 n_already,
                 len(remaining),
+                float(area_per_hru_m2[chunk_indices].sum()),
             )
             suitability_HRU = np.zeros(suitability_HRU.shape[0], dtype=bool)
             suitability_HRU[chunk_indices] = True
@@ -230,7 +271,6 @@ class Government(AgentBaseClass):
 
         land_use_type_before = hydrology.HRU.var.land_use_type.copy()
 
-        area_per_hru_m2: np.ndarray = hydrology.HRU.var.cell_area
         converted_area_m2: float = float(area_per_hru_m2[suitability_HRU].sum())
 
         forest_mask = hydrology.HRU.var.land_use_type == FOREST
@@ -402,20 +442,18 @@ class Government(AgentBaseClass):
         """Decide whether adaptation is needed and apply appropriate adaptation measures.
 
         Checks if adaptation is enabled and if it is January 1st, then calculates EAD,
-        equity, and ecosystem indicators. If any thresholds are crossed, applies the corresponding
-        adaptation measures (building floodproofing, subsidies, or reforestation).
+        equity, and ecosystem indicators. The raw values for the indicators are normalised to ensure consistensy in their interpretation, which is needed for the sigmoid function.
+        The sigmoid calculates the probability of adaptation, which is consequently combined with the weigth, that indicate government priorities, to generate an urgency score.
+        The indicator with the highest urgency score gets the adaptation decision, this is passed to the apply adaptation function.
         """
-        if "adaptation" not in self.config or not self.config["adaptation"].get(
-            "enabled", True
-        ):
+        if not self.config["adaptation"].get("enabled", True):
             return  # exits because adaptation is not (enabled) in the config file
         if not (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
         ):
             return  # exits because it is not the first of January
-        # maybe I should include something that it is only done when the model is running and not during spinup as we do not want adaptation in that period.
         if self.model.in_spinup:
-            return None
+            return  # exits because the model is in spinup, we do not want adaptation during spinup
 
         # calculate the EAD, equity indicator value and ecosystem indicator value for the past year, before the adaptation decisions for this year are made.
         EAD_value = self.calculate_EAD()  # this is defined by the EAD
@@ -426,10 +464,66 @@ class Government(AgentBaseClass):
             self.calculate_ecosystem_indicator()
         )  # this is defined by the ecosystem indicator
 
-        indicator_values = {
-            "EAD": EAD_value,
-            "equity_indicator": equity_indicator_value,
-            "ecosystem_indicator": ecosystem_indicator_value,
+        # normalise the values so we can use them in the sigmoid function. 1.0 means at threshold, above 1.0 means beyond threshold (urgent), below 1.0 means acceptable state.
+        # EAD: value/threshold, at threshold = 1.0
+        normalised_EAD_value = EAD_value / self.config["adaptation"]["EAD_threshold"]
+
+        # equity: value/threshold, at threshold = 1.0, above = worse
+        normalised_equity_value = (
+            equity_indicator_value
+            / self.config["adaptation"]["equity_indicator_threshold"]
+        )
+
+        # ecosystem: threshold/value, at threshold = 1.0, below threshold = worse (value < threshold means bad)
+        normalised_ecosystem_value = (
+            self.config["adaptation"]["ecosystem_indicator_threshold"]
+            / ecosystem_indicator_value
+        )
+
+        # what adaptation measure should be implemented depends on what indicator most urgently needs adaptation as defined by
+        # the probability of investment for the indicator value as calculated with a sigmoid function
+        # the likelihood of adaptation is between 0 and 1, combine with weighting factor for each indicator to determine which indicator is the most urgent.
+
+        steepness = self.config["sigmoid_parameters"]["steepness"]
+        infliction_point = self.config["sigmoid_parameters"]["infliction_point"]
+
+        EAD_sigmoid = self.sigmoid(steepness, normalised_EAD_value, infliction_point)
+        equity_sigmoid = self.sigmoid(
+            steepness, normalised_equity_value, infliction_point
+        )
+        ecosystem_sigmoid = self.sigmoid(
+            steepness, normalised_ecosystem_value, infliction_point
+        )
+
+        EAD_urgency = self.config["indicator_weights"].get("EAD_weight") * EAD_sigmoid
+        equity_urgency = (
+            self.config["indicator_weights"].get("equity_weight") * equity_sigmoid
+        )
+        ecosystem_urgency = (
+            self.config["indicator_weights"].get("ecosystem_weight") * ecosystem_sigmoid
+        )
+
+        # urgency score for decision making
+        urgency_per_indicator = {
+            "EAD": EAD_urgency,
+            "equity_indicator": equity_urgency,
+            "ecosystem_indicator": ecosystem_urgency,
+        }
+
+        # flip the sigmoid score so that higher score means more performance (and thus less need for adaptation) and lower score means worse performance (and thus more need for adaptation).
+        EAD_performance = self.config["indicator_weights"]["EAD_weight"] - EAD_urgency
+        equity_performance = (
+            self.config["indicator_weights"]["equity_weight"] - equity_urgency
+        )
+        ecosystem_performance = (
+            self.config["indicator_weights"]["ecosystem_weight"] - ecosystem_urgency
+        )
+
+        # performance score for logging and plotting in evaluation of pathway
+        score_per_indicator = {
+            "EAD": EAD_performance,
+            "equity_indicator": equity_performance,
+            "ecosystem_indicator": ecosystem_performance,
         }
 
         # save the values for each year of the model run to a csv file so that we can plot the values over time later on
@@ -444,7 +538,22 @@ class Government(AgentBaseClass):
 
         with open(csv_file, file_mode, newline="") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["year", "EAD", "equity_indicator", "ecosystem_indicator"]
+                f,
+                fieldnames=[
+                    "year",
+                    "EAD",
+                    "equity_indicator",
+                    "ecosystem_indicator",
+                    "normalised_EAD",
+                    "normalised_equity",
+                    "normalised_ecosystem",
+                    "EAD_urgency",
+                    "equity_urgency",
+                    "ecosystem_urgency",
+                    "EAD_performance",
+                    "equity_performance",
+                    "ecosystem_performance",
+                ],
             )
             if write_header:
                 writer.writeheader()
@@ -455,50 +564,28 @@ class Government(AgentBaseClass):
                     "EAD": EAD_value,
                     "equity_indicator": equity_indicator_value,
                     "ecosystem_indicator": ecosystem_indicator_value,
+                    "normalised_EAD": normalised_EAD_value,
+                    "normalised_equity": normalised_equity_value,
+                    "normalised_ecosystem": normalised_ecosystem_value,
+                    "EAD_urgency": EAD_urgency,
+                    "equity_urgency": equity_urgency,
+                    "ecosystem_urgency": ecosystem_urgency,
+                    "EAD_performance": EAD_performance,
+                    "equity_performance": equity_performance,
+                    "ecosystem_performance": ecosystem_performance,
                 }
             )
 
-        # Set the indicator value and the thresholds for the adaptation decision.
-        # but they should be defined in such a way that they trigger adaptation when threshold is crossed
-
-        thresholds = {
-            # defines the threshold --> value in current situation, threshold
-            "EAD": (EAD_value, self.config["adaptation"].get("EAD_threshold")),
-            "equity_indicator": (
-                equity_indicator_value,
-                self.config["adaptation"].get("equity_indicator_threshold"),
-            ),
-            "ecosystem_indicator": (
-                ecosystem_indicator_value,
-                self.config["adaptation"].get("ecosystem_indicator_threshold"),
-            ),
-        }
-
-        # if any of these the thresholds are crossed, we adapt the policies. make a list of the thresholds that are crossed
-        triggered = []
-        if EAD_value > self.config["adaptation"].get("EAD_threshold"):
-            triggered.append("EAD")
-        if equity_indicator_value < self.config["adaptation"].get(
-            "equity_indicator_threshold"
-        ):
-            triggered.append("equity_indicator")
-        if ecosystem_indicator_value < self.config["adaptation"].get(
-            "ecosystem_indicator_threshold"
-        ):
-            triggered.append("ecosystem_indicator")
-
-        # if one of the threshold is triggered something needs to be done
-        if triggered:
-            print(
-                f"Adaptation needed, the following thresholds are crossed: {triggered}"
-            )
-            self.apply_adaptation(
-                triggered, indicator_values
-            )  # we now know what has caused the need for adaptation, so now we move on and actually implement the adaptation through another function, what caused the trigger is passed to this function
-        else:
-            print(
-                "No adaptation needed, all thresholds are below the defined thresholds"
-            )
+        indicator_to_adapt = max(urgency_per_indicator, key=urgency_per_indicator.get)
+        print("Indicator scores (weight * sigmoid): ")
+        for indicator, score in urgency_per_indicator.items():
+            print(f"  {indicator}: {score}")
+        print(
+            f"Government adaptation decision: {indicator_to_adapt} has the highest urgency score, applying adaptation for this indicator."
+        )
+        self.save_implemented_adaptation_measures(indicator_to_adapt)
+        self.calculate_adaptation_effectiveness()
+        self.apply_adaptation(indicator_to_adapt)
 
     def calculate_EAD(self) -> None | float:
         """Calculate the EAD for the current year.
@@ -537,18 +624,53 @@ class Government(AgentBaseClass):
         return EAD
 
     def calculate_equity_indicator(self) -> None | float:
-        # should also only be calculated if adaptation is turned on in the config file otherwise it is not needed
         """Calculate the equity for the current year.
 
         Returns:
          the equity indicator value.
         """
         # this is defined by the exposure inequalty
-        equity_index = 0.7  # this should become an actual calculation
-        return equity_index
+        households = self.agents.households
+
+        # we define the low-income households based on EU standard definition of at-risk-of-poverty threshold, which is 60% of the median income (https://ec.europa.eu/eurostat/statistics-explained/index.php?title=Glossary:At-risk-of-poverty_threshold)
+        # as done in the UK (https://www.gov.uk/government/publications/how-low-income-is-measured/text-only-how-low-income-is-measured)
+        # netherlands also (https://www.cbs.nl/en-gb/visualisations/monitor-of-wellbeing-caribbean-netherlands/indicator-descriptions)
+        median_income = np.median(households.var.income.data)
+        income_threshold = 0.6 * median_income
+        low_income_households_mask = households.var.income.data <= income_threshold
+        population_low_income_households = low_income_households_mask.sum()
+        population_all_households = households.n
+
+        population_share = population_low_income_households / population_all_households
+
+        if "flooded" not in households.buildings.columns:
+            households.update_building_attributes()
+
+        flooded_buildings_mask = set(
+            households.buildings.loc[
+                households.buildings["flooded"] == True, "id"
+            ].astype(int)
+        )
+        # figure out which households are in these flooded buildings
+        households_in_flooded_buildings = np.where(
+            pd.Series(households.var.building_id_of_household.data).isin(
+                flooded_buildings_mask
+            )
+        )[0]
+        exposure_all_households = len(households_in_flooded_buildings)
+
+        exposure_low_income_households = np.intersect1d(
+            households_in_flooded_buildings, np.where(low_income_households_mask)[0]
+        ).size
+
+        exposure_share = exposure_low_income_households / exposure_all_households
+
+        equity_indicator = exposure_share / population_share
+
+        print(f"Calculated equity indicator: {equity_indicator}")
+        return equity_indicator
 
     def calculate_ecosystem_indicator(self) -> None | float:
-        # should also only be calculated if adaptation is turned on in the config file otherwise it is not needed
         """Calculate the ecosystem health for the current year.
 
         Returns:
@@ -565,12 +687,12 @@ class Government(AgentBaseClass):
         )
 
         values_per_land_use_type = {
-            FOREST: 1.0,  # highest ecosystem quality
-            GRASSLAND_LIKE: 0.4,
+            FOREST: 0.9,  # highest ecosystem quality
+            GRASSLAND_LIKE: 0.75,
             OPEN_WATER: 0.3,
-            PADDY_IRRIGATED: 0.1,
-            NON_PADDY_IRRIGATED: 0.1,
-            SEALED: 0.0,  # lowest ecosystem quality
+            PADDY_IRRIGATED: 0.0,
+            NON_PADDY_IRRIGATED: 0.3,
+            SEALED: 0.025,  # lowest ecosystem quality
         }
 
         # land use type and area per HRU
@@ -591,35 +713,23 @@ class Government(AgentBaseClass):
         print(f"Calculated ecosystem indicator: {ecosystem_indicator}")
         return ecosystem_indicator
 
-    def apply_adaptation(self, triggered: list, indicator_values: dict) -> None:
+    def apply_adaptation(self, indicator_to_adapt) -> None:
         """Apply the adaptation measures decided in the adaptation function.
 
         Args:
-            triggered: List of adaptation triggers that were activated.
-            indicator_values: Dictionary containing the current values of all indicators.
+            indicator_to_adapt: the indicator for which to apply adaptation measures.
         """
-        # Only one adaptation measure is applied per year. When multiple indicators are
-        # triggered, the one with the largest relative exceedance (absolute distance from
-        # its threshold, expressed as a fraction of the threshold) is prioritised.
-        # EAD is bad when *above* its threshold → positive percentual difference.
-        # Equity/ecosystem indicators are bad when *below* their threshold → negative
-        # percentual difference.  Using abs() makes both directions comparable.
-
-        percentual_differences = {}
-        for indicator in triggered:
-            threshold = self.config["adaptation"].get(f"{indicator}_threshold")
-            percentual_differences[indicator] = (
-                (indicator_values[indicator] - threshold) / threshold
-            ) * 100
-
-            print(
-                f"Percentual difference {indicator} : {percentual_differences[indicator]:.4f}%"
-            )
-
-        # Select the indicator whose value deviates most from its threshold, regardless
-        # of direction (EAD exceeds upward; equity/ecosystem fall short downward).
-        indicator_to_adapt = max(
-            percentual_differences, key=lambda k: abs(percentual_differences[k])
+        # Only one adaptation measure is applied per year, this is the indicator with the
+        # highest score as calculated by the sigmoid function multiplied by the weight for that indicator.
+        available_budget = self.config["adaptation_costs"].get("available_budget")
+        floodproofing_cost_per_household = self.config["adaptation_costs"].get(
+            "floodproofing_cost_per_household"
+        )
+        reforestation_cost_per_m2 = self.config["adaptation_costs"].get(
+            "reforestation_cost_per_m2"
+        )
+        subsidies_cost_per_household = self.config["adaptation_costs"].get(
+            "subsidies_cost_per_household"
         )
 
         if indicator_to_adapt == "EAD":
@@ -645,17 +755,41 @@ class Government(AgentBaseClass):
                     flooded_buildings_mask
                 )
             )[0]
+
+            # Households that already adapted (dry-floodproofed) should not be
+            # selected again for government-supported adaptation in later years.
+            eligible_households = households_in_flooded_buildings[
+                households.var.adapted.data[households_in_flooded_buildings] == 0
+            ]
+
+            if len(eligible_households) == 0:
+                print(
+                    "No eligible households for government floodproofing "
+                    "(all flooded households already adapted)."
+                )
+                return
+
             # the government decides who of those are adapting, we only pick a fraction as specified in the config file
-            n_to_adapt = int(
-                len(households_in_flooded_buildings) * household_adaptation_fraction
+            # the number to adapt should actually be based on the available budget, but if the eligible households are less than budget allows, we can only adapt that numnber.
+            potential_to_adapt = int(
+                available_budget / floodproofing_cost_per_household
             )
+            n_to_adapt = min(potential_to_adapt, len(eligible_households))
+            if n_to_adapt == 0:
+                print("No households selected for government floodproofing this year ")
+                return
+            # randomly select the households that are adapted based on the number of households that can be adapted.
             adapting_households_sample = np.random.choice(
-                households_in_flooded_buildings, size=n_to_adapt, replace=False
+                eligible_households, size=n_to_adapt, replace=False
             )
+            # update the households that are adapted so they are not eligible for adaptation again.
+            households.var.adapted[adapting_households_sample] = 1
+
             # use the function to floodproof the buildings of the households who are selected to adapt.
             households.update_building_adaptation_status(adapting_households_sample)
             print(
-                f"the government adapted {n_to_adapt} of the {len(households_in_flooded_buildings)} households in the floodzone by floodproofing their buildings"
+                f"the government adapted {n_to_adapt} of the "
+                f"{len(eligible_households)} eligible households in the floodzone by floodproofing their buildings"
             )
 
         # if indicator_to_adapt == "equity_indicator":
@@ -665,15 +799,15 @@ class Government(AgentBaseClass):
         #     self.provide_subsidies()
 
         if indicator_to_adapt == "ecosystem_indicator":
-            # apply reforestation --> to do: but maybe a percentage of the suitable areas instead of all suitable areas
-            # the threshold for the reforestation amount can be set in the config file under forest_reforestation_potential_threshold, set to 0.9 to convert only the top 10% suitable areas in the model.yml
+            # apply reforestation, the reforestation limited by budget is already implemented in the prepare_modified_soil_maps_for_forest_function.
             converted_area_m2 = self.prepare_modified_soil_maps_for_forest()
             print(
                 f"the government adapted by planting {converted_area_m2} m2 of forest in the most suitable areas to improve the ecosystem health"
             )
 
     def plot_indicators(self):
-        """Plot the evaluation criteria over the run time."""
+        """Plot the evaluation criteria over the run time and calculate the final score of the government's adaptation strategy."""
+        # plot the evaluation criteria over time
         csv_file = (
             self.model.output_folder
             / "adaptation"
@@ -685,7 +819,7 @@ class Government(AgentBaseClass):
         fig.suptitle("evaluation criteria over time")
 
         ax1.plot(df["year"], df["EAD"])
-        ax1.set_ylabel("EAD (€)")
+        ax1.set_ylabel("EAD (millions of €)")
         ax1.set_xlabel("Year")
         ax1.set_title("Expected Annual Damage (€) over time")
 
@@ -704,6 +838,265 @@ class Government(AgentBaseClass):
         output_folder.mkdir(parents=True, exist_ok=True)
         plt.savefig(
             output_folder / "adaptation_indicators_over_time.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close()
+
+    def plot_normalised_indicators(self):
+        """Plot the normalised evaluation criteria over the run time and calculate the final score of the government's adaptation strategy."""
+        # plot the normalised evaluation criteria over time
+        csv_file = (
+            self.model.output_folder
+            / "adaptation"
+            / "adaptation_indicators_timeseries.csv"
+        )
+        df = pd.read_csv(csv_file)
+
+        fig, (ax1, ax2, ax3) = plt.subplots(3)
+        fig.suptitle("normalised evaluation criteria over time")
+
+        ax1.plot(df["year"], df["normalised_EAD"])
+        ax1.set_ylabel("Normalised EAD (€)")
+        ax1.set_xlabel("Year")
+        ax1.set_title("Normalised Expected Annual Damage (€) over time")
+
+        ax2.plot(df["year"], df["normalised_equity"])
+        ax2.set_ylabel("Normalised Equity Indicator")
+        ax2.set_xlabel("Year")
+        ax2.set_title("Normalised Equity Indicator over time")
+
+        ax3.plot(df["year"], df["normalised_ecosystem"])
+        ax3.set_ylabel("Normalised Ecosystem Indicator")
+        ax3.set_xlabel("Year")
+        ax3.set_title("Normalised Ecosystem Indicator over time")
+
+        fig.tight_layout()
+        output_folder = self.model.output_folder / "adaptation"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        plt.savefig(
+            output_folder / "normalised_adaptation_indicators_over_time.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close()
+
+    def calculate_adaptation_effectiveness(self):
+        # the last value of the indicators in the csv file is the value after the adaptation measures have been implemented, so we can use these values to evaluate the effectiveness of the adaptation measures by comparing them with the first value of the indicators in the csv file, which is the value before the adaptation measures were implemented.
+        csv_file = (
+            self.model.output_folder
+            / "adaptation"
+            / "adaptation_indicators_timeseries.csv"
+        )
+        df = pd.read_csv(csv_file)
+
+        initial_score = (  # these are calculated by multiplying the probability of adapting based on the sigmoid with the weight for that indicator.
+            df["EAD_performance"].iloc[0]
+            + df["equity_performance"].iloc[0]
+            + df["ecosystem_performance"].iloc[0]
+        )
+
+        final_score = (
+            df["EAD_performance"].iloc[-1]
+            + df["equity_performance"].iloc[-1]
+            + df["ecosystem_performance"].iloc[-1]
+        )
+
+        if len(df) < 2:
+            improvement_achieved = 0.0
+        else:
+            improvement_achieved = final_score - (
+                df["EAD_performance"].iloc[-2]
+                + df["equity_performance"].iloc[-2]
+                + df["ecosystem_performance"].iloc[-2]
+            )
+
+        # save the values for each year of the model run to a csv file so that we can plot the values over time later on
+        output_folder = self.model.output_folder / "adaptation"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        csv_file = output_folder / "adaptation_scoring.csv"
+
+        # Overwrite (not append) on the first Jan 1 of the run so that re-running the
+        # model does not accumulate duplicate rows from previous runs.
+        is_first_write = self.model.current_time.year == self.model.run_start.year
+        file_mode = "w" if is_first_write else "a"
+        write_header = is_first_write
+
+        with open(csv_file, file_mode, newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "year",
+                    "initial_score",
+                    "final_score",
+                    "improvement_achieved",
+                ],
+            )
+            if write_header:
+                writer.writeheader()
+
+            writer.writerow(
+                {
+                    "year": self.model.current_time.year,
+                    "initial_score": initial_score,
+                    "final_score": final_score,
+                    "improvement_achieved": improvement_achieved,
+                }
+            )
+
+    def sigmoid(self, steepness, indicator_value, infliction_point):
+        """Calculate the sigmoid function value for a given indicator value.
+
+        Values for steepness and infliction point are defined in the config file.
+
+        Args:
+            steepness: Steepness of the curve, where higher values
+                represent more rigid government decisions.
+            indicator_value: Current indicator value.
+            infliction_point: Infliction point of the curve, where
+                lower values represent a more proactive government.
+
+        Returns:
+            Sigmoid value.
+        """
+        sigmoid_value = 1 / (
+            1 + np.exp(-steepness * (indicator_value - infliction_point))
+        )
+        return sigmoid_value
+
+    def plot_sigmoid(self, steepness, infliction_point):
+        """Plot the sigmoid function for a given steepness and infliction point, different per indicator."""
+        x = np.linspace(-1, 2, 100)
+        y = self.sigmoid(steepness, x, infliction_point)
+
+        plt.figure(figsize=(8, 6))
+        plt.plot(x, y)
+        plt.title(
+            f"Sigmoid Function for decision-making (steepness={steepness}, infliction_point={infliction_point})"
+        )
+        plt.xlabel("Normalised Indicator Value")
+        plt.ylabel("Adaptation Probability")
+        plt.grid()
+        output_folder = self.model.output_folder / "adaptation"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        plt.savefig(
+            output_folder / f"sigmoid_{steepness}_{infliction_point}.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close()
+
+    def save_implemented_adaptation_measures(self, indicator_to_adapt):
+        """save the implemented adaptation measures in a csv file so that we can plot the adaptation pathway later on."""
+        indicator_to_measure = {
+            "EAD": "grey",
+            "equity_indicator": "institutional",
+            "ecosystem_indicator": "green",
+        }
+
+        measure_type = indicator_to_measure.get(indicator_to_adapt, "unknown")
+
+        # save the values for each year of the model run to a csv file so that we can plot the values over time later on
+        output_folder = self.model.output_folder / "adaptation"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        csv_file = output_folder / "adaptation_measures_implemented.csv"
+
+        # Overwrite (not append) on the first Jan 1 of the run so that re-running the
+        # model does not accumulate duplicate rows from previous runs.
+        is_first_write = self.model.current_time.year == self.model.run_start.year
+        file_mode = "w" if is_first_write else "a"
+        write_header = is_first_write
+
+        with open(csv_file, file_mode, newline="") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=["year", "indicator_to_adapt", "measure_type"]
+            )
+            if write_header:
+                writer.writeheader()
+
+            writer.writerow(
+                {
+                    "year": self.model.current_time.year,
+                    "indicator_to_adapt": indicator_to_adapt,
+                    "measure_type": measure_type,
+                }
+            )
+
+    def plot_adaptation_pathway(self):
+        """plot the adaptation pathway, showing the adaptation measures that are implemented over time."""
+        csv_file_measures = (
+            self.model.output_folder
+            / "adaptation"
+            / "adaptation_measures_implemented.csv"
+        )
+        df_measures = pd.read_csv(csv_file_measures)
+
+        csv_file_scores = (
+            self.model.output_folder / "adaptation" / "adaptation_scoring.csv"
+        )
+        df_scores = pd.read_csv(csv_file_scores)
+
+        # merge on year so measures and scores are aligned
+        df = pd.merge(df_measures, df_scores, on="year")
+
+        colour_map = {
+            "grey": "#5F5E5A",
+            "green": "#3B8B2E",
+            "institutional": "#C0392B",
+        }
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+        # plot each segment between adjacent years, coloured by measure type
+        for i in range(len(df) - 1):
+            x_seg = [df["year"].iloc[i], df["year"].iloc[i + 1]]
+            y_seg = [df["final_score"].iloc[i], df["final_score"].iloc[i + 1]]
+            colour = colour_map.get(df["measure_type"].iloc[i], "#aaaaaa")
+            ax.plot(x_seg, y_seg, color=colour, linewidth=2.5)
+
+        # add dots at each year coloured by measure
+        for _, row in df.iterrows():
+            colour = colour_map.get(row["measure_type"], "#aaaaaa")
+            ax.scatter(row["year"], row["final_score"], color=colour, s=40, zorder=5)
+
+        # legend
+        from matplotlib.lines import Line2D
+
+        legend_elements = [
+            Line2D(
+                [0],
+                [0],
+                color="#5F5E5A",
+                linewidth=2.5,
+                label="Grey (hard infrastructure)",
+            ),
+            Line2D(
+                [0], [0], color="#3B8B2E", linewidth=2.5, label="Green (nature-based)"
+            ),
+            Line2D(
+                [0], [0], color="#C0392B", linewidth=2.5, label="Institutional (equity)"
+            ),
+        ]
+        ax.legend(handles=legend_elements, fontsize=10, framealpha=0.3)
+
+        ax.set_title("Adaptation pathway", fontsize=13)
+        ax.set_xlabel("Year", fontsize=11)
+        ax.set_ylabel("Performance score", fontsize=11)
+
+        # Auto-scale y-axis to show actual variation in scores rather than fixed 0–1 range.
+        # This makes small improvements visible without distorting the data.
+        score_min = df["final_score"].min()
+        score_max = df["final_score"].max()
+        score_range = score_max - score_min
+        padding = max(score_range * 0.1, 0.01)  # 10% padding or 0.01 minimum
+        ax.set_ylim(score_min - padding, score_max + padding)
+
+        ax.grid(True, alpha=0.3)
+
+        output_folder = self.model.output_folder / "adaptation"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        plt.savefig(
+            output_folder / "adaptation_pathway.png",
             dpi=150,
             bbox_inches="tight",
         )
