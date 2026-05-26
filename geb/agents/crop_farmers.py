@@ -2120,7 +2120,7 @@ class CropFarmers(AgentBaseClass):
             )
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
-            number_of_harvesting_fields = np.count_nonzero(harvested_crops)
+            number_of_harvesting_fields = np.count_nonzero(harvested_crops >= 0)
             self.model.logger.debug(
                 f"Harvesting {number_of_harvesting_fields} fields with crops: "
                 f"{np.unique(harvested_crops[harvested_crops >= 0])}"
@@ -2174,9 +2174,11 @@ class CropFarmers(AgentBaseClass):
             )
             actual_profit_per_field = actual_yield_per_field * crop_price_per_field
 
-            # DEBUG: yield and profit for wheat/maize
+            # DEBUG: yield and profit for all harvested crops, averaged over all harvested fields of that crop
             if 2014 <= self.model.current_time.year <= 2024:
-                for crop_id, crop_name in [(0, "wheat"), (1, "maize")]:
+                crop_ids_harvested = np.unique(harvested_crops[harvested_crops >= 0])
+                for crop_id in crop_ids_harvested:
+                    crop_name = self.var.crop_ids[int(crop_id)]
                     mask = harvested_crops == crop_id
                     if np.any(mask):
                         actual_yield_kg_m2 = (
@@ -2544,12 +2546,14 @@ class CropFarmers(AgentBaseClass):
                     planting_farmers_idx, crop_rotation, 0
                 ].astype(int)
 
-                for crop_id, crop_name in [(0, "wheat"), (1, "maize")]:
+                crop_ids_planted = np.unique(planting_crops[planting_crops >= 0])
+                for crop_id in crop_ids_planted:
+                    crop_name = self.var.crop_ids[int(crop_id)]
                     crop_mask = planting_crops == crop_id
                     if np.any(crop_mask):
                         farmers = planting_farmers_idx[crop_mask]
                         crop_cost_usd_m2 = cultivation_cost[
-                            self.var.region_id.data[farmers], crop_id
+                            self.var.region_id.data[farmers], int(crop_id)
                         ]
                         crop_cost_usd_farmer = (
                             crop_cost_usd_m2 * field_size_per_farmer[farmers]
