@@ -170,12 +170,24 @@ def test_accuflux(
     """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
 
+    # Empty retention arrays for "no retention" case
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+
     router: Accuflux = Accuflux(
         dt=1,
         river_network=river_network,
         river_length=np.ones_like(mask[mask], dtype=np.float32),
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
+        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
     )
 
     sideflow = np.array(
@@ -188,13 +200,7 @@ def test_accuflux(
         dtype=np.float32,
     )[mask]
 
-    # Empty retention arrays for "no retention" case
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
-    controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
 
     (
         Q_new,
@@ -213,11 +219,6 @@ def test_accuflux(
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
         retention_storage_m3=retention_storage_m3,
-        retention_max_storage_m3=retention_max_storage_m3,
-        retention_node_id=retention_node_id,
-        controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
@@ -255,14 +256,6 @@ def test_accuflux_with_retention_basins(
     """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
 
-    router: Accuflux = Accuflux(
-        dt=1,
-        river_network=river_network,
-        river_length=np.ones_like(mask[mask], dtype=np.float32),
-        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
-        is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
-    )
-
     sideflow = np.zeros(mask.sum(), dtype=np.float32)
 
     retention_raster = -1 * np.ones_like(Q_initial, dtype=np.int32)
@@ -272,7 +265,6 @@ def test_accuflux_with_retention_basins(
     retention_node_id = retention_raster[mask]
 
     # --- set initial storage and max storage ---
-    retention_storage_m3 = np.zeros(2, dtype=np.float32)  # two retention basins
     retention_max_storage_m3 = np.array([2, 2], dtype=np.float32)  # max storage
     controlled_retention = np.array([True, False])  # 1 basin are controlled
     retention_activation_threshold_controlled_m3_s = np.array(
@@ -281,6 +273,21 @@ def test_accuflux_with_retention_basins(
     retention_activation_threshold_uncontrolled_m3_s = np.array(
         [0.0, 1.0], dtype=np.float32
     )
+
+    router: Accuflux = Accuflux(
+        dt=1,
+        river_network=river_network,
+        river_length=np.ones_like(mask[mask], dtype=np.float32),
+        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
+        is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
+        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
+    )
+
+    retention_storage_m3 = np.zeros(2, dtype=np.float32)
 
     (
         Q_new,
@@ -299,11 +306,6 @@ def test_accuflux_with_retention_basins(
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
         retention_storage_m3=retention_storage_m3,
-        retention_max_storage_m3=retention_max_storage_m3,
-        retention_node_id=retention_node_id,
-        controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
@@ -334,12 +336,25 @@ def test_accuflux_with_longer_dt(
     in the routing calculations.
     """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
+
+    # Empty retention arrays for "no retention" case
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+
     router: Accuflux = Accuflux(
         dt=15,
         river_network=river_network,
         river_length=np.ones_like(mask[mask], dtype=np.float32),
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
+        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
     )
 
     sideflow = np.array(
@@ -352,14 +367,7 @@ def test_accuflux_with_longer_dt(
         dtype=np.float32,
     )[mask]
 
-    # Empty retention arrays for "no retention" case
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
-    controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
 
     (
         Q_new,
@@ -378,11 +386,6 @@ def test_accuflux_with_longer_dt(
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
         retention_storage_m3=retention_storage_m3,
-        retention_max_storage_m3=retention_max_storage_m3,
-        retention_node_id=retention_node_id,
-        controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
@@ -414,12 +417,25 @@ def test_accuflux_with_sideflow(
     contributions into the routing calculations.
     """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
+
+    # Empty retention arrays for "no retention" case
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+
     router = Accuflux(
         dt=1,
         river_network=river_network,
         river_length=np.ones_like(mask[mask], dtype=np.float32),
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
+        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
     )
 
     sideflow = np.array(
@@ -432,11 +448,6 @@ def test_accuflux_with_sideflow(
     )[mask]
 
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
-    controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
 
     (
         Q_new,
@@ -455,11 +466,6 @@ def test_accuflux_with_sideflow(
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
         retention_storage_m3=retention_storage_m3,
-        retention_max_storage_m3=retention_max_storage_m3,
-        retention_node_id=retention_node_id,
-        controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
@@ -507,6 +513,13 @@ def test_accuflux_with_waterbodies(
     )
     Q_initial[waterbody_id != -1] = np.nan
 
+    # Empty retention arrays for "no retention" case
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+
     router: Accuflux = Accuflux(
         dt=1,
         river_network=river_network,
@@ -520,6 +533,11 @@ def test_accuflux_with_waterbodies(
             ]
         )[mask],
         waterbody_id=waterbody_id[mask],
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
+        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
     )
 
     sideflow = np.array(
@@ -536,14 +554,7 @@ def test_accuflux_with_waterbodies(
 
     waterbody_storage_m3_pre = waterbody_storage_m3.copy()
 
-    # Empty retention arrays for "no retention" case
     retention_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
-    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
-    controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
 
     (
         Q_new,
@@ -562,11 +573,6 @@ def test_accuflux_with_waterbodies(
         waterbody_storage_m3=waterbody_storage_m3,
         outflow_per_waterbody_m3=outflow_per_waterbody_m3,
         retention_storage_m3=retention_storage_m3,
-        retention_max_storage_m3=retention_max_storage_m3,
-        retention_node_id=retention_node_id,
-        controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
     )
@@ -617,7 +623,6 @@ def test_kinematic(
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
         # retention arrays: full arrays for all river cells
-        retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         retention_max_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         retention_node_id=np.full(mask.sum(), -1, dtype=np.int32),
         controlled_retention=np.zeros(mask.sum(), dtype=bool),
@@ -655,14 +660,7 @@ def test_kinematic(
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
-        retention_storage_m3=np.ndarray(0, dtype=np.float64),
-        retention_max_storage_m3=np.ndarray(0, dtype=np.float64),
-        retention_node_id=np.ndarray(0, dtype=np.int32),
-        controlled_retention=np.ndarray(0, dtype=bool),
-        retention_activation_threshold_controlled_m3_s=np.ndarray(0, dtype=np.float64),
-        retention_activation_threshold_uncontrolled_m3_s=np.ndarray(
-            0, dtype=np.float64
-        ),
+        retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         river_storage_alpha=np.full_like(mask[mask], np.float32(1.0), dtype=np.float32),
         river_storage_beta=np.full_like(mask[mask], np.float32(0.6), dtype=np.float32),
     )
@@ -684,8 +682,24 @@ def test_accuflux_inverse_ops(
     waterbody_id = np.full_like(mask[mask], -1, dtype=np.int32)
     is_waterbody_outflow = np.zeros_like(mask[mask], dtype=bool)
 
+    # Empty retention arrays for "no retention" case
+    retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
+    retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    controlled_retention = np.array([], dtype=bool)
+    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+
     router: Accuflux = Accuflux(
-        dt, river_network, river_length, waterbody_id, is_waterbody_outflow
+        dt,
+        river_network,
+        river_length,
+        waterbody_id,
+        is_waterbody_outflow,
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
+        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
     )
 
     # Use Q_initial as dummy discharge values (m3/s)
@@ -733,7 +747,6 @@ def test_kinematic_wave_inverse_ops(
         river_length,
         waterbody_id,
         is_waterbody_outflow,
-        retention_storage_m3,
         retention_max_storage_m3,
         retention_node_id,
         controlled_retention,

@@ -1,6 +1,7 @@
 # dev
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
 - Recently, there have been a lot of supply chain effects, where packages contained malicious code or instructions. To avoid most of these issues, but at the same time get relatively new updates (including those with important security updates) we limit any package updates to packages that are at least 3 days old in the uv.lock file. Here we use uv's exclude-newer option.
+- Update routing to include optional retention basins. These retention basins can retain water during flood peaks, and slowly release water during low-flow periods. Can be set up using `setup_retention_basins`.
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
