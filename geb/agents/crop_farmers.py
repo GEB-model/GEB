@@ -2120,7 +2120,7 @@ class CropFarmers(AgentBaseClass):
             )
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
-            number_of_harvesting_fields = np.count_nonzero(harvested_crops)
+            number_of_harvesting_fields = np.count_nonzero(harvested_crops >= 0)
             self.model.logger.debug(
                 f"Harvesting {number_of_harvesting_fields} fields with crops: "
                 f"{np.unique(harvested_crops[harvested_crops >= 0])}"
