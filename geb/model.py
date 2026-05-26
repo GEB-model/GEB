@@ -449,8 +449,8 @@ class GEBModel(Module):
         clean_report_folder: bool = False,
         load_data_from_store: bool = False,
         omit: None | str = None,
-        #initialize_hazards: bool = False,  # CARO
-        #enabled_agents: list[str] | None = None,
+        # initialize_hazards: bool = False,  # CARO
+        # enabled_agents: list[str] | None = None,
     ) -> None:
         """Initializes the model.
 
