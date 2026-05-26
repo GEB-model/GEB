@@ -22,6 +22,7 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .modules.flood_risk import FloodRiskModule
 from .modules.wind_risk import WindRiskModule
+from .workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
     from geb.agents import Agents

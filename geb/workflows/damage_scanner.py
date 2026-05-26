@@ -68,6 +68,8 @@ def VectorScannerMultiCurves(
     features: gpd.GeoDataFrame,
     hazard: xr.DataArray,
     multi_curves: dict[str, pd.Series],
+    exposure_cache: dict | None = None,
+    cache_key: object = None,
 ) -> pd.DataFrame:
     """Computes flood damages for a set of building features using multiple depth-damage curves, with heavy optimizations for large datasets.
 
@@ -89,6 +91,11 @@ def VectorScannerMultiCurves(
                     "unmitigated": pd.Series(...),
                     "floodproofed": pd.Series(...)
                 }
+        exposure_cache (dict, optional):
+            If provided, VectorExposure results are stored in this dict on the
+            first call and reused on subsequent calls with the same cache_key.
+        cache_key (object, optional):
+            Key under which to store/retrieve the exposure result (e.g. return period).
     Returns:
         pd.DataFrame:
             A dataframe indexed by building ID (same index as input features),
@@ -128,14 +135,19 @@ def VectorScannerMultiCurves(
 
     # Preserve index of features for final output
     index_features = features.index.copy()
-    # Extract exposure geometry
-    features, _, _, cell_area_m2 = VectorExposureDS(
-        hazard_file=hazard,
-        feature_file=features,
-        object_col="object_type",
-        disable_progress=True,
-        gridded=False,
-    )
+    # Extract exposure geometry (use cache if available to avoid re-computing per year)
+    if exposure_cache is not None and cache_key is not None and cache_key in exposure_cache:
+        features, cell_area_m2 = exposure_cache[cache_key]
+    else:
+        features, _, _, cell_area_m2 = VectorExposureDS(
+            hazard_file=hazard,
+            feature_file=features,
+            object_col="object_type",
+            disable_progress=True,
+            gridded=False,
+        )
+        if exposure_cache is not None and cache_key is not None:
+            exposure_cache[cache_key] = (features.copy(), cell_area_m2)
 
     # Keep only inundated buildings
     filtered = features[features["values"].str.len() > 0].copy()

@@ -31,6 +31,9 @@ class FloodRiskModule:
         """
         self.model = model
         self.households = households
+        self._flood_maps_utm_cache: dict = {}     
+        self._exposure_cache: dict = {}           
+        self._building_geometries_cache = None    
         self.load_damage_curves()
         self.alter_damage_curves_for_flood_proofed_buildings()
         self.load_max_damage_values()
@@ -383,7 +386,7 @@ class FloodRiskModule:
             (self.households.return_periods.size, self.households.n), np.float32
         )
 
-        # create a pandas data array for assigning damage to the agents:
+        # DataFrame mapping buildings to household agents
         agent_df = pd.DataFrame(
             {"building_id_of_household": self.households.var.building_id_of_household}
         )
@@ -393,23 +396,32 @@ class FloodRiskModule:
             self.households.buildings["flooded"]
         ].copy()
         flooded_building_ids = np.array(buildings["id"])
-        building_geometries = read_geom(
-            self.households.model.files["geom"]["assets/open_building_map"],
-            filters=[("id", "in", flooded_building_ids)],
-        )
 
-        building_geometries = building_geometries.merge(
-            buildings[["id", "object_type"]],
-            on="id",
-            how="left",
-        )
-
-        # All flood maps cover the same region → same UTM zone. Reproject building
-        # geometries once before the loop instead of once per return period.
-        utm_flood_map = self.reproject_to_utm(
-            self.households.flood_maps[self.households.return_periods[0]]
-        )
-        building_geometries = building_geometries.to_crs(utm_flood_map.rio.crs)
+        # Cache building geometries — they don't change between years.
+        # Invalidate if the flooded building set changes (e.g. after a new flood event).
+        current_flooded_key = tuple(sorted(flooded_building_ids))
+        if (
+            self._building_geometries_cache is None
+            or self._building_geometries_cache["key"] != current_flooded_key
+        ):
+            building_geometries = read_geom(
+                self.households.model.files["geom"]["assets/open_building_map"],
+                filters=[("id", "in", flooded_building_ids)],
+            )
+            building_geometries = building_geometries.merge(
+                buildings[["id", "object_type"]],
+                on="id",
+                how="left",
+            )
+            utm_flood_map = self.reproject_to_utm(
+                self.households.flood_maps[self.households.return_periods[0]]
+            )
+            building_geometries = building_geometries.to_crs(utm_flood_map.rio.crs)
+            self._building_geometries_cache = {"key": current_flooded_key, "data": building_geometries}
+            # Invalidate exposure cache when building set changes
+            self._exposure_cache.clear()
+        else:
+            building_geometries = self._building_geometries_cache["data"]
 
         # Damage curves are the same for every return period — build once.
         multi_curves = {
@@ -428,9 +440,12 @@ class FloodRiskModule:
         }
 
         for i, return_period in enumerate(self.households.return_periods):
-            flood_map: xr.DataArray = self.reproject_to_utm(
-                self.households.flood_maps[return_period]
-            )
+            # Cache reprojected flood maps — they never change.
+            if return_period not in self._flood_maps_utm_cache:
+                self._flood_maps_utm_cache[return_period] = self.reproject_to_utm(
+                    self.households.flood_maps[return_period]
+                )
+            flood_map: xr.DataArray = self._flood_maps_utm_cache[return_period]
 
             building_multicurve = building_geometries.copy()
             building_multicurve_renamed: gpd.GeoDataFrame = building_multicurve.rename(
@@ -439,12 +454,13 @@ class FloodRiskModule:
                     "COST_CONTENTS_USD_SQM": "maximum_damage_content",
                 }
             )  # ty:ignore[invalid-assignment]
-            
-            #print(f"No of buildings to scan for flood damages rp{return_period}: {building_multicurve_renamed.shape[0]}")
+
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve_renamed,
                 hazard=flood_map,
                 multi_curves=multi_curves,
+                exposure_cache=self._exposure_cache,
+                cache_key=return_period,
             )
 
             # sum structure and content damages
@@ -472,7 +488,6 @@ class FloodRiskModule:
             building_multicurve = building_multicurve[
                 ["id", "damages", "damages_flood_proofed"]
             ]
-            # merged["damage"] is aligned with agents
             damages_do_not_adapt[i], damages_adapt[i] = (
                 self.households.assign_damages_to_agents(
                     agent_df,
