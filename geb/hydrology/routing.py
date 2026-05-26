@@ -1,5 +1,6 @@
 """Routing algorithms for river networks."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
@@ -8,7 +9,6 @@ import pandas as pd
 import pyflwdir
 import pyflwdir.core
 from numba import njit
-from pyflwdir import core, core_d8, core_ldd
 
 from geb.geb_types import (
     ArrayBool,
@@ -30,92 +30,39 @@ from geb.workflows.io import read_geom, read_table
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
-# Wrap pyflwdir core functions with @njit(cache=True) to enable Numba caching.
-# This significantly speeds up model initialization by caching the compiled versions
-# of these frequently-called functions. The original functions are already JIT-compiled
-# but don't have caching enabled.
 
-_upstream_matrix_orig = core.upstream_matrix
-_idxs_seq_orig = core.idxs_seq
-_from_array_ldd_orig = core_ldd.from_array
-_check_values_d8_orig = core_d8.check_values
-
-
-@njit(cache=True)
-def wrap_upstream_matrix(
-    idxs_ds: ArrayInt32, mv: np.int64 = core._mv
-) -> TwoDArrayInt32:
-    """Returns a 2D array with upstream cell indices for each cell.
-
-    The shape of the array is (idxs_ds.size, max number of upstream cells per cell).
+def read_discharge_per_river(
+    folder: Path, rivers: gpd.GeoDataFrame, all_rivers: pd.DataFrame
+) -> pd.DataFrame:
+    """Read the discharge for each river from the output files.
 
     Args:
-        idxs_ds: Linear index of next downstream cell.
-        mv: Missing value, default is -1.
+        folder: The folder where the discharge files are stored.
+        rivers: A GeoDataFrame containing the rivers in the model, with columns "is_downstream_outflow", "is_upstream_of_downstream_basin", and "hydrography_xy".
+        all_rivers: A DataFrame containing all rivers in the model, with columns "represented_in_grid", "hydrography_xy", and "downstream_ID".
 
     Returns:
-        2D array with upstream cell indices for each cell.
+        A DataFrame with the discharge for each river, with columns "discharge_m3_per_s" and "hydrography_xy".
     """
-    return _upstream_matrix_orig(idxs_ds, mv=mv)
+    discharge = pd.DataFrame()
+    for river_id in rivers.index:
+        assert isinstance(river_id, int)
+        xys: list[tuple[int, int]] = get_upstream_represented_xys(river_id, all_rivers)
+        if len(xys) == 1:
+            discharge[river_id] = read_table(
+                folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
+            )[f"river_outflow_hourly_m3_per_s_{river_id}"]
+        else:
+            for i in range(len(xys)):
+                discharge_part = read_table(
+                    folder / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
+                )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
+                if river_id not in discharge:
+                    discharge[river_id] = discharge_part
+                else:
+                    discharge[river_id] += discharge_part
 
-
-@njit(cache=True)
-def wrap_idxs_seq(
-    idxs_ds: ArrayInt32, idxs_pit: ArrayInt32, mv: np.int64 = core._mv
-) -> ArrayInt32:
-    """Returns indices ordered from down- to upstream.
-
-    Args:
-        idxs_ds: Linear index of next downstream cell.
-        idxs_pit: Linear index of pit cells.
-        mv: Missing value, default is -1.
-
-    Returns:
-        Linear indices of valid cells ordered from down- to upstream.
-    """
-    return _idxs_seq_orig(idxs_ds, idxs_pit, mv=mv)
-
-
-@njit(cache=True)
-def wrap_from_array_ldd(
-    flwdir: TwoDArrayUint8, _mv: np.uint8 = core_ldd._mv, dtype: type = np.intp
-) -> tuple[ArrayInt32, ArrayInt32, int]:
-    """Convert 2D LDD data to 1D next downstream indices.
-
-    Args:
-        flwdir: 2D array with LDD data.
-        _mv: Missing value in LDD data.
-        dtype: Data type of the output indices.
-
-    Returns:
-        Tuple containing:
-            - Linear index of next downstream cell.
-            - Linear index of pit cells.
-            - Number of valid cells.
-    """
-    return _from_array_ldd_orig(flwdir, _mv=_mv, dtype=dtype)
-
-
-@njit(cache=True)
-def wrap_check_values_d8(
-    flwdir: TwoDArrayUint8, _all: ArrayUint8 = core_d8._all
-) -> bool:
-    """Check if values in D8 flow direction array are valid.
-
-    Args:
-        flwdir: 2D array with D8 flow direction data.
-        _all: Array with all valid D8 values.
-
-    Returns:
-        True if all values are valid, False otherwise.
-    """
-    return _check_values_d8_orig(flwdir, _all=_all)
-
-
-core.upstream_matrix = wrap_upstream_matrix
-core.idxs_seq = wrap_idxs_seq
-core_ldd.from_array = wrap_from_array_ldd
-core_d8.check_values = wrap_check_values_d8
+    return discharge
 
 
 def get_upstream_represented_xys(
@@ -1219,7 +1166,7 @@ class Routing(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.ldd: ArrayUint8 = self.grid.load(
+        self.ldd: ArrayUint8 = self.grid.load2d(
             self.model.files["grid"]["routing/ldd"],
         )
 
@@ -1237,12 +1184,12 @@ class Routing(Module):
         )
         self.active_rivers = self.get_active_rivers()
 
-        self.river_ids = self.grid.load(
+        self.river_ids = self.grid.load2d(
             self.model.files["grid"]["routing/river_ids"],
         )
 
         if "routing/retention_basin_ids" in self.model.files["grid"]:
-            self.retention_basin_ids = self.grid.load(
+            self.retention_basin_ids = self.grid.load2d(
                 self.model.files["grid"]["routing/retention_basin_ids"],
             )
             self.retention_basin_data = read_table(
@@ -1340,11 +1287,11 @@ class Routing(Module):
         5. Initialize discharge variables and counters.
 
         """
-        self.grid.var.upstream_area = self.grid.load(
+        self.grid.var.upstream_area = self.grid.load2d(
             self.model.files["grid"]["routing/upstream_area_m2"]
         )
         if "routing/upstream_area_n_cells" in self.model.files["grid"]:
-            self.grid.var.upstream_area_n_cells = self.grid.load(
+            self.grid.var.upstream_area_n_cells = self.grid.load2d(
                 self.model.files["grid"]["routing/upstream_area_n_cells"]
             )
         else:
@@ -1355,13 +1302,13 @@ class Routing(Module):
 
         # Channel Manning's n
         self.grid.var.river_mannings = (
-            self.grid.load(self.model.files["grid"]["routing/mannings"])
+            self.grid.load2d(self.model.files["grid"]["routing/mannings"])
             * self.model.config["parameters"]["mannings_n_multiplier"]
         )
         assert (self.grid.var.river_mannings > 0).all()
 
         # Channel length [meters]
-        self.grid.var.river_length = self.grid.load(
+        self.grid.var.river_length = self.grid.load2d(
             self.model.files["grid"]["routing/river_length_m"]
         )
 
@@ -1375,7 +1322,7 @@ class Routing(Module):
         )
 
         # Channel bottom width [meters]
-        self.observed_average_river_width = self.grid.load(
+        self.observed_average_river_width = self.grid.load2d(
             self.model.files["grid"]["routing/river_width_m"]
         )
 
@@ -1389,7 +1336,7 @@ class Routing(Module):
         # Channel gradient (fraction, dy/dx)
         minimum_river_slope = 0.0001
         river_slope = np.maximum(
-            self.grid.load(self.model.files["grid"]["routing/river_slope_m_per_m"]),
+            self.grid.load2d(self.model.files["grid"]["routing/river_slope_m_per_m"]),
             minimum_river_slope,
         )
 
@@ -1489,9 +1436,15 @@ class Routing(Module):
 
             # re-arranged formula for alpha, where we use the observed average river width and the average discharge to calculate alpha
             alpha: ArrayFloat32 = np.where(
-                ~np.isnan(self.observed_average_river_width),
+                (
+                    (~np.isnan(self.observed_average_river_width))
+                    & (self.grid.var.waterbody_ids == -1)
+                ),
                 self.observed_average_river_width / (average_discharge**beta_array),
                 default_alpha,
+            )
+            alpha: ArrayFloat32 = np.where(
+                self.grid.var.waterbody_ids == -1, alpha, np.float32(np.nan)
             )
 
         return alpha, beta_array
@@ -1828,6 +1781,9 @@ class Routing(Module):
         else:
             routing_loss: np.float64 = np.float64(np.nan)
             total_inflow_m3 = np.float64(np.nan)
+            total_evaporation_in_rivers_m3: np.float64 = np.float64(np.nan)
+            total_waterbody_evaporation_m3: np.float64 = np.float64(np.nan)
+            total_outflow_at_pits_m3: np.float64 = np.float64(np.nan)
 
         self.report(locals())
 

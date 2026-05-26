@@ -18,7 +18,10 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hazards.floods.workflows.utils import get_start_point
-from geb.hydrology.routing import get_upstream_represented_xys
+from geb.hydrology.routing import (
+    get_upstream_represented_xys as get_upstream_represented_xys,
+    read_discharge_per_river,
+)
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows.io import read_geom, read_table
@@ -404,15 +407,15 @@ class Floods(Module):
         forcing_grid: xr.DataArray = forcing_grid.rio.write_crs(self.model.crs)
 
         if self.config["forcing_method"] == "headwater_points":
-            simulation.set_headwater_forcing_from_grid(
+            simulation.set_headwater_forcing_from_grid(  # ty:ignore[unresolved-attribute]
                 discharge_grid=forcing_grid,
             )
 
         elif self.config["forcing_method"] == "accumulated_runoff":
-            river_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+            river_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
                 self.model.files["grid"]["routing/river_ids"], compress=False
             )
-            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
                 self.model.files["grid"]["routing/basin_ids"], compress=False
             )
             simulation.set_accumulated_runoff_forcing(
@@ -479,7 +482,6 @@ class Floods(Module):
             )  # log the start of the simulation
 
             sfincs_simulation.run(
-                ncpus=self.config.get("SFINCS", {}).get("ncpus", "auto"),
                 gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
             )  # run the simulation
 
@@ -536,8 +538,7 @@ class Floods(Module):
             ]
 
             # use COMID as index and set unique index name for coastal region
-            low_elevation_coastal_zone_mask.index = [-1]
-            low_elevation_coastal_zone_mask.index.name = "COMID"
+            low_elevation_coastal_zone_mask.index = pd.Index([-1], name="COMID")
 
             # get initial_water_level for model domain
             initial_water_level = low_elevation_coastal_zone_mask[
@@ -577,7 +578,7 @@ class Floods(Module):
             # load location and offset for coastal water level forcing
             coastal_forcing_locations: gpd.GeoDataFrame = read_geom(
                 self.model.files["geom"]["gtsm/stations_coast_rp"]
-            )  # ty:ignore[invalid-assignment]
+            )
 
             coastal_offset = xr.open_dataarray(
                 self.model.files["other"][
@@ -705,7 +706,6 @@ class Floods(Module):
             simulation = MultipleSFINCSSimulations(simulations=simulations)
 
             simulation.run(
-                ncpus=self.config.get("SFINCS", {}).get("ncpus", "auto"),
                 gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
             )
             flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
@@ -777,31 +777,12 @@ class Floods(Module):
             self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
         )
         all_rivers = self.model.hydrology.routing.rivers
-        discharge = pd.DataFrame()
-        for river_id, river in rivers.iterrows():
-            assert isinstance(river_id, int)
-            xys: list[tuple[int, int]] = get_upstream_represented_xys(
-                river_id, all_rivers
-            )
-            if len(xys) == 1:
-                discharge[river_id] = read_table(
-                    self.model.report_folder.parent
-                    / "spinup"
-                    / "hydrology.routing"
-                    / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
-                )[f"river_outflow_hourly_m3_per_s_{river_id}"]
-            else:
-                for i in range(len(xys)):
-                    discharge_part = read_table(
-                        self.model.report_folder.parent
-                        / "spinup"
-                        / "hydrology.routing"
-                        / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
-                    )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
-                    if river_id not in discharge:
-                        discharge[river_id] = discharge_part
-                    else:
-                        discharge[river_id] += discharge_part
+
+        discharge = read_discharge_per_river(
+            folder=self.model.report_folder.parent / "spinup" / "hydrology.routing",
+            rivers=rivers,
+            all_rivers=all_rivers,
+        )
 
         start_time = discharge.index[0] + pd.DateOffset(years=10)
         discharge = discharge.loc[start_time:]

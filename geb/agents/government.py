@@ -124,8 +124,7 @@ class Government(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
-        adaptation_enabled = self.config.get("adaptation", {}).get("enabled", False)
-
+        adaptation_enabled = self.config["adaptation"]["enabled"]
         if (
             self.model.current_timestep == 0
             and self.config["plant_forest"]
@@ -170,7 +169,7 @@ class Government(AgentBaseClass):
             converted area in m2
         """
         hydrology = self.model.hydrology
-        plant_forest_config = self.config.get("plant_forest", {})
+        plant_forest_config = self.config["plant_forest"]
         if isinstance(plant_forest_config, dict):
             threshold = plant_forest_config.get(
                 "forest_restoration_potential_threshold", 0.5
@@ -178,7 +177,7 @@ class Government(AgentBaseClass):
         else:
             threshold = 0.5
 
-        forest_potential = hydrology.grid.load(
+        forest_potential = hydrology.grid.load2d(
             self.model.files["grid"]["landsurface/forest_restoration_potential_ratio"]
         )
         suitability_grid = forest_potential >= threshold
@@ -218,6 +217,11 @@ class Government(AgentBaseClass):
             sorted_indices = suitable_indices[np.argsort(suitable_potentials)[::-1]]
 
             n_suitable = len(sorted_indices)
+            if n_suitable == 0:
+                self.model.logger.warning(
+                    "Incremental reforestation: no suitable HRUs found. No planting applied."
+                )
+                return
 
             already_forest = hydrology.HRU.var.land_use_type == FOREST
             remaining = sorted_indices[~already_forest[sorted_indices]]
@@ -280,7 +284,7 @@ class Government(AgentBaseClass):
             "water_content_wilting_point_m",
             "water_content_residual_m",
             "saturated_hydraulic_conductivity_m_per_s",
-            "bubbling_pressure_cm",
+            "bubbling_pressure_m_positive",
             "lambda_pore_size_distribution",
             "solid_heat_capacity_J_per_m2_K",
         ):
@@ -588,7 +592,10 @@ class Government(AgentBaseClass):
         self.apply_adaptation(indicator_to_adapt)
 
     def calculate_EAD(self) -> None | float:
-        """Calculate the EAD for the current year.
+        """Calculate the expected annual damage (EAD) for the current year.
+
+        EAD is computed by integrating total flood damage over the exceedance
+        probability curve (trapezoid rule across return periods).
 
         Returns:
          the expected annual damage in euros, which is calculated as the product of the probability of a hazard occurring and the potential damage caused by that hazard.

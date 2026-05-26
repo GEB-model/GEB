@@ -12,6 +12,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import gridspec
+from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
@@ -414,7 +415,7 @@ add_hydrograph_inset(ax3, "red", (0.55, 0.75, 0.3, 0.2), show_spines=False)
 add_split_connectors(fig, ax_main, [ax1, ax2, ax3], side="right", arrow_mode="stacked")
 
 # move legend below all axes
-legend_handles = [
+legend_handles: list[Artist] = [
     Patch(facecolor=color, edgecolor="white", label=kind)
     for kind, color in COLOR_BY_KIND.items()
     if kind != "Off"
@@ -432,7 +433,7 @@ legend_handles.append(
 )
 
 # add forcing point markers to legend
-forcing_legend_dots = tuple(
+forcing_legend_dots: list[Artist] = [
     plt.Line2D(
         [0],
         [0],
@@ -444,8 +445,8 @@ forcing_legend_dots = tuple(
         markeredgewidth=1,
     )
     for color in ["red", "purple", "orange"]
-)
-legend_handles.append(forcing_legend_dots)
+]
+legend_handles.extend(forcing_legend_dots)
 legend_labels = [
     h.get_label() if hasattr(h, "get_label") else "" for h in legend_handles
 ]

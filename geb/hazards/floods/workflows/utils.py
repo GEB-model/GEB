@@ -389,7 +389,6 @@ def check_docker_running() -> bool | None:
 def run_sfincs_simulation(
     model_root: Path,
     simulation_root: Path,
-    ncpus: int | str = "auto",
     gpu: bool | str = "auto",
 ) -> int:
     """Run SFINCS simulation using either Apptainer or Docker.
@@ -399,7 +398,6 @@ def run_sfincs_simulation(
         simulation_root: Path to the simulation root directory.
             Some paths in the configuration will be made relative to this path.
             The simulation directory must be a subdirectory of the model root directory.
-        ncpus: Number of CPUs to use. Can be an integer or 'auto' to automatically detect the number of CPUs.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
 
@@ -461,22 +459,7 @@ def run_sfincs_simulation(
         if not version.endswith(".sif"):
             version: str = "docker://" + version
 
-        c = (
-            int(
-                os.getenv("SLURM_CPUS_PER_TASK", None)
-                or os.getenv("SLURM_CPUS_ON_NODE", None)
-                or os.cpu_count()  # returns none if cannot be determined
-                or 1
-            )
-            if ncpus == "auto"
-            else int(ncpus)
-        )
-        ncpus_str = "0" if c == 1 else f"0-{c - 1}"
-
         cmd: list[str] = [
-            "taskset",
-            "-c",
-            ncpus_str,  # get user defined or automatically detected number of CPUs
             "apptainer",
             "run",
             "-B",  ## Bind mount
