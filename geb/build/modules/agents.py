@@ -1573,7 +1573,7 @@ class Agents(BuildModelBase):
         buildings["distance_to_river_m"] = (
             river_distances.reindex(buildings.index)
             .fillna(river_max_distance_m)
-            .astype(np.int32)
+            .astype(np.uint16)
         )
 
         # Distance to coastline
@@ -1591,7 +1591,7 @@ class Agents(BuildModelBase):
         buildings["distance_to_coastline_m"] = (
             coastline_distances.reindex(buildings.index)
             .fillna(coastline_max_distance_m)
-            .astype(np.int32)
+            .astype(np.uint16)
         )
 
         # Reproject back to original CRS
