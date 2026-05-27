@@ -3,6 +3,9 @@
 import numpy as np
 
 from geb.hydrology.landsurface.constants import (
+    LAMBDA_ICE,
+    LAMBDA_WATER,
+    N_SOIL_LAYERS,
     STEFAN_BOLTZMANN_W_PER_M2_K4,
     VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K,
 )
@@ -11,9 +14,9 @@ from geb.hydrology.landsurface.energy import solve_soil_enthalpy_column
 
 def test_solve_soil_enthalpy_column_energy_balance() -> None:
     """Test that the implicit enthalpy solver conserves energy and behaves reasonably."""
-    # Setup a 3-layer soil column
-    n_layers = 3
-    layer_thickness_m = np.array([0.1, 0.2, 0.4], dtype=np.float32)
+    # The optimized solver is specialized for the configured soil discretization.
+    n_layers = N_SOIL_LAYERS
+    layer_thickness_m = np.array([0.1, 0.2, 0.4, 0.8, 1.6, 3.2], dtype=np.float32)
 
     # Properties
     porosity = np.full(n_layers, 0.4, dtype=np.float32)
@@ -28,6 +31,12 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
         [2.0e6 * d for d in layer_thickness_m], dtype=np.float32
     )
     thermal_conductivity_solid_W_per_m_K = np.full(n_layers, 2.0, dtype=np.float32)
+    thermal_conductivity_saturated_unfrozen_W_per_m_K = (
+        thermal_conductivity_solid_W_per_m_K ** (np.float32(1.0) - porosity)
+    ) * (LAMBDA_WATER**porosity)
+    thermal_conductivity_saturated_frozen_W_per_m_K = (
+        thermal_conductivity_solid_W_per_m_K ** (np.float32(1.0) - porosity)
+    ) * (LAMBDA_ICE**porosity)
 
     # Initial state: 10 degrees C uniform
     initial_temp_C = np.float32(10.0)
@@ -60,36 +69,15 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
 
     timestep_seconds = np.float32(3600.0)
 
-    # Pre-allocate buffers
-    lower_diagonal_a = np.empty(n_layers, dtype=np.float32)
-    main_diagonal_b = np.empty(n_layers, dtype=np.float32)
-    upper_diagonal_c = np.empty(n_layers, dtype=np.float32)
-    rhs_vector_d = np.empty(n_layers, dtype=np.float32)
-    tdma_c_prime = np.empty(n_layers, dtype=np.float32)
-    tdma_d_prime = np.empty(n_layers, dtype=np.float32)
-    enthalpies_new_iteration = np.empty(n_layers, dtype=np.float32)
-    thermal_conductances_between_layer_centers_W_per_m2_K = np.empty(
-        n_layers, dtype=np.float32
-    )
-    frozen_fraction_for_conductivity = np.empty(n_layers, dtype=np.float32)
-    latent_heat_areal_J_per_m2_per_layer = np.empty(n_layers, dtype=np.float32)
-    heat_capacity_liquid_J_per_m2_K_per_layer = np.empty(n_layers, dtype=np.float32)
-    heat_capacity_frozen_J_per_m2_K_per_layer = np.empty(n_layers, dtype=np.float32)
-    dT_dH_current_iteration = np.empty(n_layers, dtype=np.float32)
-    beta_current_iteration = np.empty(n_layers, dtype=np.float32)
-    enthalpies_current_iteration = np.empty(n_layers, dtype=np.float32)
-
     # Run Solver
-    (
-        new_enthalpies,
-        heat_flux,
-        frozen_fraction,
-    ) = solve_soil_enthalpy_column(
-        soil_enthalpies_J_per_m2=soil_enthalpies_J_per_m2.copy(),
+    enthalpies_equilibrium = soil_enthalpies_J_per_m2.copy()
+    heat_flux, frozen_fraction_top_layer = solve_soil_enthalpy_column(
+        soil_enthalpies_J_per_m2=enthalpies_equilibrium,
         layer_thicknesses_m=layer_thickness_m,
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
         solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K,
+        thermal_conductivity_saturated_unfrozen_W_per_m_K=thermal_conductivity_saturated_unfrozen_W_per_m_K,
+        thermal_conductivity_saturated_frozen_W_per_m_K=thermal_conductivity_saturated_frozen_W_per_m_K,
         water_content_saturated_m=porosity * layer_thickness_m,
         sand_percentage=sand_percentage,
         water_content_m=volumetric_water_content * layer_thickness_m,
@@ -106,41 +94,27 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
         snow_water_equivalent_m=np.float32(0.0),
         snow_temperature_C=np.float32(0.0),
         topwater_m=np.float32(0.0),
-        lower_diagonal_a=lower_diagonal_a,
-        main_diagonal_b=main_diagonal_b,
-        upper_diagonal_c=upper_diagonal_c,
-        rhs_vector_d=rhs_vector_d,
-        tdma_c_prime=tdma_c_prime,
-        tdma_d_prime=tdma_d_prime,
-        enthalpies_new_iteration=enthalpies_new_iteration,
-        thermal_conductances_between_layer_centers_W_per_m2_K=thermal_conductances_between_layer_centers_W_per_m2_K,
-        frozen_fraction_for_conductivity=frozen_fraction_for_conductivity,
-        latent_heat_areal_J_per_m2_per_layer=latent_heat_areal_J_per_m2_per_layer,
-        heat_capacity_liquid_J_per_m2_K_per_layer=heat_capacity_liquid_J_per_m2_K_per_layer,
-        heat_capacity_frozen_J_per_m2_K_per_layer=heat_capacity_frozen_J_per_m2_K_per_layer,
-        dT_dH_current_iteration=dT_dH_current_iteration,
-        beta_current_iteration=beta_current_iteration,
-        enthalpies_current_iteration=enthalpies_current_iteration,
     )
 
     # Check 1: Equilibrium should be maintained (approx)
-    assert np.isclose(new_enthalpies[0], initial_enthalpy_J_per_m2[0], rtol=1e-4)
+    assert np.isclose(
+        enthalpies_equilibrium[0], initial_enthalpy_J_per_m2[0], rtol=1e-4
+    )
     assert np.isclose(heat_flux, 0.0, atol=1.0)  # W/m2
+    assert np.float32(0.0) <= frozen_fraction_top_layer <= np.float32(1.0)
 
     # Test 2: Strong Heating
     # Add significant Shortwave radiation
     sw_in = np.float32(500.0)  # W/m2
 
-    (
-        new_enthalpies_heating,
-        heat_flux_heating,
-        _,
-    ) = solve_soil_enthalpy_column(
-        soil_enthalpies_J_per_m2=soil_enthalpies_J_per_m2.copy(),
+    enthalpies_heating = soil_enthalpies_J_per_m2.copy()
+    heat_flux_heating, _ = solve_soil_enthalpy_column(
+        soil_enthalpies_J_per_m2=enthalpies_heating,
         layer_thicknesses_m=layer_thickness_m,
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
         solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K,
+        thermal_conductivity_saturated_unfrozen_W_per_m_K=thermal_conductivity_saturated_unfrozen_W_per_m_K,
+        thermal_conductivity_saturated_frozen_W_per_m_K=thermal_conductivity_saturated_frozen_W_per_m_K,
         water_content_saturated_m=porosity * layer_thickness_m,
         sand_percentage=sand_percentage,
         water_content_m=volumetric_water_content * layer_thickness_m,
@@ -157,25 +131,10 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
         snow_water_equivalent_m=np.float32(0.0),
         snow_temperature_C=np.float32(0.0),
         topwater_m=np.float32(0.0),
-        lower_diagonal_a=lower_diagonal_a,
-        main_diagonal_b=main_diagonal_b,
-        upper_diagonal_c=upper_diagonal_c,
-        rhs_vector_d=rhs_vector_d,
-        tdma_c_prime=tdma_c_prime,
-        tdma_d_prime=tdma_d_prime,
-        enthalpies_new_iteration=enthalpies_new_iteration,
-        thermal_conductances_between_layer_centers_W_per_m2_K=thermal_conductances_between_layer_centers_W_per_m2_K,
-        frozen_fraction_for_conductivity=frozen_fraction_for_conductivity,
-        latent_heat_areal_J_per_m2_per_layer=latent_heat_areal_J_per_m2_per_layer,
-        heat_capacity_liquid_J_per_m2_K_per_layer=heat_capacity_liquid_J_per_m2_K_per_layer,
-        heat_capacity_frozen_J_per_m2_K_per_layer=heat_capacity_frozen_J_per_m2_K_per_layer,
-        dT_dH_current_iteration=dT_dH_current_iteration,
-        beta_current_iteration=beta_current_iteration,
-        enthalpies_current_iteration=enthalpies_current_iteration,
     )
 
     # Enthalpy should increase (total)
-    total_new_enthalpy = np.sum(new_enthalpies_heating)
+    total_new_enthalpy = np.sum(enthalpies_heating)
     total_initial_enthalpy = np.sum(initial_enthalpy_J_per_m2)
     assert total_new_enthalpy > total_initial_enthalpy
 
@@ -185,7 +144,7 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
     # Calculate bottom flux manually based on new T of the bottom layer
     last_idx = n_layers - 1
     final_temp_C_bottom = (
-        new_enthalpies_heating[last_idx] / total_heat_capacity_areal[last_idx]
+        enthalpies_heating[last_idx] / total_heat_capacity_areal[last_idx]
     )
 
     conductance_to_deep = thermal_conductivity_solid_W_per_m_K[last_idx] / (
@@ -206,16 +165,14 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
     # Provide an massive heat pulse that would cause instability in explicit schemes
     # The implicit scheme should dampen it and find a valid solution
 
-    (
-        new_enthalpies_extreme,
-        _,
-        _,
-    ) = solve_soil_enthalpy_column(
-        soil_enthalpies_J_per_m2=initial_enthalpy_J_per_m2.copy(),
+    enthalpies_extreme = initial_enthalpy_J_per_m2.copy()
+    solve_soil_enthalpy_column(
+        soil_enthalpies_J_per_m2=enthalpies_extreme,
         layer_thicknesses_m=layer_thickness_m,
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
         solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K,
+        thermal_conductivity_saturated_unfrozen_W_per_m_K=thermal_conductivity_saturated_unfrozen_W_per_m_K,
+        thermal_conductivity_saturated_frozen_W_per_m_K=thermal_conductivity_saturated_frozen_W_per_m_K,
         water_content_saturated_m=porosity * layer_thickness_m,
         sand_percentage=sand_percentage,
         water_content_m=volumetric_water_content * layer_thickness_m,
@@ -232,32 +189,17 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
         snow_water_equivalent_m=np.float32(0.0),
         snow_temperature_C=np.float32(0.0),
         topwater_m=np.float32(0.0),
-        lower_diagonal_a=lower_diagonal_a,
-        main_diagonal_b=main_diagonal_b,
-        upper_diagonal_c=upper_diagonal_c,
-        rhs_vector_d=rhs_vector_d,
-        tdma_c_prime=tdma_c_prime,
-        tdma_d_prime=tdma_d_prime,
-        enthalpies_new_iteration=enthalpies_new_iteration,
-        thermal_conductances_between_layer_centers_W_per_m2_K=thermal_conductances_between_layer_centers_W_per_m2_K,
-        frozen_fraction_for_conductivity=frozen_fraction_for_conductivity,
-        latent_heat_areal_J_per_m2_per_layer=latent_heat_areal_J_per_m2_per_layer,
-        heat_capacity_liquid_J_per_m2_K_per_layer=heat_capacity_liquid_J_per_m2_K_per_layer,
-        heat_capacity_frozen_J_per_m2_K_per_layer=heat_capacity_frozen_J_per_m2_K_per_layer,
-        dT_dH_current_iteration=dT_dH_current_iteration,
-        beta_current_iteration=beta_current_iteration,
-        enthalpies_current_iteration=enthalpies_current_iteration,
     )
 
-    assert new_enthalpies_extreme[0] > initial_enthalpy_J_per_m2[0]
+    assert enthalpies_extreme[0] > initial_enthalpy_J_per_m2[0]
     # Check that it didn't explode to infinity or NaN
-    assert np.isfinite(new_enthalpies_extreme[0])
+    assert np.isfinite(enthalpies_extreme[0])
 
 
 def test_solve_soil_enthalpy_column_tiny_snow_stays_stable() -> None:
     """Test that trace snow cover does not over-couple the soil thermally."""
-    n_layers = 3
-    layer_thickness_m = np.array([0.1, 0.2, 0.4], dtype=np.float32)
+    n_layers = N_SOIL_LAYERS
+    layer_thickness_m = np.array([0.1, 0.2, 0.4, 0.8, 1.6, 3.2], dtype=np.float32)
     porosity = np.full(n_layers, 0.4, dtype=np.float32)
     bulk_density_kg_per_dm3 = np.full(n_layers, 1.3, dtype=np.float32)
     sand_percentage = np.full(n_layers, 50.0, dtype=np.float32)
@@ -266,6 +208,12 @@ def test_solve_soil_enthalpy_column_tiny_snow_stays_stable() -> None:
         [2.0e6 * depth_m for depth_m in layer_thickness_m], dtype=np.float32
     )
     thermal_conductivity_solid_W_per_m_K = np.full(n_layers, 2.0, dtype=np.float32)
+    thermal_conductivity_saturated_unfrozen_W_per_m_K = (
+        thermal_conductivity_solid_W_per_m_K ** (np.float32(1.0) - porosity)
+    ) * (LAMBDA_WATER**porosity)
+    thermal_conductivity_saturated_frozen_W_per_m_K = (
+        thermal_conductivity_solid_W_per_m_K ** (np.float32(1.0) - porosity)
+    ) * (LAMBDA_ICE**porosity)
 
     initial_temperature_C = np.float32(2.0)
     water_heat_capacity_areal_J_per_m2_K = (
@@ -277,35 +225,14 @@ def test_solve_soil_enthalpy_column_tiny_snow_stays_stable() -> None:
         solid_heat_capacity_J_per_m2_K + water_heat_capacity_areal_J_per_m2_K
     ) * initial_temperature_C
 
-    # Pre-allocate buffers
-    lower_diagonal_a = np.empty(n_layers, dtype=np.float32)
-    main_diagonal_b = np.empty(n_layers, dtype=np.float32)
-    upper_diagonal_c = np.empty(n_layers, dtype=np.float32)
-    rhs_vector_d = np.empty(n_layers, dtype=np.float32)
-    tdma_c_prime = np.empty(n_layers, dtype=np.float32)
-    tdma_d_prime = np.empty(n_layers, dtype=np.float32)
-    enthalpies_new_iteration = np.empty(n_layers, dtype=np.float32)
-    thermal_conductances_between_layer_centers_W_per_m2_K = np.empty(
-        n_layers, dtype=np.float32
-    )
-    frozen_fraction_for_conductivity = np.empty(n_layers, dtype=np.float32)
-    latent_heat_areal_J_per_m2_per_layer = np.empty(n_layers, dtype=np.float32)
-    heat_capacity_liquid_J_per_m2_K_per_layer = np.empty(n_layers, dtype=np.float32)
-    heat_capacity_frozen_J_per_m2_K_per_layer = np.empty(n_layers, dtype=np.float32)
-    dT_dH_current_iteration = np.empty(n_layers, dtype=np.float32)
-    beta_current_iteration = np.empty(n_layers, dtype=np.float32)
-    enthalpies_current_iteration = np.empty(n_layers, dtype=np.float32)
-
-    (
-        new_enthalpies_J_per_m2,
-        _,
-        _,
-    ) = solve_soil_enthalpy_column(
-        soil_enthalpies_J_per_m2=initial_enthalpy_J_per_m2.copy(),
+    new_enthalpies_J_per_m2 = initial_enthalpy_J_per_m2.copy()
+    solve_soil_enthalpy_column(
+        soil_enthalpies_J_per_m2=new_enthalpies_J_per_m2,
         layer_thicknesses_m=layer_thickness_m,
         bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
         solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
-        thermal_conductivity_solid_W_per_m_K=thermal_conductivity_solid_W_per_m_K,
+        thermal_conductivity_saturated_unfrozen_W_per_m_K=thermal_conductivity_saturated_unfrozen_W_per_m_K,
+        thermal_conductivity_saturated_frozen_W_per_m_K=thermal_conductivity_saturated_frozen_W_per_m_K,
         water_content_saturated_m=porosity * layer_thickness_m,
         sand_percentage=sand_percentage,
         water_content_m=volumetric_water_content * layer_thickness_m,
@@ -322,21 +249,6 @@ def test_solve_soil_enthalpy_column_tiny_snow_stays_stable() -> None:
         snow_water_equivalent_m=np.float64(1.0e-8),
         snow_temperature_C=np.float32(-2.0),
         topwater_m=np.float32(0.0),
-        lower_diagonal_a=lower_diagonal_a,
-        main_diagonal_b=main_diagonal_b,
-        upper_diagonal_c=upper_diagonal_c,
-        rhs_vector_d=rhs_vector_d,
-        tdma_c_prime=tdma_c_prime,
-        tdma_d_prime=tdma_d_prime,
-        enthalpies_new_iteration=enthalpies_new_iteration,
-        thermal_conductances_between_layer_centers_W_per_m2_K=thermal_conductances_between_layer_centers_W_per_m2_K,
-        frozen_fraction_for_conductivity=frozen_fraction_for_conductivity,
-        latent_heat_areal_J_per_m2_per_layer=latent_heat_areal_J_per_m2_per_layer,
-        heat_capacity_liquid_J_per_m2_K_per_layer=heat_capacity_liquid_J_per_m2_K_per_layer,
-        heat_capacity_frozen_J_per_m2_K_per_layer=heat_capacity_frozen_J_per_m2_K_per_layer,
-        dT_dH_current_iteration=dT_dH_current_iteration,
-        beta_current_iteration=beta_current_iteration,
-        enthalpies_current_iteration=enthalpies_current_iteration,
     )
 
     assert np.all(np.isfinite(new_enthalpies_J_per_m2))

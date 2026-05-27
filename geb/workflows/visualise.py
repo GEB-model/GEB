@@ -87,11 +87,6 @@ def plot_sunburst(
                 continue
 
             width = (val / segment_total) * total_span
-            display_ratio = width / (2 * np.pi)
-
-            if display_ratio < min_display_ratio:
-                current_angle += width
-                continue
 
             # Use root level's color as foundation if not in 'colors'
             seg_color = colors.get(name, p_color)
@@ -146,6 +141,12 @@ def plot_sunburst(
         start = seg["start"]
         width = seg["width"]
         label = seg["label"]
+
+        display_ratio = width / (2 * np.pi)
+
+        if display_ratio < min_display_ratio:
+            continue
+
         mid_angle = start + width / 2
 
         r_inner = inner_radius + level * level_width

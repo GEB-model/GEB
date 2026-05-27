@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-import warnings
 from collections.abc import Hashable
 from pathlib import Path
 from types import TracebackType
@@ -37,10 +36,10 @@ import zarr.storage
 from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
-from zarr.codecs.numcodecs import Delta, _NumcodecsBytesBytesCodec
+from zarr.abc.codec import ArrayArrayCodec
+from zarr.codecs.numcodecs import Delta
 from zarr.codecs.zstd import ZstdCodec
 from zarr.core.buffer import NDArrayLike
-from zarr.errors import ZarrUserWarning
 
 from geb.geb_types import (
     ArrayDatetime64,
@@ -75,51 +74,55 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
     Raises:
         ValueError: If the DataFrame contains unsupported column types.
     """
-    table: pa.Table = pa.Table.from_pandas(df)
+    if df.empty:
+        df.to_parquet(fp)
 
-    int_and_dt_cols: list[str] = []
-    bool_cols: list[str] = []
-    float_cols: list[str] = []
-    dict_cols: list[str] = []
+    else:
+        table: pa.Table = pa.Table.from_pandas(df)
 
-    for n, t in zip(table.schema.names, table.schema.types):
-        if pa.types.is_integer(t) or pa.types.is_timestamp(t):
-            int_and_dt_cols.append(n)
-        elif pa.types.is_boolean(t):
-            bool_cols.append(n)
-        elif pa.types.is_floating(t):
-            float_cols.append(n)
-        elif pa.types.is_string(t) or pa.types.is_binary(t):
-            dict_cols.append(n)
-        else:
-            raise ValueError(f"Unsupported column type {t} for column {n}")
+        int_and_dt_cols: list[str] = []
+        bool_cols: list[str] = []
+        float_cols: list[str] = []
+        dict_cols: list[str] = []
 
-    # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
-    column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
+        for name, t in zip(table.schema.names, table.schema.types):
+            if pa.types.is_integer(t) or pa.types.is_timestamp(t):
+                int_and_dt_cols.append(name)
+            elif pa.types.is_boolean(t):
+                bool_cols.append(name)
+            elif pa.types.is_floating(t):
+                float_cols.append(name)
+            elif pa.types.is_string(t) or pa.types.is_binary(t):
+                dict_cols.append(name)
+            else:
+                raise ValueError(f"Unsupported column type {t} for column {name}")
 
-    # Booleans use RLE (which includes bit-packing)
-    for col in bool_cols:
-        column_encoding[col] = "RLE"
+        # Datetimes and Integers benefit most from DELTA_BINARY_PACKED
+        column_encoding = {col: "DELTA_BINARY_PACKED" for col in int_and_dt_cols}
 
-    # Estimate row group size to target ~100 MB per row group (uncompressed)
-    # 100 MB / bytes per row
-    bytes_per_row: int = table.nbytes // max(len(table), 1)
-    target_row_group_size = int(100 * 1024 * 1024 / max(bytes_per_row, 1))
-    target_row_group_size: int = min(target_row_group_size, len(table))
-    target_row_group_size: int = max(target_row_group_size, 1)
+        # Booleans use RLE (which includes bit-packing)
+        for col in bool_cols:
+            column_encoding[col] = "RLE"
 
-    pq.write_table(
-        table,
-        fp,
-        compression="zstd",
-        compression_level=22,  # Higher level for better disk density
-        use_dictionary=dict_cols,
-        column_encoding=column_encoding,
-        use_byte_stream_split=float_cols,
-        data_page_version="2.0",
-        row_group_size=target_row_group_size,
-        data_page_size=10_000_000,  # Larger page size for better compression
-    )
+        # Estimate row group size to target ~100 MB per row group (uncompressed)
+        # 100 MB / bytes per row
+        bytes_per_row: int = table.nbytes // max(len(table), 1)
+        target_row_group_size = int(100 * 1024 * 1024 / max(bytes_per_row, 1))
+        target_row_group_size: int = min(target_row_group_size, len(table))
+        target_row_group_size: int = max(target_row_group_size, 1)
+
+        pq.write_table(
+            table,
+            fp,
+            compression="zstd",
+            compression_level=22,  # Higher level for better disk density
+            use_dictionary=dict_cols,
+            column_encoding=column_encoding,
+            use_byte_stream_split=float_cols,
+            data_page_version="2.0",
+            row_group_size=target_row_group_size,
+            data_page_size=10_000_000,  # Larger page size for better compression
+        )
 
 
 @overload
@@ -167,11 +170,10 @@ def write_array(
         compression_level: The level of compression for the ZSTD compressor (1-22). Default is 5.
     """
     # Store as a single chunk covering the whole array to avoid per-chunk overhead.
-    # zarr v3 uses `codecs` instead of `compressor` for compression.
     z: zarr.Array[Any] = zarr.create_array(
         fp,
         shape=arr.shape,
-        chunks=arr.shape,
+        chunks=tuple(max(dim_size, 1) for dim_size in arr.shape),
         dtype=arr.dtype,
         compressors=[ZstdCodec(level=compression_level)],
         overwrite=True,
@@ -538,15 +540,13 @@ def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     if not path.exists():
         raise FileNotFoundError(f"Zarr folder {zarr_folder} does not exist")
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=ZarrUserWarning)
-        ds: xr.Dataset = xr.open_dataset(
-            zarr_folder,
-            engine="zarr",
-            chunks={},
-            consolidated=False,
-            mask_and_scale=False,
-        )
+    ds: xr.Dataset = xr.open_dataset(
+        zarr_folder,
+        engine="zarr",
+        chunks={},
+        consolidated=False,
+        mask_and_scale=False,
+    )
     if "spatial_ref" in ds.data_vars:
         spatial_ref_data = ds["spatial_ref"]
         ds = ds.drop_vars("spatial_ref")
@@ -766,7 +766,7 @@ def write_zarr(
     shards: dict[str, int] | None = None,
     filters: list | None = None,
     compression_level: int = 18,
-    pre_compressor: _NumcodecsBytesBytesCodec | None = None,
+    pre_compressor: ArrayArrayCodec | None = None,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
@@ -902,31 +902,20 @@ def write_zarr(
                 dtype_to_encode_time = "i2"
             else:
                 dtype_to_encode_time = "i1"
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore",
-                    category=ZarrUserWarning,
-                    message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
-                )
-                encoding["time"]["filters"] = [
-                    Delta(dtype="i8", astype=dtype_to_encode_time)
-                ]
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                category=ZarrUserWarning,
-                message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
-            )
-            da.to_zarr(
-                store=tmp_zarr,
-                mode="w",
-                encoding=encoding,
-                zarr_format=3,
-                consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
-                write_empty_chunks=True,
-                compute=False,
-            )
+            encoding["time"]["filters"] = [
+                Delta(dtype="i8", astype=dtype_to_encode_time)
+            ]
+
+        da.to_zarr(
+            store=tmp_zarr,
+            mode="w",
+            encoding=encoding,
+            zarr_format=3,
+            consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
+            write_empty_chunks=True,
+            compute=False,
+        )
 
         # Open the target array in the Zarr store for writing
         target = zarr.open_array(
@@ -1139,11 +1128,7 @@ class ForcingReader:
         self.current_chunk_index: int = -1
         self.time_size = self.datetime_index.size
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=ZarrUserWarning)
-            # Check if the variable exists
-            array = self.ds[self.variable_name]
-
+        array = self.ds[self.variable_name]
         assert isinstance(array, zarr.Array)
         self.array: zarr.Array = array
 

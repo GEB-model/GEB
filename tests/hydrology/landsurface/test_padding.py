@@ -15,8 +15,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from geb.hydrology import landsurface as landsurface_module
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
+from geb.hydrology.landsurface.constants import LAMBDA_ICE, LAMBDA_WATER
 from geb.hydrology.landsurface.landsurface_model import (
     LandSurfaceInputs,
     _pad_hru_arrays,
@@ -109,6 +109,19 @@ def _load_and_tile(npz_path: Path, num_cells: int) -> dict:
             else:
                 raw[key] = val.astype(np.float32)
 
+    if "thermal_conductivity_saturated_unfrozen_W_per_m_K" not in raw:
+        porosity = raw["water_content_saturated_m"] / raw["soil_layer_height"]
+        solid_factor = raw["solid_thermal_conductivity_W_per_m_K"] ** (
+            np.float32(1.0) - porosity
+        )
+        raw["thermal_conductivity_saturated_unfrozen_W_per_m_K"] = solid_factor * (
+            LAMBDA_WATER**porosity
+        )
+        raw["thermal_conductivity_saturated_frozen_W_per_m_K"] = solid_factor * (
+            LAMBDA_ICE**porosity
+        )
+    raw.pop("solid_thermal_conductivity_W_per_m_K", None)
+
     single_cell_count: int = raw["slope_m_per_m"].shape[0]
 
     tiled: dict = {}
@@ -172,8 +185,6 @@ def test_padding_identity(error_case_path: Path) -> None:
     cells tiled from the same single-cell fixture (which is already a multiple
     of 16 and therefore an exact match to what padding produces).
     """
-    landsurface_module.N_SOIL_LAYERS = 6  # type: ignore[attr-defined]
-
     # 5 cells: deliberately not a multiple of 16 so _pad_hru_arrays pads to 16.
     num_cells = 5
     padded_size = 16  # _pad_hru_arrays pads 5 → 16; used as reference tile size
@@ -251,8 +262,6 @@ def test_padding_speed(error_case_path: Path) -> None:
     The function is JIT-compiled by Numba, so we warm up the cache with a
     small call before benchmarking.
     """
-    landsurface_module.N_SOIL_LAYERS = 6  # type: ignore[attr-defined]
-
     # Warm up Numba JIT cache with a single cell before timing.
     warmup_inputs = _load_and_tile(error_case_path, 1)
     land_surface_model(**warmup_inputs)
