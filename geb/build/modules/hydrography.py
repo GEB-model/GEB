@@ -1671,6 +1671,10 @@ class Hydrography(BuildModelBase):
     def setup_retention_basins(self, retention_basins: Path | None = None) -> None:
         """Setup retention basins.
 
+        There can only be a maximum of one retention basin per river pixel. When a retention
+        basin is already occupied, the retention basin being set up will be assigned to the next downstream river
+        pixel that is not occupied by another retention basin.
+
         Args:
             retention_basins: A vector file that can be read by geopandas containing the retention basins,
                 with a point geometry representing the location of the retention basin. If none (default),
@@ -1678,6 +1682,7 @@ class Hydrography(BuildModelBase):
 
         Raises:
             ValueError: If a retention basin cannot be snapped to the river network.
+            ValueError: If multiple retention basins snap to the same river pixel, which is not allowed.
 
         Sets:
             routing/retention_basin_ids: A grid with the same dimensions as the model grid, where each pixel that is
@@ -1733,6 +1738,15 @@ class Hydrography(BuildModelBase):
                 "drainage/original_d8_upstream_area_m2"
             ].compute()
 
+            ldd = self.grid["routing/ldd"]
+            flow_direction_raster = pyflwdir.from_array(
+                ldd.values,
+                ftype="ldd",
+                transform=ldd.rio.transform(recalc=True),
+                latlon=True,
+            )
+            downstream_indices = flow_direction_raster.idxs_ds.reshape(ldd.shape)
+
             for _, retention_basin in retention_basins.iterrows():
                 centroid = retention_basin.geometry.centroid
 
@@ -1751,6 +1765,34 @@ class Hydrography(BuildModelBase):
                 snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
 
                 # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
+                search_steps = 0
+                while (
+                    retention_basin_ids.values[
+                        snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+                    ]
+                    != -1
+                ):
+                    assigned_retention_basin_id = retention_basin_ids.values[
+                        snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+                    ]
+                    downstream_index = downstream_indices[
+                        snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+                    ]
+                    if downstream_index == -1:
+                        raise ValueError(
+                            f"Retention basin ID {retention_basin['ID']} at location {centroid} snaps to a river pixel that is already assigned to retention basin ID {assigned_retention_basin_id}. No unassigned downstream river pixel was found because the downstream index is -1."
+                        )
+
+                    # Follow the downstream river path until we find an unassigned pixel.
+                    downstream_row, downstream_col = np.unravel_index(
+                        downstream_index, retention_basin_ids.shape
+                    )
+                    self.logger.warning(
+                        f"Retention basin ID {retention_basin['ID']} snapped to an occupied river pixel assigned to retention basin ID {assigned_retention_basin_id}; searching downstream at step {search_steps + 1} from ({snapped_grid_pixel_xy[0]}, {snapped_grid_pixel_xy[1]}) to ({downstream_col}, {downstream_row})."
+                    )
+                    snapped_grid_pixel_xy = np.array([downstream_col, downstream_row])
+                    search_steps += 1
+
                 retention_basin_ids.values[
                     snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
                 ] = retention_basin["ID"]
