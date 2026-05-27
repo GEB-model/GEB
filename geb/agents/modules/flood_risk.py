@@ -363,7 +363,7 @@ class FloodRiskModule:
         )
 
     def calculate_building_flood_damages(
-        self, verbose: bool = True, export_building_damages: bool = False
+        self, verbose: bool = False, export_building_damages: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
@@ -482,6 +482,36 @@ class FloodRiskModule:
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
         return damages_do_not_adapt, damages_adapt
+
+    def calculate_ead(self, damages_do_not_adapt, damages_adapt, adapted) -> np.ndarray:
+        (
+            """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods.
+
+        Args:
+            damages: A 2D numpy array containing damages for different return periods and agents.
+        Returns:
+            A 1D numpy array containing the EAD for each agent.
+        """
+            ""
+        )
+
+        # Copy baseline damages
+        all_damages = damages_do_not_adapt.copy()
+
+        # Replace adapted households with adapted damages
+        all_damages[:, adapted] = damages_adapt[:, adapted]
+
+        # Sort probabilities in ascending order for integration
+        probabilities = 1 / self.households.return_periods
+        sort_idx = np.argsort(probabilities)
+
+        prob_sorted = probabilities[sort_idx]
+        damages_sorted = all_damages[sort_idx, :]
+
+        # Calculate Expected Annual Damage (EAD)
+        ead = np.trapezoid(y=damages_sorted, x=prob_sorted, axis=0)
+
+        return ead
 
     def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
