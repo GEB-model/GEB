@@ -513,9 +513,9 @@ class FloodRiskModule:
         damages_sorted = all_damages[sort_idx, :]
 
         # Calculate Expected Annual Damage (EAD)
-        ead = np.trapezoid(y=damages_sorted, x=prob_sorted, axis=0)
+        ead_usd_per_year = np.trapezoid(y=damages_sorted, x=prob_sorted, axis=0)
 
-        return ead
+        return ead_usd_per_year
 
     def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
