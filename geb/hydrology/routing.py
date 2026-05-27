@@ -774,10 +774,16 @@ class KinematicWave(Router):
                         discharge_before_diversion_m3_per_s
                         > activation_threshold_m3_per_s
                     ):
+                        discharge_above_activation_threshold_m3_per_s: np.float32 = (
+                            discharge_before_diversion_m3_per_s
+                            - activation_threshold_m3_per_s
+                        )
                         diverted_volume_m3: np.float32 = min(
                             discharge_at_retention_basin_m3_per_timestep,
                             available_storage_m3,
                             inflow_limit_m3_per_timestep,
+                            discharge_above_activation_threshold_m3_per_s
+                            * dt,  # never divert more than the discharge above the activation threshold
                         )
                     else:
                         diverted_volume_m3: np.float32 = np.float32(0.0)
@@ -1221,8 +1227,15 @@ class Accuflux(Router):
 
                 # Check if retention basins are activated based on thresholds for controlled and uncontrolled basins, and determine diverted volume (can not be higher than inflow volume, available storage, and inflow limit)
                 if Q_before_diversion_m3_per_s > activation_threshold_m3_per_s:
+                    discharge_above_activation_threshold_m3_per_s: np.float32 = (
+                        Q_before_diversion_m3_per_s - activation_threshold_m3_per_s
+                    )
                     diverted_volume_m3: np.float32 = min(
-                        inflow_volume_m3, inflow_limit_m3, available_storage_m3
+                        inflow_volume_m3,
+                        inflow_limit_m3,
+                        available_storage_m3,
+                        discharge_above_activation_threshold_m3_per_s
+                        * dt,  # never divert more than the discharge above the activation threshold
                     )
                 else:
                     diverted_volume_m3: np.float32 = np.float32(0.0)
