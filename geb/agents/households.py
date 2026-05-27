@@ -1691,9 +1691,9 @@ class Households(AgentBaseClass):
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
 
-        self.var.ead = self.flood_risk_module.calculate_ead(
+        self.var.ead[:] = self.flood_risk_module.calculate_ead(
             damages_do_not_adapt, damages_adapt, self.var.adapted.data
-        )
+        ).astype(np.float32)
 
     def load_wlranges_and_measures(self) -> None:
         """Loads the water level ranges and appropriate measures, and the implementation times for measures."""
