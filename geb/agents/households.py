@@ -474,6 +474,9 @@ class Households(AgentBaseClass):
             amenity_premiums * self.var.wealth, max_n=self.max_n
         )
 
+        # initiate an array with expected annual damages (EAD) for each household
+        self.var.ead = DynamicArray(np.zeros(self.n, np.float32), max_n=self.max_n)
+
         self.model.logger.info(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
@@ -1753,6 +1756,10 @@ class Households(AgentBaseClass):
 
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
+
+        self.var.ead = self.flood_risk_module.calculate_ead(
+            damages_do_not_adapt, damages_adapt, self.var.adapted.data
+        )
 
     def load_wlranges_and_measures(self) -> None:
         """Loads the water level ranges and appropriate measures, and the implementation times for measures."""
