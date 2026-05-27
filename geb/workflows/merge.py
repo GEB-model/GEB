@@ -157,6 +157,7 @@ def _merge_geoparquets(
         merged = gpd.GeoDataFrame(pd.concat(frames), crs=frames[0].crs)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     merged.to_parquet(dest_path)
+    logger.info("    → %d features from %d cluster(s)", len(merged), len(frames))
 
 
 def _merge_table_parquets(
@@ -200,6 +201,12 @@ def _merge_table_parquets(
         merged_df = merged_df.loc[:, ~merged_df.columns.duplicated(keep="first")]
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     merged_df.to_parquet(dest_path)
+    logger.info(
+        "    → %d station(s), %d rows from %d cluster(s)",
+        len(merged_df.columns),
+        len(merged_df),
+        len(frames),
+    )
 
 
 def _symlink_output_report_files(

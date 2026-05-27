@@ -34,8 +34,8 @@ def _inject_station_images_macro(
     """Inject a JS global containing station image data and a lazy-load handler.
 
     Images are stored once in ``window._stationImages`` and populated into
-    popup ``<img>`` placeholders via a Leaflet ``popupopen`` event listener.
-    This avoids duplicating base64 data across KGE/NSE/R marker layers.
+    popup ``<img>`` placeholders only when the popup is opened via a Leaflet
+    ``popupopen`` event.
 
     Args:
         m: Folium map to inject the macro into.
@@ -192,8 +192,8 @@ def create_discharge_folium_map(
 
     popup_width = 800
 
-    # Collects base64 image data keyed by station_id. Injected into the map as a single
-    # JS global after the loop so the heavy image data is stored only once per station.
+    # Encode each station's PNG images as base64 and store them in a dict that is
+    # injected as a single JS global.
     station_images: dict[str, dict[str, str]] = {}
 
     for station_id, row in evaluation_gdf.iterrows():
@@ -211,9 +211,8 @@ def create_discharge_folium_map(
             "timeSeries": f"data:image/png;base64,{encoded_ts}",
         }
 
-        # Popup HTML carries only text metrics and empty <img> placeholders.
-        # A MutationObserver (injected after the loop) populates their src from
-        # window._stationImages when Leaflet adds the popup to the DOM.
+        # Popup HTML contains only empty placeholders. The popupopen handler
+        # (injected by _inject_station_images_macro) fills src on demand.
         popup_html = (
             f"<div data-station-id='{station_id}' style='width:{popup_width}px;'>"
             f"<img class='rp-img' style='width:100%;height:auto;display:block;'>"
@@ -272,8 +271,7 @@ def create_discharge_folium_map(
         colormap_upstream.add_to(m)
         layer_upstream.add_to(m)
 
-    # Inject all station image data as a single JS global and use Leaflet's popupopen
-    # event to populate the placeholder <img> tags.
+    # Inject all station image data as a single JS global.
     _inject_station_images_macro(m, station_images)
 
     folium.LayerControl(collapsed=False).add_to(m)

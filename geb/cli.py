@@ -1159,6 +1159,17 @@ def merge(
     \b
         cd MODELS_DIR/<merged-name> && geb evaluate
     """
+    import logging as _logging
+
+    # Always configure a visible handler when running standalone (e.g. from the
+    # debugger). force=True replaces any NullHandler that libraries may have
+    # silently installed, which would otherwise discard all output.
+    _logging.basicConfig(
+        level=_logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
     merge_model_outputs(
         models_dir=models_dir,
         run_name=run_name,

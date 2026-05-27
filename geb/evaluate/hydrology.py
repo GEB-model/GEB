@@ -139,7 +139,7 @@ def _plot_validation_return_periods(
     plt.savefig(
         eval_plot_folder / f"return_period_fit_{station_id}.png",
         bbox_inches="tight",
-        dpi=100,
+        dpi=72,
     )
     plt.close(fig_simple)
 
@@ -1062,7 +1062,7 @@ def _plot_discharge_validation_graphs(
     plt.savefig(
         eval_plot_folder / f"timeseries_plot_{station_id}.png",
         bbox_inches="tight",
-        dpi=100,
+        dpi=72,
     )
     plt.show()
     plt.close()
@@ -1996,8 +1996,13 @@ class Hydrology:
                     discharge_observations_to_GEB_upstream_area_ratio,
                 )
 
-                # Check if validation_df is empty (station was skipped due to all NaN values)
-                if validation_df.empty:
+                # Skip stations with fewer than 5 years of paired (non-NaN) observations.
+                assert validation_df.index.freq is not None  # ty:ignore[unresolved-attribute]
+                valid_duration = (
+                    validation_df.dropna().shape[0] * validation_df.index.freq.delta  # ty:ignore[unresolved-attribute]
+                )
+                if valid_duration < pd.Timedelta(days=5 * 365.25):
+                    # stop
                     continue
 
                 KGE, NSE, R = _calculate_discharge_validation_metrics(validation_df)
