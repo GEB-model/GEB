@@ -1494,8 +1494,15 @@ class Routing(Module):
             self.model.files["table"]["routing/retention_basin_data"]
         ).set_index("ID")
         # ensure retention basin data is continuous and starts from 0
-        assert (self.retention_basin_data.index.min() == 0) and (
-            self.retention_basin_data.index.max() == len(self.retention_basin_data) - 1
+        assert (
+            self.retention_basin_data.empty  # allow empty retention basin data
+            or (
+                (self.retention_basin_data.index.min() == 0)
+                and (
+                    self.retention_basin_data.index.max()
+                    == len(self.retention_basin_data) - 1
+                )
+            )
         ), "Retention basin data index must be continuous and start from 0"
 
         # initialize static retention arrays
