@@ -24,29 +24,29 @@ from ...workflows.io import (
 )
 
 
+def to_minus180_180(da: xr.DataArray, lon_name: str = "x") -> xr.DataArray:
+    """Wrap longitudes to the [-180, 180) range and sort by longitude.
+
+    Args:
+        da: Input DataArray containing a longitude coordinate.
+        lon_name: Name of the longitude coordinate in ``da``. Defaults to "x".
+
+    Returns:
+        A copy of ``da`` with wrapped longitudes and ascending longitude order.
+    """
+    lon = da[lon_name]
+    lon_wrapped = ((lon + 180) % 360) - 180
+    da = da.assign_coords({lon_name: lon_wrapped})
+    da = da.sortby(lon_name)
+    return da
+
+
 class CMIP6(Adapter):
     """Data adapter for obtaining CMIP6 climate projections."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the CMIP6 data adapter."""
         super().__init__(*args, **kwargs)
-
-    @staticmethod
-    def to_minus180_180(da: xr.DataArray, lon_name: str = "x") -> xr.DataArray:
-        """Wrap longitudes to the [-180, 180) range and sort by longitude.
-
-        Args:
-            da: Input DataArray containing a longitude coordinate.
-            lon_name: Name of the longitude coordinate in ``da``. Defaults to "x".
-
-        Returns:
-            A copy of ``da`` with wrapped longitudes and ascending longitude order.
-        """
-        lon = da[lon_name]
-        lon_wrapped = ((lon + 180) % 360) - 180
-        da = da.assign_coords({lon_name: lon_wrapped})
-        da = da.sortby(lon_name)
-        return da
 
     def construct_request(
         self,
@@ -226,7 +226,7 @@ class CMIP6(Adapter):
         combined = combined.rio.write_crs(
             "EPSG:4326"
         )  # ensure the combined dataset has a CRS
-        combined = self.to_minus180_180(
+        combined = to_minus180_180(
             da=combined,
             lon_name="x",
         )  # ensure longitudes are in the -180 to 180 range
