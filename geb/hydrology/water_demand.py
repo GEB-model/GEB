@@ -328,9 +328,9 @@ class WaterDemand(Module):
         )
         domestic_return_flow_m = domestic_return_flow_m3 / self.grid.var.cell_area
 
-        domestic_water_loss_m3 = (
-            domestic_withdrawal_m3 - domestic_return_flow_m3
-        ).sum()
+        domestic_water_loss_m3: np.float64 = np.float64(
+            (domestic_withdrawal_m3 - domestic_return_flow_m3).sum()
+        )
         total_water_demand_loss_m3 += domestic_water_loss_m3
 
         # 2. industry (surface + ground)
@@ -357,9 +357,9 @@ class WaterDemand(Module):
         industry_return_flow_m3 = industry_withdrawal_m3 * industry_return_flow_fraction
         industry_return_flow_m = industry_return_flow_m3 / self.grid.var.cell_area
 
-        industry_water_loss_m3 = (
-            industry_withdrawal_m3 - industry_return_flow_m3
-        ).sum()
+        industry_water_loss_m3: np.float64 = np.float64(
+            (industry_withdrawal_m3 - industry_return_flow_m3).sum()
+        )
         total_water_demand_loss_m3 += industry_water_loss_m3
 
         # 3. livestock (surface)
@@ -383,9 +383,9 @@ class WaterDemand(Module):
         )
         livestock_return_flow_m = livestock_return_flow_m3 / self.grid.var.cell_area
 
-        livestock_water_loss_m3 = (
-            livestock_withdrawal_m3 - livestock_return_flow_m3
-        ).sum()
+        livestock_water_loss_m3: np.float64 = np.float64(
+            (livestock_withdrawal_m3 - livestock_return_flow_m3).sum()
+        )
         total_water_demand_loss_m3 += livestock_water_loss_m3
 
         timer.finish_split("Water withdrawal")
