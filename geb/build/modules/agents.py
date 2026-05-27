@@ -1538,6 +1538,7 @@ class Agents(BuildModelBase):
         Returns:
             Buildings with distance columns appended (meters).
         """
+
         rivers: gpd.GeoDataFrame = gpd.read_parquet(
             "input/" + self.files["geom"]["routing/rivers"]
         )[["geometry"]]
