@@ -1179,6 +1179,14 @@ def resample_like(
     source: xr.DataArray = source.drop_vars("spatial_ref")
     target: xr.DataArray = target.drop_vars("spatial_ref")  # TODO: Perhaps not needed
 
+    # Ensure target bounds are within source bounds (required for resampling).
+    target_bounds = target.rio.bounds()
+    source_bounds = source.rio.bounds()
+    if not bounds_are_within(target_bounds, source_bounds):
+        raise ValueError(
+            f"Target bounds must be within source bounds for resampling (target={target_bounds}, source={source_bounds})."
+        )
+
     regridder = xarray_regrid.regrid.Regridder(source)
 
     if method == "bilinear":
