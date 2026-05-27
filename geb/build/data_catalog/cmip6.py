@@ -24,6 +24,23 @@ from ...workflows.io import (
 )
 
 
+def to_minus180_180(da: xr.DataArray, lon_name: str = "x") -> xr.DataArray:
+    """Wrap longitudes to the [-180, 180) range and sort by longitude.
+
+    Args:
+        da: Input DataArray containing a longitude coordinate.
+        lon_name: Name of the longitude coordinate in ``da``. Defaults to "x".
+
+    Returns:
+        A copy of ``da`` with wrapped longitudes and ascending longitude order.
+    """
+    lon = da[lon_name]
+    lon_wrapped = ((lon + 180) % 360) - 180
+    da = da.assign_coords({lon_name: lon_wrapped})
+    da = da.sortby(lon_name)
+    return da
+
+
 class CMIP6(Adapter):
     """Data adapter for obtaining CMIP6 climate projections."""
 
@@ -190,18 +207,29 @@ class CMIP6(Adapter):
 
         Args:
             deltas: A dictionary mapping variable names to their corresponding delta xarray Datasets.
+        Raises:
+            ValueError: If there are NaN values in the combined deltas, indicating a problem with the delta calculation.
         """
         combined = xr.Dataset()
         for variable, delta in deltas.items():
             combined[variable + "_delta"] = delta
         combined["time"] = combined.indexes["time"].to_datetimeindex()
         combined = combined.rename({"lon": "x", "lat": "y"}).to_array()
+        # assert that there are no NaN values in the combined deltas, which would indicate a problem with the delta calculation
+        if combined.isnull().any().compute().item():
+            raise ValueError(
+                "NaN values found in combined deltas, indicating a problem with the delta calculation."
+            )
         combined.attrs["_FillValue"] = (
             np.nan
         )  # Set fill value attribute for missing data
         combined = combined.rio.write_crs(
             "EPSG:4326"
         )  # ensure the combined dataset has a CRS
+        combined = to_minus180_180(
+            da=combined,
+            lon_name="x",
+        )  # ensure longitudes are in the -180 to 180 range
         write_zarr(da=combined, path=self.path, crs=combined.rio.crs)
 
     def unzip_and_load(self, zip_path: Path) -> xr.Dataset:
