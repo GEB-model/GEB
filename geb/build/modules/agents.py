@@ -1515,67 +1515,66 @@ class Agents(BuildModelBase):
         Returns:
             Buildings with distance columns appended (meters).
         """
+
         rivers: gpd.GeoDataFrame = gpd.read_parquet(
             "input/" + self.files["geom"]["routing/rivers"]
-        )
+        )[["geometry"]]
+
         coastline: gpd.GeoDataFrame = gpd.read_parquet(
             "input/" + self.files["geom"]["coastal/coastlines"]
-        )
+        )[["geometry"]]
+
         region_centroid = self.region.union_all().centroid
         utm_zone: str = get_utm_zone(region_centroid.x, region_centroid.y)
-        buildings_crs = buildings.crs
-        river_buffer_distance_m: float = 50_000.0
-        coastline_buffer_distance_m: float = 10_000.0
 
-        # Ensure same CRS (projected!)
+        buildings_crs = buildings.crs
+
+        river_max_distance_m: int = 50_000
+        coastline_max_distance_m: int = 10_000
+
+        # Project to metric CRS
         buildings = buildings.to_crs(utm_zone)
         rivers = rivers.to_crs(utm_zone)
         coastline = coastline.to_crs(utm_zone)
 
-        # Buffer rivers and coastlines to subset buildings for distance calculations.
-        rivers_buffer = union_all(rivers.geometry.buffer(river_buffer_distance_m))
-        coastline_buffer = union_all(
-            coastline.geometry.buffer(coastline_buffer_distance_m)
+        # Distance to rivers
+        river_join = buildings.sjoin_nearest(
+            rivers,
+            how="left",
+            max_distance=river_max_distance_m,
+            distance_col="distance_to_river_m",
         )
-        within_river_buffer_mask = buildings.geometry.within(rivers_buffer)
-        within_coastline_buffer_mask = buildings.geometry.within(coastline_buffer)
 
-        # Distance to river (only for buildings within the river buffer)
-        buildings.loc[within_river_buffer_mask, "distance_to_river_m"] = (
-            buildings.loc[within_river_buffer_mask]
-            .sjoin_nearest(rivers, how="left", distance_col="distance_to_river")[
-                "distance_to_river"
-            ]
+        # Handle duplicate nearest matches
+        river_distances = river_join.groupby(level=0)["distance_to_river_m"].min()
+
+        buildings["distance_to_river_m"] = (
+            river_distances.reindex(buildings.index)
+            .fillna(river_max_distance_m)
             .astype(np.int32)
         )
 
-        # Distance to coastline (only for buildings within the coastline buffer)
-        buildings.loc[within_coastline_buffer_mask, "distance_to_coastline_m"] = (
-            buildings.loc[within_coastline_buffer_mask]
-            .sjoin_nearest(coastline, how="left", distance_col="distance_to_coastline")[
-                "distance_to_coastline"
-            ]
+        # Distance to coastline
+        coastline_join = buildings.sjoin_nearest(
+            coastline,
+            how="left",
+            max_distance=coastline_max_distance_m,
+            distance_col="distance_to_coastline_m",
+        )
+
+        coastline_distances = coastline_join.groupby(level=0)[
+            "distance_to_coastline_m"
+        ].min()
+
+        buildings["distance_to_coastline_m"] = (
+            coastline_distances.reindex(buildings.index)
+            .fillna(coastline_max_distance_m)
             .astype(np.int32)
         )
 
-        missing_river_distance_mask = buildings["distance_to_river_m"].isna()
-        if missing_river_distance_mask.any():
-            # Set distances for buildings outside the river buffer to the buffer size.
-            river_buffer_distance_int_m = np.int32(river_buffer_distance_m)
-            buildings.loc[missing_river_distance_mask, "distance_to_river_m"] = (
-                river_buffer_distance_int_m
-            )
-
-        missing_coastline_distance_mask = buildings["distance_to_coastline_m"].isna()
-        if missing_coastline_distance_mask.any():
-            # Set distances for buildings outside the coastline buffer to the buffer size.
-            coastline_buffer_distance_int_m = np.int32(coastline_buffer_distance_m)
-            buildings.loc[
-                missing_coastline_distance_mask, "distance_to_coastline_m"
-            ] = coastline_buffer_distance_int_m
-
-        # reproject back to original CRS
+        # Reproject back to original CRS
         buildings = buildings.to_crs(buildings_crs)
+
         return buildings
 
     @build_method(required=True)
