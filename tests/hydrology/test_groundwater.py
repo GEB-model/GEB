@@ -146,6 +146,42 @@ def test_modflow_simulation_initialization() -> None:
     assert np.allclose(sim.area, 75.8, atol=0.1)
 
 
+def test_modflow_bmi_pointer_stability() -> None:
+    """Test that repeated BMI pointer retrieval returns the same underlying memory.
+
+    Verifies that values are updated in place and that a pointer retrieved before
+    a time step still points to the same memory location afterwards.
+    """
+    sim: ModFlowSimulation = ModFlowSimulation(**deepcopy(default_params))
+    try:
+        head_tag = sim.mf6.get_var_address("X", sim.name)
+        heads_ptr_first = sim.mf6.get_value_ptr(head_tag)
+        heads_ptr_second = sim.mf6.get_value_ptr(head_tag)
+
+        assert np.shares_memory(heads_ptr_first, heads_ptr_second)
+        assert (
+            heads_ptr_first.__array_interface__["data"][0]
+            == heads_ptr_second.__array_interface__["data"][0]
+        )
+
+        heads_first_2d = heads_ptr_first.reshape(sim.nlay, sim.n_active_cells)
+        heads_second_2d = heads_ptr_second.reshape(sim.nlay, sim.n_active_cells)
+
+        initial_column = heads_second_2d[:, 0].copy()
+        heads_first_2d[:, 0] = initial_column - 0.25
+        np.testing.assert_allclose(heads_second_2d[:, 0], initial_column - 0.25)
+
+        pointer_address_before_step = heads_ptr_first.__array_interface__["data"][0]
+        sim.step()
+        heads_ptr_after_step = sim.mf6.get_value_ptr(head_tag)
+        assert (
+            heads_ptr_after_step.__array_interface__["data"][0]
+            == pointer_address_before_step
+        )
+    finally:
+        sim.finalize()
+
+
 def test_step() -> None:
     """Test single time step execution of MODFLOW simulation.
 

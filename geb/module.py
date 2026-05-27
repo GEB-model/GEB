@@ -49,6 +49,22 @@ class Module(ABC):
         """Perform a single time step of the module. This method should be overridden by subclasses."""
         pass
 
+    @property
+    def variables_to_report(self) -> dict[str, Any]:
+        """Return a list of variable names to report for this module."""
+        return self.model.config["report"].get(self.name, {})
+
+    @property
+    def local_variables_to_report(self) -> list[str]:
+        """Return a list of local variable names to report for this module."""
+        varnames: list[str] = []
+        for data in self.variables_to_report.values():
+            varname = data["varname"]
+            if varname.startswith("."):
+                varname = varname.split("[")[0][1:]
+                varnames.append(varname)
+        return varnames
+
     def report(self, local_variables: dict[str, Any]) -> None:
         """
         Used to report data from the module.
@@ -58,4 +74,6 @@ class Module(ABC):
         Args:
             local_variables: A dictionary of local variables to report, typically the result of locals().
         """
-        self.model.reporter.report(self, local_variables, self.name)
+        self.model.reporter.report(
+            self, local_variables, self.name, self.variables_to_report
+        )

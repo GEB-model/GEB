@@ -4,6 +4,7 @@ import copy
 import datetime
 import logging
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -138,7 +139,9 @@ class GEBModel(Module):
         if Version(version_info) == Version(__version__):
             return
 
-        updates: list[str] = get_and_maybe_do_version_updates(version_info)
+        updates: list[str] = get_and_maybe_do_version_updates(
+            version_info, logger=self.logger
+        )
         if updates:
             error = f"Version mismatch and updating is required: input data version is {version_info}, but current model version is {__version__}. Please run 'geb update-version' to update the model to the current version."
             self.logger.error(error)
@@ -490,7 +493,6 @@ class GEBModel(Module):
             self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
-            self.hydrology.landsurface.set_global_variables()
 
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
 
@@ -562,7 +564,12 @@ class GEBModel(Module):
         """
         current_time: datetime.datetime = self.run_start
         end_time: datetime.datetime = self.run_end
-        self.config["report"] = {}
+        # only report household attributes (for now)
+        self.config["report"] = {
+            key: value
+            for key, value in self.config["report"].items()
+            if key.startswith("agents.households")
+        }
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
@@ -635,7 +642,10 @@ class GEBModel(Module):
         name = getattr(self.agents, agent_type).name
         self.logger.debug(f"Saving {name}.var")
         bucket = self.store.buckets[f"{name}.var"]
-        bucket.save(path / f"{name}.var")
+        with ThreadPoolExecutor() as executor:
+            futures = bucket.save(path / f"{name}.var", executor)
+            for future in futures:
+                future.result()
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
@@ -889,10 +899,12 @@ class GEBModel(Module):
         ):
             Hydrology.finalize(self.hydrology)
 
-            # Close all async forcing readers
+            # Close all forcing readers
             if hasattr(self, "forcing"):
                 for forcing_loader in self.forcing.forcing_loaders.values():
-                    if hasattr(forcing_loader, "reader"):
+                    if hasattr(forcing_loader, "reader") and hasattr(
+                        forcing_loader.reader, "close"
+                    ):
                         forcing_loader.reader.close()
 
     def __enter__(self) -> GEBModel:
@@ -1042,6 +1054,9 @@ class GEBModel(Module):
             timestep: current model timestep
         """
         self._current_timestep = timestep
+        self._current_time = (
+            self.simulation_start + self.current_timestep * self.timestep_length
+        )
 
     @property
     def current_time(self) -> datetime.datetime:
@@ -1053,15 +1068,13 @@ class GEBModel(Module):
         Raises:
             AttributeError: If `timestep_length` or `simulation_start` are not initialized.
         """
-        # Defensive check: ensure required attributes are initialized
-        if not hasattr(self, "timestep_length") or not hasattr(
-            self, "simulation_start"
-        ):
+        try:
+            return self._current_time
+        except AttributeError as e:
             raise AttributeError(
-                "Cannot compute current_time: 'timestep_length' and/or 'simulation_start' are not initialized. "
-                "Ensure the model is fully initialized before accessing current_time."
-            )
-        return self.simulation_start + self.current_timestep * self.timestep_length
+                "Error computing current_time: " + str(e) + ". "
+                "This may be due to 'simulation_start' or 'timestep_length' not being properly initialized."
+            ) from e
 
     @property
     def name(self) -> str:

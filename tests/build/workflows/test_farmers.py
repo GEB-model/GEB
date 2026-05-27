@@ -5,6 +5,7 @@ import os
 
 import numpy as np
 import pytest
+import xarray as xr
 from tqdm import tqdm
 
 from geb.build.data_catalog import DataCatalog
@@ -12,6 +13,12 @@ from geb.build.workflows.farmers import (
     create_farm_distributions,
     create_farms_numba,
 )
+from geb.workflows.raster import (
+    interpolate_na_2d,
+    rasterize_like,
+)
+
+from ...testconfig import IN_GITHUB_ACTIONS
 
 LOWDER_SIZE_CLASS_BOUNDARIES_M2: dict[str, tuple[float, float]] = {
     "< 1 Ha": (0.0, 10_000.0),
@@ -26,6 +33,13 @@ LOWDER_SIZE_CLASS_BOUNDARIES_M2: dict[str, tuple[float, float]] = {
     "500 - 1000 Ha": (5_000_000.0, 10_000_000.0),
     "> 1000 Ha": (10_000_000.0, np.inf),
 }
+
+BOUNDS = (
+    5.90,
+    50.78,
+    5.92,
+    50.80,
+)
 
 
 def test_create_farms_numba_no_farms() -> None:
@@ -136,3 +150,125 @@ def test_create_farm_distributions_for_all_lowder_regions() -> None:
         processed_iso3.append(iso3)
 
     assert processed_iso3
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_fetch_field_boundaries() -> None:
+    """Fetch field boundaries and rasterize."""
+    logger = logging.getLogger("test_fetch_field_boundaries")
+
+    field_boundaries = DataCatalog(logger=logger).fetch("field_boundaries").read(BOUNDS)
+
+    assert not field_boundaries.empty
+    assert {"id", "area", "geometry"}.issubset(field_boundaries.columns)
+    assert field_boundaries.crs is not None
+    assert field_boundaries.geometry.notna().all()
+    assert (~field_boundaries.geometry.is_empty).all()
+
+    field_boundaries["id"] = field_boundaries["id"].astype(np.int32)
+
+    xmin, ymin, xmax, ymax = BOUNDS
+    resolution = 1.5 / 3600  # 1.5 arcsec in degrees
+
+    x = np.arange(xmin, xmax + resolution, resolution, dtype=np.float64)
+    y = np.arange(ymax, ymin - resolution, -resolution, dtype=np.float64)
+
+    test_raster = xr.DataArray(
+        np.zeros((len(y), len(x)), dtype=np.float32),
+        coords={"y": y, "x": x},
+        dims=("y", "x"),
+        name="test_raster",
+        attrs={"_FillValue": np.nan},
+    )
+
+    test_raster = test_raster.rio.write_crs(field_boundaries.crs)
+
+    assert test_raster.rio.crs == field_boundaries.crs
+    assert test_raster.ndim == 2
+    assert test_raster.dims == ("y", "x")
+
+    field_boundaries_grid: xr.DataArray = rasterize_like(
+        field_boundaries,
+        column="id",
+        raster=test_raster,
+        dtype=np.int32,
+        nodata=-1,
+        all_touched=False,
+    )
+
+    assert isinstance(field_boundaries_grid, xr.DataArray)
+    assert field_boundaries_grid.shape == test_raster.shape
+    assert field_boundaries_grid.dims == test_raster.dims
+    assert field_boundaries_grid.dtype == np.int32
+    assert field_boundaries_grid.rio.crs == field_boundaries.crs
+    assert field_boundaries_grid.attrs["_FillValue"] == -1
+
+    unique_values_before = np.unique(field_boundaries_grid.values)
+    assert np.any(unique_values_before != -1), "Rasterization produced only nodata."
+
+    field_ids = set(field_boundaries["id"].unique().tolist())
+    raster_ids_before = set(unique_values_before[unique_values_before != -1].tolist())
+    assert raster_ids_before.issubset(field_ids)
+
+    field_boundaries_grid = interpolate_na_2d(field_boundaries_grid)
+
+    assert isinstance(field_boundaries_grid, xr.DataArray)
+    assert field_boundaries_grid.shape == test_raster.shape
+    assert field_boundaries_grid.dtype == np.int32
+
+    unique_values_after = np.unique(field_boundaries_grid.values)
+    assert -1 not in unique_values_after
+
+    raster_ids_after = set(unique_values_after.tolist())
+    assert raster_ids_after.issubset(field_ids)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_fetch_HRL_crop_types() -> None:
+    """Fetch HRL crop types for different years."""
+    logger = logging.getLogger("test_fetch_HRL_crop_types")
+
+    years = [2017, 2018, 2019, 2020, 2021, 2022, 2023]
+    crop_types_per_year: list[xr.DataArray] = []
+
+    for year in years:
+        crop_types = (
+            DataCatalog(logger=logger)
+            .fetch(
+                f"hrl_crop_types_{year}",
+                bounds=BOUNDS,
+                year=year,
+            )
+            .read(
+                bounds=BOUNDS,
+                year=year,
+            )
+        )
+
+        assert isinstance(crop_types, xr.DataArray)
+        assert crop_types.ndim == 2
+        assert crop_types.rio.crs is not None
+        assert crop_types.shape[0] > 0
+        assert crop_types.shape[1] > 0
+
+        valid_values = crop_types.values
+        valid_values = valid_values[~np.isnan(valid_values)]
+
+        unique_values = np.unique(valid_values)
+
+        assert unique_values.size > 1
+        assert np.any(valid_values != 0)
+
+        crop_types_per_year.append(crop_types.expand_dims(year=[year]))
+
+    crop_types_over_time = xr.concat(
+        crop_types_per_year,
+        dim="year",
+        join="exact",
+    )
+
+    assert isinstance(crop_types_over_time, xr.DataArray)
+    assert crop_types_over_time.dims[0] == "year"
+    assert list(crop_types_over_time["year"].values) == years
+    assert crop_types_over_time.sizes["year"] == len(years)
+    pass

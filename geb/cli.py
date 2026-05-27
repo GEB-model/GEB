@@ -509,6 +509,12 @@ def set(
     default=False,
     help="Continue previous build if it was interrupted or failed.",
 )
+@click.option(
+    "--debug-method",
+    default=None,
+    type=str,
+    help="Filter the build to only run 'setup_region' and the methods required for this specific 'method_name'. For debugging purposes only.",
+)
 def build(*args: Any, **kwargs: Any) -> None:
     """Build model with configuration file.
 
@@ -653,9 +659,6 @@ def evaluate(
     i = 0
     while i < len(ctx.args):
         arg = ctx.args[i]
-        key = None
-        value = None
-
         if arg.startswith("--"):
             if "=" in arg:
                 # Handle --key=value
@@ -698,6 +701,8 @@ def evaluate(
                     except ValueError:
                         # Keep as string
                         pass
+
+            key = key.replace("-", "_")
             extra_args[key] = value
 
     if profile_ram and IS_WINDOWS:

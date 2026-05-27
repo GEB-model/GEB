@@ -1,8 +1,0 @@
-# Large-scale multi-basin cluster configuration
-# LARGE_SCALE_DIR defaults to ../models/large_scale relative to the GEB root.
-# Uncomment and set an absolute path to override:
-# LARGE_SCALE_DIR: "/path/to/models/large_scale"
-CLUSTER_PREFIX: "Europe" # Prefix used when creating clusters (e.g., Europe_000, Europe_001, etc.)
-EVALUATION_METHODS: "hydrology.plot_discharge,hydrology.evaluate_discharge" # Evaluation methods to run for each cluster
-
-# Parallelism is configured in profiles/slurm/config.yaml (jobs, max-jobs-per-second, group-components)

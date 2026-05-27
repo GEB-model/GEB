@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, TextIO, TypeVar, cast
 
 import geopandas as gpd
+import pandas as pd
 import yaml
 from pydantic import BaseModel, ValidationError
 from shapely.geometry import box
@@ -28,12 +29,12 @@ from geb.build.__init__ import (
     create_cluster_visualization_map,
     create_multi_basin_configs,
     get_all_downstream_subbasins_in_geom,
-    get_river_graph,
     save_clusters_as_merged_geometries,
     save_clusters_to_geoparquet,
 )
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
+from geb.build.workflows.hydrography import get_river_graph
 from geb.config_schema import Config
 from geb.model import GEBModel
 from geb.workflows.io import WorkingDirectory, read_params
@@ -338,14 +339,60 @@ def _dump_speed_profile(profile: cProfile.Profile, name: str, date: str) -> None
     profiling_folder.mkdir(exist_ok=True)
 
     # Save binary data for visualization in tools like SnakeViz or RunSnakeRun
-    binary_path = profiling_folder / f"{name}_speed_{date}.prof"
+    binary_path: Path = profiling_folder / f"{name}_speed_{date}.prof"
     profile.dump_stats(binary_path)
 
-    # Save human-readable summary
+    ps = pstats.Stats(profile)
+    data: list[dict[str, str]] = []
+
+    for func, (cc, nc, tt, ct, callers) in ps.stats.items():  # ty:ignore[unresolved-attribute]
+        filename: str
+        filename, line, func_name = func
+
+        if "geb/" in filename:
+            filename: str = "geb/" + filename.split("geb/")[-1]
+        elif ".venv/" in filename:
+            filename: str = ".venv/" + filename.split(".venv/")[-1]
+        elif ".lib/" in filename:
+            filename: str = ".lib/" + filename.split(".lib/")[-1]
+
+        def format_caller(caller_tuple: tuple | None) -> str:
+            if not caller_tuple:
+                return "N/A"
+            func_info, stats = caller_tuple
+            # stats[0] is ncalls, stats[3] is cumtime, func_info[2] is function name
+            return f"{func_info[2][:30]} ({stats[0]} calls, {stats[3]:.4f}s)"
+
+        # Sort the callers dictionary by ncalls (index 0) and cumtime (index 3)
+        sorted_by_freq: list = sorted(
+            callers.items(), key=lambda x: x[1][0], reverse=True
+        )
+        sorted_by_cum: list = sorted(
+            callers.items(), key=lambda x: x[1][3], reverse=True
+        )
+
+        data.append(
+            {
+                "function": func_name[:30],
+                "cumtime": ct,
+                "tottime": tt,
+                "ncalls": f"{nc}/{cc}" if nc != cc else nc,
+                "filename": filename[-30:],
+                "lineno": line,
+                # "top_freq_caller": format_caller(sorted_by_freq[0])
+                # if sorted_by_freq
+                # else "N/A",
+                "top_cum_caller": format_caller(sorted_by_cum[0])
+                if sorted_by_cum
+                else "N/A",
+            }
+        )
+
+    df: pd.DataFrame = pd.DataFrame(data).sort_values("cumtime", ascending=False)
+    string_formatted: str = df.head(200).to_string(index=False, justify="left")
     text_path = profiling_folder / f"{name}_speed_summary_{date}.txt"
-    with open(text_path, "w", encoding="utf-8") as stream:
-        stats = pstats.Stats(profile, stream=stream)
-        stats.strip_dirs().sort_stats("cumtime").print_stats()
+    text_path.parent.mkdir(exist_ok=True)
+    text_path.write_text(string_formatted + "\n", encoding="utf-8")
 
     print(f"Speed profile saved to: {binary_path}")
     print(f"Speed profile summary saved to: {text_path}")
@@ -898,6 +945,7 @@ def build_fn(
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     continue_: bool = False,
+    debug_method: str | None = None,
     profile_speed: bool = PROFILE_SPEED_DEFAULT,
     profile_ram: bool = PROFILE_RAM_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
@@ -912,6 +960,7 @@ def build_fn(
         build_config: Path to the model build configuration file.
         working_directory: Working directory for the model.
         continue_: Continue previous build if it was interrupted or failed.
+        debug_method: Filter the build to only run this method and its dependencies.
         profile_speed: If True, run the build with speed profiling.
         profile_ram: If True, run the build with RAM profiling.
         optimize: If True, run the build in optimized mode.
@@ -934,10 +983,44 @@ def build_fn(
             for method, args in parsed_build_config.items()
             if not method.startswith("_")
         }
+
+        if debug_method:
+            if debug_method not in methods:
+                raise ValueError(
+                    f"Debug method '{debug_method}' not found in build config."
+                )
+
+            # setup_region is always required
+            try:
+                debug_methods = {"setup_region": methods["setup_region"]}
+            except KeyError:
+                raise ValueError(
+                    f"Required method 'setup_region' not found in build config."
+                )
+            dependencies = build_method.get_dependencies(debug_method)
+            for dep in dependencies:
+                if dep in methods:
+                    debug_methods[dep] = methods[dep]
+                else:
+                    raise ValueError(
+                        f"Dependency '{dep}' of debug method '{debug_method}' not found in build config."
+                    )
+            debug_methods[debug_method] = methods[debug_method]
+
+            # Re-order methods to match original build config order
+            methods = {k: v for k, v in methods.items() if k in debug_methods}
+            logger.info(
+                f"Debug mode enabled for method '{debug_method}'. Running with dependencies: {list(methods.keys())}"
+            )
+            check_required_methods: bool = False
+        else:
+            check_required_methods: bool = True
+
         model.build(
             methods=methods,
             region=parse_config(config, schema=Config)["general"]["region"],
             continue_=continue_,
+            check_required_methods=check_required_methods,
         )
 
     with WorkingDirectory(working_directory):

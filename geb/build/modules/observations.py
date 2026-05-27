@@ -78,6 +78,7 @@ class Observations(BuildModelBase):
         max_uparea_difference_ratio: float = 0.3,
         max_spatial_difference_degrees: float = 0.1,
         custom_river_stations: str | None = None,
+        create_plots: bool = False,
     ) -> None:
         """setup_discharge_observations is responsible for setting up discharge observations from the discharge observations dataset.
 
@@ -91,6 +92,7 @@ class Observations(BuildModelBase):
             max_uparea_difference_ratio: The maximum allowed difference in upstream area between the discharge observations station and the GEB river segment, as a ratio of the discharge observations upstream area. Default is 0.3 (30%).
             max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the discharge observations station and the GEB river segment. Default is 0.1 degrees.
             custom_river_stations: Path to a folder containing custom river station files in ``.csv`` or ``.parquet`` format. Coordinates and station name are read from the filename using the ``lon_lat+station_name.ext`` convention. Default is None, which means no custom stations are used.
+            create_plots: Whether to create plots of the snapping results for each station. Default is False.
 
         Raises:
             ValueError: If a custom station file has an unsupported format or contains discharge data with an unsupported time step.
@@ -109,12 +111,11 @@ class Observations(BuildModelBase):
         discharge_observations = self.data_catalog.fetch("GRDC").read()
 
         # create folders
-        snapping_discharge_folder = Path(self.report_dir) / "snapping_discharge"
-        snapping_discharge_folder.mkdir(parents=True, exist_ok=True)
+        discharge_snapping_folder: Path = Path(self.report_dir) / "discharge_snapping"
+        discharge_snapping_folder.mkdir(parents=True, exist_ok=True)
 
         # Initialize discharge observation DataFrames
         obs_hourly = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
-        obs_daily = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
 
         # Initialize metadata GeoDataFrame from GRDC
         obs_metadata = gpd.GeoDataFrame(
@@ -135,7 +136,6 @@ class Observations(BuildModelBase):
 
         # Track which IDs belong to which frequency
         hourly_ids = set()
-        daily_ids = set()
 
         # Filter metadata by region first
         region_obs_metadata = obs_metadata[
@@ -266,7 +266,7 @@ class Observations(BuildModelBase):
             ]
             discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
-                self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
+                discharge_snapping_folder / "discharge_snapping.xlsx",
                 index=False,
             )
 
@@ -297,7 +297,7 @@ class Observations(BuildModelBase):
         for _, station_row in tqdm(obs_metadata.iterrows(), total=len(obs_metadata)):
             station_id = station_row["discharge_observations_station_ID"]
             station_name = station_row["discharge_observations_station_name"]
-            station_coords = (station_row["x"], station_row["y"])
+            station_coords: tuple[float, float] = (station_row["x"], station_row["y"])
 
             discharge_observations_uparea_m2 = station_row[
                 "discharge_observations_upstream_area_m2"
@@ -354,19 +354,20 @@ class Observations(BuildModelBase):
                 }
             )
 
-            plot_snapping(
-                point_id=station_id,
-                output_folder=self.report_dir / "snapping_discharge",
-                rivers=rivers,
-                upstream_area=upstream_area_grid,
-                original_coords=station_coords,
-                closest_point_coords=closest_point_coords,
-                closest_river_segment=closest_river_segment,
-                grid_pixel_xy=snap_results["snapped_grid_pixel_xy"],
-                filename_prefix="snapping_discharge",
-                point_label="Original gauge",
-                title=f"Upstream area grid and gauge snapping for {station_id}",
-            )
+            if create_plots:
+                plot_snapping(
+                    point_id=station_id,
+                    output_folder=discharge_snapping_folder,
+                    rivers=rivers,
+                    upstream_area=upstream_area_grid,
+                    original_coords=station_coords,
+                    closest_point_coords=closest_point_coords,
+                    closest_river_segment=closest_river_segment,
+                    grid_pixel_xy=snap_results["snapped_grid_pixel_xy"],
+                    filename_prefix="discharge_snapping",
+                    point_label="Original gauge",
+                    title=f"Upstream area grid and gauge snapping for {station_id}",
+                )
 
         self.logger.info("Discharge snapping done for all stations")
 
@@ -374,7 +375,7 @@ class Observations(BuildModelBase):
 
         # save to excel and parquet files
         discharge_snapping_df.to_excel(
-            self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
+            discharge_snapping_folder / "discharge_snapping.xlsx",
             index=False,
         )  # save the dataframe to an excel file
 
@@ -423,3 +424,39 @@ class Observations(BuildModelBase):
         self.set_geom(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
+
+    @build_method(depends_on=["setup_hydrography"], required=True)
+    def setup_meteorological_stations_observations(self) -> None:
+        """Set up meteorological tower observations. Currently only latent heat."""
+        # Fetch metadata to find towers in region
+        stations, timeseries = self.data_catalog.fetch("fluxnet").read(geom=self.region)
+
+        if stations.empty:
+            self.logger.info("No FLUXNET towers found in the region.")
+
+        self.set_table(
+            timeseries, name="observations/meteorological_stations_timeseries"
+        )
+        self.set_geom(stations, name="observations/meteorological_station_locations")
+
+    @build_method(depends_on=["setup_hydrography"], required=True)
+    def setup_groundwater_well_observations(self) -> None:
+        """Set up groundwater level observations from the GROW dataset.
+
+        Downloads (if not already cached) and reads the GROW global groundwater
+        time series dataset, clips well locations to the basin area, and saves
+        the time series and well locations.
+
+        Notes:
+            Data are downloaded automatically from Zenodo on first use. The
+            timeseries file is ~1.7 GB; subsequent runs reuse the local cache.
+        """
+        wells, timeseries = self.data_catalog.fetch("grow").read(geom=self.region)
+
+        if wells.empty:
+            self.logger.info(
+                "No GROW groundwater observation wells found in the region."
+            )
+
+        self.set_table(timeseries, name="observations/groundwater_well_timeseries")
+        self.set_geom(wells, name="observations/groundwater_well_locations")

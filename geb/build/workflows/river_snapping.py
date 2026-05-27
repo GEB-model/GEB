@@ -256,9 +256,6 @@ def snap_point_to_river_network(
         key=lambda x: shapely.distance(x[0], closest_point_on_riverline),
     )
 
-    # Determine if we should include upstream area values in the result
-    include_uparea = upstream_area_m2 is not None and not np.isnan(upstream_area_m2)
-
     return {
         "closest_point_coords": (
             float(closest_point_on_riverline.x),
@@ -273,15 +270,11 @@ def snap_point_to_river_network(
             closest_river_point_and_xy[0].y,
         ),
         "snapped_grid_pixel_xy": closest_river_point_and_xy[1],
-        "geb_uparea_subgrid": (
-            river_cell_in_subgrid.item() if include_uparea else None
-        ),
+        "geb_uparea_subgrid": (river_cell_in_subgrid.item()),
         "geb_uparea_grid": (
             upstream_area_grid.isel(
                 x=closest_river_point_and_xy[1][0], y=closest_river_point_and_xy[1][1]
             ).item()
-            if include_uparea
-            else None
         ),
         "distance_degrees": best_river_segment.iloc[0].station_distance,
         "closest_river_segment": best_river_segment,

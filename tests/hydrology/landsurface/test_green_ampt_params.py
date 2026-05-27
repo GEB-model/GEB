@@ -15,14 +15,13 @@ def test_get_green_ampt_params_start_of_infiltration() -> None:
     wres = np.array([0.05, 0.05], dtype=np.float32)
 
     # Hydraulic props
-    ks = np.array([1e-5, 1e-5], dtype=np.float32)
     bubbling = np.array([10.0, 10.0], dtype=np.float32)  # cm
     lamb = np.array([0.5, 0.5], dtype=np.float32)
 
     wetting_front_depth_m = np.float32(0.0)
 
     idx, suction, dtheta = get_green_ampt_params.py_func(
-        wetting_front_depth_m, soil_layer_height_m, w, ws, wres, ks, bubbling, lamb
+        wetting_front_depth_m, soil_layer_height_m, w, ws, wres, bubbling, lamb
     )
 
     assert idx == 0
@@ -47,14 +46,13 @@ def test_get_green_ampt_params_advanced_front() -> None:
     ws = np.array([0.5, 0.5], dtype=np.float32)
     w = np.array([0.25, 0.2], dtype=np.float32)
     wres = np.array([0.0, 0.0], dtype=np.float32)
-    ks = np.array([1.0, 1.0], dtype=np.float32)  # Dummy
     bubbling = np.array([1.0, 1.0], dtype=np.float32)  # Dummy
     lamb = np.array([1.0, 1.0], dtype=np.float32)  # Dummy
 
     wetting_front_depth_m = np.float32(0.1)
 
     idx, _, dtheta = get_green_ampt_params.py_func(
-        wetting_front_depth_m, soil_layer_height_m, w, ws, wres, ks, bubbling, lamb
+        wetting_front_depth_m, soil_layer_height_m, w, ws, wres, bubbling, lamb
     )
 
     assert idx == 0
@@ -80,14 +78,13 @@ def test_get_green_ampt_params_second_layer() -> None:
         [0.25, 0.15], dtype=np.float32
     )  # Layer 1 is full/irrelevant for params
     wres = np.array([0.0, 0.0], dtype=np.float32)
-    ks = np.array([1.0, 1.0], dtype=np.float32)
     bubbling = np.array([1.0, 1.0], dtype=np.float32)
     lamb = np.array([1.0, 1.0], dtype=np.float32)
 
     wetting_front_depth_m = np.float32(0.6)
 
     idx, _, dtheta = get_green_ampt_params.py_func(
-        wetting_front_depth_m, soil_layer_height_m, w, ws, wres, ks, bubbling, lamb
+        wetting_front_depth_m, soil_layer_height_m, w, ws, wres, bubbling, lamb
     )
 
     assert idx == 1
@@ -127,14 +124,13 @@ def test_get_green_ampt_params_layered_no_interference() -> None:
     wres = np.array([0.0, 0.0], dtype=np.float32)
 
     # Hydraulic props (dummies)
-    ks = np.array([1e-5, 1e-6], dtype=np.float32)
     bubbling = np.array([5.0, 20.0], dtype=np.float32)
     lamb = np.array([0.5, 0.2], dtype=np.float32)
 
     wetting_front_depth_m = np.float32(0.0)
 
     idx, _, dtheta = get_green_ampt_params.py_func(
-        wetting_front_depth_m, soil_layer_height_m, w, ws, wres, ks, bubbling, lamb
+        wetting_front_depth_m, soil_layer_height_m, w, ws, wres, bubbling, lamb
     )
 
     # We assert the CORRECT physical behavior

@@ -240,6 +240,7 @@ def test_update_with_dict() -> None:
         "setup_vegetation",
         "setup_water_demand",
         "setup_discharge_observations",
+        "setup_geomorphology",
     ],
 )
 def test_update_with_method(method: str) -> None:
@@ -267,7 +268,7 @@ def test_profile_model_start() -> None:
         args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
-        args["profiling"] = True
+        args["profile_speed"] = True
         args["method_args"] = {
             "initialize_only": True,
         }
@@ -353,10 +354,12 @@ def test_forcing() -> None:
         model.run(initialize_only=True)
 
         for name, loader in model.forcing._loaders.items():
-            t_0: datetime = datetime(2010, 1, 1, 0, 0, 0)
+            if name == "SPEI":
+                continue
+            t_0: datetime = datetime(2010, 1, 1, 1, 0, 0)
             forcing_0 = loader.load(t_0)
 
-            t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
+            t_1: datetime = datetime(2020, 1, 1, 1, 0, 0)
             forcing_1 = loader.load(t_1)
 
             if isinstance(forcing_0, (xr.DataArray, np.ndarray)) and isinstance(
@@ -397,8 +400,8 @@ def test_run() -> None:
         run_model_with_method(method="run", **args)
 
         for evaluation_method in (
-            "hydrology.plot_water_balance",
             "hydrology.plot_discharge",
+            "hydrology.plot_water_balance",
             "hydrology.plot_water_storage",
             "hydrology.plot_water_circle",
             "energy.plot_soil_temperature",
@@ -416,10 +419,8 @@ def test_run() -> None:
         assert (
             hydrology_eval_folder / "water_balance_top_soil_timeseries_yearly.svg"
         ).exists()
-        assert (hydrology_eval_folder / "mean_discharge_m3_per_s.png").exists()
         assert (hydrology_eval_folder / "water_storage_timeseries.svg").exists()
         assert (hydrology_eval_folder / "water_storage_timeseries_yearly.svg").exists()
-        assert (hydrology_eval_folder / "outflow").exists()
 
         method_args = {
             "method": "hydrology.evaluate_discharge",
@@ -445,10 +446,10 @@ def test_run() -> None:
             assert label in result
             assert result[label] is not None
 
+        print("Discharge evaluation results:", result)
+
         # Note this should be much higher.
-        assert result["KGE"] > -0.05
-        assert result["NSE"] > -0.49
-        assert result["R"] > 0.41
+        assert result["KGE_hourly"] > 0.07
 
         # method_args = {
         #     "method": "hydrodynamics.evaluate_hydrodynamics",

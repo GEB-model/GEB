@@ -21,7 +21,7 @@ from geb.hydrology.landsurface.snow_glaciers import (
 from ...testconfig import output_folder
 
 output_folder_snow = output_folder / "snow_glaciers"
-output_folder_snow.mkdir(exist_ok=True)
+output_folder_snow.mkdir(exist_ok=True, parents=True)
 
 
 def test_discriminate_precipitation() -> None:

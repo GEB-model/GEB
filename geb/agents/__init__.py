@@ -14,6 +14,7 @@ from .general import AgentBaseClass
 from .government import Government
 from .households import Households
 from .industry import Industry
+from .insurers import Insurers
 from .livestock_farmers import LiveStockFarmers
 from .market import Market
 from .reservoir_operators import ReservoirOperators
@@ -42,6 +43,7 @@ class Agents(Module):
         self.reservoir_operators = ReservoirOperators(model, self)
         self.government = Government(model, self)
         self.market = Market(model, self)
+        self.insurers = Insurers(model, self)
 
         self.agents: list[AgentBaseClass] = [
             self.crop_farmers,
@@ -51,6 +53,7 @@ class Agents(Module):
             self.reservoir_operators,
             self.government,
             self.market,
+            self.insurers,
         ]
 
     @property
