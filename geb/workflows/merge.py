@@ -2,6 +2,11 @@
 
 The merged directory mirrors the layout of an individual cluster scenario
 directory and can be passed directly to ``geb evaluate``.
+
+Only a curated set of input files is merged (geometry, discharge observations,
+and waterbody tables). Everything else under ``input/`` is symlinked from the
+first available cluster, since those files are spatially identical across
+clusters (forcing, lookup tables, rasters, etc.).
 """
 
 from __future__ import annotations
@@ -15,22 +20,30 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Geometry files (GeoParquet) to concatenate across clusters.
+# Ordered pipeline phases; ``<phase>.done`` sentinels mark completion.
+PHASES: list[str] = ["build", "spinup", "run", "evaluate"]
+
+# GeoParquet files that are spatially unique per cluster → concatenate row-wise.
 _GEOM_FILES_TO_MERGE: list[str] = [
-    "input/geom/routing/rivers.geoparquet",
     "input/geom/mask.geoparquet",
+    "input/geom/routing/rivers.geoparquet",
+    "input/geom/routing/subbasins.geoparquet",
     "input/geom/discharge/discharge_snapped_locations.geoparquet",
+    "input/geom/waterbodies/lakes_and_reservoirs.geoparquet",
 ]
 
-# Tabular observation files to merge along the station (column) axis.
-# Each file has a DatetimeIndex for rows and one column per station.
-_TABLE_FILES_TO_MERGE: list[str] = [
+# Parquet tables where **columns** are station/gauge IDs → concatenate column-wise.
+_TABLE_FILES_TO_MERGE_COLUMNS: list[str] = [
     "input/table/discharge/discharge_observations_hourly.parquet",
     "input/table/discharge/discharge_observations_daily.parquet",
 ]
 
-# Ordered pipeline phases; ``<phase>.done`` sentinels mark completion.
-PHASES: list[str] = ["build", "spinup", "run", "evaluate"]
+# Parquet tables where **rows** are cluster-specific entries → concatenate row-wise.
+_TABLE_FILES_TO_MERGE_ROWS: list[str] = [
+    "input/table/waterbodies/reservoir_command_areas.parquet",
+    "input/table/waterbodies/reservoir_operators.parquet",
+    "input/table/waterbodies/lake_operators.parquet",
+]
 
 
 def _get_phase_status(scenario_dir: Path) -> dict[str, bool]:
@@ -160,12 +173,15 @@ def _merge_geoparquets(
     logger.info("    → %d features from %d cluster(s)", len(merged), len(frames))
 
 
-def _merge_table_parquets(
+def _merge_table_parquets_columns(
     cluster_bases: dict[str, Path],
     relative_path: str,
     dest_path: Path,
 ) -> None:
     """Concatenate a tabular parquet from each cluster along the station (column) axis.
+
+    Used for wide-format timeseries tables where each column is a unique
+    station/gauge ID contributed by one cluster.
 
     Args:
         cluster_bases: Mapping of cluster name → scenario base directory.
@@ -207,6 +223,83 @@ def _merge_table_parquets(
         len(merged_df),
         len(frames),
     )
+
+
+def _merge_table_parquets_rows(
+    cluster_bases: dict[str, Path],
+    relative_path: str,
+    dest_path: Path,
+) -> None:
+    """Concatenate a long-format parquet file from each cluster row-wise.
+
+    Used for tables with a fixed column schema where each cluster contributes
+    different rows (e.g. reservoir/lake operator tables keyed by body ID).
+
+    Args:
+        cluster_bases: Mapping of cluster name → scenario base directory.
+        relative_path: Path to the parquet file relative to the base directory.
+        dest_path: Output path for the merged parquet file.
+
+    Raises:
+        RuntimeError: If no source files are found across any cluster.
+    """
+    frames: list[pd.DataFrame] = []
+    for cluster_name, base_dir in cluster_bases.items():
+        src = base_dir / relative_path
+        if not src.exists():
+            logger.warning("%s: %s not found, skipping.", cluster_name, relative_path)
+            continue
+        frames.append(pd.read_parquet(src))
+
+    if not frames:
+        raise RuntimeError(
+            f"No source files found for '{relative_path}' across any cluster."
+        )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        merged_df = pd.concat(frames, axis=0, ignore_index=True)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    merged_df.to_parquet(dest_path)
+    logger.info(
+        "    → %d rows from %d cluster(s)",
+        len(merged_df),
+        len(frames),
+    )
+
+
+def _symlink_input_dir(
+    cluster_bases: dict[str, Path],
+    merged_base: Path,
+    already_merged: set[str],
+) -> None:
+    """Symlink all input files not already merged from the first available cluster.
+
+    Files that were already written (merged GeoParquets, merged tables) are
+    skipped via ``already_merged``.  All remaining input files under
+    ``input/`` are symlinked from whichever cluster has them first, since
+    those files (forcing grids, lookup tables, rasters, damage curves, etc.)
+    are spatially identical across clusters.
+
+    Args:
+        cluster_bases: Mapping of cluster name → scenario base directory.
+        merged_base: Root of the merged model directory.
+        already_merged: Set of ``input/``-prefixed relative path strings that
+            have already been physically written and must not be symlinked.
+    """
+    first_base = next(iter(cluster_bases.values()))
+    input_dir = first_base / "input"
+    for src in sorted(input_dir.rglob("*")):
+        if not src.is_file():
+            continue
+        rel = str(src.relative_to(first_base))
+        if rel in already_merged:
+            continue  # already written by a merge step
+        dest = merged_base / rel
+        if dest.exists() or dest.is_symlink():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.symlink_to(src.resolve())
 
 
 def _symlink_output_report_files(
@@ -266,6 +359,12 @@ def merge_model_outputs(
     layout as any individual cluster scenario directory so it can be passed
     directly to ``geb evaluate``.
 
+    A curated set of input files is physically merged (see module-level
+    ``_GEOM_FILES_TO_MERGE``, ``_TABLE_FILES_TO_MERGE_COLUMNS``,
+    ``_TABLE_FILES_TO_MERGE_ROWS``).  All remaining files under ``input/``
+    are symlinked from the first available cluster, as they are spatially
+    identical across clusters.
+
     Args:
         models_dir: Directory containing the cluster subdirectories.
         run_name: Name of the model run whose outputs are merged.
@@ -310,33 +409,42 @@ def merge_model_outputs(
         ", ".join(cluster_bases),
     )
 
-    # Output: symlink all parquet files under every report subdirectory.
+    # Track which input paths have been physically written so the symlink step
+    # can skip them and avoid overwriting merged data.
+    merged_paths: set[str] = set()
+
+    # Output: symlink all parquet files under every cluster's report subdirectory.
     logger.info("[output] Symlinking report parquets …")
     n_links = _symlink_output_report_files(cluster_bases, run_name, merged_base)
     logger.info("[output] %d symlink(s) created.", n_links)
 
-    # Input geometry: rivers, catchment mask, station locations.
+    # Geom: concatenate cluster-specific GeoParquet files row-wise.
     logger.info("[input] Merging geometry files …")
     for rel_path in _GEOM_FILES_TO_MERGE:
         dest = merged_base / rel_path
         logger.info("  %s", rel_path)
         _merge_geoparquets(cluster_bases, rel_path, dest)
+        merged_paths.add(rel_path)
 
-    # Input tables: discharge observations (stations are columns).
-    logger.info("[input] Merging observation tables …")
-    for rel_path in _TABLE_FILES_TO_MERGE:
+    # Wide tables: station-indexed timeseries, concatenate column-wise.
+    logger.info("[input] Merging station tables (column-wise) …")
+    for rel_path in _TABLE_FILES_TO_MERGE_COLUMNS:
         dest = merged_base / rel_path
         logger.info("  %s", rel_path)
-        _merge_table_parquets(cluster_bases, rel_path, dest)
+        _merge_table_parquets_columns(cluster_bases, rel_path, dest)
+        merged_paths.add(rel_path)
 
-    # input/files.yml — required by the runner to discover all registered files.
-    # Copy from the first available cluster; all clusters share the same schema.
-    first_cluster_name, first_base = next(iter(cluster_bases.items()))
-    src_files_yml = first_base / "input" / "files.yml"
-    dest_files_yml = merged_base / "input" / "files.yml"
-    dest_files_yml.parent.mkdir(parents=True, exist_ok=True)
-    dest_files_yml.write_bytes(src_files_yml.read_bytes())
-    logger.info("[input] Copied input/files.yml from %s.", first_cluster_name)
+    # Long tables: fixed-schema tables with cluster-specific rows, concatenate row-wise.
+    logger.info("[input] Merging waterbody tables (row-wise) …")
+    for rel_path in _TABLE_FILES_TO_MERGE_ROWS:
+        dest = merged_base / rel_path
+        logger.info("  %s", rel_path)
+        _merge_table_parquets_rows(cluster_bases, rel_path, dest)
+        merged_paths.add(rel_path)
+
+    # Everything else under input/: symlink from the first cluster that has it.
+    logger.info("[input] Symlinking remaining input files …")
+    _symlink_input_dir(cluster_bases, merged_base, merged_paths)
 
     # input/build_complete.txt — sentinel required by GEBModel.verify_build_complete().
     build_complete = merged_base / "input" / "build_complete.txt"

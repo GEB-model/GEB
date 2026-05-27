@@ -88,9 +88,11 @@ def _build_metric_colormaps() -> tuple[
 def create_discharge_folium_map(
     evaluation_gdf: gpd.GeoDataFrame,
     output_path: Path,
-    eval_plot_folder: Path,
+    timeseries_plot_folder: Path,
+    return_period_plot_folder: Path,
     region_geom: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
+    waterbodies: gpd.GeoDataFrame | None = None,
 ) -> folium.Map:
     """Create an interactive Folium discharge evaluation map.
 
@@ -99,7 +101,8 @@ def create_discharge_folium_map(
     are scaled by mean discharge.  An optional upstream-area-ratio layer is
     included when all stations have the ratio available.  Station PNG plots
     are lazy-loaded via a JS global to avoid duplicating large base64 strings
-    across metric layers.
+    across metric layers.  Lakes and reservoirs are rendered as dot markers
+    when ``waterbodies`` is provided.
 
     Args:
         evaluation_gdf: Per-station GeoDataFrame with columns ``KGE``,
@@ -108,13 +111,17 @@ def create_discharge_folium_map(
             point geometry.
         output_path: Full path (including filename) where the HTML file is
             saved.
-        eval_plot_folder: Directory containing
-            ``timeseries_plot_<id>.png`` and
+        timeseries_plot_folder: Directory containing
+            ``timeseries_plot_<id>.png`` for each station.
+        return_period_plot_folder: Directory containing
             ``return_period_fit_<id>.png`` for each station.
         region_geom: Basin/region boundary GeoDataFrame used to fit the map
             extent and render the catchment outline.
         rivers: River network GeoDataFrame with a ``discharge_m3_per_s``
             column used to scale river line widths.
+        waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
+            (1 = lake, 2 = reservoir, 3 = lake control) and polygon
+            geometries. Centroids are used for dot placement.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
@@ -199,8 +206,8 @@ def create_discharge_folium_map(
     for station_id, row in evaluation_gdf.iterrows():
         coords: list[float] = [row.geometry.y, row.geometry.x]
 
-        rp_path = eval_plot_folder / f"return_period_fit_{station_id}.png"
-        ts_path = eval_plot_folder / f"timeseries_plot_{station_id}.png"
+        rp_path = return_period_plot_folder / f"return_period_fit_{station_id}.png"
+        ts_path = timeseries_plot_folder / f"timeseries_plot_{station_id}.png"
         with open(rp_path, "rb") as img_file:
             encoded_rp = base64.b64encode(img_file.read()).decode("utf-8")
         with open(ts_path, "rb") as img_file:
@@ -273,6 +280,57 @@ def create_discharge_folium_map(
 
     # Inject all station image data as a single JS global.
     _inject_station_images_macro(m, station_images)
+
+    # Waterbodies: render lakes and reservoirs as dot markers at polygon centroids.
+    if waterbodies is not None and not waterbodies.empty:
+        # Type constants match geb/hydrology/waterbodies.py
+        _WATERBODY_STYLE: dict[int, dict[str, str]] = {
+            1: {"color": "#4FC3F7", "label": "Lake"},
+            2: {"color": "#FF8A65", "label": "Reservoir"},
+            3: {"color": "#81C784", "label": "Lake (controlled)"},
+        }
+        wb_layers: dict[int, folium.FeatureGroup] = {
+            wtype: folium.FeatureGroup(name=style["label"] + "s", show=True)
+            for wtype, style in _WATERBODY_STYLE.items()
+        }
+        waterbodies_wgs84 = waterbodies.to_crs(epsg=4326)
+        for _, wb_row in waterbodies_wgs84.iterrows():
+            wtype = int(wb_row["waterbody_type"])
+            style = _WATERBODY_STYLE.get(wtype)
+            if style is None:
+                continue
+            centroid = wb_row.geometry.centroid
+            area_km2: float | None = (
+                float(wb_row["average_area"]) / 1e6
+                if "average_area" in wb_row.index
+                else None
+            )
+            volume_km3: float | None = (
+                float(wb_row["volume_total"]) / 1e9
+                if "volume_total" in wb_row.index
+                else None
+            )
+            popup_lines = [
+                f"<b>{style['label']}</b> (ID {wb_row.get('waterbody_id', '?')})<br>"
+            ]
+            if area_km2 is not None:
+                popup_lines.append(f"Area: {area_km2:.1f} km²<br>")
+            if volume_km3 is not None:
+                popup_lines.append(f"Volume: {volume_km3:.3f} km³<br>")
+            folium.CircleMarker(
+                location=[centroid.y, centroid.x],
+                radius=5,
+                color="black",
+                weight=0.5,
+                fill=True,
+                fill_color=style["color"],
+                fill_opacity=0.8,
+                popup=folium.Popup("".join(popup_lines), max_width=200),
+                tooltip=f"{style['label']} {wb_row.get('waterbody_id', '')}",
+                z_index=500,
+            ).add_to(wb_layers[wtype])
+        for wb_layer in wb_layers.values():
+            wb_layer.add_to(m)
 
     folium.LayerControl(collapsed=False).add_to(m)
     output_path.parent.mkdir(parents=True, exist_ok=True)

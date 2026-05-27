@@ -1,5 +1,6 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -52,7 +53,7 @@ mpl.rcParams["savefig.edgecolor"] = "#000000"
 
 def _calculate_discharge_validation_metrics(
     validation_df: pd.DataFrame,
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float, float, float, float]:
     """Calculate station-level discharge validation metrics.
 
     Args:
@@ -64,12 +65,16 @@ def _calculate_discharge_validation_metrics(
             - Kling-Gupta efficiency (dimensionless).
             - Nash-Sutcliffe efficiency (dimensionless).
             - Pearson correlation coefficient (dimensionless).
+            - Coefficient of determination R² (dimensionless).
+            - Mean squared error (m6/s2).
+            - Root mean squared error (m3/s).
+            - Relative root mean squared error, RMSE / mean(observed) (dimensionless).
     """
     valid_pairs_df: pd.DataFrame = validation_df[
         ["discharge_observations", "discharge_simulations"]
     ].dropna()
     if valid_pairs_df.shape[0] < 2:
-        return np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
 
     y_true: np.ndarray = valid_pairs_df["discharge_observations"].values
     y_pred: np.ndarray = valid_pairs_df["discharge_simulations"].values
@@ -78,8 +83,14 @@ def _calculate_discharge_validation_metrics(
     kge: float = float(evaluator.kling_gupta_efficiency())
     nse: float = float(evaluator.nash_sutcliffe_efficiency())
     r_value: float = float(evaluator.pearson_correlation_coefficient())
+    r2: float = float(evaluator.pearson_correlation_coefficient_square())
+    mse: float = float(evaluator.mean_squared_error())
+    rmse: float = float(evaluator.root_mean_squared_error())
+    # RRMSE = RMSE / mean(observed); protected against zero mean
+    mean_obs: float = float(np.mean(y_true))
+    rrmse: float = rmse / mean_obs if mean_obs > 0.0 else np.nan
 
-    return kge, nse, r_value
+    return kge, nse, r_value, r2, mse, rmse, rrmse
 
 
 def _plot_validation_return_periods(
@@ -136,8 +147,10 @@ def _plot_validation_return_periods(
         fontsize=14,
         fontweight="bold",
     )
+    return_periods_folder: Path = eval_plot_folder / "return_periods"
+    return_periods_folder.mkdir(parents=True, exist_ok=True)
     plt.savefig(
-        eval_plot_folder / f"return_period_fit_{station_id}.png",
+        return_periods_folder / f"return_period_fit_{station_id}.png",
         bbox_inches="tight",
         dpi=72,
     )
@@ -201,7 +214,7 @@ def _plot_validation_return_periods(
 
     plt.tight_layout(rect=(0, 0.03, 1, 0.96))
     plt.savefig(
-        eval_plot_folder / f"return_period_validation_{station_id}.svg",
+        return_periods_folder / f"return_period_validation_{station_id}.svg",
         bbox_inches="tight",
     )
     plt.close()
@@ -1055,12 +1068,14 @@ def _plot_discharge_validation_graphs(
         fontsize=12,
     )
     plt.title(f"Discharge vs observations for station {station_name}")
+    timeseries_folder: Path = eval_plot_folder / "timeseries"
+    timeseries_folder.mkdir(parents=True, exist_ok=True)
     plt.savefig(
-        eval_plot_folder / f"timeseries_plot_{station_id}.svg",
+        timeseries_folder / f"timeseries_plot_{station_id}.svg",
         bbox_inches="tight",
     )
     plt.savefig(
-        eval_plot_folder / f"timeseries_plot_{station_id}.png",
+        timeseries_folder / f"timeseries_plot_{station_id}.png",
         bbox_inches="tight",
         dpi=72,
     )
@@ -1109,7 +1124,7 @@ def _plot_discharge_validation_graphs(
                 f"GEB discharge vs observations for {year} at station {station_name}"
             )
             plt.savefig(
-                eval_plot_folder / f"timeseries_plot_{station_id}_{year}.svg",
+                timeseries_folder / f"timeseries_plot_{station_id}_{year}.svg",
                 bbox_inches="tight",
             )
             plt.show()
@@ -1858,6 +1873,12 @@ class Hydrology:
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
+        # Clean the evaluation output folder so stale plots from previous runs
+        # are not mixed in with fresh output.
+        if self.output_folder.exists():
+            shutil.rmtree(self.output_folder)
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+
         rivers_of_interest, discharge = self.get_discharge_per_river(run_name)
         for river_id in discharge.columns:
             rivers_of_interest.loc[river_id, "discharge_m3_per_s"] = discharge[
@@ -1925,6 +1946,12 @@ class Hydrology:
             FileNotFoundError: If the run folder does not exist in the report directory.
             ValueError: If a non-existing frequency label is encountered in the discharge observations data.
         """
+        # Clean the evaluation output folder so stale plots and metrics from previous
+        # runs are not mixed in with fresh output.
+        if self.output_folder.exists():
+            shutil.rmtree(self.output_folder)
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+
         # load input data files
         discharge_observations_hourly: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_hourly"]
@@ -2005,7 +2032,9 @@ class Hydrology:
                     # stop
                     continue
 
-                KGE, NSE, R = _calculate_discharge_validation_metrics(validation_df)
+                KGE, NSE, R, R2, MSE, RMSE, RRMSE = (
+                    _calculate_discharge_validation_metrics(validation_df)
+                )
 
                 if create_plots:
                     _plot_discharge_validation_graphs(
@@ -2034,9 +2063,17 @@ class Hydrology:
                     "KGE": KGE,
                     "NSE": NSE,
                     "R": R,
+                    "R2": R2,
+                    "MSE": MSE,
+                    "RMSE": RMSE,
+                    "RRMSE": RRMSE,
                     f"KGE_{freq_label}": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
                     f"NSE_{freq_label}": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
                     f"R_{freq_label}": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
+                    f"R2_{freq_label}": R2,
+                    f"MSE_{freq_label}": MSE,
+                    f"RMSE_{freq_label}": RMSE,
+                    f"RRMSE_{freq_label}": RRMSE,
                 }
 
                 # if the frequency is hourly, also calculate the metrics on the daily resampled data
@@ -2046,14 +2083,24 @@ class Hydrology:
                     validation_df_daily = (
                         validation_df.resample("D").mean()[counts == 24].dropna()
                     )
-                    KGE_daily, NSE_daily, R_daily = (
-                        _calculate_discharge_validation_metrics(validation_df_daily)
-                    )
+                    (
+                        KGE_daily,
+                        NSE_daily,
+                        R_daily,
+                        R2_daily,
+                        MSE_daily,
+                        RMSE_daily,
+                        RRMSE_daily,
+                    ) = _calculate_discharge_validation_metrics(validation_df_daily)
                     station_evaluation.update(
                         {
                             "KGE_daily": KGE_daily,
                             "NSE_daily": NSE_daily,
                             "R_daily": R_daily,
+                            "R2_daily": R2_daily,
+                            "MSE_daily": MSE_daily,
+                            "RMSE_daily": RMSE_daily,
+                            "RRMSE_daily": RRMSE_daily,
                         }
                     )
                 # if the frequency is daily, we cannot calculate the metrics on the hourly resampled data,
@@ -2064,6 +2111,10 @@ class Hydrology:
                             "KGE_hourly": np.nan,
                             "NSE_hourly": np.nan,
                             "R_hourly": np.nan,
+                            "R2_hourly": np.nan,
+                            "MSE_hourly": np.nan,
+                            "RMSE_hourly": np.nan,
+                            "RRMSE_hourly": np.nan,
                         }
                     )
                 else:
@@ -2073,14 +2124,24 @@ class Hydrology:
 
                 # Calculate montly metrics for the station
                 validation_df_monthly = validation_df.resample("M").mean().dropna()
-                KGE_monthly, NSE_monthly, R_monthly = (
-                    _calculate_discharge_validation_metrics(validation_df_monthly)
-                )
+                (
+                    KGE_monthly,
+                    NSE_monthly,
+                    R_monthly,
+                    R2_monthly,
+                    MSE_monthly,
+                    RMSE_monthly,
+                    RRMSE_monthly,
+                ) = _calculate_discharge_validation_metrics(validation_df_monthly)
                 station_evaluation.update(
                     {
                         "KGE_monthly": KGE_monthly,
                         "NSE_monthly": NSE_monthly,
                         "R_monthly": R_monthly,
+                        "R2_monthly": R2_monthly,
+                        "MSE_monthly": MSE_monthly,
+                        "RMSE_monthly": RMSE_monthly,
+                        "RRMSE_monthly": RRMSE_monthly,
                     }
                 )
 
@@ -2100,15 +2161,31 @@ class Hydrology:
                         "KGE_monthly",
                         "NSE_monthly",
                         "R_monthly",
+                        "R2_monthly",
+                        "MSE_monthly",
+                        "RMSE_monthly",
+                        "RRMSE_monthly",
                         "KGE_daily",
                         "NSE_daily",
                         "R_daily",
+                        "R2_daily",
+                        "MSE_daily",
+                        "RMSE_daily",
+                        "RRMSE_daily",
                         "KGE_hourly",
                         "NSE_hourly",
                         "R_hourly",
+                        "R2_hourly",
+                        "MSE_hourly",
+                        "RMSE_hourly",
+                        "RRMSE_hourly",
                         "KGE",
                         "NSE",
                         "R",
+                        "R2",
+                        "MSE",
+                        "RMSE",
+                        "RRMSE",
                     ]
                 ),
                 index=pd.Index([], name="station_ID"),
@@ -2137,37 +2214,65 @@ class Hydrology:
                 region_geom = read_geom(
                     self.model.files["geom"]["mask"]
                 )  # load the region shapefile
-                rivers, discharge = self.get_discharge_per_river(
-                    run_name
-                )  # load the river geometries and discharge data
-                for river_id in discharge.columns:
-                    rivers.loc[river_id, "discharge_m3_per_s"] = discharge[
-                        river_id
-                    ].mean()
+                try:
+                    rivers, discharge = self.get_discharge_per_river(run_name)
+                except FileNotFoundError as e:
+                    # In merged multi-cluster runs not all river output files may be
+                    # present. Skip the map in that case rather than crashing.
+                    self.model.logger.warning(f"Skipping discharge map: {e}")
+                    rivers, discharge = None, None
+                if rivers is not None:
+                    assert discharge is not None
+                    for river_id in discharge.columns:
+                        rivers.loc[river_id, "discharge_m3_per_s"] = discharge[
+                            river_id
+                        ].mean()
 
-                create_discharge_folium_map(
-                    evaluation_gdf=evaluation_gdf,
-                    output_path=self.output_folder / "discharge_evaluation_map.html",
-                    eval_plot_folder=self.output_folder,
-                    region_geom=region_geom,
-                    rivers=rivers,
-                )
+                    waterbodies = read_geom(
+                        self.model.files["geom"]["waterbodies/waterbody_data"]
+                    )
+                    create_discharge_folium_map(
+                        evaluation_gdf=evaluation_gdf,
+                        output_path=self.output_folder
+                        / "discharge_evaluation_map.html",
+                        timeseries_plot_folder=self.output_folder / "timeseries",
+                        return_period_plot_folder=self.output_folder / "return_periods",
+                        region_geom=region_geom,
+                        rivers=rivers,
+                        waterbodies=waterbodies,
+                    )
 
-                self.model.logger.info("Discharge evaluation dashboard created.")
+                    self.model.logger.info("Discharge evaluation dashboard created.")
 
             scores: dict[str, float | None] = {
                 "KGE_hourly": float(evaluation_df["KGE_hourly"].median()),
                 "NSE_hourly": float(evaluation_df["NSE_hourly"].median()),
                 "R_hourly": float(evaluation_df["R_hourly"].median()),
+                "R2_hourly": float(evaluation_df["R2_hourly"].median()),
+                "MSE_hourly": float(evaluation_df["MSE_hourly"].median()),
+                "RMSE_hourly": float(evaluation_df["RMSE_hourly"].median()),
+                "RRMSE_hourly": float(evaluation_df["RRMSE_hourly"].median()),
                 "KGE_daily": float(evaluation_df["KGE_daily"].median()),
                 "NSE_daily": float(evaluation_df["NSE_daily"].median()),
                 "R_daily": float(evaluation_df["R_daily"].median()),
+                "R2_daily": float(evaluation_df["R2_daily"].median()),
+                "MSE_daily": float(evaluation_df["MSE_daily"].median()),
+                "RMSE_daily": float(evaluation_df["RMSE_daily"].median()),
+                "RRMSE_daily": float(evaluation_df["RRMSE_daily"].median()),
                 "KGE_monthly": float(evaluation_df["KGE_monthly"].median()),
                 "NSE_monthly": float(evaluation_df["NSE_monthly"].median()),
                 "R_monthly": float(evaluation_df["R_monthly"].median()),
+                "R2_monthly": float(evaluation_df["R2_monthly"].median()),
+                "MSE_monthly": float(evaluation_df["MSE_monthly"].median()),
+                "RMSE_monthly": float(evaluation_df["RMSE_monthly"].median()),
+                "RRMSE_monthly": float(evaluation_df["RRMSE_monthly"].median()),
                 "KGE": float(evaluation_df["KGE"].median()),
                 "NSE": float(evaluation_df["NSE"].median()),
                 "R": float(evaluation_df["R"].median()),
+                "R2": float(evaluation_df["R2"].median()),
+                "MSE": float(evaluation_df["MSE"].median()),
+                "RMSE": float(evaluation_df["RMSE"].median()),
+                "RRMSE": float(evaluation_df["RRMSE"].median()),
             }
         else:
             self.model.logger.warning(
@@ -2178,118 +2283,407 @@ class Hydrology:
                 "KGE_hourly": None,
                 "NSE_hourly": None,
                 "R_hourly": None,
+                "R2_hourly": None,
+                "MSE_hourly": None,
+                "RMSE_hourly": None,
+                "RRMSE_hourly": None,
                 "KGE_daily": None,
                 "NSE_daily": None,
                 "R_daily": None,
+                "R2_daily": None,
+                "MSE_daily": None,
+                "RMSE_daily": None,
+                "RRMSE_daily": None,
                 "KGE_monthly": None,
                 "NSE_monthly": None,
                 "R_monthly": None,
+                "R2_monthly": None,
+                "MSE_monthly": None,
+                "RMSE_monthly": None,
+                "RRMSE_monthly": None,
                 "KGE": None,
                 "NSE": None,
                 "R": None,
+                "R2": None,
+                "MSE": None,
+                "RMSE": None,
+                "RRMSE": None,
             }
 
         self.model.logger.info(f"Discharge evaluation completed. Scores: {scores}")
 
         return scores
 
+    def prepare_external_evaluation(
+        self,
+        external_evaluation_folder: str | Path | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, pd.DataFrame]:
+        """Filter external model evaluation CSVs to the stations present in the GEB evaluation.
+
+        Can be called in two ways:
+
+        1. **With a folder** — reads every ``*.csv`` in ``external_evaluation_folder``
+           (one file per external model), keeps only rows whose station name matches
+           those in the GEB ``evaluation_metrics.xlsx``, saves the filtered subsets
+           to ``self.output_folder`` as
+           ``external_evaluation_filtered_<model_name>.csv``, and returns them.
+        2. **Without a folder** — first looks for the default external evaluation
+           folder at ``../../merged/external_evaluation_data`` relative to the
+           current working directory (the conventional location for merged-model
+           runs). If that folder exists its CSVs are filtered and saved as above.
+           Otherwise any previously saved ``external_evaluation_filtered_*.csv``
+           files in ``self.output_folder`` are loaded and returned directly.
+
+        Can be called standalone from the CLI::
+
+            geb evaluate hydrology.prepare_external_evaluation
+            # or with an explicit path:
+            geb evaluate hydrology.prepare_external_evaluation \\
+                --external-evaluation-folder /path/to/external_models/
+
+        Notes:
+            Station names are matched case-insensitively.
+
+        Args:
+            external_evaluation_folder: Directory containing one CSV file per
+                external model. Each file must have station names as its row index
+                and evaluation metrics (e.g. KGE, NSE, R2, RMSE, RRMSE) as columns.
+                The filename stem is used as the model label. When ``None``, the
+                default location ``../../merged/external_evaluation_data`` is tried
+                first, falling back to previously saved filtered CSVs.
+            *args: Ignored (absorbed for CLI compatibility).
+            **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
+
+        Returns:
+            Mapping from model label to a DataFrame of matched stations (index =
+            station name, columns = metric columns from the source CSV).
+
+        Raises:
+            FileNotFoundError: If a folder is supplied explicitly but the GEB
+                ``evaluation_metrics.xlsx`` does not yet exist in
+                ``self.output_folder``.
+        """
+        # Resolve the folder to use: explicit > default location > saved CSVs.
+        _DEFAULT_EXTERNAL_FOLDER = Path("../../merged/external_evaluation_data")
+
+        if external_evaluation_folder is None:
+            resolved = _DEFAULT_EXTERNAL_FOLDER.resolve()
+            if resolved.exists():
+                external_evaluation_folder = resolved
+                self.model.logger.info(
+                    f"Using default external evaluation folder: {resolved}"
+                )
+
+        if external_evaluation_folder is not None:
+            geb_xlsx = self.output_folder / "evaluation_metrics.xlsx"
+            if not geb_xlsx.exists():
+                raise FileNotFoundError(
+                    f"GEB evaluation file not found: {geb_xlsx}. "
+                    "Run evaluate_discharge first."
+                )
+            geb_df: pd.DataFrame = pd.read_excel(geb_xlsx)
+            our_stations: set[str] = set(geb_df["station_name"].dropna().str.upper())
+
+            external_models: dict[str, pd.DataFrame] = {}
+            for csv_path in sorted(Path(external_evaluation_folder).glob("*.csv")):
+                raw: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
+                raw.index = raw.index.str.upper()
+                filtered: pd.DataFrame = raw[raw.index.isin(our_stations)].copy()
+                label: str = csv_path.stem
+                self.model.logger.info(
+                    f"External model '{label}': {len(filtered)}/{len(raw)} stations matched."
+                )
+                filtered.to_csv(
+                    self.output_folder / f"external_evaluation_filtered_{label}.csv"
+                )
+                if not filtered.empty:
+                    external_models[label] = filtered
+        else:
+            # Load previously saved filtered CSVs so the user does not need to
+            # re-specify the original folder or re-run evaluate_discharge.
+            external_models = {}
+            for saved in sorted(
+                self.output_folder.glob("external_evaluation_filtered_*.csv")
+            ):
+                label = saved.stem.removeprefix("external_evaluation_filtered_")
+                df: pd.DataFrame = pd.read_csv(saved, index_col=0)
+                if not df.empty:
+                    external_models[label] = df
+                    self.model.logger.info(
+                        f"Loaded cached external model '{label}' ({len(df)} stations)."
+                    )
+
+        return external_models
+
     def plot_skill_scores(
         self,
         export: bool = True,
+        include_geb: bool = True,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
-        """Create skill score boxplot graphs for hydrological model evaluation metrics.
+        """Create skill score violin+boxplot graphs for hydrological model evaluation metrics.
 
-        Generates boxplot visualizations of discharge evaluation metrics (KGE, NSE, R)
-        from previously calculated station evaluations. Creates a plot
-        showing the distribution of performance metrics across all gauging stations.
+        Generates a 2×3 grid of violin plots (with overlaid box plots) for the
+        discharge evaluation metrics. Each panel shows the distribution across all
+        gauging stations and annotates the median.
+
+        External model data is loaded automatically via
+        :meth:`prepare_external_evaluation` (no folder argument needed here — run
+        that method first to filter and save the external CSVs).
 
         Notes:
-            Requires evaluation metrics to exist from a previous `evaluate_discharge` run.
-            If no discharge stations are found for evaluation, the method will skip
-            graph creation and return early.
+            External CSV files must have station names as the row index and metric
+            names as columns (e.g. KGE, NSE, R2, RMSE, RRMSE). Which metrics are
+            available in each external file is detected automatically.
 
         Args:
-            export: Whether to save the skill score graphs to PNG files.
+            export: Whether to save the figure to an SVG file.
+            include_geb: When ``False``, GEB is omitted from the plot so only
+                external models are shown. Useful for a standalone comparison.
+            *args: Ignored (absorbed for CLI compatibility).
+            **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
         """
-        evaluation_df = pd.read_excel(self.output_folder / "evaluation_metrics.xlsx")
+        # ── Load our own evaluation results ──────────────────────────────────────
+        geb_xlsx_path = self.output_folder / "evaluation_metrics.xlsx"
+        evaluation_df: pd.DataFrame = (
+            pd.read_excel(geb_xlsx_path) if geb_xlsx_path.exists() else pd.DataFrame()
+        )
 
-        # Check if evaluation dataframe is empty
-        if evaluation_df.empty:
+        if include_geb and evaluation_df.empty:
             self.model.logger.info(
                 "No discharge stations found for evaluation. Skipping skill score graphs."
             )
             return
 
-        # Create fancy boxplots for evaluation metrics
-        self.model.logger.info("Creating evaluation metrics boxplots...")
+        # ── Load external model data via the dedicated helper ─────────────────────
+        # Loads saved filtered CSVs from self.output_folder (produced by
+        # prepare_external_evaluation). Returns an empty dict if none exist.
+        external_models: dict[str, pd.DataFrame] = self.prepare_external_evaluation()
 
-        # Prepare data for boxplots
-        metrics = [
+        if not include_geb and not external_models:
+            self.model.logger.warning(
+                "include_geb=False but no external model data found. "
+                "Run prepare_external_evaluation first."
+            )
+            return
+
+        # ── Metric definitions ────────────────────────────────────────────────────
+        # Fixed y-limits and reference values per metric; None means data-driven.
+        metric_configs: list[dict] = [
             {
-                "data": evaluation_df["KGE"].dropna(),
-                "label": "KGE\n(Kling-Gupta)",
+                "col": "KGE",
+                "label": "KGE",
+                "title": "Kling-Gupta Efficiency",
                 "color": "#2E86AB",
+                "ylim": (-1.0, 1.0),
+                "reference": 1.0,
+                "unit": "(−)",
             },
             {
-                "data": evaluation_df["NSE"].dropna(),
-                "label": "NSE\n(Nash-Sutcliffe)",
+                "col": "NSE",
+                "label": "NSE",
+                "title": "Nash-Sutcliffe Efficiency",
                 "color": "#A23B72",
+                "ylim": (-1.0, 1.0),
+                "reference": 1.0,
+                "unit": "(−)",
             },
             {
-                "data": evaluation_df["R"].dropna(),
-                "label": "R\n(Correlation)",
+                "col": "R",
+                "label": "R",
+                "title": "Pearson Correlation",
                 "color": "#F18F01",
+                "ylim": (0.0, 1.0),
+                "reference": 1.0,
+                "unit": "(−)",
+            },
+            {
+                "col": "R2",
+                "label": "R²",
+                "title": "Coefficient of Determination",
+                "color": "#4CAF50",
+                "ylim": (0.0, 1.0),
+                "reference": 1.0,
+                "unit": "(−)",
+            },
+            {
+                "col": "RMSE",
+                "label": "RMSE",
+                "title": "Root Mean Squared Error",
+                "color": "#FF6B6B",
+                "ylim": None,
+                "reference": 0.0,
+                "unit": "(m³/s)",
+            },
+            {
+                "col": "RRMSE",
+                "label": "RRMSE",
+                "title": "Relative RMSE",
+                "color": "#CE93D8",
+                "ylim": None,
+                "reference": 0.0,
+                "unit": "(−)",
             },
         ]
 
-        # Create the figure with 3 subplots
-        fig, axes = plt.subplots(1, 3, figsize=(15, 6))
-        fig.suptitle(
-            "Hydrological Model Evaluation Metrics", fontsize=16, fontweight="bold"
-        )
+        # Colour palette for external models (cycles if more than 6).
+        ext_colors: dict[str, str] = {
+            name: c
+            for name, c in zip(
+                external_models,
+                ["#FFD700", "#00CED1", "#FF8C00", "#ADFF2F", "#FF69B4", "#40E0D0"],
+            )
+        }
 
-        for i, metric in enumerate(metrics):
-            ax = axes[i]
-
-            # Create boxplot
-            bp = ax.boxplot(
-                metric["data"],
+        # ── Helper: draw one violin + box at a given x position ──────────────────
+        def _draw_violin_box(
+            ax: plt.Axes, values: np.ndarray, position: float, color: str
+        ) -> None:
+            if len(values) >= 3:
+                parts = ax.violinplot(
+                    values,
+                    positions=[position],
+                    showmedians=False,
+                    showextrema=False,
+                    widths=0.35,
+                )
+                for pc in parts["bodies"]:
+                    pc.set_facecolor(color)
+                    pc.set_edgecolor("white")
+                    pc.set_alpha(0.45)
+            ax.boxplot(
+                values,
+                positions=[position],
+                widths=0.12,
                 patch_artist=True,
-                medianprops={"color": "white", "linewidth": 2},
-                boxprops={"linewidth": 1.5},
-                whiskerprops={"linewidth": 1.5},
-                capprops={"linewidth": 1.5},
+                medianprops={"color": "white", "linewidth": 2.5},
+                boxprops={"facecolor": color, "alpha": 0.85, "linewidth": 1.2},
+                whiskerprops={"color": "white", "linewidth": 1.2},
+                capprops={"color": "white", "linewidth": 1.2},
+                flierprops={
+                    "marker": "o",
+                    "markerfacecolor": color,
+                    "markeredgecolor": "white",
+                    "markersize": 4,
+                    "alpha": 0.7,
+                },
             )
 
-            # Color the box
-            bp["boxes"][0].set_facecolor(metric["color"])
-            bp["boxes"][0].set_alpha(0.7)
+        # ── Build figure ──────────────────────────────────────────────────────────
+        self.model.logger.info("Creating evaluation metrics skill score plots...")
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        fig.suptitle(
+            "Discharge Evaluation — Skill Score Distributions",
+            fontsize=16,
+            fontweight="bold",
+        )
 
-            # Add title and styling
-            ax.set_title(metric["label"], fontsize=12, fontweight="bold")
-            ax.set_ylabel("Score", fontsize=11)
-            ax.grid(True, alpha=0.3, linestyle="--")
+        for ax, cfg in zip(axes.flat, metric_configs):
+            col: str = cfg["col"]
+
+            # Collect data for GEB and each external model for this metric.
+            geb_values: np.ndarray = (
+                evaluation_df[col].dropna().to_numpy(dtype=float)
+                if include_geb
+                else np.array([], dtype=float)
+            )
+            ext_values: dict[str, np.ndarray] = {
+                name: df[col].dropna().to_numpy(dtype=float)
+                for name, df in external_models.items()
+                if col in df.columns
+            }
+            ext_values = {k: v for k, v in ext_values.items() if v.size > 0}
+
+            if geb_values.size == 0 and not ext_values:
+                ax.set_visible(False)
+                continue
+
+            # Assign evenly spaced x positions to each model present.
+            models_to_plot: list[tuple[str, np.ndarray, str]] = []
+            if include_geb and geb_values.size > 0:
+                models_to_plot.append(("GEB", geb_values, cfg["color"]))
+            for name, vals in ext_values.items():
+                models_to_plot.append((name, vals, ext_colors[name]))
+
+            positions = (
+                np.linspace(-0.4, 0.4, len(models_to_plot))
+                if len(models_to_plot) > 1
+                else [0.0]
+            )
+
+            for (name, vals, color), pos in zip(models_to_plot, positions):
+                _draw_violin_box(ax, vals, pos, color)
+                median = float(np.median(vals))
+                y_top = cfg["ylim"][1] if cfg["ylim"] else float(np.max(vals)) * 1.05
+                ax.text(
+                    pos,
+                    y_top,
+                    f"{median:.3f}\nn={len(vals)}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                    color=color,
+                    alpha=0.9,
+                )
+
+            ax.axhline(
+                cfg["reference"],
+                color="white",
+                linewidth=0.8,
+                linestyle="--",
+                alpha=0.4,
+            )
+            ax.set_title(
+                f"{cfg['label']}  {cfg['unit']}", fontsize=12, fontweight="bold"
+            )
+            ax.set_xlabel(cfg["title"], fontsize=9)
+            if cfg["ylim"] is not None:
+                ax.set_ylim(*cfg["ylim"])
             ax.set_xticks([])
+            ax.grid(True, axis="y", alpha=0.15, color="white")
 
-            # Set specific y-limits for each metric
-            if i == 0:  # KGE
-                ax.set_ylim(0, 1)
-            elif i == 1:  # NSE
-                ax.set_ylim(-1, 1)
-            # R (correlation) keeps automatic limits
+        # ── Legend ────────────────────────────────────────────────────────────────
+        legend_handles: list[Line2D] = []
+        if include_geb and not evaluation_df.empty:
+            legend_handles.append(
+                Line2D(
+                    [0],
+                    [0],
+                    color=metric_configs[0]["color"],
+                    linewidth=6,
+                    alpha=0.85,
+                    label="GEB",
+                )
+            )
+        for name, color in ext_colors.items():
+            legend_handles.append(
+                Line2D([0], [0], color=color, linewidth=6, alpha=0.85, label=name)
+            )
+        if legend_handles:
+            fig.legend(
+                handles=legend_handles,
+                loc="lower center",
+                ncol=len(legend_handles),
+                fontsize=10,
+                frameon=False,
+                labelcolor="white",
+                bbox_to_anchor=(0.5, -0.02),
+            )
 
         plt.tight_layout()
 
-        # Save the plot
         if export:
-            boxplot_path = self.output_folder / "evaluation_boxplots_simple.svg"
-            plt.savefig(boxplot_path, bbox_inches="tight")
-            self.model.logger.info(f"Boxplots saved to: {boxplot_path}")
+            suffix = "" if include_geb else "_external_only"
+            out_path = self.output_folder / f"evaluation_skill_scores{suffix}.svg"
+            plt.savefig(out_path, bbox_inches="tight")
+            self.model.logger.info(f"Skill score plot saved to: {out_path}")
 
         plt.show()
         plt.close()
-
-        self.model.logger.info("Skill score graphs created.")
+        self.model.logger.info("Skill score plots created.")
 
     def plot_water_circle(
         self,
