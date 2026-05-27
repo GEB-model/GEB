@@ -33,14 +33,14 @@ class CMIP6(Adapter):
 
     @staticmethod
     def to_minus180_180(da: xr.DataArray, lon_name: str = "x") -> xr.DataArray:
-        """Create a new DataArray with longitudes wrapped to the -180 to 180 range and sorted in ascending order.
+        """Wrap longitudes to the [-180, 180) range and sort by longitude.
 
         Args:
-            da (xr.DataArray): _description_
-            lon_name (str, optional): _description_. Defaults to "x".
+            da: Input DataArray containing a longitude coordinate.
+            lon_name: Name of the longitude coordinate in ``da``. Defaults to "x".
 
         Returns:
-            xr.DataArray: _description_
+            A copy of ``da`` with wrapped longitudes and ascending longitude order.
         """
         lon = da[lon_name]
         lon_wrapped = ((lon + 180) % 360) - 180
