@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +142,135 @@ class Hetao(BuildModelBase):
         else:
             fx = fx_map[max(fx_map.keys())]
         return float(value_cny) / float(fx) if fx else 0.0
+
+    @build_method(required=False, depends_on=["setup_economic_data"])
+    def setup_crop_cultivation_costs_by_reference_year_hetao(
+        self,
+        start_year: int,
+        end_year: int,
+        xlsx: str,
+        sheet: str = "Sheet1",
+        col_crop_id: str = "crop_id",
+        col_year: str = "year",
+        col_cost_cny_mu: str = "cost_cny_mu",
+        mu_to_m2: float = 666.6666667,
+    ) -> None:
+        """
+        Build Hetao crop cultivation costs from observed CNY/mu crop costs.
+
+        Rules:
+        - Observed crop-year values replace the existing cultivation_costs.
+        - Missing years for crops with observations are filled using inflation.
+        - Crops without observations keep the existing cultivation_costs unchanged.
+        - Output format is the same as crops/cultivation_costs.yml.
+        """
+        years = list(range(int(start_year), int(end_year) + 1))
+
+        current_costs: dict[str, Any] = copy.deepcopy(
+            self.params["crops/cultivation_costs"]
+        )
+        current_years = [int(y) for y in current_costs["time"]]
+        current_year_to_idx = {y: i for i, y in enumerate(current_years)}
+
+        inflation_rates: dict[str, Any] = self.params["socioeconomics/inflation_rates"]
+        inflation_years = [int(y) for y in inflation_rates["time"]]
+        inflation_year_to_idx = {y: i for i, y in enumerate(inflation_years)}
+
+        fx_map = self._make_fx_map_from_lcu_per_usd()
+
+        df = pd.read_excel(Path(xlsx), sheet_name=sheet).copy()
+
+        for col in [col_crop_id, col_year, col_cost_cny_mu]:
+            if col not in df.columns:
+                raise ValueError(
+                    f"Column '{col}' not found in {xlsx}:{sheet}. "
+                    f"Columns={list(df.columns)}"
+                )
+
+        df = df[[col_crop_id, col_year, col_cost_cny_mu]].dropna()
+        df[col_crop_id] = df[col_crop_id].astype(int).astype(str)
+        df[col_year] = df[col_year].astype(int)
+        df[col_cost_cny_mu] = df[col_cost_cny_mu].astype(float)
+
+        df = df[(df[col_year] >= int(start_year)) & (df[col_year] <= int(end_year))]
+
+        if df.duplicated([col_crop_id, col_year]).any():
+            duplicated = df[df.duplicated([col_crop_id, col_year], keep=False)]
+            raise ValueError(
+                "Duplicate crop-year cultivation cost rows found: "
+                f"{duplicated[[col_crop_id, col_year]].to_dict('records')}"
+            )
+
+        observed_usd_m2: dict[str, dict[int, float]] = {}
+        for row in df.itertuples(index=False):
+            crop_id = str(getattr(row, col_crop_id))
+            year = int(getattr(row, col_year))
+            cost_cny_mu = float(getattr(row, col_cost_cny_mu))
+            cost_usd_m2 = self._cny_to_usd(cost_cny_mu, year, fx_map) / mu_to_m2
+            observed_usd_m2.setdefault(crop_id, {})[year] = cost_usd_m2
+
+        def fill_missing_with_inflation(
+            observed: dict[int, float],
+            region_id: str,
+        ) -> list[float]:
+            series = pd.Series(index=years, dtype="float64")
+
+            for year, value in observed.items():
+                series.loc[year] = float(value)
+
+            observed_years = sorted(observed)
+            if not observed_years:
+                raise ValueError("Cannot fill cultivation costs without observations.")
+
+            first_year = observed_years[0]
+            last_year = observed_years[-1]
+
+            for year in range(first_year - 1, int(start_year) - 1, -1):
+                next_year = year + 1
+                if next_year not in inflation_year_to_idx:
+                    raise ValueError(f"Missing inflation rate for year {next_year}.")
+                infl_next = inflation_rates["data"][region_id][
+                    inflation_year_to_idx[next_year]
+                ]
+                series.loc[year] = series.loc[next_year] / float(infl_next)
+
+            for year in range(first_year + 1, int(end_year) + 1):
+                if pd.isna(series.loc[year]):
+                    if year not in inflation_year_to_idx:
+                        raise ValueError(f"Missing inflation rate for year {year}.")
+                    infl = inflation_rates["data"][region_id][
+                        inflation_year_to_idx[year]
+                    ]
+                    series.loc[year] = series.loc[year - 1] * float(infl)
+
+            return series.tolist()
+
+        output = {
+            "type": current_costs.get("type", "time_series"),
+            "time": years,
+            "data": {},
+        }
+
+        for region_id, crops in current_costs["data"].items():
+            region_id_str = str(region_id)
+            output["data"][region_id_str] = {}
+
+            for crop_id, old_series in crops.items():
+                crop_id_str = str(crop_id)
+
+                if crop_id_str in observed_usd_m2:
+                    output["data"][region_id_str][crop_id_str] = (
+                        fill_missing_with_inflation(
+                            observed_usd_m2[crop_id_str],
+                            region_id_str,
+                        )
+                    )
+                else:
+                    output["data"][region_id_str][crop_id_str] = [
+                        float(old_series[current_year_to_idx[year]]) for year in years
+                    ]
+
+        self.set_params(output, name="crops/cultivation_costs")
 
     @build_method(required=False, depends_on=["setup_economic_data"])
     def setup_operation_costs_hetao(
