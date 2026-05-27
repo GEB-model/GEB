@@ -29,30 +29,32 @@ class DecisionModule:
         amenity_values = np.full(
             household_distance_to_river_m.shape, 0.0, dtype=np.float32
         )
-        household_distance_to_river_m *= 0.001  # convert to km
-        amenity_values[household_distance_to_river_m < 10] = (
+        amenity_values[household_distance_to_river_m < 10_000] = (
             4000
-            - 150 * household_distance_to_river_m[household_distance_to_river_m < 10]
+            - 150
+            * household_distance_to_river_m[household_distance_to_river_m < 10_000]
         )
         amenity_values[
-            (household_distance_to_river_m >= 10) & (household_distance_to_river_m < 25)
+            (household_distance_to_river_m >= 10_000)
+            & (household_distance_to_river_m < 25_000)
         ] = 2500 - 100 * (
             household_distance_to_river_m[
-                (household_distance_to_river_m >= 10)
-                & (household_distance_to_river_m < 25)
+                (household_distance_to_river_m >= 10_000)
+                & (household_distance_to_river_m < 25_000)
             ]
-            - 10
+            - 10_000
         )
         amenity_values[
-            (household_distance_to_river_m >= 25) & (household_distance_to_river_m < 50)
+            (household_distance_to_river_m >= 25_000)
+            & (household_distance_to_river_m < 50_000)
         ] = 1000 - 40 * (
             household_distance_to_river_m[
-                (household_distance_to_river_m >= 25)
-                & (household_distance_to_river_m < 50)
+                (household_distance_to_river_m >= 25_000)
+                & (household_distance_to_river_m < 50_000)
             ]
-            - 25
+            - 25_000
         )
-        amenity_values[household_distance_to_river_m >= 50] = 0
+        amenity_values[household_distance_to_river_m >= 50_000] = 0
         return GDP_i_t * phi_i * amenity_values
 
     @staticmethod
@@ -72,8 +74,7 @@ class DecisionModule:
         Returns:
             Coastal amenity value
         """
-        x_j *= 0.001  # convert to km
-        x_arr = np.array([0, 0.5, 1, 10, 12], dtype=np.float32)
+        x_arr = np.array([0, 500, 1_000, 10_000, 12_000], dtype=np.float32)
         y_arr = np.array([0.6, 0.6, 0.1, 0.03, 0], dtype=np.float32)
         amenity_value = np.interp(x_j, x_arr, y_arr)
 
