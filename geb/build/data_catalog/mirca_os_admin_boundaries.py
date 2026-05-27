@@ -39,7 +39,12 @@ class MIRCAOSAdminBoundaries(Adapter):
         Returns:
             gpd.GeoDataFrame: The admin boundaries data.
         """
-        gdf = gpd.read_file(self.path, **kwargs)
+        gdf: gpd.GeoDataFrame = gpd.read_file(self.path, **kwargs)
         gdf["unit_code"] = gdf["unit_code"].astype(int)
+
+        # remove all duplicates, keeping the first occurrence
+        gdf: gpd.GeoDataFrame = gdf.drop_duplicates(
+            subset="unit_code", keep="first"
+        ).reset_index(drop=True)  # ty:ignore[invalid-assignment]
 
         return gdf

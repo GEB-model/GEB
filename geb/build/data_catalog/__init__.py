@@ -1247,12 +1247,12 @@ data_catalog: dict[str, dict[str, Any]] = {
                 local_version=1,
                 cache="global",
             ),
-            "url": "https://drive.google.com/drive/folders/1fqtG_HEAvK_wKRTF4NuuGgXl8FNBnDvY",
+            "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
             "source": {
                 "name": "MIRCA-OS Admin Boundaries",
                 "author": "Kebede et al. (2024)",
                 "license": "CC BY 4.0",
-                "url": "https://drive.google.com/drive/folders/1fqtG_HEAvK_wKRTF4NuuGgXl8FNBnDvY",
+                "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
             },
         }
         for year in ["2000", "2005", "2010", "2015"]

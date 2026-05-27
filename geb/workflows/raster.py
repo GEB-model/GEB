@@ -1104,7 +1104,7 @@ def interpolate_na_along_dim(
 
 
 def fillna_2d(
-    arr: np.ndarray, nodata: float, mask: np.ndarray | None = None
+    arr: np.ndarray, nodata: float | int, mask: np.ndarray | None = None
 ) -> np.ndarray:
     """Interpolate NaN values in a 2D numpy array using nearest neighbor interpolation.
 

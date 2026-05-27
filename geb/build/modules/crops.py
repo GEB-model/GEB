@@ -8,6 +8,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
+from pyproj import Geod
 
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
@@ -20,14 +21,17 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
+from geb.build.workflows.crop_calendars import parse_MIRCA_crop_calendar
 from geb.geb_types import ArrayBool, ArrayInt32, ArrayInt64, ArrayUint8, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
+    fillna_2d,
     get_linear_indices,
     get_neighbor_cell_ids_for_linear_indices,
     interpolate_na_2d,
     interpolate_na_along_dim,
     pad_xy,
+    rasterize_like,
     sample_from_map,
     snap_to_grid,
 )
@@ -1245,22 +1249,40 @@ class Crops(BuildModelBase):
         self,
         year: int,
         MIRCA_unit_grid: xr.DataArray,
+        MIRCA_unit_geom: gpd.GeoDataFrame,
         farmer_mirca_units: ArrayInt32,
-        resolution: str = "5-arcminute",
-    ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+        reference_crop_map: xr.DataArray,
+        reference_map_buffer: int,
+    ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, ArrayInt32]:
         """Compute MIRCA crop area fractions and summarize per region.
 
         Args:
             year: The year for which to compute crop area fractions.
             MIRCA_unit_grid: The MIRCA unit grid for spatial reference.
+            MIRCA_unit_geom: The geometry for each MIRCA unit.
             farmer_mirca_units: An array of MIRCA unit IDs for each farmer.
-            resolution: Resolution tag for plotting/output naming.
+            reference_crop_map: A reference crop map to align the MIRCA data with.
+            reference_map_buffer: The buffer (in number of cells) to apply when aligning the MIRCA data with the reference crop map.
 
         Returns:
-            A tuple containing three xarray DataArrays:
+            A tuple of four values:
             - rainfed_crop_fraction: DataArray with dimensions (crop, y, x) representing the fraction of rainfed crop area for each crop.
             - irrigated_crop_fraction: DataArray with dimensions (crop, y, x) representing the fraction of irrigated crop area for each crop.
-            - MIRCA_unit_grid: The updated MIRCA unit grid.
+            - MIRCA_unit_grid: The updated MIRCA unit grid, with empty units remapped to their donor.
+            - farmer_mirca_units: The (possibly updated) array of MIRCA unit IDs per farmer.
+
+        Notes:
+            If a MIRCA unit used by farmers has no crop data at all (all NaN in both
+            ir and rf maps), the method progressively expands the interpolation mask to
+            include the nearest MIRCA unit by WGS84 great-circle distance that does
+            carry data. Interpolation runs on the expanded mask; only the original
+            (data-less) unit's cells are updated with the result. The ``farmer_mirca_units`` array is mutated in-place: entries that
+            pointed to the empty unit are reassigned to the donor unit so that
+            downstream crop-calendar and crop-assignment steps use valid data.
+
+        Raises:
+            ValueError: If a MIRCA unit used by farmers has no crop data and no
+                neighboring unit with data could be found.
         """
         crops: dict[str, int] = {
             "Wheat": 0,
@@ -1294,22 +1316,18 @@ class Crops(BuildModelBase):
 
         irrigation_types: list[str] = ["ir", "rf"]
 
-        # the datasets have slightly different grids, so we need to snap them to the same grid. We take the first one as reference and snap the others to it
-        reference: None | xr.DataArray = None
-
         crop_maps_per_irrigation_type: dict[str, xr.DataArray] = {}
         for irrigation_type in irrigation_types:
             crop_maps: list[xr.DataArray] = []
             for crop_name, crop_id in crops.items():
                 if crop_name in missing_crops:
-                    assert reference is not None
                     # when crop is not available in MIRCA-OS, set to nan
                     crop_map = self.full_like(
-                        reference, fill_value=np.nan, nodata=np.nan
+                        reference_crop_map, fill_value=np.nan, nodata=np.nan
                     )
                 else:
                     crop_map = self.data_catalog.fetch(
-                        f"mirca_os_cropping_area_{year}_{resolution}_{crop_name}_{irrigation_type}"
+                        f"mirca_os_cropping_area_{year}_5-arcminute_{crop_name}_{irrigation_type}"
                     ).read()
 
                     crop_map = crop_map.isel(
@@ -1317,27 +1335,22 @@ class Crops(BuildModelBase):
                             crop_map.x,
                             crop_map.y,
                             self.bounds,
-                            buffer=100,
+                            buffer=reference_map_buffer,  # use the same buffer as was used for the reference map
                             raise_on_buffer_out_of_bounds=False,
                         )  # use a very large buffer so that we use don't get edge effects in the interpolation
                     ).compute()
 
-                    # do the snapping unless it is the first dataset, then we take this one as reference for the others
-                    # see above comment for more info
-                    if reference is None:
-                        reference = crop_map.copy()
-                    else:
-                        # some maps are smaller than the reference, so we need to pad them
-                        # with np.nan values, so that they can be combined in one dataset.
-                        crop_map = pad_xy(
-                            crop_map,
-                            reference.x[0].item(),
-                            reference.y[0].item(),
-                            reference.x[-1].item(),
-                            reference.y[-1].item(),
-                            constant_values=np.nan,
-                        )
-                        crop_map = snap_to_grid(crop_map, reference)
+                    # some maps are smaller than the reference, so we need to pad them
+                    # with np.nan values, so that they can be combined in one dataset.
+                    crop_map = pad_xy(
+                        crop_map,
+                        reference_crop_map.x[0].item(),
+                        reference_crop_map.y[0].item(),
+                        reference_crop_map.x[-1].item(),
+                        reference_crop_map.y[-1].item(),
+                        constant_values=np.nan,
+                    )
+                    crop_map = snap_to_grid(crop_map, reference_crop_map)
 
                 crop_map = crop_map.assign_coords(crop=crop_id)
 
@@ -1390,21 +1403,123 @@ class Crops(BuildModelBase):
         MIRCA_unit_grid: xr.DataArray = (
             MIRCA_unit_grid.compute()
         )  # ensure it is loaded in memory for the loop below
-        MIRCA_unit_grid = snap_to_grid(
-            MIRCA_unit_grid, reference
-        )  # snap to the same grid as the crop maps
+
+        # MIRCA grid should already be aligned with the reference grid
+        assert MIRCA_unit_grid.x.equals(
+            reference_crop_map.x
+        ) and MIRCA_unit_grid.y.equals(reference_crop_map.y), (
+            "MIRCA unit grid must be aligned with the reference crop map."
+        )
+
+        MIRCA_unit_centroid: gpd.GeoSeries = (
+            MIRCA_unit_geom.set_index("unit_code")["geometry"]
+            .to_crs(epsg=4326)
+            .centroid
+        )
+        geod_wgs84 = Geod(ellps="WGS84")
 
         mask: xr.DataArray = self.full_like(
             MIRCA_unit_grid, fill_value=False, nodata=False
         ).astype(bool)
         for MIRCA_unit in np.unique(farmer_mirca_units):
-            MIRCA_unit_mask = MIRCA_unit_grid == MIRCA_unit
-            crop_maps_per_irrigation_type["ir"] = interpolate_na_along_dim(
-                crop_maps_per_irrigation_type["ir"], mask=MIRCA_unit_mask
-            )
-            crop_maps_per_irrigation_type["rf"] = interpolate_na_along_dim(
-                crop_maps_per_irrigation_type["rf"], mask=MIRCA_unit_mask
-            )
+            original_MIRCA_unit_mask: xr.DataArray = MIRCA_unit_grid == MIRCA_unit
+            MIRCA_unit_mask: xr.DataArray = original_MIRCA_unit_mask
+
+            # A unit "has data" when at least one non-NaN value exists across all
+            # crops. NaN means no observation at all; 0 means the crop is absent but
+            # the cell was surveyed.
+            has_ir_data: bool = not np.isnan(
+                crop_maps_per_irrigation_type["ir"].values[
+                    :, original_MIRCA_unit_mask.values
+                ]
+            ).all()
+            has_rf_data: bool = not np.isnan(
+                crop_maps_per_irrigation_type["rf"].values[
+                    :, original_MIRCA_unit_mask.values
+                ]
+            ).all()
+
+            if not has_ir_data and not has_rf_data:
+                # No crop data exists for this unit. Progressively expand the
+                # interpolation mask by adding the nearest MIRCA unit
+                # that does have data, until one is found.
+                MIRCA_unit_centroid_point = MIRCA_unit_centroid.loc[MIRCA_unit]
+                distances_m: pd.Series = MIRCA_unit_centroid.apply(
+                    lambda centroid_point: geod_wgs84.inv(
+                        MIRCA_unit_centroid_point.x,
+                        MIRCA_unit_centroid_point.y,
+                        centroid_point.x,
+                        centroid_point.y,
+                    )[2]
+                )
+                sorted_units: list[int] = distances_m.sort_values().index.tolist()
+
+                searched_units: set[int] = {MIRCA_unit}
+                donor_unit: int | None = None
+                for candidate_unit in sorted_units:
+                    if candidate_unit in searched_units:
+                        continue
+                    searched_units.add(candidate_unit)
+
+                    candidate_mask: xr.DataArray = MIRCA_unit_grid == candidate_unit
+                    candidate_has_ir: bool = not np.isnan(
+                        crop_maps_per_irrigation_type["ir"].values[
+                            :, candidate_mask.values
+                        ]
+                    ).all()
+                    candidate_has_rf: bool = not np.isnan(
+                        crop_maps_per_irrigation_type["rf"].values[
+                            :, candidate_mask.values
+                        ]
+                    ).all()
+
+                    if candidate_has_ir or candidate_has_rf:
+                        # Found a donor; widen the mask to borrow its data.
+                        MIRCA_unit_mask = MIRCA_unit_mask | candidate_mask
+                        donor_unit = candidate_unit
+                        break
+
+                if donor_unit is None:
+                    raise ValueError(
+                        f"MIRCA unit {MIRCA_unit} has no crop data and no neighboring "
+                        "unit with data could be found to fill it."
+                    )
+
+                # Interpolate using the expanded mask, then write the filled values
+                # back only into the original (data-less) unit's cells.
+                ir_filled: xr.DataArray = interpolate_na_along_dim(
+                    crop_maps_per_irrigation_type["ir"], mask=MIRCA_unit_mask
+                )
+                rf_filled: xr.DataArray = interpolate_na_along_dim(
+                    crop_maps_per_irrigation_type["rf"], mask=MIRCA_unit_mask
+                )
+                original_selection = original_MIRCA_unit_mask.values
+                crop_maps_per_irrigation_type["ir"].values[:, original_selection] = (
+                    ir_filled.values[:, original_selection]
+                )
+                crop_maps_per_irrigation_type["rf"].values[:, original_selection] = (
+                    rf_filled.values[:, original_selection]
+                )
+
+                # Remap both the farmer array and the raster grid so that the empty
+                # unit is replaced by the donor unit everywhere.
+                farmer_mirca_units[farmer_mirca_units == MIRCA_unit] = donor_unit
+                MIRCA_unit_grid.values[original_MIRCA_unit_mask.values] = donor_unit
+
+                self.logger.info(
+                    f"MIRCA unit {MIRCA_unit} had no crop data; filled from nearest "
+                    f"unit {donor_unit}."
+                )
+
+                # Use only the original unit area for subsequent assertions.
+                MIRCA_unit_mask = original_MIRCA_unit_mask
+            else:
+                crop_maps_per_irrigation_type["ir"] = interpolate_na_along_dim(
+                    crop_maps_per_irrigation_type["ir"], mask=MIRCA_unit_mask
+                )
+                crop_maps_per_irrigation_type["rf"] = interpolate_na_along_dim(
+                    crop_maps_per_irrigation_type["rf"], mask=MIRCA_unit_mask
+                )
 
             # Ensure that we indeed have data everywhere (no nans, no cells with all zeros)
             assert not np.isnan(
@@ -1472,7 +1587,12 @@ class Crops(BuildModelBase):
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
             get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2)
         )
-        return rainfed_crop_fraction, irrigated_crop_fraction, MIRCA_unit_grid
+        return (
+            rainfed_crop_fraction,
+            irrigated_crop_fraction,
+            MIRCA_unit_grid,
+            farmer_mirca_units,
+        )
 
     @build_method(depends_on=[], required=False)
     def setup_farmer_crop_calendar_multirun(
@@ -1681,15 +1801,33 @@ class Crops(BuildModelBase):
         """
         n_farmers = self.array["agents/farmers/region_id"].size
 
+        # For alignment of various input data, we need a reference. So we just
+        # load one. The crops itself are not used, but just the metadata.
+        reference_crop_map = self.data_catalog.fetch(
+            f"mirca_os_cropping_area_{year}_5-arcminute_Wheat_rf"
+        ).read()
+        reference_map_buffer: int = 100
+        reference_crop_map = reference_crop_map.isel(
+            get_window(
+                reference_crop_map.x,
+                reference_crop_map.y,
+                self.bounds,
+                buffer=reference_map_buffer,
+                raise_on_buffer_out_of_bounds=False,
+            )  # use a very large buffer so that we use don't get edge effects in the interpolation
+        )
+
         # Load MIRCA-OS data for the given year
         MIRCA_unit_geom = self.data_catalog.fetch(
             f"mirca_os_admin_boundaries_{year}"
         ).read()
         assert isinstance(MIRCA_unit_geom, gpd.GeoDataFrame)
 
-        # select only what is within the model bounds
-        minx, miny, maxx, maxy = self.bounds
-        MIRCA_unit_geom = MIRCA_unit_geom.cx[minx:maxx, miny:maxy]
+        # Clip geometries to the reference crop map extent so they remain aligned.
+        MIRCA_unit_geom = MIRCA_unit_geom.cx[
+            reference_crop_map.x.values.min() : reference_crop_map.x.values.max(),
+            reference_crop_map.y.values.min() : reference_crop_map.y.values.max(),
+        ]
 
         rainfed_source = self.data_catalog.fetch(
             f"mirca_os_crop_calendar_{year}_rf"
@@ -1704,20 +1842,14 @@ class Crops(BuildModelBase):
             irrigated_source["unit_code"].isin(MIRCA_unit_geom["unit_code"])
         ]
 
-        # Convert DF to list of strings for parse_MIRCA_file compatibility
-        # This is a bit hacky, maybe update parse_MIRCA_file to handle DataFrames later
-        rainfed_lines = rainfed_source.to_csv(index=False).splitlines()
-        irrigated_lines = irrigated_source.to_csv(index=False).splitlines()
-
         crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
-        from geb.build.workflows.crop_calendars import parse_MIRCA_file
 
-        MIRCA_units = np.unique(MIRCA_unit_grid.values).tolist()
-        crop_calendar = parse_MIRCA_file(
-            crop_calendar, rainfed_lines, MIRCA_units, is_irrigated=False
+        MIRCA_units = (MIRCA_unit_geom.unit_code).tolist()
+        crop_calendar = parse_MIRCA_crop_calendar(
+            crop_calendar, rainfed_source, MIRCA_units, is_irrigated=False
         )
-        crop_calendar = parse_MIRCA_file(
-            crop_calendar, irrigated_lines, MIRCA_units, is_irrigated=True
+        crop_calendar = parse_MIRCA_crop_calendar(
+            crop_calendar, irrigated_source, MIRCA_units, is_irrigated=True
         )
 
         def fix_365_in_crop_calendar(
@@ -1795,25 +1927,38 @@ class Crops(BuildModelBase):
                     f"Filling missing crop calendar for MIRCA unit {mirca_unit} with data from {closest_mirca_unit}."
                 )
 
-        else:
-            self.logger.debug("All keys have valid values.")
-
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
         )
 
+        MIRCA_unit_grid = rasterize_like(
+            MIRCA_unit_geom,
+            reference_crop_map,
+            dtype=np.int32,
+            nodata=-1,
+            column="unit_code",
+            name="MIRCA_unit",
+        )
+        MIRCA_unit_grid.values = fillna_2d(MIRCA_unit_grid.values, nodata=-1)
         farmer_mirca_units = sample_from_map(
             MIRCA_unit_grid.values,
             farmer_locations,
             MIRCA_unit_grid.rio.transform(recalc=True).to_gdal(),
         )
 
+        assert not (farmer_mirca_units == -1).any(), (
+            "All farmers should be assigned to a MIRCA unit."
+        )
+
         farmer_crops, is_irrigated = self.assign_crops(
+            reference_crop_map,
+            reference_map_buffer,
             crop_calendar,
             farmer_locations,
             farmer_mirca_units,
             year,
             MIRCA_unit_grid,
+            MIRCA_unit_geom,
             minimum_area_ratio=minimum_area_ratio,
             replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
         )
@@ -2246,30 +2391,43 @@ class Crops(BuildModelBase):
 
     def assign_crops(
         self,
+        reference_crop_map: xr.DataArray,
+        reference_map_buffer: int,
         crop_calendar: dict,
         farmer_locations: np.ndarray,
         farmer_mirca_units: np.ndarray,
         year: int,
         MIRCA_unit_grid: xr.DataArray,
+        MIRCA_unit_geom: gpd.GeoDataFrame,
         minimum_area_ratio: float,
         replace_crop_calendar_unit_code: dict = {},
     ) -> tuple[np.ndarray, np.ndarray]:
         """Assign crops and irrigation status to farmers for a given year.
 
         Args:
+            reference_crop_map: A reference crop map for the given year, used for alignment of grids only.
+            reference_map_buffer: Buffer size in pixels to apply when sampling the reference crop map to avoid edge effects.
             crop_calendar: Mapping from MIRCA unit to list of rotations (fraction, matrix).
             farmer_locations: Array of farmer pixel coordinates (x, y) order.
             farmer_mirca_units: Array mapping farmer index to MIRCA unit id.
             year: Year to select fractions from raster inputs.
             MIRCA_unit_grid: Grid of MIRCA unit ids aligned with fraction rasters.
+            MIRCA_unit_geom: Geometry for each MIRCA unit.
             minimum_area_ratio: Minimum fraction for a crop to be considered when sampling.
             replace_crop_calendar_unit_code: Optional remapping for MIRCA unit ids.
 
         Returns:
             A tuple of (farmer_crops, farmer_irrigated) arrays.
         """
-        rainfed_fraction, irrigated_fraction, MIRCA_unit_grid = (
-            self.get_crop_area_fractions(year, MIRCA_unit_grid, farmer_mirca_units)
+        rainfed_fraction, irrigated_fraction, MIRCA_unit_grid, farmer_mirca_units = (
+            self.get_crop_area_fractions(
+                year,
+                MIRCA_unit_grid,
+                MIRCA_unit_geom,
+                farmer_mirca_units,
+                reference_crop_map,
+                reference_map_buffer,
+            )
         )
 
         n_farmers: int = farmer_mirca_units.size
