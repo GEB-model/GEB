@@ -1855,77 +1855,19 @@ class Crops(BuildModelBase):
         def fix_365_in_crop_calendar(
             crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
         ) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
-            """Replace any 365 day-of-year values with 364 in the 4th column.
-
-            Scans each (area, arr) pair in every dictionary entry. If a value 365 is
-            found, it asserts that it appears only in column index 3 and then rewrites
-            it to 364. Increments a running count of replacements and raises a
-            ValueError if a 365 is found outside column 3.
-
-            Raises:
-                ValueError: If any 365 is found outside column index 3 (the 4th column).
+            """Replace growth lengths of 365 days with 364 in the crop calendar.
 
             Returns:
-                A dictionary of crop calendars where the 365 length crops are now 364 days.
+                The crop calendar with any 365-day growth lengths clamped to 364.
             """
-            total_replacements = 0
+            for entries in crop_calendar.values():
+                for _, arr in entries:
+                    arr[arr[:, 3] == 365, 3] = 364
 
-            crop_calendar_adjusted = crop_calendar.copy()
-
-            for key, entries in crop_calendar_adjusted.items():
-                for i, (area, arr) in enumerate(entries):
-                    rows, cols = np.where(arr == 365)
-
-                    if rows.size == 0:
-                        continue  # nothing to change in this array
-
-                    # Safety: all 365s must be in column index 3 (4th column)
-                    if not np.all(cols == 3):
-                        raise ValueError(
-                            f"Found 365 outside column 3 for key={key}, index={i}: "
-                            f"indices={list(zip(rows, cols))}"
-                        )
-
-                    # Do the replacement
-                    arr[rows, 3] = 364
-                    entries[i] = (area, arr)
-                    total_replacements += rows.size
-
-            return crop_calendar_adjusted
+            return crop_calendar
 
         # Replace crop growth time of 365 with 364 as 365 leads to many issues
         crop_calendar = fix_365_in_crop_calendar(crop_calendar)
-
-        if any(value in [None, "", [], {}] for value in crop_calendar.values()):
-            missing_mirca_unit = [
-                unit for unit, calendars in crop_calendar.items() if not calendars
-            ]
-            self.logger.warning(
-                f"Missing crop calendar for MIRCA unit(s): {missing_mirca_unit}"
-            )
-
-            for mirca_unit in missing_mirca_unit:
-                # Filter out the current mirca_unit from crop_calendar.keys()
-                valid_keys = [key for key in crop_calendar.keys() if key != mirca_unit]
-
-                # Find the closest MIRCA unit with a crop calendar
-                if valid_keys:  # Ensure there are valid keys to process
-                    closest_mirca_unit = min(
-                        valid_keys, key=lambda x: abs(x - mirca_unit)
-                    )
-                else:
-                    raise ValueError(
-                        f"No valid MIRCA units found to replace missing crop calendar for {mirca_unit}."
-                    )
-
-                # use this closest_mirca_unit to fill the missing crop calendar
-                crop_calendar[mirca_unit] = crop_calendar[closest_mirca_unit]
-                MIRCA_unit_grid = MIRCA_unit_grid.where(
-                    MIRCA_unit_grid != mirca_unit, closest_mirca_unit
-                )
-                self.logger.info(
-                    f"Filling missing crop calendar for MIRCA unit {mirca_unit} with data from {closest_mirca_unit}."
-                )
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
