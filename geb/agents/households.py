@@ -135,20 +135,6 @@ class Households(AgentBaseClass):
         """Return the name of the agent type."""
         return "agents.households"
 
-    @property
-    def household_distance_to_river_m(self) -> np.ndarray:
-        return np.take(
-            np.array(self.buildings["distance_to_river_m"]),
-            self.var.building_id_of_household,
-        )
-
-    @property
-    def household_distance_to_coastline_m(self) -> np.ndarray:
-        return np.take(
-            np.array(self.buildings["distance_to_coastline_m"]),
-            self.var.building_id_of_household,
-        )
-
     def load_objects(self) -> None:
         """Load buildings, roads, and rail geometries from model files."""
         # Load buildings
@@ -2022,3 +2008,27 @@ class Households(AgentBaseClass):
             Total population.
         """
         return self.var.sizes.data.sum()
+
+    @property
+    def household_distance_to_river_m(self) -> np.ndarray:
+        """Get the distance to the nearest river for each household.
+
+        Returns:
+            np.ndarray: Array of distances to the nearest river for each household.
+        """
+        return np.take(
+            np.array(self.buildings["distance_to_river_m"]),
+            self.var.building_id_of_household,
+        )
+
+    @property
+    def household_distance_to_coastline_m(self) -> np.ndarray:
+        """Get the distance to the nearest coastline for each household.
+
+        Returns:
+            np.ndarray: Array of distances to the nearest coastline for each household.
+        """
+        return np.take(
+            np.array(self.buildings["distance_to_coastline_m"]),
+            self.var.building_id_of_household,
+        )
