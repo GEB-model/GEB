@@ -1,5 +1,6 @@
 """The main GEB model class. This class is used to initialize and run the model."""
 
+from concurrent.futures import ThreadPoolExecutor
 import copy
 import datetime
 import logging
@@ -636,7 +637,8 @@ class GEBModel(Module):
         name = getattr(self.agents, agent_type).name
         self.logger.debug(f"Saving {name}.var")
         bucket = self.store.buckets[f"{name}.var"]
-        bucket.save(path / f"{name}.var")
+        with ThreadPoolExecutor() as executor:
+            bucket.save(path / name, executor)
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
