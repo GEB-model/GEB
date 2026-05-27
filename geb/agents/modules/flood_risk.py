@@ -503,8 +503,8 @@ class FloodRiskModule:
         all_damages = damages_do_not_adapt.copy()
 
         # Replace adapted households with adapted damages
-        all_damages[:, adapted] = damages_adapt[:, adapted]
-
+        adapted_mask = adapted.astype(bool)
+        all_damages[:, adapted_mask] = damages_adapt[:, adapted_mask]
         # Sort probabilities in ascending order for integration
         probabilities = 1 / self.households.return_periods
         sort_idx = np.argsort(probabilities)
