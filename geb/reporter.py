@@ -904,21 +904,22 @@ class Reporter:
         else:
             self.is_activated = False
 
-    def create_variable(self, config: dict, module_name: str, name: str) -> list | None:
+    def create_variable(self, config: dict, module_name: str, name: str) -> None:
         """This function creates a variable for the reporter.
 
-        For
-        configurations without a aggregation function, a zarr file is created. For
-        configurations with an aggregation function, the data
-        is stored in memory and exported on the final timestep.
+        For configurations without an aggregation function, a zarr file is created.
+        For configurations with an aggregation function, both the time array and
+        the data array are lazily created on the first write so that runtime-only
+        information (e.g. substep count) is available when sizing the arrays.
 
         Args:
-            config: The configuration for the variable.
+            config: The configuration for the variable (mutated in-place to add
+                pre-allocated time array and tracking structures).
             module_name: The name of the module to which the variable belongs.
             name: The name of the variable.
 
         Returns:
-            A list of values if the variable is scalar, None otherwise.
+            None in all cases; data is tracked via the config dict.
 
         Raises:
             ValueError: If the variable type is not recognized.
@@ -927,23 +928,22 @@ class Reporter:
             assert "function" not in config or config["function"] is None, (
                 "Scalar variables cannot have a function. "
             )
-            return []
-        elif config["type"] in ("grid", "HRU"):
-            if config["function"] is not None:
-                return []
-            else:
-                return None
-
-        elif config["type"] == "agents":
-            if config["function"] is not None:
-                return []
-            else:
-                return None
-
+            initialize_tracking_arrays = True
+        elif config["type"] in ("grid", "HRU", "agents"):
+            initialize_tracking_arrays = config["function"] is not None
         else:
             raise ValueError(
                 f"Type {config['type']} not recognized. Must be 'scalar', 'grid', 'agents' or 'HRU'."
             )
+
+        if initialize_tracking_arrays:
+            # Time array and data array are created lazily on first write.
+            # For grid/HRU this allows sizing based on runtime substep count.
+            config["_time_array"] = None
+            config["_data_array"] = None
+            config["_var_index"] = 0
+
+        return None
 
     def maybe_report_value(
         self,
@@ -1025,9 +1025,8 @@ class Reporter:
             value = eval(f"value{fancy_index}")
 
         if np.isscalar(value):
+            assert isinstance(value, np.generic)
             assert not np.isnan(value) and not np.isinf(value)
-            if isinstance(value, (np.floating, np.integer, np.bool_)):
-                value = value.item()
 
         self.process_value(module_name, name, value, config)
 
@@ -1404,31 +1403,43 @@ class Reporter:
                 f"Type {type_} not recognized. Check your configuration for {module_name}.{name}."
             )
 
-        if module_name not in self.variables:
-            self.variables[module_name] = {}
+        # Initialize time and data arrays on the first write.
+        if config["_time_array"] is None:
+            substeps: int | None = config.get("substeps")
+            config["_time_array"] = create_time_array(
+                start=self.model.simulation_start,
+                end=self.model.simulation_end,
+                timestep=self.model.timestep_length,
+                conf=config,
+                substeps=substeps,
+            )
 
-        if name not in self.variables[module_name]:
-            self.variables[module_name][name] = []
-
-        current_time = self.model.current_time
+        if config["_data_array"] is None:
+            n: int = len(config["_time_array"])
+            # Use numpy value dtype
+            if isinstance(value, np.ndarray):
+                dtype = value.dtype
+            elif isinstance(value, np.generic):
+                dtype = np.dtype(value)
+            else:
+                raise ValueError(
+                    f"Value for {module_name}.{name} has unsupported type {type(value)}. Must be a numpy array or a scalar of type int, float or bool."
+                )
+            config["_data_array"] = np.empty(n, dtype=dtype)
 
         if "substeps" in config:
             assert isinstance(value, np.ndarray)
             assert len(value) == config["substeps"], (
                 f"Value for {module_name}.{name} has length {len(value)}, but {config['substeps']} substeps are expected."
             )
-            self.variables[module_name][name].extend(
-                [
-                    (
-                        current_time
-                        + i * self.model.timestep_length / config["substeps"],
-                        v,
-                    )
-                    for i, v in enumerate(value)
-                ]
-            )
+            n_substeps: int = config["substeps"]
+            idx: int = config["_var_index"]
+            config["_data_array"][idx : idx + n_substeps] = value
+            config["_var_index"] = idx + n_substeps
         else:
-            self.variables[module_name][name].append((current_time, value))
+            idx: int = config["_var_index"]
+            config["_data_array"][idx] = value
+            config["_var_index"] = idx + 1
 
     def _flush_chunk_data(
         self,
@@ -1468,7 +1479,8 @@ class Reporter:
             self.model.logger.info("No report configuration found. No data to report.")
             return
 
-        with ThreadPoolExecutor() as executor:
+        # Limit thread pool to avoid excessive threading that could prevent disk flushes
+        with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
 
             # Flush any remaining buffers
@@ -1512,28 +1524,27 @@ class Reporter:
                         )
 
             # Export all scalar and aggregated variables to parquet files
-            for module_name, variables in self.variables.items():
-                for name, values in variables.items():
-                    if self.model.config["report"][module_name][name][
-                        "type"
-                    ] == "scalar" or (
-                        self.model.config["report"][module_name][name]["function"]
-                        is not None
-                    ):
-                        # if the variable is a scalar or has an aggregation function, we report
-                        df = pd.DataFrame.from_records(
-                            values, columns=["time", name], index="time"
-                        )
+            for module_name, module_configs in self.model.config["report"].items():
+                for name, config in module_configs.items():
+                    if "_time_array" not in config or config["_data_array"] is None:
+                        continue
+                    # Convert Unix timestamps (seconds) to datetime
+                    time_values: pd.DatetimeIndex = pd.to_datetime(
+                        config["_time_array"], unit="s"
+                    )
+                    df = pd.DataFrame(
+                        {name: config["_data_array"]},
+                        index=pd.Index(time_values, name="time"),
+                    )
 
-                        folder = self.report_folder / module_name
-                        folder.mkdir(parents=True, exist_ok=True)
+                    folder = self.report_folder / module_name
+                    folder.mkdir(parents=True, exist_ok=True)
 
-                        futures.append(
-                            executor.submit(
-                                write_table, df, folder / (name + ".parquet")
-                            )
-                        )
+                    futures.append(
+                        executor.submit(write_table, df, folder / (name + ".parquet"))
+                    )
 
+            # Wait for all futures to complete before exiting context manager
             for future in as_completed(futures):
                 # re-raise any exception from the worker thread
                 future.result()
