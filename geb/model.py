@@ -4,6 +4,7 @@ import copy
 import datetime
 import logging
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -563,7 +564,12 @@ class GEBModel(Module):
         """
         current_time: datetime.datetime = self.run_start
         end_time: datetime.datetime = self.run_end
-        self.config["report"] = {}
+        # only report household attributes (for now)
+        self.config["report"] = {
+            key: value
+            for key, value in self.config["report"].items()
+            if key.startswith("agents.households")
+        }
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
@@ -636,7 +642,10 @@ class GEBModel(Module):
         name = getattr(self.agents, agent_type).name
         self.logger.debug(f"Saving {name}.var")
         bucket = self.store.buckets[f"{name}.var"]
-        bucket.save(path / f"{name}.var")
+        with ThreadPoolExecutor() as executor:
+            futures = bucket.save(path / f"{name}.var", executor)
+            for future in futures:
+                future.result()
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
