@@ -216,7 +216,7 @@ class CMIP6(Adapter):
         combined["time"] = combined.indexes["time"].to_datetimeindex()
         combined = combined.rename({"lon": "x", "lat": "y"}).to_array()
         # assert that there are no NaN values in the combined deltas, which would indicate a problem with the delta calculation
-        if np.isnan(combined.values).any():
+        if combined.isnull().any().compute().item():
             raise ValueError(
                 "NaN values found in combined deltas, indicating a problem with the delta calculation."
             )
