@@ -1165,11 +1165,12 @@ class Forcing(BuildModelBase):
             target_tas_grid = tas.isel(time=0, drop=True)
 
             delta_pr_regridded = resample_like(
-                source=delta_pr, target=target_pr_grid, method="nearest"
+                source=delta_pr, target=target_pr_grid, method="bilinear"
             )
             delta_tas_regridded = resample_like(
-                source=delta_tas, target=target_tas_grid, method="nearest"
+                source=delta_tas, target=target_tas_grid, method="bilinear"
             )
+
             # check for NaNs in the regridded deltas, which would indicate a problem with the regridding (e.g., missing weights)
             if np.isnan(delta_pr_regridded.values).any():
                 raise ValueError("NaN values found in regridded precipitation deltas.")
