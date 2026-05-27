@@ -31,7 +31,17 @@ class CMIP6(Adapter):
         """Initialize the CMIP6 data adapter."""
         super().__init__(*args, **kwargs)
 
+    @staticmethod
     def to_minus180_180(da: xr.DataArray, lon_name: str = "x") -> xr.DataArray:
+        """Create a new DataArray with longitudes wrapped to the -180 to 180 range and sorted in ascending order.
+
+        Args:
+            da (xr.DataArray): _description_
+            lon_name (str, optional): _description_. Defaults to "x".
+
+        Returns:
+            xr.DataArray: _description_
+        """
         lon = da[lon_name]
         lon_wrapped = ((lon + 180) % 360) - 180
         da = da.assign_coords({lon_name: lon_wrapped})
@@ -197,6 +207,8 @@ class CMIP6(Adapter):
 
         Args:
             deltas: A dictionary mapping variable names to their corresponding delta xarray Datasets.
+        Raises:
+            ValueError: If there are NaN values in the combined deltas, indicating a problem with the delta calculation.
         """
         combined = xr.Dataset()
         for variable, delta in deltas.items():
@@ -215,7 +227,8 @@ class CMIP6(Adapter):
             "EPSG:4326"
         )  # ensure the combined dataset has a CRS
         combined = self.to_minus180_180(
-            combined
+            da=combined,
+            lon_name="x",
         )  # ensure longitudes are in the -180 to 180 range
         write_zarr(da=combined, path=self.path, crs=combined.rio.crs)
 
