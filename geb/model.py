@@ -643,7 +643,9 @@ class GEBModel(Module):
         self.logger.debug(f"Saving {name}.var")
         bucket = self.store.buckets[f"{name}.var"]
         with ThreadPoolExecutor() as executor:
-            bucket.save(path / name, executor)
+            futures = bucket.save(path / f"{name}.var", executor)
+            for future in futures:
+                future.result()
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
