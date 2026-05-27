@@ -10,6 +10,7 @@ import xarray as xr
 
 from geb.hydrology.landcovers import FOREST
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr
+from geb.workflows.raster import sample_from_map
 
 from ...workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.helpers import from_landuse_raster_to_polygon
@@ -820,3 +821,73 @@ class FloodRiskModule:
         print(f"the total flood damages are: {total_flood_damages}")
 
         return total_flood_damages
+
+    def return_period_flood(self, flood_protection_standard: int = 10) -> np.ndarray:
+        """Simulate a flood event based on return periods and determine which households are flooded.
+
+        Returns:
+            Array of indices of flooded households.
+        """
+        # draw a single random number
+        p_random = np.random.random()
+        # Work with a locally sorted copy of return periods to ensure correct event selection
+        return_periods_arr = np.asarray(self.households.return_periods, dtype=float)
+        sort_idx = np.argsort(return_periods_arr)  # ascending order
+        sorted_return_periods = return_periods_arr[sort_idx]
+        probabilities = 1.0 / sorted_return_periods
+
+        if p_random >= probabilities.max() or p_random >= 1 / flood_protection_standard:
+            return np.array([], dtype=int)
+
+        # find the event corresponding to the random draw
+        event_idx = np.searchsorted(probabilities[::-1], p_random)
+        event_idx = len(probabilities) - 1 - event_idx
+        event = sorted_return_periods[event_idx]
+        self.model.logger.info(
+            "Return period flood event: %s years (p=%.4f, random draw=%.4f)",
+            event,
+            probabilities[event_idx],
+            p_random,
+        )
+
+        # get the flood map for this event
+        flood_map: xr.DataArray = self.households.flood_maps[event]
+
+        # cache household coordinates in flood_map CRS (Nx2 numpy array)
+        if not hasattr(self, "_household_xy"):
+            import pyproj
+
+            x, y = (
+                np.array(self.households.buildings.x),
+                np.array(self.households.buildings.y),
+            )
+            transformer = pyproj.Transformer.from_crs(
+                "EPSG:4326", flood_map.rio.crs, always_xy=True
+            )
+            self._building_xy = np.array(transformer.transform(x, y)).T
+
+        # sample flood map using clipped coordinates
+        sampled_values = sample_from_map(
+            array=flood_map.values,
+            coords=self._building_xy,
+            gt=flood_map.rio.transform(recalc=True).to_gdal(),
+            out_of_bounds_value=np.nan,
+        )
+        # Use the same minimum flood depth threshold (0.05 m) as elsewhere in the model
+        minimum_flood_depth_m = 0.05
+        # np.where will return indices of flooded households relative to the original household array
+        flooded_building_indices = np.where(sampled_values > minimum_flood_depth_m)[0]
+
+        # get building IDs of flooded buildings
+        flooded_building_ids = self.households.buildings.loc[
+            flooded_building_indices, "id"
+        ].values.astype(int)
+
+        # get indices of households located in flooded buildings
+        flooded_household_indices = np.where(
+            np.isin(
+                self.households.var.building_id_of_household.data, flooded_building_ids
+            )
+        )[0]
+
+        return flooded_household_indices
