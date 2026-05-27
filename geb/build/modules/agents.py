@@ -1511,11 +1511,11 @@ class Agents(BuildModelBase):
 
         Args:
             buildings: Building geometries used to compute distances.
-
+        Raises:
+            ValueError: If the specified maximum distances exceed the limits of uint16.
         Returns:
             Buildings with distance columns appended (meters).
         """
-
         rivers: gpd.GeoDataFrame = gpd.read_parquet(
             "input/" + self.files["geom"]["routing/rivers"]
         )[["geometry"]]
@@ -1531,6 +1531,14 @@ class Agents(BuildModelBase):
 
         river_max_distance_m: int = 50_000
         coastline_max_distance_m: int = 10_000
+
+        if (
+            river_max_distance_m >= np.iinfo(np.uint16).max
+            or coastline_max_distance_m >= np.iinfo(np.uint16).max
+        ):
+            raise ValueError(
+                "Max distances must be less than or equal to 65535 meters to fit in uint16."
+            )
 
         # Project to metric CRS
         buildings = buildings.to_crs(utm_zone)
