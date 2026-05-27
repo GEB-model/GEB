@@ -1,10 +1,10 @@
 """The main GEB model class. This class is used to initialize and run the model."""
 
-from concurrent.futures import ThreadPoolExecutor
 import copy
 import datetime
 import logging
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import time
 from types import TracebackType

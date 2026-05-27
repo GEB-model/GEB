@@ -483,18 +483,21 @@ class FloodRiskModule:
                 )
         return damages_do_not_adapt, damages_adapt
 
-    def calculate_ead(self, damages_do_not_adapt, damages_adapt, adapted) -> np.ndarray:
-        (
-            """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods.
+    def calculate_ead(
+        self,
+        damages_do_not_adapt: np.ndarray,
+        damages_adapt: np.ndarray,
+        adapted: np.ndarray,
+    ) -> np.ndarray:
+        """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods.
 
         Args:
-            damages: A 2D numpy array containing damages for different return periods and agents.
+            damages_do_not_adapt: A multi-dimensional numpy array containing damages for different return periods and agents.
+            damages_adapt: A multi-dimensional numpy array containing adapted damages for different return periods and agents.
+            adapted: A boolean numpy array indicating which agents have adapted.
         Returns:
             A 1D numpy array containing the EAD for each agent.
         """
-            ""
-        )
-
         # Copy baseline damages
         all_damages = damages_do_not_adapt.copy()
 
