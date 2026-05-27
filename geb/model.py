@@ -564,7 +564,12 @@ class GEBModel(Module):
         """
         current_time: datetime.datetime = self.run_start
         end_time: datetime.datetime = self.run_end
-        self.config["report"] = {}
+        # only report household attributes (for now)
+        self.config["report"] = {
+            key: value
+            for key, value in self.config["report"].items()
+            if key.startswith("agents.households")
+        }
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
