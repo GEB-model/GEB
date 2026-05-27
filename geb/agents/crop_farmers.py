@@ -1150,17 +1150,8 @@ class CropFarmers(AgentBaseClass):
         # To set cultivation costs local observations are needed as it is not
         # available globally. Thus, in generalized setups we set cultivation
         # costs as a fraction of sell prices. If you have local data, set this
-        # to false.
-        cultivation_costs_config = self.model.config["agent_settings"]["farmers"][
-            "cultivation_costs"
-        ]
-
-        if cultivation_costs_config["adjust_cultivation_costs"]:
-            self.cultivation_costs = self.adjust_cultivation_costs()
-        else:
-            self.cultivation_costs = load_regional_crop_data_from_dict(
-                self.model, "crops/cultivation_costs"
-            )
+        # to false. see def load_cultivation_costs and def adjust_cultivation_costs for more details.
+        self.cultivation_costs = self.load_cultivation_costs()
 
     @staticmethod
     @njit(cache=True)
@@ -1242,6 +1233,24 @@ class CropFarmers(AgentBaseClass):
             maxx=bounds[2],
             maxy=bounds[3],
         )
+
+    def load_cultivation_costs(self):
+        cultivation_costs_config = self.model.config["agent_settings"]["farmers"][
+            "cultivation_costs"
+        ]
+
+        if cultivation_costs_config["adjust_cultivation_costs"]:
+            return self.adjust_cultivation_costs()
+
+        return load_regional_crop_data_from_dict(self.model, "crops/cultivation_costs")
+
+    # If cultivation costs are not loaded yet, load them.
+    # This is needed for the case where cultivation costs are not loaded
+    # during initialization in running simulations, but only when the agents
+    # need to make decisions about cultivation costs.
+    def ensure_cultivation_costs(self) -> None:
+        if not hasattr(self, "cultivation_costs"):
+            self.cultivation_costs = self.load_cultivation_costs()
 
     def adjust_cultivation_costs(self) -> None:
         """Adjust cultivation costs based on configuration and calibration settings.
@@ -2476,6 +2485,8 @@ class CropFarmers(AgentBaseClass):
 
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU."""
+        self.ensure_cultivation_costs()
+
         if self.cultivation_costs[0] is None:
             cultivation_cost = self.cultivation_costs[1]
         else:
@@ -3013,6 +3024,7 @@ class CropFarmers(AgentBaseClass):
         ]["crop_switching"]["loan_duration"]
         switching_or_investment_costs = np.zeros(self.var.n, dtype=np.float32)
 
+        self.ensure_cultivation_costs()
         date_index = self.cultivation_costs[0]
         assert isinstance(date_index, DateIndex)
         index = date_index.get(self.model.current_time)
