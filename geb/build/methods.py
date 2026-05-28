@@ -14,14 +14,14 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
+from numba import njit
 
 __all__: list[str] = ["build_method"]
 
-from numba import njit as _numba_njit
 
-
-@_numba_njit
+@njit(cache=True)
 def _set_numba_seed(seed: int) -> None:
+    """Set the seed for numba's random number generator."""
     np.random.seed(seed)
 
 
