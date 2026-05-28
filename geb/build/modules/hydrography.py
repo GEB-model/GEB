@@ -561,9 +561,13 @@ class Hydrography(BuildModelBase):
         )
         subbasin_ids.update(sink_subbasin_ids)
 
-        downstream_subbasins = get_immediate_downstream_subbasins(
+        downstream_subbasins: dict[int, list[int]] = get_immediate_downstream_subbasins(
             river_graph, sink_subbasin_ids
         )
+        # remove downstream subbasins that are also upstream subbasins, because those are already included in the river network
+        downstream_subbasins: dict[int, list[int]] = {
+            k: v for k, v in downstream_subbasins.items() if k not in subbasin_ids
+        }
         subbasin_ids.update(downstream_subbasins)
 
         is_further_downstream_outflow: set[int] = set()
@@ -574,6 +578,12 @@ class Hydrography(BuildModelBase):
             )
         )
 
+        # remove further downstream subbasins that are also upstream subbasins, because those are already included in the river network
+        is_further_downstream_outflow = {
+            subbasin_id
+            for subbasin_id in is_further_downstream_outflow
+            if subbasin_id not in subbasin_ids
+        }
         subbasin_ids.update(is_further_downstream_outflow)
 
         # later we want to include the downstream outflow basins. However, we don't want to include

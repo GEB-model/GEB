@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b26": [
+        "[update-method;setup_farmer_crop_calendar]",
         "[update-method;setup_retention_basins]",
     ],
     "1.0.0b25": [
