@@ -38,7 +38,7 @@ class DestinationEarth(Adapter):
         if DESTINATION_EARTH_KEY is None:
             print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
             print(
-                "Please set your Personal Access Token in your .env file or export it in your shell."
+                "Please set your API KEY in your .env file or export it in your shell."
             )
             raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
 
@@ -72,17 +72,17 @@ class DestinationEarth(Adapter):
         if DESTINATION_EARTH_KEY is None:
             print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
             print(
-                "Please set your Personal Access Token in your .env file or export it in your shell."
+                "Please set your API KEY in your .env file or export it in your shell."
             )
             raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
 
         if DESTINATION_EARTH_KEY.startswith("edh_pat_"):
             self.url = "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
-        elif DESTINATION_EARTH_KEY.startswith("edh_key__"):
+        elif DESTINATION_EARTH_KEY.startswith("edh_key_"):
             self.url = "https://api.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
         else:
             raise ValueError(
-                "Invalid DESTINATION_EARTH_KEY format. It should start with 'edh_pat_' for Personal Access Tokens or 'edh_key__' for API keys."
+                "Invalid DESTINATION_EARTH_KEY format. It should start with 'edh_pat_' for Personal Access Tokens or 'edh_key_' for API keys."
             )
 
         return self

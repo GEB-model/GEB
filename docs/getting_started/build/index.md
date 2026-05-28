@@ -95,7 +95,7 @@ MERIT_PASSWORD=<your_password>
 2.  To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on [Destination Earth](https://earthdatahub.destine.eu/). Then, create an [API key](https://auth.destine.eu/realms/desp/account/api-keys) and add the content to the ".env"-file in the GEB repository:
 
 ``` text
-DESTINATION_EARTH_KEY=edh_key__<remainder_of_your_API_key>
+DESTINATION_EARTH_KEY=edh_key_<remainder_of_your_API_key>
 ```
 
 You can manage your Destination Earth API keys [here](https://auth.destine.eu/realms/desp/account/api-keys).
