@@ -138,14 +138,6 @@ def parse_MIRCA_crop_calendar(
 
     calendar_data["crop_class"] = calendar_data["Crop"].map(MIRCA_OS_CROP_CLASS_MAP)
 
-    unknown_crops = sorted(
-        calendar_data.loc[calendar_data["crop_class"].isna(), "Crop"].unique().tolist()
-    )
-    if unknown_crops:
-        raise ValueError(
-            "Encountered unsupported MIRCA-OS crop name(s): " + ", ".join(unknown_crops)
-        )
-
     calendar_data["unit_code"] = pd.to_numeric(calendar_data["unit_code"])
     calendar_data["Growing_area"] = pd.to_numeric(calendar_data["Growing_area"])
     calendar_data["Planting_Month"] = pd.to_numeric(calendar_data["Planting_Month"])
@@ -260,54 +252,6 @@ def parse_MIRCA_crop_calendar(
                 raise NotImplementedError
 
     return parsed_calendar
-
-
-def parse_MIRCA2000_crop_calendar(
-    data_catalog: DataCatalog,
-    MIRCA_units: list[int],
-    year: int = 2000,
-) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
-    """Parse MIRCA-OS crop calendars for given MIRCA units.
-
-    Notes:
-        This function keeps a legacy name for backward compatibility, but now
-        reads MIRCA-OS crop calendar CSV sources.
-
-    Args:
-        data_catalog: The data catalog containing MIRCA-OS files.
-        MIRCA_units: The list of MIRCA unit codes to parse.
-        year: The MIRCA-OS reference year.
-
-    Returns:
-        A dictionary containing the parsed crop calendars.
-
-    Raises:
-        TypeError: If the calendar data is not provided as a DataFrame.
-    """
-    rainfed_source = data_catalog.fetch(f"mirca_os_crop_calendar_{year}_rf").read()
-    irrigated_source = data_catalog.fetch(f"mirca_os_crop_calendar_{year}_ir").read()
-
-    if not isinstance(rainfed_source, pd.DataFrame) or not isinstance(
-        irrigated_source, pd.DataFrame
-    ):
-        raise TypeError("Expected MIRCA-OS calendar data as pandas DataFrames.")
-
-    mirca2000_data: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
-
-    mirca2000_data = parse_MIRCA_crop_calendar(
-        mirca2000_data,
-        rainfed_source,
-        MIRCA_units,
-        is_irrigated=False,
-    )
-    mirca2000_data = parse_MIRCA_crop_calendar(
-        mirca2000_data,
-        irrigated_source,
-        MIRCA_units,
-        is_irrigated=True,
-    )
-
-    return mirca2000_data
 
 
 def donate_and_receive_crop_prices(
