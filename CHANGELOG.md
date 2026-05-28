@@ -1,7 +1,7 @@
 # dev
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
 - Recently, there have been a lot of supply chain effects, where packages contained malicious code or instructions. To avoid most of these issues, but at the same time get relatively new updates (including those with important security updates) we limit any package updates to packages that are at least 3 days old in the uv.lock file. Here we use uv's exclude-newer option.
-- Update routing to include optional retention basins. These retention basins can retain water during flood peaks, and slowly release water during low-flow periods. Can be set up using `setup_retention_basins`.
+- Update routing to include retention basins. By default no retention basins are set (all -1), however a dataset can be passed to set up retention basins. These basins can retain water during flood peaks, and slowly release water during low-flow periods. Set up using `setup_retention_basins`.
 - Fix case where river discharge was 0 in waterbodies (OK), but led to division by zero error in determining alpha for river widths ([#819](https://github.com/GEB-model/GEB/issues/819)).
 - Pre-allocate numpy arrays in reporter for both time and data. This uses significantly less memory as compared to Python lists, and because arrays are pre-allocated they do not cause RAM issues very late in the run but immediately instead.
 - Include an array tracking household expected annual damages (based on adaptation status). 
