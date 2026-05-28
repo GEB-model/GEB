@@ -2,7 +2,7 @@
 
 - Add `geb tool merge` command to merge outputs from multiple GEB cluster sub-models into a single merged model directory that can be evaluated directly with `geb evaluate`.
 - Add `plot_skill_score_maps()` to plot skill scores per station on a satellite basemap for each metric.
-- Overhaul `plot_skill_score_boxplots()` with violin + boxplot panels for KGE, NSE, R², RMSE and RRMSE, including support for overlaying external reference model results.
+- Update `plot_skill_score_boxplots()` with violin + boxplot panels for KGE, NSE, R², RMSE and RRMSE, including support for overlaying external reference model (e.g. LISFLOOD) results.
 - Add R², RMSE and RRMSE to discharge evaluation metrics at hourly, daily and monthly frequencies.
 - Stations with fewer than 5 years of paired observations are skipped in `evaluate_discharge`.
 - Lakes and reservoirs are now shown as dot markers in the interactive discharge evaluation map.
