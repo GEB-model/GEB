@@ -197,13 +197,18 @@ class Hydrology(Data, Module):
             Total river routing water storage (m3).
         """
         return (
-            self.routing.router.get_total_storage(
-                self.grid.var.discharge_in_rivers_m3_s_substep,
-                self.grid.var.river_storage_alpha,
-                self.grid.var.river_storage_beta,
+            (
+                self.routing.router.get_total_storage(
+                    self.grid.var.discharge_in_rivers_m3_s_substep,
+                    self.grid.var.river_storage_alpha,
+                    self.grid.var.river_storage_beta,
+                )
+                .astype(np.float64)
+                .sum()
             )
-            .astype(np.float64)
-            .sum()
+            + self.grid.var.retention_basin_storage_m3.astype(
+                np.float64
+            ).sum()  # retention basins are considered part of the hydrological system, as they can store water and affect the water balance
         )
 
     def get_waterbodies_storage_m3(self) -> np.float64:
