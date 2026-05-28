@@ -7,6 +7,7 @@
 - Pre-allocate numpy arrays in reporter for both time and data. This uses significantly less memory as compared to Python lists, and because arrays are pre-allocated they do not cause RAM issues very late in the run but immediately instead.
 - Include an array tracking household expected annual damages (based on adaptation status). 
 - Support exporting household attributes (such as ead) using the reporter in run_yearly.
+- When multiple outflow basins were selected that are not coastal basins, it could happen that some basins were erroneously excluded. This is now fixed.
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
