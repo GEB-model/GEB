@@ -98,7 +98,7 @@ MERIT_PASSWORD=<your_password>
 DESTINATION_EARTH_KEY=edh_key_<remainder_of_your_API_key>
 ```
 
-You can find the personal access token [here](https://earthdatahub.destine.eu/account-settings).
+You can manage your Destination Earth API keys [here](https://auth.destine.eu/realms/desp/account/api-keys).
 
 3.  To use forecasts in GEB, unflag the build-method "setup_forecasts" in the build.yml file. This will trigger the downloading and processing of ECMWF ensemble forecasts from the ECMWF archive. To access ECMWF forecasts, request access to the [ECMWF MARS archive](https://confluence.ecmwf.int/display/WEBAPI/Access+MARS). Afterwards, find your [API key](https://api.ecmwf.int/v1/key/) and add the content to the ".env"-file in the GEB repository.
 
