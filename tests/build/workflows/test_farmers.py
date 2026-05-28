@@ -10,8 +10,13 @@ from tqdm import tqdm
 
 from geb.build.data_catalog import DataCatalog
 from geb.build.workflows.farmers import (
+    count_crops_by_field_year,
     create_farm_distributions,
     create_farms_numba,
+    create_lowder_target_farm_areas,
+    dominant_crop_by_field_year,
+    grow_farms_from_lowder_targets,
+    prepare_projected_fields,
 )
 from geb.workflows.raster import (
     interpolate_na_2d,
@@ -271,4 +276,168 @@ def test_fetch_HRL_crop_types() -> None:
     assert crop_types_over_time.dims[0] == "year"
     assert list(crop_types_over_time["year"].values) == years
     assert crop_types_over_time.sizes["year"] == len(years)
-    pass
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_determine_farmers_from_boundaries_and_HRL_crops() -> None:
+    """Use HRL crop types and field boundaries to determine farms."""
+    logger = logging.getLogger("test_determine_farmers_from_boundaries_and_HRL_crops")
+
+    # First fetch the HRL crop types dataset
+    years = [2017, 2018, 2019, 2020, 2021, 2022, 2023]
+    crop_types_per_year: list[xr.DataArray] = []
+
+    for year in years:
+        crop_types = (
+            DataCatalog(logger=logger)
+            .fetch(
+                f"hrl_crop_types_{year}",
+                bounds=BOUNDS,
+                year=year,
+            )
+            .read(
+                bounds=BOUNDS,
+                year=year,
+            )
+        )
+        crop_types_per_year.append(crop_types.expand_dims(year=[year]))
+
+    crop_types_over_time = xr.concat(
+        crop_types_per_year,
+        dim="year",
+        join="exact",
+    )
+
+    # Now fetch and rasterize the field boundaries
+    field_boundaries = DataCatalog(logger=logger).fetch("field_boundaries").read(BOUNDS)
+    field_boundaries["id"] = field_boundaries["id"].astype(np.int32)
+
+    # Rasterize the field boundaries directly onto the HRL crop-types grid.
+    # This avoids resampling categorical crop data or categorical field IDs.
+    crop_template = crop_types_over_time.isel(year=0)
+
+    field_boundaries_grid: xr.DataArray = rasterize_like(
+        field_boundaries,
+        column="id",
+        raster=crop_template,
+        dtype=np.int32,
+        nodata=-1,
+        all_touched=False,
+    )
+
+    # Combine the datasets to determine the crop sequence per field.
+    crop_counts = count_crops_by_field_year(
+        crop_types_over_time=crop_types_over_time,
+        field_ids=field_boundaries_grid,
+        invalid_crop_values=(0, 65535),
+        field_nodata=-1,
+    )
+
+    dominant_crops = dominant_crop_by_field_year(crop_counts)
+
+    dominant_crop_table = dominant_crops.transpose("field_id", "year").to_pandas()
+    dominant_crop_table.columns = [
+        f"crop_{year}" for year in dominant_crop_table.columns
+    ]
+
+    field_boundaries_with_crops = field_boundaries.merge(
+        dominant_crop_table,
+        left_on="id",
+        right_index=True,
+        how="left",
+    )
+
+    crop_columns = [f"crop_{year}" for year in years]
+
+    valid_crop_mask = (
+        field_boundaries_with_crops[crop_columns].notna()
+        & field_boundaries_with_crops[crop_columns].ne(-1)
+    ).any(axis=1)
+
+    field_boundaries_with_crops = field_boundaries_with_crops[valid_crop_mask]
+
+    crop_fractions = crop_counts / crop_counts.sum("crop_type")
+    crop_fractions = crop_fractions.fillna(0)
+    crop_fractions.name = "crop_fraction"
+
+    crop_composition_table = (
+        crop_fractions.to_dataframe(name="fraction")
+        .reset_index()
+        .merge(
+            crop_counts.to_dataframe(name="pixel_count").reset_index(),
+            on=["year", "field_id", "crop_type"],
+            how="left",
+        )
+    )
+    crop_composition_table = crop_composition_table[
+        crop_composition_table["pixel_count"] > 0
+    ]
+
+    assert not field_boundaries_with_crops.empty
+    assert set(dominant_crop_table.index).issubset(set(field_boundaries["id"]))
+    assert crop_counts.sizes["year"] == len(years)
+    assert crop_composition_table["pixel_count"].gt(0).all()
+
+    # Combine the datasets to determine the unique farms
+    crop_columns = [f"crop_{year}" for year in years]
+
+    # For now, choose the ISO3 code manually for the small test region.
+    # Later this should come from the intersecting region polygon.
+    iso3 = "NLD"
+
+    farm_sizes_per_region = (
+        DataCatalog(logger=logger).fetch("lowder_farm_size_distribution").read()
+    )
+
+    region_farm_sizes = farm_sizes_per_region.loc[
+        farm_sizes_per_region["ISO3"] == iso3
+    ].drop(["Country", "Census Year", "Total"], axis=1)
+
+    assert len(region_farm_sizes) == 2, (
+        f"Found {len(region_farm_sizes)} Lowder rows for {iso3}."
+    )
+
+    projected_fields, _ = prepare_projected_fields(
+        field_boundaries_with_crops,
+        crop_columns,
+    )
+
+    cultivated_field_area_m2 = float(projected_fields["field_area_m2"].sum())
+    mean_field_area_m2 = float(projected_fields["field_area_m2"].mean())
+
+    target_farms = create_lowder_target_farm_areas(
+        region_farm_sizes=region_farm_sizes,
+        size_class_boundaries=LOWDER_SIZE_CLASS_BOUNDARIES_M2,
+        cultivated_field_area_m2=cultivated_field_area_m2,
+        iso3=iso3,
+        logger=logger,
+        random_seed=42,
+        minimum_fields_per_farm=1.0,
+        mean_field_area_m2=mean_field_area_m2,
+    )
+
+    fields_with_farms, farms, diagnostics = grow_farms_from_lowder_targets(
+        fields=field_boundaries_with_crops,
+        target_farms=target_farms,
+        crop_columns=crop_columns,
+        random_seed=42,
+        max_distance_m=500.0,
+        distance_weight=0.45,
+        crop_sequence_weight=0.35,
+        switch_timing_weight=0.20,
+        target_overshoot_tolerance=1.25,
+    )
+
+    logger.info("Farm reconstruction diagnostics: %s", diagnostics)
+
+    assert not fields_with_farms.empty
+    assert not farms.empty
+    assert "farmer_id" in fields_with_farms.columns
+    assert "farmer_id" in farms.columns
+    assert fields_with_farms["farmer_id"].notna().all()
+    assert farms["area_ha"].gt(0).all()
+    assert np.isclose(
+        farms["area_m2"].sum(),
+        projected_fields["field_area_m2"].sum(),
+        rtol=0.01,
+    )
