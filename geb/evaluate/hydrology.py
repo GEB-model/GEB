@@ -2462,7 +2462,7 @@ class Hydrology:
                 "col": "KGE",
                 "label": "KGE",
                 "title": "Kling-Gupta Efficiency",
-\                "ylim": (-1.0, 1.0),
+                "ylim": (-1.0, 1.0),
                 "reference": 1.0,
                 "unit": "(−)",
             },
@@ -2554,8 +2554,6 @@ class Hydrology:
                     "linewidth": 0,
                 },
             )
-
-        
 
         self.model.logger.info("Creating evaluation metrics skill score plots...")
 
