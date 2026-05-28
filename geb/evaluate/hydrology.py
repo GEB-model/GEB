@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import contextily as ctx
 import geopandas as gpd
@@ -15,6 +15,7 @@ import pandas as pd
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
+from matplotlib.transforms import blended_transform_factory
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
@@ -1842,6 +1843,15 @@ class Hydrology:
             )
         ].copy()
 
+        # In merged multi-cluster runs some rivers may not have output files, mostly caused by the outflow reporter to be false in the model.yml. Filter out those rivers here.
+        rivers_of_interest = rivers_of_interest[
+            rivers_of_interest.index.map(
+                lambda rid: (
+                    discharge_folder / f"river_outflow_hourly_m3_per_s_{rid}.parquet"
+                ).exists()
+            )
+        ].copy()
+
         discharge: pd.DataFrame = read_discharge_per_river(
             folder=discharge_folder,
             rivers=rivers_of_interest,
@@ -1959,6 +1969,7 @@ class Hydrology:
         discharge_observations_daily: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_daily"]
         )
+        waterbodies = read_geom(self.model.files["geom"]["waterbodies/waterbody_data"])
 
         if not discharge_observations_hourly.empty:
             discharge_observations_hourly = regularize_discharge_timeseries(
@@ -2214,35 +2225,26 @@ class Hydrology:
                 region_geom = read_geom(
                     self.model.files["geom"]["mask"]
                 )  # load the region shapefile
-                try:
-                    rivers, discharge = self.get_discharge_per_river(run_name)
-                except FileNotFoundError as e:
-                    # In merged multi-cluster runs not all river output files may be
-                    # present. Skip the map in that case rather than crashing.
-                    self.model.logger.warning(f"Skipping discharge map: {e}")
-                    rivers, discharge = None, None
-                if rivers is not None:
-                    assert discharge is not None
-                    for river_id in discharge.columns:
-                        rivers.loc[river_id, "discharge_m3_per_s"] = discharge[
-                            river_id
-                        ].mean()
 
-                    waterbodies = read_geom(
-                        self.model.files["geom"]["waterbodies/waterbody_data"]
-                    )
-                    create_discharge_folium_map(
-                        evaluation_gdf=evaluation_gdf,
-                        output_path=self.output_folder
-                        / "discharge_evaluation_map.html",
-                        timeseries_plot_folder=self.output_folder / "timeseries",
-                        return_period_plot_folder=self.output_folder / "return_periods",
-                        region_geom=region_geom,
-                        rivers=rivers,
-                        waterbodies=waterbodies,
-                    )
+                rivers, discharge = self.get_discharge_per_river(
+                    run_name
+                )  # load in the rivers
+                for river_id in discharge.columns:
+                    rivers.loc[river_id, "discharge_m3_per_s"] = discharge[
+                        river_id
+                    ].mean()  # calculate mean per river used to scale the river line widths on the folium map
 
-                    self.model.logger.info("Discharge evaluation dashboard created.")
+                create_discharge_folium_map(
+                    evaluation_gdf=evaluation_gdf,
+                    output_path=self.output_folder / "discharge_evaluation_map.html",
+                    timeseries_plot_folder=self.output_folder / "timeseries",
+                    return_period_plot_folder=self.output_folder / "return_periods",
+                    region_geom=region_geom,
+                    rivers=rivers,
+                    waterbodies=waterbodies,
+                )
+
+                self.model.logger.info("Discharge evaluation dashboard created.")
 
             scores: dict[str, float | None] = {
                 "KGE_hourly": float(evaluation_df["KGE_hourly"].median()),
@@ -2317,103 +2319,94 @@ class Hydrology:
     def prepare_external_evaluation(
         self,
         external_evaluation_folder: str | Path | None = None,
-        *args: Any,
         **kwargs: Any,
     ) -> dict[str, pd.DataFrame]:
-        """Filter external model evaluation CSVs to the stations present in the GEB evaluation.
+        """Filter external model evaluation CSVs to the stations present in this model.
 
-        Can be called in two ways:
+        Reads every ``.csv`` in ``external_evaluation_folder`` (one file per external
+        model), keeps only rows whose station name matches model stations, saves the
+        filtered results to ``self.output_folder`` as
+        ``external_evaluation_filtered_<model_name>.xlsx``, and returns them.
 
-        1. **With a folder** — reads every ``*.csv`` in ``external_evaluation_folder``
-           (one file per external model), keeps only rows whose station name matches
-           those in the GEB ``evaluation_metrics.xlsx``, saves the filtered subsets
-           to ``self.output_folder`` as
-           ``external_evaluation_filtered_<model_name>.csv``, and returns them.
-        2. **Without a folder** — first looks for the default external evaluation
-           folder at ``../../merged/external_evaluation_data`` relative to the
-           current working directory (the conventional location for merged-model
-           runs). If that folder exists its CSVs are filtered and saved as above.
-           Otherwise any previously saved ``external_evaluation_filtered_*.csv``
-           files in ``self.output_folder`` are loaded and returned directly.
+        When no folder is provided, the folder ``external_evaluation_data/`` in
+        the root models directory (e.g. ``large_scale6/``) is used, found by going
+        three levels up from ``output_folder`` (``output/`` → ``base/`` → model dir
+        → models root). If the folder does not exist, an empty dict is returned.
 
-        Can be called standalone from the CLI::
-
-            geb evaluate hydrology.prepare_external_evaluation
-            # or with an explicit path:
-            geb evaluate hydrology.prepare_external_evaluation \\
-                --external-evaluation-folder /path/to/external_models/
+        Station names are resolved from ``evaluation_metrics.xlsx`` when it exists
+        (i.e. after :meth:`evaluate_discharge` has been run), otherwise they are
+        read directly from ``discharge_snapped_locations.geoparquet``.
 
         Notes:
             Station names are matched case-insensitively.
 
         Args:
-            external_evaluation_folder: Directory containing one CSV file per
-                external model. Each file must have station names as its row index
-                and evaluation metrics (e.g. KGE, NSE, R2, RMSE, RRMSE) as columns.
-                The filename stem is used as the model label. When ``None``, the
-                default location ``../../merged/external_evaluation_data`` is tried
-                first, falling back to previously saved filtered CSVs.
-            *args: Ignored (absorbed for CLI compatibility).
+            external_evaluation_folder: Directory containing one CSV per external
+                model. Each file must have station names as the row index and
+                evaluation metrics (KGE, NSE, R2, RMSE, RRMSE, …) as columns.
+                The filename stem is used as the model label. Defaults to
+                ``external_evaluation_data/`` two levels above ``output_folder``
+                (i.e. the models directory level, e.g.
+                ``large_scale6/external_evaluation_data/``).
             **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
 
         Returns:
             Mapping from model label to a DataFrame of matched stations (index =
             station name, columns = metric columns from the source CSV).
-
-        Raises:
-            FileNotFoundError: If a folder is supplied explicitly but the GEB
-                ``evaluation_metrics.xlsx`` does not yet exist in
-                ``self.output_folder``.
         """
-        # Resolve the folder to use: explicit > default location > saved CSVs.
-        _DEFAULT_EXTERNAL_FOLDER = Path("../../merged/external_evaluation_data")
+        # output_folder resolves to <models_dir>/<model>/base/output.
+        # Three levels up always reaches <models_dir> (large_scale6/).
+        default_folder = (
+            self.model.output_folder.resolve().parent.parent.parent
+            / "external_evaluation_data"
+        )
+        folder: Path = (
+            Path(external_evaluation_folder)
+            if external_evaluation_folder is not None
+            else default_folder
+        )
 
-        if external_evaluation_folder is None:
-            resolved = _DEFAULT_EXTERNAL_FOLDER.resolve()
-            if resolved.exists():
-                external_evaluation_folder = resolved
-                self.model.logger.info(
-                    f"Using default external evaluation folder: {resolved}"
-                )
+        if not folder.exists():
+            self.model.logger.info(
+                "No external evaluation data folder found at %s, skipping.", folder
+            )
+            return {}
 
-        if external_evaluation_folder is not None:
-            geb_xlsx = self.output_folder / "evaluation_metrics.xlsx"
-            if not geb_xlsx.exists():
-                raise FileNotFoundError(
-                    f"GEB evaluation file not found: {geb_xlsx}. "
-                    "Run evaluate_discharge first."
-                )
-            geb_df: pd.DataFrame = pd.read_excel(geb_xlsx)
-            our_stations: set[str] = set(geb_df["station_name"].dropna().str.upper())
-
-            external_models: dict[str, pd.DataFrame] = {}
-            for csv_path in sorted(Path(external_evaluation_folder).glob("*.csv")):
-                raw: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
-                raw.index = raw.index.str.upper()
-                filtered: pd.DataFrame = raw[raw.index.isin(our_stations)].copy()
-                label: str = csv_path.stem
-                self.model.logger.info(
-                    f"External model '{label}': {len(filtered)}/{len(raw)} stations matched."
-                )
-                filtered.to_csv(
-                    self.output_folder / f"external_evaluation_filtered_{label}.csv"
-                )
-                if not filtered.empty:
-                    external_models[label] = filtered
+        # Prefer the already-evaluated station list so we only include stations
+        # that actually have GEB results; fall back to the geom file otherwise.
+        geb_xlsx = self.output_folder / "evaluation_metrics.xlsx"
+        if geb_xlsx.exists():
+            our_stations: set[str] = set(
+                pd.read_excel(geb_xlsx)["station_name"].dropna().str.upper()
+            )
         else:
-            # Load previously saved filtered CSVs so the user does not need to
-            # re-specify the original folder or re-run evaluate_discharge.
-            external_models = {}
-            for saved in sorted(
-                self.output_folder.glob("external_evaluation_filtered_*.csv")
-            ):
-                label = saved.stem.removeprefix("external_evaluation_filtered_")
-                df: pd.DataFrame = pd.read_csv(saved, index_col=0)
-                if not df.empty:
-                    external_models[label] = df
-                    self.model.logger.info(
-                        f"Loaded cached external model '{label}' ({len(df)} stations)."
-                    )
+            snapped = read_geom(
+                self.model.files["geom"]["discharge/discharge_snapped_locations"]
+            )
+            our_stations = set(
+                snapped["discharge_observations_station_name"].dropna().str.upper()
+            )
+
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+        external_models: dict[str, pd.DataFrame] = {}
+        for csv_path in sorted(folder.glob("*.csv")):
+            all_stations_df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
+            all_stations_df.index = all_stations_df.index.str.upper()
+            matched_stations_df: pd.DataFrame = all_stations_df[
+                all_stations_df.index.isin(our_stations)
+            ].copy()
+            model_name: str = csv_path.stem
+            self.model.logger.info(
+                "External model '%s': %d/%d stations matched.",
+                model_name,
+                len(matched_stations_df),
+                len(all_stations_df),
+            )
+            matched_stations_df.to_excel(
+                self.output_folder / f"external_evaluation_filtered_{model_name}.xlsx"
+            )
+            if not matched_stations_df.empty:
+                external_models[model_name] = matched_stations_df
 
         return external_models
 
@@ -2421,18 +2414,14 @@ class Hydrology:
         self,
         export: bool = True,
         include_geb: bool = True,
-        *args: Any,
         **kwargs: Any,
     ) -> None:
         """Create skill score violin+boxplot graphs for hydrological model evaluation metrics.
 
         Generates a 2×3 grid of violin plots (with overlaid box plots) for the
         discharge evaluation metrics. Each panel shows the distribution across all
-        gauging stations and annotates the median.
-
-        External model data is loaded automatically via
-        :meth:`prepare_external_evaluation` (no folder argument needed here — run
-        that method first to filter and save the external CSVs).
+        gauging stations and annotates the median. External model data is loaded
+        automatically using`prepare_external_evaluation` functionality.
 
         Notes:
             External CSV files must have station names as the row index and metric
@@ -2443,13 +2432,13 @@ class Hydrology:
             export: Whether to save the figure to an SVG file.
             include_geb: When ``False``, GEB is omitted from the plot so only
                 external models are shown. Useful for a standalone comparison.
-            *args: Ignored (absorbed for CLI compatibility).
             **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
         """
-        # ── Load our own evaluation results ──────────────────────────────────────
-        geb_xlsx_path = self.output_folder / "evaluation_metrics.xlsx"
+        geb_evaluation_xlsx = self.output_folder / "evaluation_metrics.xlsx"
         evaluation_df: pd.DataFrame = (
-            pd.read_excel(geb_xlsx_path) if geb_xlsx_path.exists() else pd.DataFrame()
+            pd.read_excel(geb_evaluation_xlsx)
+            if geb_evaluation_xlsx.exists()
+            else pd.DataFrame()
         )
 
         if include_geb and evaluation_df.empty:
@@ -2458,9 +2447,6 @@ class Hydrology:
             )
             return
 
-        # ── Load external model data via the dedicated helper ─────────────────────
-        # Loads saved filtered CSVs from self.output_folder (produced by
-        # prepare_external_evaluation). Returns an empty dict if none exist.
         external_models: dict[str, pd.DataFrame] = self.prepare_external_evaluation()
 
         if not include_geb and not external_models:
@@ -2470,15 +2456,13 @@ class Hydrology:
             )
             return
 
-        # ── Metric definitions ────────────────────────────────────────────────────
         # Fixed y-limits and reference values per metric; None means data-driven.
         metric_configs: list[dict] = [
             {
                 "col": "KGE",
                 "label": "KGE",
                 "title": "Kling-Gupta Efficiency",
-                "color": "#2E86AB",
-                "ylim": (-1.0, 1.0),
+\                "ylim": (-1.0, 1.0),
                 "reference": 1.0,
                 "unit": "(−)",
             },
@@ -2486,17 +2470,7 @@ class Hydrology:
                 "col": "NSE",
                 "label": "NSE",
                 "title": "Nash-Sutcliffe Efficiency",
-                "color": "#A23B72",
                 "ylim": (-1.0, 1.0),
-                "reference": 1.0,
-                "unit": "(−)",
-            },
-            {
-                "col": "R",
-                "label": "R",
-                "title": "Pearson Correlation",
-                "color": "#F18F01",
-                "ylim": (0.0, 1.0),
                 "reference": 1.0,
                 "unit": "(−)",
             },
@@ -2504,7 +2478,6 @@ class Hydrology:
                 "col": "R2",
                 "label": "R²",
                 "title": "Coefficient of Determination",
-                "color": "#4CAF50",
                 "ylim": (0.0, 1.0),
                 "reference": 1.0,
                 "unit": "(−)",
@@ -2513,7 +2486,6 @@ class Hydrology:
                 "col": "RMSE",
                 "label": "RMSE",
                 "title": "Root Mean Squared Error",
-                "color": "#FF6B6B",
                 "ylim": None,
                 "reference": 0.0,
                 "unit": "(m³/s)",
@@ -2522,25 +2494,30 @@ class Hydrology:
                 "col": "RRMSE",
                 "label": "RRMSE",
                 "title": "Relative RMSE",
-                "color": "#CE93D8",
                 "ylim": None,
                 "reference": 0.0,
                 "unit": "(−)",
             },
         ]
 
-        # Colour palette for external models (cycles if more than 6).
-        ext_colors: dict[str, str] = {
-            name: c
-            for name, c in zip(
+        # Colours are per model, consistent across all metric panels.
+        GEB_COLOR = "#1f77b4"
+        ext_colors: dict[str, str] = dict(
+            zip(
                 external_models,
-                ["#FFD700", "#00CED1", "#FF8C00", "#ADFF2F", "#FF69B4", "#40E0D0"],
+                ["#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2"],
             )
-        }
+        )
+        model_colors: dict[str, str] = (
+            {"GEB": GEB_COLOR} if include_geb else {}
+        ) | ext_colors
 
-        # ── Helper: draw one violin + box at a given x position ──────────────────
         def _draw_violin_box(
-            ax: plt.Axes, values: np.ndarray, position: float, color: str
+            ax: plt.Axes,
+            values: np.ndarray,
+            position: float,
+            bar_color: str,
+            violin_width: float = 0.35,
         ) -> None:
             if len(values) >= 3:
                 parts = ax.violinplot(
@@ -2548,141 +2525,169 @@ class Hydrology:
                     positions=[position],
                     showmedians=False,
                     showextrema=False,
-                    widths=0.35,
+                    widths=violin_width,
                 )
-                for pc in parts["bodies"]:
-                    pc.set_facecolor(color)
-                    pc.set_edgecolor("white")
+                for pc in cast(list, parts["bodies"]):
+                    pc.set_facecolor(bar_color)
+                    pc.set_edgecolor(bar_color)
                     pc.set_alpha(0.45)
             ax.boxplot(
                 values,
                 positions=[position],
-                widths=0.12,
+                widths=violin_width * 0.35,
                 patch_artist=True,
-                medianprops={"color": "white", "linewidth": 2.5},
-                boxprops={"facecolor": color, "alpha": 0.85, "linewidth": 1.2},
-                whiskerprops={"color": "white", "linewidth": 1.2},
-                capprops={"color": "white", "linewidth": 1.2},
+                medianprops={"color": "white", "linewidth": 2.0, "zorder": 5},
+                boxprops={
+                    "facecolor": bar_color,
+                    "alpha": 0.9,
+                    "linewidth": 0.8,
+                    "edgecolor": bar_color,
+                },
+                whiskerprops={"color": bar_color, "linewidth": 1.0},
+                capprops={"color": bar_color, "linewidth": 1.0},
                 flierprops={
                     "marker": "o",
-                    "markerfacecolor": color,
-                    "markeredgecolor": "white",
-                    "markersize": 4,
-                    "alpha": 0.7,
+                    "markerfacecolor": bar_color,
+                    "markeredgecolor": bar_color,
+                    "markersize": 3,
+                    "alpha": 0.5,
+                    "linewidth": 0,
                 },
             )
 
-        # ── Build figure ──────────────────────────────────────────────────────────
+        
+
         self.model.logger.info("Creating evaluation metrics skill score plots...")
-        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-        fig.suptitle(
-            "Discharge Evaluation — Skill Score Distributions",
-            fontsize=16,
-            fontweight="bold",
-        )
 
-        for ax, cfg in zip(axes.flat, metric_configs):
-            col: str = cfg["col"]
-
-            # Collect data for GEB and each external model for this metric.
-            geb_values: np.ndarray = (
-                evaluation_df[col].dropna().to_numpy(dtype=float)
-                if include_geb
-                else np.array([], dtype=float)
-            )
-            ext_values: dict[str, np.ndarray] = {
-                name: df[col].dropna().to_numpy(dtype=float)
-                for name, df in external_models.items()
-                if col in df.columns
-            }
-            ext_values = {k: v for k, v in ext_values.items() if v.size > 0}
-
-            if geb_values.size == 0 and not ext_values:
-                ax.set_visible(False)
-                continue
-
-            # Assign evenly spaced x positions to each model present.
-            models_to_plot: list[tuple[str, np.ndarray, str]] = []
-            if include_geb and geb_values.size > 0:
-                models_to_plot.append(("GEB", geb_values, cfg["color"]))
-            for name, vals in ext_values.items():
-                models_to_plot.append((name, vals, ext_colors[name]))
-
-            positions = (
-                np.linspace(-0.4, 0.4, len(models_to_plot))
-                if len(models_to_plot) > 1
-                else [0.0]
-            )
-
-            for (name, vals, color), pos in zip(models_to_plot, positions):
-                _draw_violin_box(ax, vals, pos, color)
-                median = float(np.median(vals))
-                y_top = cfg["ylim"][1] if cfg["ylim"] else float(np.max(vals)) * 1.05
-                ax.text(
-                    pos,
-                    y_top,
-                    f"{median:.3f}\nn={len(vals)}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=7,
-                    color=color,
-                    alpha=0.9,
-                )
-
-            ax.axhline(
-                cfg["reference"],
+        with plt.style.context("dark_background"):
+            fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+            fig.patch.set_facecolor("black")
+            fig.suptitle(
+                "Discharge Evaluation — Skill Score Distributions",
+                fontsize=14,
+                fontweight="bold",
                 color="white",
-                linewidth=0.8,
-                linestyle="--",
-                alpha=0.4,
+                y=1.01,
             )
-            ax.set_title(
-                f"{cfg['label']}  {cfg['unit']}", fontsize=12, fontweight="bold"
-            )
-            ax.set_xlabel(cfg["title"], fontsize=9)
-            if cfg["ylim"] is not None:
-                ax.set_ylim(*cfg["ylim"])
-            ax.set_xticks([])
-            ax.grid(True, axis="y", alpha=0.15, color="white")
 
-        # ── Legend ────────────────────────────────────────────────────────────────
-        legend_handles: list[Line2D] = []
-        if include_geb and not evaluation_df.empty:
-            legend_handles.append(
-                Line2D(
-                    [0],
-                    [0],
-                    color=metric_configs[0]["color"],
-                    linewidth=6,
-                    alpha=0.85,
-                    label="GEB",
+            for ax, cfg in zip(axes.flat, metric_configs):
+                metric_col: str = cfg["col"]
+
+                # Collect metric values per model; a panel is shown as long as at
+                # least one model has data for this metric.
+                geb_metric_values: np.ndarray = (
+                    evaluation_df[metric_col].dropna().to_numpy(dtype=float)
+                    if include_geb and metric_col in evaluation_df.columns
+                    else np.array([], dtype=float)
                 )
-            )
-        for name, color in ext_colors.items():
-            legend_handles.append(
-                Line2D([0], [0], color=color, linewidth=6, alpha=0.85, label=name)
-            )
-        if legend_handles:
-            fig.legend(
-                handles=legend_handles,
-                loc="lower center",
-                ncol=len(legend_handles),
-                fontsize=10,
-                frameon=False,
-                labelcolor="white",
-                bbox_to_anchor=(0.5, -0.02),
-            )
+                external_metric_values: dict[str, np.ndarray] = {
+                    model_name: values
+                    for model_name, model_df in external_models.items()
+                    if metric_col in model_df.columns
+                    for values in (model_df[metric_col].dropna().to_numpy(dtype=float),)
+                    if values.size > 0
+                }
 
-        plt.tight_layout()
+                if geb_metric_values.size == 0 and not external_metric_values:
+                    ax.set_visible(False)
+                    continue
 
-        if export:
-            suffix = "" if include_geb else "_external_only"
-            out_path = self.output_folder / f"evaluation_skill_scores{suffix}.svg"
-            plt.savefig(out_path, bbox_inches="tight")
-            self.model.logger.info(f"Skill score plot saved to: {out_path}")
+                models_with_data: list[tuple[str, np.ndarray]] = []
+                if geb_metric_values.size > 0:
+                    models_with_data.append(("GEB", geb_metric_values))
+                for model_name, metric_values in external_metric_values.items():
+                    models_with_data.append((model_name, metric_values))
 
-        plt.show()
-        plt.close()
+                x_positions = (
+                    np.linspace(-0.4, 0.4, len(models_with_data))
+                    if len(models_with_data) > 1
+                    else np.array([0.0])
+                )
+
+                for (model_name, metric_values), x_position in zip(
+                    models_with_data, x_positions
+                ):
+                    bar_color = model_colors[model_name]
+                    _draw_violin_box(ax, metric_values, x_position, bar_color)
+                    median_value = float(np.median(metric_values))
+                    # Use a blended transform so the annotation is always at the
+                    # top of the axes (y in axes-fraction) regardless of data range,
+                    # while x stays in data coordinates so it tracks each violin.
+                    transform = blended_transform_factory(ax.transData, ax.transAxes)
+                    ax.text(
+                        x_position,
+                        1.03,
+                        f"med={median_value:.2f}  n={len(metric_values)}",
+                        transform=transform,
+                        ha="center",
+                        va="bottom",
+                        fontsize=7,
+                        color="white",
+                    )
+
+                ax.axhline(
+                    cfg["reference"],
+                    color="0.5",
+                    linewidth=0.8,
+                    linestyle="--",
+                    zorder=0,
+                )
+                ax.set_facecolor("black")
+                ax.set_title(
+                    f"{cfg['label']} — {cfg['title']} {cfg['unit']}",
+                    fontsize=9,
+                    fontweight="bold",
+                    color="white",
+                    pad=18,  # extra headroom for the annotation above the axes
+                )
+                if cfg["ylim"] is not None:
+                    ax.set_ylim(*cfg["ylim"])
+                ax.set_xticks([])
+                ax.tick_params(axis="y", labelsize=8, colors="white")
+                ax.set_xlabel("")
+                for spine in ax.spines.values():
+                    spine.set_edgecolor("0.4")
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+                ax.spines["bottom"].set_visible(False)
+                ax.yaxis.label.set_color("white")
+                ax.grid(axis="y", color="0.25", linewidth=0.5)
+
+            legend_handles: list[Line2D] = [
+                Line2D([0], [0], color=color, linewidth=5, label=name)
+                for name, color in model_colors.items()
+                if name == "GEB" or name in ext_colors
+            ]
+            if legend_handles:
+                leg = fig.legend(
+                    handles=legend_handles,
+                    loc="lower center",
+                    ncol=len(legend_handles),
+                    fontsize=9,
+                    frameon=True,
+                    framealpha=1.0,
+                    edgecolor="0.4",
+                    bbox_to_anchor=(0.5, -0.04),
+                )
+                leg.get_frame().set_facecolor("black")
+                for text in leg.get_texts():
+                    text.set_color("white")
+
+            plt.tight_layout()
+
+            if export:
+                suffix = "" if include_geb else "_external_only"
+                for extension in ("svg", "png"):
+                    out_path = (
+                        self.output_folder
+                        / f"evaluation_skill_scores{suffix}.{extension}"
+                    )
+                    plt.savefig(out_path, bbox_inches="tight", dpi=150)
+                    self.model.logger.info("Skill score plot saved to: %s", out_path)
+
+            plt.show()
+            plt.close()
+
         self.model.logger.info("Skill score plots created.")
 
     def plot_water_circle(
