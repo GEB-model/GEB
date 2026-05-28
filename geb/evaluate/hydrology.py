@@ -2271,7 +2271,7 @@ class Hydrology:
                 self.model.logger.info("Discharge evaluation dashboard created.")
 
                 # GEB standalone plot — all GEB stations.
-                self.plot_skill_scores(
+                self.plot_skill_score_boxplots(
                     export=True, include_geb=True, matched_only=False
                 )
                 self.plot_skill_score_maps(export=True)
@@ -2280,7 +2280,7 @@ class Hydrology:
                 # combined plot restricted to stations present in both datasets
                 # so the comparison is fair.
                 if self._read_external_evaluation_raw():
-                    self.plot_skill_scores(
+                    self.plot_skill_score_boxplots(
                         export=True, include_geb=True, matched_only=True
                     )
 
@@ -2597,7 +2597,7 @@ class Hydrology:
 
         self.model.logger.info("All skill score maps saved to: %s", maps_folder)
 
-    def plot_skill_scores(
+    def plot_skill_score_boxplots(
         self,
         export: bool = True,
         include_geb: bool = True,

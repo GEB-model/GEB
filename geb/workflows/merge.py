@@ -28,10 +28,6 @@ TABLE_FILES_COLUMNS = [
     "input/table/discharge/discharge_observations_daily.parquet",
 ]
 
-# Tables where each cluster contributes different rows → concatenate row-wise.
-# Only include files that are actually present in at least some clusters.
-TABLE_FILES_ROWS: list[str] = []
-
 
 def _log_cluster_status(models_dir: Path, cluster_prefix: str) -> None:
     """Log a phase-completion table for all matching cluster directories.
@@ -277,11 +273,6 @@ def merge_model_outputs(
     logger.info("[input] Merging station tables (column-wise) …")
     for rel_path in TABLE_FILES_COLUMNS:
         _merge_and_write(cluster_bases, rel_path, merged_base / rel_path, axis=1)
-        merged_paths.add(rel_path)
-
-    logger.info("[input] Merging waterbody tables (row-wise) …")
-    for rel_path in TABLE_FILES_ROWS:
-        _merge_and_write(cluster_bases, rel_path, merged_base / rel_path, axis=0)
         merged_paths.add(rel_path)
 
     logger.info("[input] Symlinking remaining input files …")
