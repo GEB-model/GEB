@@ -54,7 +54,7 @@ mpl.rcParams["savefig.edgecolor"] = "#000000"
 
 def _calculate_discharge_validation_metrics(
     validation_df: pd.DataFrame,
-) -> tuple[float, float, float, float, float, float, float]:
+) -> tuple[float, float, float, float, float, float]:
     """Calculate station-level discharge validation metrics.
 
     Args:
@@ -67,7 +67,6 @@ def _calculate_discharge_validation_metrics(
             - Nash-Sutcliffe efficiency (dimensionless).
             - Pearson correlation coefficient (dimensionless).
             - Coefficient of determination R² (dimensionless).
-            - Mean squared error (m6/s2).
             - Root mean squared error (m3/s).
             - Relative root mean squared error, RMSE / mean(observed) (dimensionless).
     """
@@ -75,7 +74,7 @@ def _calculate_discharge_validation_metrics(
         ["discharge_observations", "discharge_simulations"]
     ].dropna()
     if valid_pairs_df.shape[0] < 2:
-        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
 
     y_true: np.ndarray = valid_pairs_df["discharge_observations"].values
     y_pred: np.ndarray = valid_pairs_df["discharge_simulations"].values
@@ -85,13 +84,12 @@ def _calculate_discharge_validation_metrics(
     nse: float = float(evaluator.nash_sutcliffe_efficiency())
     r_value: float = float(evaluator.pearson_correlation_coefficient())
     r2: float = float(evaluator.pearson_correlation_coefficient_square())
-    mse: float = float(evaluator.mean_squared_error())
     rmse: float = float(evaluator.root_mean_squared_error())
     # RRMSE = RMSE / mean(observed); protected against zero mean
     mean_obs: float = float(np.mean(y_true))
     rrmse: float = rmse / mean_obs if mean_obs > 0.0 else np.nan
 
-    return kge, nse, r_value, r2, mse, rmse, rrmse
+    return kge, nse, r_value, r2, rmse, rrmse
 
 
 def _plot_validation_return_periods(
@@ -2080,7 +2078,7 @@ class Hydrology:
                     # stop
                     continue
 
-                KGE, NSE, R, R2, MSE, RMSE, RRMSE = (
+                KGE, NSE, R, R2, RMSE, RRMSE = (
                     _calculate_discharge_validation_metrics(validation_df)
                 )
 
@@ -2112,14 +2110,12 @@ class Hydrology:
                     "NSE": NSE,
                     "R": R,
                     "R2": R2,
-                    "MSE": MSE,
                     "RMSE": RMSE,
                     "RRMSE": RRMSE,
                     f"KGE_{freq_label}": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
                     f"NSE_{freq_label}": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
                     f"R_{freq_label}": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
                     f"R2_{freq_label}": R2,
-                    f"MSE_{freq_label}": MSE,
                     f"RMSE_{freq_label}": RMSE,
                     f"RRMSE_{freq_label}": RRMSE,
                 }
@@ -2136,7 +2132,6 @@ class Hydrology:
                         NSE_daily,
                         R_daily,
                         R2_daily,
-                        MSE_daily,
                         RMSE_daily,
                         RRMSE_daily,
                     ) = _calculate_discharge_validation_metrics(validation_df_daily)
@@ -2146,7 +2141,6 @@ class Hydrology:
                             "NSE_daily": NSE_daily,
                             "R_daily": R_daily,
                             "R2_daily": R2_daily,
-                            "MSE_daily": MSE_daily,
                             "RMSE_daily": RMSE_daily,
                             "RRMSE_daily": RRMSE_daily,
                         }
@@ -2160,7 +2154,6 @@ class Hydrology:
                             "NSE_hourly": np.nan,
                             "R_hourly": np.nan,
                             "R2_hourly": np.nan,
-                            "MSE_hourly": np.nan,
                             "RMSE_hourly": np.nan,
                             "RRMSE_hourly": np.nan,
                         }
@@ -2177,7 +2170,6 @@ class Hydrology:
                     NSE_monthly,
                     R_monthly,
                     R2_monthly,
-                    MSE_monthly,
                     RMSE_monthly,
                     RRMSE_monthly,
                 ) = _calculate_discharge_validation_metrics(validation_df_monthly)
@@ -2187,7 +2179,6 @@ class Hydrology:
                         "NSE_monthly": NSE_monthly,
                         "R_monthly": R_monthly,
                         "R2_monthly": R2_monthly,
-                        "MSE_monthly": MSE_monthly,
                         "RMSE_monthly": RMSE_monthly,
                         "RRMSE_monthly": RRMSE_monthly,
                     }
@@ -2210,28 +2201,24 @@ class Hydrology:
                         "NSE_monthly",
                         "R_monthly",
                         "R2_monthly",
-                        "MSE_monthly",
                         "RMSE_monthly",
                         "RRMSE_monthly",
                         "KGE_daily",
                         "NSE_daily",
                         "R_daily",
                         "R2_daily",
-                        "MSE_daily",
                         "RMSE_daily",
                         "RRMSE_daily",
                         "KGE_hourly",
                         "NSE_hourly",
                         "R_hourly",
                         "R2_hourly",
-                        "MSE_hourly",
                         "RMSE_hourly",
                         "RRMSE_hourly",
                         "KGE",
                         "NSE",
                         "R",
                         "R2",
-                        "MSE",
                         "RMSE",
                         "RRMSE",
                     ]
@@ -2302,28 +2289,24 @@ class Hydrology:
                 "NSE_hourly": float(evaluation_df["NSE_hourly"].median()),
                 "R_hourly": float(evaluation_df["R_hourly"].median()),
                 "R2_hourly": float(evaluation_df["R2_hourly"].median()),
-                "MSE_hourly": float(evaluation_df["MSE_hourly"].median()),
                 "RMSE_hourly": float(evaluation_df["RMSE_hourly"].median()),
                 "RRMSE_hourly": float(evaluation_df["RRMSE_hourly"].median()),
                 "KGE_daily": float(evaluation_df["KGE_daily"].median()),
                 "NSE_daily": float(evaluation_df["NSE_daily"].median()),
                 "R_daily": float(evaluation_df["R_daily"].median()),
                 "R2_daily": float(evaluation_df["R2_daily"].median()),
-                "MSE_daily": float(evaluation_df["MSE_daily"].median()),
                 "RMSE_daily": float(evaluation_df["RMSE_daily"].median()),
                 "RRMSE_daily": float(evaluation_df["RRMSE_daily"].median()),
                 "KGE_monthly": float(evaluation_df["KGE_monthly"].median()),
                 "NSE_monthly": float(evaluation_df["NSE_monthly"].median()),
                 "R_monthly": float(evaluation_df["R_monthly"].median()),
                 "R2_monthly": float(evaluation_df["R2_monthly"].median()),
-                "MSE_monthly": float(evaluation_df["MSE_monthly"].median()),
                 "RMSE_monthly": float(evaluation_df["RMSE_monthly"].median()),
                 "RRMSE_monthly": float(evaluation_df["RRMSE_monthly"].median()),
                 "KGE": float(evaluation_df["KGE"].median()),
                 "NSE": float(evaluation_df["NSE"].median()),
                 "R": float(evaluation_df["R"].median()),
                 "R2": float(evaluation_df["R2"].median()),
-                "MSE": float(evaluation_df["MSE"].median()),
                 "RMSE": float(evaluation_df["RMSE"].median()),
                 "RRMSE": float(evaluation_df["RRMSE"].median()),
             }
@@ -2337,28 +2320,24 @@ class Hydrology:
                 "NSE_hourly": None,
                 "R_hourly": None,
                 "R2_hourly": None,
-                "MSE_hourly": None,
                 "RMSE_hourly": None,
                 "RRMSE_hourly": None,
                 "KGE_daily": None,
                 "NSE_daily": None,
                 "R_daily": None,
                 "R2_daily": None,
-                "MSE_daily": None,
                 "RMSE_daily": None,
                 "RRMSE_daily": None,
                 "KGE_monthly": None,
                 "NSE_monthly": None,
                 "R_monthly": None,
                 "R2_monthly": None,
-                "MSE_monthly": None,
                 "RMSE_monthly": None,
                 "RRMSE_monthly": None,
                 "KGE": None,
                 "NSE": None,
                 "R": None,
                 "R2": None,
-                "MSE": None,
                 "RMSE": None,
                 "RRMSE": None,
             }
