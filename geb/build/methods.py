@@ -1,8 +1,10 @@
 """Contains classes and methods for building the dependency tree of build methods, verification etc."""
 
 import functools
+import hashlib
 import inspect
 import logging
+import random
 import tracemalloc
 from pathlib import Path
 from time import time
@@ -10,9 +12,33 @@ from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import networkx as nx
+import numpy as np
 import pandas as pd
 
 __all__: list[str] = ["build_method"]
+
+from numba import njit as _numba_njit
+
+
+@_numba_njit
+def _set_numba_seed(seed: int) -> None:
+    np.random.seed(seed)
+
+
+def _seed_from_method_name(method_name: str) -> int:
+    """Derive a deterministic 32-bit seed from a method name.
+
+    Uses SHA-256 so the result is stable regardless of PYTHONHASHSEED.
+
+    Args:
+        method_name: Name of the build method.
+
+    Returns:
+        A deterministic integer seed in the range [0, 2**32).
+    """
+    digest: bytes = hashlib.sha256(method_name.encode()).digest()
+    return int.from_bytes(digest[:4], byteorder="big")
+
 
 from typing import Protocol
 
@@ -184,6 +210,14 @@ class _build_method:
                 active_logger.info(f"Running method: {func.__name__}")
                 for key, value in kwargs.items():
                     active_logger.debug(f"{func.__name__}.{key}: {value}")
+
+                # Set deterministic seeds before each build method so that any
+                # stochastic steps (numpy, Python random, numba) produce the same
+                # output regardless of execution order or prior method calls.
+                seed: int = _seed_from_method_name(func.__name__)
+                random.seed(seed)
+                np.random.seed(seed)
+                _set_numba_seed(seed)
 
                 tracemalloc.start()
                 start_time: float = time()
