@@ -4,6 +4,7 @@ import datetime
 import functools
 import inspect
 import json
+import logging
 import subprocess
 import sys
 from operator import attrgetter
@@ -1141,31 +1142,14 @@ def merge(
     merged_name: str,
     overwrite: bool,
 ) -> None:
-    """Merge outputs from multiple GEB model clusters into a single merged model.
+    """Merge outputs from multiple GEB cluster sub-models into a single merged model.
 
-    Scans MODELS_DIR for cluster subdirectories (e.g. Europe_000, Europe_001 …),
-    and creates a merged model at MODELS_DIR/<merged-name>/ with:
-
-    \b
-    - Symlinks to all parquet files under every report subdirectory from all
-      clusters (covers hydrology.routing and any future reporters).
-    - Merged river, mask, and station geometry GeoParquets.
-    - Merged discharge observation tables.
-    - A model.yml that inherits from MODELS_DIR/model.yml.
-
-    The resulting directory has the same layout as any individual cluster, so
-    it can be evaluated directly with:
-
-    \b
-        cd MODELS_DIR/<merged-name> && geb evaluate
+    Scans MODELS_DIR for cluster subdirectories matching CLUSTER_PREFIX, merges
+    geometry files and discharge observation tables, symlinks report parquets, and
+    writes a model.yml so the result can be evaluated directly with ``geb evaluate``.
     """
-    import logging as _logging
-
-    # Always configure a visible handler when running standalone (e.g. from the
-    # debugger). force=True replaces any NullHandler that libraries may have
-    # silently installed, which would otherwise discard all output.
-    _logging.basicConfig(
-        level=_logging.INFO,
+    logging.basicConfig(
+        level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(message)s",
         datefmt="%H:%M:%S",
         force=True,
