@@ -56,7 +56,7 @@ class DestinationEarth(Adapter):
 
         Args:
             url: The URL of the Destination Earth data source.
-                Must be None, because there are multiple URLs that can be used to access the data, and the correct one is determined in the connect_API method.
+                Must be None, because there are multiple URLs that can be used to access the data, and the correct one is determined automatically.
 
         Returns:
             The current instance of the DestinationEarth adapter.
@@ -65,7 +65,7 @@ class DestinationEarth(Adapter):
             ValueError: If the DESTINATION_EARTH_KEY environment variable is not set or has an invalid format.
         """
         assert url is None, (
-            "URL must be None for Destination Earth, as it is determined in the connect_API method."
+            "URL must be None for Destination Earth, as it is determined automatically."
         )
 
         DESTINATION_EARTH_KEY: str | None = os.getenv(key="DESTINATION_EARTH_KEY")
