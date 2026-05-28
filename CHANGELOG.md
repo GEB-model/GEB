@@ -4,6 +4,8 @@
 - Update routing to include optional retention basins. These retention basins can retain water during flood peaks, and slowly release water during low-flow periods. Can be set up using `setup_retention_basins`.
 - Fix case where river discharge was 0 in waterbodies (OK), but led to division by zero error in determining alpha for river widths ([#819](https://github.com/GEB-model/GEB/issues/819)).
 - Pre-allocate numpy arrays in reporter for both time and data. This uses significantly less memory as compared to Python lists, and because arrays are pre-allocated they do not cause RAM issues very late in the run but immediately instead.
+- Include an array tracking household expected annual damages (based on adaptation status). 
+- Support exporting household attributes (such as ead) using the reporter in run_yearly.
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).

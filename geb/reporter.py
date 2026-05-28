@@ -1357,7 +1357,7 @@ class Reporter:
         self,
         module_name: str,
         name: str,
-        value: np.ndarray | int | float | bool,
+        value: np.ndarray | np.generic,
         config: dict,
     ) -> None:
         """Exports an array of values to the export folder.
