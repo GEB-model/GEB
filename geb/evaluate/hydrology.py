@@ -2283,19 +2283,16 @@ class Hydrology:
 
                 self.model.logger.info("Discharge evaluation dashboard created.")
 
-                # Always produce the full GEB-only skill score plot.
+                # GEB standalone plot — all GEB stations.
                 self.plot_skill_scores(
                     export=True, include_geb=True, matched_only=False
                 )
                 self.plot_skill_score_maps(export=True)
 
                 # When external evaluation data are present, also produce a
-                # matched-stations comparison so all curves cover the same set
-                # of gauging stations.
-                external_models: dict[str, pd.DataFrame] = (
-                    self.prepare_external_evaluation()
-                )
-                if external_models:
+                # combined plot restricted to stations present in both datasets
+                # so the comparison is fair.
+                if self._read_external_evaluation_raw():
                     self.plot_skill_scores(
                         export=True, include_geb=True, matched_only=True
                     )
@@ -2370,55 +2367,80 @@ class Hydrology:
 
         return scores
 
+    def _get_external_evaluation_folder(
+        self, external_evaluation_folder: str | Path | None = None
+    ) -> Path:
+        """Resolve the external evaluation data folder.
+
+        Defaults to ``external_evaluation_data/`` in the models-root directory.
+
+        Args:
+            external_evaluation_folder: Explicit override path.
+
+        Returns:
+            Resolved Path to the external evaluation data folder.
+        """
+        default_folder = (
+            self.model.output_folder.resolve().parent.parent.parent
+            / "external_evaluation_data"
+        )
+        return (
+            Path(external_evaluation_folder)
+            if external_evaluation_folder is not None
+            else default_folder
+        )
+
+    def _read_external_evaluation_raw(
+        self, external_evaluation_folder: str | Path | None = None
+    ) -> dict[str, pd.DataFrame]:
+        """Read all external model evaluation CSVs without filtering to GEB stations.
+
+        Args:
+            external_evaluation_folder: Override path; defaults via
+                :meth:`_get_external_evaluation_folder`.
+
+        Returns:
+            Mapping from model label to full (unfiltered) DataFrame
+            (index = station name, columns = metrics).
+        """
+        folder: Path = self._get_external_evaluation_folder(external_evaluation_folder)
+        if not folder.exists():
+            return {}
+
+        external_models: dict[str, pd.DataFrame] = {}
+        for csv_path in sorted(folder.glob("*.csv")):
+            df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
+            df.index = df.index.str.upper()
+            external_models[csv_path.stem] = df
+        return external_models
+
     def prepare_external_evaluation(
         self,
         external_evaluation_folder: str | Path | None = None,
         **kwargs: Any,
     ) -> dict[str, pd.DataFrame]:
-        """Filter external model evaluation CSVs to the stations present in this model.
+        """Filter external model evaluation CSVs to stations present in this model.
 
-        Reads every ``.csv`` in ``external_evaluation_folder`` (one file per external
-        model), keeps only rows whose station name matches model stations, saves the
-        filtered results to ``self.output_folder`` as
-        ``external_evaluation_filtered_<model_name>.xlsx``, and returns them.
-
-        When no folder is provided, the folder ``external_evaluation_data/`` in
-        the root models directory (e.g. ``large_scale6/``) is used, found by going
-        three levels up from ``output_folder`` (``output/`` → ``base/`` → model dir
-        → models root). If the folder does not exist, an empty dict is returned.
-
-        Station names are resolved from ``evaluation_metrics.xlsx`` when it exists
-        (i.e. after :meth:`evaluate_discharge` has been run), otherwise they are
-        read directly from ``discharge_snapped_locations.geoparquet``.
+        Reads each ``.csv`` in ``external_evaluation_folder`` (one file per
+        external model), keeps only rows whose station name matches GEB stations,
+        saves filtered results as ``external_evaluation_filtered_<name>.xlsx``,
+        and returns them.
 
         Notes:
-            Station names are matched case-insensitively.
+            Station names are matched case-insensitively. Falls back to
+            ``discharge_snapped_locations.geoparquet`` when
+            ``evaluation_metrics.xlsx`` does not yet exist.
 
         Args:
-            external_evaluation_folder: Directory containing one CSV per external
-                model. Each file must have station names as the row index and
-                evaluation metrics (KGE, NSE, R2, RMSE, RRMSE, …) as columns.
-                The filename stem is used as the model label. Defaults to
-                ``external_evaluation_data/`` two levels above ``output_folder``
-                (i.e. the models directory level, e.g.
-                ``large_scale6/external_evaluation_data/``).
-            **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
+            external_evaluation_folder: Directory with one CSV per external model
+                (station names as index, metrics as columns). Defaults to
+                ``external_evaluation_data/`` in the models-root directory.
+            **kwargs: Ignored (CLI compatibility).
 
         Returns:
-            Mapping from model label to a DataFrame of matched stations (index =
-            station name, columns = metric columns from the source CSV).
+            Mapping from model label to matched-stations DataFrame.
         """
-        # output_folder resolves to <models_dir>/<model>/base/output.
-        # Three levels up always reaches <models_dir> (large_scale6/).
-        default_folder = (
-            self.model.output_folder.resolve().parent.parent.parent
-            / "external_evaluation_data"
-        )
-        folder: Path = (
-            Path(external_evaluation_folder)
-            if external_evaluation_folder is not None
-            else default_folder
-        )
+        folder: Path = self._get_external_evaluation_folder(external_evaluation_folder)
 
         if not folder.exists():
             self.model.logger.info(
@@ -2426,8 +2448,7 @@ class Hydrology:
             )
             return {}
 
-        # Prefer the already-evaluated station list so we only include stations
-        # that actually have GEB results; fall back to the geom file otherwise.
+        # Use already-evaluated station list when available; fall back to geom file.
         geb_xlsx = self.output_folder / "evaluation_metrics.xlsx"
         if geb_xlsx.exists():
             our_stations: set[str] = set(
@@ -2604,34 +2625,18 @@ class Hydrology:
         matched_only: bool = False,
         **kwargs: Any,
     ) -> None:
-        """Create skill score violin+boxplot graphs for hydrological model evaluation metrics.
+        """Create skill score violin+boxplot graphs for each evaluation metric.
 
-        Generates a 2×3 grid of violin plots (with overlaid box plots) for the
-        discharge evaluation metrics. Each panel shows the distribution across
-        gauging stations and annotates the median. External model data is loaded
-        automatically using `prepare_external_evaluation`.
-
-        When ``matched_only=True`` the GEB data is filtered to the subset of
-        stations that are also present in at least one external model, so all
-        curves in the combined plot represent exactly the same set of stations.
-        Use ``matched_only=False`` (the default) to show each model's full
-        station set, which is useful for standalone per-model plots.
-
-        Notes:
-            External CSV files must have station names as the row index and metric
-            names as columns (e.g. KGE, NSE, R2, RMSE, RRMSE). Which metrics are
-            available in each external file is detected automatically.
-            ``matched_only=True`` has no effect when no external models are found
-            or when ``include_geb=False``.
+        Produces a 2×3 grid of violin/box plots across gauging stations.
+        When ``matched_only=False`` (default), each model uses its full station
+        set. When ``matched_only=True``, both GEB and external data are restricted
+        to their overlapping stations for a fair comparison.
 
         Args:
-            export: Whether to save the figure to an SVG file.
-            include_geb: When ``False``, GEB is omitted from the plot so only
-                external models are shown. Useful for a standalone comparison.
-            matched_only: When ``True``, restrict GEB data to stations that are
-                also present in at least one external model. Ensures a fair
-                like-for-like comparison between GEB and external models.
-            **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
+            export: Save the figure to disk.
+            include_geb: Include GEB in the plot.
+            matched_only: Restrict all models to overlapping stations only.
+            **kwargs: Ignored (CLI compatibility).
         """
         geb_evaluation_xlsx = self.output_folder / "evaluation_metrics.xlsx"
         evaluation_df: pd.DataFrame = (
@@ -2646,38 +2651,32 @@ class Hydrology:
             )
             return
 
-        external_models: dict[str, pd.DataFrame] = (
-            self.prepare_external_evaluation()
-        )  # Returns {} when the external_evaluation_data/ folder is absent — that is expected and simply means the plot will show GEB only.
-
-        if external_models:
-            self.model.logger.info(
-                "External models included in skill score plot: %s",
-                list(external_models),
+        # matched_only: use filtered (overlapping) external data; otherwise raw.
+        if matched_only:
+            external_models: dict[str, pd.DataFrame] = (
+                self.prepare_external_evaluation()
             )
         else:
-            self.model.logger.info(
-                "No external models found; skill score plot will show GEB only."
-            )
+            external_models = self._read_external_evaluation_raw()
 
-        # When matched_only is requested, restrict GEB to the stations that are
-        # shared with at least one external model.
+        if external_models:
+            self.model.logger.info("External models in plot: %s", list(external_models))
+        else:
+            self.model.logger.info("No external models found; showing GEB only.")
+
+        # Restrict GEB to overlapping stations when matched_only is set.
         if matched_only and include_geb and external_models and not evaluation_df.empty:
             matched_station_names: set[str] = set()
             for ext_df in external_models.values():
-                # External DataFrames are already filtered to GEB stations by
-                # prepare_external_evaluation; their index holds station names.
                 matched_station_names.update(ext_df.index.str.upper())
             before_n: int = len(evaluation_df)
             evaluation_df = evaluation_df[
                 evaluation_df["station_name"].str.upper().isin(matched_station_names)
             ].copy()
-            after_n: int = len(evaluation_df)
             self.model.logger.info(
-                "matched_only=True: GEB restricted from %d to %d stations "
-                "(those present in at least one external model).",
+                "matched_only=True: GEB restricted from %d to %d stations.",
                 before_n,
-                after_n,
+                len(evaluation_df),
             )
 
         if not include_geb and not external_models:
