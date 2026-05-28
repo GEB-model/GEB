@@ -150,6 +150,21 @@ def parse_MIRCA_crop_calendar(
     calendar_data["Planting_Month"] = calendar_data["Planting_Month"].astype(np.int64)
     calendar_data["Maturity_Month"] = calendar_data["Maturity_Month"].astype(np.int64)
 
+    # Collapse exact duplicates: rows sharing the same unit, crop class, and
+    # growing season (identical planting and maturity month) have their areas
+    # summed for simplication of further logic.
+    #
+    # Rows with a different planting or maturity month are kept as
+    # separate rotation candidates.
+    calendar_data = (
+        calendar_data.groupby(
+            ["unit_code", "crop_class", "Planting_Month", "Maturity_Month"],
+            sort=False,
+        )
+        .agg(Growing_area=("Growing_area", "sum"))
+        .reset_index()
+    )
+
     for unit_code, unit_rows in calendar_data.groupby("unit_code", sort=False):
         if unit_code not in parsed_calendar:
             parsed_calendar[unit_code] = []
@@ -184,9 +199,15 @@ def parse_MIRCA_crop_calendar(
 
             crop_rotations = sorted(crop_rotations, key=lambda x: x[2])
             if len(crop_rotations) > 2:
+                # Three or more distinct named variants exist for the same crop
+                # class in this unit (e.g. Wheat1, Wheat2, Wheat3). Only two
+                # rotation windows can be represented per farmer group, so we
+                # keep the two largest-area seasons and discard the rest.
                 crop_rotations = crop_rotations[-2:]
                 warnings.warn(
-                    "More than 2 crop rotations found, discarding the one with the lowest area. This should be fixed later."
+                    "More than 2 distinct crop rotations found for the same crop "
+                    "class in one MIRCA unit; discarding the rotation(s) with the "
+                    "lowest area."
                 )
 
             if len(crop_rotations) == 1:

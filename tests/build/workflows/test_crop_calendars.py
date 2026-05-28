@@ -15,6 +15,78 @@ from geb.build.workflows.crop_calendars import (
 from ...testconfig import IN_GITHUB_ACTIONS
 
 
+def test_parse_mirca_os_duplicate_crop_name_aggregated() -> None:
+    """Duplicate rows for the same named crop variant have their areas summed.
+
+    Two rows both named "Wheat1" with the same growing season should be
+    collapsed into a single rotation entry whose area is the sum of both rows,
+    rather than being treated as two separate rotation candidates.
+    """
+    calendar_data = pd.DataFrame(
+        {
+            "unit_code": [1, 1],
+            "Crop": ["Wheat1", "Wheat1"],
+            "Growing_area": [100.0, 50.0],
+            "Planting_Month": [11, 11],
+            "Maturity_Month": [5, 5],
+        }
+    )
+
+    parsed = parse_MIRCA_crop_calendar(
+        parsed_calendar={},
+        crop_calendar_data=calendar_data,
+        MIRCA_units=[1],
+        is_irrigated=False,
+    )
+
+    assert 1 in parsed
+    assert len(parsed[1]) == 1
+
+    area, rotation_matrix = parsed[1][0]
+    assert area == 150.0
+    assert int(rotation_matrix[0, 0]) == MIRCA_OS_CROP_CLASS_MAP["Wheat"]
+
+
+def test_parse_mirca_os_two_variants_non_overlapping_split() -> None:
+    """Two non-overlapping wheat variants produce one single and one double rotation.
+
+    With variant 1 at 100 ha (Jan–Mar) and variant 2 at 200 ha (Jun–Sep), the
+    expected output is:
+    - 100 ha with only variant 2's rotation (the excess area that cannot also
+      grow variant 1 within the same year).
+    - 100 ha with both variants in sequence (the area that can fit both rotations
+      in one year).
+    """
+    calendar_data = pd.DataFrame(
+        {
+            "unit_code": [1, 1],
+            "Crop": ["Wheat1", "Wheat2"],
+            "Growing_area": [100.0, 200.0],
+            "Planting_Month": [1, 6],
+            "Maturity_Month": [3, 9],
+        }
+    )
+
+    parsed = parse_MIRCA_crop_calendar(
+        parsed_calendar={},
+        crop_calendar_data=calendar_data,
+        MIRCA_units=[1],
+        is_irrigated=False,
+    )
+
+    assert 1 in parsed
+    assert len(parsed[1]) == 2
+
+    areas = sorted(e[0] for e in parsed[1])
+    assert areas == [100.0, 100.0]
+
+    # One entry has a single active rotation row, the other has two.
+    active_rotation_counts = sorted(
+        int((arr[:, 0] != -1).sum()) for _, arr in parsed[1]
+    )
+    assert active_rotation_counts == [1, 2]
+
+
 def test_parse_mirca_os_others_annual_numbered_variant() -> None:
     """Map MIRCA-OS numbered Others annual variants to class 25."""
     calendar_data = pd.DataFrame(
