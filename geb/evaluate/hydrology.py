@@ -2078,8 +2078,8 @@ class Hydrology:
                     # stop
                     continue
 
-                KGE, NSE, R, R2, RMSE, RRMSE = (
-                    _calculate_discharge_validation_metrics(validation_df)
+                KGE, NSE, R, R2, RMSE, RRMSE = _calculate_discharge_validation_metrics(
+                    validation_df
                 )
 
                 if create_plots:

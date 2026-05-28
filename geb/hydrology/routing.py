@@ -1782,62 +1782,6 @@ class Routing(Module):
             self.observed_average_river_width, beta, dtype=np.float32
         )
 
-        # DEBUGGING: after 10 days of simulation, check for zero average discharge.
-        # Zero discharge will cause division-by-zero when computing alpha later on,
-        # so we surface the affected river locations here while we still have enough
-        # context to be useful.
-        if self.var.discharge_step_count == 300 * 24:
-            average_discharge_debug: np.ndarray = (
-                self.var.sum_of_all_discharge_steps / self.var.discharge_step_count
-            ).astype(np.float64)
-
-            # Only check river cells — non-river cells (river_ids == -1) are
-            # expected to have zero discharge and must not trigger a false positive.
-            river_cell_mask: np.ndarray = self.river_ids != -1
-
-            # Use a small epsilon rather than strict == 0: initial discharge is set
-            # to 1e-30 so cells that never receive flow will have a tiny non-zero
-            # average rather than exactly zero.
-            effectively_zero: np.ndarray = average_discharge_debug < 1e-20
-            if (effectively_zero & river_cell_mask).any():
-                zero_mask: np.ndarray = effectively_zero & river_cell_mask
-                zero_compressed_indices: np.ndarray = np.where(zero_mask)[0]
-
-                # river_ids is guaranteed != -1 for all zero_compressed_indices
-                # because we filtered with river_cell_mask above.
-                merit_comids: np.ndarray = self.river_ids[zero_compressed_indices]
-
-                # Reconstruct 2D (row, col) grid coordinates for map cross-referencing.
-                rows_2d, cols_2d = np.where(~self.grid.mask)
-                zero_rows: np.ndarray = rows_2d[zero_compressed_indices]
-                zero_cols: np.ndarray = cols_2d[zero_compressed_indices]
-
-                # Look up the river segment metadata from the rivers GeoDataFrame
-                # (indexed by MERIT COMID).
-                matched_rivers = self.rivers.loc[self.rivers.index.isin(merit_comids)]
-
-                # Unique MERIT COMIDs — the primary list to look up river segment locations.
-                unique_comids: np.ndarray = np.unique(merit_comids)
-
-                debug_lines: list[str] = [
-                    f"  compressed_idx={idx}, row={r}, col={c}, MERIT_COMID={cid}"
-                    for idx, r, c, cid in zip(
-                        zero_compressed_indices, zero_rows, zero_cols, merit_comids
-                    )
-                ]
-                self.model.logger.warning(
-                    f"Average discharge is effectively zero (<1e-20 m³/s) for {zero_mask.sum()} river cell(s) after "
-                    f"{self.var.discharge_step_count} routing sub-steps. "
-                    "This will cause division-by-zero when computing the river-width alpha later.\n"
-                    f"Unique MERIT COMIDs with zero discharge ({len(unique_comids)}): "
-                    f"{unique_comids.tolist()}\n"
-                    "All affected cells (compressed index, 2-D grid row/col, MERIT COMID):\n"
-                    + "\n".join(debug_lines)
-                    + f"\nMatched river segments in GeoDataFrame:\n{matched_rivers}\n"
-                    "Check whether these cells are genuinely dry or whether upstream "
-                    "connectivity / LDD routing is broken."
-                )
-
         # for the first year of simulation, we use the default alpha value for all rivers
         if self.var.discharge_step_count < 365 * 24:
             alpha: ArrayFloat32 = np.full_like(

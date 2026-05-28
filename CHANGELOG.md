@@ -1,5 +1,12 @@
 # dev
 
+- Add `geb tool merge` command to merge outputs from multiple GEB cluster sub-models into a single merged model directory that can be evaluated directly with `geb evaluate`.
+- Add `plot_skill_score_maps()` to plot skill scores per station on a satellite basemap for each metric.
+- Overhaul `plot_skill_scores()` with violin + boxplot panels for KGE, NSE, R², RMSE and RRMSE, including support for overlaying external reference model results.
+- Add R², RMSE and RRMSE to discharge evaluation metrics at hourly, daily and monthly frequencies.
+- Stations with fewer than 5 years of paired observations are skipped in `evaluate_discharge`.
+- Lakes and reservoirs are now shown as dot markers in the interactive discharge evaluation map.
+
 # v1.0.0b26
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
 - Recently, there have been a lot of supply chain effects, where packages contained malicious code or instructions. To avoid most of these issues, but at the same time get relatively new updates (including those with important security updates) we limit any package updates to packages that are at least 3 days old in the uv.lock file. Here we use uv's exclude-newer option.
