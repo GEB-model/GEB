@@ -891,6 +891,161 @@ def _plot_discharge_validation_map(
     plt.close()
 
 
+def _plot_skill_score_map_single(
+    evaluation_gdf: gpd.GeoDataFrame,
+    metric_col: str,
+    metric_label: str,
+    metric_title: str,
+    cmap_name: str,
+    vmin: float,
+    vmax: float,
+    output_path: Path,
+    region_geom: gpd.GeoDataFrame,
+) -> None:
+    """Plot gauging stations coloured by a single skill score on a satellite basemap.
+
+    The GeoDataFrame is reprojected to Web Mercator (EPSG:3857) for compatibility
+    with the contextily satellite basemap.
+
+    Args:
+        evaluation_gdf: Per-station metrics with point geometry in any CRS.
+        metric_col: Column name of the metric to plot (e.g. ``"KGE"``).
+        metric_label: Short colorbar label including units (e.g. ``"KGE (−)"``).
+        metric_title: Full figure title.
+        cmap_name: Matplotlib colormap name.
+        vmin: Colorbar minimum value.
+        vmax: Colorbar maximum value.
+        output_path: Output path stem (no extension); ``.svg`` and ``.png`` are
+            saved automatically.
+        region_geom: Basin/region boundary overlaid on the map.
+    """
+    # Reproject to Web Mercator for contextily basemap compatibility
+    gdf_3857: gpd.GeoDataFrame = evaluation_gdf.to_crs("EPSG:3857")
+    region_3857: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
+
+    norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+
+    fig, ax = plt.subplots(figsize=(10, 9))
+    fig.patch.set_facecolor("black")
+    ax.set_facecolor("black")
+
+    region_3857.plot(
+        ax=ax,
+        color="none",
+        edgecolor="white",
+        linewidth=0.6,
+        alpha=0.7,
+        zorder=2,
+    )
+
+    # Valid stations coloured by metric value; NaN stations shown as grey crosses
+    valid_mask: pd.Series = gdf_3857[metric_col].notna()
+    if valid_mask.any():
+        ax.scatter(
+            gdf_3857.loc[valid_mask, "geometry"].x,
+            gdf_3857.loc[valid_mask, "geometry"].y,
+            c=gdf_3857.loc[valid_mask, metric_col],
+            cmap=cmap_name,
+            norm=norm,
+            s=12,
+            zorder=4,
+            linewidths=0.2,
+            edgecolors="white",
+        )
+    if (~valid_mask).any():
+        ax.scatter(
+            gdf_3857.loc[~valid_mask, "geometry"].x,
+            gdf_3857.loc[~valid_mask, "geometry"].y,
+            c="grey",
+            marker="x",
+            s=10,
+            zorder=3,
+            linewidths=0.5,
+            label="No data",
+        )
+        ax.legend(
+            fontsize=8,
+            loc="lower right",
+            framealpha=0.6,
+            facecolor="black",
+            edgecolor="white",
+            labelcolor="white",
+        )
+
+    # Satellite basemap
+    ctx.add_basemap(
+        ax,
+        crs="EPSG:3857",
+        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
+        attribution=False,
+        zoom="auto",
+    )
+
+    # Colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=norm)
+    cbar = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02, aspect=30)
+    cbar.set_label(metric_label, fontsize=11, color="white")
+    cbar.ax.yaxis.set_tick_params(color="white", labelcolor="white")
+    cbar.outline.set_edgecolor("white")  # ty:ignore[call-non-callable]
+
+    # Scale bar — pick a round bar length that is ~15 % of the map width in metres
+    x_min, x_max = ax.get_xlim()
+    y_min, y_max = ax.get_ylim()
+    map_width_m: float = x_max - x_min
+    map_height_m: float = y_max - y_min
+    raw_bar_m: float = map_width_m * 0.15
+    magnitude: float = 10 ** np.floor(np.log10(raw_bar_m))
+    bar_m: float = round(raw_bar_m / magnitude) * magnitude
+    bar_label_str: str = (
+        f"{int(bar_m / 1_000)} km" if bar_m >= 1_000 else f"{int(bar_m)} m"
+    )
+    bar_x0: float = x_min + map_width_m * 0.03
+    bar_y: float = y_min + map_height_m * 0.03
+    ax.plot(
+        [bar_x0, bar_x0 + bar_m],
+        [bar_y, bar_y],
+        color="white",
+        linewidth=3,
+        solid_capstyle="butt",
+        zorder=5,
+    )
+    ax.text(
+        bar_x0 + bar_m / 2,
+        bar_y + map_height_m * 0.012,
+        bar_label_str,
+        color="white",
+        fontsize=8,
+        ha="center",
+        va="bottom",
+        zorder=5,
+    )
+
+    # North arrow using a simple annotated arrow in axes-fraction coordinates
+    ax.annotate(
+        "N",
+        xy=(0.96, 0.12),
+        xytext=(0.96, 0.06),
+        xycoords="axes fraction",
+        textcoords="axes fraction",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        color="white",
+        fontweight="bold",
+        arrowprops=dict(arrowstyle="-|>", color="white", lw=1.5),
+    )
+
+    ax.set_title(metric_title, fontsize=13, fontweight="bold", color="white", pad=10)
+    ax.tick_params(colors="white", labelsize=8)
+    for spine in ax.spines.values():
+        spine.set_edgecolor("white")
+
+    plt.tight_layout()
+    for ext in ("svg", "png"):
+        plt.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=200)
+    plt.close(fig)
+
+
 def create_validation_df(
     output_folder: Path,
     run_name: str,
@@ -2409,6 +2564,139 @@ class Hydrology:
                 external_models[model_name] = matched_stations_df
 
         return external_models
+
+    def plot_skill_score_maps(
+        self,
+        export: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        """Plot per-station skill scores on a satellite basemap, one map per metric.
+
+        Produces a map for each of the five discharge evaluation
+        metrics (KGE, NSE, R², RMSE, RRMSE). Each gauging station is coloured by
+        its score value using a perceptually-uniform colormap. The colour range for
+        bounded metrics (KGE, NSE, R²) is fixed to the theoretical range; for
+        unbounded metrics (RMSE, RRMSE) the upper bound is set to the 95th
+        percentile of observed values to avoid outlier influences.
+
+        An Esri WorldImagery satellite basemap is added via contextily, along with
+        a scale bar and north arrow for cartographic completeness. Figures are saved
+        as both SVG and PNG (200 dpi) under ``<output_folder>/skill_score_maps/``.
+
+        Notes:
+            Requires ``evaluate_discharge`` to have been run first so that
+            ``evaluation_metrics.xlsx`` or ``evaluation_metrics.geoparquet`` exist.
+
+        Args:
+            export: Whether to save the figures to disk.
+            **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
+        """
+        geoparquet_path: Path = self.output_folder / "evaluation_metrics.geoparquet"
+        xlsx_path: Path = self.output_folder / "evaluation_metrics.xlsx"
+
+        if geoparquet_path.exists():
+            evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(geoparquet_path)
+        elif xlsx_path.exists():
+            eval_df: pd.DataFrame = pd.read_excel(xlsx_path)
+            evaluation_gdf = gpd.GeoDataFrame(
+                eval_df,
+                geometry=gpd.points_from_xy(eval_df["x"], eval_df["y"]),
+                crs="EPSG:4326",
+            )
+        else:
+            self.model.logger.warning(
+                "No evaluation_metrics file found. Run evaluate_discharge first."
+            )
+            return
+
+        region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
+
+        metric_configs: list[dict] = [
+            {
+                "col": "KGE",
+                "label": "KGE (−)",
+                "title": "Kling-Gupta Efficiency (KGE)",
+                "cmap": "RdYlGn",
+                "vmin": -1.0,
+                "vmax": 1.0,
+            },
+            {
+                "col": "NSE",
+                "label": "NSE (−)",
+                "title": "Nash-Sutcliffe Efficiency (NSE)",
+                "cmap": "RdYlGn",
+                "vmin": -1.0,
+                "vmax": 1.0,
+            },
+            {
+                "col": "R2",
+                "label": "R² (−)",
+                "title": "Coefficient of Determination (R²)",
+                "cmap": "YlGn",
+                "vmin": 0.0,
+                "vmax": 1.0,
+            },
+            {
+                "col": "RMSE",
+                "label": "RMSE (m³/s)",
+                "title": "Root Mean Squared Error (RMSE)",
+                "cmap": "YlOrRd_r",
+                "vmin": 0.0,
+                # Upper bound set to 95th percentile per-run to avoid outlier compression
+                "vmax": None,
+            },
+            {
+                "col": "RRMSE",
+                "label": "RRMSE (−)",
+                "title": "Relative Root Mean Squared Error (RRMSE)",
+                "cmap": "YlOrRd_r",
+                "vmin": 0.0,
+                "vmax": None,
+            },
+        ]
+
+        maps_folder: Path = self.output_folder / "skill_score_maps"
+        maps_folder.mkdir(parents=True, exist_ok=True)
+
+        for cfg in metric_configs:
+            col: str = cfg["col"]
+            if col not in evaluation_gdf.columns:
+                self.model.logger.info(
+                    "Metric '%s' not in evaluation data, skipping.", col
+                )
+                continue
+
+            valid_values: np.ndarray = (
+                evaluation_gdf[col].dropna().to_numpy(dtype=float)
+            )
+            if valid_values.size == 0:
+                self.model.logger.info(
+                    "No valid values for metric '%s', skipping.", col
+                )
+                continue
+
+            vmax: float = (
+                float(np.nanpercentile(valid_values, 95))
+                if cfg["vmax"] is None
+                else float(cfg["vmax"])
+            )
+            vmin: float = float(cfg["vmin"])
+
+            self.model.logger.info("Creating skill score map for: %s", col)
+            _plot_skill_score_map_single(
+                evaluation_gdf=evaluation_gdf,
+                metric_col=col,
+                metric_label=cfg["label"],
+                metric_title=cfg["title"],
+                cmap_name=cfg["cmap"],
+                vmin=vmin,
+                vmax=vmax,
+                output_path=maps_folder / f"skill_score_map_{col.lower()}",
+                region_geom=region_geom,
+            )
+            self.model.logger.info("Saved skill score map for %s.", col)
+
+        self.model.logger.info("All skill score maps saved to: %s", maps_folder)
 
     def plot_skill_scores(
         self,
