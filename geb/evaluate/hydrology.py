@@ -773,124 +773,6 @@ def _plot_outflow_discharge_timeseries(
     return plots_created
 
 
-def _plot_discharge_validation_map(
-    evaluation_gdf: gpd.GeoDataFrame,
-    region_geom: gpd.GeoDataFrame,
-    rivers: gpd.GeoDataFrame,
-    eval_result_folder: Path,
-) -> None:
-    """Plot spatial discharge validation metrics on a map.
-
-    Args:
-        evaluation_gdf: Per-station evaluation metrics and geometries.
-        region_geom: Basin/region boundary geometry.
-        rivers: River network geometries.
-        eval_result_folder: Output directory for saved figures.
-    """
-    fig, ax = plt.subplots(1, 3, figsize=(20, 10))
-
-    evaluation_gdf.plot(
-        column="R",
-        ax=ax[0],
-        legend=False,
-        cmap="viridis",
-        markersize=50,
-        zorder=3,
-    )
-    evaluation_gdf.plot(
-        column="KGE",
-        ax=ax[1],
-        legend=False,
-        cmap="viridis",
-        markersize=50,
-        zorder=3,
-    )
-    evaluation_gdf.plot(
-        column="NSE",
-        ax=ax[2],
-        legend=False,
-        cmap="viridis",
-        markersize=50,
-        zorder=3,
-    )
-
-    region_geom.plot(ax=ax[0], color="none", edgecolor="black", linewidth=1, zorder=2)
-    region_geom.plot(ax=ax[1], color="none", edgecolor="black", linewidth=1, zorder=2)
-    region_geom.plot(ax=ax[2], color="none", edgecolor="black", linewidth=1, zorder=2)
-
-    rivers.plot(ax=ax[0], color="blue", linewidth=0.5, zorder=2)
-    rivers.plot(ax=ax[1], color="blue", linewidth=0.5, zorder=2)
-    rivers.plot(ax=ax[2], color="blue", linewidth=0.5, zorder=2)
-
-    ctx.add_basemap(
-        ax[0],
-        crs=evaluation_gdf.crs.to_string(),
-        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-        attribution=False,
-    )
-    ctx.add_basemap(
-        ax[1],
-        crs=evaluation_gdf.crs.to_string(),
-        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-        attribution=False,
-    )
-    ctx.add_basemap(
-        ax[2],
-        crs=evaluation_gdf.crs.to_string(),
-        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-        attribution=False,
-    )
-
-    ax[0].set_title("R")
-    ax[1].set_title("KGE")
-    ax[2].set_title("NSE")
-    ax[0].set_xlabel("Longitude")
-    ax[0].set_ylabel("Latitude")
-    ax[1].set_xlabel("Longitude")
-    ax[2].set_xlabel("Longitude")
-
-    r_colorbar = plt.cm.ScalarMappable(
-        cmap="viridis",
-        norm=mcolors.Normalize(vmin=0, vmax=1),
-    )
-    kge_colorbar = plt.cm.ScalarMappable(
-        cmap="viridis",
-        norm=mcolors.Normalize(vmin=0, vmax=1),
-    )
-    nse_colorbar = plt.cm.ScalarMappable(
-        cmap="viridis",
-        norm=mcolors.Normalize(vmin=0, vmax=1),
-    )
-
-    fig.colorbar(
-        r_colorbar, ax=ax[0], orientation="horizontal", pad=0.1, aspect=50, label="R"
-    )
-    fig.colorbar(
-        kge_colorbar,
-        ax=ax[1],
-        orientation="horizontal",
-        pad=0.1,
-        aspect=50,
-        label="KGE",
-    )
-    fig.colorbar(
-        nse_colorbar,
-        ax=ax[2],
-        orientation="horizontal",
-        pad=0.1,
-        aspect=50,
-        label="NSE",
-    )
-
-    plt.tight_layout()
-    plt.savefig(
-        eval_result_folder / "discharge_evaluation_metrics.svg",
-        bbox_inches="tight",
-    )
-    plt.show()
-    plt.close()
-
-
 def _plot_skill_score_map_single(
     evaluation_gdf: gpd.GeoDataFrame,
     metric_col: str,
@@ -2401,6 +2283,23 @@ class Hydrology:
 
                 self.model.logger.info("Discharge evaluation dashboard created.")
 
+                # Always produce the full GEB-only skill score plot.
+                self.plot_skill_scores(
+                    export=True, include_geb=True, matched_only=False
+                )
+                self.plot_skill_score_maps(export=True)
+
+                # When external evaluation data are present, also produce a
+                # matched-stations comparison so all curves cover the same set
+                # of gauging stations.
+                external_models: dict[str, pd.DataFrame] = (
+                    self.prepare_external_evaluation()
+                )
+                if external_models:
+                    self.plot_skill_scores(
+                        export=True, include_geb=True, matched_only=True
+                    )
+
             scores: dict[str, float | None] = {
                 "KGE_hourly": float(evaluation_df["KGE_hourly"].median()),
                 "NSE_hourly": float(evaluation_df["NSE_hourly"].median()),
@@ -2702,24 +2601,36 @@ class Hydrology:
         self,
         export: bool = True,
         include_geb: bool = True,
+        matched_only: bool = False,
         **kwargs: Any,
     ) -> None:
         """Create skill score violin+boxplot graphs for hydrological model evaluation metrics.
 
         Generates a 2×3 grid of violin plots (with overlaid box plots) for the
-        discharge evaluation metrics. Each panel shows the distribution across all
+        discharge evaluation metrics. Each panel shows the distribution across
         gauging stations and annotates the median. External model data is loaded
-        automatically using`prepare_external_evaluation` functionality.
+        automatically using `prepare_external_evaluation`.
+
+        When ``matched_only=True`` the GEB data is filtered to the subset of
+        stations that are also present in at least one external model, so all
+        curves in the combined plot represent exactly the same set of stations.
+        Use ``matched_only=False`` (the default) to show each model's full
+        station set, which is useful for standalone per-model plots.
 
         Notes:
             External CSV files must have station names as the row index and metric
             names as columns (e.g. KGE, NSE, R2, RMSE, RRMSE). Which metrics are
             available in each external file is detected automatically.
+            ``matched_only=True`` has no effect when no external models are found
+            or when ``include_geb=False``.
 
         Args:
             export: Whether to save the figure to an SVG file.
             include_geb: When ``False``, GEB is omitted from the plot so only
                 external models are shown. Useful for a standalone comparison.
+            matched_only: When ``True``, restrict GEB data to stations that are
+                also present in at least one external model. Ensures a fair
+                like-for-like comparison between GEB and external models.
             **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
         """
         geb_evaluation_xlsx = self.output_folder / "evaluation_metrics.xlsx"
@@ -2735,7 +2646,39 @@ class Hydrology:
             )
             return
 
-        external_models: dict[str, pd.DataFrame] = self.prepare_external_evaluation()
+        external_models: dict[str, pd.DataFrame] = (
+            self.prepare_external_evaluation()
+        )  # Returns {} when the external_evaluation_data/ folder is absent — that is expected and simply means the plot will show GEB only.
+
+        if external_models:
+            self.model.logger.info(
+                "External models included in skill score plot: %s",
+                list(external_models),
+            )
+        else:
+            self.model.logger.info(
+                "No external models found; skill score plot will show GEB only."
+            )
+
+        # When matched_only is requested, restrict GEB to the stations that are
+        # shared with at least one external model.
+        if matched_only and include_geb and external_models and not evaluation_df.empty:
+            matched_station_names: set[str] = set()
+            for ext_df in external_models.values():
+                # External DataFrames are already filtered to GEB stations by
+                # prepare_external_evaluation; their index holds station names.
+                matched_station_names.update(ext_df.index.str.upper())
+            before_n: int = len(evaluation_df)
+            evaluation_df = evaluation_df[
+                evaluation_df["station_name"].str.upper().isin(matched_station_names)
+            ].copy()
+            after_n: int = len(evaluation_df)
+            self.model.logger.info(
+                "matched_only=True: GEB restricted from %d to %d stations "
+                "(those present in at least one external model).",
+                before_n,
+                after_n,
+            )
 
         if not include_geb and not external_models:
             self.model.logger.warning(
@@ -2848,8 +2791,11 @@ class Hydrology:
         with plt.style.context("dark_background"):
             fig, axes = plt.subplots(2, 3, figsize=(14, 8))
             fig.patch.set_facecolor("black")
+            plot_subtitle: str = (
+                " (matched stations only)" if matched_only and external_models else ""
+            )
             fig.suptitle(
-                "Discharge Evaluation — Skill Score Distributions",
+                f"Discharge Evaluation — Skill Score Distributions{plot_subtitle}",
                 fontsize=14,
                 fontweight="bold",
                 color="white",
@@ -2962,7 +2908,12 @@ class Hydrology:
             plt.tight_layout()
 
             if export:
-                suffix = "" if include_geb else "_external_only"
+                if not include_geb:
+                    suffix = "_external_only"
+                elif matched_only and external_models:
+                    suffix = "_matched"
+                else:
+                    suffix = ""
                 for extension in ("svg", "png"):
                     out_path = (
                         self.output_folder
