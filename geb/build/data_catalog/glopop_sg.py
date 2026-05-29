@@ -23,6 +23,7 @@ class GLOPOP_SG(Adapter):
     # the same remote ZIP is only interrogated once per process.
     _zip_info_cache: dict[str, dict[str, zipfile.ZipInfo]] = {}
     _RETRY_429_SLEEP_S: int = 10
+    _MAX_RETRY_S: int = 6 * 3600  # give up after 6 hours of 429 responses
 
     def fetch(self, url: str) -> GLOPOP_SG:
         """Fetch data for a specific region.
@@ -41,15 +42,19 @@ class GLOPOP_SG(Adapter):
 
         The central directory is fetched at most once per URL per process; all
         subsequent calls return the in-memory cache without any HTTP requests.
-        Retries indefinitely on HTTP 429 responses.
+        Retries on HTTP 429 responses for up to ``_MAX_RETRY_S`` seconds.
 
         Args:
             url: URL of the remote ZIP archive.
 
         Returns:
             Mapping of filename to ZipInfo for every entry in the archive.
+
+        Raises:
+            TimeoutError: If HTTP 429 retries exceed the configured time limit.
         """
         if url not in self._zip_info_cache:
+            retry_start: float = time.monotonic()
             while True:
                 try:
                     with zipfile.ZipFile(RemoteFile(url), "r") as zf:
@@ -58,6 +63,11 @@ class GLOPOP_SG(Adapter):
                         }
                     break
                 except HTTP429Error:
+                    if time.monotonic() - retry_start > self._MAX_RETRY_S:
+                        raise TimeoutError(
+                            f"HTTP 429 retries exceeded the "
+                            f"{self._MAX_RETRY_S / 3600:.0f}-hour limit for {url}."
+                        )
                     time.sleep(self._RETRY_429_SLEEP_S)
         return self._zip_info_cache[url]
 
@@ -73,12 +83,14 @@ class GLOPOP_SG(Adapter):
 
         Raises:
             FileNotFoundError: If the file is not found in the remote zip.
+            TimeoutError: If HTTP 429 retries exceed the configured time limit.
         """
         info_dict = self._get_zip_infolist(url)
         if filename not in info_dict:
             raise FileNotFoundError(f"{filename} not found in remote zip.")
         file_size = info_dict[filename].file_size
 
+        retry_start = time.monotonic()
         while True:
             try:
                 buffer = io.BytesIO()
@@ -101,6 +113,11 @@ class GLOPOP_SG(Adapter):
                 buffer.seek(0)
                 return buffer
             except HTTP429Error:
+                if time.monotonic() - retry_start > self._MAX_RETRY_S:
+                    raise TimeoutError(
+                        f"HTTP 429 retries exceeded the "
+                        f"{self._MAX_RETRY_S / 3600:.0f}-hour limit for {url}."
+                    )
                 time.sleep(self._RETRY_429_SLEEP_S)
 
     def read(self, region: str) -> tuple[pd.DataFrame, xr.DataArray]:
