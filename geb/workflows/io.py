@@ -1320,7 +1320,8 @@ class RemoteFile:
             base_delay: Base delay in seconds for exponential backoff.
 
         Raises:
-            OSError: If the URL cannot be accessed.
+            OSError: If the URL cannot be accessed or does not support range requests.
+            HTTP429Error: If the server responds with HTTP 429 Too Many Requests during initialization.
         """
         self.url_original = url
         self.max_retries = max_retries
@@ -1328,6 +1329,9 @@ class RemoteFile:
 
         # Resolve redirects and get size
         resp = self._request_with_retry("HEAD", url, allow_redirects=True)
+        if resp.status_code == 429:
+            resp.close()
+            raise HTTP429Error(f"HTTP 429 Too Many Requests from {url}")
 
         # Confirm range support
         range_supported = (
@@ -1345,6 +1349,9 @@ class RemoteFile:
                 stream=True,
                 allow_redirects=True,
             )
+            if resp.status_code == 429:
+                resp.close()
+                raise HTTP429Error(f"HTTP 429 Too Many Requests from {url}")
             if resp.status_code != 206:
                 resp.close()
                 raise OSError(
