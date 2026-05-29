@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import contextily as ctx
 import geopandas as gpd
@@ -52,9 +52,20 @@ mpl.rcParams["savefig.facecolor"] = "#000000"
 mpl.rcParams["savefig.edgecolor"] = "#000000"
 
 
+class DischargeMetrics(NamedTuple):
+    """Discharge validation skill scores for a single station and time period."""
+
+    KGE: float = float("nan")
+    NSE: float = float("nan")
+    R: float = float("nan")
+    R2: float = float("nan")
+    RMSE: float = float("nan")
+    RRMSE: float = float("nan")
+
+
 def _calculate_discharge_validation_metrics(
     validation_df: pd.DataFrame,
-) -> tuple[float, float, float, float, float, float]:
+) -> DischargeMetrics:
     """Calculate station-level discharge validation metrics.
 
     Args:
@@ -62,19 +73,14 @@ def _calculate_discharge_validation_metrics(
             columns named `discharge_observations` and `discharge_simulations` (m3/s).
 
     Returns:
-        Tuple containing:
-            - Kling-Gupta efficiency (dimensionless).
-            - Nash-Sutcliffe efficiency (dimensionless).
-            - Pearson correlation coefficient (dimensionless).
-            - Coefficient of determination R² (dimensionless).
-            - Root mean squared error (m3/s).
-            - Relative root mean squared error, RMSE / mean(observed) (dimensionless).
+        DischargeMetrics with KGE, NSE, R, R2, RMSE, RRMSE; all NaN when there are
+        fewer than 2 valid pairs.
     """
     valid_pairs_df: pd.DataFrame = validation_df[
         ["discharge_observations", "discharge_simulations"]
     ].dropna()
     if valid_pairs_df.shape[0] < 2:
-        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+        return DischargeMetrics()
 
     y_true: np.ndarray = valid_pairs_df["discharge_observations"].values
     y_pred: np.ndarray = valid_pairs_df["discharge_simulations"].values
@@ -87,9 +93,9 @@ def _calculate_discharge_validation_metrics(
     rmse: float = float(evaluator.root_mean_squared_error())
     # RRMSE = RMSE / mean(observed); protected against zero mean
     mean_obs: float = float(np.mean(y_true))
-    rrmse: float = rmse / mean_obs if mean_obs > 0.0 else np.nan
+    rrmse: float = rmse / mean_obs if mean_obs > 0.0 else float("nan")
 
-    return kge, nse, r_value, r2, rmse, rrmse
+    return DischargeMetrics(KGE=kge, NSE=nse, R=r_value, R2=r2, RMSE=rmse, RRMSE=rrmse)
 
 
 def _plot_validation_return_periods(
@@ -2078,9 +2084,7 @@ class Hydrology:
                     # stop
                     continue
 
-                KGE, NSE, R, R2, RMSE, RRMSE = _calculate_discharge_validation_metrics(
-                    validation_df
-                )
+                m = _calculate_discharge_validation_metrics(validation_df)
 
                 if create_plots:
                     _plot_discharge_validation_graphs(
@@ -2089,15 +2093,15 @@ class Hydrology:
                         validation_df=validation_df,
                         station_name=discharge_observations_station_name,
                         upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
-                        kge=KGE,
-                        nse=NSE,
-                        r_value=R,
+                        kge=m.KGE,
+                        nse=m.NSE,
+                        r_value=m.R,
                         eval_plot_folder=self.output_folder,
                         include_yearly_plots=include_yearly_plots,
                         frequency=freq_label,
                     )
 
-                station_evaluation = {
+                station_evaluation: dict[str, Any] = {
                     "station_ID": ID,
                     "station_name": discharge_observations_station_name,
                     "x": discharge_observations_station_coords[0],
@@ -2106,82 +2110,37 @@ class Hydrology:
                     "upstream_area_GEB": snapped_locations.at[
                         ID, "GEB_upstream_area_from_grid"
                     ],
-                    "KGE": KGE,
-                    "NSE": NSE,
-                    "R": R,
-                    "R2": R2,
-                    "RMSE": RMSE,
-                    "RRMSE": RRMSE,
-                    f"KGE_{freq_label}": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
-                    f"NSE_{freq_label}": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
-                    f"R_{freq_label}": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
-                    f"R2_{freq_label}": R2,
-                    f"RMSE_{freq_label}": RMSE,
-                    f"RRMSE_{freq_label}": RRMSE,
+                    **m._asdict(),
+                    **{f"{k}_{freq_label}": v for k, v in m._asdict().items()},
                 }
 
                 # if the frequency is hourly, also calculate the metrics on the daily resampled data
                 if freq_label == "hourly":
-                    # resample to daily, but keep only the days with 24 valid hourly observations
+                    # Resample to daily, keeping only days with 24 valid hourly observations.
                     counts = validation_df.resample("D").count()
                     validation_df_daily = (
                         validation_df.resample("D").mean()[counts == 24].dropna()
                     )
-                    (
-                        KGE_daily,
-                        NSE_daily,
-                        R_daily,
-                        R2_daily,
-                        RMSE_daily,
-                        RRMSE_daily,
-                    ) = _calculate_discharge_validation_metrics(validation_df_daily)
+                    m_daily = _calculate_discharge_validation_metrics(validation_df_daily)
                     station_evaluation.update(
-                        {
-                            "KGE_daily": KGE_daily,
-                            "NSE_daily": NSE_daily,
-                            "R_daily": R_daily,
-                            "R2_daily": R2_daily,
-                            "RMSE_daily": RMSE_daily,
-                            "RRMSE_daily": RRMSE_daily,
-                        }
+                        {f"{k}_daily": v for k, v in m_daily._asdict().items()}
                     )
-                # if the frequency is daily, we cannot calculate the metrics on the hourly resampled data,
-                # so we set those to NaN
+                # Daily-frequency stations have no hourly data; fill with NaN so the
+                # DataFrame columns remain consistent across all stations.
                 elif freq_label == "daily":
                     station_evaluation.update(
-                        {
-                            "KGE_hourly": np.nan,
-                            "NSE_hourly": np.nan,
-                            "R_hourly": np.nan,
-                            "R2_hourly": np.nan,
-                            "RMSE_hourly": np.nan,
-                            "RRMSE_hourly": np.nan,
-                        }
+                        {f"{k}_hourly": float("nan") for k in DischargeMetrics._fields}
                     )
                 else:
                     raise ValueError(
                         f"Unexpected frequency label '{freq_label}' in evaluation loop."
                     )
 
-                # Calculate montly metrics for the station
-                validation_df_monthly = validation_df.resample("M").mean().dropna()
-                (
-                    KGE_monthly,
-                    NSE_monthly,
-                    R_monthly,
-                    R2_monthly,
-                    RMSE_monthly,
-                    RRMSE_monthly,
-                ) = _calculate_discharge_validation_metrics(validation_df_monthly)
+                # Monthly metrics
+                validation_df_monthly = validation_df.resample("ME").mean().dropna()
+                m_monthly = _calculate_discharge_validation_metrics(validation_df_monthly)
                 station_evaluation.update(
-                    {
-                        "KGE_monthly": KGE_monthly,
-                        "NSE_monthly": NSE_monthly,
-                        "R_monthly": R_monthly,
-                        "R2_monthly": R2_monthly,
-                        "RMSE_monthly": RMSE_monthly,
-                        "RRMSE_monthly": RRMSE_monthly,
-                    }
+                    {f"{k}_monthly": v for k, v in m_monthly._asdict().items()}
                 )
 
                 # attach to the evaluation dataframe
@@ -2189,40 +2148,20 @@ class Hydrology:
 
         if len(evaluation_per_station) == 0:
             # Create empty evaluation dataframe with proper structure
+            # Column names are derived from DischargeMetrics so they stay in sync.
+            freq_cols: list[str] = [
+                f"{k}_{freq}" for freq in ("monthly", "daily", "hourly") for k in DischargeMetrics._fields
+            ]
             evaluation_df = pd.DataFrame(
-                columns=np.array(
-                    [
-                        "station_name",
-                        "x",
-                        "y",
-                        "upstream_area_GEB",
-                        "discharge_observations_to_GEB_upstream_area_ratio",
-                        "KGE_monthly",
-                        "NSE_monthly",
-                        "R_monthly",
-                        "R2_monthly",
-                        "RMSE_monthly",
-                        "RRMSE_monthly",
-                        "KGE_daily",
-                        "NSE_daily",
-                        "R_daily",
-                        "R2_daily",
-                        "RMSE_daily",
-                        "RRMSE_daily",
-                        "KGE_hourly",
-                        "NSE_hourly",
-                        "R_hourly",
-                        "R2_hourly",
-                        "RMSE_hourly",
-                        "RRMSE_hourly",
-                        "KGE",
-                        "NSE",
-                        "R",
-                        "R2",
-                        "RMSE",
-                        "RRMSE",
-                    ]
-                ),
+                columns=[  # ty:ignore[invalid-argument-type]
+                    "station_name",
+                    "x",
+                    "y",
+                    "upstream_area_GEB",
+                    "discharge_observations_to_GEB_upstream_area_ratio",
+                    *freq_cols,
+                    *DischargeMetrics._fields,
+                ],
                 index=pd.Index([], name="station_ID"),
             )
         else:
@@ -2285,30 +2224,10 @@ class Hydrology:
                     )
 
             scores: dict[str, float | None] = {
-                "KGE_hourly": float(evaluation_df["KGE_hourly"].median()),
-                "NSE_hourly": float(evaluation_df["NSE_hourly"].median()),
-                "R_hourly": float(evaluation_df["R_hourly"].median()),
-                "R2_hourly": float(evaluation_df["R2_hourly"].median()),
-                "RMSE_hourly": float(evaluation_df["RMSE_hourly"].median()),
-                "RRMSE_hourly": float(evaluation_df["RRMSE_hourly"].median()),
-                "KGE_daily": float(evaluation_df["KGE_daily"].median()),
-                "NSE_daily": float(evaluation_df["NSE_daily"].median()),
-                "R_daily": float(evaluation_df["R_daily"].median()),
-                "R2_daily": float(evaluation_df["R2_daily"].median()),
-                "RMSE_daily": float(evaluation_df["RMSE_daily"].median()),
-                "RRMSE_daily": float(evaluation_df["RRMSE_daily"].median()),
-                "KGE_monthly": float(evaluation_df["KGE_monthly"].median()),
-                "NSE_monthly": float(evaluation_df["NSE_monthly"].median()),
-                "R_monthly": float(evaluation_df["R_monthly"].median()),
-                "R2_monthly": float(evaluation_df["R2_monthly"].median()),
-                "RMSE_monthly": float(evaluation_df["RMSE_monthly"].median()),
-                "RRMSE_monthly": float(evaluation_df["RRMSE_monthly"].median()),
-                "KGE": float(evaluation_df["KGE"].median()),
-                "NSE": float(evaluation_df["NSE"].median()),
-                "R": float(evaluation_df["R"].median()),
-                "R2": float(evaluation_df["R2"].median()),
-                "RMSE": float(evaluation_df["RMSE"].median()),
-                "RRMSE": float(evaluation_df["RRMSE"].median()),
+                **{f"{k}_{freq}": float(evaluation_df[f"{k}_{freq}"].median())
+                   for freq in ("hourly", "daily", "monthly")
+                   for k in DischargeMetrics._fields},
+                **{k: float(evaluation_df[k].median()) for k in DischargeMetrics._fields},
             }
         else:
             self.model.logger.warning(
@@ -2316,30 +2235,10 @@ class Hydrology:
             )
 
             scores: dict[str, float | None] = {
-                "KGE_hourly": None,
-                "NSE_hourly": None,
-                "R_hourly": None,
-                "R2_hourly": None,
-                "RMSE_hourly": None,
-                "RRMSE_hourly": None,
-                "KGE_daily": None,
-                "NSE_daily": None,
-                "R_daily": None,
-                "R2_daily": None,
-                "RMSE_daily": None,
-                "RRMSE_daily": None,
-                "KGE_monthly": None,
-                "NSE_monthly": None,
-                "R_monthly": None,
-                "R2_monthly": None,
-                "RMSE_monthly": None,
-                "RRMSE_monthly": None,
-                "KGE": None,
-                "NSE": None,
-                "R": None,
-                "R2": None,
-                "RMSE": None,
-                "RRMSE": None,
+                **{f"{k}_{freq}": None
+                   for freq in ("hourly", "daily", "monthly")
+                   for k in DischargeMetrics._fields},
+                **{k: None for k in DischargeMetrics._fields},
             }
 
         self.model.logger.info(f"Discharge evaluation completed. Scores: {scores}")
