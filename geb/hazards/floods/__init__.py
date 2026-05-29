@@ -639,7 +639,7 @@ class Floods(Module):
                 )
                 _shape_config = self.config.get("shape", {})
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge_by_river=self.discharge_by_river_spinup,
+                    discharge_by_river=self.discharge_by_river_spinup_and_run,
                     return_periods=self.config["return_periods"],
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
@@ -799,6 +799,67 @@ class Floods(Module):
             raise ValueError(
                 """Not enough data available for reliable spinup, should be at least 20 years of data left.
                 Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
+
+        return discharge
+
+    @property
+    def discharge_by_river_spinup_and_run(self) -> pd.DataFrame:
+        """Open and concatenate spinup and run discharge per river as a DataFrame.
+
+        Reads spinup discharge (discarding the first 10 years as warm-up), then
+        appends run discharge if available. Using the combined series gives
+        GPD-POT more data, which is especially useful for rare return periods.
+
+        Returns:
+            A pandas DataFrame containing discharge time series for each river,
+            indexed by timestamp, covering spinup (minus warm-up) and run periods.
+
+        Raises:
+            ValueError: If there is not enough data available for reliable spinup.
+        """
+        rivers: gpd.GeoDataFrame = (
+            self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
+        )
+        all_rivers = self.model.hydrology.routing.rivers
+
+        spinup_discharge = read_discharge_per_river(
+            folder=self.model.report_folder.parent / "spinup" / "hydrology.routing",
+            rivers=rivers,
+            all_rivers=all_rivers,
+        )
+
+        start_time = spinup_discharge.index[0] + pd.DateOffset(years=10)
+        spinup_discharge = spinup_discharge.loc[start_time:]
+        spinup_discharge.index.freq = pd.infer_freq(spinup_discharge.index)
+
+        if (spinup_discharge.index[-1].year - spinup_discharge.index[0].year) < 20:
+            raise ValueError(
+                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
+
+        run_folder = self.model.report_folder.parent / "default" / "hydrology.routing"
+        if run_folder.exists():
+            run_discharge = read_discharge_per_river(
+                folder=run_folder,
+                rivers=rivers,
+                all_rivers=all_rivers,
+            )
+            discharge = pd.concat([spinup_discharge, run_discharge])
+            discharge.index.freq = pd.infer_freq(discharge.index)
+            spinup_years = spinup_discharge.index[-1].year - spinup_discharge.index[0].year
+            run_years = run_discharge.index[-1].year - run_discharge.index[0].year
+            print(
+                f"Using spinup + run discharge for GPD-POT: "
+                f"{spinup_years} spinup years + {run_years} run years."
+            )
+        else:
+            discharge = spinup_discharge
+            spinup_years = spinup_discharge.index[-1].year - spinup_discharge.index[0].year
+            print(
+                f"Run discharge not found, using spinup only for GPD-POT: "
+                f"{spinup_years} years."
             )
 
         return discharge
