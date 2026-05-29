@@ -1,4 +1,5 @@
 # dev
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 
 # v1.0.0b26
@@ -286,7 +287,6 @@ To support this version:
 - Fix: fix bug of countries that are not in trade regions (GLOBIOM) 
 - Raise error when progress.txt contains duplicates 
 - Speedup pr_gev calculation in build.
-- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 - Simplify report function arguments.
 - Report water balance evaluation plot to evaluate folder.
 - Save climate data in weekly chunks, also read in weekly chunks -> significant speedup (~15% is some tests).
