@@ -16,7 +16,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
-from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
+from matplotlib.colors import LinearSegmentedColormap
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
 
@@ -190,6 +190,20 @@ def read_flood_depth(
         figsize=(11, 7),  # ty: ignore[invalid-argument-type]
     )
 
+    flood_cmap = LinearSegmentedColormap.from_list(
+        "flood_depth",
+        [
+            "#87CEFA",
+            "#00BFFF",
+            "#1E90FF",
+            "#0000FF",
+            "#FFD700",
+            "#FF8C00",
+            "#FF0000",
+            "#8B0000",
+        ],
+    )
+
     # Plot flood depth with colorbar
     cbar_kwargs: dict[str, float | tuple[int, int]] = {"shrink": 0.6, "anchor": (0, 0)}
     flood_depth_m.plot(
@@ -198,7 +212,7 @@ def read_flood_depth(
         ax=ax,
         vmin=0,
         vmax=float(flood_depth_m.max().values),
-        cmap=viridis,
+        cmap=flood_cmap,
         cbar_kwargs=cbar_kwargs,
     )
 

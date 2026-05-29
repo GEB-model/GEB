@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
 import xarray as xr
+from matplotlib.colors import LinearSegmentedColormap
 from shapely.geometry.point import Point
 
 from geb.geb_types import (
@@ -729,6 +731,57 @@ class Floods(Module):
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
                 crs=flood_depth_return_period.rio.crs,
             )
+
+            if sfincs_inland_root_models and self.config["write_figures"]:
+                depth_colors = [
+                    "#87CEFA",
+                    "#00BFFF",
+                    "#1E90FF",
+                    "#0000FF",
+                    "#FFD700",
+                    "#FF8C00",
+                    "#FF0000",
+                    "#8B0000",
+                ]
+                flood_cmap = LinearSegmentedColormap.from_list(
+                    "flood_depth", depth_colors
+                )
+
+                fig, ax = sfincs_inland_root_models[0].sfincs_model.plot_basemap(
+                    fn_out=None,  # ty: ignore[invalid-argument-type]
+                    variable="",
+                    plot_geoms=False,
+                    zoomlevel=12,
+                    figsize=(11, 7),  # ty: ignore[invalid-argument-type]
+                )
+                flood_depth_return_period.plot(  # ty: ignore[missing-argument]
+                    x="x",
+                    y="y",
+                    ax=ax,
+                    vmin=0,
+                    vmax=float(flood_depth_return_period.max().values),
+                    cmap=flood_cmap,
+                    cbar_kwargs={"shrink": 0.6, "anchor": (0, 0)},
+                )
+                # Expand axes to the full catchment extent, not just the first subbasin
+                ax.set_xlim(
+                    float(flood_depth_return_period.x.min()),
+                    float(flood_depth_return_period.x.max()),
+                )
+                ax.set_ylim(
+                    float(flood_depth_return_period.y.min()),
+                    float(flood_depth_return_period.y.max()),
+                )
+                ax.set_title(
+                    f"Maximum Flood Depth — {return_period}-year Return Period"
+                )
+                figures_dir: Path = sfincs_inland_root_models[0]._root
+                fig.savefig(
+                    figures_dir / f"flood_depth_rp{return_period}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                plt.close(fig)
 
             # simulation.cleanup()
 
