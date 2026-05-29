@@ -413,12 +413,12 @@ def create_time_array(
     """
     # Build a fully hashable cache key from all inputs.
     # repr(timestep) is deterministic for both timedelta and relativedelta.
-    # json.dumps with sort_keys ensures dict ordering does not affect the key.
+    # Only the "frequency" entry of conf is used by this function.
     cache_key: tuple = (
         start,
         end,
         repr(timestep),
-        json.dumps(conf, sort_keys=True),
+        json.dumps(conf.get("frequency", {"every": "day"}), sort_keys=True),
         substeps,
     )
     if cache_key in _create_time_array_cache:
