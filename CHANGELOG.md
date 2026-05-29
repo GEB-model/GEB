@@ -1,6 +1,7 @@
 # dev
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 - Implement retry mechanism for 429 html error GLOPOP-SG data adapter. Zenodo rate limited making too many range requests. If we get rate limited now, we now go to sleep for a bit and try again later.
+- Further reduce memory use of reporter by using numpy views for identical time series data.
 
 # v1.0.0b26
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
