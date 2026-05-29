@@ -1445,6 +1445,7 @@ class RemoteFile:
 
         Raises:
             OSError: If reading from the URL fails.
+            HTTP429Error: If the server responds with HTTP 429 Too Many Requests.
         """
         if size == 0:
             return b""
