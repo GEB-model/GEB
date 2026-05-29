@@ -848,7 +848,9 @@ class Floods(Module):
             )
             discharge = pd.concat([spinup_discharge, run_discharge])
             discharge.index.freq = pd.infer_freq(discharge.index)
-            spinup_years = spinup_discharge.index[-1].year - spinup_discharge.index[0].year
+            spinup_years = (
+                spinup_discharge.index[-1].year - spinup_discharge.index[0].year
+            )
             run_years = run_discharge.index[-1].year - run_discharge.index[0].year
             print(
                 f"Using spinup + run discharge for GPD-POT: "
@@ -856,7 +858,9 @@ class Floods(Module):
             )
         else:
             discharge = spinup_discharge
-            spinup_years = spinup_discharge.index[-1].year - spinup_discharge.index[0].year
+            spinup_years = (
+                spinup_discharge.index[-1].year - spinup_discharge.index[0].year
+            )
             print(
                 f"Run discharge not found, using spinup only for GPD-POT: "
                 f"{spinup_years} years."
