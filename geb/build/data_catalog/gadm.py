@@ -1,7 +1,5 @@
 """GADM data adapter for downloading and processing GADM data."""
 
-from __future__ import annotations
-
 import shutil
 import zipfile
 from pathlib import Path

@@ -1,15 +1,14 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
-from __future__ import annotations
-
 import math
-import tempfile
 from collections.abc import Generator, Hashable, Mapping
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Literal, cast, overload
 
+import dask.array as dask_array
 import geopandas as gpd
+import numba
 import numpy as np
 import numpy.typing as npt
 import xarray
@@ -27,6 +26,7 @@ from pyresample.resampler import resample_blocks
 from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
+from shapely.geometry.base import BaseGeometry
 from xarray.core.coordinates import DataArrayCoordinates
 
 from geb.geb_types import (
@@ -161,6 +161,7 @@ def sample_from_map(
     array: np.ndarray,
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
+    out_of_bounds_value: float | int | bool | None = None,
 ) -> np.ndarray:
     """Sample coordinates from a map. Can handle multiple dimensions.
 
@@ -168,46 +169,68 @@ def sample_from_map(
         array: The map to sample from (2+n dimensions).
         coords: The coordinates used to sample (shape: m, 2).
         gt: The geotransformation. Must be unrotated.
+        out_of_bounds_value: The value to return for coordinates that are out of bounds. If None, an error will be raised.
 
     Returns:
         The values at each coordinate.
+
+    Raises:
+        IndexError: If a coordinate is out of bounds and out_of_bounds_value is None.
+        ValueError: If the geotransformation indicates a rotated map.
     """
-    assert gt[2] + gt[4] == 0
+    if not (gt[2] == 0 and gt[4] == 0):
+        raise ValueError("Cannot sample from rotated maps")
+
     size = coords.shape[0]
     x_offset = gt[0]
     y_offset = gt[3]
     x_step = gt[1]
     y_step = gt[5]
     values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
-    for i in prange(size):  # ty: ignore[not-iterable]
-        values[i] = array[
-            ...,
-            int((coords[i, 1] - y_offset) / y_step),
-            int((coords[i, 0] - x_offset) / x_step),
-        ]
+
+    if out_of_bounds_value is None:
+        for i in prange(size):  # ty: ignore[not-iterable]
+            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
+            if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
+                values[i] = array[..., y_idx, x_idx]
+            else:
+                raise IndexError("Coordinate is out of bounds for array")
+
+    else:
+        for i in prange(size):  # ty: ignore[not-iterable]
+            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
+            if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
+                values[i] = array[..., y_idx, x_idx]
+            else:
+                values[i] = out_of_bounds_value
     return values
 
 
 @njit(
-    parallel=False,
+    parallel=True,
     cache=True,
-)  # Writing to an array cannot be parallelized as race conditions would occur.
+)
 def write_to_array(
     array: np.ndarray,
     values: np.ndarray,
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
+    parallel: bool = False,
 ) -> np.ndarray:
     """Write values using coordinates to a map.
 
-    If multiple coordinates map to a single cell,
-    the values are added. The operation is inplace.
+    If multiple coordinates map to a single cell, the values are added.
+    Parallel processing is achieved by each thread writing to its own sub-array
+    to avoid race conditions, followed by a final summation.
 
     Args:
         array: The 2-dimensional array to write to.
         values: The values to write (shape: n).
         coords: The coordinates of the values (shape: n, 2).
         gt: The geotransformation. Must be unrotated.
+        parallel: Whether to use parallel processing. Uses more memory but can be much faster for large arrays and many coordinates.
 
     Returns:
         The array with the values added (operation is inplace).
@@ -219,11 +242,33 @@ def write_to_array(
     y_offset = gt[3]
     x_step = gt[1]
     y_step = gt[5]
-    for i in range(size):
-        array[
-            int((coords[i, 1] - y_offset) / y_step),
-            int((coords[i, 0] - x_offset) / x_step),
-        ] += values[i]
+
+    if parallel:
+        # Get the number of threads Numba will use
+        num_threads = numba.get_num_threads()
+        # Create an array of sub-arrays, one for each thread
+        # Shape: (num_threads, rows, cols)
+        sub_arrays = np.zeros(
+            (num_threads, array.shape[0], array.shape[1]), dtype=array.dtype
+        )
+
+        # Parallel loop where each thread writes to its own sub-array
+        for i in prange(size):  # ty:ignore[not-iterable]
+            thread_id = numba.get_thread_id()
+            y_idx = int((coords[i, 1] - y_offset) / y_step)
+            x_idx = int((coords[i, 0] - x_offset) / x_step)
+            sub_arrays[thread_id, y_idx, x_idx] += values[i]
+
+        # Sum all sub-arrays into the final array
+        for t in range(num_threads):
+            array += sub_arrays[t]
+
+    else:
+        for i in range(size):
+            y_idx = int((coords[i, 1] - y_offset) / y_step)
+            x_idx = int((coords[i, 0] - x_offset) / x_step)
+            array[y_idx, x_idx] += values[i]
+
     return array
 
 
@@ -668,8 +713,14 @@ def clip_with_grid(
 
     Returns:
         A tuple containing the clipped dataset and a dictionary with slices for x and y dimensions.
+
+    Raises:
+        ValueError: If the dataset and mask do not have the same x and y coordinates.
     """
-    assert ds.shape == mask.shape
+    if ds["x"].size != mask["x"].size:
+        raise ValueError("Dataset and mask must have the same x coordinates")
+    if ds["y"].size != mask["y"].size:
+        raise ValueError("Dataset and mask must have the same y coordinates")
     cells_along_y = mask.sum(dim="x").values.ravel()
     miny = (cells_along_y > 0).argmax().item()
     maxy = cells_along_y.size - (cells_along_y[::-1] > 0).argmax().item()
@@ -814,8 +865,8 @@ def pad_xy(
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
     | None = None,
-    return_slice: Literal[True] = True,
-) -> tuple[xr.DataArray, dict[str, slice]]: ...
+    return_slice: Literal[False] = False,
+) -> xr.DataArray: ...
 
 
 @overload
@@ -829,9 +880,9 @@ def pad_xy(
     | bool
     | tuple[int, int]
     | Mapping[Any, tuple[int, int]]
-    | None = None,
-    return_slice: Literal[False] = False,
-) -> xr.DataArray: ...
+    | None = ...,
+    return_slice: Literal[True] = ...,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
 
 
 def pad_xy(
@@ -934,14 +985,17 @@ def pad_xy(
         return superset
 
 
-def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArray:
+def interpolate_na_along_dim(
+    da: xr.DataArray, mask: xr.DataArray | None = None
+) -> xr.DataArray:
     """Interpolate NaN values along the time dimension of a DataArray.
 
     Uses nearest neighbor interpolation in the spatial dimensions for each time slice.
 
     Args:
-        da: The input 3D DataArray with dimensions (dim, y, x) and NaN values to interpolate.
-        dim: The dimension along which to interpolate NaN values. Default is 'time'.
+        da: The input 3D DataArray with dimensions (time, y, x) and NaN values to interpolate.
+        mask: Optional spatial mask with True where interpolation should be performed.
+            The interpolation will only use values from cells where the mask is True.
 
     Returns:
         A new DataArray with NaN values interpolated along the dimension.
@@ -955,47 +1009,92 @@ def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArra
     nodata = da.attrs["_FillValue"]
 
     def fillna_nearest_2d(
-        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...], nodata: float
+        arr: TwoDArrayFloat32 | TwoDArrayFloat64,
+        mask: np.ndarray | None = None,
+        *,
+        nodata: float,
     ) -> TwoDArrayFloat32 | TwoDArrayFloat64:
         """Fill NaN values in a 2D array using nearest neighbor interpolation.
 
         Args:
-            arr: The input 2D array with NaN values.
-            dims: The dimensions of the array.
+            arr: The input 3D array (time, y, x) or 2D slice (y, x).
+            mask: Optional mask with True where interpolation should be performed.
             nodata: The nodata value to treat as missing.
 
         Returns:
             The array with NaN values filled.
         """
-        mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
-        if not mask.any():
+        is_nodata = np.isnan(arr) if np.isnan(nodata) else arr == nodata
+        if not is_nodata.any():
             return arr
 
-        assert dims == (dim, "y", "x")
+        # When using apply_ufunc with dask='parallelized', the function may receive
+        # a 3D array (time, y, x) if 'time' is a broadcast dimension.
+        if arr.ndim == 3:
+            for idx in range(arr.shape[0]):
+                mask_slice = is_nodata[idx]
+                dim_slice = arr[idx]
 
-        for idx in range(arr.shape[0]):
-            mask_slice = mask[idx]
-            dim_slice = arr[idx]
+                if mask is not None:
+                    # Only fill cells within the mask, using only data from within the mask
+                    m_slice = mask_slice & mask
+                    known_mask = (~is_nodata[idx]) & mask
+                else:
+                    m_slice = mask_slice
+                    known_mask = ~mask_slice
 
-            y, x = np.indices(dim_slice.shape)
-            known_x, known_y = x[~mask_slice], y[~mask_slice]
-            known_v = dim_slice[~mask_slice]
-            missing_x, missing_y = x[mask_slice], y[mask_slice]
+                if not m_slice.any() or not known_mask.any():
+                    continue
 
-            filled_values = griddata(
-                (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
-            )
-            arr[idx][mask_slice] = filled_values
+                y, x = np.indices(dim_slice.shape)
+                known_x, known_y = x[known_mask], y[known_mask]
+                known_v = dim_slice[known_mask]
+                missing_x, missing_y = x[m_slice], y[m_slice]
+
+                filled_values = griddata(
+                    (known_x, known_y),
+                    known_v,
+                    (missing_x, missing_y),
+                    method="nearest",
+                )
+                arr[idx][m_slice] = filled_values
+        else:
+            # 2D case (single slice)
+            if mask is not None:
+                m_slice = is_nodata & mask
+                known_mask = (~is_nodata) & mask
+            else:
+                m_slice = is_nodata
+                known_mask = ~is_nodata
+
+            if m_slice.any() and known_mask.any():
+                y, x = np.indices(arr.shape)
+                known_x, known_y = x[known_mask], y[known_mask]
+                known_v = arr[known_mask]
+                missing_x, missing_y = x[m_slice], y[m_slice]
+
+                filled_values = griddata(
+                    (known_x, known_y),
+                    known_v,
+                    (missing_x, missing_y),
+                    method="nearest",
+                )
+                arr[m_slice] = filled_values
         return arr
+
+    input_core_dims = [["y", "x"]]
+    input_args = [da]
+    if mask is not None:
+        input_args.append(mask)
+        input_core_dims.append(["y", "x"])
 
     da = xr.apply_ufunc(
         fillna_nearest_2d,
-        da,
+        *input_args,
         dask="parallelized",  # Enable parallelized computation
-        input_core_dims=[["y", "x"]],
+        input_core_dims=input_core_dims,
         output_core_dims=[["y", "x"]],
         kwargs={
-            "dims": da.dims,
             "nodata": nodata,
         },  # Additional arguments for the function
         output_dtypes=[da.dtype],
@@ -1004,43 +1103,136 @@ def interpolate_na_along_dim(da: xr.DataArray, dim: str = "time") -> xr.DataArra
     return da
 
 
-def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
+def fillna_2d(
+    arr: np.ndarray, nodata: float | int, mask: np.ndarray | None = None
+) -> np.ndarray:
+    """Interpolate NaN values in a 2D numpy array using nearest neighbor interpolation.
+
+    Args:
+        arr: The input 2D array with NaN values.
+        nodata: The nodata value to treat as missing.
+        mask: Optional mask with True where interpolation should be performed.
+
+    Returns:
+        A new 2D NumPy array with missing values interpolated.
+    """
+    is_nodata = np.isnan(arr) if np.isnan(nodata) else arr == nodata
+
+    if not is_nodata.any():
+        return arr
+    if is_nodata.all():
+        return arr
+
+    if mask is not None:
+        mask_slice = is_nodata & mask
+        known_mask = (~is_nodata) & mask
+    else:
+        # If no mask is provided, use all non-nodata cells as sources
+        mask_slice = is_nodata
+        known_mask = ~is_nodata
+
+    if not mask_slice.any() or not known_mask.any():
+        return arr
+
+    y, x = np.indices(arr.shape)
+    known_x, known_y = x[known_mask], y[known_mask]
+    known_v = arr[known_mask]
+    missing_x, missing_y = x[mask_slice], y[mask_slice]
+
+    filled_values = griddata(
+        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+    )
+    arr_filled = arr.copy()
+    arr_filled[mask_slice] = filled_values
+    return arr_filled
+
+
+def interpolate_na_2d(
+    da: xr.DataArray,
+    buffer: int | tuple[int, int] = 0,
+    mask: xr.DataArray | None = None,
+) -> xr.DataArray:
     """Interpolate NaN values in a 2D DataArray using nearest neighbor interpolation.
 
     Args:
         da: The input DataArray with dimensions ('y', 'x').
+        buffer: Overlap depth in cells used when processing Dask chunks. The
+            effective overlap is capped per axis to the raster extent so large
+            requested buffers remain valid for small arrays. If a tuple is
+            provided, it is interpreted as ``(buffer_y, buffer_x)``.
+        mask: Optional spatial mask with True where interpolation should be performed.
+            The interpolation will only use values from cells where the mask is True.
 
     Returns:
         A new DataArray with NaN values interpolated.
 
     Raises:
         ValueError: If '_FillValue' attribute is missing.
+        ValueError: If ``buffer`` is not a non-negative integer or a tuple of
+            two non-negative integers.
     """
     if "_FillValue" not in da.attrs:
         raise ValueError("DataArray must have '_FillValue' attribute")
 
     nodata = da.attrs["_FillValue"]
 
-    mask = np.isnan(da.values) if np.isnan(nodata) else da.values == nodata
+    if isinstance(buffer, int):
+        if buffer < 0:
+            raise ValueError("buffer must be non-negative")
+        buffer_y: int = buffer
+        buffer_x: int = buffer
+    elif isinstance(buffer, tuple) and len(buffer) == 2:
+        buffer_y, buffer_x = buffer
+        if not all(isinstance(value, int) and value >= 0 for value in buffer):
+            raise ValueError("buffer values must be non-negative integers")
+    else:
+        raise ValueError(
+            "buffer must be a non-negative integer or a tuple of two non-negative integers"
+        )
 
-    if not mask.any():
-        return da
+    if da.chunks is None:
+        mask_val = mask.values if mask is not None else None
+        filled_values = fillna_2d(np.asarray(da.data), nodata=nodata, mask=mask_val)
+        result = da.copy(data=filled_values)
+        result.attrs = da.attrs.copy()
+        return result
 
-    y, x = np.indices(da.values.shape)
-    known_x, known_y = x[~mask], y[~mask]
-    known_v = da.values[~mask]
-    missing_x, missing_y = x[mask], y[mask]
+    overlap_depth: dict[int, int] = {
+        0: min(buffer_y, max(da.sizes["y"] - 1, 0)),
+        1: min(buffer_x, max(da.sizes["x"] - 1, 0)),
+    }
 
-    filled_values = griddata(
-        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
-    )
-    da_filled = da.copy()
-    da_filled.values[mask] = filled_values
-    return da_filled
+    map_overlap_kwargs = {
+        "depth": overlap_depth,
+        "boundary": "none",
+        "trim": True,
+        "dtype": da.dtype,
+        "nodata": nodata,
+    }
+
+    if mask is not None:
+        filled_data = dask_array.map_overlap(
+            fillna_2d,
+            da.data,
+            mask.data,
+            **map_overlap_kwargs,
+        )
+    else:
+        filled_data = dask_array.map_overlap(
+            fillna_2d,
+            da.data,
+            **map_overlap_kwargs,
+        )
+
+    result = da.copy(data=filled_data)
+    result.attrs = da.attrs.copy()
+    return result
 
 
 def resample_like(
-    source: xr.DataArray, target: xr.DataArray, method: str = "bilinear"
+    source: xr.DataArray,
+    target: xr.DataArray,
+    method: Literal["bilinear", "nearest", "conservative"] = "bilinear",
 ) -> xr.DataArray:
     """Resample the source DataArray to match the target DataArray's grid.
 
@@ -1066,6 +1258,14 @@ def resample_like(
     source: xr.DataArray = source.drop_vars("spatial_ref")
     target: xr.DataArray = target.drop_vars("spatial_ref")  # TODO: Perhaps not needed
 
+    # Ensure target bounds are within source bounds (required for resampling).
+    target_bounds = target.rio.bounds()
+    source_bounds = source.rio.bounds()
+    if not bounds_are_within(target_bounds, source_bounds):
+        raise ValueError(
+            f"Target bounds must be within source bounds for resampling (target={target_bounds}, source={source_bounds})."
+        )
+
     regridder = xarray_regrid.regrid.Regridder(source)
 
     if method == "bilinear":
@@ -1077,7 +1277,7 @@ def resample_like(
         dst = regridder.conservative(
             target,  # ty: ignore[invalid-argument-type]
             latitude_coord="y",
-            output_chunks={**source.chunksizes, **target.chunksizes},
+            output_chunks={**source.chunksizes, **target.chunksizes},  # ty:ignore[invalid-argument-type]
         )
     elif method == "nearest":
         dst = regridder.nearest(target)  # ty: ignore[invalid-argument-type]
@@ -1210,7 +1410,7 @@ def resample_chunked(
         name=source.name,
         attrs=source.attrs.copy(),
     )
-    da.rio.set_crs(source.rio.crs)
+    da: xr.DataArray = da.rio.write_crs(source.rio.crs)
     return da
 
 
@@ -1377,6 +1577,94 @@ def clip_region(
     return clipped_mask, *clipped_arrays
 
 
+def rasterize_geometry(
+    block: xr.DataArray,
+    geometry: BaseGeometry,
+    all_touched: bool,
+) -> xr.DataArray:
+    """Rasterize a geometry onto a block of a DataArray.
+
+    Args:
+        block: The block of the DataArray to rasterize onto. Must have x and y coordinates.
+        geometry: The geometry to rasterize. Must be in the same CRS as the DataArray.
+        all_touched: If True, all pixels touched by the geometry will be included in the mask.
+            If False, only pixels whose center is within the geometry will be included.
+
+    Returns:
+        A boolean DataArray with the same shape and coordinates as the block, where True values indicate the presence of the geometry.
+    """
+    mask = rasterize(
+        [(geometry, 1)],
+        out_shape=block.shape,
+        transform=block.rio.transform(recalc=True),
+        nodata=False,
+        all_touched=all_touched,
+        dtype=np.int8,
+    ).astype(bool)
+
+    return xr.DataArray(mask, coords=block.coords, dims=block.dims, name="mask")
+
+
+def clip_with_geometry(
+    da: xr.DataArray,
+    gdf: gpd.GeoDataFrame,
+    all_touched: bool = False,
+    drop: bool = False,
+) -> xr.DataArray:
+    """Clip a DataArray to the extent of a geometry.
+
+    Args:
+        da: The DataArray to clip. Must have x and y coordinates.
+        gdf: The GeoDataFrame containing the geometry to clip with. Must be in the same CRS as the DataArray.
+        all_touched: If True, all pixels touched by the geometry will be included in the mask.
+            If False, only pixels whose center is within the geometry will be included.
+        drop: If True, drop any empty slices from the clipped DataArray.
+
+    Returns:
+        A new DataArray clipped to the geometry.
+
+    Raises:
+        ValueError: If the DataArray does not have x and y coordinates.
+        ValueError: If the geometry is not in the same CRS as the DataArray.
+    """
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        raise ValueError("gdf must be a GeoDataFrame")
+
+    if "x" not in da.coords or "y" not in da.coords:
+        raise ValueError(
+            "DataArray must have x and y coordinates to use clip_with_geometry"
+        )
+    if da.rio.crs is None:
+        raise ValueError("DataArray must have a CRS defined to use clip_with_geometry")
+
+    if not da.rio.crs.equals(gdf.crs):
+        raise ValueError(
+            "Geometry must be in the same CRS as the DataArray to use clip_with_geometry"
+        )
+
+    if da.rio.nodata is None:
+        raise ValueError(
+            "DataArray must have nodata value defined to use clip_with_geometry"
+        )
+
+    if da.chunks:
+        if drop is True:
+            xmin, ymin, xmax, ymax = gdf.geometry.total_bounds
+            da = da.rio.clip_box(xmin, ymin, xmax, ymax, crs=gdf.crs)
+
+        rasterized = da.map_blocks(
+            rasterize_geometry,
+            args=[gdf.geometry.union_all(), all_touched],
+            template=da.astype(bool),  # Tells dask the expected output shape/type
+        )
+        da_: xr.DataArray = da.where(rasterized, other=da.rio.nodata)
+        assert da_.dtype == da.dtype
+        da = da_
+    else:
+        da = da.rio.clip(gdf.geometry, all_touched=all_touched, drop=drop)
+    return da
+
+
 def get_linear_indices(da: xr.DataArray) -> xr.DataArray:
     """Get linear indices for each cell in a 2D DataArray.
 
@@ -1450,11 +1738,9 @@ def get_neighbor_cell_ids_for_linear_indices(
 @contextmanager
 def create_temp_zarr(
     da: xr.DataArray,
-    name: str = "temp",
-    x_chunksize: int = 350,
-    y_chunksize: int = 350,
-    time_chunksize: int = 1,
-    time_chunks_per_shard: int | None = 30,
+    name: str = "tmp",
+    shards: dict[str, int] | None = None,
+    **kwargs: Any,
 ) -> Generator[xr.DataArray, None, None]:
     """Create a DataArray to a temporary Zarr file with specified chunks.
 
@@ -1464,10 +1750,8 @@ def create_temp_zarr(
     Args:
         da: The DataArray to create.
         name: Name suffix for the temporary file.
-        x_chunksize: Chunk size for x dimension.
-        y_chunksize: Chunk size for y dimension.
-        time_chunksize: Chunk size for time dimension.
-        time_chunks_per_shard: Time chunks per shard.
+        shards: Optional dictionary specifying sharding for dimensions, e.g. {"time": 30}.
+        **kwargs: Additional keyword arguments to pass to `write_zarr`.
 
     Yields:
         The created DataArray opened from the temporary Zarr file.
@@ -1478,19 +1762,15 @@ def create_temp_zarr(
     if da.rio.crs is None:
         raise ValueError("DataArray must have a CRS defined to use create_temp_zarr")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir) / f"{name}.zarr"
-        temp_da = write_zarr(
-            da,
-            tmp_path,
-            crs=da.rio.crs,
-            x_chunksize=x_chunksize,
-            y_chunksize=y_chunksize,
-            time_chunksize=time_chunksize,
-            time_chunks_per_shard=time_chunks_per_shard,
-            progress=True,
-        )
-        yield temp_da
+    temp_da = write_zarr(
+        da,
+        path=None,
+        crs=da.rio.crs,
+        progress=True,
+        compression_level=1,
+        shards=shards,
+    )
+    yield temp_da
 
 
 def rechunk_zarr_file(
@@ -1525,7 +1805,7 @@ def rechunk_zarr_file(
         shards = None
     elif how == "space-optimized":
         x_chunk, y_chunk, time_chunk = 350, 350, 1
-        shards = 30
+        shards = {"time": 30}
     elif how == "balanced":
         x_chunk, y_chunk, time_chunk = 50, 50, 50
         shards = None
@@ -1542,12 +1822,8 @@ def rechunk_zarr_file(
             "Creating intermediate rechunked Zarr with 50x50 spatial chunks and 50 time chunks..."
         )
         ctx = create_temp_zarr(
-            da,
+            da.chunk({"x": 50, "y": 50, "time": 50}),
             name="intermediate",
-            x_chunksize=50,
-            y_chunksize=50,
-            time_chunksize=50,
-            time_chunks_per_shard=None,
         )
     else:
         # No intermediate step, directly rechunk from source to target
@@ -1559,12 +1835,9 @@ def rechunk_zarr_file(
             f"Rechunking Zarr with strategy '{how}' (x_chunk={x_chunk}, y_chunk={y_chunk}, time_chunk={time_chunk}, shards={shards})..."
         )
         write_zarr(
-            source_da,
+            source_da.chunk({"x": x_chunk, "y": y_chunk, "time": time_chunk}),
             output_path,
             crs=da.rio.crs,
-            x_chunksize=x_chunk,
-            y_chunksize=y_chunk,
-            time_chunksize=time_chunk,
-            time_chunks_per_shard=shards,
+            shards=shards,
             progress=True,
         )

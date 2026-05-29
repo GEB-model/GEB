@@ -1,4 +1,249 @@
 # dev
+- Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
+
+# v1.0.0b26
+- Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
+- Recently, there have been a lot of supply chain effects, where packages contained malicious code or instructions. To avoid most of these issues, but at the same time get relatively new updates (including those with important security updates) we limit any package updates to packages that are at least 3 days old in the uv.lock file. Here we use uv's exclude-newer option.
+- Update routing to include retention basins. By default no retention basins are set (all -1), however a dataset can be passed to set up retention basins. These basins can retain water during flood peaks, and slowly release water during low-flow periods. Set up using `setup_retention_basins`.
+- Fix case where river discharge was 0 in waterbodies (OK), but led to division by zero error in determining alpha for river widths ([#819](https://github.com/GEB-model/GEB/issues/819)).
+- Use MIRCA-OS crop calendars rather than MIRCA2000 ([#813](https://github.com/GEB-model/GEB/issues/813)).
+- Pre-allocate numpy arrays in reporter for both time and data. This uses significantly less memory as compared to Python lists, and because arrays are pre-allocated they do not cause RAM issues very late in the run but immediately instead.
+- Include an array tracking household expected annual damages (based on adaptation status). 
+- Support exporting household attributes (such as ead) using the reporter in run_yearly.
+- When multiple outflow basins were selected that are not coastal basins, it could happen that some basins were erroneously excluded. This is now fixed.
+
+# v1.0.0b25
+- Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
+- Include a delta approach to account for changes in precipitation and temperature under climate change in creating return period maps. To adjust forcing data to future climate, add the `representative_forcing_year` argument to `setup_forcing` in the build.yml to indicate the year for which you want to fast-forward the forcing data.
+- Fix a bug where update-version would not write newly created files to `files.yml`.
+
+# v1.0.0b24
+- Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
+- Add `--debug-method "method_name"` to `geb build` to filter the build to only run the setup region and any other methods that are required to run that specific method. For debugging purposes only.
+- Update DeltaDTM adapter to download continent ZIP files, unpack them, and then save the unpacked files on disk. This avoids issues with temporary files.
+- Load GLOPOP-SG files directly in memory, rather than first writing to disk and then loading to memory.
+- Improve alignment of data that goes into land surface model, reducing memory contention. And various other optimizations in land surface model.
+- Fix "Inflation not set when model runs to final year of data that was created in build process" ([#808](https://github.com/GEB-model/GEB/issues/808)).
+- Flood events could not and still cannot be simulated during the spinup. However, this was not clear and a funny error about missing files was raised. Now this situation is detected and a clear error is raised ([#806](https://github.com/GEB-model/GEB/issues/806)).
+- Simplify and speed up reading of forcing data. Before we used chunks of only 24 hours and used complex async reading to make it fast. Now that we use much larger chunks and efficient masking, the asynchronous reading made things overly complex and error prone. Simplifying the reading (e.g., dropping the async reader) while optimizing the indexing makes the model 10-20% faster in the test region. The difference is negligible in large regions.
+- Switch to Ross methodology for vertical soil water balance. This improves stability model speed.
+- Switch to Côté-Konrad kappa-based method for calculating soil/water heat conductivity. This uses no power functions and is much faster to compute.
+- Use titles for names in GRDC discharge plots.
+- Several updates for visualization of discharge evaluation. Switch to different background, use consistent coloring, replace scatter plot with return period plot.
+- Large number of optimizations in LSM making the model significantly faster again.
+- Speed up sampling from subgrid to HRUs using multi-processing.
+- Support 0 delay of runoff concentration.
+- Set variable runoff concentration variable to 1.0 by default (needs spatial discretization).
+- Improved layout of profiling txt file.
+- Export less data by default.
+- Combine various reporter outputs more efficiently.
+- Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point).
+- Return median metrics for KGE, NSE etc rather than mean.
+- Add FLUXNET (https://fluxnet.org) and GROW (https://zenodo.org/records/15149480) observations to build process. Not yet used in evaluation.
+- Export less data by default. If you miss any files that you relied on they can be explicitly turned on in your `model.yml`. See the `reasonable_default_config.yml` for references. This makes the model ~10% faster.
+- Combine various reporter outputs more efficiently reducing the amount of (duplicate) files exported. Naming conventions have changed slightly, but code in the evaluation functions was updated accordingly.
+- Use Zarr ScaleOffset and CastValue codecs instead of numcodecs (which are off-spec and will be deprecated at some point). Also they are faster.
+- Do not convert from grid to HRU and then back to grid for livestock water consumption.
+- Abstraction from industry is now assumed to be abstracted from larger rivers only. If we let industry abstract from each grid cell that has any industry, the industrial users abstract water from very small rivers, which also leads to very high groundwater abstraction in those cells because the demand is not satisfiable from the river. This is highly unrealistic. Therefore, we define abstraction areas based on the river network. Each abstraction area is associated with a river of shreve stream order above a set threshold. All water demands from industry are essentially transferred downstream to the river of the abstraction area, and abstraction is assumed to occur from that river.
+- All other configuration options that essentially tried to do some of these things above per study area (like custom abstraction) are removed now. Hopefully we can simply reduce the need for configuration options with better defaults!
+- Change units that industry and livestock water demand return (now m3/day, was m/day).
+- Add surface area ratio to setup_geomorphology.
+- Use surface area ratio to set variable runoff.
+- Improvement of variable names and unit conventions in land surface model.
+- Limit infiltration to most restricted layer and set a simple surface crust to limit infiltration to 20% of saturated conductivity for top layer. Can be improved upon.
+- Export evapotranspiration for locations with flux towers.
+- Improve visualisation of discharge_evaluation.html. Several things to make it look better, but also make it roughly 33-40% of original size while making it faster loading.
+- Report monthly discharge evaluation values too.
+
+# v1.0.0b23
+- Add documentation, repository, and issue tracker links to `pyproject.toml` ([#797](https://github.com/GEB-model/GEB/issues/797)).
+- Update license specification in `pyproject.toml` to follow PEP 639.
+- Re-support running with yearly timestep (fix several small bugs with variables not being available).
+- Add `create_plots` to `setup_discharge_observations`. This is because the plots are quite large and take long to generate. Default is false.
+
+# v1.0.0b22
+- Remove option to auto-fix build order (now build order should be much more consistent with `reasonable_default_build.yml`) and fix associated tests.
+
+# v1.0.0b21
+- Remove `ncpus` config option from SFINCS. CPU count is now always determined automatically from the SLURM environment or system.
+- Simplify assigning of crops and irrigation type in build process. Fix bug where sometimes irrigation type was not found.
+- Remove setup_irrigation_sources from build process as it is not needed anymore.
+- Fix basin delineation for endorheic basins.
+- Fix division by zero error for reservoirs that have no long term inflow.
+- Reduce RAM usage of reading GTSM data.
+- Table-like data is exported as parquet rather than csv (saves lots of space on disk).
+- Better compression of reported data. Most importantly, floats are now bitrounded with a maximum error of around 0.01%. In one test, the hourly discharge is now 168MB instead of 487MB.
+- In reported spatial data, the time dimension is now the last dimension. This allows for better compressibility (because of spatial auto-correlation). If you make plots and read the data with xarray you likely won't notice. If you read the data in funky ways with numpy, you may need to adapt some scripts.
+- Report discharge for outflow points of all rivers instead of just the outflow at the end of the basin with _outflow_points is set to true in the report.
+- Use the reported time series tables instead of grid when setting up the SFINCS models and estimating return period values.
+- Do not report discharge grid data by default in example (saving lots of disk space). You can re-enable this manually when you need it.
+- Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
+- Fix all typing issues.
+- Enable better compression for any table-like data. Mostly targets GTSM data that is now better compressed.
+- All agricultural insurances premiums and insured yields are now determined by a new insurer agent named "insurers". The adaptation itself is still within crop_farmers. For index and precipitation insurance functions have been added to estimate candidate spaces for the potential contracts have been added. These estimate strike, exit and rates from the index and income/loss data. Additional insurers functionalities can be added to this agent now. 
+- A hydrological year start month parameter has been added. This is a simple variable under "general" in the model.yml that indicates which month of the year the hydrological year starts. The base variable is 1 (january). Crop_farmers, livestock_farmers, market reservoir_operators, waterbodies and insurers take yearly actions at the start of the hydrological year. 
+- setup_waterbodies has a new functionality where it can create reservoir command areas just based on the hydrology and reservoirs using the calculate_command_areas setting. 
+- Bug fix where unify_crop_variants did not work for farmers for crop rotations with more than 1 crop. 
+- self.var.adaptations is now a boolean array. Run `geb update -b build.yml::setup_farmer_crop_calendar` for it to become boolean. 
+- setup_SPEI and setup_pr_GEV had issues with the grids not properly being assigned the actual GEV values. Rerun `geb update -b build.yml::setup_SPEI` and `geb update -b build.yml::setup_pr_GEV` to update
+- Fix division by zero error for reservoirs that have no long term inflow.
+- Fix basin delineation for endorheic basins.
+- Table-like data is exported as parquet rather than csv (saves lots of space on disk).
+- Better compression of reported data. Most importantly, floats are now bitrounded with a maximum error of around 0.01%. In one test, the hourly discharge is now 168MB instead of 487MB.
+- In reported spatial data, the time dimension is now the last dimension. This allows for better compressibility (because of spatial auto-correlation). If you make plots and read the data with xarray you likely won't notice. If you read the data in funky ways with numpy, you may need to adapt some scripts.
+- Report discharge for outflow points of all rivers instead of just the outflow at the end of the basin with _outflow_points is set to true in the report.
+- Use the reported time series tables instead of grid when setting up the SFINCS models and estimating return period values.
+- Do not report discharge grid data by default in example (saving lots of disk space). You can re-enable this manually when you need it.
+- Remove setting up SFINCS model from gridded data directly. Not needed anymore (see above).
+- Fix all typing issues.
+- Reduce RAM usage of reading GTSM data.
+- Enable better compression for any table-like data.
+- Save GTSM data as zarr with fixedscaleoffset and delta compression. Also adapt GTSM readers in model accordingly.
+- Remove all local caching during build to save disk space.
+- Enable automatic delta compression of time coordinates in zarr files.
+- Reduce RAM usage for models with a complex coastline.
+- Fix for differently sized crop maps from MIRCA-OS that led to issues where maps in regions where some maps did not overlap.
+- Several optimizations that make the model faster: faster grid-conversions, faster forcing interpolation.
+- Some fixes so that the evaluation functions read parquet files rather than the old csv files.
+- Fix for interpolation of MIRCA-OS crop data ([#765](https://github.com/GEB-model/GEB/issues/765))
+- Make the example build.yml inherit from a new 'reasonable_default_build.yml', allowing seamless updating unless custom settings are used.
+- Update pyflwdir to 0.5.11, which has caching of numba functions. Also thus allows removing of custom cached functions in routing.py.
+- Fix bug where river widths could be negative in rare cases. This clearly raised an error in the model run, so it doesn't affect any model that ran normally ([#770](https://github.com/GEB-model/GEB/issues/770))
+- Fix bugs in DeltaDTM: 1) tiles were not found as a buffer was not present around the coastal mask 2) for large coastal regions, the tiles were deleted, solving [[#783](https://github.com/GEB-model/GEB/issues/783)]
+- Different updates to Global Exposure model (GEM), most importantly a detailed mapping of name changes between GEM and GADM 
+- Fix bug where `insurance_active` tuple was always truthy; insurance check now uses `any(insurance_active)` in crop farmers (https://github.com/GEB-model/GEB/issues/790).
+- Fix wrong config key in `livestock_farmers.py`: was reading from `agent_settings.town_managers` instead of `agent_settings.livestock_farmers`. Since no config was actually used, this didn't have an effect on the model run.
+- Fix accounting bug in `get_current_storage()` where topwater was counted twice.
+- Replace `efficiency` [0–1] with explicit `return_flow` (m/day) in industry and livestock agents. The `to_grid` conversion for industry and livestock water demand is now performed inside `update_water_demand()`, so both agents return grid-scale arrays directly.
+- Speed up `to_grid` by parallelizing and simplifying because only weightedmean was used.
+- Split `get_current_storage()` into five sub-methods: `get_landsurface_storage_m3`, `get_overland_flow_buffer_storage_m3`, `get_routing_storage_m3`, `get_waterbodies_storage_m3`, `get_groundwater_storage_m3` for better profiling and clarity. Also sped up some of the functions using numba.
+- Cache `current_time` in `set_timestep()` to avoid recomputing date every call.
+- Make saving of store and finalization of reporting multithreaded.
+- Refactor `Reporter.process_value()` into helper methods (`_write_grid_hru_to_zarr`, `_apply_grid_hru_function`, `_write_agents_to_zarr`, `_apply_agent_function`) for better readability and profiling.
+- Adapt `plot_discharge` in evaluate to work with timeseries instead of grid.
+
+To support this version:
+- First of all it is HIGHLY RECOMMENDED to remove your own build.yml and replace it with the one in the examples. See `geb/examples/geul/build.yml`. This build.yml inherits from a new `reasonable_default_build.yml` (see `geb/reasonable_default_build.yml`). This will drastrically reduce the number of manual updates you need to do in the future. If you made any changes to your `build.yml` relative to the example, you can only keep those methods in your `build.yml`, which will then override the default ones in the `reasonable_default_build.yml`. If you want to keep the current setup, you need to remove `setup_irrigation_sources` from build.yml.
+
+The following should be run automatically with `geb update-version`, but if you want to do this manually:
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.
+- Re-run `setup_gtsm_station_data`: `geb update -b build.yml::setup_gtsm_station_data`.
+
+# v1.0.0b20
+- Completely removed the region_subgrid. This subgrid was very large and led to several issues, including using lots of memory during the build. By refactoring the farms setup, this could be removed completely. This doesn't affect the model run as it never used it. Only internally in the build.
+- Refactored setup farms from lowder and created a test. Non-lowder datasets are not supported anymore. This will be added back later in the simplified setup when it is required for a specific purpose.
+- Write a custom zarr writer that is able to write chunked data and adapt all build methods to work with this.
+- Made numerous changes throughout the build to reduce memory usage. No content changes.
+- Set fill depressions to False by default in build. This option uses too much memory for large areas. If needed this can be build in again at the hydrodynamics stage.
+- Remove old data catalog entirely, and all references to it. Rename NewDataCatalog to DataCatalog.
+- Fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
+- Add incremental reforestation: set `plant_forest.increment_fraction` (0–1) to plant a fraction of suitable HRUs per call, ranked by restoration potential. Auto-advances each call by skipping already-forested HRUs.
+- Add government adaptation pathway: set `agent_settings.government.adaptation.enabled: true` to trigger annual flood, equity, and ecosystem adaptation measures on January 1st based on configurable thresholds.
+- Optimize GTSM data catalog, now pre-processing to zarr files.
+- Improve CLI help so `geb evaluate --help` list the available evaluation methods.
+- Fix issue in the enthalpy calculations. Previously there would be 0 infiltration even when only part of the soil was frozen. In addition, rainfall that didn't infiltrate never warmed the soil (if soil is colder..) which led to situations with too much frozen soil, too much runoff and too much discharge in winters.
+- Made quite a few plots and exporters for the water balance plotting. Note that not all plots show a correct balance yet. This is highly likely not due to actual balance errors (they are checked in the running model) but because we don't yet plot the right variables. To be continued..
+- Remove support for include_spinup in the evalution. This option was supported sometimes and sometimes not, which led to silent ignores and general over complications. It is still possible to run the evaluate for the spinup (only) by using the run_name: `geb evaluate --run_name spinup`.
+- For large scale (multiple basins) only: build stats are now written to CSV files under `build_memory_stats/<cluster>.csv`.  Individual files are made for each basin cluster. 
+- New command "geb clean" to reset and delete the data for a model, except the .yml files. Also works for multiple basin clusters/models. 
+- The buffer size check fuction (check_buffer_size) is removed as this caused errors but is redundant. 
+- Fixes in water circle displaying.
+- Update format for custom river discharge time series. See geb/examples/geul/data/discharge_observations
+- Make full integration test, now checking discharge with observed discharge in the test_run.
+- Fix recent regression where water demand for households was set to 0 except on January 1st.
+- Include evaluation tests in the test_run for simplicity. 
+- Include global Huizinga curves as alternative to local Endendijk in build and reasonable default config.
+- Include setup_subnational_income_distribution to also set up initial subnational income distribution parameters for simulating migration decisions.
+- Move evaluation of hydrodynamics to seperate file.
+- Also calculate discharge metrics at daily frequency if only hourly data is available.
+- Added auto-update for build methods.
+- Improve memory usage of setup_soil (hopefully)
+- Update to Python 3.14.4.
+- Fix variables that were not correctly set in optimized mode.
+- Assert that future sea level rise is monotonically increasing, or monotontically decreasing.
+- Catch more exceptions where names for regions between several datasets do not match.
+
+To support this version:
+- Add `setup_flood_damage_model` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_flood_damage_model`.
+- Add `setup_subnational_income_distribution` to your `build.yml` if it is not already present, then run it: `geb update -b build.yml::setup_subnational_income_distribution`.
+- Update to Python 3.14.4. Ensure that you update your uv first (`uv self update`).
+
+# v1.0.0b19
+- Add option for filling and raise out of bounds error for sample_from_map.
+- Activate dynamic river widths during spinup. During the first years of spinup there may be some small balance errors, but they will resolve over time and in the run (when river width alpha and beta are stable).
+- Only re-calculate household water demand every year (performance).
+- Set SPEI calibration period to 1960-1990.
+- Reduce memory usage during build with custom clip that works with dask.
+
+To support this version:
+- Add a new file called 'build_complete.txt' in your input folder. In future versions this file will be made automatically.
+- Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.
+
+# v1.0.0b18
+- Add loggers to groundwater model and SFINCS models.
+- Close all open figures in SFINCS to reduce memory usage.
+- Several fixes in sfincs.py to avoid futurewarnings for pandas 3.0.
+- Compress forcing data to 1D. This makes the input folder significantly smaller (~50% depending on the area).
+- Reduce area that elevation and land use maps are written for reducing size on disk.
+- Remove self.buildings_centroid as attribute (appears not to be used).
+- Load in buildings as pandas df, only load geometry data for flood damage calculations.
+- Make filling of discharge gaps a lot more efficient (quite some reduction in run speed).
+- Make it possible to specify the number of cores using `--cores`. Default is all cores (no change).
+- Make an option to auto-fix the build order if it is incorrect.
+- Simulate return period based flood events for updating risk perceptions (instead of fixed threshold).
+
+To support this version:
+- Re-run `setup_forcing`: `geb update -b build.yml::setup_forcing`.
+- Re-run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.
+- Re-run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.
+- Re-run `setup_buildings`: `geb update -b build.yml::setup_buildings`.
+
+# v1.0.0b17
+- Synchronize start and end dates in reasonable default config and example.
+- Add .zenodo.json
+
+# v1.0.0b16
+- Cleanup logging situation in model. Now each method (except init-multiple) should created their own log file in the logs directory and no additional logs *should* be created.
+- Fix several warnings throughout model. And do not ignore some warnings globally.
+- Add custom and improved logging in calibration snakemake workflow.
+- In calibration, only run init and build if model.yml and build was not completed respectively.
+
+# v1.0.0b15
+- Switch back to Python 3.13 due to netcdf reading errors.
+- Switch liquid water in snow and snow water equivalent to float64 to avoid floating point imprecision in thick snow layers.
+- In case of water balance or enthalpy error export data for single cell that can be used to fix and test water balance seperately.
+
+# v1.0.0b14
+- Only create plots during forcing setup if specifically requested with new `create_plots` argument.
+- Combine code in forcing.py so that it is more easy to maintain.
+- Remove unused setup_land_use_parameters.
+- Pre-process GRDC data to zarr with chunks for faster future reads.
+- Add object size profile when speed-profile is used.
+- Add version of when build was made.
+- Switch to Python 3.14
+- Make land surface build process more efficient and cleanup. As part of this update, only the original land cover within the SFINCS regions is saved. Therefore, this now depends on setup_coastal_sfincs_model_regions.
+- Yield is now computed from actual evapotranspiration and potential evapotranspiration rather than actual transpiration and potential transpiration. This is in line with GAEZ documentation, and also fixes a divide by 0 error.
+- Refactor runoff concentration, and solve very small WB bug due to order of operations.
+- There is now a new check to check the data version against the model version. If there is a mismatch, an error is given and the user is suggested how to update to the new model version. This only works for fresh builds. If you want to force this behaviour on already existing builds, run `geb update-version`.
+
+To support this version:
+- Update to Python 3.14. If using uv, first ensure uv is updated `uv self update`, then run `uv sync` to update Python and packages.
+- Move `setup_coastlines` and `setup_coastal_sfincs_model_regions` to above `setup_regions_and_land_use` in your build.yml.
+
+# v1.0.0b13
+- combine fabdem loading of elevation and forcing for saving some data on disk
+- add memory profiler memray. Use option e.g., geb spinup --profile-memory
+- renamed speed profiler to --profile-speed
+- remove return statement from setup_forcing that was left behind from a debugging session
+
+# v1.0.0b12
+- Reforestation: add government forest planting policy and soil modification workflow.
+- Convert suitable cropland/grassland to forest; update soils and remove farmers.
+- Reorganized `geb/hydrology/` by moving land surface-related modules (`landsurface.py`, `evapotranspiration.py`, `interception.py`, `snow_glaciers.py`, `potential_evapotranspiration.py`) into a new `geb/hydrology/landsurface/` package.
+- Split `soil.py` into `geb/hydrology/landsurface/water.py` (soil hydraulic processes) and `geb/hydrology/landsurface/energy.py` (soil thermal processes).
+- Add Leaf Area Index (LAI) integration in soil net radiation calculation to account for canopy shielding and emission.
 - Refactor discharge observations to support dual-frequency (hourly and daily) data tables.
 - Rename generic `Q_obs` to `discharge_observations` across the codebase for clarity.
 - Add frequency labels (hourly/daily) to extreme value analysis and validation plot titles.
@@ -26,6 +271,11 @@
 - Move aquastat to new data catalog.
 - Add OECD Income Distribution Database (IDD) to the new data catalog.
 - Move Coast-RP to new data catalog.
+- Add heat conductivity to deeper soil layers (still missing influence of water).
+- Consider soil heat flux in pennmann-monteith.
+- Turn of sensible and turbulent heat fluxes in case there is snow.
+- Include evaporative cooling and advective heat transport from rainfall. 
+- Add a daily soil enthalpy balance check.
 - Generalize river snapping.
 - Setup example preprocessing for retention basins.
 - Fix: Add iso codes for GDL regions where those are missing 
@@ -37,6 +287,10 @@
 - Raise error when progress.txt contains duplicates 
 - Speedup pr_gev calculation in build.
 - Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
+- Simplify report function arguments.
+- Report water balance evaluation plot to evaluate folder.
+- Save climate data in weekly chunks, also read in weekly chunks -> significant speedup (~15% is some tests).
+- Use full penman-monteith for setup_SPEI.
 
 To support this version:
 - Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`
@@ -48,7 +302,10 @@ To support this version:
      - re-run `setup_income_distribution_parameters`: `geb update -b build.yml::setup_income_distribution_parameters`
      - re-run `setup_create_farms`: `geb update -b build.yml::setup_create_farms`
 
-# v1.0.0b10
+Recommended:
+- Re-run `setup_forcing` and `setup_SPEI` for a significant speedup and better SPEI estimation: `geb update -b build.yml::setup_forcing` and `geb update -b build.yml::setup_SPEI`
+
+# v1.0.0b11
 - Fix numerical precision issues in waterbodies by clamping outflow to not exceed storage when handling float32 outflow with float64 storage.
 - Fix GPU instability in SFINCS by disabling h73table parameter that was causing crashes during GPU-accelerated flood simulations.
 - `setup_soil_parameters` is removed in favour of `setup_soil` for consistency.
@@ -91,6 +348,10 @@ To support this version:
 - Moved global exposure model to global cache to deal with request limits (only 60 per hour when unauthenticated, just to prevent this becoming an issue)
 - Moved setup_buildings to its own function for quicker updating building attributes after changes. 
 - Removed waterbodies from gadv28 for better matching with the global exposure model.
+- Added a water level boundary for coastal rivers (for now set to zero).
+- Included detrending of tide data in estimation of hydrograph shape. 
+- Moved Global dynamic ocean topography to the new data catalog.
+- Implemented a padding of cells with values in Global dynamic ocean topography to extent the data to the coastline based on extrapolation.
 - Maintain origin index of the feature dataset in VectorScanner and VectorScannerMulticurve
 - Update damagescanner to v1.0.0b1
 - Switch MERIT Hydro dir/elv datasets to the global cache with a local fallback copy for offline access.
@@ -111,7 +372,6 @@ To support this version:
 - Setup cdsapi for gtsm download, see instruction here: https://cds.climate.copernicus.eu/how-to-api
 - Rename `setup_crops_from_source` to `setup_crops` and use `source_type` rather than `type` (which is a reserved keyword in Python).
 - Add and run `setup_vegetation` to `build.yml`. A good place is for example after `setup_soil`.
-- Run uv sync to update damagescanner
 
 # v1.0.0b10
 - Coastal inundation maps are now masked with OSM land polygons before writing to disk. 

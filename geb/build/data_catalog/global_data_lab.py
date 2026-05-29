@@ -1,7 +1,5 @@
 """Adapter for Global Data Lab shapefiles."""
 
-from __future__ import annotations
-
 import shutil
 import zipfile
 from typing import Any

@@ -25,8 +25,6 @@ Groundwater submodule for hydrology in GEB.
 Provides groundwater simulation and ModFlow integration utilities.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -74,27 +72,24 @@ class GroundWater(Module):
         """Initialize groundwater model parameters and state variables."""
         # load hydraulic conductivity (md-1)
         self.grid.var.groundwater_hydraulic_conductivity_m_per_day = (
-            self.hydrology.grid.load(
+            self.hydrology.grid.load3d(
                 self.model.files["grid"]["groundwater/hydraulic_conductivity"],
-                layer=None,
             )
         )
 
-        self.grid.var.specific_yield = self.hydrology.grid.load(
+        self.grid.var.specific_yield = self.hydrology.grid.load3d(
             self.model.files["grid"]["groundwater/specific_yield"],
-            layer=None,
         )
 
-        self.grid.var.layer_boundary_elevation = self.hydrology.grid.load(
+        self.grid.var.layer_boundary_elevation = self.hydrology.grid.load3d(
             self.model.files["grid"]["groundwater/layer_boundary_elevation"],
-            layer=None,
         )
 
         # recession_coefficient = self.hydrology.grid.load(
         #     self.model.files["grid"]["groundwater/recession_coefficient"],
         # )
 
-        self.grid.var.elevation = self.hydrology.grid.load(
+        self.grid.var.elevation = self.hydrology.grid.load2d(
             self.model.files["grid"]["landsurface/elevation_m"]
         )
 
@@ -104,8 +99,8 @@ class GroundWater(Module):
         )
 
         def get_initial_head() -> npt.NDArray[np.float64]:
-            heads = self.hydrology.grid.load(
-                self.model.files["grid"]["groundwater/heads"], layer=None
+            heads = self.hydrology.grid.load3d(
+                self.model.files["grid"]["groundwater/heads"]
             ).astype(np.float64)  # modflow is an exception, it needs double precision
             heads = np.where(
                 ~np.isnan(heads),
@@ -146,6 +141,7 @@ class GroundWater(Module):
             basin_mask=self.model.hydrology.grid.mask,
             heads=self.grid.var.heads,
             hydraulic_conductivity=self.grid.var.groundwater_hydraulic_conductivity_m_per_day,
+            logger=self.model.logger,
             verbose=False,
             heads_update_callback=self.heads_update_callback,
         )
@@ -190,7 +186,7 @@ class GroundWater(Module):
                 ],
                 prestorages=[groundwater_storage_pre.astype(np.float64)],
                 poststorages=[self.modflow.groundwater_content_m3.astype(np.float64)],
-                tolerance=500,  # 500 m3
+                tolerance=groundwater_recharge_m.size,  # maximum of 1m3 per cell
             )
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area

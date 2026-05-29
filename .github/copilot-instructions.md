@@ -10,3 +10,4 @@ when reviewing a pull request, please consider the following guidelines:
 - When a new feature is added or a bug is fixed, the changelog in `CHANGELOG.md` must be updated accordingly.
 - When adding a new feature that requires user documentation, the relevant documentation files must be updated accordingly.
 - When adding or removing authors, ensure that pyproject.toml and docs/about/developers.md are synchronized.
+- When a user needs to make new updates to input files to support the new version, the necessary updates must be added to `geb/build/version_updates.py`, and the version of the package must be raised to trigger the warning for users with old versions of the input data.

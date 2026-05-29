@@ -1,7 +1,5 @@
 """Several general functions to load and process data for the GEB model."""
 
-from __future__ import annotations
-
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING

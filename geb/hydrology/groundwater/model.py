@@ -21,8 +21,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-from __future__ import annotations
-
+import logging
 import os
 import platform
 from pathlib import Path
@@ -124,7 +123,7 @@ def get_groundwater_storage_m(
     Args:
         layer_boundary_elevation: Elevation of the layer boundaries, in m.
         head: The heads of the model grid, in m.
-        specific_yield: The specific yield of the model grid, in m-1.
+        specific_yield: The specific yield of the model grid (-).
         min_remaining_layer_storage_m: The minimum remaining layer storage in m.
             More storage cannot be abstracted with wells.
 
@@ -165,7 +164,7 @@ def distribute_well_abstraction_m3_per_layer(
         well_rate: The well rate, in m3/step. Negative values indicate abstraction.
         layer_boundary_elevation: Elevation of the layer boundaries, in m.
         heads: The heads of the model grid, in m.
-        specific_yield: The specific yield of the model grid, in m-1.
+        specific_yield: The specific yield of the model grid (-).
         area: The area of each cell, in m2.
         min_remaining_layer_storage_m: The minimum remaining layer storage in m.
             More storage cannot be abstracted with wells.
@@ -224,6 +223,12 @@ class ModFlowSimulation:
 
     area: ArrayFloat32
     heads: TwoDArrayFloat64
+    _heads_ptr: ArrayFloat64
+    _potential_well_rate_ptr: ArrayFloat64
+    _actual_well_rate_ptr: ArrayFloat64
+    _drainage_ptr: ArrayFloat64
+    _recharge_ptr: ArrayFloat64
+    _mxit_ptr: npt.NDArray[np.int32]
 
     def __init__(
         self,
@@ -238,6 +243,7 @@ class ModFlowSimulation:
         hydraulic_conductivity: TwoDArrayFloat32,
         heads: TwoDArrayFloat64,
         heads_update_callback: Callable,
+        logger: logging.Logger,
         min_remaining_layer_storage_m: float = 0.1,
         verbose: bool = False,
         never_load_from_disk: bool = False,
@@ -256,11 +262,13 @@ class ModFlowSimulation:
             hydraulic_conductivity: The hydraulic conductivity of the model grid (m/day).
             heads: The initial heads of the model grid (m).
             heads_update_callback: A callback function to update the heads in the GEB model after each time step.
+            logger: A logger instance to log information about the model.
             min_remaining_layer_storage_m: The minimum remaining layer storage in m, defaults to 0.1. More storage cannot be abstracted with wells.
             verbose: Whether to print debug information, defaults to False.
             never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input
                 will be loaded from disk if it exists and the input parameters have not changed.
         """
+        self.logger = logger
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
         self.heads_update_callback = heads_update_callback
         self.basin_mask = basin_mask
@@ -282,9 +290,11 @@ class ModFlowSimulation:
         self.hydraulic_conductivity_drainage = hydraulic_conductivity[0]
 
         arguments = dict(locals())
+
         arguments.pop("working_directory")
         arguments.pop("modflow_bin_folder")
         arguments.pop("self")
+        arguments.pop("logger")  # not hashable and not needed
         arguments.pop("heads_update_callback")  # not hashable and not needed
         arguments.pop(
             "heads"
@@ -297,7 +307,7 @@ class ModFlowSimulation:
         if not self.load_from_disk(arguments):
             try:
                 if self.verbose:
-                    print("Creating MODFLOW model")
+                    self.logger.info("Creating MODFLOW model")
 
                 sim = self.get_simulation(
                     gt,
@@ -314,7 +324,7 @@ class ModFlowSimulation:
                 raise
             # sim.run_simulation()
         elif self.verbose:
-            print("Loading MODFLOW model from disk")
+            self.logger.info("Loading MODFLOW model from disk")
 
         self.load_bmi(heads, modflow_bin_folder)
 
@@ -803,8 +813,8 @@ class ModFlowSimulation:
             try:
                 self.mf6 = XmiWrapper(library_path)
             except Exception as e:
-                print("Failed to load " + str(library_path))
-                print("with message: " + str(e))
+                self.logger.error("Failed to load " + str(library_path))
+                self.logger.error("with message: " + str(e))
                 self.bmi_return()
                 raise
 
@@ -823,7 +833,7 @@ class ModFlowSimulation:
                 raise
 
             if self.verbose:
-                print("MODFLOW model initialized")
+                self.logger.debug("MODFLOW model initialized")
 
         area_tag: str = self.mf6.get_var_address("AREA", self.name, "DIS")
         area: TwoDArrayFloat64 = self.mf6.get_value_ptr(area_tag).reshape(
@@ -836,6 +846,27 @@ class ModFlowSimulation:
         # so we can use the area of the top layer
         self.area = area[0].astype(np.float32)
 
+        # Cache frequently accessed BMI pointers. MODFLOW updates these arrays
+        # in place, so repeated pointer retrieval is unnecessary.
+        self._heads_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("X", self.name)
+        )
+        self._potential_well_rate_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("Q", self.name, "WEL_0")
+        )
+        self._actual_well_rate_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("SIMVALS", self.name, "WEL_0")
+        )
+        self._drainage_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("SIMVALS", self.name, "DRN_0")
+        )
+        self._recharge_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
+        )
+        self._mxit_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("MXITER", "SLN_1")
+        )
+
         self.prepare_time_step()
 
         # because modflow rounds heads when they are written to file, we set the modflow heads
@@ -844,24 +875,13 @@ class ModFlowSimulation:
         assert not np.isnan(self.heads).any()
 
     @property
-    def head_tag(self) -> str:
-        """Get the tag (name) for the heads variable in the modflow model.
-
-        Returns:
-            The tag for the heads variable.
-        """
-        return self.mf6.get_var_address("X", self.name)
-
-    @property
     def heads(self) -> TwoDArrayFloat64:
         """Get the heads of the model grid for all layers.
 
         Returns:
             The heads of the model grid, in m.
         """
-        heads = self.mf6.get_value_ptr(self.head_tag).reshape(
-            self.nlay, self.n_active_cells
-        )
+        heads = self._heads_ptr.reshape(self.nlay, self.n_active_cells)
         assert not np.isnan(heads).any()
         return heads
 
@@ -872,7 +892,7 @@ class ModFlowSimulation:
         Args:
             value: The heads to set, in m.
         """
-        self.mf6.get_value_ptr(self.head_tag)[:] = value.ravel()
+        self._heads_ptr[:] = value.ravel()
 
     @property
     def groundwater_depth(self) -> ArrayFloat64:
@@ -938,26 +958,6 @@ class ModFlowSimulation:
         return self.available_groundwater_m * self.area
 
     @property
-    def potential_well_rate_tag(self) -> str:
-        """Get the tag (name) for the potential well rate variable in the modflow model.
-
-        Returns:
-            The tag for the potential well rate variable.
-        """
-        return self.mf6.get_var_address("Q", self.name, "WEL_0")
-
-    @property
-    def actual_well_rate_tag(self) -> str:
-        """Get the tag (name) for the actual simulated well rate variable in the modflow model.
-
-        This rate can be lower than the potential well rate if not enough groundwater is available.
-
-        Returns:
-            The tag for the actual well rate variable.
-        """
-        return self.mf6.get_var_address("SIMVALS", self.name, "WEL_0")
-
-    @property
     def potential_well_rate(self) -> ArrayFloat64:
         """Get the potential well rate, value in m3/step.
 
@@ -967,12 +967,12 @@ class ModFlowSimulation:
         Returns:
             The potential well rate, value in m3/step.
         """
-        return self.mf6.get_value_ptr(self.potential_well_rate_tag)
+        return self._potential_well_rate_ptr
 
     @property
     def actual_well_rate(self) -> ArrayFloat64:
         """Get the actual simulated well rate, value in m3/step."""
-        return self.mf6.get_value_ptr(self.actual_well_rate_tag)
+        return self._actual_well_rate_ptr
 
     @potential_well_rate.setter
     def potential_well_rate(self, well_rate: ArrayFloat64) -> None:
@@ -993,16 +993,7 @@ class ModFlowSimulation:
                 self.min_remaining_layer_storage_m
             ),
         ).ravel()
-        self.mf6.get_value_ptr(self.potential_well_rate_tag)[:] = well_rate_per_layer
-
-    @property
-    def drainage_tag(self) -> str:
-        """Get the tag (name) for the drainage variable in the modflow model.
-
-        Returns:
-            The tag for the drainage variable.
-        """
-        return self.mf6.get_var_address("SIMVALS", self.name, "DRN_0")
+        self._potential_well_rate_ptr[:] = well_rate_per_layer
 
     @property
     def drainage_m3(self) -> npt.NDArray[np.float64]:
@@ -1011,7 +1002,7 @@ class ModFlowSimulation:
         Returns:
             The drainage, value in m3/step.
         """
-        drainage = -self.mf6.get_value_ptr(self.drainage_tag)
+        drainage = -self._drainage_ptr
         assert not np.isnan(drainage).any()
         # TODO: This assert can become more strict when soil depth is considered
         assert (drainage / self.area < self.hydraulic_conductivity_drainage * 100).all()
@@ -1022,17 +1013,8 @@ class ModFlowSimulation:
         return self.drainage_m3 / self.area
 
     @property
-    def recharge_tag(self) -> str:
-        """Get the tag (name) for the recharge variable in the modflow model.
-
-        Returns:
-            The tag for the recharge variable.
-        """
-        return self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
-
-    @property
     def _recharge_m(self) -> npt.NDArray[np.float64]:
-        recharge = self.mf6.get_value_ptr(self.recharge_tag).copy()
+        recharge = self._recharge_ptr.copy()
         assert not np.isnan(recharge).any()
         return recharge
 
@@ -1044,7 +1026,7 @@ class ModFlowSimulation:
             value: The recharge to set, value in m/step.
         """
         assert not np.isnan(value).any()
-        self.mf6.get_value_ptr(self.recharge_tag)[:] = value
+        self._recharge_ptr[:] = value
 
     @property
     def recharge_m3(self) -> npt.NDArray[np.float64]:
@@ -1062,8 +1044,7 @@ class ModFlowSimulation:
         Returns:
             The maximum number of iterations.
         """
-        mxit_tag = self.mf6.get_var_address("MXITER", "SLN_1")
-        return self.mf6.get_value_ptr(mxit_tag)[0]
+        return int(self._mxit_ptr[0])
 
     def prepare_time_step(self) -> None:
         """Prepare the model for the next time step."""
@@ -1117,7 +1098,7 @@ class ModFlowSimulation:
                 if has_converged:
                     break
             else:
-                print("MODFLOW did not converge")
+                self.logger.error("MODFLOW did not converge")
                 # raise RuntimeError("MODFLOW did not converge")
 
             self.mf6.finalize_solve(solution_id)
@@ -1131,11 +1112,11 @@ class ModFlowSimulation:
         assert not np.isnan(self.heads[-1] - self.layer_boundary_elevation[-1]).any()
 
         if self.verbose:
-            print("MODFLOW")
-            print(
+            self.logger.debug("MODFLOW")
+            self.logger.debug(
                 f"\ttimestep {int(self.mf6.get_current_time())} converged in {round(time() - t0, 2)} seconds"
             )
-            print(
+            self.logger.debug(
                 "\tHead statictics: mean",
                 self.heads.mean(),
                 "min",
@@ -1143,7 +1124,7 @@ class ModFlowSimulation:
                 "max",
                 self.heads.max(),
             )
-            print(
+            self.logger.debug(
                 "\tGroundwater depth: mean",
                 self.groundwater_depth.mean(),
                 "min",
@@ -1151,22 +1132,24 @@ class ModFlowSimulation:
                 "max",
                 self.groundwater_depth.max(),
             )
-            print("\tGroundwater content: mean", self.groundwater_content_m3.mean())
-            print(
+            self.logger.debug(
+                "\tGroundwater content: mean", self.groundwater_content_m3.mean()
+            )
+            self.logger.debug(
                 "\tRecharge (mean)",
                 (self.recharge_m * self.area).mean(),
                 "m3",
                 self.recharge_m.mean(),
                 "m",
             )
-            print(
+            self.logger.debug(
                 "\tAbstraction (mean)",
                 self.actual_well_rate.mean(),
                 "m3",
                 (self.actual_well_rate.sum(axis=0) / self.area).mean(),
                 "m",
             )
-            print(
+            self.logger.debug(
                 "\tDrainage (mean)",
                 self.drainage_m3.mean(),
                 "m3",
@@ -1185,12 +1168,11 @@ class ModFlowSimulation:
         If the model has already been finalized or was never
         initialised, this method will silently pass.
         """
-        print("Finalizing MODFLOW model")
         try:
             self.mf6.finalize()
         except InputError:
             pass
-        print("MODFLOW model finalized")
+        self.logger.info("MODFLOW model finalized")
 
     def restore(self, heads: TwoDArrayFloat64) -> None:
         """Restore the model to a previous state by setting the heads.

@@ -18,4 +18,4 @@ Where:
 
 For other land use types, fixed interception capacities are used (e.g., 1mm for irrigated crops).
 
-::: geb.hydrology.interception
+::: geb.hydrology.landsurface.interception

@@ -21,6 +21,7 @@ from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
 
 from geb.geb_types import ArrayFloat32, ArrayInt64
+from geb.workflows.io import read_geom
 
 
 def export_rivers(
@@ -46,7 +47,7 @@ def import_rivers(model_root: Path, postfix: str = "") -> gpd.GeoDataFrame:
     Returns:
         A GeoDataFrame containing the river segments.
     """
-    return gpd.read_parquet(model_root / f"rivers{postfix}.geoparquet")
+    return read_geom(model_root / f"rivers{postfix}.geoparquet")
 
 
 def read_flood_depth(
@@ -205,6 +206,7 @@ def read_flood_depth(
 
     output_path: Path = model_root / "flood_depth_all_time_steps.png"
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
     return flood_depth_m
 
 
@@ -552,7 +554,7 @@ def check_docker_running() -> bool | None:
             capture_output=True,
         )
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError, FileNotFoundError:
         print("Docker not installed properly or not running properly.")
         return False
 
@@ -560,7 +562,6 @@ def check_docker_running() -> bool | None:
 def run_sfincs_simulation(
     model_root: Path,
     simulation_root: Path,
-    ncpus: int | str = "auto",
     gpu: bool | str = "auto",
 ) -> int:
     """Run SFINCS simulation using either Apptainer or Docker.
@@ -570,7 +571,6 @@ def run_sfincs_simulation(
         simulation_root: Path to the simulation root directory.
             Some paths in the configuration will be made relative to this path.
             The simulation directory must be a subdirectory of the model root directory.
-        ncpus: Number of CPUs to use. Can be an integer or 'auto' to automatically detect the number of CPUs.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
 
@@ -632,22 +632,7 @@ def run_sfincs_simulation(
         if not version.endswith(".sif"):
             version: str = "docker://" + version
 
-        c = (
-            int(
-                os.getenv("SLURM_CPUS_PER_TASK", None)
-                or os.getenv("SLURM_CPUS_ON_NODE", None)
-                or os.cpu_count()  # returns none if cannot be determined
-                or 1
-            )
-            if ncpus == "auto"
-            else int(ncpus)
-        )
-        ncpus_str = "0" if c == 1 else f"0-{c - 1}"
-
         cmd: list[str] = [
-            "taskset",
-            "-c",
-            ncpus_str,  # get user defined or automatically detected number of CPUs
             "apptainer",
             "run",
             "-B",  ## Bind mount
@@ -766,14 +751,13 @@ def get_representative_river_points(
         return xys
 
 
-def get_discharge_and_river_parameters_by_river(
+def get_river_parameters_by_river(
     river_IDs: list[int],
     points_per_river: list[list[tuple[int, int]]],
-    discharge: xr.DataArray,
     river_width_alpha: npt.NDArray[np.float32] | None = None,
     river_width_beta: npt.NDArray[np.float32] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Extract discharge time series and river parameters for each river.
+) -> pd.DataFrame:
+    """Extract river parameters for each river.
 
     When rivers are represented in the low-resolution hydrological grid, rivers
     should have only one point in the points_per_river list. When rivers are not
@@ -785,16 +769,13 @@ def get_discharge_and_river_parameters_by_river(
     Args:
         river_IDs: List of river IDs.
         points_per_river: List of lists of (x, y) tuples representing the points for each river.
-        discharge: xarray DataArray containing discharge values with dimensions (time, y, x).
         river_width_alpha: 2D array of river width alpha parameters, same shape as discharge y and x dimensions.
             If None, river width alpha will not be extracted. Defaults to None.
         river_width_beta: 2D array of river width beta parameters, same shape as discharge y and x dimensions.
             If None, river width beta will not be extracted. Defaults to None.
 
     Returns:
-        A tuple containing:
-            - A pandas DataFrame with discharge time series for each river (columns are river IDs).
-            - A pandas DataFrame with river parameters (index is river IDs, columns are 'river_width_alpha' and 'river_width_beta').
+        A pandas DataFrame with river parameters (index is river IDs, columns are 'river_width_alpha' and 'river_width_beta').
 
     Raises:
         ValueError: If no points are found for rivers or if discharge values contain NaNs.
@@ -817,14 +798,6 @@ def get_discharge_and_river_parameters_by_river(
         dims="points",
     )
 
-    discharge_per_point: xr.DataArray = discharge.isel(
-        x=x_points,
-        y=y_points,
-    ).compute()
-    assert not np.isnan(discharge_per_point.values).any(), (
-        "Discharge values contain NaNs"
-    )
-
     if river_width_alpha is not None:
         river_width_alpha_per_point = river_width_alpha[y_points, x_points]
     else:
@@ -834,8 +807,6 @@ def get_discharge_and_river_parameters_by_river(
     else:
         river_width_beta_per_point = None
 
-    discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
-    discharge_df.index.freq = "H"  # ty:ignore[invalid-assignment]
     river_parameters: pd.DataFrame = pd.DataFrame(
         index=np.array(river_IDs),
         columns=np.array(
@@ -845,12 +816,6 @@ def get_discharge_and_river_parameters_by_river(
 
     i: int = 0
     for river_ID, points in zip(river_IDs, points_per_river, strict=True):
-        discharge_per_river = discharge_per_point.isel(
-            points=slice(i, i + len(points))
-        ).sum(dim="points")
-
-        discharge_df[river_ID] = discharge_per_river
-
         if river_width_alpha_per_point is not None:
             river_width_alpha_per_river = river_width_alpha_per_point[
                 i : i + len(points)
@@ -882,7 +847,6 @@ def get_discharge_and_river_parameters_by_river(
     assert i == len(xs), "Discharge values do not match the number of points"
     assert i == len(ys), "Discharge values do not match the number of points"
     # make sure no NaN values are present in the discharge DataFrame
-    assert not discharge_df.isnull().values.any(), "Discharge DataFrame contains NaNs"
 
     if river_width_alpha_per_point is not None:
         # make sure no NaN values are present in the river parameters DataFrame
@@ -894,20 +858,20 @@ def get_discharge_and_river_parameters_by_river(
         assert not river_parameters["river_width_beta"].isnull().values.any(), (
             "River width beta DataFrame contains NaNs"
         )
-    return discharge_df, river_parameters
+    return river_parameters
 
 
-def select_most_downstream_point(
+def select_most_upstream_point(
     river: LineString, outflow_points: GeometryCollection
 ) -> Point:
-    """Select the most downstream point from a collection of outflow points.
+    """Select the most upstream point from a collection of outflow points.
 
     Args:
         river: LineString of the river geometry.
         outflow_points: GeometryCollection of outflow points (can contain Points and LineStrings).
 
     Returns:
-        The most downstream Point from the outflow_points.
+        The most upstream Point from the outflow_points.
 
     Raises:
         TypeError: If an unsupported geometry type is found in outflow_points.
@@ -924,14 +888,14 @@ def select_most_downstream_point(
                 f"Unsupported geometry type in outflow_points: {type(geom)}"
             )
 
-    most_downstream_point: Point = points[0]
-    most_downstream_point_loc: float = line_locate_point(river, most_downstream_point)
+    most_upstream_point: Point = points[0]
+    most_upstream_point_loc: float = line_locate_point(river, most_upstream_point)
     for point in points[1:]:
         loc = line_locate_point(river, point)
-        if loc > most_downstream_point_loc:
-            most_downstream_point = point
-            most_downstream_point_loc = loc
+        if loc < most_upstream_point_loc:
+            most_upstream_point = point
+            most_upstream_point_loc = loc
 
-    outflow_point: Point = most_downstream_point
+    outflow_point: Point = most_upstream_point
 
     return outflow_point

@@ -2,4 +2,4 @@
 
 ## Code
 
-::: geb.hydrology.snow_glaciers
+::: geb.hydrology.landsurface.snow_glaciers

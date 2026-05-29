@@ -14,12 +14,14 @@ geb/examples/*/*
 !geb/examples/*/build.yml
 !geb/examples/*/model.yml
 !geb/examples/*/update.yml
+!geb/examples/*/data
 .snakemake
 **.code-workspace
 libmf6.so
 ssh_script
 .gemini/
 /model/
+._.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -144,3 +146,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+# SLURM output files
+*.out
+*.err

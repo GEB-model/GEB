@@ -101,9 +101,7 @@ class GroundWater(BuildModelBase):
                     relative_bottom_top_layer,
                     relative_bottom_bottom_layer,
                 ],
-                dim=xr.Variable(
-                    "boundary", ["relative_top", "boundary", "relative_bottom"]
-                ),
+                dim=xr.Variable("boundary", np.array([0, 1, 2], dtype=np.int32)),
                 compat="equals",
             )
         else:
@@ -115,7 +113,10 @@ class GroundWater(BuildModelBase):
                     ),
                     relative_bottom_bottom_layer,
                 ],
-                dim=xr.Variable("boundary", ["relative_top", "relative_bottom"]),
+                dim=xr.Variable(
+                    "boundary",
+                    np.array([0, 1], dtype=np.int32),
+                ),
                 compat="equals",
             )
 

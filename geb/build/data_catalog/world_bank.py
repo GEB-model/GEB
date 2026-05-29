@@ -1,7 +1,5 @@
 """Simple file adapter for downloading and saving files."""
 
-from __future__ import annotations
-
 import zipfile
 from pathlib import Path
 from typing import Any

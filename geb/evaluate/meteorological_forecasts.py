@@ -5,8 +5,6 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -188,8 +186,8 @@ class MeteorologicalForecasts:
                 init_time_str: str,
                 plot_type: str = "intensity",
                 show_legend: bool = False,
-                x_start: pd.Timestamp = pd.Timestamp("2024-04-26 00:00"),
-                x_end: pd.Timestamp = pd.Timestamp("2024-05-16 00:00"),
+                x_start: pd.Timestamp = pd.Timestamp("2024-04-26 00:00"),  # ty:ignore[invalid-parameter-default]
+                x_end: pd.Timestamp = pd.Timestamp("2024-05-16 00:00"),  # ty:ignore[invalid-parameter-default]
             ) -> None:
                 """Plot precipitation data (intensity or cumulative) for a single subplot.
 
@@ -243,7 +241,7 @@ class MeteorologicalForecasts:
                 )
 
                 # Add moment of flooding line
-                moment_of_inundation: pd.Timestamp = pd.Timestamp(
+                moment_of_inundation: pd.Timestamp = pd.Timestamp(  # ty:ignore[invalid-assignment]
                     "2024-05-06T00:00:00.000000000"
                 )
                 ax.axvline(
@@ -385,7 +383,7 @@ class MeteorologicalForecasts:
             fig.text(0.5, 0.02, "Date (UTC)", ha="center", fontsize=18)
             fig.text(0.02, 0.5, ylabel, va="center", rotation="vertical", fontsize=18)
 
-            plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.95])
+            plt.tight_layout(rect=(0.03, 0.03, 0.97, 0.95))
 
             # Save plot
             plt.savefig(

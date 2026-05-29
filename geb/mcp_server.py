@@ -18,7 +18,8 @@ def run_model(
     config: str = CONFIG_DEFAULT,
     working_directory: str = WORKING_DIRECTORY_DEFAULT,
     optimize: bool = False,
-    profiling: bool = False,
+    profile_ram: bool = False,
+    profile_speed: bool = False,
 ) -> str:
     """Run the GEB model.
 
@@ -26,7 +27,8 @@ def run_model(
         config: Path to model configuration file.
         working_directory: Working directory.
         optimize: Run in optimized mode.
-        profiling: Run with profiling.
+        profile_ram: Run with RAM profiling.
+        profile_speed: Run with speed profiling.
 
     Returns:
         Status message.
@@ -39,7 +41,8 @@ def run_model(
             config=Path(config),
             working_directory=Path(working_directory),
             optimize=optimize,
-            profiling=profiling,
+            profile_ram=profile_ram,
+            profile_speed=profile_speed,
         )
         return "Model run completed successfully."
     except Exception as e:
@@ -81,7 +84,6 @@ def build_model(
     config: str = CONFIG_DEFAULT,
     build_config: str = BUILD_DEFAULT,
     working_directory: str = WORKING_DIRECTORY_DEFAULT,
-    data_provider: str = "default",
     continue_substep: bool = False,
 ) -> str:
     """Build the model.
@@ -93,7 +95,6 @@ def build_model(
         config: Path to model configuration file.
         build_config: Path to build configuration file.
         working_directory: Working directory.
-        data_provider: Data provider to use.
         continue_substep: Continue previous build.
     """
     try:
@@ -103,7 +104,6 @@ def build_model(
             config=Path(config),
             build_config=Path(build_config),
             working_directory=Path(working_directory),
-            data_provider=data_provider,
             continue_=continue_substep,
         )
         return "Model build completed."
@@ -116,7 +116,6 @@ def update_model(
     config: str = CONFIG_DEFAULT,
     build_config: str = UPDATE_DEFAULT,
     working_directory: str = WORKING_DIRECTORY_DEFAULT,
-    data_provider: str = "default",
 ) -> str:
     """Update the model.
 
@@ -124,7 +123,6 @@ def update_model(
         config: Path to model configuration file.
         build_config: Path to update configuration file.
         working_directory: Working directory.
-        data_provider: Data provider to use.
 
     Returns:
         Status message.
@@ -136,7 +134,6 @@ def update_model(
             config=Path(config),
             build_config=Path(build_config),
             working_directory=Path(working_directory),
-            data_provider=data_provider,
         )
         return "Model updated."
     except Exception as e:

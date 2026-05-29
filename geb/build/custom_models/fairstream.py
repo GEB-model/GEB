@@ -37,9 +37,9 @@ from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
     INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
-    PERSONAL_INSURANCE_ADAPTATION,
     PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
+    TRADITIONAL_INSURANCE_ADAPTATION,
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
@@ -1046,7 +1046,7 @@ class fairSTREAMModel(GEBModel):
             crop_data_per_tehsil_fn: Excel file with crop holding counts per
                 tehsil and size class.
         """
-        n_farmers = self.array["agents/farmers/id"].size
+        n_farmers = self.array["agents/farmers/region_id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
         # Set all farmers within command areas to canal irrigation
@@ -1059,15 +1059,15 @@ class fairSTREAMModel(GEBModel):
                         WELL_ADAPTATION,
                         IRRIGATION_EFFICIENCY_ADAPTATION,
                         FIELD_EXPANSION_ADAPTATION,
-                        PERSONAL_INSURANCE_ADAPTATION,
+                        TRADITIONAL_INSURANCE_ADAPTATION,
                         INDEX_INSURANCE_ADAPTATION,
                         PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
             ),
-            -1,
-            dtype=np.int32,
+            0,
+            dtype=bool,
         )
 
         command_areas = self.subgrid["waterbodies/subcommand_areas"]
