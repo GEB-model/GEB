@@ -1296,6 +1296,14 @@ class WorkingDirectory:
         os.chdir(self._original_path)
 
 
+class HTTP429Error(Exception):
+    """Raised when the server responds with HTTP 429 Too Many Requests.
+
+    Intentionally does not inherit from OSError so that it propagates through
+    file-like wrappers (e.g. zipfile) that broadly catch OSError.
+    """
+
+
 class RemoteFile:
     """A file-like object that reads from a remote URL using HTTP Range headers.
 
@@ -1468,6 +1476,8 @@ class RemoteFile:
                 f"Server returned 200 OK but 206 Partial Content was expected for range {range_header}"
             )
 
+        if resp.status_code == 429:
+            raise HTTP429Error(f"HTTP 429 Too Many Requests from {self.url}")
         if resp.status_code not in [200, 206]:
             raise OSError(f"Failed to read from {self.url}: {resp.status_code}")
 

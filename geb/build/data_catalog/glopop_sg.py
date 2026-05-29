@@ -2,6 +2,7 @@
 
 import gzip
 import io
+import time
 import zipfile
 
 import numpy as np
@@ -10,13 +11,18 @@ import rioxarray as rxr
 import xarray as xr
 from tqdm import tqdm
 
-from geb.workflows.io import RemoteFile
+from geb.workflows.io import HTTP429Error, RemoteFile
 
 from .base import Adapter
 
 
 class GLOPOP_SG(Adapter):
     """Adapter for GLOPOP-SG population data."""
+
+    # Central-directory metadata for each URL, shared across all instances so
+    # the same remote ZIP is only interrogated once per process.
+    _zip_info_cache: dict[str, dict[str, zipfile.ZipInfo]] = {}
+    _RETRY_429_SLEEP_S: int = 10
 
     def fetch(self, url: str) -> GLOPOP_SG:
         """Fetch data for a specific region.
@@ -29,6 +35,31 @@ class GLOPOP_SG(Adapter):
         """
         self.url = url
         return self
+
+    def _get_zip_infolist(self, url: str) -> dict[str, zipfile.ZipInfo]:
+        """Return the central-directory info for a remote ZIP, with caching.
+
+        The central directory is fetched at most once per URL per process; all
+        subsequent calls return the in-memory cache without any HTTP requests.
+        Retries indefinitely on HTTP 429 responses.
+
+        Args:
+            url: URL of the remote ZIP archive.
+
+        Returns:
+            Mapping of filename to ZipInfo for every entry in the archive.
+        """
+        if url not in self._zip_info_cache:
+            while True:
+                try:
+                    with zipfile.ZipFile(RemoteFile(url), "r") as zf:
+                        self._zip_info_cache[url] = {
+                            info.filename: info for info in zf.infolist()
+                        }
+                    break
+                except HTTP429Error:
+                    time.sleep(self._RETRY_429_SLEEP_S)
+        return self._zip_info_cache[url]
 
     def _extract_from_remote_to_memory(self, filename: str, url: str) -> io.BytesIO:
         """Extract a single file from the remote ZIP into memory.
@@ -43,30 +74,34 @@ class GLOPOP_SG(Adapter):
         Raises:
             FileNotFoundError: If the file is not found in the remote zip.
         """
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(RemoteFile(url), "r") as zf:
+        info_dict = self._get_zip_infolist(url)
+        if filename not in info_dict:
+            raise FileNotFoundError(f"{filename} not found in remote zip.")
+        file_size = info_dict[filename].file_size
+
+        while True:
             try:
-                file_info = zf.getinfo(filename)
-                file_size = file_info.file_size
-                with (
-                    zf.open(filename) as source,
-                    tqdm(
-                        total=file_size,
-                        unit="B",
-                        unit_scale=True,
-                        desc=f"Downloading {filename}",
-                    ) as pbar,
-                ):
-                    while True:
-                        chunk = source.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        buffer.write(chunk)
-                        pbar.update(len(chunk))
-            except KeyError:
-                raise FileNotFoundError(f"{filename} not found in remote zip.")
-        buffer.seek(0)
-        return buffer
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(RemoteFile(url), "r") as zf:
+                    with (
+                        zf.open(filename) as source,
+                        tqdm(
+                            total=file_size,
+                            unit="B",
+                            unit_scale=True,
+                            desc=f"Downloading {filename}",
+                        ) as pbar,
+                    ):
+                        while True:
+                            chunk = source.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            buffer.write(chunk)
+                            pbar.update(len(chunk))
+                buffer.seek(0)
+                return buffer
+            except HTTP429Error:
+                time.sleep(self._RETRY_429_SLEEP_S)
 
     def read(self, region: str) -> tuple[pd.DataFrame, xr.DataArray]:
         """Read GLOPOP-SG data for a region.
