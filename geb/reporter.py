@@ -1,6 +1,7 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
 import datetime
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from operator import attrgetter
@@ -367,6 +368,11 @@ def get_time_chunk_size(
     return max(1, time_chunk_size)
 
 
+# Module-level cache for create_time_array results.  Keys are derived from
+# all function inputs; values are read-only arrays whose views are returned.
+_create_time_array_cache: dict[tuple, ArrayInt64] = {}
+
+
 def create_time_array(
     start: datetime.datetime,
     end: datetime.datetime,
@@ -376,6 +382,20 @@ def create_time_array(
 ) -> ArrayInt64:
     """Create a time array based on the start and end time, the timestep, and the frequency.
 
+    Results are cached: repeated calls with identical arguments return a
+    read-only view of the previously computed array, avoiding redundant work.
+    The cached array itself is marked non-writeable; callers must not attempt
+    to modify the returned view.
+
+    For daily frequency with a ``timedelta`` timestep the result is computed
+    with a vectorised ``np.arange`` over Unix seconds, avoiding a Python loop
+    over every day. For yearly and monthly frequencies the matching calendar
+    dates are enumerated directly.
+
+    Notes:
+        When substeps are requested the timestep must be evenly divisible by
+        the substep count; a ``ValueError`` is raised otherwise.
+
     Args:
         start: The start time.
         end: The end time.
@@ -384,45 +404,128 @@ def create_time_array(
         substeps: The number of substeps per timestep.
 
     Returns:
-        time: The time array.
+        time: A read-only view of the time array as Unix seconds (int64).
 
     Raises:
         ValueError: If the frequency is not recognized.
         ValueError: If substeps are provided for a frequency that does not support them.
+        ValueError: If the timestep is not evenly divisible by substeps.
     """
+    # Build a fully hashable cache key from all inputs.
+    # repr(timestep) is deterministic for both timedelta and relativedelta.
+    # Only the "frequency" entry of conf is used by this function.
+    cache_key: tuple = (
+        start,
+        end,
+        repr(timestep),
+        json.dumps(conf.get("frequency", {"every": "day"}), sort_keys=True),
+        substeps,
+    )
+    if cache_key in _create_time_array_cache:
+        return _create_time_array_cache[cache_key][:]
+
     if "frequency" not in conf:
-        frequency = {"every": "day"}
+        frequency: dict | str = {"every": "day"}
     else:
         frequency = conf["frequency"]
+
+    # `time_array` is set directly by the fast vectorised daily path; all
+    # other paths populate `time` (a list) and convert it below.
+    time_array: ArrayInt64 | None = None
+
     if "every" in frequency:
-        every = frequency["every"]
-        time = []
-        current_time = start
-        while current_time <= end:
-            if every == "year":
-                if substeps is not None:
-                    raise ValueError(
-                        "Substeps not supported for yearly frequency in create_time_array."
+        every: str = frequency["every"]
+
+        if every == "year":
+            if substeps is not None:
+                raise ValueError(
+                    "Substeps not supported for yearly frequency in create_time_array."
+                )
+            # Enumerate matching years directly — O(n_years) instead of O(n_days).
+            target_month: int = frequency["month"]
+            target_day: int = frequency["day"]
+            time: list[datetime.datetime] = []
+            for year in range(start.year, end.year + 1):
+                try:
+                    dt = start.replace(year=year, month=target_month, day=target_day)
+                except ValueError:
+                    # Day does not exist in this year (e.g. Feb 29 in a non-leap year).
+                    continue
+                if start <= dt <= end:
+                    time.append(dt)
+
+        elif every == "month":
+            if substeps is not None:
+                raise ValueError(
+                    "Substeps not supported for monthly frequency in create_time_array."
+                )
+            # Enumerate matching months directly — O(n_months) instead of O(n_days).
+            target_day_of_month: int = frequency["day"]
+            time = []
+            current_year: int = start.year
+            current_month: int = start.month
+            while True:
+                try:
+                    dt = start.replace(
+                        year=current_year, month=current_month, day=target_day_of_month
                     )
-                if (
-                    frequency["month"] == current_time.month
-                    and frequency["day"] == current_time.day
-                ):
-                    time.append(current_time)
-            elif every == "month":
-                if substeps is not None:
-                    raise ValueError(
-                        "Substeps not supported for monthly frequency in create_time_array."
-                    )
-                if frequency["day"] == current_time.day:
-                    time.append(current_time)
-            elif every == "day":
-                if substeps is None:
-                    time.append(current_time)
+                except ValueError:
+                    # Day does not exist in this month (e.g. the 31st of February).
+                    pass
                 else:
-                    for substep in range(substeps):
-                        time.append(current_time + substep * (timestep / substeps))
-            current_time += timestep
+                    if dt > end:
+                        break
+                    if dt >= start:
+                        time.append(dt)
+                # Advance to next month; break early once past the end month.
+                if current_month == 12:
+                    current_year += 1
+                    current_month = 1
+                else:
+                    current_month += 1
+                if datetime.datetime(current_year, current_month, 1) > end:
+                    break
+
+        elif every == "day":
+            if isinstance(timestep, datetime.timedelta):
+                # Fully vectorised path — no Python loop at all.
+                step_s: int = int(timestep.total_seconds())
+                start_s: int = int(np.datetime64(start, "s").astype(np.int64))
+                end_s: int = int(np.datetime64(end, "s").astype(np.int64))
+
+                if substeps is None:
+                    time_array = np.arange(start_s, end_s + 1, step_s, dtype=np.int64)
+                else:
+                    if step_s % substeps != 0:
+                        raise ValueError(
+                            f"Timestep {timestep} is not evenly divisible by substeps={substeps}."
+                        )
+                    substep_s: int = step_s // substeps
+                    # The outer loop runs while current_time <= end and emits
+                    # `substeps` evenly spaced entries per iteration. The sequence
+                    # is contiguous at substep_s resolution up to
+                    # last_start_s + (substeps - 1) * substep_s.
+                    last_start_s: int = ((end_s - start_s) // step_s) * step_s + start_s
+                    last_t_s: int = last_start_s + (substeps - 1) * substep_s
+                    time_array = np.arange(
+                        start_s, last_t_s + 1, substep_s, dtype=np.int64
+                    )
+
+            else:
+                # relativedelta timestep: division is not supported, fall back to loop.
+                time = []
+                current_time = start
+                while current_time <= end:
+                    if substeps is None:
+                        time.append(current_time)
+                    else:
+                        for substep in range(substeps):
+                            time.append(current_time + substep * (timestep / substeps))
+                    current_time += timestep
+
+        else:
+            raise ValueError(f"Frequency 'every: {every}' not recognized.")
+
     elif frequency == "initial":
         if substeps is not None:
             raise ValueError(
@@ -438,10 +541,18 @@ def create_time_array(
     else:
         raise ValueError(f"Frequency {frequency} not recognized.")
 
-    time_array = (
-        np.array(time, dtype="datetime64[ns]").astype("datetime64[s]").astype(np.int64)
-    )
-    return time_array
+    if time_array is None:
+        time_array = (
+            np.array(time, dtype="datetime64[ns]")
+            .astype("datetime64[s]")
+            .astype(np.int64)
+        )
+
+    # Mark the canonical array read-only before caching so no caller can
+    # accidentally mutate shared state through any view.
+    time_array.flags.writeable = False
+    _create_time_array_cache[cache_key] = time_array
+    return time_array[:]
 
 
 def get_filters_and_compressors(
@@ -1578,6 +1689,8 @@ class Reporter:
             for future in as_completed(futures):
                 # re-raise any exception from the worker thread
                 future.result()
+
+        (self.report_folder / "done.txt").touch()
 
     def report(
         self,
