@@ -966,6 +966,8 @@ class Floods(Module):
         if run_zarr_path.exists():
             run_da: xr.DataArray = read_zarr(run_zarr_path)
             da: xr.DataArray = xr.concat([spinup_da, run_da], dim="time")
+            da = da.sortby("time")
+            da = da.isel(time=~da.indexes["time"].duplicated())
             print(
                 f"Using spinup + run discharge for GPD-POT: "
                 f"{len(spinup_da.time.groupby(spinup_da.time.dt.year).groups)} spinup years + "

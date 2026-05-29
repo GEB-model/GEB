@@ -1393,9 +1393,11 @@ class SFINCSRootModel:
         # For 'anchor' mode Q_2 is always needed as the reference discharge.
         # Add it to the GPD computation even if the user did not request RP=2.
         anchor_rp: int | float = 2
+        anchor_rp_injected: bool = False
         return_periods_for_gpd: list[int | float] = list(return_periods)
         if hydrograph_shape == "anchor" and anchor_rp not in return_periods_for_gpd:
             return_periods_for_gpd = [anchor_rp] + return_periods_for_gpd
+            anchor_rp_injected = True
 
         # here we only select the rivers that have an upstream forcing point
         rivers_with_return_period: gpd.GeoDataFrame = self.active_rivers[
@@ -1470,6 +1472,14 @@ class SFINCSRootModel:
                 }
                 self.rivers.at[river_idx, f"hydrograph_{return_period}"] = (
                     hydrograph_dict
+                )
+
+        # Drop internally injected anchor RP column so it doesn't appear in exports.
+        if anchor_rp_injected:
+            col = f"Q_{anchor_rp}"
+            if col in rivers_with_return_period.columns:
+                rivers_with_return_period = rivers_with_return_period.drop(
+                    columns=[col]
                 )
 
         export_rivers(self.path, self.rivers, postfix="_return_periods")
