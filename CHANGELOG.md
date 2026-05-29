@@ -1,4 +1,5 @@
 # dev
+- Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 
 # v1.0.0b26
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
@@ -10,7 +11,6 @@
 - Include an array tracking household expected annual damages (based on adaptation status). 
 - Support exporting household attributes (such as ead) using the reporter in run_yearly.
 - When multiple outflow basins were selected that are not coastal basins, it could happen that some basins were erroneously excluded. This is now fixed.
-- Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).

@@ -8,7 +8,7 @@ import random
 import tracemalloc
 from pathlib import Path
 from time import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -38,9 +38,6 @@ def _seed_from_method_name(method_name: str) -> int:
     """
     digest: bytes = hashlib.sha256(method_name.encode()).digest()
     return int.from_bytes(digest[:4], byteorder="big")
-
-
-from typing import Protocol
 
 
 def validate_build_methods(
