@@ -2,6 +2,7 @@
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 - Implement retry mechanism for 429 web error GLOPOP-SG data adapter. Zenodo rate limited making too many range requests. If we get rate limited now, we now go to sleep for a bit and try again later.
 - Further reduce memory use of reporter by using numpy views for identical time series data.
+- In a recent change, discharges were explictly set to nan in reservoirs (good). This led to a case where rivers had 0 river width in the hydrodynamic model, which led to raised errors. Now, we fix this by looking further downstream of reservoirs to find a valid discharge for estimating river widths. This is also better, because perviously the default alpha for river width was used.
 
 # v1.0.0b26
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
