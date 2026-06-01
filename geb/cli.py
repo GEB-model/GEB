@@ -4,7 +4,6 @@ import datetime
 import functools
 import inspect
 import json
-import logging
 import subprocess
 import sys
 from operator import attrgetter
@@ -1108,7 +1107,6 @@ def rechunk(
 @tool.command()
 @click.argument(
     "models_dir",
-    default="../models/large_scale6",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
 @click.option(
@@ -1142,24 +1140,20 @@ def merge(
     merged_name: str,
     overwrite: bool,
 ) -> None:
-    """Merge outputs from multiple GEB cluster sub-models into a single merged model.
+    """Merge GEB cluster outputs into a single model directory for evaluation.
 
     Scans MODELS_DIR for cluster subdirectories matching CLUSTER_PREFIX, merges
     geometry files and discharge observation tables, symlinks report parquets, and
-    writes a model.yml so the result can be evaluated directly with ``geb evaluate``.
+    writes a model.yml so the result can be passed to ``geb evaluate``.
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%H:%M:%S",
-        force=True,
-    )
+    logger = create_logger("merge")
     merge_model_outputs(
         models_dir=models_dir,
         run_name=run_name,
         cluster_prefix=cluster_prefix,
         merged_dir_name=merged_name,
         overwrite=overwrite,
+        logger=logger,
     )
 
 

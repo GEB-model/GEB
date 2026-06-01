@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import warnings
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-
-logger = logging.getLogger(__name__)
-
-PHASES = ["build", "spinup", "run", "evaluate"]
 
 # GeoParquet files with spatially unique rows per cluster → concatenate row-wise.
 GEOM_FILES = [
@@ -29,44 +26,19 @@ TABLE_FILES_COLUMNS = [
 ]
 
 
-def _log_cluster_status(models_dir: Path, cluster_prefix: str) -> None:
-    """Log a phase-completion table for all matching cluster directories.
-
-    Args:
-        models_dir: Directory containing the cluster subdirectories.
-        cluster_prefix: Prefix used for cluster directory names.
-    """
-    col_w = 10
-    header = f"{'Cluster':<20}" + "".join(f"  {p:<{col_w}}" for p in PHASES)
-    logger.info(header)
-    logger.info("-" * len(header))
-    for cluster_dir in sorted(models_dir.glob(f"{cluster_prefix}_*")):
-        if not cluster_dir.is_dir():
-            continue
-        scenario_dir = next(
-            (d for d in sorted(cluster_dir.iterdir()) if d.is_dir()), None
-        )
-        statuses = (
-            {p: (scenario_dir / f"{p}.done").exists() for p in PHASES}
-            if scenario_dir
-            else {p: False for p in PHASES}
-        )
-        cells = "".join(f"  {'done' if statuses[p] else '·':<{col_w}}" for p in PHASES)
-        logger.info("%s%s", f"{cluster_dir.name:<20}", cells)
-
-
 def _find_cluster_dirs(
-    models_dir: Path, cluster_prefix: str, run_name: str
+    models_dir: Path, cluster_prefix: str, run_name: str, logger: logging.Logger
 ) -> dict[str, Path]:
-    """Find cluster scenario dirs that have completed the run phase.
+    """Return cluster name → scenario dir for every cluster that has a run output directory.
 
     Args:
         models_dir: Directory containing the cluster subdirectories.
         cluster_prefix: Prefix used for cluster directory names (e.g. ``"Europe"``).
-        run_name: Name of the model run to look for inside ``output/report/<run_name>/``.
+        run_name: Name of the run to look for inside ``output/report/<run_name>/``.
+        logger: Logger for progress messages.
 
     Returns:
-        Mapping of cluster name → scenario directory path, only for completed clusters.
+        Mapping of cluster name → scenario directory path.
     """
     result: dict[str, Path] = {}
     for cluster_dir in sorted(models_dir.glob(f"{cluster_prefix}_*")):
@@ -76,21 +48,30 @@ def _find_cluster_dirs(
             if not scenario_dir.is_dir():
                 continue
             run_dir = scenario_dir / "output" / "report" / run_name
-            if (scenario_dir / "run.done").exists() and run_dir.is_dir():
+            if run_dir.is_dir():
                 result[cluster_dir.name] = scenario_dir
                 break
+            else:
+                logger.debug(
+                    "%s: run output directory not found at %s, skipping.",
+                    cluster_dir.name,
+                    run_dir,
+                )
     return result
 
 
-def _collect_frames(cluster_bases: dict[str, Path], rel_path: str) -> list:
-    """Load a file from each cluster, skipping missing ones with a warning.
+def _collect_frames(
+    cluster_bases: dict[str, Path], rel_path: str, logger: logging.Logger
+) -> list:
+    """Load ``rel_path`` from each cluster, skipping missing ones with a warning.
 
     Args:
         cluster_bases: Mapping of cluster name → scenario base directory.
         rel_path: Path to the file relative to each scenario base directory.
+        logger: Logger for progress messages.
 
     Returns:
-        List of loaded DataFrames or GeoDataFrames. Empty if none found.
+        List of loaded DataFrames / GeoDataFrames; empty if none found.
     """
     read = gpd.read_parquet if rel_path.endswith(".geoparquet") else pd.read_parquet
     frames = []
@@ -104,17 +85,22 @@ def _collect_frames(cluster_bases: dict[str, Path], rel_path: str) -> list:
 
 
 def _merge_and_write(
-    cluster_bases: dict[str, Path], rel_path: str, dest: Path, axis: int = 0
+    cluster_bases: dict[str, Path],
+    rel_path: str,
+    dest: Path,
+    logger: logging.Logger,
+    axis: int = 0,
 ) -> None:
-    """Merge a file from all clusters and write the result to dest.
+    """Concatenate ``rel_path`` from all clusters and write to ``dest``.
 
     Args:
         cluster_bases: Mapping of cluster name → scenario base directory.
         rel_path: Path to the file relative to each scenario base directory.
         dest: Output path for the merged file.
-        axis: Concat axis — 0 for row-wise, 1 for column-wise.
+        logger: Logger for progress messages.
+        axis: Concat axis — 0 row-wise, 1 column-wise.
     """
-    frames = _collect_frames(cluster_bases, rel_path)
+    frames = _collect_frames(cluster_bases, rel_path, logger)
     if not frames:
         logger.warning("  %s → not found in any cluster, skipping.", rel_path)
         return
@@ -150,16 +136,18 @@ def _merge_and_write(
 
 
 def _symlink_output_reports(
-    cluster_bases: dict[str, Path], run_name: str, merged_base: Path
+    cluster_bases: dict[str, Path],
+    run_name: str,
+    merged_base: Path,
+    logger: logging.Logger,
 ) -> int:
-    """Symlink all report parquet files from every cluster into the merged directory.
-
-    Station IDs are globally unique across clusters so there are no filename collisions.
+    """Symlink every report parquet from each cluster into the merged directory.
 
     Args:
         cluster_bases: Mapping of cluster name → scenario base directory.
         run_name: Name of the model run (e.g. ``"default"``).
         merged_base: Root of the merged model directory.
+        logger: Logger for progress messages.
 
     Returns:
         Total number of symlinks created.
@@ -173,7 +161,7 @@ def _symlink_output_reports(
             dest_file = dest_run_dir / src_file.relative_to(src_run_dir)
             dest_file.parent.mkdir(parents=True, exist_ok=True)
             if dest_file.exists() or dest_file.is_symlink():
-                dest_file.unlink()
+                continue
             dest_file.symlink_to(src_file.resolve())
             cluster_links += 1
         logger.info("  %s: %d report files symlinked", cluster_name, cluster_links)
@@ -184,10 +172,10 @@ def _symlink_output_reports(
 def _symlink_remaining_inputs(
     cluster_bases: dict[str, Path], merged_base: Path, already_merged: set[str]
 ) -> None:
-    """Symlink input files not already merged from the first available cluster.
+    """Symlink input files from the first cluster that haven't been merged yet.
 
-    These files (forcing grids, lookup tables, rasters, etc.) are spatially
-    identical across clusters, so we only need one copy.
+    Forcing grids, rasters, and lookup tables are identical across clusters,
+    so one symlinked copy is sufficient.
 
     Args:
         cluster_bases: Mapping of cluster name → scenario base directory.
@@ -214,46 +202,52 @@ def merge_model_outputs(
     cluster_prefix: str = "Europe",
     merged_dir_name: str = "merged",
     overwrite: bool = False,
+    logger: logging.Logger | None = None,
 ) -> Path:
-    """Merge outputs from multiple GEB model clusters into a single merged model.
+    """Merge GEB cluster outputs into a single model directory for evaluation.
 
-    Creates ``<models_dir>/<merged_dir_name>/`` with the same layout as any
-    individual cluster scenario directory so it can be passed to ``geb evaluate``.
+    Creates ``<models_dir>/<merged_dir_name>/base/`` with the same layout as a
+    normal scenario directory so it can be passed directly to ``geb evaluate``.
 
     Args:
         models_dir: Directory containing the cluster subdirectories.
-        run_name: Name of the model run whose outputs are merged.
-        cluster_prefix: Prefix used for cluster directory names (e.g. ``"Europe"``).
-        merged_dir_name: Name for the merged directory inside ``models_dir``.
-        overwrite: If ``True``, overwrite an existing merged directory.
+        run_name: Name of the model run to merge.
+        cluster_prefix: Prefix of cluster directory names (e.g. ``"Europe"``).
+        merged_dir_name: Name for the merged output directory inside ``models_dir``.
+        overwrite: Overwrite an existing merged directory.
+        logger: Logger for progress messages. Defaults to the module logger.
 
     Returns:
-        Path to the created merged model base directory.
+        Path to the merged model base directory.
 
     Raises:
         FileNotFoundError: If ``models_dir`` does not exist.
         FileExistsError: If the merged directory already exists and ``overwrite`` is ``False``.
-        RuntimeError: If no completed clusters are found.
+        RuntimeError: If no clusters with the expected run output are found.
     """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
     if not models_dir.exists():
         raise FileNotFoundError(f"Models directory not found: {models_dir}")
 
     merged_base = models_dir / merged_dir_name / "base"
-    if merged_base.exists() and not overwrite:
-        raise FileExistsError(
-            f"Merged directory already exists: {merged_base}. "
-            "Pass overwrite=True (or --overwrite on the CLI) to replace it."
-        )
+    if merged_base.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"Merged directory already exists: {merged_base}. "
+                "Pass overwrite=True (or --overwrite on the CLI) to replace it."
+            )
+        shutil.rmtree(merged_base)
 
-    logger.info("Cluster phase status in %s:", models_dir)
-    _log_cluster_status(models_dir, cluster_prefix)
-
-    logger.info("Scanning for clusters with run.done and '%s' output …", run_name)
-    cluster_bases = _find_cluster_dirs(models_dir, cluster_prefix, run_name)
+    logger.info(
+        "Scanning for clusters with '%s' output directory in %s …", run_name, models_dir
+    )
+    cluster_bases = _find_cluster_dirs(models_dir, cluster_prefix, run_name, logger)
     if not cluster_bases:
         raise RuntimeError(
-            f"No clusters matching '{cluster_prefix}_*' with 'run.done' and a "
-            f"'{run_name}' output directory were found in {models_dir}."
+            f"No clusters matching '{cluster_prefix}_*' with a '{run_name}' "
+            f"output directory were found in {models_dir}."
         )
     logger.info(
         "Merging %d cluster(s): %s", len(cluster_bases), ", ".join(cluster_bases)
@@ -262,17 +256,21 @@ def merge_model_outputs(
     merged_paths: set[str] = set()
 
     logger.info("[output] Symlinking report parquets …")
-    n_links = _symlink_output_reports(cluster_bases, run_name, merged_base)
+    n_links = _symlink_output_reports(cluster_bases, run_name, merged_base, logger)
     logger.info("[output] %d symlink(s) created.", n_links)
 
     logger.info("[input] Merging geometry files …")
     for rel_path in GEOM_FILES:
-        _merge_and_write(cluster_bases, rel_path, merged_base / rel_path, axis=0)
+        _merge_and_write(
+            cluster_bases, rel_path, merged_base / rel_path, logger, axis=0
+        )
         merged_paths.add(rel_path)
 
     logger.info("[input] Merging station tables (column-wise) …")
     for rel_path in TABLE_FILES_COLUMNS:
-        _merge_and_write(cluster_bases, rel_path, merged_base / rel_path, axis=1)
+        _merge_and_write(
+            cluster_bases, rel_path, merged_base / rel_path, logger, axis=1
+        )
         merged_paths.add(rel_path)
 
     logger.info("[input] Symlinking remaining input files …")
@@ -281,10 +279,19 @@ def merge_model_outputs(
     # Sentinel required by GEBModel.verify_build_complete().
     (merged_base / "input" / "build_complete.txt").touch()
 
-    # Minimal config that inherits shared settings from the parent directory.
+    # Inherit from the shared parent config when available (common but not guaranteed).
     model_yml = merged_base / "model.yml"
     model_yml.parent.mkdir(parents=True, exist_ok=True)
-    model_yml.write_text("inherits: ../../model.yml\n")
+    parent_config = models_dir / "model.yml"
+    if parent_config.exists():
+        model_yml.write_text("inherits: ../../model.yml\n")
+    else:
+        model_yml.write_text("")
+        logger.warning(
+            "No parent model.yml found at %s; wrote an empty model.yml — "
+            "provide your own configuration before running 'geb evaluate'.",
+            parent_config,
+        )
 
     logger.info("Merged model ready at: %s", merged_base)
     return merged_base

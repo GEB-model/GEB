@@ -65,6 +65,9 @@ hydrology:
         beta: 0.5
     river_depth:
       method: manning # or power law. If power law, alpha and beta must be set additionally in the parameters
+  evaluation:
+    discharge:
+      minimum_upstream_area_km2: 0  # minimum modeled upstream area for discharge evaluation stations (km2)
 
 agent_settings:
   government:

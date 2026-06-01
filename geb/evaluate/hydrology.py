@@ -2,9 +2,8 @@
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple
 
-import contextily as ctx
 import geopandas as gpd
 import matplotlib as mpl
 import matplotlib.colors as mcolors
@@ -15,11 +14,20 @@ import pandas as pd
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
-from matplotlib.transforms import blended_transform_factory
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import create_discharge_folium_map
+from geb.evaluate.workflows.hydrology_data import (
+    filter_evaluation_by_minimum_upstream_area,
+    get_discharge_evaluation_minimum_upstream_area_km2,
+    has_minimum_upstream_area,
+)
+from geb.evaluate.workflows.hydrology_plot_engine import (
+    plot_skill_score_boxplots as _plot_skill_score_boxplots,
+    plot_skill_score_maps as _plot_skill_score_maps,
+    plot_skill_scores_vs_upstream_area as _plot_skill_scores_vs_upstream_area,
+)
 from geb.hydrology.routing import read_discharge_per_river
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
 from geb.workflows.visualise import plot_sunburst
@@ -775,161 +783,6 @@ def _plot_outflow_discharge_timeseries(
         plots_created += 1
 
     return plots_created
-
-
-def _plot_skill_score_map_single(
-    evaluation_gdf: gpd.GeoDataFrame,
-    metric_col: str,
-    metric_label: str,
-    metric_title: str,
-    cmap_name: str,
-    vmin: float,
-    vmax: float,
-    output_path: Path,
-    region_geom: gpd.GeoDataFrame,
-) -> None:
-    """Plot gauging stations coloured by a single skill score on a satellite basemap.
-
-    The GeoDataFrame is reprojected to Web Mercator (EPSG:3857) for compatibility
-    with the contextily satellite basemap.
-
-    Args:
-        evaluation_gdf: Per-station metrics with point geometry in any CRS.
-        metric_col: Column name of the metric to plot (e.g. ``"KGE"``).
-        metric_label: Short colorbar label including units (e.g. ``"KGE (−)"``).
-        metric_title: Full figure title.
-        cmap_name: Matplotlib colormap name.
-        vmin: Colorbar minimum value.
-        vmax: Colorbar maximum value.
-        output_path: Output path stem (no extension); ``.svg`` and ``.png`` are
-            saved automatically.
-        region_geom: Basin/region boundary overlaid on the map.
-    """
-    # Reproject to Web Mercator for contextily basemap compatibility
-    gdf_3857: gpd.GeoDataFrame = evaluation_gdf.to_crs("EPSG:3857")
-    region_3857: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
-
-    norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-
-    fig, ax = plt.subplots(figsize=(10, 9))
-    fig.patch.set_facecolor("black")
-    ax.set_facecolor("black")
-
-    region_3857.plot(
-        ax=ax,
-        color="none",
-        edgecolor="white",
-        linewidth=0.6,
-        alpha=0.7,
-        zorder=2,
-    )
-
-    # Valid stations coloured by metric value; NaN stations shown as grey crosses
-    valid_mask: pd.Series = gdf_3857[metric_col].notna()
-    if valid_mask.any():
-        ax.scatter(
-            gdf_3857.loc[valid_mask, "geometry"].x,
-            gdf_3857.loc[valid_mask, "geometry"].y,
-            c=gdf_3857.loc[valid_mask, metric_col],
-            cmap=cmap_name,
-            norm=norm,
-            s=12,
-            zorder=4,
-            linewidths=0.2,
-            edgecolors="white",
-        )
-    if (~valid_mask).any():
-        ax.scatter(
-            gdf_3857.loc[~valid_mask, "geometry"].x,
-            gdf_3857.loc[~valid_mask, "geometry"].y,
-            c="grey",
-            marker="x",
-            s=10,
-            zorder=3,
-            linewidths=0.5,
-            label="No data",
-        )
-        ax.legend(
-            fontsize=8,
-            loc="lower right",
-            framealpha=0.6,
-            facecolor="black",
-            edgecolor="white",
-            labelcolor="white",
-        )
-
-    # Satellite basemap
-    ctx.add_basemap(
-        ax,
-        crs="EPSG:3857",
-        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-        attribution=False,
-        zoom="auto",
-    )
-
-    # Colorbar
-    sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=norm)
-    cbar = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02, aspect=30)
-    cbar.set_label(metric_label, fontsize=11, color="white")
-    cbar.ax.yaxis.set_tick_params(color="white", labelcolor="white")
-    cbar.outline.set_edgecolor("white")  # ty:ignore[call-non-callable]
-
-    # Scale bar — pick a round bar length that is ~15 % of the map width in metres
-    x_min, x_max = ax.get_xlim()
-    y_min, y_max = ax.get_ylim()
-    map_width_m: float = x_max - x_min
-    map_height_m: float = y_max - y_min
-    raw_bar_m: float = map_width_m * 0.15
-    magnitude: float = 10 ** np.floor(np.log10(raw_bar_m))
-    bar_m: float = round(raw_bar_m / magnitude) * magnitude
-    bar_label_str: str = (
-        f"{int(bar_m / 1_000)} km" if bar_m >= 1_000 else f"{int(bar_m)} m"
-    )
-    bar_x0: float = x_min + map_width_m * 0.03
-    bar_y: float = y_min + map_height_m * 0.03
-    ax.plot(
-        [bar_x0, bar_x0 + bar_m],
-        [bar_y, bar_y],
-        color="white",
-        linewidth=3,
-        solid_capstyle="butt",
-        zorder=5,
-    )
-    ax.text(
-        bar_x0 + bar_m / 2,
-        bar_y + map_height_m * 0.012,
-        bar_label_str,
-        color="white",
-        fontsize=8,
-        ha="center",
-        va="bottom",
-        zorder=5,
-    )
-
-    # North arrow using a simple annotated arrow in axes-fraction coordinates
-    ax.annotate(
-        "N",
-        xy=(0.96, 0.12),
-        xytext=(0.96, 0.06),
-        xycoords="axes fraction",
-        textcoords="axes fraction",
-        ha="center",
-        va="bottom",
-        fontsize=10,
-        color="white",
-        fontweight="bold",
-        arrowprops=dict(arrowstyle="-|>", color="white", lw=1.5),
-    )
-
-    ax.set_title(metric_title, fontsize=13, fontweight="bold", color="white", pad=10)
-    ax.tick_params(colors="white", labelsize=8)
-    for spine in ax.spines.values():
-        spine.set_edgecolor("white")
-
-    plt.tight_layout()
-    for ext in ("svg", "png"):
-        plt.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=200)
-    plt.close(fig)
 
 
 def create_validation_df(
@@ -1924,11 +1777,9 @@ class Hydrology:
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
-        # Clean the evaluation output folder so stale plots from previous runs
-        # are not mixed in with fresh output.
-        if self.output_folder.exists():
-            shutil.rmtree(self.output_folder)
-        self.output_folder.mkdir(parents=True, exist_ok=True)
+        if self.discharge_output_folder.exists():
+            shutil.rmtree(self.discharge_output_folder)
+        self.discharge_output_folder.mkdir(parents=True, exist_ok=True)
 
         rivers_of_interest, discharge = self.get_discharge_per_river(run_name)
         for river_id in discharge.columns:
@@ -1946,7 +1797,7 @@ class Hydrology:
         ax.set_title(f"Mean discharge (m3/s)")
 
         plt.savefig(
-            self.output_folder / "mean_discharge_m3_per_s_map.svg",
+            self.discharge_output_folder / "mean_discharge_m3_per_s_map.svg",
         )
         plt.close()
 
@@ -1954,7 +1805,7 @@ class Hydrology:
             model=self.model,
             output_folder=self.model.output_folder,
             run_name=run_name,
-            eval_plot_folder=self.output_folder,
+            eval_plot_folder=self.discharge_output_folder,
         )
         if outflow_plot_count > 0:
             self.model.logger.info(
@@ -1967,6 +1818,7 @@ class Hydrology:
         include_yearly_plots: bool = True,
         correct_discharge_observations: bool = False,
         create_plots: bool = True,
+        minimum_upstream_area_km2: float | None = None,
     ) -> dict[str, float | None]:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
@@ -1986,6 +1838,8 @@ class Hydrology:
             correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
                 in upstream area between the discharge observations station and the discharge from GEB.
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for station evaluation (km2).
+                If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
 
         Returns:
             Dictionary containing mean metrics (KGE, NSE, R). In addition, the returned dictionary contains
@@ -1997,11 +1851,18 @@ class Hydrology:
             FileNotFoundError: If the run folder does not exist in the report directory.
             ValueError: If a non-existing frequency label is encountered in the discharge observations data.
         """
-        # Clean the evaluation output folder so stale plots and metrics from previous
-        # runs are not mixed in with fresh output.
-        if self.output_folder.exists():
-            shutil.rmtree(self.output_folder)
-        self.output_folder.mkdir(parents=True, exist_ok=True)
+        if self.evaluate_discharge_output_folder.exists():
+            shutil.rmtree(self.evaluate_discharge_output_folder)
+        self.evaluate_discharge_output_folder.mkdir(parents=True, exist_ok=True)
+
+        minimum_upstream_area_km2 = get_discharge_evaluation_minimum_upstream_area_km2(
+            self.model.config,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+        )
+        self.model.logger.info(
+            "Using %.1f km2 as the minimum upstream area threshold for discharge evaluation.",
+            minimum_upstream_area_km2,
+        )
 
         # load input data files
         discharge_observations_hourly: pd.DataFrame = read_table(
@@ -2065,15 +1926,30 @@ class Hydrology:
                         ID
                     ].discharge_observations_to_GEB_upstream_area_ratio
                 )
-
-                validation_df = create_validation_df(
-                    self.model.output_folder,
-                    run_name,
-                    ID,
-                    discharge_obs_series,
-                    correct_discharge_observations,
-                    discharge_observations_to_GEB_upstream_area_ratio,
+                geb_upstream_area_m2: float = float(
+                    snapped_locations.at[ID, "GEB_upstream_area_from_grid"]
                 )
+                if not has_minimum_upstream_area(
+                    upstream_area_m2=geb_upstream_area_m2,
+                    minimum_upstream_area_km2=minimum_upstream_area_km2,
+                ):
+                    # Smaller catchments tend to be dominated by local timing and snapping
+                    # errors, so the default benchmark excludes them from summary scores.
+                    continue
+                try:
+                    validation_df = create_validation_df(
+                        self.model.output_folder,
+                        run_name,
+                        ID,
+                        discharge_obs_series,
+                        correct_discharge_observations,
+                        discharge_observations_to_GEB_upstream_area_ratio,
+                    )
+                except FileNotFoundError:
+                    self.model.logger.warning(
+                        f"Simulation discharge data for station {ID} not found. Skipping this station."
+                    )
+                    continue
 
                 # Skip stations with fewer than 5 years of paired (non-NaN) observations.
                 assert validation_df.index.freq is not None  # ty:ignore[unresolved-attribute]
@@ -2096,7 +1972,7 @@ class Hydrology:
                         kge=m.KGE,
                         nse=m.NSE,
                         r_value=m.R,
-                        eval_plot_folder=self.output_folder,
+                        eval_plot_folder=self.evaluate_discharge_output_folder,
                         include_yearly_plots=include_yearly_plots,
                         frequency=freq_label,
                     )
@@ -2107,9 +1983,7 @@ class Hydrology:
                     "x": discharge_observations_station_coords[0],
                     "y": discharge_observations_station_coords[1],
                     "discharge_observations_to_GEB_upstream_area_ratio": discharge_observations_to_GEB_upstream_area_ratio,
-                    "upstream_area_GEB": snapped_locations.at[
-                        ID, "GEB_upstream_area_from_grid"
-                    ],
+                    "upstream_area_GEB": geb_upstream_area_m2,
                     **m._asdict(),
                     **{f"{k}_{freq_label}": v for k, v in m._asdict().items()},
                 }
@@ -2121,7 +1995,9 @@ class Hydrology:
                     validation_df_daily = (
                         validation_df.resample("D").mean()[counts == 24].dropna()
                     )
-                    m_daily = _calculate_discharge_validation_metrics(validation_df_daily)
+                    m_daily = _calculate_discharge_validation_metrics(
+                        validation_df_daily
+                    )
                     station_evaluation.update(
                         {f"{k}_daily": v for k, v in m_daily._asdict().items()}
                     )
@@ -2138,7 +2014,9 @@ class Hydrology:
 
                 # Monthly metrics
                 validation_df_monthly = validation_df.resample("ME").mean().dropna()
-                m_monthly = _calculate_discharge_validation_metrics(validation_df_monthly)
+                m_monthly = _calculate_discharge_validation_metrics(
+                    validation_df_monthly
+                )
                 station_evaluation.update(
                     {f"{k}_monthly": v for k, v in m_monthly._asdict().items()}
                 )
@@ -2150,7 +2028,9 @@ class Hydrology:
             # Create empty evaluation dataframe with proper structure
             # Column names are derived from DischargeMetrics so they stay in sync.
             freq_cols: list[str] = [
-                f"{k}_{freq}" for freq in ("monthly", "daily", "hourly") for k in DischargeMetrics._fields
+                f"{k}_{freq}"
+                for freq in ("monthly", "daily", "hourly")
+                for k in DischargeMetrics._fields
             ]
             evaluation_df = pd.DataFrame(
                 columns=[  # ty:ignore[invalid-argument-type]
@@ -2168,7 +2048,7 @@ class Hydrology:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
 
         evaluation_df.to_excel(
-            self.output_folder / "evaluation_metrics.xlsx",
+            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx",
             index=True,
         )
 
@@ -2179,7 +2059,7 @@ class Hydrology:
             crs="EPSG:4326",
         )  # create a geodataframe from the evaluation dataframe
         evaluation_gdf.to_parquet(
-            self.output_folder / "evaluation_metrics.geoparquet",
+            self.evaluate_discharge_output_folder / "evaluation_metrics.geoparquet",
         )
 
         # Return median metrics if available
@@ -2199,9 +2079,12 @@ class Hydrology:
 
                 create_discharge_folium_map(
                     evaluation_gdf=evaluation_gdf,
-                    output_path=self.output_folder / "discharge_evaluation_map.html",
-                    timeseries_plot_folder=self.output_folder / "timeseries",
-                    return_period_plot_folder=self.output_folder / "return_periods",
+                    output_path=self.evaluate_discharge_output_folder
+                    / "discharge_evaluation_map.html",
+                    timeseries_plot_folder=self.evaluate_discharge_output_folder
+                    / "timeseries",
+                    return_period_plot_folder=self.evaluate_discharge_output_folder
+                    / "return_periods",
                     region_geom=region_geom,
                     rivers=rivers,
                     waterbodies=waterbodies,
@@ -2224,10 +2107,15 @@ class Hydrology:
                     )
 
             scores: dict[str, float | None] = {
-                **{f"{k}_{freq}": float(evaluation_df[f"{k}_{freq}"].median())
-                   for freq in ("hourly", "daily", "monthly")
-                   for k in DischargeMetrics._fields},
-                **{k: float(evaluation_df[k].median()) for k in DischargeMetrics._fields},
+                **{
+                    f"{k}_{freq}": float(evaluation_df[f"{k}_{freq}"].median())
+                    for freq in ("hourly", "daily", "monthly")
+                    for k in DischargeMetrics._fields
+                },
+                **{
+                    k: float(evaluation_df[k].median())
+                    for k in DischargeMetrics._fields
+                },
             }
         else:
             self.model.logger.warning(
@@ -2235,9 +2123,11 @@ class Hydrology:
             )
 
             scores: dict[str, float | None] = {
-                **{f"{k}_{freq}": None
-                   for freq in ("hourly", "daily", "monthly")
-                   for k in DischargeMetrics._fields},
+                **{
+                    f"{k}_{freq}": None
+                    for freq in ("hourly", "daily", "monthly")
+                    for k in DischargeMetrics._fields
+                },
                 **{k: None for k in DischargeMetrics._fields},
             }
 
@@ -2327,7 +2217,7 @@ class Hydrology:
             return {}
 
         # Use already-evaluated station list when available; fall back to geom file.
-        geb_xlsx = self.output_folder / "evaluation_metrics.xlsx"
+        geb_xlsx = self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
         if geb_xlsx.exists():
             our_stations: set[str] = set(
                 pd.read_excel(geb_xlsx)["station_name"].dropna().str.upper()
@@ -2340,7 +2230,6 @@ class Hydrology:
                 snapped["discharge_observations_station_name"].dropna().str.upper()
             )
 
-        self.output_folder.mkdir(parents=True, exist_ok=True)
         external_models: dict[str, pd.DataFrame] = {}
         for csv_path in sorted(folder.glob("*.csv")):
             all_stations_df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
@@ -2356,7 +2245,8 @@ class Hydrology:
                 len(all_stations_df),
             )
             matched_stations_df.to_excel(
-                self.output_folder / f"external_evaluation_filtered_{model_name}.xlsx"
+                self.evaluate_discharge_output_folder
+                / f"external_evaluation_filtered_{model_name}.xlsx"
             )
             if not matched_stations_df.empty:
                 external_models[model_name] = matched_stations_df
@@ -2366,20 +2256,10 @@ class Hydrology:
     def plot_skill_score_maps(
         self,
         export: bool = True,
+        minimum_upstream_area_km2: float | None = None,
         **kwargs: Any,
     ) -> None:
         """Plot per-station skill scores on a satellite basemap, one map per metric.
-
-        Produces a map for each of the five discharge evaluation
-        metrics (KGE, NSE, R², RMSE, RRMSE). Each gauging station is coloured by
-        its score value using a perceptually-uniform colormap. The colour range for
-        bounded metrics (KGE, NSE, R²) is fixed to the theoretical range; for
-        unbounded metrics (RMSE, RRMSE) the upper bound is set to the 95th
-        percentile of observed values to avoid outlier influences.
-
-        An Esri WorldImagery satellite basemap is added via contextily, along with
-        a scale bar and north arrow for cartographic completeness. Figures are saved
-        as both SVG and PNG (200 dpi) under ``<output_folder>/skill_score_maps/``.
 
         Notes:
             Requires ``evaluate_discharge`` to have been run first so that
@@ -2387,10 +2267,18 @@ class Hydrology:
 
         Args:
             export: Whether to save the figures to disk.
-            **kwargs: Ignored (absorbed for CLI compatibility, e.g. ``run_name``).
+            minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted stations (km2).
+                If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            **kwargs: Ignored (CLI compatibility).
         """
-        geoparquet_path: Path = self.output_folder / "evaluation_metrics.geoparquet"
-        xlsx_path: Path = self.output_folder / "evaluation_metrics.xlsx"
+        minimum_upstream_area_km2 = get_discharge_evaluation_minimum_upstream_area_km2(
+            self.model.config,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+        )
+        geoparquet_path = (
+            self.evaluate_discharge_output_folder / "evaluation_metrics.geoparquet"
+        )
+        xlsx_path = self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
 
         if geoparquet_path.exists():
             evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(geoparquet_path)
@@ -2407,100 +2295,43 @@ class Hydrology:
             )
             return
 
-        region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
-
-        metric_configs: list[dict] = [
-            {
-                "col": "KGE",
-                "label": "KGE (−)",
-                "title": "Kling-Gupta Efficiency (KGE)",
-                "cmap": "RdYlGn",
-                "vmin": -1.0,
-                "vmax": 1.0,
-            },
-            {
-                "col": "NSE",
-                "label": "NSE (−)",
-                "title": "Nash-Sutcliffe Efficiency (NSE)",
-                "cmap": "RdYlGn",
-                "vmin": -1.0,
-                "vmax": 1.0,
-            },
-            {
-                "col": "R2",
-                "label": "R² (−)",
-                "title": "Coefficient of Determination (R²)",
-                "cmap": "YlGn",
-                "vmin": 0.0,
-                "vmax": 1.0,
-            },
-            {
-                "col": "RMSE",
-                "label": "RMSE (m³/s)",
-                "title": "Root Mean Squared Error (RMSE)",
-                "cmap": "YlOrRd_r",
-                "vmin": 0.0,
-                # Upper bound set to 95th percentile per-run to avoid outlier compression
-                "vmax": None,
-            },
-            {
-                "col": "RRMSE",
-                "label": "RRMSE (−)",
-                "title": "Relative Root Mean Squared Error (RRMSE)",
-                "cmap": "YlOrRd_r",
-                "vmin": 0.0,
-                "vmax": None,
-            },
-        ]
-
-        maps_folder: Path = self.output_folder / "skill_score_maps"
-        maps_folder.mkdir(parents=True, exist_ok=True)
-
-        for cfg in metric_configs:
-            col: str = cfg["col"]
-            if col not in evaluation_gdf.columns:
-                self.model.logger.info(
-                    "Metric '%s' not in evaluation data, skipping.", col
-                )
-                continue
-
-            valid_values: np.ndarray = (
-                evaluation_gdf[col].dropna().to_numpy(dtype=float)
+        before_filter_count: int = len(evaluation_gdf)
+        evaluation_gdf = gpd.GeoDataFrame(
+            filter_evaluation_by_minimum_upstream_area(
+                evaluation_gdf,
+                minimum_upstream_area_km2=minimum_upstream_area_km2,
+            ),
+            geometry="geometry",
+            crs=evaluation_gdf.crs,
+        )
+        self.model.logger.info(
+            "Upstream-area plot filter retained %d/%d stations at %.1f km2 or larger.",
+            len(evaluation_gdf),
+            before_filter_count,
+            minimum_upstream_area_km2,
+        )
+        if evaluation_gdf.empty:
+            self.model.logger.warning(
+                "No discharge evaluation stations remain after upstream-area filtering. "
+                "Skipping skill score maps."
             )
-            if valid_values.size == 0:
-                self.model.logger.info(
-                    "No valid values for metric '%s', skipping.", col
-                )
-                continue
+            return
 
-            vmax: float = (
-                float(np.nanpercentile(valid_values, 95))
-                if cfg["vmax"] is None
-                else float(cfg["vmax"])
-            )
-            vmin: float = float(cfg["vmin"])
-
-            self.model.logger.info("Creating skill score map for: %s", col)
-            _plot_skill_score_map_single(
+        if export:
+            region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
+            _plot_skill_score_maps(
                 evaluation_gdf=evaluation_gdf,
-                metric_col=col,
-                metric_label=cfg["label"],
-                metric_title=cfg["title"],
-                cmap_name=cfg["cmap"],
-                vmin=vmin,
-                vmax=vmax,
-                output_path=maps_folder / f"skill_score_map_{col.lower()}",
                 region_geom=region_geom,
+                output_folder=self.evaluate_discharge_output_folder,
+                logger=self.model.logger,
             )
-            self.model.logger.info("Saved skill score map for %s.", col)
-
-        self.model.logger.info("All skill score maps saved to: %s", maps_folder)
 
     def plot_skill_score_boxplots(
         self,
         export: bool = True,
         include_geb: bool = True,
         matched_only: bool = False,
+        minimum_upstream_area_km2: float | None = None,
         **kwargs: Any,
     ) -> None:
         """Create skill score violin+boxplot graphs for each evaluation metric.
@@ -2514,14 +2345,35 @@ class Hydrology:
             export: Save the figure to disk.
             include_geb: Include GEB in the plot.
             matched_only: Restrict all models to overlapping stations only.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted GEB stations (km2).
+                If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             **kwargs: Ignored (CLI compatibility).
         """
-        geb_evaluation_xlsx = self.output_folder / "evaluation_metrics.xlsx"
+        minimum_upstream_area_km2 = get_discharge_evaluation_minimum_upstream_area_km2(
+            self.model.config,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+        )
+        geb_evaluation_xlsx = (
+            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        )
         evaluation_df: pd.DataFrame = (
             pd.read_excel(geb_evaluation_xlsx)
             if geb_evaluation_xlsx.exists()
             else pd.DataFrame()
         )
+
+        if not evaluation_df.empty:
+            before_filter_count: int = len(evaluation_df)
+            evaluation_df = filter_evaluation_by_minimum_upstream_area(
+                evaluation_df,
+                minimum_upstream_area_km2=minimum_upstream_area_km2,
+            )
+            self.model.logger.info(
+                "Upstream-area plot filter retained %d/%d GEB stations at %.1f km2 or larger.",
+                len(evaluation_df),
+                before_filter_count,
+                minimum_upstream_area_km2,
+            )
 
         if include_geb and evaluation_df.empty:
             self.model.logger.info(
@@ -2529,7 +2381,6 @@ class Hydrology:
             )
             return
 
-        # matched_only: use filtered (overlapping) external data; otherwise raw.
         if matched_only:
             external_models: dict[str, pd.DataFrame] = (
                 self.prepare_external_evaluation()
@@ -2542,7 +2393,6 @@ class Hydrology:
         else:
             self.model.logger.info("No external models found; showing GEB only.")
 
-        # Restrict GEB to overlapping stations when matched_only is set.
         if matched_only and include_geb and external_models and not evaluation_df.empty:
             matched_station_names: set[str] = set()
             for ext_df in external_models.values():
@@ -2556,253 +2406,80 @@ class Hydrology:
                 before_n,
                 len(evaluation_df),
             )
+            geb_station_names: set[str] = set(
+                evaluation_df["station_name"].dropna().str.upper()
+            )
+            external_models = {
+                model_name: model_df[model_df.index.isin(geb_station_names)].copy()
+                for model_name, model_df in external_models.items()
+            }
 
-        if not include_geb and not external_models:
+        _plot_skill_score_boxplots(
+            evaluation_df=evaluation_df,
+            external_models=external_models,
+            output_folder=self.evaluate_discharge_output_folder,
+            logger=self.model.logger,
+            export=export,
+            include_geb=include_geb,
+            matched_only=matched_only,
+        )
+
+    def plot_skill_scores_vs_upstream_area(
+        self,
+        export: bool = True,
+        minimum_upstream_area_km2: float | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Plot upstream area against discharge skill scores.
+
+        Notes:
+            Requires ``evaluate_discharge`` to have been run first so that
+            ``evaluation_metrics.xlsx`` exists.
+
+        Args:
+            export: Whether to save the figure to disk.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted stations (km2).
+                If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            **kwargs: Ignored (CLI compatibility).
+        """
+        minimum_upstream_area_km2 = get_discharge_evaluation_minimum_upstream_area_km2(
+            self.model.config,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+        )
+        evaluation_path: Path = (
+            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        )
+        if not evaluation_path.exists():
             self.model.logger.warning(
-                "include_geb=False but no external model data found. "
-                "Run prepare_external_evaluation first."
+                "No evaluation_metrics.xlsx file found. Run evaluate_discharge first."
             )
             return
 
-        # Fixed y-limits and reference values per metric; None means data-driven.
-        metric_configs: list[dict] = [
-            {
-                "col": "KGE",
-                "label": "KGE",
-                "title": "Kling-Gupta Efficiency",
-                "ylim": (-1.0, 1.0),
-                "reference": 1.0,
-                "unit": "(−)",
-            },
-            {
-                "col": "NSE",
-                "label": "NSE",
-                "title": "Nash-Sutcliffe Efficiency",
-                "ylim": (-1.0, 1.0),
-                "reference": 1.0,
-                "unit": "(−)",
-            },
-            {
-                "col": "R2",
-                "label": "R²",
-                "title": "Coefficient of Determination",
-                "ylim": (0.0, 1.0),
-                "reference": 1.0,
-                "unit": "(−)",
-            },
-            {
-                "col": "RMSE",
-                "label": "RMSE",
-                "title": "Root Mean Squared Error",
-                "ylim": None,
-                "reference": 0.0,
-                "unit": "(m³/s)",
-            },
-            {
-                "col": "RRMSE",
-                "label": "RRMSE",
-                "title": "Relative RMSE",
-                "ylim": None,
-                "reference": 0.0,
-                "unit": "(−)",
-            },
-        ]
-
-        # Colours are per model, consistent across all metric panels.
-        GEB_COLOR = "#1f77b4"
-        ext_colors: dict[str, str] = dict(
-            zip(
-                external_models,
-                ["#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2"],
-            )
+        evaluation_df: pd.DataFrame = pd.read_excel(evaluation_path)
+        before_filter_count: int = len(evaluation_df)
+        evaluation_df = filter_evaluation_by_minimum_upstream_area(
+            evaluation_df,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
         )
-        model_colors: dict[str, str] = (
-            {"GEB": GEB_COLOR} if include_geb else {}
-        ) | ext_colors
-
-        def _draw_violin_box(
-            ax: plt.Axes,
-            values: np.ndarray,
-            position: float,
-            bar_color: str,
-            violin_width: float = 0.35,
-        ) -> None:
-            if len(values) >= 3:
-                parts = ax.violinplot(
-                    values,
-                    positions=[position],
-                    showmedians=False,
-                    showextrema=False,
-                    widths=violin_width,
-                )
-                for pc in cast(list, parts["bodies"]):
-                    pc.set_facecolor(bar_color)
-                    pc.set_edgecolor(bar_color)
-                    pc.set_alpha(0.45)
-            ax.boxplot(
-                values,
-                positions=[position],
-                widths=violin_width * 0.35,
-                patch_artist=True,
-                medianprops={"color": "white", "linewidth": 2.0, "zorder": 5},
-                boxprops={
-                    "facecolor": bar_color,
-                    "alpha": 0.9,
-                    "linewidth": 0.8,
-                    "edgecolor": bar_color,
-                },
-                whiskerprops={"color": bar_color, "linewidth": 1.0},
-                capprops={"color": bar_color, "linewidth": 1.0},
-                flierprops={
-                    "marker": "o",
-                    "markerfacecolor": bar_color,
-                    "markeredgecolor": bar_color,
-                    "markersize": 3,
-                    "alpha": 0.5,
-                    "linewidth": 0,
-                },
+        self.model.logger.info(
+            "Upstream-area plot filter retained %d/%d GEB stations at %.1f km2 or larger.",
+            len(evaluation_df),
+            before_filter_count,
+            minimum_upstream_area_km2,
+        )
+        if evaluation_df.empty:
+            self.model.logger.warning(
+                "No discharge evaluation stations remain after upstream-area filtering. "
+                "Skipping skill-score upstream-area scatterplot."
             )
+            return
 
-        self.model.logger.info("Creating evaluation metrics skill score plots...")
-
-        with plt.style.context("dark_background"):
-            fig, axes = plt.subplots(2, 3, figsize=(14, 8))
-            fig.patch.set_facecolor("black")
-            plot_subtitle: str = (
-                " (matched stations only)" if matched_only and external_models else ""
+        if export:
+            _plot_skill_scores_vs_upstream_area(
+                evaluation_df=evaluation_df,
+                output_folder=self.evaluate_discharge_output_folder,
+                logger=self.model.logger,
             )
-            fig.suptitle(
-                f"Discharge Evaluation — Skill Score Distributions{plot_subtitle}",
-                fontsize=14,
-                fontweight="bold",
-                color="white",
-                y=1.01,
-            )
-
-            for ax, cfg in zip(axes.flat, metric_configs):
-                metric_col: str = cfg["col"]
-
-                # Collect metric values per model; a panel is shown as long as at
-                # least one model has data for this metric.
-                geb_metric_values: np.ndarray = (
-                    evaluation_df[metric_col].dropna().to_numpy(dtype=float)
-                    if include_geb and metric_col in evaluation_df.columns
-                    else np.array([], dtype=float)
-                )
-                external_metric_values: dict[str, np.ndarray] = {
-                    model_name: values
-                    for model_name, model_df in external_models.items()
-                    if metric_col in model_df.columns
-                    for values in (model_df[metric_col].dropna().to_numpy(dtype=float),)
-                    if values.size > 0
-                }
-
-                if geb_metric_values.size == 0 and not external_metric_values:
-                    ax.set_visible(False)
-                    continue
-
-                models_with_data: list[tuple[str, np.ndarray]] = []
-                if geb_metric_values.size > 0:
-                    models_with_data.append(("GEB", geb_metric_values))
-                for model_name, metric_values in external_metric_values.items():
-                    models_with_data.append((model_name, metric_values))
-
-                x_positions = (
-                    np.linspace(-0.4, 0.4, len(models_with_data))
-                    if len(models_with_data) > 1
-                    else np.array([0.0])
-                )
-
-                for (model_name, metric_values), x_position in zip(
-                    models_with_data, x_positions
-                ):
-                    bar_color = model_colors[model_name]
-                    _draw_violin_box(ax, metric_values, x_position, bar_color)
-                    median_value = float(np.median(metric_values))
-                    # Use a blended transform so the annotation is always at the
-                    # top of the axes (y in axes-fraction) regardless of data range,
-                    # while x stays in data coordinates so it tracks each violin.
-                    transform = blended_transform_factory(ax.transData, ax.transAxes)
-                    ax.text(
-                        x_position,
-                        1.03,
-                        f"med={median_value:.2f}  n={len(metric_values)}",
-                        transform=transform,
-                        ha="center",
-                        va="bottom",
-                        fontsize=7,
-                        color="white",
-                    )
-
-                ax.axhline(
-                    cfg["reference"],
-                    color="0.5",
-                    linewidth=0.8,
-                    linestyle="--",
-                    zorder=0,
-                )
-                ax.set_facecolor("black")
-                ax.set_title(
-                    f"{cfg['label']} — {cfg['title']} {cfg['unit']}",
-                    fontsize=9,
-                    fontweight="bold",
-                    color="white",
-                    pad=18,  # extra headroom for the annotation above the axes
-                )
-                if cfg["ylim"] is not None:
-                    ax.set_ylim(*cfg["ylim"])
-                ax.set_xticks([])
-                ax.tick_params(axis="y", labelsize=8, colors="white")
-                ax.set_xlabel("")
-                for spine in ax.spines.values():
-                    spine.set_edgecolor("0.4")
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
-                ax.spines["bottom"].set_visible(False)
-                ax.yaxis.label.set_color("white")
-                ax.grid(axis="y", color="0.25", linewidth=0.5)
-
-            legend_handles: list[Line2D] = [
-                Line2D([0], [0], color=color, linewidth=5, label=name)
-                for name, color in model_colors.items()
-                if name == "GEB" or name in ext_colors
-            ]
-            if legend_handles:
-                leg = fig.legend(
-                    handles=legend_handles,
-                    loc="lower center",
-                    ncol=len(legend_handles),
-                    fontsize=9,
-                    frameon=True,
-                    framealpha=1.0,
-                    edgecolor="0.4",
-                    bbox_to_anchor=(0.5, -0.04),
-                )
-                leg.get_frame().set_facecolor("black")
-                for text in leg.get_texts():
-                    text.set_color("white")
-
-            plt.tight_layout()
-
-            if export:
-                if not include_geb:
-                    suffix = "_external_only"
-                elif matched_only and external_models:
-                    suffix = "_matched"
-                else:
-                    suffix = ""
-                for extension in ("svg", "png"):
-                    out_path = (
-                        self.output_folder
-                        / f"evaluation_skill_scores{suffix}.{extension}"
-                    )
-                    plt.savefig(out_path, bbox_inches="tight", dpi=150)
-                    self.model.logger.info("Skill score plot saved to: %s", out_path)
-
-            plt.show()
-            plt.close()
-
-        self.model.logger.info("Skill score plots created.")
 
     def plot_water_circle(
         self,
@@ -2943,7 +2620,7 @@ class Hydrology:
 
         if export:
             water_circle.savefig(
-                self.output_folder / "water_circle.svg",
+                self.water_circle_output_folder / "water_circle.svg",
             )
 
         return water_circle
@@ -3087,8 +2764,9 @@ class Hydrology:
         )
 
         if export:
-            fig_path = self.output_folder / "water_balance_yearly_subplots.svg"
-            fig_path.parent.mkdir(parents=True, exist_ok=True)
+            fig_path = (
+                self.water_balance_output_folder / "water_balance_yearly_subplots.svg"
+            )
             plt.savefig(fig_path)
             self.model.logger.info(f"Water balance yearly plot saved as: {fig_path}")
 
@@ -3308,9 +2986,11 @@ class Hydrology:
         )
 
         if export:
-            full_path: Path = self.output_folder / "water_balance_timeseries.svg"
+            full_path: Path = (
+                self.water_balance_output_folder / "water_balance_timeseries.svg"
+            )
             yearly_path: Path = (
-                self.output_folder / "water_balance_timeseries_yearly.svg"
+                self.water_balance_output_folder / "water_balance_timeseries_yearly.svg"
             )
             full_figure.savefig(full_path)
             yearly_figure.savefig(yearly_path)
@@ -3571,10 +3251,12 @@ class Hydrology:
 
         if export:
             top_soil_full_path: Path = (
-                self.output_folder / "water_balance_top_soil_timeseries.svg"
+                self.water_balance_output_folder
+                / "water_balance_top_soil_timeseries.svg"
             )
             top_soil_yearly_path: Path = (
-                self.output_folder / "water_balance_top_soil_timeseries_yearly.svg"
+                self.water_balance_output_folder
+                / "water_balance_top_soil_timeseries_yearly.svg"
             )
             top_soil_full_figure.savefig(top_soil_full_path)
             top_soil_yearly_figure.savefig(top_soil_yearly_path)
@@ -3702,9 +3384,11 @@ class Hydrology:
         )
 
         if export:
-            full_path: Path = self.output_folder / "water_storage_timeseries.svg"
+            full_path: Path = (
+                self.water_storage_output_folder / "water_storage_timeseries.svg"
+            )
             yearly_path: Path = (
-                self.output_folder / "water_storage_timeseries_yearly.svg"
+                self.water_storage_output_folder / "water_storage_timeseries_yearly.svg"
             )
             full_figure.savefig(full_path)
             yearly_figure.savefig(yearly_path)
@@ -3720,8 +3404,38 @@ class Hydrology:
         plt.close(yearly_figure)
 
     @property
-    def output_folder(self) -> Path:
-        """Path to the folder where evaluation outputs for this evaluator are stored."""
-        folder = self.evaluator.output_folder_evaluate / "hydrology"
+    def discharge_output_folder(self) -> Path:
+        """Path to the folder where discharge map outputs are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology" / "discharge"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def evaluate_discharge_output_folder(self) -> Path:
+        """Path to the folder where discharge evaluation outputs are stored."""
+        folder = (
+            self.evaluator.output_folder_evaluate / "hydrology" / "evaluate_discharge"
+        )
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def water_balance_output_folder(self) -> Path:
+        """Path to the folder where water balance outputs are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology" / "water_balance"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def water_storage_output_folder(self) -> Path:
+        """Path to the folder where water storage outputs are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology" / "water_storage"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def water_circle_output_folder(self) -> Path:
+        """Path to the folder where water circle outputs are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology" / "water_circle"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
