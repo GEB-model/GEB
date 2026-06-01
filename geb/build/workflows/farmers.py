@@ -1553,9 +1553,10 @@ def update_farm_crop_sequence(
 
     Returns:
         One complete observed crop sequence from the fields in the farm.
+
     Raises:
-        ValueError: If farm_crop_sequences is not a 2D array.
-        ValueError: If crop sequences is empty.
+        ValueError: If ``farm_crop_sequences`` is not a two-dimensional array.
+        ValueError: If ``farm_crop_sequences`` contains no field sequences.
     """
     if farm_crop_sequences.ndim != 2:
         raise ValueError("farm_crop_sequences must be a 2D array.")
@@ -1693,7 +1694,13 @@ def grow_farms_from_lowder_targets(
         unassigned_fields.remove(seed_field)
 
         current_area_m2 = float(field_areas[seed_field])
+
+        # Keep all full crop sequences already assigned to this farm.
+        # At the seed stage, the farm has only one observed sequence, so the
+        # representative sequence is simply the seed field sequence.
+        farm_crop_sequences = field_sequences[[seed_field]].copy()
         farm_crop_sequence = field_sequences[seed_field].copy()
+
         farm_geometry = projected_fields.loc[seed_field, "geometry"]
 
         while unassigned_fields and current_area_m2 < target_farm.target_area_m2:
@@ -1761,10 +1768,17 @@ def grow_farms_from_lowder_targets(
                 ]
             )
 
-            farm_crop_sequence = update_farm_crop_sequence(
-                field_sequences,
-                farm_field_indices,
+            # Add the selected field's full observed sequence to the farm.
+            farm_crop_sequences = np.vstack(
+                [
+                    farm_crop_sequences,
+                    field_sequences[selected_field],
+                ]
             )
+
+            # Update the representative sequence used to score future candidates.
+            # This sequence is always one full observed field sequence.
+            farm_crop_sequence = update_farm_crop_sequence(farm_crop_sequences)
 
         for field_index in farm_field_indices:
             assigned_farmer_ids[field_index] = farmer_id
