@@ -33,9 +33,9 @@ class WEkEOCopernicus(Adapter):
 
     Notes:
         Tile filenames are assumed to follow the pattern
-        ``CLMS_HRLVLCC_CTY_S{year}_R10m_{tile}_03035_V01_R00.zip`` and the
-        corresponding extracted TIFF is assumed to have the same basename with
-        ``.tif`` extension.
+        ``CLMS_HRLVLCC_{product_code}_S{year}_R10m_{tile}_03035_V01_R00.zip``
+        and the corresponding extracted TIFF is assumed to have the same basename
+        with ``.tif`` extension.
 
         Tile identifiers are taken directly from the WEkEO API results rather than
         inferred from a manually reconstructed projected tile grid. This avoids
@@ -55,6 +55,7 @@ class WEkEOCopernicus(Adapter):
         *args: Any,
         dataset_id: str,
         default_query: dict[str, Any] | None = None,
+        product_code: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the adapter for WEkEO Copernicus data.
@@ -63,11 +64,15 @@ class WEkEOCopernicus(Adapter):
             *args: Additional positional arguments passed to the base Adapter class.
             dataset_id: WEkEO HDA dataset identifier.
             default_query: Dataset-specific default query parameters.
+            product_code: Optional HRL product code expected in the returned tile IDs,
+                for example ``CTY`` for crop types or ``CPSCT`` for secondary crop
+                types. If provided, WEkEO results with non-matching IDs are ignored.
             **kwargs: Additional keyword arguments passed to the base Adapter class.
         """
         super().__init__(*args, **kwargs)
         self.dataset_id = dataset_id
         self.default_query = default_query or {}
+        self.product_code = product_code.upper() if product_code is not None else None
 
     def _get_client(self) -> Client:
         """Create an authenticated WEkEO HDA client.
@@ -79,7 +84,6 @@ class WEkEOCopernicus(Adapter):
             Basic auth is required and read from environment variables:
             WEKEO_USERNAME and WEKEO_PASSWORD. A new account can be made at
             https://wekeo.copernicus.eu/register .
-
 
         Raises:
             ValueError: If WEkEO credentials are not available.
@@ -152,21 +156,6 @@ class WEkEOCopernicus(Adapter):
         """
         return self._year_dir(year) / self._tile_tif_name(tile_id)
 
-    def _problem_tile_name(self, tile_id: str) -> str | None:
-        """Return the known problematic tile name contained in a tile ID.
-
-        Args:
-            tile_id: WEkEO tile identifier.
-
-        Returns:
-            Matching problematic tile name, or None if the tile is not known to be
-            problematic.
-        """
-        for tile_name in _KNOWN_WEKEO_PROBLEM_TILES:
-            if tile_name in tile_id:
-                return tile_name
-        return None
-
     def _build_query(
         self,
         bounds: tuple[float, float, float, float],
@@ -195,6 +184,21 @@ class WEkEOCopernicus(Adapter):
 
         return query
 
+    def _matches_product_code(self, tile_id: str) -> bool:
+        """Check whether a WEkEO tile ID matches the configured product code.
+
+        Args:
+            tile_id: WEkEO tile identifier.
+
+        Returns:
+            True if no product code is configured or if the tile ID contains the
+            configured product code as a filename component.
+        """
+        if self.product_code is None:
+            return True
+
+        return f"_{self.product_code}_" in tile_id.upper()
+
     def _search_tiles(
         self,
         bounds: tuple[float, float, float, float],
@@ -214,7 +218,8 @@ class WEkEOCopernicus(Adapter):
                 - a lookup mapping tile identifier to downloadable WEkEO result object.
 
         Raises:
-            FileNotFoundError: If the query returns no results.
+            FileNotFoundError: If the query returns no results, or if no returned
+                result IDs match the configured product code.
         """
         query = self._build_query(
             bounds=bounds,
@@ -233,17 +238,38 @@ class WEkEOCopernicus(Adapter):
             )
 
         tile_ids: list[str] = []
+        skipped_tile_ids: list[str] = []
         result_lookup: dict[str, Any] = {}
 
         for index, result in enumerate(matches.results):
             if isinstance(result, dict) and "id" in result:
-                tile_id = result["id"]
+                tile_id = str(result["id"])
+
+                if not self._matches_product_code(tile_id):
+                    skipped_tile_ids.append(tile_id)
+                    continue
+
                 tile_ids.append(tile_id)
                 result_lookup[tile_id] = matches[index]
 
+        if skipped_tile_ids:
+            self.logger.info(
+                "Skipped %s WEkEO result(s) because they did not match product code %s: %s",
+                len(skipped_tile_ids),
+                self.product_code,
+                skipped_tile_ids,
+            )
+
         if not tile_ids:
+            product_code_message = (
+                ""
+                if self.product_code is None
+                else f" matching product_code={self.product_code!r}"
+            )
             raise FileNotFoundError(
-                f"WEkEO returned results for query={query}, but no result IDs were found."
+                f"WEkEO returned results for query={query}, but no result IDs"
+                f"{product_code_message} were found. Skipped result IDs: "
+                f"{skipped_tile_ids}."
             )
 
         return sorted(set(tile_ids)), result_lookup

@@ -743,6 +743,130 @@ def get_farm_locations(farms: xr.DataArray, method: str = "centroid") -> TwoDArr
     return locations
 
 
+def combine_crop_types_with_secondary_crop(
+    crop_types_over_time: xr.DataArray,
+    secondary_crop_over_time: xr.DataArray,
+    *,
+    invalid_crop_values: tuple[int, ...] = (0, 65535),
+    valid_secondary_crop_values: tuple[int, ...] = (1, 2, 3, 4),
+) -> xr.DataArray:
+    """Combine HRL crop types with HRL secondary crop type information.
+
+    The combined code keeps the main crop code as the base value and adds the
+    secondary crop type code when a valid secondary crop is present.
+
+    Examples:
+        1430 means rapeseed without a valid secondary crop.
+        1433 means rapeseed with a short winter secondary crop.
+
+    Args:
+        crop_types_over_time: HRL Crop Types data with dimensions including
+            ``year``, ``y`` and ``x``.
+        secondary_crop_over_time: HRL Secondary Crops Type data with the same
+            dimensions, coordinates and grid as ``crop_types_over_time``.
+        invalid_crop_values: Crop type values that should not be encoded.
+        valid_secondary_crop_values: Secondary crop type values to preserve.
+
+    Returns:
+        DataArray with encoded main-crop and secondary-crop information.
+
+    Raises:
+        ValueError: If both rasters are not aligned exactly.
+    """
+    if crop_types_over_time.dims != secondary_crop_over_time.dims:
+        raise ValueError(
+            "Crop types and secondary crop rasters must have identical dimensions. "
+            f"Got {crop_types_over_time.dims} and {secondary_crop_over_time.dims}."
+        )
+
+    if crop_types_over_time.shape != secondary_crop_over_time.shape:
+        raise ValueError(
+            "Crop types and secondary crop rasters must have identical shapes. "
+            f"Got {crop_types_over_time.shape} and {secondary_crop_over_time.shape}."
+        )
+
+    for dim in crop_types_over_time.dims:
+        if not np.array_equal(
+            crop_types_over_time[dim].values,
+            secondary_crop_over_time[dim].values,
+        ):
+            raise ValueError(
+                f"Crop types and secondary crop rasters are not aligned on "
+                f"dimension {dim!r}."
+            )
+
+    if crop_types_over_time.rio.crs != secondary_crop_over_time.rio.crs:
+        raise ValueError(
+            "Crop types and secondary crop rasters must have the same CRS. "
+            f"Got {crop_types_over_time.rio.crs} and "
+            f"{secondary_crop_over_time.rio.crs}."
+        )
+
+    crop_types = crop_types_over_time.astype(np.int32)
+    secondary_crop = secondary_crop_over_time.astype(np.int32)
+
+    valid_crop = ~xr.apply_ufunc(
+        np.isin,
+        crop_types,
+        np.array(invalid_crop_values, dtype=np.int32),
+        kwargs={"invert": False},
+        dask="allowed",
+    )
+
+    valid_secondary_crop = xr.apply_ufunc(
+        np.isin,
+        secondary_crop,
+        np.array(valid_secondary_crop_values, dtype=np.int32),
+        kwargs={"invert": False},
+        dask="allowed",
+    )
+
+    secondary_crop_code = xr.where(
+        valid_secondary_crop,
+        secondary_crop,
+        0,
+        keep_attrs=True,
+    ).astype(np.int32)
+
+    combined_crop_types = xr.where(
+        valid_crop,
+        crop_types + secondary_crop_code,
+        crop_types,
+        keep_attrs=True,
+    ).astype(np.int32)
+
+    combined_crop_types.name = "crop_types_with_secondary_crop"
+    combined_crop_types.attrs.update(crop_types_over_time.attrs)
+    combined_crop_types.attrs["description"] = (
+        "HRL crop type code plus secondary crop type code. "
+        "The final digit indicates secondary crop type: 0 = none/invalid, "
+        "1 = short summer, 2 = long summer, 3 = short winter, 4 = long winter."
+    )
+
+    return combined_crop_types
+
+
+def decode_crop_type_with_secondary_crop(
+    combined_crop_type: xr.DataArray | np.ndarray,
+    *,
+    invalid_crop_values: tuple[int, ...] = (0, 65535),
+) -> tuple[xr.DataArray | np.ndarray, xr.DataArray | np.ndarray]:
+    """Decode combined crop-secondary codes into main and secondary crop codes.
+
+    Returns:
+        One DataArray with the main-crop and one with the secondary-crop information.
+    """
+    main_crop = (combined_crop_type // 10) * 10
+    secondary_crop = combined_crop_type % 10
+
+    invalid_crop = np.isin(combined_crop_type, invalid_crop_values)
+
+    main_crop = np.where(invalid_crop, combined_crop_type, main_crop)
+    secondary_crop = np.where(invalid_crop, 0, secondary_crop)
+
+    return main_crop, secondary_crop
+
+
 def count_crops_by_field_year(
     crop_types_over_time: xr.DataArray,
     field_ids: xr.DataArray,
@@ -1411,47 +1535,57 @@ def candidate_score(
 
 
 def update_farm_crop_sequence(
-    field_sequences: np.ndarray,
-    field_indices: list[int],
+    farm_crop_sequences: np.ndarray,
     *,
     missing_value: int = -1,
 ) -> np.ndarray:
-    """Update the representative crop sequence of a synthetic farm.
+    """Update the representative crop sequence of a growing synthetic farm.
 
-    The farm-level crop sequence is calculated as the modal crop value across
-    all fields currently assigned to the farm for each year. Missing values are
-    ignored. If all selected fields have missing values for a given year, the
-    farm-level value for that year remains ``missing_value``.
-
-    This sequence is updated whenever a new field is added to a growing farm and
-    is then used to score additional candidate fields.
+    The representative sequence is selected from the full crop sequences already
+    present in the farm. This avoids constructing artificial sequences by taking
+    the modal crop independently for each year.
 
     Args:
-        field_sequences: Two-dimensional array of field-level crop sequences
-            with shape ``(n_fields, n_years)``.
-        field_indices: Indices of fields currently assigned to the synthetic
-            farm.
-        missing_value: Value used to indicate missing or invalid crop
-            observations.
+        farm_crop_sequences: Two-dimensional array with shape
+            ``(n_farm_fields, n_years)`` containing the full crop sequence of
+            each field currently assigned to the farm.
+        missing_value: Value used to indicate missing crop observations.
 
     Returns:
-        One-dimensional array containing the representative farm-level crop
-        sequence, with one value per year.
+        One complete observed crop sequence from the fields in the farm.
+    Raises:
+        ValueError: If farm_crop_sequences is not a 2D array.
+        ValueError: If crop sequences is empty.
     """
-    selected = field_sequences[field_indices]
-    farm_sequence = np.full(selected.shape[1], missing_value, dtype=np.int32)
+    if farm_crop_sequences.ndim != 2:
+        raise ValueError("farm_crop_sequences must be a 2D array.")
 
-    for year_index in range(selected.shape[1]):
-        year_values = selected[:, year_index]
-        year_values = year_values[year_values != missing_value]
+    if farm_crop_sequences.shape[0] == 0:
+        raise ValueError("Cannot update crop sequence for an empty farm.")
 
-        if year_values.size == 0:
-            continue
+    unique_sequences, counts = np.unique(
+        farm_crop_sequences,
+        axis=0,
+        return_counts=True,
+    )
 
-        values, counts = np.unique(year_values, return_counts=True)
-        farm_sequence[year_index] = values[np.argmax(counts)]
+    most_common_count = counts.max()
+    most_common_sequences = unique_sequences[counts == most_common_count]
 
-    return farm_sequence
+    if len(most_common_sequences) == 1:
+        return most_common_sequences[0].astype(np.int32)
+
+    # Deterministic tie-breaker: prefer the sequence with fewer missing values.
+    missing_counts = np.sum(most_common_sequences == missing_value, axis=1)
+    fewest_missing = missing_counts.min()
+    best_sequences = most_common_sequences[missing_counts == fewest_missing]
+
+    if len(best_sequences) == 1:
+        return best_sequences[0].astype(np.int32)
+
+    # Final deterministic tie-breaker: choose the lexicographically smallest sequence.
+    sort_order = np.lexsort(best_sequences.T[::-1])
+    return best_sequences[sort_order[0]].astype(np.int32)
 
 
 def grow_farms_from_lowder_targets(

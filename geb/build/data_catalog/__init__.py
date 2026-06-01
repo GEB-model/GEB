@@ -271,6 +271,7 @@ data_catalog: dict[str, dict[str, Any]] = {
                 filename="tiles",
                 cache="global",
                 dataset_id="EO:EEA:DAT:HRL:CRL",
+                product_code="CTY",
                 default_query={
                     "productType": "Crop Types",
                     "resolution": "10m",
@@ -283,7 +284,33 @@ data_catalog: dict[str, dict[str, Any]] = {
                 "name": "HRL crop types",
                 "author": "Copernicus Land Monitoring Service",
                 "license": "CC BY 4.0",
-                "url": "https://land.copernicus.eu/en/products/high-resolution-layer-croplands/crop-types-2023-raster-10-m-europe-yearly",
+                "url": "https://library.land.copernicus.eu/products/High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf",
+            },
+        }
+        for year in ["2017", "2018", "2019", "2020", "2021", "2022", "2023"]
+    },
+    **{
+        f"hrl_secondary_crop_{year}": {
+            "adapter": WEkEOCopernicus(
+                folder="hrl_secondary_crop",
+                local_version=1,
+                filename="tiles",
+                cache="global",
+                dataset_id="EO:EEA:DAT:HRL:CRL",
+                product_code="CPSCT",
+                default_query={
+                    "productType": "Secondary Crops Type",
+                    "resolution": "10m",
+                    "itemsPerPage": 200,
+                    "startIndex": 0,
+                },
+            ),
+            "url": None,
+            "source": {
+                "name": "HRL secondary crop",
+                "author": "Copernicus Land Monitoring Service",
+                "license": "CC BY 4.0",
+                "url": "https://library.land.copernicus.eu/products/High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf",
             },
         }
         for year in ["2017", "2018", "2019", "2020", "2021", "2022", "2023"]
