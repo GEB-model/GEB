@@ -135,10 +135,38 @@ def VectorScannerMultiCurves(
 
     # Preserve index of features for final output
     index_features = features.index.copy()
-    # Extract exposure geometry (use cache if available to avoid re-computing per year)
-    if exposure_cache is not None and cache_key is not None and cache_key in exposure_cache:
-        features, cell_area_m2 = exposure_cache[cache_key]
+
+    # Identify curve families — cheap list comprehension, always computed
+    i_curves_structure = [
+        i for i, n in enumerate(curve_names) if "structure" in n.lower()
+    ]
+    i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
+
+    if not i_curves_structure and not i_curves_content:
+        raise ValueError(
+            "No vulnerability curves for structure or content damages were found. "
+            "Ensure that at least one curve name contains the substring 'structure' or 'content'."
+        )
+
+    # On a cache hit the entire filter/flatten/repeat pipeline is skipped — only
+    # the numba kernel and a reindex run.  The caller is responsible for clearing
+    # the cache when the hazard maps or the building set change (e.g. for future
+    # climate-change scenarios with year-varying flood maps).
+    if (
+        exposure_cache is not None
+        and cache_key is not None
+        and cache_key in exposure_cache
+    ):
+        _c = exposure_cache[cache_key]
+        inundation_parts = _c["inundation_parts"]
+        coverage_parts = _c["coverage_parts"]
+        max_damage_arr_structure = _c["max_damage_structure"]
+        max_damage_arr_content = _c["max_damage_content"]
+        lengths = _c["lengths"]
+        starts = _c["starts"]
+        filtered_index = _c["filtered_index"]
     else:
+        # Compute exposure (raster × vector intersection)
         features, _, _, cell_area_m2 = VectorExposureDS(
             hazard_file=hazard,
             feature_file=features,
@@ -146,56 +174,69 @@ def VectorScannerMultiCurves(
             disable_progress=True,
             gridded=False,
         )
-        if exposure_cache is not None and cache_key is not None:
-            exposure_cache[cache_key] = (features.copy(), cell_area_m2)
 
-    # Keep only inundated buildings
-    filtered = features[features["values"].str.len() > 0].copy()
-    filtered = filtered[filtered["values"].apply(sum) > 0]
-    filtered["len_values"] = filtered["values"].apply(len).astype(np.int32)
+        # Keep only buildings with non-zero inundation
+        filtered = features[features["values"].str.len() > 0].copy()
+        filtered = filtered[filtered["values"].apply(sum) > 0]
+        filtered["len_values"] = filtered["values"].apply(len).astype(np.int32)
 
-    # Efficient list flattening
-    vals = (v for sub in filtered["values"].array for v in sub)
-    covs = (c for sub in filtered["coverage"].array for c in sub)
+        # Flatten nested per-cell lists into contiguous arrays
+        vals = (v for sub in filtered["values"].array for v in sub)
+        covs = (c for sub in filtered["coverage"].array for c in sub)
+        inundation_parts = np.fromiter(vals, dtype=np.float64)
+        coverage_parts = np.fromiter(covs, dtype=np.float64) * cell_area_m2
 
-    inundation_parts = np.fromiter(vals, dtype=np.float64)
-    coverage_parts = np.fromiter(covs, dtype=np.float64) * cell_area_m2
+        # Clip hazard values for stable searchsorted
+        inundation_parts = np.clip(inundation_parts, curve_x[0], curve_x[-2])
 
-    # Clip hazard values for stable searchsorted
-    inundation_parts = np.clip(inundation_parts, curve_x[0], curve_x[-2])
+        lengths = filtered["len_values"].to_numpy()
+        starts = np.r_[0, lengths.cumsum()[:-1]]
+        filtered_index = filtered.index.copy()
 
-    ## CARO
-    lengths = filtered["len_values"].to_numpy()
-    starts = np.r_[0, lengths.cumsum()[:-1]]
-
-    #Identify which curve families are present
-    i_curves_structure = [
-        i for i, n in enumerate(curve_names) if "structure" in n.lower()
-    ]
-    i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
-    
-    if not i_curves_structure and not i_curves_content:
-        raise ValueError(
-            "No vulnerability curves for structure or content damages were found. "
-            "Ensure that at least one curve name contains the substring 'structure' or 'content'."
-        )
-    
-    damage_frames = []
-    if i_curves_structure:
-        if "maximum_damage_structure" not in filtered.columns:
+        # Validate required columns
+        if i_curves_structure and "maximum_damage_structure" not in filtered.columns:
             raise ValueError(
                 "The features GeoDataFrame must contain a 'maximum_damage_structure' column for structure damage curves."
             )
-        max_damage_arr_structure = np.fromiter(
-            (
-                dmg
-                for len_v, dmg in zip(
-                    filtered["len_values"], filtered["maximum_damage_structure"]
-                )
-                for _ in range(len_v)
-            ),
-            dtype=np.float64,
+        if i_curves_content and "maximum_damage_content" not in filtered.columns:
+            raise ValueError(
+                "The features GeoDataFrame must contain a 'maximum_damage_content' column for content damage curves."
+            )
+
+        # Broadcast per-building max-damage values to per-cell arrays (fast C op,
+        # replaces the Python generator that was the third profiling hot-spot)
+        max_damage_arr_structure = (
+            np.repeat(
+                filtered["maximum_damage_structure"].to_numpy(dtype=np.float64),
+                lengths,
+            )
+            if i_curves_structure
+            else None
         )
+        max_damage_arr_content = (
+            np.repeat(
+                filtered["maximum_damage_content"].to_numpy(dtype=np.float64),
+                lengths,
+            )
+            if i_curves_content
+            else None
+        )
+
+        # Store all pre-computed arrays so subsequent calls for the same
+        # (cache_key, building set) skip this entire block.
+        if exposure_cache is not None and cache_key is not None:
+            exposure_cache[cache_key] = {
+                "inundation_parts": inundation_parts,
+                "coverage_parts": coverage_parts,
+                "max_damage_structure": max_damage_arr_structure,
+                "max_damage_content": max_damage_arr_content,
+                "lengths": lengths,
+                "starts": starts,
+                "filtered_index": filtered_index,
+            }
+
+    damage_frames = []
+    if i_curves_structure:
         curve_structure = curve_y[i_curves_structure, :]
         slopes_structure = curve_slopes[i_curves_structure, :]
         damage_matrix_structure = compute_all_numba(
@@ -212,26 +253,12 @@ def VectorScannerMultiCurves(
         df_damage_structure = pd.DataFrame(
             damage_matrix_structure_final,
             columns=np.array(curve_names)[i_curves_structure],
-            index=filtered.index,
+            index=filtered_index,
         )
         df_damage_structure = df_damage_structure.reindex(index_features, fill_value=0.0)
-        damage_frames.append(df_damage_structure)   
+        damage_frames.append(df_damage_structure)
 
     if i_curves_content:
-        if "maximum_damage_content" not in filtered.columns:
-            raise ValueError(
-                "The features GeoDataFrame must contain a 'maximum_damage_content' column for content damage curves."
-            )
-        max_damage_arr_content = np.fromiter(
-            (
-                dmg
-                for len_v, dmg in zip(
-                    filtered["len_values"], filtered["maximum_damage_content"]
-                )
-                for _ in range(len_v)
-            ),
-            dtype=np.float64,
-        )
         curve_content = curve_y[i_curves_content, :]
         slopes_content = curve_slopes[i_curves_content, :]
         damage_matrix_content = compute_all_numba(
@@ -248,118 +275,13 @@ def VectorScannerMultiCurves(
         df_damage_content = pd.DataFrame(
             damage_matrix_content_final,
             columns=np.array(curve_names)[i_curves_content],
-            index=filtered.index,
+            index=filtered_index,
         )
         df_damage_content = df_damage_content.reindex(index_features, fill_value=0.0)
         damage_frames.append(df_damage_content)
 
     df_damage_combined = pd.concat(damage_frames, axis=1)
     return df_damage_combined
-
-    ## CARO END
-    
-    # # check if maximum damage columns are present
-    # if "maximum_damage_structure" not in filtered.columns:
-    #     raise ValueError(
-    #         "The features GeoDataFrame must contain a 'maximum_damage_structure' column."
-    #     )
-    # if "maximum_damage_content" not in filtered.columns:
-    #     raise ValueError(
-    #         "The features GeoDataFrame must contain a 'maximum_damage_content' column."
-    #     )
-
-    # # Maximum damage per building-part (broadcasted)
-    # max_damage_arr_structure = np.fromiter(
-    #     (
-    #         dmg
-    #         for len_v, dmg in zip(
-    #             filtered["len_values"], filtered["maximum_damage_structure"]
-    #         )
-    #         for _ in range(len_v)
-    #     ),
-    #     dtype=np.float64,
-    # )
-
-    # max_damage_arr_content = np.fromiter(
-    #     (
-    #         dmg
-    #         for len_v, dmg in zip(
-    #             filtered["len_values"], filtered["maximum_damage_content"]
-    #         )
-    #         for _ in range(len_v)
-    #     ),
-    #     dtype=np.float64,
-    # )
-
-    # # Initiate aggregate per building (vectorized)
-    # lengths = filtered["len_values"].to_numpy()
-    # starts = np.r_[0, lengths.cumsum()[:-1]]
-
-    # # Compute damages for every part
-    # # only select curves relevant for structure
-    # # find index of curves relevant for structure based on index searching for "structure" in curve names
-    # i_curves_structure = [
-    #     i for i, n in enumerate(curve_names) if "structure" in n.lower()
-    # ]
-
-    # if not i_curves_structure:
-    #     # Fail fast with a clear error when no structure-related curves are available.
-    #     # Without at least one such curve, damage computation would proceed with empty
-    #     # curve arrays and likely produce incorrect results or fail deep in numba code.
-    #     raise ValueError(
-    #         "No vulnerability curves for structure damages were found. "
-    #         "Ensure that at least one curve name contains the substring 'structure'."
-    #     )
-    # curve_structure = curve_y[i_curves_structure, :]
-    # slopes_structure = curve_slopes[i_curves_structure, :]
-    # damage_matrix_structure = compute_all_numba(
-    #     inundation_parts,
-    #     coverage_parts,
-    #     max_damage_arr_structure,
-    #     curve_x,
-    #     curve_structure,
-    #     slopes_structure,
-    # )
-
-    # damage_matrix_structure_final = np.add.reduceat(
-    #     damage_matrix_structure, starts, axis=0
-    # )
-    # # Return as DataFrame
-    # df_damage_structure = pd.DataFrame(
-    #     damage_matrix_structure_final,
-    #     columns=np.array(curve_names)[i_curves_structure],
-    #     index=filtered.index,
-    # )
-    # # fill missing buildings with zero damage
-    # df_damage_structure = df_damage_structure.reindex(index_features, fill_value=0.0)
-
-    # # only select curves relevant for content
-    # i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
-    # curve_content = curve_y[i_curves_content, :]
-    # slopes_content = curve_slopes[i_curves_content, :]
-    # damage_matrix_content = compute_all_numba(
-    #     inundation_parts,
-    #     coverage_parts,
-    #     max_damage_arr_content,
-    #     curve_x,
-    #     curve_content,
-    #     slopes_content,
-    # )
-
-    # damage_matrix_content_final = np.add.reduceat(damage_matrix_content, starts, axis=0)
-
-    # # Return as DataFrame
-    # df_damage_content = pd.DataFrame(
-    #     damage_matrix_content_final,
-    #     columns=np.array(curve_names)[i_curves_content],
-    #     index=filtered.index,
-    # )
-    # # fill missing buildings with zero damage
-    # df_damage_content = df_damage_content.reindex(index_features, fill_value=0.0)
-
-    # # concat both dataframes
-    # df_damage_combined = pd.concat([df_damage_structure, df_damage_content], axis=1)
-    # return df_damage_combined
 
 
 def VectorScanner(

@@ -11,7 +11,8 @@ import xarray as xr
 
 from geb.workflows.io import read_params, read_table
 
-from ...workflows.damage_scanner import VectorScannerMultiCurves
+from ...workflows.damage_scanner import VectorScannerMultiCurves #VectorScanner, VectorScannerMultiCurves
+#from ..workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
     from geb.agents import Agents
@@ -49,7 +50,7 @@ class WindRiskModule:
         for return_period in self.households.windstorm_return_periods:
             file_path = (
                 windstorm_path / f"return_level_rp{return_period}.tif"
-            )
+            )  # adjust to file name
             windstorm_map = xr.open_dataarray(file_path, engine="rasterio")
             windstorm_maps[return_period] = windstorm_map
        
@@ -114,29 +115,21 @@ class WindRiskModule:
             (self.households.windstorm_return_periods.size, self.households.n), np.float32
         )
     
-        debug_damage_stats = bool(
-            self.model.config.get("hazards", {})
-            .get("windstorm", {})
-            .get("debug_damage_stats", False)
-        )
-    
+        windstorm_config = self.model.config.get("hazards", {}).get("windstorm", {})
+        debug_damage_stats = bool(windstorm_config.get("debug_damage_stats", False))
+        only_flooded_buildings = bool(windstorm_config.get("only_flooded_buildings", True))
+        wind_threshold = float(windstorm_config.get("wind_threshold_ms", 20.0))
+
         # DataFrame mapping buildings to household agents
         agent_df = pd.DataFrame(
             {"building_id_of_household": self.households.var.building_id_of_household}
         )
 
-        buildings = self.households.buildings.copy()
-
-        # Optionally restrict to buildings in flooded areas
-        only_flooded_buildings = bool(
-            self.model.config.get("hazards", {})
-            .get("windstorm", {})
-            .get("only_flooded_buildings", True)
-        )
+        mask = (self.households.buildings["n_occupants"] > 0)
+        # Optional filter to focus only on flooded households
         if only_flooded_buildings:
-            buildings = buildings[buildings["flooded"]]
-    
-        buildings = buildings[buildings["n_occupants"] > 0]
+            mask &= self.households.buildings["flooded"]
+        buildings = self.households.buildings[mask]
     
         # threshold used only for prefiltering
         wind_threshold = float(
@@ -144,7 +137,7 @@ class WindRiskModule:
             .get("windstorm", {})
             .get("wind_threshold_ms", 20.0)
         )
-    
+
         rps = list(self.households.windstorm_return_periods)
         if len(rps) == 0:
             return damages_unprotected_w, damages_adapt_w
@@ -170,37 +163,42 @@ class WindRiskModule:
 
         # Centroid points in WGS84 (for sampling)
         buildings_points_wgs84 = gpd.GeoDataFrame(
-            buildings_gdf[["id"]].copy(),
+            buildings_gdf[["id"]],
             geometry=gpd.points_from_xy(buildings_gdf["x"], buildings_gdf["y"]),
             crs="EPSG:4326",
         ).set_index("id")
         
         # Prefilter buildings via centroid wind speed.
         # Cache this — building positions and wind maps are both static across years.
-        # Invalidate if the candidate building set changes (e.g. occupancy or flooded flags).
         prefilter_buildings_key = tuple(sorted(buildings_gdf["id"].values))
         if (
             self._wind_prefilter_cache is None
             or self._wind_prefilter_cache["key"] != prefilter_buildings_key
         ):
+            # All wind maps cover the same region and share the same CRS.
+            # Reproject building points once using the first map's CRS, then
+            # reuse xs/ys for every return period instead of repeating per-rp.
+            wind_crs_ref = self.households.windstorm_maps[rps[0]].rio.crs
+            buildings_points = (
+                buildings_points_wgs84.to_crs(wind_crs_ref)
+                if wind_crs_ref is not None and buildings_points_wgs84.crs != wind_crs_ref
+                else buildings_points_wgs84
+            )
+            xs = xr.DataArray(buildings_points.geometry.x.values, dims="points")
+            ys = xr.DataArray(buildings_points.geometry.y.values, dims="points")
+
             exposed_ids_by_rp: dict[float, np.ndarray] = {}
             for rp in rps:
                 wind_map: xr.DataArray = self.households.windstorm_maps[rp]
-                wind_crs = wind_map.rio.crs
-
-                buildings_points = (
-                    buildings_points_wgs84.to_crs(wind_crs)
-                    if wind_crs is not None and buildings_points_wgs84.crs != wind_crs
-                    else buildings_points_wgs84
+                sampled_vals = np.nan_to_num(
+                    wind_map.sel(
+                        {wind_map.rio.x_dim: xs, wind_map.rio.y_dim: ys},
+                        method="nearest",
+                    ).values.squeeze().astype(np.float32),
+                    nan=0.0,
                 )
-
-                sampled_winds = wind_map.interp(
-                    {wind_map.rio.x_dim: ("points", buildings_points.geometry.x.values),
-                     wind_map.rio.y_dim: ("points", buildings_points.geometry.y.values),},
-                    method="nearest",
-                )
-                sampled_vals = np.nan_to_num(np.asarray(sampled_winds.values).squeeze(), nan=0.0)
-                exposed_ids_by_rp[rp] = np.asarray(buildings_points.index.values[sampled_vals >= wind_threshold], dtype=int)
+                mask = sampled_vals >= wind_threshold
+                exposed_ids_by_rp[rp] = buildings_points.index.values[mask].astype(np.int32)
 
                 if debug_damage_stats:
                     n_total = int(buildings_points.shape[0])
@@ -225,8 +223,8 @@ class WindRiskModule:
             buildings_union = buildings_gdf[buildings_gdf["id"].isin(union_ids)].copy().set_index("id")
             footprint_m2 = buildings_union.to_crs(buildings_union.estimate_utm_crs()).geometry.area.astype(np.float32)
             features_pts_wgs84 = gpd.GeoDataFrame(
-                buildings_union[["object_type", "COST_STRUCTURAL_USD_SQM"]].copy(),
-                geometry=gpd.points_from_xy(buildings_union["x"], buildings_union["y"]),
+                buildings_union[["object_type", "COST_STRUCTURAL_USD_SQM"]],
+                geometry=buildings_union.centroid,
                 crs="EPSG:4326",
             )
             self._wind_prefilter_cache = {
@@ -269,6 +267,7 @@ class WindRiskModule:
         transform_ref = wind_map_ref.rio.transform(recalc=True)
         cell_area_m2 = float(abs(transform_ref.a * transform_ref.e))
 
+        # return period loop scan ONLY exposed point-features
         for i, rp in enumerate(rps):
             ids = exposed_ids_by_rp[rp]
             if ids.size == 0:
@@ -305,10 +304,15 @@ class WindRiskModule:
             )
     
             # Convert scanner output to the needed columns 
-            out = pd.DataFrame({"id": damage_buildings.index.astype(int)})
-            out["damages_unprotected"] = damage_buildings["damages_structure_unprotected"].to_numpy()
-            out["damages_wind_shutters"] = damage_buildings["damages_structure_wind_shutters"].to_numpy()
-    
+            # out = pd.DataFrame({"id": damage_buildings.index.astype(int)})
+            # out["damages_unprotected"] = damage_buildings["damages_structure_unprotected"].to_numpy()
+            # out["damages_wind_shutters"] = damage_buildings["damages_structure_wind_shutters"].to_numpy()
+            out = pd.DataFrame({
+                "id": damage_buildings.index.astype(int),
+                "damages_unprotected": damage_buildings["damages_structure_unprotected"].to_numpy(),
+                "damages_wind_shutters": damage_buildings["damages_structure_wind_shutters"].to_numpy(),
+            })
+
             if export_building_damages:
                 fn_export = self.households.model.output_folder / "building_wind_damages"
                 fn_export.mkdir(parents=True, exist_ok=True)

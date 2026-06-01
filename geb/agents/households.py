@@ -135,18 +135,24 @@ class Households(AgentBaseClass):
         )
         self.decision_module = DecisionModule()
 
-        if self.config["adapt"]:
+        adapt_flood = self.config.get("adapt", False)
+        adapt_wind = self.config.get("wind_adaptation", False)
+
+        if adapt_flood or adapt_wind:
             self.load_objects()
+
+        if adapt_flood:
             self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
             self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
             self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
             if self.model.config["agent_settings"]["households"]["warning_response"]:
                 self.load_critical_infrastructure()  # ideally this should be done in the setup_assets when building the model
                 self.load_wlranges_and_measures()
-            if self.model.config["agent_settings"]["households"]["wind_adaptation"]:
-                self.wind_risk_module = WindRiskModule(model=self.model, households=self)
-                self.wind_risk_perceptions = []  # Store the windstorm risk perceptions in here
-                self.wind_risk_perceptions_statistics = []  # Store some statistics on windstorm risk perceptions here
+
+        if adapt_wind:
+            self.wind_risk_module = WindRiskModule(model=self.model, households=self)
+            self.wind_risk_perceptions = []  # Store the windstorm risk perceptions in here
+            self.wind_risk_perceptions_statistics = []  # Store some statistics on windstorm risk perceptions here
         
 
         
@@ -1926,24 +1932,35 @@ class Households(AgentBaseClass):
 
     def decide_household_strategy(self) -> None:
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
-        # update risk perceptions
-        self.update_risk_perceptions()
-        
-        # calculate damages for adapting and not adapting households based on building footprints
-        damages_do_not_adapt, damages_adapt = (
-            self.flood_risk_module.calculate_building_flood_damages()
-        )
-        damages_unprotected_w, damages_adapt_w = self.wind_risk_module.calculate_building_wind_damages()
-        # update windstorm risk perceptions (use computed damages to avoid re-running scanners)
-        self._last_damages_unprotected_w = damages_unprotected_w
-        self._last_damages_adapt_w = damages_adapt_w
-        # DEBUG DIAGNOSTIC
-        mask = self.var.adapted_shutters.data == 0
-        ead_no = self.decision_module.calc_EAD(damages_unprotected_w[:, mask], 1.0 / self.windstorm_return_periods)
-        ead_ad = self.decision_module.calc_EAD(damages_adapt_w[:, mask], 1.0 / self.windstorm_return_periods)
-        print(f"[wind] EAD reduction from shutters: p50={float(np.median(ead_no - ead_ad)):.2f}, p95={float(np.percentile(ead_no - ead_ad, 95)):.2f}")
+        adapt_flood = self.config.get("adapt", False)
+        adapt_wind = self.config.get("wind_adaptation", False)
 
-        self.update_windstorm_risk_perceptions()
+        # --- Flood damages and risk perceptions ---
+        if adapt_flood:
+            self.update_risk_perceptions()
+            damages_do_not_adapt, damages_adapt = (
+                self.flood_risk_module.calculate_building_flood_damages()
+            )
+        else:
+            damages_do_not_adapt = np.zeros((1, self.n), np.float32)
+            damages_adapt = np.zeros((1, self.n), np.float32)
+            self.return_periods = np.array([1])
+
+        # --- Wind damages and risk perceptions ---
+        if adapt_wind:
+            damages_unprotected_w, damages_adapt_w = self.wind_risk_module.calculate_building_wind_damages()
+            self._last_damages_unprotected_w = damages_unprotected_w
+            self._last_damages_adapt_w = damages_adapt_w
+            # DEBUG DIAGNOSTIC
+            mask = self.var.adapted_shutters.data == 0
+            ead_no = self.decision_module.calc_EAD(damages_unprotected_w[:, mask], 1.0 / self.windstorm_return_periods)
+            ead_ad = self.decision_module.calc_EAD(damages_adapt_w[:, mask], 1.0 / self.windstorm_return_periods)
+            print(f"[wind] EAD reduction from shutters: p50={float(np.median(ead_no - ead_ad)):.2f}, p95={float(np.percentile(ead_no - ead_ad, 95)):.2f}")
+            self.update_windstorm_risk_perceptions()
+        else:
+            damages_unprotected_w = np.zeros((1, self.n), np.float32)
+            damages_adapt_w = np.zeros((1, self.n), np.float32)
+            self.windstorm_return_periods = np.array([1])
 
         # risk_perception_multi = np.maximum(
         #     self.var.risk_perception.data, self.var.risk_perception_windstorm.data
@@ -2670,8 +2687,11 @@ class Households(AgentBaseClass):
 
     def step(self) -> None:
         """Advance the households by one time step."""
-        if self.config["adapt"]:
-            if self.config["adapt_to_actual_floods"]:
+        adapt_flood = self.config.get("adapt", False)
+        adapt_wind = self.config.get("wind_adaptation", False)
+
+        if adapt_flood or adapt_wind:
+            if adapt_flood and self.config.get("adapt_to_actual_floods", False):
                 self.flood_events: list[dict[str, datetime]] = self.model.config[
                     "hazards"
                 ]["floods"]["events"]
@@ -2731,13 +2751,12 @@ class Households(AgentBaseClass):
                     df_stats.to_csv(out_path, index=False)
                     print(f"Saved risk perception statistics to {out_path}")
 
-            else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
+            else:  # Households make an annual decision on the first day of the year
                 if (
-                    self.config["adapt"]
-                    and self.model.current_time.month == 1
+                    self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 ):
-                    if "flooded" not in self.buildings.columns:
+                    if adapt_flood and "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
                     print("Thinking about adapting...")
                     self.decide_household_strategy()

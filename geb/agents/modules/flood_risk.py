@@ -439,6 +439,15 @@ class FloodRiskModule:
             ],
         }
 
+        # Rename cost columns once before the loop — column names never change
+        # between return periods, so doing this N_rp times was wasteful.
+        building_features = building_geometries.rename(
+            columns={
+                "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
+                "COST_CONTENTS_USD_SQM": "maximum_damage_content",
+            }
+        )
+
         for i, return_period in enumerate(self.households.return_periods):
             # Cache reprojected flood maps — they never change.
             if return_period not in self._flood_maps_utm_cache:
@@ -447,16 +456,8 @@ class FloodRiskModule:
                 )
             flood_map: xr.DataArray = self._flood_maps_utm_cache[return_period]
 
-            building_multicurve = building_geometries.copy()
-            building_multicurve_renamed: gpd.GeoDataFrame = building_multicurve.rename(
-                columns={
-                    "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
-                    "COST_CONTENTS_USD_SQM": "maximum_damage_content",
-                }
-            )  # ty:ignore[invalid-assignment]
-
             damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
-                features=building_multicurve_renamed,
+                features=building_features,
                 hazard=flood_map,
                 multi_curves=multi_curves,
                 exposure_cache=self._exposure_cache,
@@ -472,27 +473,24 @@ class FloodRiskModule:
                 damage_buildings["damages_structure_flood_proofed"]
                 + damage_buildings["damages_content_flood_proofed"]
             )
-            # concatenate damages to building_multicurve
-            building_multicurve = pd.concat(
-                [building_multicurve, damage_buildings], axis=1
-            )
 
             if export_building_damages:
                 fn_for_export = self.households.model.output_folder / "building_damages"
                 fn_for_export.mkdir(parents=True, exist_ok=True)
-                building_multicurve.to_parquet(
-                    self.households.model.output_folder
-                    / "building_damages"
+                pd.concat([building_geometries, damage_buildings], axis=1).to_parquet(
+                    fn_for_export
                     / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
                 )
-            building_multicurve = building_multicurve[
-                ["id", "damages", "damages_flood_proofed"]
-            ]
+
+            # Build output directly — no copy/concat needed since damage_buildings
+            # is already aligned with building_geometries by index.
+            out = pd.DataFrame({
+                "id": building_geometries["id"].values,
+                "damages": damage_buildings["damages"].values,
+                "damages_flood_proofed": damage_buildings["damages_flood_proofed"].values,
+            })
             damages_do_not_adapt[i], damages_adapt[i] = (
-                self.households.assign_damages_to_agents(
-                    agent_df,
-                    building_multicurve,
-                )
+                self.households.assign_damages_to_agents(agent_df, out)
             )
             if verbose:
                 print(
