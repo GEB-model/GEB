@@ -1808,7 +1808,6 @@ class Routing(Module):
             ] / (
                 average_discharge[calculate_alpha] ** beta_array[calculate_alpha]
             )  # calculate alpha
-            # stop here
 
         return alpha, beta_array
 
