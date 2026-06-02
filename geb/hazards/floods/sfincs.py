@@ -483,7 +483,9 @@ class SFINCSRootModel:
             river_representative_points = []
             for ID in self.active_rivers.index:
                 river_representative_points.append(
-                    get_representative_river_points(ID, self.rivers)
+                    get_representative_river_points(
+                        ID, self.rivers, ~np.isnan(river_width_alpha)
+                    )
                 )
 
             river_parameters: pd.DataFrame = get_river_parameters_by_river(

@@ -5,6 +5,7 @@ from typing import Any
 
 from .aquastat import AQUASTAT
 from .base import Adapter
+from .cmip6 import CMIP6
 from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
@@ -41,7 +42,9 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
-from .mirca_os import MIRCAOS
+from .mirca_os_admin_boundaries import MIRCAOSAdminBoundaries
+from .mirca_os_crop_calendar import MIRCAOSCropCalendar
+from .mirca_os_harvested_grids import MIRCAOSHarvestedGrids
 from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
@@ -766,6 +769,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov",
         },
     },
+    "cmip6": {
+        "adapter": CMIP6(
+            folder="cmip6",
+            local_version=1,
+            filename="cmip6_combined_deltas.zarr",
+            cache="local",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/projections-cmip6?tab=download",
+        "source": {
+            "name": "CMIP6",
+            "author": "CMIP6 Modeling Groups",
+            "license": "“Creative Commons Attribution-ShareAlike 4.0 International License (https://creativecommons.org/licenses/).”",
+            "url": "https://cds.climate.copernicus.eu/datasets/projections-cmip6?tab=overview",
+        },
+    },
     "coast_rp": {
         "adapter": CoastRP(
             folder="coast_rp",
@@ -1186,7 +1204,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     **{
         f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}": {
-            "adapter": MIRCAOS(
+            "adapter": MIRCAOSHarvestedGrids(
                 folder="mirca_os",
                 filename=f"Annual Harvested Area Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{irrigation}.tif",
                 local_version=1,
@@ -1228,6 +1246,43 @@ data_catalog: dict[str, dict[str, Any]] = {
             "Pulses",
         ]
         for irrigation in ["ir", "rf"]
+    },
+    **{
+        f"mirca_os_crop_calendar_{year}_{irrigation}": {
+            "adapter": MIRCAOSCropCalendar(
+                folder="mirca_os",
+                filename=f"Crop Calendar/MIRCA-OS_{year}_{irrigation}.csv",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/data/contents/Crop%20Calendar",
+            "source": {
+                "name": "MIRCA-OS Crop Calendar",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://doi.org/10.4211/hs.60a890eb841c460192c03bb590687145",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
+        for irrigation in ["ir", "rf"]
+    },
+    **{
+        f"mirca_os_admin_boundaries_{year}": {
+            "adapter": MIRCAOSAdminBoundaries(
+                folder="mirca_os",
+                filename=f"Admin Boundaries/MIRCAOS_{year}_Admin_v1.shp",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
+            "source": {
+                "name": "MIRCA-OS Admin Boundaries",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
     },
 }
 
