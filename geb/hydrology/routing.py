@@ -1491,8 +1491,15 @@ class Routing(Module):
             ldd_uncompressed=ldd_uncompressed, mask=mask
         )
 
+        is_waterbody: TwoDArrayBool = (
+            self.grid.load2d(
+                self.model.files["grid"]["waterbodies/waterbody_id"], compress=False
+            )
+            != -1
+        )
+
         self.rivers: gpd.GeoDataFrame = self.load_rivers(
-            grid_linear_mapping=self.grid.linear_mapping
+            grid_linear_mapping=self.grid.linear_mapping, is_waterbody=is_waterbody
         )
         self.active_rivers = self.get_active_rivers()
 
@@ -1565,20 +1572,29 @@ class Routing(Module):
         if self.model.in_spinup:
             self.spinup()
 
-    def load_rivers(self, grid_linear_mapping: TwoDArrayInt32) -> gpd.GeoDataFrame:
+    def load_rivers(
+        self, grid_linear_mapping: TwoDArrayInt32, is_waterbody: TwoDArrayBool
+    ) -> gpd.GeoDataFrame:
         """Load the river network geometries.
 
         Args:
             grid_linear_mapping: A 2D array mapping grid cells to linear indices.
+            is_waterbody: A 2D boolean array indicating which cells are waterbodies.
 
         Returns:
             A GeoDataFrame containing the river network geometries.
         """
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
+        # select only hydrography_xy that are not waterbodies
+        rivers["hydrography_xy"] = rivers["hydrography_xy"].apply(
+            lambda xys: [xy for xy in xys if not is_waterbody[xy[1], xy[0]]]
+        )
+        # update represented_in_grid based on whether there are any hydrography_xy left after removing waterbodies
+        rivers["represented_in_grid"] = rivers["hydrography_xy"].apply(
+            lambda xys: len(xys) > 0
+        )
         rivers["hydrography_linear"] = rivers["hydrography_xy"].apply(
-            lambda xys: np.array(
-                [grid_linear_mapping[xy[1], xy[0]] for xy in xys], dtype=np.int32
-            )
+            lambda xys: [grid_linear_mapping[xy[1], xy[0]] for xy in xys]
         )
         return rivers
 

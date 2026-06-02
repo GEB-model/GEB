@@ -184,6 +184,10 @@ class Floods(Module):
         self.DEM_config: list[dict[str, Any]] = read_params(
             self.model.files["dict"]["hydrodynamics/DEM_config"]
         )
+        for entry in self.DEM_config:
+            entry["elevtn"] = read_zarr(
+                self.model.files["other"][entry["path"]]
+            ).to_dataset(name="elevtn")
 
         self.HRU = model.hydrology.HRU
 
@@ -274,10 +278,6 @@ class Floods(Module):
         sfincs_model = SFINCSRootModel(
             self.model.simulation_root, name, logger=self.model.logger
         )
-        for entry in self.DEM_config:
-            entry["elevtn"] = read_zarr(
-                self.model.files["other"][entry["path"]]
-            ).to_dataset(name="elevtn")
 
         sfincs_model.build(
             subbasins=subbasins,
@@ -704,13 +704,29 @@ class Floods(Module):
                 simulations.append(sfincs_inland_simulation)
 
             simulation = MultipleSFINCSSimulations(simulations=simulations)
+            if simulations:
+                simulation.run(
+                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
+                )
+                flood_depth_return_period: xr.DataArray = (
+                    simulation.read_max_flood_depth(self.config["minimum_flood_depth"])
+                )
+            else:
+                self.model.logger.warning(
+                    f"No rivers found that are represented in grid and/or are not fully inside waterbodies. Creating dummy empty flood map."
+                )
+                dummy_sfincs_model = sfincs_model = SFINCSRootModel(
+                    self.model.simulation_root, "dummy", logger=self.model.logger
+                )
+                dummy_mask = dummy_sfincs_model.create_mask(
+                    self.DEM_config,
+                    subbasins[~subbasins["is_downstream_outflow"]],
+                    self.config["grid_size_multiplier"],
+                )
 
-            simulation.run(
-                gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
-            )
-            flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
-                self.config["minimum_flood_depth"]
-            )
+                flood_depth_return_period = dummy_mask.astype(np.float32)
+                flood_depth_return_period[:] = 0
+                flood_depth_return_period.attrs["_FillValue"] = np.nan
 
             # mask floodplain with land polygons to remove inundation in the sea
             if coastal and coastal_boundary_exclude_mask is not None:
