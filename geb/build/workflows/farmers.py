@@ -2137,6 +2137,261 @@ def _expected_lowder_farms_by_size_class(
     return expected_n_farms.reindex(size_class_boundaries.keys()).fillna(0)
 
 
+def _largest_remainder_round(values: np.ndarray, target_sum: int) -> np.ndarray:
+    """Round fractional values to integers while preserving a target sum.
+
+    The function first floors all values and then distributes the remaining
+    units to the values with the largest fractional remainders. If the floored
+    values exceed the target sum, units are removed from values with the
+    smallest fractional remainders, while avoiding negative counts.
+    This is useful when expected farm counts per size class are fractional but
+    need to be converted to integer counts while preserving the total number of
+    target farms.
+    Args:
+        values: Array of fractional values to round.
+        target_sum: Required sum of the returned integer array.
+    Returns:
+        Integer array with the same shape as ``values``. The values are rounded
+        versions of the input values and sum to ``target_sum`` where possible.
+    """
+    floored = np.floor(values).astype(np.int64)
+    missing = int(target_sum - floored.sum())
+
+    if missing > 0:
+        order = np.argsort(values - floored)[::-1]
+        floored[order[:missing]] += 1
+    elif missing < 0:
+        order = np.argsort(values - floored)
+        for index in order:
+            if missing == 0:
+                break
+            if floored[index] > 0:
+                floored[index] -= 1
+                missing += 1
+
+    return floored
+
+
+def create_lowder_target_farm_areas(
+    region_farm_sizes: pd.DataFrame,
+    size_class_boundaries: dict[str, tuple[float, float]],
+    cultivated_field_area_m2: float,
+    iso3: str,
+    logger: logging.Logger,
+    *,
+    random_seed: int = 42,
+    minimum_fields_per_farm: float = 1.0,
+    mean_field_area_m2: float | None = None,
+) -> list[TargetFarm]:
+    """Create target farm areas from Lowder-style farm-size statistics.
+
+    This function converts country-level Lowder-style farm-size statistics into
+    a list of target farm areas for the selected region. It first estimates the
+    representative farm area in each size class, then scales the number of farms
+    to match the cultivated field area available in the region.
+    The resulting target farms are later used by
+    ``grow_farms_from_lowder_targets`` to group individual field polygons into
+    synthetic farms. A small deterministic lognormal perturbation is applied
+    within each size class so that farms from the same class do not all have
+    identical target areas.
+    Args:
+        region_farm_sizes: Lowder-style farm-size data for one ISO3 code. Must
+            contain one row for ``"Holdings"`` and one row for
+            ``"Agricultural area (Ha)"``.
+        size_class_boundaries: Mapping from Lowder size-class labels to lower
+            and upper area boundaries in square metres.
+        cultivated_field_area_m2: Total cultivated field area in the selected
+            region, calculated from the available field polygons.
+        iso3: ISO3 country code used in warning and error messages.
+        logger: Logger used to report missing, clipped, or adjusted farm-size
+            statistics.
+        random_seed: Seed used for deterministic variation in target farm areas.
+        minimum_fields_per_farm: Minimum expected number of fields per synthetic
+            farm. Used only when ``mean_field_area_m2`` is provided.
+        mean_field_area_m2: Mean field area in the selected region. If provided,
+            the target number of farms is reduced when the Lowder-scaled farm
+            count would imply fewer fields than farms.
+    Returns:
+        List of ``TargetFarm`` objects. Each object contains a target farm area
+        in square metres and the Lowder size class from which it was derived.
+    Raises:
+        ValueError: If no valid Lowder farm-size classes are available for the
+            selected ISO3 code.
+        ValueError: If the total Lowder-derived agricultural area is zero or
+            negative after processing the valid size classes.
+    """
+    rng = np.random.default_rng(random_seed)
+
+    holdings = (
+        region_farm_sizes.loc[
+            region_farm_sizes["Holdings/ agricultural area"] == "Holdings"
+        ]
+        .iloc[0]
+        .drop(["Holdings/ agricultural area", "ISO3"])
+        .replace("..", np.nan)
+        .astype(np.float64)
+    )
+
+    agricultural_area_ha = (
+        region_farm_sizes.loc[
+            region_farm_sizes["Holdings/ agricultural area"] == "Agricultural area (Ha)"
+        ]
+        .iloc[0]
+        .drop(["Holdings/ agricultural area", "ISO3"])
+        .replace("..", np.nan)
+        .astype(np.float64)
+    )
+
+    bin_records: list[dict[str, Any]] = []
+
+    for raw_size_class, total_area_ha in agricultural_area_ha.items():
+        size_class = str(raw_size_class).strip()
+
+        if size_class not in size_class_boundaries:
+            continue
+
+        n_holdings = holdings[size_class]
+        min_size_m2, max_size_m2 = size_class_boundaries[size_class]
+
+        if np.isnan(total_area_ha) and (np.isnan(n_holdings) or n_holdings == 0):
+            continue
+
+        if np.isnan(n_holdings) or n_holdings <= 0:
+            continue
+
+        if np.isnan(total_area_ha):
+            logger.warning(
+                "Total agricultural area for bin '%s' in %s is missing; "
+                "using class midpoint as average farm size.",
+                size_class,
+                iso3,
+            )
+            if np.isinf(max_size_m2):
+                average_farm_size_m2 = min_size_m2 * 1.5
+            else:
+                average_farm_size_m2 = (min_size_m2 + max_size_m2) / 2
+        else:
+            average_farm_size_m2 = total_area_ha * 10_000 / n_holdings
+
+        if average_farm_size_m2 < min_size_m2:
+            logger.warning(
+                "Average farm size for bin '%s' in %s is %.2f m², below the "
+                "minimum %.2f m². Clipping to the minimum.",
+                size_class,
+                iso3,
+                average_farm_size_m2,
+                min_size_m2,
+            )
+            average_farm_size_m2 = min_size_m2
+
+        if not np.isinf(max_size_m2) and average_farm_size_m2 > max_size_m2:
+            logger.warning(
+                "Average farm size for bin '%s' in %s is %.2f m², above the "
+                "maximum %.2f m². Clipping to the maximum.",
+                size_class,
+                iso3,
+                average_farm_size_m2,
+                max_size_m2,
+            )
+            average_farm_size_m2 = max_size_m2
+
+        bin_records.append(
+            {
+                "size_class": size_class,
+                "n_holdings_database": float(n_holdings),
+                "average_farm_size_m2": float(average_farm_size_m2),
+                "database_area_m2": float(n_holdings * average_farm_size_m2),
+                "min_size_m2": float(min_size_m2),
+                "max_size_m2": float(max_size_m2),
+            }
+        )
+
+    farm_statistics = pd.DataFrame(bin_records)
+
+    if farm_statistics.empty:
+        raise ValueError(f"No valid Lowder farm-size data found for {iso3}.")
+
+    database_total_area_m2 = farm_statistics["database_area_m2"].sum()
+    if database_total_area_m2 <= 0:
+        raise ValueError(f"Invalid total Lowder farm area for {iso3}.")
+
+    scale_factor = cultivated_field_area_m2 / database_total_area_m2
+
+    farm_statistics["expected_n_farms"] = (
+        farm_statistics["n_holdings_database"] * scale_factor
+    )
+
+    expected_total_n_farms = int(round(farm_statistics["expected_n_farms"].sum()))
+    expected_total_n_farms = max(expected_total_n_farms, 1)
+
+    if mean_field_area_m2 is not None:
+        max_reasonable_n_farms = int(
+            cultivated_field_area_m2 / (mean_field_area_m2 * minimum_fields_per_farm)
+        )
+        max_reasonable_n_farms = max(max_reasonable_n_farms, 1)
+
+        if expected_total_n_farms > max_reasonable_n_farms:
+            logger.warning(
+                "Lowder implies %s farms, but the field-boundary data only support "
+                "about %s farms under the current minimum_fields_per_farm setting. "
+                "Reducing the target number of farms.",
+                expected_total_n_farms,
+                max_reasonable_n_farms,
+            )
+            expected_total_n_farms = max_reasonable_n_farms
+
+    farm_statistics["target_n_farms"] = _largest_remainder_round(
+        farm_statistics["expected_n_farms"].to_numpy(dtype=np.float64),
+        expected_total_n_farms,
+    )
+
+    target_farms: list[TargetFarm] = []
+
+    for row in farm_statistics.itertuples(index=False):
+        if row.target_n_farms <= 0:
+            continue
+
+        target_bin_area_m2 = row.database_area_m2 * scale_factor
+        mean_target_area_m2 = target_bin_area_m2 / row.target_n_farms
+
+        # Add small deterministic variation around the class mean so all farms
+        # in the same size class are not identical.
+        variation = rng.lognormal(
+            mean=0.0,
+            sigma=0.15,
+            size=int(row.target_n_farms),
+        )
+        farm_areas = variation / variation.sum() * target_bin_area_m2
+
+        if np.isinf(row.max_size_m2):
+            max_size_m2 = max(row.average_farm_size_m2 * 2, mean_target_area_m2)
+        else:
+            max_size_m2 = row.max_size_m2
+
+        farm_areas = np.clip(
+            farm_areas,
+            row.min_size_m2,
+            max_size_m2,
+        )
+
+        # Rescale after clipping to preserve the selected-region area as closely
+        # as possible.
+        if farm_areas.sum() > 0:
+            farm_areas *= target_bin_area_m2 / farm_areas.sum()
+
+        for farm_area_m2 in farm_areas:
+            target_farms.append(
+                TargetFarm(
+                    target_area_m2=float(farm_area_m2),
+                    size_class=str(row.size_class),
+                )
+            )
+
+    rng.shuffle(target_farms)
+
+    return target_farms
+
+
 def farm_size_distribution_fit_by_size_class(
     farmers: pd.DataFrame,
     regions: gpd.GeoDataFrame,
