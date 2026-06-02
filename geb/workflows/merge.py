@@ -9,7 +9,7 @@ import pandas as pd
 
 from geb.workflows.io import read_geom, read_table, write_geom, write_table
 
-GEOMETRY_FILES_TO_MERGE = [
+GEOPARQUET_FILES_TO_MERGE = [
     "input/geom/mask.geoparquet",
     "input/geom/routing/rivers.geoparquet",
     "input/geom/routing/subbasins.geoparquet",
@@ -17,7 +17,7 @@ GEOMETRY_FILES_TO_MERGE = [
     "input/geom/waterbodies/waterbody_data.geoparquet",
 ]
 
-STATION_TABLES_TO_MERGE = [
+PARQUET_FILES_TO_MERGE = [
     "input/table/discharge/discharge_observations_hourly.parquet",
     "input/table/discharge/discharge_observations_daily.parquet",
 ]
@@ -99,7 +99,7 @@ def merge_model_outputs(
                 symlink_count += 1
     logger.info("[output] %d report symlink(s) created.", symlink_count)
 
-    for relative_path in GEOMETRY_FILES_TO_MERGE:
+    for relative_path in GEOPARQUET_FILES_TO_MERGE:
         cluster_geometries: list[gpd.GeoDataFrame] = []
         for cluster_name, scenario_dir in cluster_scenario_dirs.items():
             input_file = scenario_dir / relative_path
@@ -119,7 +119,7 @@ def merge_model_outputs(
         merged_input_paths.add(relative_path)
         logger.info("[input] %s: %d features", relative_path, len(merged_geometry))
 
-    for relative_path in STATION_TABLES_TO_MERGE:
+    for relative_path in PARQUET_FILES_TO_MERGE:
         cluster_tables: list[pd.DataFrame] = []
         for cluster_name, scenario_dir in cluster_scenario_dirs.items():
             input_file = scenario_dir / relative_path
