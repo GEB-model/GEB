@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,11 +11,11 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
-from numba import njit
-from shapely.ops import unary_union
+from numba import njit, prange
+from scipy.spatial import cKDTree
 
 from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
-from geb.workflows.raster import pixels_to_coords
+from geb.workflows.raster import pixels_to_coords, rasterize_like
 
 
 def create_farm_distributions(
@@ -743,109 +742,6 @@ def get_farm_locations(farms: xr.DataArray, method: str = "centroid") -> TwoDArr
     return locations
 
 
-def combine_crop_types_with_secondary_crop(
-    crop_types_over_time: xr.DataArray,
-    secondary_crop_over_time: xr.DataArray,
-    *,
-    invalid_crop_values: tuple[int, ...] = (0, 65535),
-    valid_secondary_crop_values: tuple[int, ...] = (1, 2, 3, 4),
-) -> xr.DataArray:
-    """Combine HRL crop types with HRL secondary crop type information.
-
-    The combined code keeps the main crop code as the base value and adds the
-    secondary crop type code when a valid secondary crop is present.
-
-    Examples:
-        1430 means rapeseed without a valid secondary crop.
-        1433 means rapeseed with a short winter secondary crop.
-
-    Args:
-        crop_types_over_time: HRL Crop Types data with dimensions including
-            ``year``, ``y`` and ``x``.
-        secondary_crop_over_time: HRL Secondary Crops Type data with the same
-            dimensions, coordinates and grid as ``crop_types_over_time``.
-        invalid_crop_values: Crop type values that should not be encoded.
-        valid_secondary_crop_values: Secondary crop type values to preserve.
-
-    Returns:
-        DataArray with encoded main-crop and secondary-crop information.
-
-    Raises:
-        ValueError: If both rasters are not aligned exactly.
-    """
-    if crop_types_over_time.dims != secondary_crop_over_time.dims:
-        raise ValueError(
-            "Crop types and secondary crop rasters must have identical dimensions. "
-            f"Got {crop_types_over_time.dims} and {secondary_crop_over_time.dims}."
-        )
-
-    if crop_types_over_time.shape != secondary_crop_over_time.shape:
-        raise ValueError(
-            "Crop types and secondary crop rasters must have identical shapes. "
-            f"Got {crop_types_over_time.shape} and {secondary_crop_over_time.shape}."
-        )
-
-    for dim in crop_types_over_time.dims:
-        if not np.array_equal(
-            crop_types_over_time[dim].values,
-            secondary_crop_over_time[dim].values,
-        ):
-            raise ValueError(
-                f"Crop types and secondary crop rasters are not aligned on "
-                f"dimension {dim!r}."
-            )
-
-    if crop_types_over_time.rio.crs != secondary_crop_over_time.rio.crs:
-        raise ValueError(
-            "Crop types and secondary crop rasters must have the same CRS. "
-            f"Got {crop_types_over_time.rio.crs} and "
-            f"{secondary_crop_over_time.rio.crs}."
-        )
-
-    crop_types = crop_types_over_time.astype(np.int32)
-    secondary_crop = secondary_crop_over_time.astype(np.int32)
-
-    valid_crop = ~xr.apply_ufunc(
-        np.isin,
-        crop_types,
-        np.array(invalid_crop_values, dtype=np.int32),
-        kwargs={"invert": False},
-        dask="allowed",
-    )
-
-    valid_secondary_crop = xr.apply_ufunc(
-        np.isin,
-        secondary_crop,
-        np.array(valid_secondary_crop_values, dtype=np.int32),
-        kwargs={"invert": False},
-        dask="allowed",
-    )
-
-    secondary_crop_code = xr.where(
-        valid_secondary_crop,
-        secondary_crop,
-        0,
-        keep_attrs=True,
-    ).astype(np.int32)
-
-    combined_crop_types = xr.where(
-        valid_crop,
-        crop_types + secondary_crop_code,
-        crop_types,
-        keep_attrs=True,
-    ).astype(np.int32)
-
-    combined_crop_types.name = "crop_types_with_secondary_crop"
-    combined_crop_types.attrs.update(crop_types_over_time.attrs)
-    combined_crop_types.attrs["description"] = (
-        "HRL crop type code plus secondary crop type code. "
-        "The final digit indicates secondary crop type: 0 = none/invalid, "
-        "1 = short summer, 2 = long summer, 3 = short winter, 4 = long winter."
-    )
-
-    return combined_crop_types
-
-
 def decode_crop_type_with_secondary_crop(
     combined_crop_type: xr.DataArray | np.ndarray,
     *,
@@ -867,201 +763,6 @@ def decode_crop_type_with_secondary_crop(
     return main_crop, secondary_crop
 
 
-def count_crops_by_field_year(
-    crop_types_over_time: xr.DataArray,
-    field_ids: xr.DataArray,
-    *,
-    invalid_crop_values: Iterable[int] = (0, 65535),
-    field_nodata: int = -1,
-) -> xr.DataArray:
-    """Count valid crop-type pixels for each field and year.
-
-    The crop raster is categorical. Therefore, field boundaries should first be
-    rasterized onto the exact crop-raster grid, rather than resampling the crop
-    raster. Each valid crop pixel is then grouped by year, field ID, and crop
-    type.
-
-    Crop values listed in ``invalid_crop_values`` are ignored before counting.
-    This is useful for HRL crop-type rasters where, for example, ``0`` indicates
-    no crop and ``65535`` indicates nodata.
-
-    Args:
-        crop_types_over_time: Crop-type raster with dimensions
-            ``("year", "y", "x")``. Values are categorical crop-type codes.
-        field_ids: Field-ID raster with dimensions ``("y", "x")``. This raster
-            must be on the same grid as ``crop_types_over_time``.
-        invalid_crop_values: Crop raster values that should be ignored. These
-            values do not enter the crop counts and cannot become dominant crops.
-        field_nodata: Nodata value in ``field_ids``. These pixels are ignored
-            because they are not assigned to a field.
-
-    Returns:
-        Pixel counts per year, field ID, and valid crop type. The returned array
-        has dimensions ``("year", "field_id", "crop_type")`` and contains
-        integer pixel counts.
-
-    Raises:
-        ValueError: If the crop raster and field-ID raster do not have matching
-            spatial dimensions.
-        ValueError: If no valid field pixels are found.
-        ValueError: If no valid crop pixels are found after excluding
-            ``invalid_crop_values``.
-    """
-    if crop_types_over_time.dims != ("year", "y", "x"):
-        crop_types_over_time = crop_types_over_time.transpose("year", "y", "x")
-
-    if field_ids.dims != ("y", "x"):
-        field_ids = field_ids.transpose("y", "x")
-
-    crop_y_size = crop_types_over_time.sizes["y"]
-    field_y_size = field_ids.sizes["y"]
-    if crop_y_size != field_y_size:
-        message = (
-            "crop_types_over_time and field_ids must have the same y size. "
-            f"Got crop_types_over_time y size {crop_y_size} and "
-            f"field_ids y size {field_y_size}."
-        )
-        raise ValueError(message)
-
-    crop_x_size = crop_types_over_time.sizes["x"]
-    field_x_size = field_ids.sizes["x"]
-    if crop_x_size != field_x_size:
-        message = (
-            "crop_types_over_time and field_ids must have the same x size. "
-            f"Got crop_types_over_time x size {crop_x_size} and "
-            f"field_ids x size {field_x_size}."
-        )
-        raise ValueError(message)
-
-    crops = crop_types_over_time.values
-    fields = field_ids.values
-    years = crop_types_over_time["year"].values
-
-    invalid_crop_values_array = np.asarray(tuple(invalid_crop_values))
-
-    fields_flat = fields.ravel()
-    valid_field_mask = fields_flat != field_nodata
-
-    if not valid_field_mask.any():
-        message = (
-            "No valid field pixels were found in field_ids after excluding "
-            f"field_nodata={field_nodata}."
-        )
-        raise ValueError(message)
-
-    valid_field_ids = fields_flat[valid_field_mask]
-    unique_field_ids, field_inverse = np.unique(
-        valid_field_ids,
-        return_inverse=True,
-    )
-
-    valid_pixels_mask = fields != field_nodata
-    valid_crops_all_years = crops[:, valid_pixels_mask]
-    valid_crops_mask = ~np.isin(
-        valid_crops_all_years,
-        invalid_crop_values_array,
-    )
-    valid_crop_values = valid_crops_all_years[valid_crops_mask]
-
-    if valid_crop_values.size == 0:
-        message = (
-            "No valid crop pixels were found after excluding invalid crop "
-            f"values {tuple(invalid_crop_values_array)}."
-        )
-        raise ValueError(message)
-
-    unique_crop_types = np.unique(valid_crop_values)
-
-    n_years = years.size
-    n_fields = unique_field_ids.size
-    n_crops = unique_crop_types.size
-
-    counts = np.zeros((n_years, n_fields, n_crops), dtype=np.int32)
-
-    for year_idx in range(n_years):
-        crops_year = crops[year_idx].ravel()[valid_field_mask]
-        valid_crop_mask = ~np.isin(crops_year, invalid_crop_values_array)
-
-        crop_index = np.searchsorted(
-            unique_crop_types,
-            crops_year[valid_crop_mask],
-        )
-        field_index = field_inverse[valid_crop_mask]
-
-        combined_index = field_index * n_crops + crop_index
-
-        counts[year_idx] = np.bincount(
-            combined_index,
-            minlength=n_fields * n_crops,
-        ).reshape(n_fields, n_crops)
-
-    return xr.DataArray(
-        counts,
-        dims=("year", "field_id", "crop_type"),
-        coords={
-            "year": years,
-            "field_id": unique_field_ids,
-            "crop_type": unique_crop_types,
-        },
-        name="crop_pixel_count",
-    )
-
-
-def dominant_crop_by_field_year(
-    crop_counts: xr.DataArray,
-    *,
-    nodata: int = -1,
-) -> xr.DataArray:
-    """Determine the dominant crop per field and year.
-
-    The dominant crop is defined as the crop type with the highest pixel count
-    within a field-year combination. Field-year combinations without any valid
-    crop pixels receive the provided nodata value.
-
-    This function should usually be applied to the output of
-    ``count_crops_by_field_year``. The full crop-count array can still be used
-    separately to inspect mixed fields or calculate crop fractions.
-
-    Args:
-        crop_counts: Pixel-count array with dimensions
-            ``("year", "field_id", "crop_type")``.
-        nodata: Value assigned to field-year combinations without valid crop
-            pixels.
-
-    Returns:
-        Dominant crop code per year and field ID. The returned array has
-        dimensions ``("year", "field_id")``.
-
-    Raises:
-        ValueError: If ``crop_counts`` does not have the expected dimensions.
-    """
-    expected_dims = ("year", "field_id", "crop_type")
-    if crop_counts.dims != expected_dims:
-        message = (
-            f"crop_counts must have dimensions {expected_dims}. Got {crop_counts.dims}."
-        )
-        raise ValueError(message)
-
-    counts = crop_counts.values
-    crop_types = crop_counts["crop_type"].values
-
-    total_pixels = counts.sum(axis=2)
-    dominant_crop_index = counts.argmax(axis=2)
-
-    dominant_crops = crop_types[dominant_crop_index]
-    dominant_crops = np.where(total_pixels > 0, dominant_crops, nodata)
-
-    return xr.DataArray(
-        dominant_crops.astype(np.int32),
-        dims=("year", "field_id"),
-        coords={
-            "year": crop_counts["year"].values,
-            "field_id": crop_counts["field_id"].values,
-        },
-        name="dominant_crop",
-    )
-
-
 @dataclass(frozen=True)
 class TargetFarm:
     """Lowder-derived target farm used during synthetic farm construction.
@@ -1079,268 +780,6 @@ class TargetFarm:
 
     target_area_m2: float
     size_class: str
-
-
-def _largest_remainder_round(values: np.ndarray, target_sum: int) -> np.ndarray:
-    """Round fractional values to integers while preserving a target sum.
-
-    The function first floors all values and then distributes the remaining
-    units to the values with the largest fractional remainders. If the floored
-    values exceed the target sum, units are removed from values with the
-    smallest fractional remainders, while avoiding negative counts.
-
-    This is useful when expected farm counts per size class are fractional but
-    need to be converted to integer counts while preserving the total number of
-    target farms.
-
-    Args:
-        values: Array of fractional values to round.
-        target_sum: Required sum of the returned integer array.
-
-    Returns:
-        Integer array with the same shape as ``values``. The values are rounded
-        versions of the input values and sum to ``target_sum`` where possible.
-    """
-    floored = np.floor(values).astype(np.int64)
-    missing = int(target_sum - floored.sum())
-
-    if missing > 0:
-        order = np.argsort(values - floored)[::-1]
-        floored[order[:missing]] += 1
-    elif missing < 0:
-        order = np.argsort(values - floored)
-        for index in order:
-            if missing == 0:
-                break
-            if floored[index] > 0:
-                floored[index] -= 1
-                missing += 1
-
-    return floored
-
-
-def create_lowder_target_farm_areas(
-    region_farm_sizes: pd.DataFrame,
-    size_class_boundaries: dict[str, tuple[float, float]],
-    cultivated_field_area_m2: float,
-    iso3: str,
-    logger: logging.Logger,
-    *,
-    random_seed: int = 42,
-    minimum_fields_per_farm: float = 1.0,
-    mean_field_area_m2: float | None = None,
-) -> list[TargetFarm]:
-    """Create target farm areas from Lowder-style farm-size statistics.
-
-    This function converts country-level Lowder-style farm-size statistics into
-    a list of target farm areas for the selected region. It first estimates the
-    representative farm area in each size class, then scales the number of farms
-    to match the cultivated field area available in the region.
-
-    The resulting target farms are later used by
-    ``grow_farms_from_lowder_targets`` to group individual field polygons into
-    synthetic farms. A small deterministic lognormal perturbation is applied
-    within each size class so that farms from the same class do not all have
-    identical target areas.
-
-    Args:
-        region_farm_sizes: Lowder-style farm-size data for one ISO3 code. Must
-            contain one row for ``"Holdings"`` and one row for
-            ``"Agricultural area (Ha)"``.
-        size_class_boundaries: Mapping from Lowder size-class labels to lower
-            and upper area boundaries in square metres.
-        cultivated_field_area_m2: Total cultivated field area in the selected
-            region, calculated from the available field polygons.
-        iso3: ISO3 country code used in warning and error messages.
-        logger: Logger used to report missing, clipped, or adjusted farm-size
-            statistics.
-        random_seed: Seed used for deterministic variation in target farm areas.
-        minimum_fields_per_farm: Minimum expected number of fields per synthetic
-            farm. Used only when ``mean_field_area_m2`` is provided.
-        mean_field_area_m2: Mean field area in the selected region. If provided,
-            the target number of farms is reduced when the Lowder-scaled farm
-            count would imply fewer fields than farms.
-
-    Returns:
-        List of ``TargetFarm`` objects. Each object contains a target farm area
-        in square metres and the Lowder size class from which it was derived.
-
-    Raises:
-        ValueError: If no valid Lowder farm-size classes are available for the
-            selected ISO3 code.
-        ValueError: If the total Lowder-derived agricultural area is zero or
-            negative after processing the valid size classes.
-    """
-    rng = np.random.default_rng(random_seed)
-
-    holdings = (
-        region_farm_sizes.loc[
-            region_farm_sizes["Holdings/ agricultural area"] == "Holdings"
-        ]
-        .iloc[0]
-        .drop(["Holdings/ agricultural area", "ISO3"])
-        .replace("..", np.nan)
-        .astype(np.float64)
-    )
-
-    agricultural_area_ha = (
-        region_farm_sizes.loc[
-            region_farm_sizes["Holdings/ agricultural area"] == "Agricultural area (Ha)"
-        ]
-        .iloc[0]
-        .drop(["Holdings/ agricultural area", "ISO3"])
-        .replace("..", np.nan)
-        .astype(np.float64)
-    )
-
-    bin_records: list[dict[str, Any]] = []
-
-    for raw_size_class, total_area_ha in agricultural_area_ha.items():
-        size_class = str(raw_size_class).strip()
-
-        if size_class not in size_class_boundaries:
-            continue
-
-        n_holdings = holdings[size_class]
-        min_size_m2, max_size_m2 = size_class_boundaries[size_class]
-
-        if np.isnan(total_area_ha) and (np.isnan(n_holdings) or n_holdings == 0):
-            continue
-
-        if np.isnan(n_holdings) or n_holdings <= 0:
-            continue
-
-        if np.isnan(total_area_ha):
-            logger.warning(
-                "Total agricultural area for bin '%s' in %s is missing; "
-                "using class midpoint as average farm size.",
-                size_class,
-                iso3,
-            )
-            if np.isinf(max_size_m2):
-                average_farm_size_m2 = min_size_m2 * 1.5
-            else:
-                average_farm_size_m2 = (min_size_m2 + max_size_m2) / 2
-        else:
-            average_farm_size_m2 = total_area_ha * 10_000 / n_holdings
-
-        if average_farm_size_m2 < min_size_m2:
-            logger.warning(
-                "Average farm size for bin '%s' in %s is %.2f m², below the "
-                "minimum %.2f m². Clipping to the minimum.",
-                size_class,
-                iso3,
-                average_farm_size_m2,
-                min_size_m2,
-            )
-            average_farm_size_m2 = min_size_m2
-
-        if not np.isinf(max_size_m2) and average_farm_size_m2 > max_size_m2:
-            logger.warning(
-                "Average farm size for bin '%s' in %s is %.2f m², above the "
-                "maximum %.2f m². Clipping to the maximum.",
-                size_class,
-                iso3,
-                average_farm_size_m2,
-                max_size_m2,
-            )
-            average_farm_size_m2 = max_size_m2
-
-        bin_records.append(
-            {
-                "size_class": size_class,
-                "n_holdings_database": float(n_holdings),
-                "average_farm_size_m2": float(average_farm_size_m2),
-                "database_area_m2": float(n_holdings * average_farm_size_m2),
-                "min_size_m2": float(min_size_m2),
-                "max_size_m2": float(max_size_m2),
-            }
-        )
-
-    farm_statistics = pd.DataFrame(bin_records)
-
-    if farm_statistics.empty:
-        raise ValueError(f"No valid Lowder farm-size data found for {iso3}.")
-
-    database_total_area_m2 = farm_statistics["database_area_m2"].sum()
-    if database_total_area_m2 <= 0:
-        raise ValueError(f"Invalid total Lowder farm area for {iso3}.")
-
-    scale_factor = cultivated_field_area_m2 / database_total_area_m2
-
-    farm_statistics["expected_n_farms"] = (
-        farm_statistics["n_holdings_database"] * scale_factor
-    )
-
-    expected_total_n_farms = int(round(farm_statistics["expected_n_farms"].sum()))
-    expected_total_n_farms = max(expected_total_n_farms, 1)
-
-    if mean_field_area_m2 is not None:
-        max_reasonable_n_farms = int(
-            cultivated_field_area_m2 / (mean_field_area_m2 * minimum_fields_per_farm)
-        )
-        max_reasonable_n_farms = max(max_reasonable_n_farms, 1)
-
-        if expected_total_n_farms > max_reasonable_n_farms:
-            logger.warning(
-                "Lowder implies %s farms, but the field-boundary data only support "
-                "about %s farms under the current minimum_fields_per_farm setting. "
-                "Reducing the target number of farms.",
-                expected_total_n_farms,
-                max_reasonable_n_farms,
-            )
-            expected_total_n_farms = max_reasonable_n_farms
-
-    farm_statistics["target_n_farms"] = _largest_remainder_round(
-        farm_statistics["expected_n_farms"].to_numpy(dtype=np.float64),
-        expected_total_n_farms,
-    )
-
-    target_farms: list[TargetFarm] = []
-
-    for row in farm_statistics.itertuples(index=False):
-        if row.target_n_farms <= 0:
-            continue
-
-        target_bin_area_m2 = row.database_area_m2 * scale_factor
-        mean_target_area_m2 = target_bin_area_m2 / row.target_n_farms
-
-        # Add small deterministic variation around the class mean so all farms
-        # in the same size class are not identical.
-        variation = rng.lognormal(
-            mean=0.0,
-            sigma=0.15,
-            size=int(row.target_n_farms),
-        )
-        farm_areas = variation / variation.sum() * target_bin_area_m2
-
-        if np.isinf(row.max_size_m2):
-            max_size_m2 = max(row.average_farm_size_m2 * 2, mean_target_area_m2)
-        else:
-            max_size_m2 = row.max_size_m2
-
-        farm_areas = np.clip(
-            farm_areas,
-            row.min_size_m2,
-            max_size_m2,
-        )
-
-        # Rescale after clipping to preserve the selected-region area as closely
-        # as possible.
-        if farm_areas.sum() > 0:
-            farm_areas *= target_bin_area_m2 / farm_areas.sum()
-
-        for farm_area_m2 in farm_areas:
-            target_farms.append(
-                TargetFarm(
-                    target_area_m2=float(farm_area_m2),
-                    size_class=str(row.size_class),
-                )
-            )
-
-    rng.shuffle(target_farms)
-
-    return target_farms
 
 
 def crop_sequence_similarity(
@@ -1428,58 +867,6 @@ def switch_timing_similarity(
     return float(np.sum(intersection) / np.sum(union))
 
 
-def prepare_projected_fields(
-    fields: gpd.GeoDataFrame,
-    crop_columns: list[str],
-) -> tuple[gpd.GeoDataFrame, Any]:
-    """Prepare field polygons for area and distance calculations.
-
-    Field geometries are projected to an estimated local UTM CRS so that areas
-    and distances can be calculated in metres. The function also creates a stable
-    integer ``field_index`` column, calculates field area in square metres, and
-    converts crop-sequence columns to integer values.
-
-    Missing crop values in the selected crop columns are replaced by ``-1`` so
-    that later crop-sequence comparisons can treat them consistently as missing
-    values.
-
-    Args:
-        fields: Field-boundary GeoDataFrame containing geometry and crop-sequence
-            columns.
-        crop_columns: Names of the crop-sequence columns that should be prepared
-            for farm-growing logic.
-
-    Returns:
-        Tuple containing the projected field GeoDataFrame and the original CRS.
-        The projected GeoDataFrame contains additional ``field_index`` and
-        ``field_area_m2`` columns.
-
-    Raises:
-        ValueError: If ``fields`` has no CRS.
-        ValueError: If a projected CRS cannot be estimated from the field
-            geometries.
-    """
-    if fields.crs is None:
-        raise ValueError("Field boundaries must have a CRS.")
-
-    original_crs = fields.crs
-    projected_crs = fields.estimate_utm_crs()
-
-    if projected_crs is None:
-        raise ValueError("Could not estimate a projected CRS.")
-
-    projected = fields.to_crs(projected_crs).copy()
-    projected = projected.reset_index(drop=True)
-
-    projected["field_index"] = np.arange(len(projected), dtype=np.int32)
-    projected["field_area_m2"] = projected.geometry.area.astype(np.float64)
-
-    for crop_column in crop_columns:
-        projected[crop_column] = projected[crop_column].fillna(-1).astype(np.int32)
-
-    return projected, original_crs
-
-
 def candidate_score(
     farm_crop_sequence: np.ndarray,
     field_crop_sequence: np.ndarray,
@@ -1545,6 +932,11 @@ def update_farm_crop_sequence(
     present in the farm. This avoids constructing artificial sequences by taking
     the modal crop independently for each year.
 
+    Ties between equally frequent full sequences are resolved by choosing the
+    sequence with the highest average similarity to all field sequences in the
+    farm. This makes the selected sequence a simple medoid-like representative
+    while still ensuring that it is an observed sequence.
+
     Args:
         farm_crop_sequences: Two-dimensional array with shape
             ``(n_farm_fields, n_years)`` containing the full crop sequence of
@@ -1576,10 +968,35 @@ def update_farm_crop_sequence(
     if len(most_common_sequences) == 1:
         return most_common_sequences[0].astype(np.int32)
 
-    # Deterministic tie-breaker: prefer the sequence with fewer missing values.
-    missing_counts = np.sum(most_common_sequences == missing_value, axis=1)
+    # If multiple full sequences are equally common, choose the one that is most
+    # similar to the farm's full set of observed sequences.
+    mean_similarities = np.empty(len(most_common_sequences), dtype=np.float64)
+
+    for sequence_index, candidate_sequence in enumerate(most_common_sequences):
+        similarities = np.array(
+            [
+                crop_sequence_similarity(
+                    candidate_sequence,
+                    farm_sequence,
+                    missing_value=missing_value,
+                )
+                for farm_sequence in farm_crop_sequences
+            ],
+            dtype=np.float64,
+        )
+        mean_similarities[sequence_index] = similarities.mean()
+
+    highest_similarity = mean_similarities.max()
+    best_sequences = most_common_sequences[mean_similarities == highest_similarity]
+
+    if len(best_sequences) == 1:
+        return best_sequences[0].astype(np.int32)
+
+    # If the medoid-like score is also tied, prefer the sequence with fewer
+    # missing values.
+    missing_counts = np.sum(best_sequences == missing_value, axis=1)
     fewest_missing = missing_counts.min()
-    best_sequences = most_common_sequences[missing_counts == fewest_missing]
+    best_sequences = best_sequences[missing_counts == fewest_missing]
 
     if len(best_sequences) == 1:
         return best_sequences[0].astype(np.int32)
@@ -1589,140 +1006,729 @@ def update_farm_crop_sequence(
     return best_sequences[sort_order[0]].astype(np.int32)
 
 
-def grow_farms_from_lowder_targets(
-    fields: gpd.GeoDataFrame,
-    target_farms: list[TargetFarm],
-    crop_columns: list[str],
+def _dataarray_to_int32_values(data: xr.DataArray) -> np.ndarray:
+    """Convert an xarray DataArray to a contiguous int32 NumPy array.
+
+    Floating rasters are converted to integers after replacing NaN values with
+    the HRL outside-area value ``65535``.
+
+    Args:
+        data: Input raster data.
+
+    Returns:
+        Contiguous NumPy array with dtype ``np.int32``.
+    """
+    values = data.values
+
+    if np.issubdtype(values.dtype, np.floating):
+        values = np.nan_to_num(values, nan=65535)
+
+    return np.ascontiguousarray(values.astype(np.int32, copy=False))
+
+
+def assert_matching_raster_grid(
+    crop_types: xr.DataArray,
+    secondary_crop: xr.DataArray,
+) -> None:
+    """Check whether crop and secondary-crop rasters are exactly aligned.
+
+    Args:
+        crop_types: HRL crop-type raster.
+        secondary_crop: HRL secondary-crop raster.
+
+    Raises:
+        ValueError: If the rasters do not have matching dimensions, shape, CRS,
+            or coordinates.
+    """
+    if crop_types.ndim != 2 or secondary_crop.ndim != 2:
+        raise ValueError("Crop and secondary-crop rasters must both be 2D.")
+
+    if crop_types.rio.crs is None or secondary_crop.rio.crs is None:
+        raise ValueError("Crop and secondary-crop rasters must both have a CRS.")
+
+    if crop_types.rio.crs != secondary_crop.rio.crs:
+        raise ValueError(
+            "Crop and secondary-crop rasters must have the same CRS. "
+            f"Got {crop_types.rio.crs} and {secondary_crop.rio.crs}."
+        )
+
+    if crop_types.shape != secondary_crop.shape:
+        raise ValueError(
+            "Crop and secondary-crop rasters must have the same shape. "
+            f"Got {crop_types.shape} and {secondary_crop.shape}."
+        )
+
+    if crop_types.dims != secondary_crop.dims:
+        raise ValueError(
+            "Crop and secondary-crop rasters must have the same dimensions. "
+            f"Got {crop_types.dims} and {secondary_crop.dims}."
+        )
+
+    for dim in crop_types.dims:
+        if not np.array_equal(crop_types[dim].values, secondary_crop[dim].values):
+            raise ValueError(f"Rasters are not aligned on dimension {dim!r}.")
+
+
+def combine_crop_and_secondary_values(
+    crop_values: np.ndarray,
+    secondary_values: np.ndarray,
+) -> np.ndarray:
+    """Combine one year of HRL crop and secondary-crop values.
+
+    The final digit of the returned crop code stores the secondary-crop class.
+    Only secondary-crop values 1, 2, 3, and 4 are encoded. All other secondary
+    values are treated as no valid secondary crop.
+
+    Args:
+        crop_values: Two-dimensional HRL crop-type values.
+        secondary_values: Two-dimensional HRL secondary-crop values.
+
+    Returns:
+        Two-dimensional encoded crop raster with dtype ``np.int32``.
+
+    Raises:
+        ValueError: If both input arrays do not have the same shape.
+    """
+    if crop_values.shape != secondary_values.shape:
+        raise ValueError(
+            "crop_values and secondary_values must have the same shape. "
+            f"Got {crop_values.shape} and {secondary_values.shape}."
+        )
+
+    crop_values = np.ascontiguousarray(crop_values.astype(np.int32, copy=False))
+    secondary_values = np.ascontiguousarray(
+        secondary_values.astype(np.int32, copy=False)
+    )
+
+    combined = crop_values.copy()
+
+    valid_crop = (crop_values != 0) & (crop_values != 65535)
+    valid_secondary = (secondary_values >= 1) & (secondary_values <= 4)
+
+    # Only valid main-crop pixels receive the secondary-crop suffix.
+    encode_mask = valid_crop & valid_secondary
+    combined[encode_mask] = crop_values[encode_mask] + secondary_values[encode_mask]
+
+    return combined
+
+
+@njit(cache=True, parallel=True)
+def _map_field_ids_to_indices_numba(
+    field_ids: np.ndarray,
+    unique_field_ids: np.ndarray,
+    field_nodata: int,
+    out: np.ndarray,
+) -> None:
+    """Map original field IDs to compact zero-based field indices.
+
+    Original field IDs can be large and sparse. Compact indices keep later
+    arrays small and contiguous.
+
+    Args:
+        field_ids: Two-dimensional raster of original field IDs.
+        unique_field_ids: Sorted unique valid field IDs.
+        field_nodata: Nodata value in ``field_ids``.
+        out: Output array where compact field indices are written.
+    """
+    field_flat = field_ids.ravel()
+    out_flat = out.ravel()
+
+    for index in prange(field_flat.size):
+        field_id = field_flat[index]
+
+        if field_id == field_nodata:
+            out_flat[index] = -1
+            continue
+
+        compact_index = np.searchsorted(unique_field_ids, field_id)
+
+        if (
+            compact_index < unique_field_ids.size
+            and unique_field_ids[compact_index] == field_id
+        ):
+            out_flat[index] = compact_index
+        else:
+            out_flat[index] = -1
+
+
+def create_field_index_grid(
+    field_ids: xr.DataArray,
     *,
-    random_seed: int = 42,
+    field_nodata: int = -1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Create a compact field-index grid.
+
+    Args:
+        field_ids: Rasterized field-boundary IDs.
+        field_nodata: Nodata value in ``field_ids``.
+
+    Returns:
+        Tuple containing the compact field-index grid and the original field IDs
+        corresponding to each compact index.
+
+    Raises:
+        ValueError: If no valid field IDs are found.
+    """
+    field_values = _dataarray_to_int32_values(field_ids)
+
+    unique_field_ids = np.unique(field_values[field_values != field_nodata]).astype(
+        np.int32
+    )
+
+    if unique_field_ids.size == 0:
+        raise ValueError("No valid field IDs found in field-ID raster.")
+
+    field_index_grid = np.full(field_values.shape, -1, dtype=np.int32)
+
+    _map_field_ids_to_indices_numba(
+        field_values,
+        unique_field_ids,
+        field_nodata,
+        field_index_grid,
+    )
+
+    return field_index_grid, unique_field_ids
+
+
+@njit(cache=True)
+def _pair_counts_chunk_numba(
+    crop_chunk: np.ndarray,
+    field_index_chunk: np.ndarray,
+    pair_base: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Count valid field/crop pairs in one raster chunk.
+
+    Each valid pixel is encoded as ``field_index * pair_base + crop_code``.
+    Sorting these encoded pairs makes it possible to count occurrences without
+    constructing a dense ``field x crop`` matrix.
+
+    Args:
+        crop_chunk: Encoded crop-type raster chunk.
+        field_index_chunk: Compact field-index raster chunk.
+        pair_base: Multiplier used to encode field/crop pairs.
+
+    Returns:
+        Tuple containing encoded unique field/crop pair codes and pixel counts.
+    """
+    crop_flat = crop_chunk.ravel()
+    field_flat = field_index_chunk.ravel()
+
+    pair_codes = np.empty(crop_flat.size, dtype=np.int64)
+    valid_count = 0
+
+    for index in range(crop_flat.size):
+        field_index = field_flat[index]
+
+        if field_index < 0:
+            continue
+
+        crop = crop_flat[index]
+
+        if crop == 0 or crop == 65535:
+            continue
+
+        if crop < 0 or crop >= pair_base:
+            continue
+
+        pair_codes[valid_count] = np.int64(field_index) * pair_base + crop
+        valid_count += 1
+
+    if valid_count == 0:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int32)
+
+    sorted_pairs = np.sort(pair_codes[:valid_count])
+
+    n_unique = 1
+    for index in range(1, sorted_pairs.size):
+        if sorted_pairs[index] != sorted_pairs[index - 1]:
+            n_unique += 1
+
+    unique_pairs = np.empty(n_unique, dtype=np.int64)
+    counts = np.empty(n_unique, dtype=np.int32)
+
+    unique_index = 0
+    current_pair = sorted_pairs[0]
+    current_count = 1
+
+    for index in range(1, sorted_pairs.size):
+        if sorted_pairs[index] == current_pair:
+            current_count += 1
+        else:
+            unique_pairs[unique_index] = current_pair
+            counts[unique_index] = current_count
+            unique_index += 1
+
+            current_pair = sorted_pairs[index]
+            current_count = 1
+
+    unique_pairs[unique_index] = current_pair
+    counts[unique_index] = current_count
+
+    return unique_pairs, counts
+
+
+def dominant_crop_one_year_chunked(
+    crop_types: xr.DataArray,
+    secondary_crop: xr.DataArray,
+    field_index_grid: np.ndarray,
+    n_fields: int,
+    *,
+    chunk_rows: int = 2048,
+    pair_base: int = 65536,
+    nodata: int = -1,
+) -> np.ndarray:
+    """Compute the dominant encoded crop per field for one year.
+
+    The raster is processed in row chunks to avoid holding large intermediate
+    arrays in memory. Within each chunk, valid field/crop pixel pairs are counted
+    and accumulated in a sparse dictionary.
+
+    Args:
+        crop_types: HRL crop-type raster for one year.
+        secondary_crop: HRL secondary-crop raster for the same year.
+        field_index_grid: Compact field-index grid aligned with the HRL raster.
+        n_fields: Number of unique fields.
+        chunk_rows: Number of raster rows processed at once.
+        pair_base: Multiplier used to encode field/crop pairs. This must be
+            larger than the maximum possible encoded crop code.
+        nodata: Output value for fields without valid crop pixels.
+
+    Returns:
+        One-dimensional array with one dominant encoded crop code per field.
+
+    """
+    assert_matching_raster_grid(crop_types, secondary_crop)
+
+    pair_totals: dict[int, int] = {}
+    n_rows = crop_types.sizes["y"]
+
+    for y_start in range(0, n_rows, chunk_rows):
+        y_stop = min(y_start + chunk_rows, n_rows)
+
+        crop_chunk = _dataarray_to_int32_values(
+            crop_types.isel(y=slice(y_start, y_stop))
+        )
+        secondary_chunk = _dataarray_to_int32_values(
+            secondary_crop.isel(y=slice(y_start, y_stop))
+        )
+
+        combined_chunk = combine_crop_and_secondary_values(
+            crop_chunk,
+            secondary_chunk,
+        )
+
+        field_index_chunk = np.ascontiguousarray(
+            field_index_grid[y_start:y_stop],
+            dtype=np.int32,
+        )
+
+        unique_pairs, counts = _pair_counts_chunk_numba(
+            combined_chunk,
+            field_index_chunk,
+            pair_base,
+        )
+
+        # Accumulate sparse pair counts across row chunks.
+        for pair_code, count in zip(unique_pairs, counts, strict=True):
+            pair_code_int = int(pair_code)
+            pair_totals[pair_code_int] = pair_totals.get(pair_code_int, 0) + int(count)
+
+    dominant_crop = np.full(n_fields, nodata, dtype=np.int32)
+    best_count = np.zeros(n_fields, dtype=np.int32)
+
+    # Keep only the crop code with the largest pixel count per field.
+    for pair_code, count in pair_totals.items():
+        field_index = pair_code // pair_base
+        crop_code = pair_code % pair_base
+
+        if count > best_count[field_index]:
+            best_count[field_index] = count
+            dominant_crop[field_index] = crop_code
+
+    return dominant_crop
+
+
+def prepare_projected_field_arrays(
+    fields: gpd.GeoDataFrame,
+    crop_columns: list[str],
+) -> tuple[gpd.GeoDataFrame, Any, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Prepare field geometry and arrays for farm growing.
+
+    Field geometries are projected to a local metric CRS. The function then
+    extracts compact arrays used by the farm-growing logic.
+
+    Args:
+        fields: Field-boundary GeoDataFrame containing geometry and crop columns.
+        crop_columns: Names of crop-sequence columns to use during farm growing.
+
+    Returns:
+        Tuple containing the projected GeoDataFrame, original CRS, field areas,
+        representative-point x coordinates, representative-point y coordinates,
+        and field crop sequences.
+
+    Raises:
+        ValueError: If ``fields`` has no CRS.
+        ValueError: If a projected CRS cannot be estimated.
+    """
+    if fields.crs is None:
+        raise ValueError("Field boundaries must have a CRS.")
+
+    original_crs = fields.crs
+    projected_crs = fields.estimate_utm_crs()
+
+    if projected_crs is None:
+        raise ValueError("Could not estimate a projected CRS.")
+
+    projected = fields.to_crs(projected_crs).copy()
+    projected = projected.reset_index(drop=True)
+
+    projected["field_index"] = np.arange(len(projected), dtype=np.int32)
+    projected["field_area_m2"] = projected.geometry.area.astype(np.float64)
+
+    for crop_column in crop_columns:
+        projected[crop_column] = projected[crop_column].fillna(-1).astype(np.int32)
+
+    representative_points = projected.geometry.representative_point()
+
+    centroid_x = representative_points.x.to_numpy(dtype=np.float64)
+    centroid_y = representative_points.y.to_numpy(dtype=np.float64)
+    field_areas = projected["field_area_m2"].to_numpy(dtype=np.float64)
+    field_sequences = projected[crop_columns].to_numpy(dtype=np.int32)
+
+    return projected, original_crs, field_areas, centroid_x, centroid_y, field_sequences
+
+
+def build_field_neighbor_graph(
+    centroid_x: np.ndarray,
+    centroid_y: np.ndarray,
+    *,
+    max_distance_m: float,
+    max_neighbors: int = 32,
+    query_chunk_size: int = 100_000,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build a fixed-size nearest-neighbor graph for fields.
+
+    The neighbor graph is stored in compressed sparse row format. This avoids
+    repeated GeoPandas/Shapely distance queries during farm growing.
+
+    Args:
+        centroid_x: Field representative-point x coordinates.
+        centroid_y: Field representative-point y coordinates.
+        max_distance_m: Maximum search distance for neighboring fields.
+        max_neighbors: Maximum number of neighbors stored per field.
+        query_chunk_size: Number of fields queried at once against the KD-tree.
+
+    Returns:
+        Tuple containing the CSR index pointer array, neighbor field indices,
+        and neighbor distances in metres.
+
+    Raises:
+        ValueError: If coordinate arrays do not have the same length.
+        ValueError: If no field coordinates are provided.
+    """
+    if centroid_x.shape[0] != centroid_y.shape[0]:
+        raise ValueError("centroid_x and centroid_y must have the same length.")
+
+    if centroid_x.size == 0:
+        raise ValueError("At least one field coordinate is required.")
+
+    coordinates = np.column_stack([centroid_x, centroid_y])
+    tree = cKDTree(coordinates)
+
+    n_fields = coordinates.shape[0]
+    counts = np.zeros(n_fields, dtype=np.int32)
+    query_k = min(max_neighbors + 1, n_fields)
+
+    # First pass: count valid neighbors so exact arrays can be allocated.
+    for start in range(0, n_fields, query_chunk_size):
+        stop = min(start + query_chunk_size, n_fields)
+
+        distances, indices = tree.query(
+            coordinates[start:stop],
+            k=query_k,
+            distance_upper_bound=max_distance_m,
+        )
+
+        if query_k == 1:
+            distances = distances[:, None]
+            indices = indices[:, None]
+
+        row_ids = np.arange(start, stop, dtype=np.int64)[:, None]
+        valid = (indices < n_fields) & (indices != row_ids) & np.isfinite(distances)
+
+        counts[start:stop] = valid.sum(axis=1).astype(np.int32)
+
+    indptr = np.empty(n_fields + 1, dtype=np.int64)
+    indptr[0] = 0
+    np.cumsum(counts, out=indptr[1:])
+
+    neighbor_indices = np.empty(int(indptr[-1]), dtype=np.int32)
+    neighbor_distances = np.empty(int(indptr[-1]), dtype=np.float32)
+
+    # Second pass: write neighbor indices and distances into CSR arrays.
+    for start in range(0, n_fields, query_chunk_size):
+        stop = min(start + query_chunk_size, n_fields)
+
+        distances, indices = tree.query(
+            coordinates[start:stop],
+            k=query_k,
+            distance_upper_bound=max_distance_m,
+        )
+
+        if query_k == 1:
+            distances = distances[:, None]
+            indices = indices[:, None]
+
+        for local_row, field_index in enumerate(range(start, stop)):
+            valid = (
+                (indices[local_row] < n_fields)
+                & (indices[local_row] != field_index)
+                & np.isfinite(distances[local_row])
+            )
+
+            n_valid = int(valid.sum())
+            if n_valid == 0:
+                continue
+
+            write_start = indptr[field_index]
+            write_stop = write_start + n_valid
+
+            neighbor_indices[write_start:write_stop] = indices[local_row][valid].astype(
+                np.int32
+            )
+            neighbor_distances[write_start:write_stop] = distances[local_row][
+                valid
+            ].astype(np.float32)
+
+    return indptr, neighbor_indices, neighbor_distances
+
+
+def _select_seed_field(
+    target_area_m2: float,
+    sorted_field_indices: np.ndarray,
+    sorted_field_areas: np.ndarray,
+    unassigned: np.ndarray,
+) -> int:
+    """Select an unassigned seed field close to the target area.
+
+    Args:
+        target_area_m2: Target farm area.
+        sorted_field_indices: Field indices sorted by area.
+        sorted_field_areas: Field areas sorted in ascending order.
+        unassigned: Boolean array indicating which fields are still unassigned.
+
+    Returns:
+        Index of the selected seed field, or ``-1`` if no unassigned field is
+        available.
+    """
+    insertion_position = np.searchsorted(sorted_field_areas, target_area_m2)
+
+    left = insertion_position - 1
+    right = insertion_position
+
+    best_field = -1
+    best_difference = np.inf
+
+    # Search outward from the area closest to the target.
+    while left >= 0 or right < sorted_field_indices.size:
+        found_candidate = False
+
+        if left >= 0:
+            left_field = int(sorted_field_indices[left])
+            if unassigned[left_field]:
+                best_field = left_field
+                best_difference = abs(sorted_field_areas[left] - target_area_m2)
+                found_candidate = True
+
+        if right < sorted_field_indices.size:
+            right_field = int(sorted_field_indices[right])
+            if unassigned[right_field]:
+                right_difference = abs(sorted_field_areas[right] - target_area_m2)
+
+                if (
+                    not found_candidate
+                    or right_difference < best_difference
+                    or (
+                        right_difference == best_difference and right_field < best_field
+                    )
+                ):
+                    best_field = right_field
+                    best_difference = right_difference
+                    found_candidate = True
+
+        if found_candidate:
+            return best_field
+
+        left -= 1
+        right += 1
+
+    return -1
+
+
+def _add_neighbors_to_candidate_frontier(
+    field_index: int,
+    candidate_distances: dict[int, float],
+    unassigned: np.ndarray,
+    neighbor_indptr: np.ndarray,
+    neighbor_indices: np.ndarray,
+    neighbor_distances: np.ndarray,
+) -> None:
+    """Add unassigned neighbors of one field to the candidate frontier.
+
+    Args:
+        field_index: Field whose neighbors should be added.
+        candidate_distances: Dictionary mapping candidate fields to their
+            shortest known distance to the growing farm.
+        unassigned: Boolean array indicating which fields are still unassigned.
+        neighbor_indptr: CSR index pointer array for the neighbor graph.
+        neighbor_indices: Neighbor field indices.
+        neighbor_distances: Neighbor distances in metres.
+    """
+    edge_start = neighbor_indptr[field_index]
+    edge_stop = neighbor_indptr[field_index + 1]
+
+    for edge_index in range(edge_start, edge_stop):
+        candidate_index = int(neighbor_indices[edge_index])
+
+        if not unassigned[candidate_index]:
+            continue
+
+        distance_m = float(neighbor_distances[edge_index])
+
+        # If a candidate is connected through multiple farm fields, keep the
+        # shortest distance to the current farm.
+        if (
+            candidate_index not in candidate_distances
+            or distance_m < candidate_distances[candidate_index]
+        ):
+            candidate_distances[candidate_index] = distance_m
+
+
+def grow_farms_from_prepared_fields(
+    projected_fields: gpd.GeoDataFrame,
+    original_crs: Any,
+    field_areas_m2: np.ndarray,
+    centroid_x: np.ndarray,
+    centroid_y: np.ndarray,
+    field_sequences: np.ndarray,
+    target_farms: list[TargetFarm],
+    *,
     max_distance_m: float = 500.0,
+    max_neighbors: int = 32,
     distance_weight: float = 0.45,
     crop_sequence_weight: float = 0.35,
     switch_timing_weight: float = 0.20,
     target_overshoot_tolerance: float = 1.25,
-) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, dict[str, Any]]:
-    """Grow synthetic farms from field boundaries and Lowder target areas.
+) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
+    """Grow farms from prepared field arrays using a Python/NumPy loop.
 
-    Each synthetic farm starts from one seed field and is expanded by adding
-    nearby unassigned fields until it approaches its Lowder-derived target area.
-    Candidate fields are selected using a weighted score based on distance,
-    crop-sequence similarity, and crop-switch timing similarity.
-
-    Fields are assigned exactly once. If the Lowder target farms are exhausted
-    before all fields have been assigned, remaining fields are attached to the
-    nearest existing synthetic farm. The function returns both the field-level
-    assignment and the resulting farm geometries.
+    Uses a precomputed centroid-neighbor graph to grow farms to match the
+    target farms based on Lowder statistics.
 
     Args:
-        fields: Field-boundary GeoDataFrame with crop-sequence columns.
-        target_farms: Target farm areas and size classes derived from
-            Lowder-style farm-size statistics.
-        crop_columns: Crop-sequence columns used to compare fields during farm
-            growing, for example ``["crop_2017", ..., "crop_2023"]``.
-        random_seed: Seed used for deterministic seed-field selection and
-            tie-breaking noise.
-        max_distance_m: Maximum distance in metres for considering candidate
-            fields during farm expansion.
-        distance_weight: Weight assigned to the spatial proximity component of
-            the candidate score.
-        crop_sequence_weight: Weight assigned to the crop-sequence similarity
-            component of the candidate score.
-        switch_timing_weight: Weight assigned to the crop-switch timing
-            similarity component of the candidate score.
-        target_overshoot_tolerance: Maximum allowed overshoot of the target farm
-            area when adding a candidate field. For example, 1.25 allows the
-            current farm area to exceed the target area by up to 25%.
+        projected_fields: Field GeoDataFrame in projected coordinates.
+        original_crs: CRS to convert the output fields back to.
+        field_areas_m2: Field areas in square metres.
+        centroid_x: Field representative-point x coordinates.
+        centroid_y: Field representative-point y coordinates.
+        field_sequences: Field crop-sequence array with shape
+            ``(n_fields, n_years)``.
+        target_farms: Lowder-derived target farms.
+        max_distance_m: Maximum neighbor distance in metres.
+        max_neighbors: Maximum number of neighbors stored per field.
+        distance_weight: Weight for spatial proximity in candidate scoring.
+        crop_sequence_weight: Weight for crop-sequence similarity.
+        switch_timing_weight: Weight for crop-switch timing similarity.
+        target_overshoot_tolerance: Maximum allowed target-area overshoot.
 
     Returns:
-        Tuple containing three objects:
-
-        1. Field-level GeoDataFrame with a ``farmer_id`` column identifying the
-           synthetic farm assigned to each field.
-        2. Farm-level GeoDataFrame with one geometry per synthetic farm and
-           summary attributes such as area, size class, and number of fields.
-        3. Diagnostics dictionary with summary statistics about the generated
-           farms and field assignments.
+        Tuple containing the field GeoDataFrame with assigned ``farmer_id`` and a
+        compact farmer table.
 
     Raises:
-        ValueError: If no fields are available after preparing the projected
-            field dataset.
-        RuntimeError: If one or more fields remain unassigned after the farm
-            growing and nearest-farm assignment steps.
+        ValueError: If no fields are available.
+        ValueError: If no target farms are available.
+        RuntimeError: If one or more fields remain unassigned.
     """
-    rng = np.random.default_rng(random_seed)
-
-    projected_fields, original_crs = prepare_projected_fields(
-        fields,
-        crop_columns,
-    )
-
     if projected_fields.empty:
         raise ValueError("No fields available for farm growing.")
 
+    if not target_farms:
+        raise ValueError("No target farms available for farm growing.")
+
     target_farms = sorted(
         target_farms,
-        key=lambda farm: farm.target_area_m2,
+        key=lambda target_farm: target_farm.target_area_m2,
         reverse=True,
     )
 
-    field_sequences = projected_fields[crop_columns].to_numpy(dtype=np.int32)
-    field_areas = projected_fields["field_area_m2"].to_numpy(dtype=np.float64)
+    neighbor_indptr, neighbor_indices, neighbor_distances = build_field_neighbor_graph(
+        centroid_x,
+        centroid_y,
+        max_distance_m=max_distance_m,
+        max_neighbors=max_neighbors,
+    )
 
-    unassigned_fields: set[int] = set(range(len(projected_fields)))
-    assigned_farmer_ids = np.full(len(projected_fields), -1, dtype=np.int32)
+    n_fields = len(projected_fields)
 
-    spatial_index = projected_fields.sindex
+    sorted_field_indices = np.argsort(field_areas_m2).astype(np.int32)
+    sorted_field_areas = field_areas_m2[sorted_field_indices]
 
-    farm_records: list[dict[str, Any]] = []
+    unassigned = np.ones(n_fields, dtype=bool)
+    assigned_farmer_ids = np.full(n_fields, -1, dtype=np.int32)
 
-    for farmer_id, target_farm in enumerate(target_farms):
-        if not unassigned_fields:
+    farmer_areas_m2: list[float] = []
+    farmer_n_fields: list[int] = []
+    farmer_size_class: list[str] = []
+    farmer_target_area_m2: list[float] = []
+
+    for target_farm in target_farms:
+        if not unassigned.any():
             break
 
-        unassigned_array = np.array(sorted(unassigned_fields), dtype=np.int32)
+        farmer_id = len(farmer_areas_m2)
 
-        # Prefer a seed field with an area reasonably close to the target.
-        area_difference = np.abs(
-            field_areas[unassigned_array] - target_farm.target_area_m2
+        seed_field = _select_seed_field(
+            target_farm.target_area_m2,
+            sorted_field_indices,
+            sorted_field_areas,
+            unassigned,
         )
-        best_seed_candidates = unassigned_array[
-            area_difference == area_difference.min()
-        ]
-        seed_field = int(rng.choice(best_seed_candidates))
+
+        if seed_field < 0:
+            break
 
         farm_field_indices = [seed_field]
-        unassigned_fields.remove(seed_field)
+        current_area_m2 = float(field_areas_m2[seed_field])
 
-        current_area_m2 = float(field_areas[seed_field])
+        unassigned[seed_field] = False
+        assigned_farmer_ids[seed_field] = farmer_id
 
-        # Keep all full crop sequences already assigned to this farm.
-        # At the seed stage, the farm has only one observed sequence, so the
-        # representative sequence is simply the seed field sequence.
         farm_crop_sequences = field_sequences[[seed_field]].copy()
         farm_crop_sequence = field_sequences[seed_field].copy()
 
-        farm_geometry = projected_fields.loc[seed_field, "geometry"]
+        candidate_distances: dict[int, float] = {}
+        _add_neighbors_to_candidate_frontier(
+            seed_field,
+            candidate_distances,
+            unassigned,
+            neighbor_indptr,
+            neighbor_indices,
+            neighbor_distances,
+        )
 
-        while unassigned_fields and current_area_m2 < target_farm.target_area_m2:
-            search_geometry = farm_geometry.buffer(max_distance_m)
-            candidate_indices = list(spatial_index.intersection(search_geometry.bounds))
+        while unassigned.any() and current_area_m2 < target_farm.target_area_m2:
+            best_candidate = -1
+            best_score = -np.inf
+            best_distance = np.inf
 
-            valid_candidates: list[tuple[float, float, int]] = []
+            # Remove candidates that were assigned while growing another branch.
+            for candidate_index in list(candidate_distances):
+                if not unassigned[candidate_index]:
+                    del candidate_distances[candidate_index]
 
-            for candidate_index in candidate_indices:
-                candidate_index = int(candidate_index)
-
-                if candidate_index not in unassigned_fields:
-                    continue
-
-                candidate_geometry = projected_fields.loc[candidate_index, "geometry"]
-                distance_m = float(farm_geometry.distance(candidate_geometry))
-
-                if distance_m > max_distance_m:
-                    continue
-
-                candidate_area_m2 = float(field_areas[candidate_index])
-                new_area_m2 = current_area_m2 + candidate_area_m2
+            for candidate_index, distance_m in candidate_distances.items():
+                new_area_m2 = current_area_m2 + float(field_areas_m2[candidate_index])
 
                 if (
                     new_area_m2
@@ -1740,121 +1746,515 @@ def grow_farms_from_lowder_targets(
                     switch_timing_weight=switch_timing_weight,
                 )
 
-                # Small deterministic noise prevents unstable tie behaviour.
-                score += float(rng.uniform(0, 1e-9))
-
-                valid_candidates.append(
-                    (
-                        score,
-                        -distance_m,
-                        candidate_index,
+                if (
+                    score > best_score
+                    or (score == best_score and distance_m < best_distance)
+                    or (
+                        score == best_score
+                        and distance_m == best_distance
+                        and candidate_index < best_candidate
                     )
-                )
+                ):
+                    best_candidate = candidate_index
+                    best_score = score
+                    best_distance = distance_m
 
-            if not valid_candidates:
+            if best_candidate < 0:
                 break
 
-            valid_candidates.sort(reverse=True)
-            selected_field = valid_candidates[0][2]
+            farm_field_indices.append(best_candidate)
+            current_area_m2 += float(field_areas_m2[best_candidate])
 
-            farm_field_indices.append(selected_field)
-            unassigned_fields.remove(selected_field)
+            unassigned[best_candidate] = False
+            assigned_farmer_ids[best_candidate] = farmer_id
+            candidate_distances.pop(best_candidate, None)
 
-            current_area_m2 += float(field_areas[selected_field])
-            farm_geometry = unary_union(
-                [
-                    farm_geometry,
-                    projected_fields.loc[selected_field, "geometry"],
-                ]
-            )
-
-            # Add the selected field's full observed sequence to the farm.
             farm_crop_sequences = np.vstack(
                 [
                     farm_crop_sequences,
-                    field_sequences[selected_field],
+                    field_sequences[best_candidate],
                 ]
             )
-
-            # Update the representative sequence used to score future candidates.
-            # This sequence is always one full observed field sequence.
             farm_crop_sequence = update_farm_crop_sequence(farm_crop_sequences)
 
-        for field_index in farm_field_indices:
-            assigned_farmer_ids[field_index] = farmer_id
-
-        farm_records.append(
-            {
-                "farmer_id": farmer_id,
-                "target_area_m2": float(target_farm.target_area_m2),
-                "area_m2": float(current_area_m2),
-                "area_ha": float(current_area_m2 / 10_000),
-                "size_class": target_farm.size_class,
-                "n_fields": int(len(farm_field_indices)),
-                "geometry": unary_union(
-                    projected_fields.loc[farm_field_indices, "geometry"].to_list()
-                ),
-            }
-        )
-
-    # If Lowder targets ran out before all fields were assigned, attach remaining
-    # fields to the nearest existing farm.
-    if unassigned_fields and farm_records:
-        farm_geometries = {
-            record["farmer_id"]: record["geometry"] for record in farm_records
-        }
-
-        for field_index in sorted(unassigned_fields):
-            field_geometry = projected_fields.loc[field_index, "geometry"]
-
-            nearest_farmer_id = min(
-                farm_geometries,
-                key=lambda farmer_id: field_geometry.distance(
-                    farm_geometries[farmer_id]
-                ),
+            _add_neighbors_to_candidate_frontier(
+                best_candidate,
+                candidate_distances,
+                unassigned,
+                neighbor_indptr,
+                neighbor_indices,
+                neighbor_distances,
             )
 
-            assigned_farmer_ids[field_index] = nearest_farmer_id
+        farmer_areas_m2.append(current_area_m2)
+        farmer_n_fields.append(len(farm_field_indices))
+        farmer_size_class.append(target_farm.size_class)
+        farmer_target_area_m2.append(float(target_farm.target_area_m2))
 
-            for record in farm_records:
-                if record["farmer_id"] == nearest_farmer_id:
-                    record["area_m2"] += float(field_areas[field_index])
-                    record["area_ha"] = record["area_m2"] / 10_000
-                    record["n_fields"] += 1
-                    record["geometry"] = unary_union(
-                        [
-                            record["geometry"],
-                            field_geometry,
-                        ]
-                    )
-                    farm_geometries[nearest_farmer_id] = record["geometry"]
-                    break
+    # Attach leftover fields to the nearest assigned neighbor, or create a
+    # singleton farm if no assigned neighbor exists.
+    for field_index in np.flatnonzero(unassigned):
+        best_farmer_id = -1
+        best_distance = np.inf
 
-    projected_fields["farmer_id"] = assigned_farmer_ids
+        edge_start = neighbor_indptr[field_index]
+        edge_stop = neighbor_indptr[field_index + 1]
+
+        for edge_index in range(edge_start, edge_stop):
+            neighbor_index = int(neighbor_indices[edge_index])
+            neighbor_farmer_id = int(assigned_farmer_ids[neighbor_index])
+
+            if neighbor_farmer_id < 0:
+                continue
+
+            distance_m = float(neighbor_distances[edge_index])
+
+            if distance_m < best_distance:
+                best_distance = distance_m
+                best_farmer_id = neighbor_farmer_id
+
+        if best_farmer_id < 0:
+            best_farmer_id = len(farmer_areas_m2)
+            farmer_areas_m2.append(0.0)
+            farmer_n_fields.append(0)
+            farmer_size_class.append("fallback")
+            farmer_target_area_m2.append(float(field_areas_m2[field_index]))
+
+        assigned_farmer_ids[field_index] = best_farmer_id
+        unassigned[field_index] = False
+
+        farmer_areas_m2[best_farmer_id] += float(field_areas_m2[field_index])
+        farmer_n_fields[best_farmer_id] += 1
+
+    projected_fields = projected_fields.copy()
+    projected_fields["farmer_id"] = assigned_farmer_ids.astype(np.int32)
 
     if (projected_fields["farmer_id"] < 0).any():
         raise RuntimeError("Some fields were not assigned to a farmer.")
 
-    farms = gpd.GeoDataFrame(
-        farm_records,
-        geometry="geometry",
-        crs=projected_fields.crs,
+    farmers = pd.DataFrame(
+        {
+            "farmer_id": np.arange(len(farmer_areas_m2), dtype=np.int32),
+            "target_area_m2": np.asarray(farmer_target_area_m2, dtype=np.float64),
+            "area_m2": np.asarray(farmer_areas_m2, dtype=np.float64),
+            "area_ha": np.asarray(farmer_areas_m2, dtype=np.float64) / 10_000,
+            "size_class": farmer_size_class,
+            "n_fields": np.asarray(farmer_n_fields, dtype=np.int32),
+        }
     )
 
     fields_with_farms = projected_fields.to_crs(original_crs)
-    farms = farms.to_crs(original_crs)
 
-    diagnostics = {
-        "random_seed": random_seed,
-        "n_fields": int(len(fields_with_farms)),
-        "n_farms": int(len(farms)),
-        "n_target_farms": int(len(target_farms)),
-        "total_field_area_ha": float(projected_fields["field_area_m2"].sum() / 10_000),
-        "total_farm_area_ha": float(farms["area_m2"].sum() / 10_000),
-        "mean_farm_area_ha": float(farms["area_ha"].mean()),
-        "median_farm_area_ha": float(farms["area_ha"].median()),
-        "mean_fields_per_farm": float(farms["n_fields"].mean()),
-        "max_fields_per_farm": int(farms["n_fields"].max()),
-    }
+    return fields_with_farms, farmers
 
-    return fields_with_farms, farms, diagnostics
+
+def assign_regions_to_fields(
+    fields: gpd.GeoDataFrame,
+    regions: gpd.GeoDataFrame,
+    *,
+    region_id_column: str = "region_id",
+    country_iso3_column: str = "ISO3",
+    logger: logging.Logger | None = None,
+) -> gpd.GeoDataFrame:
+    """Assign model regions to field polygons using representative points.
+
+    Args:
+        fields: Field-boundary GeoDataFrame.
+        regions: Region GeoDataFrame containing region and country columns.
+        region_id_column: Name of the region ID column in ``regions``.
+        country_iso3_column: Name of the country ISO3 column in ``regions``.
+        logger: Optional logger used to report dropped fields.
+
+    Returns:
+        Field GeoDataFrame with region and ISO3 columns attached.
+
+    Raises:
+        ValueError: If required columns are missing.
+        ValueError: If the input GeoDataFrames do not have a CRS.
+        ValueError: If no fields can be assigned to a region.
+    """
+    required_region_columns = {region_id_column, country_iso3_column, "geometry"}
+    missing_columns = required_region_columns - set(regions.columns)
+
+    if missing_columns:
+        raise ValueError(
+            f"Region database is missing columns: {sorted(missing_columns)}"
+        )
+
+    if fields.crs is None:
+        raise ValueError("Field boundaries must have a CRS.")
+
+    if regions.crs is None:
+        raise ValueError("Regions must have a CRS.")
+
+    regions_for_join = regions[
+        [region_id_column, country_iso3_column, "geometry"]
+    ].to_crs(fields.crs)
+
+    # Representative points are guaranteed to lie inside their field polygon.
+    field_points = gpd.GeoDataFrame(
+        {"__field_row": np.arange(len(fields), dtype=np.int64)},
+        geometry=fields.geometry.representative_point(),
+        crs=fields.crs,
+    )
+
+    joined = gpd.sjoin(
+        field_points,
+        regions_for_join,
+        how="left",
+        predicate="within",
+    )
+
+    # If boundaries overlap, keep the first match to avoid duplicating fields.
+    joined = joined.drop_duplicates("__field_row", keep="first")
+    joined = joined.set_index("__field_row").reindex(np.arange(len(fields)))
+
+    fields_with_regions = fields.copy()
+    fields_with_regions[region_id_column] = joined[region_id_column].to_numpy()
+    fields_with_regions[country_iso3_column] = joined[country_iso3_column].to_numpy()
+
+    missing_region = fields_with_regions[region_id_column].isna()
+    if missing_region.any():
+        n_missing = int(missing_region.sum())
+
+        if logger is not None:
+            logger.warning(
+                "Dropping %s fields because they could not be assigned to a region.",
+                n_missing,
+            )
+
+        fields_with_regions = fields_with_regions.loc[~missing_region].copy()
+
+    if fields_with_regions.empty:
+        raise ValueError("No fields could be assigned to model regions.")
+
+    fields_with_regions[region_id_column] = fields_with_regions[
+        region_id_column
+    ].astype(np.int32)
+
+    return fields_with_regions
+
+
+def rasterize_and_compact_field_farms(
+    fields_with_farms: gpd.GeoDataFrame,
+    farmers: pd.DataFrame,
+    template: xr.DataArray,
+    *,
+    farmer_id_column: str = "farmer_id",
+    nodata: int = -1,
+    all_touched: bool = False,
+    logger: logging.Logger | None = None,
+) -> tuple[xr.DataArray, pd.DataFrame]:
+    """Rasterize field-based farmer IDs and compact IDs to represented farms.
+
+    Some very small fields may disappear when rasterized to a coarser model grid.
+    This function therefore keeps only farmer IDs that are actually represented
+    in the final raster and remaps them to contiguous IDs.
+
+    Args:
+        fields_with_farms: Field GeoDataFrame with a farmer ID column.
+        farmers: Farmer table with one row per farmer.
+        template: Target model grid, usually ``self.subgrid["region_ids"]``.
+        farmer_id_column: Name of the farmer ID column.
+        nodata: Nodata value for the farm raster.
+        all_touched: Whether to burn all pixels touched by field polygons.
+        logger: Optional logger used to report removed farmers.
+
+    Returns:
+        Tuple containing the compact farm raster and compact farmer table.
+
+    Raises:
+        ValueError: If required farmer ID columns are missing.
+        ValueError: If no farmers are represented in the raster.
+    """
+    if farmer_id_column not in fields_with_farms.columns:
+        raise ValueError(f"fields_with_farms must contain '{farmer_id_column}'.")
+
+    if farmer_id_column not in farmers.columns:
+        raise ValueError(f"farmers must contain '{farmer_id_column}'.")
+
+    fields_for_raster = fields_with_farms
+
+    if template.rio.crs is not None:
+        fields_for_raster = fields_for_raster.to_crs(template.rio.crs)
+
+    farms = rasterize_like(
+        fields_for_raster,
+        column=farmer_id_column,
+        raster=template,
+        dtype=np.int32,
+        nodata=nodata,
+        all_touched=all_touched,
+    )
+
+    farm_values = farms.values.astype(np.int32, copy=True)
+    present_farmer_ids = np.unique(farm_values[farm_values != nodata]).astype(np.int32)
+
+    if present_farmer_ids.size == 0:
+        raise ValueError("No farmers are represented in the rasterized farm map.")
+
+    if present_farmer_ids.size < len(farmers) and logger is not None:
+        logger.warning(
+            "Only %s of %s field-derived farmers are represented on the model grid. "
+            "Missing farmers are dropped from the farmer table.",
+            present_farmer_ids.size,
+            len(farmers),
+        )
+
+    old_to_new = np.full(int(present_farmer_ids.max()) + 1, -1, dtype=np.int32)
+    old_to_new[present_farmer_ids] = np.arange(present_farmer_ids.size, dtype=np.int32)
+
+    valid_farm_pixels = farm_values != nodata
+    farm_values[valid_farm_pixels] = old_to_new[farm_values[valid_farm_pixels]]
+
+    compact_farms = xr.DataArray(
+        farm_values,
+        coords=farms.coords,
+        dims=farms.dims,
+        attrs=farms.attrs,
+        name="agents/farmers/farms",
+    )
+    compact_farms.attrs["_FillValue"] = nodata
+
+    compact_farmers = (
+        farmers.set_index(farmer_id_column)
+        .loc[present_farmer_ids]
+        .reset_index(drop=True)
+        .copy()
+    )
+    compact_farmers[farmer_id_column] = np.arange(
+        len(compact_farmers),
+        dtype=np.int32,
+    )
+
+    return compact_farms, compact_farmers
+
+
+def _assign_size_class(
+    area_m2: pd.Series,
+    size_class_boundaries: dict[str, tuple[int | float, int | float]],
+) -> pd.Series:
+    """Assign farm areas to Lowder size classes.
+
+    Args:
+        area_m2: Farm areas in square metres.
+        size_class_boundaries: Size-class boundaries in square metres.
+
+    Returns:
+        Size-class label for each farm.
+    """
+    size_classes = pd.Series(index=area_m2.index, dtype="object")
+
+    for size_class, (lower_m2, upper_m2) in size_class_boundaries.items():
+        if np.isinf(upper_m2):
+            in_class = area_m2 >= lower_m2
+        else:
+            in_class = (area_m2 >= lower_m2) & (area_m2 < upper_m2)
+
+        size_classes.loc[in_class] = size_class
+
+    return size_classes
+
+
+def _expected_lowder_farms_by_size_class(
+    region_farm_sizes: pd.DataFrame,
+    size_class_boundaries: dict[str, tuple[int | float, int | float]],
+    cultivated_field_area_m2: float,
+) -> pd.Series:
+    """Scale Lowder farm counts to the generated cultivated area.
+
+    Args:
+        region_farm_sizes: Lowder data for one ISO3 code.
+        size_class_boundaries: Size-class boundaries in square metres.
+        cultivated_field_area_m2: Generated cultivated field area in the region.
+
+    Returns:
+        Expected number of farms per size class, scaled to the region area.
+
+    Raises:
+        ValueError: If the Lowder data do not contain one holdings row and one
+            agricultural-area row.
+        ValueError: If no usable Lowder size classes are available.
+    """
+    holdings = region_farm_sizes.loc[
+        region_farm_sizes["Holdings/ agricultural area"] == "Holdings"
+    ]
+    agricultural_area = region_farm_sizes.loc[
+        region_farm_sizes["Holdings/ agricultural area"] == "Agricultural area (Ha)"
+    ]
+
+    if len(holdings) != 1 or len(agricultural_area) != 1:
+        raise ValueError("Expected one Holdings row and one Agricultural area row.")
+
+    holdings = holdings.iloc[0].replace("..", np.nan)
+    agricultural_area = agricultural_area.iloc[0].replace("..", np.nan)
+
+    records: list[dict[str, float | str]] = []
+
+    for size_class, (lower_m2, upper_m2) in size_class_boundaries.items():
+        if (
+            size_class not in holdings.index
+            or size_class not in agricultural_area.index
+        ):
+            continue
+
+        n_holdings = pd.to_numeric(holdings[size_class], errors="coerce")
+        area_ha = pd.to_numeric(agricultural_area[size_class], errors="coerce")
+
+        if pd.isna(n_holdings) or n_holdings <= 0:
+            continue
+
+        if pd.isna(area_ha):
+            if np.isinf(upper_m2):
+                average_farm_size_m2 = lower_m2 * 1.5
+            else:
+                average_farm_size_m2 = (lower_m2 + upper_m2) / 2
+
+            area_m2 = n_holdings * average_farm_size_m2
+        else:
+            area_m2 = area_ha * 10_000
+
+        records.append(
+            {
+                "size_class": size_class,
+                "lowder_n_farms": float(n_holdings),
+                "lowder_area_m2": float(area_m2),
+            }
+        )
+
+    if not records:
+        raise ValueError("No usable Lowder size classes are available.")
+
+    lowder = pd.DataFrame(records).set_index("size_class")
+    database_area_m2 = lowder["lowder_area_m2"].sum()
+
+    if database_area_m2 <= 0:
+        raise ValueError("Lowder agricultural area must be positive.")
+
+    scale_factor = cultivated_field_area_m2 / database_area_m2
+
+    expected_n_farms = lowder["lowder_n_farms"] * scale_factor
+    return expected_n_farms.reindex(size_class_boundaries.keys()).fillna(0)
+
+
+def farm_size_distribution_fit_by_size_class(
+    farmers: pd.DataFrame,
+    regions: gpd.GeoDataFrame,
+    farm_sizes_per_region: pd.DataFrame,
+    size_class_boundaries: dict[str, tuple[int | float, int | float]],
+    farm_size_donor_country: dict[str, str],
+    *,
+    region_id_column: str = "region_id",
+    country_iso3_column: str = "ISO3",
+    area_column: str = "area_m2",
+    logger: logging.Logger | None = None,
+) -> pd.DataFrame:
+    """Compare generated and Lowder-expected farm counts by size class.
+
+    The Lowder counts are scaled per region using the generated cultivated field
+    area in that region. The final table is aggregated over all regions.
+
+    Args:
+        farmers: Final compact farmer table.
+        regions: Model region GeoDataFrame.
+        farm_sizes_per_region: Lowder farm-size distribution table.
+        size_class_boundaries: Size-class boundaries in square metres.
+        farm_size_donor_country: Mapping from missing ISO3 codes to donor ISO3
+            codes.
+        region_id_column: Name of the region ID column.
+        country_iso3_column: Name of the ISO3 column.
+        area_column: Name of the generated farm-area column in square metres.
+        logger: Optional logger.
+
+    Returns:
+        DataFrame with expected and actual farm counts per size class.
+
+    Raises:
+        ValueError: If required columns are missing.
+    """
+    required_farmer_columns = {region_id_column, area_column}
+    missing_farmer_columns = required_farmer_columns - set(farmers.columns)
+
+    if missing_farmer_columns:
+        raise ValueError(
+            f"Farmers table is missing columns: {sorted(missing_farmer_columns)}"
+        )
+
+    required_region_columns = {region_id_column, country_iso3_column}
+    missing_region_columns = required_region_columns - set(regions.columns)
+
+    if missing_region_columns:
+        raise ValueError(
+            f"Region database is missing columns: {sorted(missing_region_columns)}"
+        )
+
+    expected_counts = pd.Series(0.0, index=size_class_boundaries.keys())
+    actual_counts = pd.Series(0, index=size_class_boundaries.keys(), dtype=np.int64)
+
+    for _, region in regions.iterrows():
+        region_id = int(region[region_id_column])
+        original_iso3 = region[country_iso3_column]
+        iso3 = farm_size_donor_country.get(original_iso3, original_iso3)
+
+        farmers_region = farmers.loc[farmers[region_id_column] == region_id].copy()
+        if farmers_region.empty:
+            continue
+
+        region_farm_sizes = farm_sizes_per_region.loc[
+            farm_sizes_per_region["ISO3"] == iso3
+        ]
+
+        try:
+            expected_region = _expected_lowder_farms_by_size_class(
+                region_farm_sizes=region_farm_sizes,
+                size_class_boundaries=size_class_boundaries,
+                cultivated_field_area_m2=float(farmers_region[area_column].sum()),
+            )
+        except ValueError as error:
+            if logger is not None:
+                logger.warning(
+                    "Could not calculate Lowder expected size-class counts for "
+                    "region %s (%s, Lowder source %s): %s",
+                    region_id,
+                    original_iso3,
+                    iso3,
+                    error,
+                )
+            continue
+
+        expected_counts = expected_counts.add(expected_region, fill_value=0)
+
+        actual_size_classes = _assign_size_class(
+            farmers_region[area_column],
+            size_class_boundaries,
+        )
+
+        actual_region = actual_size_classes.value_counts().reindex(
+            size_class_boundaries.keys(),
+            fill_value=0,
+        )
+
+        actual_counts = actual_counts.add(actual_region, fill_value=0).astype(np.int64)
+
+    result = pd.DataFrame(
+        {
+            "size_class": list(size_class_boundaries.keys()),
+            "expected_n_farms_lowder": expected_counts.to_numpy(dtype=np.float64),
+            "actual_n_farms": actual_counts.to_numpy(dtype=np.int64),
+        }
+    )
+
+    result["difference"] = result["actual_n_farms"] - result["expected_n_farms_lowder"]
+
+    result["actual_to_expected_ratio"] = np.where(
+        result["expected_n_farms_lowder"] > 0,
+        result["actual_n_farms"] / result["expected_n_farms_lowder"],
+        np.nan,
+    )
+
+    result["expected_share"] = (
+        result["expected_n_farms_lowder"] / result["expected_n_farms_lowder"].sum()
+    )
+    result["actual_share"] = result["actual_n_farms"] / result["actual_n_farms"].sum()
+
+    return result

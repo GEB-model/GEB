@@ -16,20 +16,29 @@ from tqdm import tqdm
 from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
+from geb.build.workflows.farmers import (
+    assert_matching_raster_grid,
+    assign_regions_to_fields,
+    create_farm_distributions,
+    create_field_index_grid,
+    create_lowder_target_farm_areas,
+    dominant_crop_one_year_chunked,
+    farm_size_distribution_fit_by_size_class,
+    grow_farms_from_prepared_fields,
+    pixels_to_coords,
+    prepare_projected_field_arrays,
+    rasterize_and_compact_field_farms,
+)
 from geb.geb_types import TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
-from geb.workflows.raster import (
-    clip_with_grid,
-    pixels_to_coords,
-    sample_from_map,
-)
+from geb.workflows.raster import clip_with_grid, rasterize_like, sample_from_map
 
 from ..workflows.conversions import (
     COUNTRY_NAME_TO_ISO3,
     TRADE_REGIONS,
     setup_donor_countries,
 )
-from ..workflows.farmers import create_farm_distributions, create_farms
+from ..workflows.farmers import create_farms
 from .base import BuildModelBase
 
 
@@ -1150,6 +1159,389 @@ class Agents(BuildModelBase):
 
         self.set_subgrid(farms, name="agents/farmers/farms")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
+
+    @build_method(
+        depends_on=["setup_regions_and_land_use"],
+        required=True,
+    )
+    def setup_create_farms_from_HRL_field_boundaries(
+        self,
+        region_id_column: str = "region_id",
+        country_iso3_column: str = "ISO3",
+        data_source: Literal["lowder"] = "lowder",
+        size_class_boundaries: dict[str, tuple[int | float, int | float]] | None = None,
+        years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
+        random_seed: int = 42,
+        chunk_rows: int = 2048,
+        max_distance_m: float = 500.0,
+        max_neighbors: int = 32,
+        distance_weight: float = 0.45,
+        crop_sequence_weight: float = 0.35,
+        switch_timing_weight: float = 0.20,
+        target_overshoot_tolerance: float = 1.25,
+        minimum_fields_per_farm: float = 1.0,
+        all_touched_farm_raster: bool = False,
+    ) -> None:
+        """Set up farmer agents from HRL crop rasters and field boundaries.
+
+        This method constructs synthetic farms from observed field boundaries and
+        HRL crop histories. For each year, HRL crop-type data and secondary-crop
+        data are processed one year at a time to avoid storing full 3D raster stacks.
+        The dominant crop sequence per field is then used as one of the clues for
+        grouping nearby fields into synthetic farms.
+
+        Farm-size targets are derived from Lowder-style country-level farm-size
+        distributions and scaled to the field area available in each model region.
+        The resulting field-based farmer IDs are rasterized directly to the model
+        grid and stored as ``agents/farmers/farms``. The farmer region IDs are stored
+        as ``agents/farmers/region_id``.
+
+        Args:
+            region_id_column: Name of the region ID column in ``self.geom["regions"]``.
+            country_iso3_column: Name of the ISO3 column in ``self.geom["regions"]``.
+            data_source: Source of farm-size data. Currently only ``"lowder"`` is
+                supported.
+            size_class_boundaries: Optional Lowder size-class boundaries in square
+                metres. If ``None``, default Lowder boundaries are used.
+            years: HRL crop years to use for crop-sequence construction.
+            random_seed: Seed used when deriving target farm sizes.
+            chunk_rows: Number of HRL raster rows processed at once when deriving
+                dominant crops.
+            max_distance_m: Maximum distance for candidate neighboring fields during
+                farm growing.
+            max_neighbors: Maximum number of neighboring fields stored per field.
+            distance_weight: Weight for spatial proximity in farm-growing candidate
+                scoring.
+            crop_sequence_weight: Weight for crop-sequence similarity in candidate
+                scoring.
+            switch_timing_weight: Weight for crop-switch timing similarity in
+                candidate scoring.
+            target_overshoot_tolerance: Maximum allowed farm target-area overshoot.
+            minimum_fields_per_farm: Minimum expected number of fields per synthetic
+                farm when scaling Lowder farm counts.
+            all_touched_farm_raster: Whether to burn all model-grid pixels touched
+                by field polygons when rasterizing final farmer IDs.
+
+        Raises:
+            ValueError: If an unsupported farm-size data source is requested.
+            ValueError: If required region columns are missing.
+            ValueError: If no usable fields or farmers can be created.
+        """
+        if data_source != "lowder":
+            raise ValueError(
+                "Only the Lowder farm-size dataset is currently supported."
+            )
+
+        if size_class_boundaries is None:
+            size_class_boundaries = {
+                "< 1 Ha": (0, 10_000),
+                "1 - 2 Ha": (10_000, 20_000),
+                "2 - 5 Ha": (20_000, 50_000),
+                "5 - 10 Ha": (50_000, 100_000),
+                "10 - 20 Ha": (100_000, 200_000),
+                "20 - 50 Ha": (200_000, 500_000),
+                "50 - 100 Ha": (500_000, 1_000_000),
+                "100 - 200 Ha": (1_000_000, 2_000_000),
+                "200 - 500 Ha": (2_000_000, 5_000_000),
+                "500 - 1000 Ha": (5_000_000, 10_000_000),
+                "> 1000 Ha": (10_000_000, np.inf),
+            }
+
+        regions_shapes: gpd.GeoDataFrame = self.geom["regions"]
+        if region_id_column not in regions_shapes.columns:
+            raise ValueError(f"Region database must contain '{region_id_column}'.")
+
+        if country_iso3_column not in regions_shapes.columns:
+            raise ValueError(f"Region database must contain '{country_iso3_column}'.")
+
+        region_ids: xr.DataArray = self.subgrid["region_ids"].compute()
+
+        field_boundaries: gpd.GeoDataFrame = self.data_catalog.fetch(
+            "field_boundaries"
+        ).read(self.bounds)
+        field_boundaries["id"] = field_boundaries["id"].astype(np.int32)
+
+        if field_boundaries.empty:
+            raise ValueError("No field boundaries were found within the model bounds.")
+
+        crop_columns = [f"crop_{year}" for year in years]
+        dominant_crop_per_year: list[np.ndarray] = []
+
+        unique_field_ids: np.ndarray | None = None
+        field_index_grid: np.ndarray | None = None
+
+        self.logger.info(
+            "Starting HRL crop sequence extraction for %s years.", len(years)
+        )
+
+        for year_index, year in enumerate(years):
+            self.logger.info(
+                "Processing HRL crop and secondary-crop rasters for %s.", year
+            )
+
+            crop_types_adapter = self.data_catalog.fetch(
+                f"hrl_crop_types_{year}",
+                bounds=self.bounds,
+                year=year,
+            )
+            crop_types: xr.DataArray = crop_types_adapter.read(
+                bounds=self.bounds,
+                year=year,
+            )
+
+            secondary_crop_adapter = self.data_catalog.fetch(
+                f"hrl_secondary_crop_{year}",
+                bounds=self.bounds,
+                year=year,
+            )
+            secondary_crop: xr.DataArray = secondary_crop_adapter.read(
+                bounds=self.bounds,
+                year=year,
+            )
+
+            assert_matching_raster_grid(crop_types, secondary_crop)
+
+            if year_index == 0:
+                # Rasterize fields once because HRL yearly layers share the same grid.
+                field_boundaries_grid: xr.DataArray = rasterize_like(
+                    field_boundaries,
+                    column="id",
+                    raster=crop_types,
+                    dtype=np.int32,
+                    nodata=-1,
+                    all_touched=False,
+                )
+
+                field_index_grid, unique_field_ids = create_field_index_grid(
+                    field_boundaries_grid,
+                    field_nodata=-1,
+                )
+
+            if field_index_grid is None or unique_field_ids is None:
+                raise ValueError("Field index grid could not be created.")
+
+            dominant_crop_year = dominant_crop_one_year_chunked(
+                crop_types=crop_types,
+                secondary_crop=secondary_crop,
+                field_index_grid=field_index_grid,
+                n_fields=unique_field_ids.size,
+                chunk_rows=chunk_rows,
+                pair_base=65536,
+                nodata=-1,
+            )
+
+            dominant_crop_per_year.append(dominant_crop_year)
+
+        if unique_field_ids is None or len(dominant_crop_per_year) == 0:
+            raise ValueError("No dominant crop sequences could be derived.")
+
+        dominant_crop_table = pd.DataFrame(
+            np.column_stack(dominant_crop_per_year).astype(np.int32),
+            index=unique_field_ids,
+            columns=crop_columns,
+        )
+
+        field_boundaries_with_crops = field_boundaries.merge(
+            dominant_crop_table,
+            left_on="id",
+            right_index=True,
+            how="left",
+        )
+
+        # Fields without any crop observation cannot inform farm reconstruction.
+        valid_crop_mask = (
+            field_boundaries_with_crops[crop_columns].notna()
+            & field_boundaries_with_crops[crop_columns].ne(-1)
+        ).any(axis=1)
+
+        field_boundaries_with_crops = field_boundaries_with_crops.loc[
+            valid_crop_mask
+        ].copy()
+
+        if field_boundaries_with_crops.empty:
+            raise ValueError("No field boundaries contain valid HRL crop observations.")
+
+        field_boundaries_with_crops = assign_regions_to_fields(
+            field_boundaries_with_crops,
+            regions_shapes,
+            region_id_column=region_id_column,
+            country_iso3_column=country_iso3_column,
+            logger=self.logger,
+        )
+
+        farm_sizes_per_region = self.data_catalog.fetch(
+            "lowder_farm_size_distribution"
+        ).read()
+
+        farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
+        farm_size_donor_country = setup_donor_countries(
+            self.data_catalog,
+            self.geom["global_countries"],
+            farm_countries_list,
+            alternative_countries=regions_shapes[country_iso3_column].unique().tolist(),
+        )
+
+        all_fields_with_farms: list[gpd.GeoDataFrame] = []
+        all_farmers: list[pd.DataFrame] = []
+
+        farmer_id_offset = 0
+
+        self.logger.info("Starting field-based farm construction for model regions.")
+
+        for region_index, (_, region) in enumerate(regions_shapes.iterrows()):
+            region_id = int(region[region_id_column])
+            original_iso3 = region[country_iso3_column]
+            iso3 = original_iso3
+
+            fields_region = field_boundaries_with_crops.loc[
+                field_boundaries_with_crops[region_id_column] == region_id
+            ].copy()
+
+            if fields_region.empty:
+                continue
+
+            if iso3 in farm_size_donor_country:
+                iso3 = farm_size_donor_country[iso3]
+                self.logger.info(
+                    "Missing farm sizes for %s; using donor country %s.",
+                    original_iso3,
+                    iso3,
+                )
+
+            region_farm_sizes = farm_sizes_per_region.loc[
+                farm_sizes_per_region["ISO3"] == iso3
+            ].drop(["Country", "Census Year", "Total"], axis=1)
+
+            if len(region_farm_sizes) != 2:
+                self.logger.warning(
+                    "Skipping region %s because no complete Lowder farm-size data "
+                    "are available for %s.",
+                    region_id,
+                    iso3,
+                )
+                continue
+
+            (
+                projected_fields,
+                original_crs,
+                field_areas_m2,
+                centroid_x,
+                centroid_y,
+                field_sequences,
+            ) = prepare_projected_field_arrays(
+                fields_region,
+                crop_columns,
+            )
+
+            target_farms = create_lowder_target_farm_areas(
+                region_farm_sizes=region_farm_sizes,
+                size_class_boundaries=size_class_boundaries,
+                cultivated_field_area_m2=float(field_areas_m2.sum()),
+                iso3=iso3,
+                logger=self.logger,
+                random_seed=random_seed + region_index,
+                minimum_fields_per_farm=minimum_fields_per_farm,
+                mean_field_area_m2=float(field_areas_m2.mean()),
+            )
+
+            fields_region_with_farms, farmers_region = grow_farms_from_prepared_fields(
+                projected_fields=projected_fields,
+                original_crs=original_crs,
+                field_areas_m2=field_areas_m2,
+                centroid_x=centroid_x,
+                centroid_y=centroid_y,
+                field_sequences=field_sequences,
+                target_farms=target_farms,
+                max_distance_m=max_distance_m,
+                max_neighbors=max_neighbors,
+                distance_weight=distance_weight,
+                crop_sequence_weight=crop_sequence_weight,
+                switch_timing_weight=switch_timing_weight,
+                target_overshoot_tolerance=target_overshoot_tolerance,
+            )
+
+            fields_region_with_farms["farmer_id"] = (
+                fields_region_with_farms["farmer_id"].astype(np.int32)
+                + farmer_id_offset
+            )
+
+            farmers_region["farmer_id"] = (
+                farmers_region["farmer_id"].astype(np.int32) + farmer_id_offset
+            )
+            farmers_region[region_id_column] = np.full(
+                len(farmers_region),
+                region_id,
+                dtype=np.int32,
+            )
+
+            all_fields_with_farms.append(fields_region_with_farms)
+            all_farmers.append(farmers_region)
+
+            farmer_id_offset += len(farmers_region)
+
+        if not all_fields_with_farms or not all_farmers:
+            raise ValueError("No field-based farmers could be created.")
+
+        fields_with_farms = gpd.GeoDataFrame(
+            pd.concat(all_fields_with_farms, ignore_index=True),
+            geometry="geometry",
+            crs=field_boundaries_with_crops.crs,
+        )
+
+        farmers = pd.concat(all_farmers, ignore_index=True)
+        farmers = farmers.sort_values("farmer_id").reset_index(drop=True)
+
+        farms, farmers = rasterize_and_compact_field_farms(
+            fields_with_farms,
+            farmers,
+            template=region_ids,
+            farmer_id_column="farmer_id",
+            nodata=-1,
+            all_touched=all_touched_farm_raster,
+            logger=self.logger,
+        )
+
+        farm_size_fit = farm_size_distribution_fit_by_size_class(
+            farmers=farmers,
+            regions=regions_shapes,
+            farm_sizes_per_region=farm_sizes_per_region,
+            size_class_boundaries=size_class_boundaries,
+            farm_size_donor_country=farm_size_donor_country,
+            region_id_column=region_id_column,
+            country_iso3_column=country_iso3_column,
+            area_column="area_m2",
+            logger=self.logger,
+        )
+
+        self.logger.info(
+            "Farm-size distribution fit by size class:\n%s",
+            farm_size_fit.round(
+                {
+                    "expected_n_farms_lowder": 1,
+                    "difference": 1,
+                    "actual_to_expected_ratio": 2,
+                    "expected_share": 3,
+                    "actual_share": 3,
+                }
+            ).to_string(index=False),
+        )
+
+        if farms.max().item() != len(farmers) - 1:
+            raise ValueError(
+                "Farm raster IDs are not consistent with the compact farmer table."
+            )
+
+        self.logger.info(
+            "Created %s field-based farmer agents from %s field polygons.",
+            len(farmers),
+            len(fields_with_farms),
+        )
+
+        self.set_subgrid(farms, name="agents/farmers/farms")
+        self.set_array(
+            farmers[region_id_column].to_numpy(dtype=np.int32),
+            name="agents/farmers/region_id",
+        )
 
     @build_method(
         depends_on=["setup_regions_and_land_use", "setup_cell_area"], required=True
