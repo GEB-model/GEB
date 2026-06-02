@@ -18,11 +18,6 @@ from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import create_discharge_folium_map
-from geb.evaluate.workflows.hydrology_data import (
-    filter_evaluation_by_minimum_upstream_area,
-    get_discharge_evaluation_minimum_upstream_area_km2,
-    has_minimum_upstream_area,
-)
 from geb.evaluate.workflows.hydrology_plot_engine import (
     plot_skill_score_boxplots as _plot_skill_score_boxplots,
     plot_skill_score_maps as _plot_skill_score_maps,
@@ -1819,6 +1814,7 @@ class Hydrology:
         correct_discharge_observations: bool = False,
         create_plots: bool = True,
         minimum_upstream_area_km2: float | None = None,
+        minimum_timeseries_length_years: float | None = None,
     ) -> dict[str, float | None]:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
@@ -1840,6 +1836,8 @@ class Hydrology:
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
             minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for station evaluation (km2).
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            minimum_timeseries_length_years: Optional minimum paired observation-simulation timeseries length for station evaluation (years).
+                If omitted, `hydrology.evaluation.discharge.minimum_timeseries_length_years` is used.
 
         Returns:
             Dictionary containing mean metrics (KGE, NSE, R). In addition, the returned dictionary contains
@@ -1855,13 +1853,21 @@ class Hydrology:
             shutil.rmtree(self.evaluate_discharge_output_folder)
         self.evaluate_discharge_output_folder.mkdir(parents=True, exist_ok=True)
 
-        minimum_upstream_area_km2 = get_discharge_evaluation_minimum_upstream_area_km2(
-            self.model.config,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
-        )
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
         self.model.logger.info(
             "Using %.1f km2 as the minimum upstream area threshold for discharge evaluation.",
             minimum_upstream_area_km2,
+        )
+        if minimum_timeseries_length_years is None:
+            minimum_timeseries_length_years = self.model.config["hydrology"][
+                "evaluation"
+            ]["discharge"]["minimum_timeseries_length_years"]
+        self.model.logger.info(
+            "Using %.2f years as the minimum paired timeseries length for discharge evaluation.",
+            minimum_timeseries_length_years,
         )
 
         # load input data files
@@ -1929,10 +1935,7 @@ class Hydrology:
                 geb_upstream_area_m2: float = float(
                     snapped_locations.at[ID, "GEB_upstream_area_from_grid"]
                 )
-                if not has_minimum_upstream_area(
-                    upstream_area_m2=geb_upstream_area_m2,
-                    minimum_upstream_area_km2=minimum_upstream_area_km2,
-                ):
+                if geb_upstream_area_m2 < minimum_upstream_area_km2 * 1_000_000.0:
                     # Smaller catchments tend to be dominated by local timing and snapping
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
@@ -1951,13 +1954,12 @@ class Hydrology:
                     )
                     continue
 
-                # Skip stations with fewer than 5 years of paired (non-NaN) observations.
-                assert validation_df.index.freq is not None  # ty:ignore[unresolved-attribute]
-                valid_duration = (
-                    validation_df.dropna().shape[0] * validation_df.index.freq.delta  # ty:ignore[unresolved-attribute]
+                minimum_valid_steps = (
+                    minimum_timeseries_length_years
+                    * 365.25
+                    * (24 if freq_label == "hourly" else 1)
                 )
-                if valid_duration < pd.Timedelta(days=5 * 365.25):
-                    # stop
+                if validation_df.dropna().shape[0] < minimum_valid_steps:
                     continue
 
                 m = _calculate_discharge_validation_metrics(validation_df)
@@ -2271,10 +2273,10 @@ class Hydrology:
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             **kwargs: Ignored (CLI compatibility).
         """
-        minimum_upstream_area_km2 = get_discharge_evaluation_minimum_upstream_area_km2(
-            self.model.config,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
-        )
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
         geoparquet_path = (
             self.evaluate_discharge_output_folder / "evaluation_metrics.geoparquet"
         )
@@ -2297,10 +2299,10 @@ class Hydrology:
 
         before_filter_count: int = len(evaluation_gdf)
         evaluation_gdf = gpd.GeoDataFrame(
-            filter_evaluation_by_minimum_upstream_area(
-                evaluation_gdf,
-                minimum_upstream_area_km2=minimum_upstream_area_km2,
-            ),
+            evaluation_gdf[
+                evaluation_gdf["upstream_area_GEB"]
+                >= minimum_upstream_area_km2 * 1_000_000.0
+            ].copy(),
             geometry="geometry",
             crs=evaluation_gdf.crs,
         )
@@ -2349,10 +2351,10 @@ class Hydrology:
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             **kwargs: Ignored (CLI compatibility).
         """
-        minimum_upstream_area_km2 = get_discharge_evaluation_minimum_upstream_area_km2(
-            self.model.config,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
-        )
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
         geb_evaluation_xlsx = (
             self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
         )
@@ -2364,10 +2366,10 @@ class Hydrology:
 
         if not evaluation_df.empty:
             before_filter_count: int = len(evaluation_df)
-            evaluation_df = filter_evaluation_by_minimum_upstream_area(
-                evaluation_df,
-                minimum_upstream_area_km2=minimum_upstream_area_km2,
-            )
+            evaluation_df = evaluation_df[
+                evaluation_df["upstream_area_GEB"]
+                >= minimum_upstream_area_km2 * 1_000_000.0
+            ].copy()
             self.model.logger.info(
                 "Upstream-area plot filter retained %d/%d GEB stations at %.1f km2 or larger.",
                 len(evaluation_df),
@@ -2442,10 +2444,10 @@ class Hydrology:
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             **kwargs: Ignored (CLI compatibility).
         """
-        minimum_upstream_area_km2 = get_discharge_evaluation_minimum_upstream_area_km2(
-            self.model.config,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
-        )
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
         evaluation_path: Path = (
             self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
         )
@@ -2457,10 +2459,10 @@ class Hydrology:
 
         evaluation_df: pd.DataFrame = pd.read_excel(evaluation_path)
         before_filter_count: int = len(evaluation_df)
-        evaluation_df = filter_evaluation_by_minimum_upstream_area(
-            evaluation_df,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
-        )
+        evaluation_df = evaluation_df[
+            evaluation_df["upstream_area_GEB"]
+            >= minimum_upstream_area_km2 * 1_000_000.0
+        ].copy()
         self.model.logger.info(
             "Upstream-area plot filter retained %d/%d GEB stations at %.1f km2 or larger.",
             len(evaluation_df),
