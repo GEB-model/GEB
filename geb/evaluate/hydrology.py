@@ -2172,23 +2172,48 @@ class Hydrology:
 
         Args:
             external_evaluation_folder: Directory with one CSV per external model.
-                Defaults to ``external_evaluation_data/`` in the models-root directory.
+                Defaults to the configured folder, resolved from the model folder
+                when relative.
 
         Returns:
             Mapping from model label to full (unfiltered) DataFrame
             (index = station name, columns = metrics).
         """
-        folder = (
-            Path(external_evaluation_folder)
+        configured_folder = self.model.config["hydrology"]["evaluation"][
+            "discharge"
+        ].get("external_evaluation_folder")
+        folder = Path(
+            external_evaluation_folder
             if external_evaluation_folder is not None
-            else self.model.output_folder.resolve().parent.parent.parent
-            / "external_evaluation_data"
+            else configured_folder
         )
+        if not folder.is_absolute():
+            folder = self.model.input_folder.parent / folder
         if not folder.exists():
+            self.model.logger.info(
+                "No external evaluation data folder found at %s, skipping.", folder
+            )
+            return {}
+        if not folder.is_dir():
+            self.model.logger.warning(
+                "External evaluation path is not a folder: %s. Skipping.", folder
+            )
             return {}
 
+        csv_paths: list[Path] = sorted(folder.glob("*.csv"))
+        if not csv_paths:
+            self.model.logger.info(
+                "No external evaluation CSV files found at %s, skipping.", folder
+            )
+            return {}
+
+        self.model.logger.info(
+            "Reading external evaluation data from %s.",
+            folder,
+        )
+
         external_models: dict[str, pd.DataFrame] = {}
-        for csv_path in sorted(folder.glob("*.csv")):
+        for csv_path in csv_paths:
             external_evaluation_df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
             external_evaluation_df.index = external_evaluation_df.index.str.upper()
             external_models[csv_path.stem] = external_evaluation_df
