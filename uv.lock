@@ -1351,7 +1351,7 @@ wheels = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b26"
+version = "1.0.0b27"
 source = { editable = "." }
 dependencies = [
     { name = "cartopy" },
