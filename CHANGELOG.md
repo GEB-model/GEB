@@ -1,16 +1,18 @@
 # dev
 - Fix error with zero discharge in routing, closing [#819](https://github.com/GEB-model/GEB/issues/819)
+
+# v1.0.0b27
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 - Implement retry mechanism for 429 web error GLOPOP-SG data adapter. Zenodo rate limited making too many range requests. If we get rate limited now, we now go to sleep for a bit and try again later.
 - Further reduce memory use of reporter by using numpy views for identical time series data.
 - In a recent change, discharges were explictly set to nan in reservoirs (good). This led to a case where rivers had 0 river width in the hydrodynamic model, which led to raised errors. Now, we fix this by looking further downstream of reservoirs to find a valid discharge for estimating river widths. This is also better, because perviously the default alpha for river width was used.
-
 - Add `geb tool merge` command to merge outputs from multiple GEB cluster sub-models into a single merged model directory that can be evaluated directly with `geb evaluate`.
 - Add `plot_skill_score_maps()` to plot skill scores per station on a satellite basemap for each metric.
 - Update `plot_skill_score_boxplots()` with violin + boxplot panels for KGE, NSE, R², RMSE and RRMSE, including support for overlaying external reference model (e.g. LISFLOOD) results.
 - Add R², RMSE and RRMSE to discharge evaluation metrics at hourly, daily and monthly frequencies.
 - Stations with fewer than 5 years of paired observations are skipped in `evaluate_discharge`.
 - Lakes and reservoirs are now shown as dot markers in the interactive discharge evaluation map.
+- Include height above nearest drainage (HAND) for later use.
 
 # v1.0.0b26
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
