@@ -715,7 +715,7 @@ class Floods(Module):
                 self.model.logger.warning(
                     f"No rivers found that are represented in grid and/or are not fully inside waterbodies. Creating dummy empty flood map."
                 )
-                dummy_sfincs_model = sfincs_model = SFINCSRootModel(
+                dummy_sfincs_model = SFINCSRootModel(
                     self.model.simulation_root, "dummy", logger=self.model.logger
                 )
                 dummy_mask = dummy_sfincs_model.create_mask(

@@ -1585,10 +1585,24 @@ class Routing(Module):
             A GeoDataFrame containing the river network geometries.
         """
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
-        # select only hydrography_xy that are not waterbodies
-        rivers["hydrography_xy"] = rivers["hydrography_xy"].apply(
-            lambda xys: [xy for xy in xys if not is_waterbody[xy[1], xy[0]]]
+
+        # select only hydrography_xy that are not in waterbodies
+        # and store the mask to filter other columns as well
+        not_waterbody_mask = rivers["hydrography_xy"].apply(
+            lambda xys: [not is_waterbody[xy[1], xy[0]] for xy in xys]
         )
+        rivers["hydrography_xy"] = [
+            [xy for xy, m in zip(xys, mask) if m]
+            for xys, mask in zip(rivers["hydrography_xy"], not_waterbody_mask)
+        ]
+
+        rivers["hydrography_upstream_area_m2"] = [
+            [ua for ua, m in zip(uas, mask) if m]
+            for uas, mask in zip(
+                rivers["hydrography_upstream_area_m2"], not_waterbody_mask
+            )
+        ]
+
         # update represented_in_grid based on whether there are any hydrography_xy left after removing waterbodies
         rivers["represented_in_grid"] = rivers["hydrography_xy"].apply(
             lambda xys: len(xys) > 0

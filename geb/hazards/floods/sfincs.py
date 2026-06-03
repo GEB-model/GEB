@@ -1657,7 +1657,7 @@ class MultipleSFINCSSimulations:
             minimum_flood_depth: Minimum flood depth to consider in the output.
 
         Returns:
-            An xarray DataArray containing the maximum flood depth or None if no simulations are available.
+            An xarray DataArray containing the maximum flood depth.
 
         Raises:
             ValueError: If no simulations are available to read flood depth from.
