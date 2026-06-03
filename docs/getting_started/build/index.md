@@ -92,13 +92,13 @@ MERIT_USERNAME=<your_username>
 MERIT_PASSWORD=<your_password>
 ```
 
-2.  To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on [Destination Earth](https://earthdatahub.destine.eu/). Then, create a personal access token and add the content to the ".env"-file in the GEB repository:
+2.  To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on [Destination Earth](https://earthdatahub.destine.eu/). Then, create a [Standard API key](https://earthdatahub.destine.eu/account-settings) and add the content to the ".env"-file in the GEB repository:
 
 ``` text
-DESTINATION_EARTH_KEY=edh_pat_de<remainder_of_your_personal_access_token>
+DESTINATION_EARTH_KEY=edh_key_<remainder_of_your_API_key>
 ```
 
-You can find the personal access token [here](https://earthdatahub.destine.eu/account-settings).
+You can manage your Destination Earth API keys [here](https://auth.destine.eu/realms/desp/account/api-keys).
 
 3.  To use forecasts in GEB, unflag the build-method "setup_forecasts" in the build.yml file. This will trigger the downloading and processing of ECMWF ensemble forecasts from the ECMWF archive. To access ECMWF forecasts, request access to the [ECMWF MARS archive](https://confluence.ecmwf.int/display/WEBAPI/Access+MARS). Afterwards, find your [API key](https://api.ecmwf.int/v1/key/) and add the content to the ".env"-file in the GEB repository.
 

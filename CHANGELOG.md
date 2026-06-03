@@ -23,6 +23,7 @@
 - Include an array tracking household expected annual damages (based on adaptation status). 
 - Support exporting household attributes (such as ead) using the reporter in run_yearly.
 - When multiple outflow basins were selected that are not coastal basins, it could happen that some basins were erroneously excluded. This is now fixed.
+- Support new Destination Earth keys ([#844](https://github.com/GEB-model/GEB/issues/844)).
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
