@@ -4,7 +4,7 @@ general:
   # model end time (YYYY-MM-DD).
   end_time: 2024-12-30
   # start of the spinup time (YYYY-MM-DD).
-  spinup_time: 2000-01-01
+  spinup_time: 1960-01-01
   hydrological_year_start_month: 1
   input_folder: input/
   preprocessing_folder: preprocessing/
@@ -65,6 +65,11 @@ hydrology:
         beta: 0.5
     river_depth:
       method: manning # or power law. If power law, alpha and beta must be set additionally in the parameters
+  evaluation:
+    discharge:
+      minimum_upstream_area_km2: 0  # minimum modeled upstream area for discharge evaluation stations (km2)
+      minimum_timeseries_length_years: 10  # minimum paired observation-simulation timeseries length for discharge evaluation stations (years)
+      external_evaluation_folder: ../../external_evaluation_data/  # folder with external discharge evaluation CSV files, relative to the model folder
 
 agent_settings:
   government:
