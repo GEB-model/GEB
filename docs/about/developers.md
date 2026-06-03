@@ -22,7 +22,7 @@ We are also extremely grateful to the grandmasters without whom the GEB model wo
 
 # Past contributors
 
-- [Joshua Kiesel](https://research.vu.nl/en/persons/joshua-kiesel/) - contributed the simulation retention basins
+- [Joshua Kiesel](https://research.vu.nl/en/persons/joshua-kiesel/) - contributed the simulation of retention basins
 - [Mikhail Smilovic](https://iiasa.ac.at/staff/mikhail-smilovic) - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 - [Peter Burek](https://iiasa.ac.at/staff/peter-burek) - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 - Luca Guillaumot - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
