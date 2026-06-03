@@ -1,4 +1,5 @@
 # dev
+- Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801))
 
 # v1.0.0b27
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
