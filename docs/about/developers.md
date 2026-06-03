@@ -11,7 +11,6 @@
 - [Carolina Ferman Carral](https://vu.nl/en/research/scientists/carolina-ferman-carral)
 - [Roy Pontman](https://research.vu.nl/en/persons/roy-pontman/)
 - [Lisanne van Amelsvoort](https://research.vu.nl/en/persons/lisanne-van-amelsvoort/)
-- [Joshua Kiesel](https://research.vu.nl/en/persons/joshua-kiesel/)
 
 # Grandmasters
 
@@ -23,6 +22,7 @@ We are also extremely grateful to the grandmasters without whom the GEB model wo
 
 # Past contributors
 
+- [Joshua Kiesel](https://research.vu.nl/en/persons/joshua-kiesel/) - contributed the simulation retention basins
 - [Mikhail Smilovic](https://iiasa.ac.at/staff/mikhail-smilovic) - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 - [Peter Burek](https://iiasa.ac.at/staff/peter-burek) - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 - Luca Guillaumot - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
