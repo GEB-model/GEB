@@ -31,47 +31,6 @@ MIN_ACTIVE_SNOW_SWE_M: np.float64 = np.float64(1.0e-6)
 
 
 @njit(cache=True, inline="always")
-def calculate_snow_thermal_properties(
-    snow_water_equivalent_m: np.float64,
-) -> tuple[np.float32, np.float64, np.float32]:
-    """Calculate snow density, depth, and thermal conductivity.
-
-    This local helper mirrors the snow-module parameterization so the energy
-    module can remain independent from snow module imports.
-
-    Args:
-        snow_water_equivalent_m: Snow water equivalent [m].
-
-    Returns:
-        Tuple of:
-            - Snow density [kg/m3].
-            - Snow depth [m].
-            - Thermal conductivity [W/m/K].
-    """
-    snow_density_kg_per_m3: np.float32 = min(
-        np.float32(550.0),
-        np.float32(150.0)
-        + np.float32(400.0)
-        * np.float32(
-            snow_water_equivalent_m,
-        ),
-    )
-
-    # Based on Anderson (2019)
-    # Full report: https://repository.library.noaa.gov/view/noaa/6392
-    # Implementation in Community Firn Model:
-    # https://github.com/UWGlaciology/CommunityFirnModel/blob/main/CFM_main/diffusion.py
-    snow_thermal_conductivity: np.float32 = (
-        np.float32(0.021)
-        + np.float32(2.5) * (snow_density_kg_per_m3 / np.float32(1000.0)) ** 2
-    )
-    snow_depth_m: np.float64 = snow_water_equivalent_m / (
-        snow_density_kg_per_m3 / np.float32(1000.0)
-    )
-    return snow_density_kg_per_m3, snow_depth_m, snow_thermal_conductivity
-
-
-@njit(cache=True, inline="always")
 def calculate_snow_thermal_conductivity_from_density(
     snow_density_kg_per_m3: np.float32,
 ) -> np.float32:
@@ -83,17 +42,14 @@ def calculate_snow_thermal_conductivity_from_density(
     Returns:
         Snow thermal conductivity (W/m/K).
     """
-    # See Sturm et al. 1997;  equation in abstract
-    # https://doi.org/10.3189/S0022143000002781
-    rho_g_per_cm3: np.float32 = snow_density_kg_per_m3 / np.float32(1000.0)
-    if rho_g_per_cm3 < np.float32(0.156):
-        return np.float32(0.023) + np.float32(0.234) * rho_g_per_cm3
-    else:
-        return (
-            np.float32(0.138)
-            - np.float32(1.01) * rho_g_per_cm3
-            + np.float32(3.233) * (rho_g_per_cm3**2)
-        )
+    # Based on Anderson (1976)
+    # Implementation in Community Firn Model:
+    # https://github.com/UWGlaciology/CommunityFirnModel/blob/main/CFM_main/diffusion.py
+    snow_thermal_conductivity: np.float32 = (
+        np.float32(0.021)
+        + np.float32(2.5) * (snow_density_kg_per_m3 / np.float32(1000.0)) ** 2
+    )
+    return snow_thermal_conductivity
 
 
 @njit(cache=True, inline="always", fastmath=True)
