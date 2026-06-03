@@ -1604,6 +1604,334 @@ def _add_neighbors_to_candidate_frontier(
             candidate_distances[candidate_index] = distance_m
 
 
+@njit(cache=True)
+def _crop_sequence_similarity_numba(
+    sequence_i: np.ndarray,
+    sequence_j: np.ndarray,
+    missing_value: int,
+) -> float:
+    """Calculate crop-sequence similarity in Numba-compatible form.
+
+    Returns:
+        Fraction of comparable years in which both sequences have the same crop
+        value. Returns 0.0 if the sequences have no comparable non-missing years.
+    """
+    valid_count = 0
+    match_count = 0
+
+    for year_index in range(sequence_i.size):
+        crop_i = sequence_i[year_index]
+        crop_j = sequence_j[year_index]
+
+        if crop_i == missing_value or crop_j == missing_value:
+            continue
+
+        valid_count += 1
+        if crop_i == crop_j:
+            match_count += 1
+
+    if valid_count == 0:
+        return 0.0
+
+    return match_count / valid_count
+
+
+@njit(cache=True)
+def _switch_timing_similarity_numba(
+    sequence_i: np.ndarray,
+    sequence_j: np.ndarray,
+    missing_value: int,
+) -> float:
+    """Calculate crop-switch timing similarity in Numba-compatible form.
+
+    Returns:
+        Jaccard-style overlap between year-to-year crop-switch events. Returns
+        0.0 if there are no comparable valid intervals, and 0.5 if both
+        sequences have comparable intervals but neither sequence switches crop.
+    """
+    union_count = 0
+    intersection_count = 0
+    valid_interval_count = 0
+
+    for year_index in range(sequence_i.size - 1):
+        crop_i_previous = sequence_i[year_index]
+        crop_i_next = sequence_i[year_index + 1]
+        crop_j_previous = sequence_j[year_index]
+        crop_j_next = sequence_j[year_index + 1]
+
+        if (
+            crop_i_previous == missing_value
+            or crop_i_next == missing_value
+            or crop_j_previous == missing_value
+            or crop_j_next == missing_value
+        ):
+            continue
+
+        valid_interval_count += 1
+        switch_i = crop_i_next != crop_i_previous
+        switch_j = crop_j_next != crop_j_previous
+
+        if switch_i or switch_j:
+            union_count += 1
+            if switch_i and switch_j:
+                intersection_count += 1
+
+    if valid_interval_count == 0:
+        return 0.0
+
+    if union_count == 0:
+        return 0.5
+
+    return intersection_count / union_count
+
+
+@njit(cache=True)
+def _find_best_candidate_numba(
+    candidate_indices: np.ndarray,
+    candidate_distances: np.ndarray,
+    field_areas_m2: np.ndarray,
+    field_sequences: np.ndarray,
+    farm_crop_sequence: np.ndarray,
+    current_area_m2: float,
+    target_area_m2: float,
+    max_distance_m: float,
+    distance_weight: float,
+    crop_sequence_weight: float,
+    switch_timing_weight: float,
+    target_overshoot_tolerance: float,
+    missing_value: int,
+) -> tuple[int, float, float]:
+    """Select the best candidate field from a frontier using compiled scoring.
+
+    Returns:
+        Tuple containing the selected candidate field index, its weighted
+        candidate score, and its distance to the growing farm. If no candidate
+        can be added without exceeding the allowed target-area overshoot, returns
+        ``(-1, -np.inf, np.inf)``.
+    """
+    best_candidate = -1
+    best_score = -np.inf
+    best_distance = np.inf
+    maximum_allowed_area_m2 = target_area_m2 * target_overshoot_tolerance
+
+    for candidate_position in range(candidate_indices.size):
+        candidate_index = candidate_indices[candidate_position]
+        distance_m = float(candidate_distances[candidate_position])
+        new_area_m2 = current_area_m2 + float(field_areas_m2[candidate_index])
+
+        if new_area_m2 > maximum_allowed_area_m2:
+            continue
+
+        distance_score = max(0.0, 1.0 - distance_m / max_distance_m)
+        sequence_score = _crop_sequence_similarity_numba(
+            farm_crop_sequence,
+            field_sequences[candidate_index],
+            missing_value,
+        )
+        switch_score = _switch_timing_similarity_numba(
+            farm_crop_sequence,
+            field_sequences[candidate_index],
+            missing_value,
+        )
+        score = (
+            distance_weight * distance_score
+            + crop_sequence_weight * sequence_score
+            + switch_timing_weight * switch_score
+        )
+
+        if (
+            score > best_score
+            or (score == best_score and distance_m < best_distance)
+            or (
+                score == best_score
+                and distance_m == best_distance
+                and (best_candidate < 0 or candidate_index < best_candidate)
+            )
+        ):
+            best_candidate = int(candidate_index)
+            best_score = score
+            best_distance = distance_m
+
+    return best_candidate, best_score, best_distance
+
+
+@njit(cache=True)
+def _select_representative_sequence_index_numba(
+    unique_sequences: np.ndarray,
+    sequence_counts: np.ndarray,
+    missing_value: int,
+) -> int:
+    """Select the representative sequence from unique farm sequences.
+
+    Returns:
+        Index of the selected representative sequence in ``unique_sequences``.
+        The selected sequence is the most frequent sequence; ties are resolved by
+        highest weighted mean similarity to all farm sequences, then by fewest
+        missing values, and finally by lexicographic order.
+    """
+    best_index = -1
+    best_count = -1
+    best_mean_similarity = -np.inf
+    best_missing_count = 0
+    total_count = 0
+
+    for sequence_index in range(sequence_counts.size):
+        total_count += int(sequence_counts[sequence_index])
+
+    for candidate_index in range(sequence_counts.size):
+        candidate_count = int(sequence_counts[candidate_index])
+
+        if candidate_count < best_count:
+            continue
+
+        candidate_missing_count = 0
+        for year_index in range(unique_sequences.shape[1]):
+            if unique_sequences[candidate_index, year_index] == missing_value:
+                candidate_missing_count += 1
+
+        weighted_similarity = 0.0
+        for sequence_index in range(unique_sequences.shape[0]):
+            similarity = _crop_sequence_similarity_numba(
+                unique_sequences[candidate_index],
+                unique_sequences[sequence_index],
+                missing_value,
+            )
+            weighted_similarity += similarity * sequence_counts[sequence_index]
+        weighted_similarity /= total_count
+
+        if candidate_count > best_count:
+            best_index = candidate_index
+            best_count = candidate_count
+            best_mean_similarity = weighted_similarity
+            best_missing_count = candidate_missing_count
+            continue
+
+        if weighted_similarity > best_mean_similarity:
+            best_index = candidate_index
+            best_mean_similarity = weighted_similarity
+            best_missing_count = candidate_missing_count
+            continue
+
+        if weighted_similarity < best_mean_similarity:
+            continue
+
+        if candidate_missing_count < best_missing_count:
+            best_index = candidate_index
+            best_missing_count = candidate_missing_count
+            continue
+
+        if candidate_missing_count > best_missing_count:
+            continue
+
+        if best_index < 0:
+            best_index = candidate_index
+            continue
+
+        # Final deterministic tie-breaker: lexicographically smallest sequence.
+        for year_index in range(unique_sequences.shape[1]):
+            candidate_value = unique_sequences[candidate_index, year_index]
+            best_value = unique_sequences[best_index, year_index]
+            if candidate_value < best_value:
+                best_index = candidate_index
+                break
+            if candidate_value > best_value:
+                break
+
+    return best_index
+
+
+def _update_farm_crop_sequence_incremental(
+    unique_sequences: np.ndarray,
+    sequence_counts: np.ndarray,
+    new_sequence: np.ndarray,
+    *,
+    missing_value: int = -1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Update the farm representative sequence from compact sequence counts.
+
+    The function keeps only unique crop sequences and their counts for the
+    growing farm. This preserves the original update-after-each-field behaviour,
+    but avoids repeatedly stacking all field sequences and running ``np.unique``
+    over the full farm field list.
+
+    Args:
+        unique_sequences: Unique crop sequences already present in the farm.
+        sequence_counts: Number of fields with each unique crop sequence.
+        new_sequence: Crop sequence of the newly added field.
+        missing_value: Value used to indicate missing crop observations.
+
+    Returns:
+        Tuple containing the updated unique sequences, updated sequence counts,
+        and the selected representative crop sequence.
+    """
+    matching_index = -1
+    for sequence_index in range(unique_sequences.shape[0]):
+        if np.array_equal(unique_sequences[sequence_index], new_sequence):
+            matching_index = sequence_index
+            break
+
+    if matching_index >= 0:
+        sequence_counts[matching_index] += 1
+    else:
+        unique_sequences = np.vstack(
+            [
+                unique_sequences,
+                new_sequence.astype(np.int32, copy=False)[None, :],
+            ]
+        )
+        sequence_counts = np.append(sequence_counts, np.int32(1))
+
+    representative_index = _select_representative_sequence_index_numba(
+        unique_sequences,
+        sequence_counts,
+        missing_value,
+    )
+    representative_sequence = unique_sequences[representative_index].copy()
+
+    return unique_sequences, sequence_counts, representative_sequence
+
+
+def _candidate_frontier_to_arrays(
+    candidate_distances: dict[int, float],
+    unassigned: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert the current candidate frontier to compact arrays for Numba scoring.
+
+    Assigned candidates are removed from ``candidate_distances`` while the arrays
+    are built. Keeping this cleanup in Python preserves the dictionary frontier
+    logic while moving the repeated candidate scoring to compiled code.
+
+    Args:
+        candidate_distances: Candidate frontier mapping field index to shortest
+            distance from the growing farm.
+        unassigned: Boolean array indicating whether each field is still
+            unassigned.
+
+    Returns:
+        Candidate field indices and matching distances.
+    """
+    if not candidate_distances:
+        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.float32)
+
+    candidate_indices = np.empty(len(candidate_distances), dtype=np.int32)
+    candidate_distance_values = np.empty(len(candidate_distances), dtype=np.float32)
+    n_candidates = 0
+
+    for candidate_index, distance_m in list(candidate_distances.items()):
+        if not unassigned[candidate_index]:
+            del candidate_distances[candidate_index]
+            continue
+
+        candidate_indices[n_candidates] = candidate_index
+        candidate_distance_values[n_candidates] = distance_m
+        n_candidates += 1
+
+    return (
+        candidate_indices[:n_candidates],
+        candidate_distance_values[:n_candidates],
+    )
+
+
 def grow_farms_from_prepared_fields(
     projected_fields: gpd.GeoDataFrame,
     original_crs: Any,
@@ -1620,10 +1948,14 @@ def grow_farms_from_prepared_fields(
     switch_timing_weight: float = 0.20,
     target_overshoot_tolerance: float = 1.25,
 ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
-    """Grow farms from prepared field arrays using a Python/NumPy loop.
+    """Grow farms from prepared field arrays using optimized frontier scoring.
 
-    Uses a precomputed centroid-neighbor graph to grow farms to match the
-    target farms based on Lowder statistics.
+    Uses a precomputed centroid-neighbor graph to grow farms to match the target
+    farms based on Lowder statistics. The growing loop keeps the original logic of
+    updating the representative crop sequence after every added field, but stores
+    only unique crop sequences and their counts for the current farm. Candidate
+    field scoring is batched into arrays and evaluated with Numba to reduce Python
+    overhead in large candidate frontiers.
 
     Args:
         projected_fields: Field GeoDataFrame in projected coordinates.
@@ -1670,6 +2002,7 @@ def grow_farms_from_prepared_fields(
     )
 
     n_fields = len(projected_fields)
+    n_unassigned = n_fields
 
     sorted_field_indices = np.argsort(field_areas_m2).astype(np.int32)
     sorted_field_areas = field_areas_m2[sorted_field_indices]
@@ -1683,7 +2016,7 @@ def grow_farms_from_prepared_fields(
     farmer_target_area_m2: list[float] = []
 
     for target_farm in target_farms:
-        if not unassigned.any():
+        if n_unassigned == 0:
             break
 
         farmer_id = len(farmer_areas_m2)
@@ -1702,9 +2035,11 @@ def grow_farms_from_prepared_fields(
         current_area_m2 = float(field_areas_m2[seed_field])
 
         unassigned[seed_field] = False
+        n_unassigned -= 1
         assigned_farmer_ids[seed_field] = farmer_id
 
-        farm_crop_sequences = field_sequences[[seed_field]].copy()
+        unique_farm_sequences = field_sequences[[seed_field]].copy()
+        unique_farm_sequence_counts = np.ones(1, dtype=np.int32)
         farm_crop_sequence = field_sequences[seed_field].copy()
 
         candidate_distances: dict[int, float] = {}
@@ -1717,47 +2052,32 @@ def grow_farms_from_prepared_fields(
             neighbor_distances,
         )
 
-        while unassigned.any() and current_area_m2 < target_farm.target_area_m2:
-            best_candidate = -1
-            best_score = -np.inf
-            best_distance = np.inf
-
-            # Remove candidates that were assigned while growing another branch.
-            for candidate_index in list(candidate_distances):
-                if not unassigned[candidate_index]:
-                    del candidate_distances[candidate_index]
-
-            for candidate_index, distance_m in candidate_distances.items():
-                new_area_m2 = current_area_m2 + float(field_areas_m2[candidate_index])
-
-                if (
-                    new_area_m2
-                    > target_farm.target_area_m2 * target_overshoot_tolerance
-                ):
-                    continue
-
-                score = candidate_score(
-                    farm_crop_sequence,
-                    field_sequences[candidate_index],
-                    distance_m,
-                    max_distance_m=max_distance_m,
-                    distance_weight=distance_weight,
-                    crop_sequence_weight=crop_sequence_weight,
-                    switch_timing_weight=switch_timing_weight,
+        while n_unassigned > 0 and current_area_m2 < target_farm.target_area_m2:
+            candidate_indices, candidate_distance_values = (
+                _candidate_frontier_to_arrays(
+                    candidate_distances,
+                    unassigned,
                 )
+            )
 
-                if (
-                    score > best_score
-                    or (score == best_score and distance_m < best_distance)
-                    or (
-                        score == best_score
-                        and distance_m == best_distance
-                        and candidate_index < best_candidate
-                    )
-                ):
-                    best_candidate = candidate_index
-                    best_score = score
-                    best_distance = distance_m
+            if candidate_indices.size == 0:
+                break
+
+            best_candidate, _, _ = _find_best_candidate_numba(
+                candidate_indices,
+                candidate_distance_values,
+                field_areas_m2,
+                field_sequences,
+                farm_crop_sequence,
+                current_area_m2,
+                target_farm.target_area_m2,
+                max_distance_m,
+                distance_weight,
+                crop_sequence_weight,
+                switch_timing_weight,
+                target_overshoot_tolerance,
+                -1,
+            )
 
             if best_candidate < 0:
                 break
@@ -1766,16 +2086,20 @@ def grow_farms_from_prepared_fields(
             current_area_m2 += float(field_areas_m2[best_candidate])
 
             unassigned[best_candidate] = False
+            n_unassigned -= 1
             assigned_farmer_ids[best_candidate] = farmer_id
             candidate_distances.pop(best_candidate, None)
 
-            farm_crop_sequences = np.vstack(
-                [
-                    farm_crop_sequences,
-                    field_sequences[best_candidate],
-                ]
+            (
+                unique_farm_sequences,
+                unique_farm_sequence_counts,
+                farm_crop_sequence,
+            ) = _update_farm_crop_sequence_incremental(
+                unique_farm_sequences,
+                unique_farm_sequence_counts,
+                field_sequences[best_candidate],
+                missing_value=-1,
             )
-            farm_crop_sequence = update_farm_crop_sequence(farm_crop_sequences)
 
             _add_neighbors_to_candidate_frontier(
                 best_candidate,
@@ -1822,6 +2146,7 @@ def grow_farms_from_prepared_fields(
 
         assigned_farmer_ids[field_index] = best_farmer_id
         unassigned[field_index] = False
+        n_unassigned -= 1
 
         farmer_areas_m2[best_farmer_id] += float(field_areas_m2[field_index])
         farmer_n_fields[best_farmer_id] += 1
@@ -2012,6 +2337,109 @@ def rasterize_and_compact_field_farms(
         coords=farms.coords,
         dims=farms.dims,
         attrs=farms.attrs,
+        name="agents/farmers/farms",
+    )
+    compact_farms.attrs["_FillValue"] = nodata
+
+    compact_farmers = (
+        farmers.set_index(farmer_id_column)
+        .loc[present_farmer_ids]
+        .reset_index(drop=True)
+        .copy()
+    )
+    compact_farmers[farmer_id_column] = np.arange(
+        len(compact_farmers),
+        dtype=np.int32,
+    )
+
+    return compact_farms, compact_farmers
+
+
+def compact_farm_raster_values(
+    farm_values: np.ndarray,
+    farmers: pd.DataFrame,
+    template: xr.DataArray,
+    *,
+    farmer_id_column: str = "farmer_id",
+    nodata: int = -1,
+    row_chunk_size: int = 512,
+    logger: logging.Logger | None = None,
+) -> tuple[xr.DataArray, pd.DataFrame]:
+    """Compact an already-rasterized farm-ID array and matching farmer table.
+
+    This is the low-memory counterpart of ``rasterize_and_compact_field_farms``.
+    It is useful when field polygons are rasterized region by region into a shared
+    output array, so the full all-region field GeoDataFrame never has to be kept
+    in memory. ``farm_values`` is compacted in place.
+
+    Args:
+        farm_values: Two-dimensional farm-ID raster values. This array is modified
+            in place to contain compact contiguous farmer IDs.
+        farmers: Farmer table with one row per pre-compaction farmer.
+        template: Target model grid used to provide coordinates, dimensions, and
+            raster metadata for the returned farm DataArray.
+        farmer_id_column: Name of the farmer ID column.
+        nodata: Nodata value in ``farm_values``.
+        row_chunk_size: Number of raster rows processed at once while finding and
+            remapping represented farmer IDs.
+        logger: Optional logger used to report removed farmers.
+
+    Returns:
+        Tuple containing the compact farm raster and compact farmer table.
+
+    Raises:
+        ValueError: If required farmer ID columns are missing.
+        ValueError: If the farm-value grid does not match the template shape.
+        ValueError: If no farmers are represented in the raster.
+    """
+    if farmer_id_column not in farmers.columns:
+        raise ValueError(f"farmers must contain '{farmer_id_column}'.")
+
+    if farm_values.shape != template.shape:
+        raise ValueError(
+            "farm_values must have the same shape as template. "
+            f"Got {farm_values.shape} and {template.shape}."
+        )
+
+    if farm_values.dtype != np.int32:
+        farm_values = farm_values.astype(np.int32, copy=False)
+
+    present_chunks: list[np.ndarray] = []
+    for row_start in range(0, farm_values.shape[0], row_chunk_size):
+        row_stop = min(row_start + row_chunk_size, farm_values.shape[0])
+        farm_chunk = farm_values[row_start:row_stop]
+        valid_farm_pixels = farm_chunk != nodata
+
+        if np.any(valid_farm_pixels):
+            present_chunks.append(np.unique(farm_chunk[valid_farm_pixels]))
+
+    if not present_chunks:
+        raise ValueError("No farmers are represented in the rasterized farm map.")
+
+    present_farmer_ids = np.unique(np.concatenate(present_chunks)).astype(np.int32)
+
+    if present_farmer_ids.size < len(farmers) and logger is not None:
+        logger.warning(
+            "Only %s of %s field-derived farmers are represented on the model grid. "
+            "Missing farmers are dropped from the farmer table.",
+            present_farmer_ids.size,
+            len(farmers),
+        )
+
+    old_to_new = np.full(int(present_farmer_ids.max()) + 1, -1, dtype=np.int32)
+    old_to_new[present_farmer_ids] = np.arange(present_farmer_ids.size, dtype=np.int32)
+
+    for row_start in range(0, farm_values.shape[0], row_chunk_size):
+        row_stop = min(row_start + row_chunk_size, farm_values.shape[0])
+        farm_chunk = farm_values[row_start:row_stop]
+        valid_farm_pixels = farm_chunk != nodata
+        farm_chunk[valid_farm_pixels] = old_to_new[farm_chunk[valid_farm_pixels]]
+
+    compact_farms = xr.DataArray(
+        farm_values,
+        coords=template.coords,
+        dims=template.dims,
+        attrs=dict(template.attrs),
         name="agents/farmers/farms",
     )
     compact_farms.attrs["_FillValue"] = nodata

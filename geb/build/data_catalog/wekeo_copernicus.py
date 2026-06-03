@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
+import time
+import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +29,49 @@ _REQUEST_CRS = "EPSG:4326"
 _MANUAL_TILE_DOWNLOAD_URL = (
     "https://land.copernicus.eu/en/map-viewer?product=c6d1726c6e824ae4819bdf402b785956"
 )
+
+
+@dataclass(frozen=True)
+class _TileDownloadStatus:
+    """Small status object used to summarize tile download/cache handling."""
+
+    tile_id: str
+    status: str
+    path: Path | None = None
+
+
+@dataclass(frozen=True)
+class _TileCacheStatus:
+    """Summary of which requested tiles are already available locally."""
+
+    tile_ids: tuple[str, ...]
+    cached_tif_tile_ids: tuple[str, ...]
+    cached_zip_tile_ids: tuple[str, ...]
+    missing_tile_ids: tuple[str, ...]
+
+    @property
+    def total_tiles(self) -> int:
+        """Total number of tiles required for the request."""
+        return len(self.tile_ids)
+
+    @property
+    def cached_tiles(self) -> int:
+        """Number of required tiles available as either TIFF or ZIP."""
+        return len(self.cached_tif_tile_ids) + len(self.cached_zip_tile_ids)
+
+    @property
+    def missing_tiles(self) -> int:
+        """Number of required tiles that still need to be downloaded."""
+        return len(self.missing_tile_ids)
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether all required tiles are available locally."""
+        return not self.missing_tile_ids
+
+
+class WEkEODownloadError(RuntimeError):
+    """Raised when WEkEO/HDA could not download one or more requested tiles."""
 
 
 class WEkEOCopernicus(Adapter):
@@ -56,6 +105,12 @@ class WEkEOCopernicus(Adapter):
         dataset_id: str,
         default_query: dict[str, Any] | None = None,
         product_code: str | None = None,
+        max_parallel_downloads: int | None = None,
+        download_retries: int | None = None,
+        download_backoff_seconds: float | None = None,
+        show_download_progress: bool = False,
+        normalize_nodata_values: tuple[int, ...] = (65535,),
+        destination_nodata: int | None = 0,
         **kwargs: Any,
     ) -> None:
         """Initialize the adapter for WEkEO Copernicus data.
@@ -67,12 +122,63 @@ class WEkEOCopernicus(Adapter):
             product_code: Optional HRL product code expected in the returned tile IDs,
                 for example ``CTY`` for crop types or ``CPSCT`` for secondary crop
                 types. If provided, WEkEO results with non-matching IDs are ignored.
+            max_parallel_downloads: Maximum number of tile downloads to run in
+                parallel. If None, the ``WEKEO_MAX_PARALLEL_DOWNLOADS`` environment
+                variable is used, falling back to 1. Values larger than 4 can be
+                unfriendly to WEkEO/HDA and to shared cluster file systems.
+            download_retries: Number of retries after the first failed download
+                attempt. If None, ``WEKEO_DOWNLOAD_RETRIES`` is used, falling back
+                to 2.
+            download_backoff_seconds: Base sleep time between retries. The actual
+                delay scales linearly with the retry attempt. If None,
+                ``WEKEO_DOWNLOAD_BACKOFF_SECONDS`` is used, falling back to 5 s.
+            show_download_progress: Whether to allow HDA/tqdm progress bars. The
+                default keeps build logs clean.
+            normalize_nodata_values: Source values to map to ``destination_nodata``
+                before reprojection. For HRL crop rasters, 65535 is a common invalid
+                value and otherwise creates repeated rasterio warnings.
+            destination_nodata: Nodata value used after normalization and
+                reprojection. For HRL crop rasters, 0 is already treated as invalid
+                downstream. Use None to leave nodata handling unchanged.
             **kwargs: Additional keyword arguments passed to the base Adapter class.
         """
         super().__init__(*args, **kwargs)
         self.dataset_id = dataset_id
         self.default_query = default_query or {}
         self.product_code = product_code.upper() if product_code is not None else None
+
+        self.max_parallel_downloads = max(
+            1,
+            int(
+                max_parallel_downloads
+                if max_parallel_downloads is not None
+                else os.getenv("WEKEO_MAX_PARALLEL_DOWNLOADS", "1")
+            ),
+        )
+        self.download_retries = max(
+            0,
+            int(
+                download_retries
+                if download_retries is not None
+                else os.getenv("WEKEO_DOWNLOAD_RETRIES", "2")
+            ),
+        )
+        self.download_backoff_seconds = max(
+            0.0,
+            float(
+                download_backoff_seconds
+                if download_backoff_seconds is not None
+                else os.getenv("WEKEO_DOWNLOAD_BACKOFF_SECONDS", "5")
+            ),
+        )
+        self.normalize_nodata_values = normalize_nodata_values
+        self.destination_nodata = destination_nodata
+
+        if not show_download_progress:
+            # HDA uses tqdm internally. This avoids thousands of progress-bar lines
+            # in non-interactive GEB build/update logs.
+            os.environ.setdefault("TQDM_DISABLE", "1")
+            logging.getLogger("hda").setLevel(logging.WARNING)
 
     def _get_client(self) -> Client:
         """Create an authenticated WEkEO HDA client.
@@ -298,6 +404,219 @@ class WEkEOCopernicus(Adapter):
         )
         return tile_ids
 
+    def _find_downloaded_file(
+        self,
+        directory: Path,
+        tile_id: str,
+        suffixes: tuple[str, ...],
+    ) -> Path | None:
+        """Find a downloaded file in a temporary HDA download directory.
+
+        Returns:
+            A list of WEkEO tile identifiers that are present in the directory.
+        """
+        candidates = [
+            path
+            for path in directory.rglob("*")
+            if path.is_file() and path.suffix.lower() in suffixes
+        ]
+        if not candidates:
+            return None
+
+        matching_candidates = [path for path in candidates if path.stem == tile_id]
+        if matching_candidates:
+            return sorted(matching_candidates)[0]
+        return sorted(candidates)[0]
+
+    def _format_download_failure(
+        self,
+        tile_id: str,
+        year: str | int,
+        target_dir: Path,
+        reason: str,
+    ) -> str:
+        """Create a contextual error message for failed HDA tile downloads.
+
+        Returns:
+            A contextual error message for failed HDA tile downloads.
+        """
+        return (
+            f"Failed to download WEkEO tile {tile_id!r} for year {year}. "
+            f"Target directory: {target_dir}. Reason: {reason}\n"
+            "If the preceding HDA log contains '401 Client Error: Unauthorized' "
+            "for a 'termsaccepted' URL, the usual causes are that the WEkEO data "
+            "policy/terms have not been accepted for this account, the credentials "
+            "are wrong, or the HDA token expired. Log in to WEkEO once with the same "
+            "account, accept the Copernicus Land Monitoring Service data policy, and "
+            "check WEKEO_USERNAME/WEKEO_PASSWORD."
+        )
+
+    def _download_single_tile(
+        self,
+        tile_id: str,
+        year: str | int,
+        year_dir: Path,
+        result: Any,
+    ) -> _TileDownloadStatus:
+        """Download one WEkEO tile and store it atomically in the year cache.
+
+        The method first checks whether the requested tile is already available as an
+        extracted TIFF or downloaded ZIP. If not, it downloads the tile into a
+        tile-specific temporary directory, locates the returned ZIP or TIFF, and moves
+        that file into the permanent year cache. The temporary directory is removed after
+        each attempt, including failed attempts. Failed downloads are retried according
+        to ``self.download_retries`` and ``self.download_backoff_seconds``.
+
+        Args:
+            tile_id: WEkEO tile identifier to download.
+            year: Product year used to construct the cache paths.
+            year_dir: Directory where cached files for the requested year are stored.
+            result: WEkEO/HDA result object exposing a ``download`` method.
+
+        Returns:
+            Download status describing whether the tile was already cached or newly
+            downloaded, and the local path of the cached ZIP or TIFF.
+
+        Raises:
+            WEkEODownloadError: If HDA does not create a ZIP or TIFF file, or if all
+                download attempts fail.
+        """
+        zip_path = self._tile_zip_path(year, tile_id)
+        tif_path = self._tile_tif_path(year, tile_id)
+
+        if tif_path.exists():
+            return _TileDownloadStatus(
+                tile_id=tile_id, status="cached_tif", path=tif_path
+            )
+        if zip_path.exists():
+            return _TileDownloadStatus(
+                tile_id=tile_id, status="cached_zip", path=zip_path
+            )
+
+        last_error: BaseException | None = None
+        attempts = self.download_retries + 1
+
+        for attempt in range(1, attempts + 1):
+            temp_dir = year_dir / f".download-{tile_id}-{uuid.uuid4().hex}"
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                result.download(str(temp_dir))
+
+                downloaded_zip = self._find_downloaded_file(
+                    directory=temp_dir,
+                    tile_id=tile_id,
+                    suffixes=(".zip",),
+                )
+                downloaded_tif = self._find_downloaded_file(
+                    directory=temp_dir,
+                    tile_id=tile_id,
+                    suffixes=(".tif", ".tiff"),
+                )
+
+                if downloaded_zip is None and downloaded_tif is None:
+                    files = sorted(
+                        str(path.relative_to(temp_dir)) for path in temp_dir.rglob("*")
+                    )
+                    raise WEkEODownloadError(
+                        self._format_download_failure(
+                            tile_id=tile_id,
+                            year=year,
+                            target_dir=year_dir,
+                            reason=(
+                                "HDA returned without raising an exception, but no ZIP "
+                                f"or TIFF was created. Temporary files: {files or 'none'}."
+                            ),
+                        )
+                    )
+
+                if downloaded_zip is not None:
+                    if zip_path.exists():
+                        zip_path.unlink()
+                    downloaded_zip.replace(zip_path)
+                    return _TileDownloadStatus(
+                        tile_id=tile_id,
+                        status="downloaded_zip",
+                        path=zip_path,
+                    )
+
+                assert downloaded_tif is not None
+                if tif_path.exists():
+                    tif_path.unlink()
+                downloaded_tif.replace(tif_path)
+                return _TileDownloadStatus(
+                    tile_id=tile_id,
+                    status="downloaded_tif",
+                    path=tif_path,
+                )
+
+            except Exception as error:
+                last_error = error
+                if attempt < attempts:
+                    self.logger.warning(
+                        "Download failed for WEkEO tile %s, year %s, attempt %s/%s: %s. "
+                        "Retrying after %.1f s.",
+                        tile_id,
+                        year,
+                        attempt,
+                        attempts,
+                        error,
+                        self.download_backoff_seconds * attempt,
+                    )
+                    time.sleep(self.download_backoff_seconds * attempt)
+                    continue
+
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+        assert last_error is not None
+        raise WEkEODownloadError(
+            self._format_download_failure(
+                tile_id=tile_id,
+                year=year,
+                target_dir=year_dir,
+                reason=str(last_error),
+            )
+        ) from last_error
+
+    def _inspect_tile_cache(
+        self,
+        tile_ids: list[str],
+        year: str | int,
+    ) -> _TileCacheStatus:
+        """Check all required tile paths before deciding whether to download.
+
+        A tile is considered locally available if either the extracted TIFF exists
+        or the original downloaded ZIP exists. ZIP files are treated as available
+        because ``read()`` can unpack them later through ``_unpack_tiles``.
+
+        Args:
+            tile_ids: Complete list of tile identifiers required for the request.
+            year: Product year.
+
+        Returns:
+            Cache summary containing cached TIFFs, cached ZIPs, and missing tiles.
+        """
+        cached_tif_tile_ids: list[str] = []
+        cached_zip_tile_ids: list[str] = []
+        missing_tile_ids: list[str] = []
+
+        for tile_id in tile_ids:
+            if self._tile_tif_path(year, tile_id).exists():
+                cached_tif_tile_ids.append(tile_id)
+            elif self._tile_zip_path(year, tile_id).exists():
+                cached_zip_tile_ids.append(tile_id)
+            else:
+                missing_tile_ids.append(tile_id)
+
+        return _TileCacheStatus(
+            tile_ids=tuple(tile_ids),
+            cached_tif_tile_ids=tuple(cached_tif_tile_ids),
+            cached_zip_tile_ids=tuple(cached_zip_tile_ids),
+            missing_tile_ids=tuple(missing_tile_ids),
+        )
+
     def download_tiles(
         self,
         tile_ids: list[str],
@@ -307,6 +626,12 @@ class WEkEOCopernicus(Adapter):
         result_lookup: dict[str, Any] | None = None,
     ) -> None:
         """Download WEkEO ZIP tiles for the specified tile identifiers.
+
+        Downloads are parallelized with a thread pool because the work is primarily
+        network-bound. Each tile is downloaded into its own temporary directory first,
+        then moved into the permanent cache. This avoids the race condition in the old
+        implementation, where several downloads could not safely compare the same
+        directory's before/after file listing.
 
         Args:
             tile_ids: List of WEkEO tile identifiers to download.
@@ -318,9 +643,8 @@ class WEkEOCopernicus(Adapter):
                 ``year``, and ``query_overrides``.
 
         Raises:
-            FileNotFoundError: If a requested tile is not found in the WEkEO results,
-                if no ZIP file is downloaded for a tile, or if a known problematic
-                tile would need to be downloaded from WEkEO.
+            FileNotFoundError: If a requested tile is not found in the WEkEO results.
+            WEkEODownloadError: If one or more tile downloads fail.
         """
         year_dir = self._year_dir(year)
         year_dir.mkdir(parents=True, exist_ok=True)
@@ -338,91 +662,117 @@ class WEkEOCopernicus(Adapter):
                 query_overrides=query_overrides,
             )
 
-        self.logger.info(
-            "Preparing to download %s WEkEO tile(s) for year %s into %s.",
-            len(tile_ids),
-            year,
-            year_dir,
-        )
+        cache_status = self._inspect_tile_cache(tile_ids=tile_ids, year=year)
+        tiles_to_download = list(cache_status.missing_tile_ids)
 
-        for tile_id in tile_ids:
-            zip_path = self._tile_zip_path(year, tile_id)
-            tif_path = self._tile_tif_path(year, tile_id)
-
-            if tif_path.exists():
-                self.logger.info(
-                    "Skipping WEkEO tile %s for year %s because TIFF already exists: %s",
-                    tile_id,
-                    year,
-                    tif_path,
-                )
-                continue
-
-            if zip_path.exists():
-                self.logger.info(
-                    "Skipping download of WEkEO tile %s for year %s because ZIP already "
-                    "exists and will be reused: %s",
-                    tile_id,
-                    year,
-                    zip_path,
-                )
-                continue
-
+        for tile_id in tiles_to_download:
             if tile_id not in result_lookup:
                 raise FileNotFoundError(
                     f"Tile {tile_id} was requested but not found in WEkEO search results."
                 )
 
-            before_files = set(year_dir.iterdir()) if year_dir.exists() else set()
+        worker_count = min(self.max_parallel_downloads, max(1, len(tiles_to_download)))
+        self.logger.info(
+            "WEkEO cache preflight for year %s: %s required tile(s), "
+            "%s cached TIFF(s), %s cached ZIP(s), %s missing tile(s).",
+            year,
+            cache_status.total_tiles,
+            len(cache_status.cached_tif_tile_ids),
+            len(cache_status.cached_zip_tile_ids),
+            cache_status.missing_tiles,
+        )
 
+        if cache_status.is_complete:
             self.logger.info(
-                "Downloading WEkEO tile %s for year %s into %s.",
-                tile_id,
+                "All %s required WEkEO tile(s) for year %s are already available; "
+                "skipping download stage.",
+                cache_status.total_tiles,
                 year,
-                year_dir,
             )
-            result_lookup[tile_id].download(str(year_dir))
+            return
 
-            after_files = set(year_dir.iterdir())
-            new_files = sorted(after_files - before_files)
+        self.logger.info(
+            "Downloading %s missing WEkEO tile(s) for year %s using %s worker(s).",
+            len(tiles_to_download),
+            year,
+            worker_count,
+        )
 
-            zip_files = [
-                file_path
-                for file_path in new_files
-                if file_path.suffix.lower() == ".zip"
-            ]
-            if not zip_files:
-                raise FileNotFoundError(
-                    f"No ZIP file downloaded for tile {tile_id}, year {year}."
-                )
+        statuses: list[_TileDownloadStatus] = []
+        failures: list[tuple[str, BaseException]] = []
 
-            matching_zip = next(
-                (file_path for file_path in zip_files if file_path.stem == tile_id),
-                None,
+        if worker_count == 1:
+            for tile_id in tiles_to_download:
+                try:
+                    status = self._download_single_tile(
+                        tile_id=tile_id,
+                        year=year,
+                        year_dir=year_dir,
+                        result=result_lookup[tile_id],
+                    )
+                    statuses.append(status)
+                    self.logger.info(
+                        "Downloaded WEkEO tile %s for year %s: %s",
+                        status.tile_id,
+                        year,
+                        status.path,
+                    )
+                except Exception as error:
+                    failures.append((tile_id, error))
+                    break
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(
+                        self._download_single_tile,
+                        tile_id,
+                        year,
+                        year_dir,
+                        result_lookup[tile_id],
+                    ): tile_id
+                    for tile_id in tiles_to_download
+                }
+                for future in as_completed(futures):
+                    tile_id = futures[future]
+                    try:
+                        status = future.result()
+                    except Exception as error:
+                        failures.append((tile_id, error))
+                        self.logger.error(
+                            "Failed to download WEkEO tile %s for year %s: %s",
+                            tile_id,
+                            year,
+                            error,
+                        )
+                    else:
+                        statuses.append(status)
+                        self.logger.info(
+                            "Downloaded WEkEO tile %s for year %s: %s",
+                            status.tile_id,
+                            year,
+                            status.path,
+                        )
+
+        if failures:
+            details = "\n".join(f"- {tile_id}: {error}" for tile_id, error in failures)
+            raise WEkEODownloadError(
+                f"Failed to download {len(failures)} of {len(tiles_to_download)} "
+                f"missing WEkEO tile(s) for year {year}.\n{details}"
             )
-            downloaded_zip = matching_zip if matching_zip is not None else zip_files[0]
 
-            if downloaded_zip != zip_path:
-                self.logger.info(
-                    "Renaming downloaded WEkEO ZIP from %s to expected path %s.",
-                    downloaded_zip,
-                    zip_path,
-                )
-                if zip_path.exists():
-                    zip_path.unlink()
-                downloaded_zip.replace(zip_path)
-
-            self.logger.info(
-                "Finished downloading WEkEO tile %s for year %s: %s",
-                tile_id,
-                year,
-                zip_path,
-            )
+        self.logger.info(
+            "Finished downloading %s WEkEO tile(s) for year %s into %s.",
+            len(statuses),
+            year,
+            year_dir,
+        )
 
     def unpack_and_merge_tiles(
         self,
         tile_ids: list[str],
         year: str | int,
+        *,
+        chunks: dict[str, int] | None = None,
     ) -> xr.DataArray:
         """Unpack and merge WEkEO tiles into a single dataarray.
 
@@ -432,25 +782,40 @@ class WEkEOCopernicus(Adapter):
         Args:
             tile_ids: List of WEkEO tile identifiers to unpack and merge.
             year: Product year.
+            chunks: Optional dask chunks passed to ``rioxarray.open_rasterio``.
+                Use this for large categorical HRL rasters to avoid full-array reads.
 
         Returns:
             Merged dataarray of the specified tiles.
         """
         extracted_paths = self._unpack_tiles(tile_ids, year)
-        da = self._merge_tiles(extracted_paths)
+        da = self._merge_tiles(extracted_paths, chunks=chunks)
         return da
 
-    def _merge_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
+    def _merge_tiles(
+        self,
+        tile_paths: list[Path],
+        *,
+        chunks: dict[str, int] | None = None,
+    ) -> xr.DataArray:
         """Merge extracted WEkEO tiles into a single xarray DataArray.
 
         Args:
             tile_paths: List of paths to the extracted tile files.
+            chunks: Optional dask chunks passed to ``rioxarray.open_rasterio``.
 
         Returns:
             Merged dataset of the specified tiles.
         """
+        open_chunks: dict[str, int] | dict[Any, Any] = {} if chunks is None else chunks
         das: list[xr.DataArray] = [
-            rxr.open_rasterio(path, chunks={}) for path in tile_paths
+            rxr.open_rasterio(
+                path,
+                chunks=open_chunks,
+                masked=False,
+                cache=False,
+            )
+            for path in tile_paths
         ]
         das = [da.sel(band=1) for da in das]
         da = xr.combine_by_coords(
@@ -484,6 +849,7 @@ class WEkEOCopernicus(Adapter):
         Raises:
             FileNotFoundError: If neither a TIFF nor a ZIP exists for a requested tile,
                 or if a ZIP contains no TIFF.
+            WEkEODownloadError: If the cache is corrupt for a certain file.
         """
         extracted_paths: list[Path] = []
 
@@ -500,23 +866,37 @@ class WEkEOCopernicus(Adapter):
                     f"Neither TIFF nor ZIP found for tile {tile_id}, year {year}."
                 )
 
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                tif_members = [
-                    name
-                    for name in zip_ref.namelist()
-                    if name.lower().endswith((".tif", ".tiff"))
-                ]
-                if not tif_members:
-                    raise FileNotFoundError(f"No TIFF found inside archive {zip_path}.")
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                    tif_members = [
+                        name
+                        for name in zip_ref.namelist()
+                        if name.lower().endswith((".tif", ".tiff"))
+                    ]
+                    if not tif_members:
+                        raise FileNotFoundError(
+                            f"No TIFF found inside archive {zip_path} for tile {tile_id}, "
+                            f"year {year}."
+                        )
 
-                matching_member = next(
-                    (name for name in tif_members if Path(name).stem == tile_id),
-                    None,
-                )
-                tif_member = (
-                    matching_member if matching_member is not None else tif_members[0]
-                )
-                extracted_path = Path(zip_ref.extract(tif_member, path=tif_path.parent))
+                    matching_member = next(
+                        (name for name in tif_members if Path(name).stem == tile_id),
+                        None,
+                    )
+                    tif_member = (
+                        matching_member
+                        if matching_member is not None
+                        else tif_members[0]
+                    )
+                    extracted_path = Path(
+                        zip_ref.extract(tif_member, path=tif_path.parent)
+                    )
+            except zipfile.BadZipFile as error:
+                raise WEkEODownloadError(
+                    f"Cached ZIP file is corrupt for tile {tile_id}, year {year}: "
+                    f"{zip_path}. "
+                    "Delete this ZIP and rerun the build so it can be downloaded again."
+                ) from error
 
             if extracted_path != tif_path:
                 if tif_path.exists():
@@ -568,13 +948,32 @@ class WEkEOCopernicus(Adapter):
         self.tile_ids = tile_ids
         self.year = year
 
-        self.download_tiles(
-            tile_ids=self.tile_ids,
-            year=year,
-            bounds=bounds,
-            query_overrides=query_overrides,
-            result_lookup=result_lookup,
+        cache_status = self._inspect_tile_cache(tile_ids=tile_ids, year=year)
+        self.logger.info(
+            "WEkEO cache preflight for year %s: %s required tile(s), "
+            "%s cached TIFF(s), %s cached ZIP(s), %s missing tile(s).",
+            year,
+            cache_status.total_tiles,
+            len(cache_status.cached_tif_tile_ids),
+            len(cache_status.cached_zip_tile_ids),
+            cache_status.missing_tiles,
         )
+
+        if cache_status.is_complete:
+            self.logger.info(
+                "All required WEkEO tile(s) for year %s are already available in %s; "
+                "skipping download stage.",
+                year,
+                self._year_dir(year),
+            )
+        else:
+            self.download_tiles(
+                tile_ids=list(cache_status.missing_tile_ids),
+                year=year,
+                bounds=bounds,
+                query_overrides=query_overrides,
+                result_lookup=result_lookup,
+            )
 
         self.logger.info(
             "Finished fetching WEkEO Copernicus data for year %s and bounds %s.",
@@ -589,6 +988,10 @@ class WEkEOCopernicus(Adapter):
         bounds: tuple[float, float, float, float],
         year: str | int | None = None,
         query_overrides: dict[str, Any] | None = None,
+        *,
+        dst_crs: str | None = _REQUEST_CRS,
+        normalize_nodata: bool = True,
+        chunks: dict[str, int] | None = None,
     ) -> xr.DataArray:
         """Read and unpack the downloaded WEkEO data, clipping it to the requested bounds.
 
@@ -597,6 +1000,12 @@ class WEkEOCopernicus(Adapter):
             year: Product year. If None, uses the year from the most recent fetch.
             query_overrides: Additional dataset-specific query fields or overrides.
                 Only used if tiles need to be re-identified from the API.
+            dst_crs: Output CRS. Use ``None`` to keep the native tile CRS and skip
+                the expensive full-raster reprojection.
+            normalize_nodata: Whether to map ``normalize_nodata_values`` to
+                ``destination_nodata``. Set False for categorical HRL workflows that
+                already treat the source nodata values as invalid downstream.
+            chunks: Optional dask chunks passed to ``rioxarray.open_rasterio``.
 
         Returns:
             The downloaded and merged WEkEO data.
@@ -618,7 +1027,7 @@ class WEkEOCopernicus(Adapter):
                 query_overrides=query_overrides,
             )
 
-        da = self.unpack_and_merge_tiles(tile_ids, read_year)
+        da = self.unpack_and_merge_tiles(tile_ids, read_year, chunks=chunks)
 
         mask_projected = (
             gpd.GeoSeries([box(*bounds)], crs=_REQUEST_CRS).to_crs(_TILE_CRS).iloc[0]
@@ -649,6 +1058,22 @@ class WEkEOCopernicus(Adapter):
                 "Or contact: luca.battistella@eea.europa.eu"
             ) from error
 
-        da = da.rio.reproject(_REQUEST_CRS)
+        should_normalize_nodata = (
+            normalize_nodata
+            and self.destination_nodata is not None
+            and bool(self.normalize_nodata_values)
+        )
+        if should_normalize_nodata:
+            source_dtype = da.dtype
+            for nodata_value in self.normalize_nodata_values:
+                da = da.where(da != nodata_value, self.destination_nodata)
+            da = da.astype(source_dtype)
+            da = da.rio.write_nodata(self.destination_nodata)
+
+        if dst_crs is not None:
+            da = da.rio.reproject(
+                dst_crs,
+                nodata=self.destination_nodata,
+            )
 
         return da
