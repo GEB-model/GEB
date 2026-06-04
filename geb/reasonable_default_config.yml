@@ -226,17 +226,22 @@ plantFATE:
   n_cells: 'all'
 
 calibration:
-  spinup_time: 1975-01-01
-  start_time: 1978-01-01
-  end_time: 1985-01-01
-  path: calibration
-  gpus: 0
-  scenario: no-adaptation
-  calibration_targets:
-    KGE_discharge: 1
-  DEAP:
-    use_multiprocessing: true
-    ngen: 10
-    mu: 30
-    lambda_: 12
-    select_best: 10
+  hydrology:
+    spinup_time: 1975-01-01
+    start_time: 1978-01-01
+    end_time: 1985-01-01
+    path: calibration
+    gpus: 0
+    scenario: no-adaptation
+    calibration_targets:
+      KGE_discharge:
+        method: hydrology.evaluate_discharge
+        metric: KGE
+        weight: 1.0
+
+    DEAP:
+      use_multiprocessing: true
+      ngen: 10
+      mu: 30
+      lambda_: 12
+      select_best: 10

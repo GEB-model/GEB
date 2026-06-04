@@ -1237,10 +1237,21 @@ class CropFarmers(AgentBaseClass):
         ]  # Cultivation costs are set as a fraction of crop prices
         date_index, cultivation_costs_array = self.cultivation_costs
 
-        if (
-            "calibration" in self.model.config
-            and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
-        ):
+        calibration_section = self.model.config.get("calibration", {})
+        calibration_targets: dict[str, Any] = {}
+        if isinstance(calibration_section, dict):
+            if isinstance(calibration_section.get("calibration_targets"), dict):
+                calibration_targets = calibration_section["calibration_targets"]
+            else:
+                # Backward compatibility for track-based configs under calibration.<track>.
+                for track_config in calibration_section.values():
+                    if isinstance(track_config, dict) and isinstance(
+                        track_config.get("calibration_targets"), dict
+                    ):
+                        calibration_targets = track_config["calibration_targets"]
+                        break
+
+        if "KGE_crops" in calibration_targets:
             # Load price change factors 0 to 25 into a NumPy array
             factors = np.array(
                 [

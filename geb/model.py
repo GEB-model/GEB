@@ -243,13 +243,15 @@ class GEBModel(Module):
             if loader.supports_forecast:
                 # open one forecast to see the number of members
                 forecast_data[loader_name] = read_zarr(
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                    / self.config["general"]["forecasts"]["ensemble"]
-                    / forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
-                    / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
+                    self.files["other"][
+                        f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['ensemble']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                    ]
+                    # / "other"
+                    # / "forecasts"
+                    # / self.config["general"]["forecasts"]["provider"]
+                    # / self.config["general"]["forecasts"]["ensemble"]
+                    # / forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
+                    # / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
                 # these are the forecast members to loop over
                 variable_forecast_members: list[str] = [
@@ -297,6 +299,7 @@ class GEBModel(Module):
 
             # redirect the reporter to a per-member subfolder so outputs do not
             # overwrite the main-run zarrs or each other
+            member_variables = self.reporter.clone_variables()
             saved_runtime_state, saved_variables = (
                 self.reporter._save_and_clear_runtime_state()
             )  # snapshot and clear all open zarr handles / indices
@@ -304,6 +307,7 @@ class GEBModel(Module):
                 original_report_folder / self.multiverse_name
             )  # one dedicated output folder per forecast member
             self.reporter.report_folder = member_report_folder
+            self.reporter.variables = member_variables
             member_report_folder.mkdir(parents=True, exist_ok=True)
 
             # Clone the base run report snapshot into the member folder so
@@ -417,50 +421,34 @@ class GEBModel(Module):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            # forecast issue dates are stored as subdirectories named after the issue datetime
-            # (e.g. forecasts/ECMWF/merged_control_ensemble/20210710T000000/)
-            forecast_issue_dir: Path = (
-                self.input_folder
-                / "other"
-                / "forecasts"
-                / self.config["general"]["forecasts"]["provider"]
-                / self.config["general"]["forecasts"]["ensemble"]
-            )
-            forecast_date_dirs: list[Path] = (
-                [d for d in forecast_issue_dir.iterdir() if d.is_dir()]
-                if forecast_issue_dir.exists()
-                else []
-            )
-            self.logger.debug(
-                "Found %s forecast issue date directories in %s",
-                len(forecast_date_dirs),
-                forecast_issue_dir,
-            )
-            forecast_issue_dates: list[
-                datetime.datetime
-            ] = []  # list to store forecast issue datetimes
-            for d in forecast_date_dirs:
-                datetime_str = d.name  # directory name is the issue datetime string
-                if (
-                    datetime_str.replace("T", "").replace(":", "").isdigit()
-                ):  # Check if datetime string contains only digits, T, and colons (valid format)
-                    dt = datetime.datetime.strptime(
-                        datetime_str, "%Y%m%dT%H%M%S"
-                    )  # convert the string to a datetime object
-                    forecast_issue_dates.append(dt)
-                else:
-                    raise RuntimeError(
-                        f"Forecast directory {d.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
-                    )
+            # forecast issue dates are extracted from self.files['other'] keys
+            # which are stored as: forecasts/PROVIDER/ENSEMBLE/YYYYMMDDTHHMMSS/...
+            provider: str = self.config["general"]["forecasts"]["provider"]
+            ensemble: str = self.config["general"]["forecasts"]["ensemble"]
+            forecast_prefix: str = f"forecasts/{provider}/{ensemble}/"
 
-            forecast_issue_dates = list(
-                set(forecast_issue_dates)
-            )  # only keep unique dates
+            other_files: dict[str, Path] = self.files.get("other", {})
+
+            # extract unique forecast issue datetimes from files keys
+            forecast_issue_dates: list[datetime.datetime] = sorted(
+                {
+                    datetime.datetime.strptime(Path(file_key).parts[3], "%Y%m%dT%H%M%S")
+                    for file_key in other_files
+                    if file_key.startswith(forecast_prefix)
+                    and len(Path(file_key).parts) >= 5
+                    and Path(file_key).parts[3].replace("T", "").isdigit()
+                }
+            )
+
+            self.logger.debug(
+                "Found %s unique forecast issue datetimes for prefix %s",
+                len(forecast_issue_dates),
+                forecast_prefix,
+            )
             self.logger.debug(
                 "Unique forecast issue datetimes available: %s",
-                [dt.isoformat() for dt in sorted(forecast_issue_dates)],
+                [dt.isoformat() for dt in forecast_issue_dates],
             )
-            forecast_issue_dates.sort()  # sort the datetimes in ascending order
             for dt in forecast_issue_dates:
                 self.logger.debug(
                     "Checking forecast issue datetime: %s vs current model time: %s",

@@ -163,7 +163,7 @@ def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") 
 
 
 def ensure_calibration_report_config(model_config_path: Path) -> None:
-    """Ensure calibration runs write the routing discharge reports needed by floods.
+    """Ensure calibration runs use the active track config and write needed reports.
 
     Args:
         model_config_path: Path to the run-specific model configuration file.
@@ -178,6 +178,22 @@ def ensure_calibration_report_config(model_config_path: Path) -> None:
         model_config = {}
     if not isinstance(model_config, dict):
         raise ValueError(f"Expected mapping in model config: {model_config_path}")
+
+    calibration_config = model_config.get("calibration")
+    if calibration_config is not None:
+        if not isinstance(calibration_config, dict):
+            raise ValueError(
+                f"Expected 'calibration' section to be a mapping in {model_config_path}"
+            )
+        if CALIBRATION_TRACK in calibration_config:
+            track_config = calibration_config[CALIBRATION_TRACK]
+            if not isinstance(track_config, dict):
+                raise ValueError(
+                    f"Expected calibration track '{CALIBRATION_TRACK}' to be a mapping in {model_config_path}"
+                )
+            # Runtime model parsing expects the selected calibration track at the
+            # top level, not nested under calibration.<track>.
+            model_config["calibration"] = track_config
 
     report_config = model_config.setdefault("report", {})
     if not isinstance(report_config, dict):

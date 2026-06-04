@@ -1643,6 +1643,12 @@ class LandSurface(Module):
             AssertionError: If any of the debug assertions fail.
         """
         if self.model.current_timestep == 0:
+            runoff_shape_beta_multiplier: np.float32 = np.float32(
+                self.model.config["parameters"]["variable_runoff_shape_beta"]
+            )
+            assert not np.isnan(runoff_shape_beta_multiplier)
+            assert runoff_shape_beta_multiplier > np.float32(0.0)
+
             surface_area_ratio = self.grid.load2d(
                 self.model.files["grid"]["landsurface/surface_area_ratio"]
             )
@@ -1650,7 +1656,8 @@ class LandSurface(Module):
 
             self.HRU.var.variable_runoff_shape_beta[:] = (
                 (surface_area_ratio - np.float32(1)) + np.float32(0.2)
-            ) * 5
+            ) * np.float32(5.0)
+            self.HRU.var.variable_runoff_shape_beta *= runoff_shape_beta_multiplier
             assert not np.isnan(self.HRU.var.variable_runoff_shape_beta).any()
             assert (self.HRU.var.variable_runoff_shape_beta > 0).all()
 

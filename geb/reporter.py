@@ -1,5 +1,6 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
+import copy
 import datetime
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1347,19 +1348,6 @@ class Reporter:
         if type_ is None:
             raise ValueError(f"Type not specified for {config}.")
 
-        if "function" in config and config["function"] is None and "path" not in config:
-            zarr_path: Path = self.report_folder / module_name / (name + ".zarr")
-            zarr_path.parent.mkdir(parents=True, exist_ok=True)
-            config["path"] = str(zarr_path)
-
-            store = zarr.storage.LocalStore(zarr_path, read_only=False)
-            config["_store"] = store
-
-            root_group = zarr.open_group(store, mode="w")
-            config["_root_group"] = root_group
-
-            config["_index"] = 0
-
         if type_ in ("grid", "HRU"):
             if not isinstance(value, np.ndarray):
                 raise ValueError(
@@ -1380,6 +1368,9 @@ class Reporter:
                     error += f" grid id size {grid_size}. Did you mean to set type to 'grid' instead of 'HRU'?"
                 raise ValueError(error)
 
+            if config["function"] is None and "path" not in config:
+                self._initialize_report_store(module_name, name, config, type_, value)
+
             if config["function"] is None:
                 self._write_grid_hru_to_zarr(module_name, name, value, config, type_)
                 return
@@ -1390,6 +1381,8 @@ class Reporter:
 
         elif type_ == "agents":
             assert isinstance(value, (np.ndarray, DynamicArray))
+            if config["function"] is None and "path" not in config:
+                self._initialize_report_store(module_name, name, config, type_, value)
             if config["function"] is None:
                 self._write_agents_to_zarr(module_name, name, value, config)
                 return
@@ -1440,9 +1433,9 @@ class Reporter:
     ) -> None:
         """Flush a specific chunk for grid/HRU variables.
 
-        We write directly to zarr blocks for full chunks. For incomplete final
-        chunks, we fall back to slice-based writes because zarr blocks only
-        accept full chunk shapes.
+        Main-run writes keep using zarr block writes for complete chunks.
+        Forecast-member writes use slices so resumed member output can update
+        partial chunks safely.
 
         Args:
             group: The zarr group where the variable is stored.
@@ -1453,10 +1446,194 @@ class Reporter:
         """
         zarr_array = group[name]
         assert isinstance(zarr_array, zarr.Array)
-        # Create a slice tuple with Ellipsis for all dimensions except the target axis
-        selection: list[slice | int] = [slice(None)] * len(zarr_array.shape)
-        selection[axis] = chunk_index
-        zarr_array.blocks[tuple(selection)] = buffer
+        model = getattr(self, "model", None)
+        is_forecast_member_write = (
+            hasattr(model, "_report_resume_from_timestep") if model is not None else False
+        )
+        chunk_size = zarr_array.chunks[axis]
+
+        if not is_forecast_member_write and buffer.shape[axis] == chunk_size:
+            selection: list[slice | int] = [slice(None)] * len(zarr_array.shape)
+            selection[axis] = chunk_index
+            zarr_array.blocks[tuple(selection)] = buffer
+            return
+
+        chunk_start_index: int = chunk_index * zarr_array.chunks[axis]
+        chunk_end_index: int = chunk_start_index + buffer.shape[axis]
+
+        selection: list[slice] = [slice(None)] * len(zarr_array.shape)
+        selection[axis] = slice(chunk_start_index, chunk_end_index)
+        zarr_array[tuple(selection)] = buffer
+
+    def _get_resume_index(self, root_group: zarr.Group, substeps: int) -> int:
+        """Get the report index from which a forecast member should resume.
+
+        Args:
+            root_group: Zarr group holding the existing report arrays.
+            substeps: Number of reported substeps per model timestep.
+
+        Returns:
+            Report index aligned to the current model time.
+
+        Raises:
+            ValueError: If the stored timeline does not align with the substep count.
+        """
+        time_array = root_group["time"]
+        assert isinstance(time_array, zarr.Array)
+
+        report_times = pd.to_datetime(time_array[:], unit="s")
+        resume_time = np.datetime64(self.model.current_time, "s")
+        resume_index = int(
+            np.searchsorted(report_times.to_numpy(dtype="datetime64[s]"), resume_time)
+        )
+
+        if substeps > 1 and resume_index % substeps != 0:
+            raise ValueError(
+                "Forecast resume index does not align with the report substep count."
+            )
+
+        return resume_index
+
+    def _reset_existing_time_range(
+        self,
+        zarr_array: zarr.Array,
+        axis: int,
+        start_index: int,
+    ) -> None:
+        """Reset an existing time range to the array fill value.
+
+        Args:
+            zarr_array: The array to clear.
+            axis: The time axis.
+            start_index: First index that should be cleared.
+        """
+        if start_index >= zarr_array.shape[axis]:
+            return
+
+        selection: list[slice] = [slice(None)] * len(zarr_array.shape)
+        selection[axis] = slice(start_index, zarr_array.shape[axis])
+        reset_shape = list(zarr_array.shape)
+        reset_shape[axis] = zarr_array.shape[axis] - start_index
+        zarr_array[tuple(selection)] = np.full(
+            tuple(reset_shape),
+            zarr_array.fill_value,
+            dtype=zarr_array.dtype,
+        )
+
+    def _create_chunk_buffer_from_array(
+        self,
+        zarr_array: zarr.Array,
+        axis: int,
+        resume_index: int,
+    ) -> np.ndarray:
+        """Create a chunk-sized write buffer for an existing zarr array.
+
+        Args:
+            zarr_array: Existing zarr array.
+            axis: Time axis.
+            resume_index: Index where writing resumes.
+
+        Returns:
+            Buffer initialised with the preserved prefix of the resume chunk.
+        """
+        buffer_shape = list(zarr_array.shape)
+        buffer_shape[axis] = zarr_array.chunks[axis]
+        buffer = np.full(
+            tuple(buffer_shape),
+            zarr_array.fill_value,
+            dtype=zarr_array.dtype,
+        )
+
+        chunk_size = zarr_array.chunks[axis]
+        chunk_start_index = (resume_index // chunk_size) * chunk_size
+        preserved_prefix_length = resume_index - chunk_start_index
+        if preserved_prefix_length == 0:
+            return buffer
+
+        source_selection: list[slice] = [slice(None)] * len(zarr_array.shape)
+        source_selection[axis] = slice(
+            chunk_start_index,
+            chunk_start_index + preserved_prefix_length,
+        )
+        target_selection: list[slice] = [slice(None)] * len(buffer_shape)
+        target_selection[axis] = slice(0, preserved_prefix_length)
+        buffer[tuple(target_selection)] = zarr_array[tuple(source_selection)]
+        return buffer
+
+    def _initialize_report_store(
+        self,
+        module_name: str,
+        name: str,
+        config: dict[str, Any],
+        type_: str,
+        value: np.ndarray | DynamicArray | int | float | bool,
+    ) -> None:
+        """Initialise reporter runtime state for one variable.
+
+        Args:
+            module_name: Name of the module to which the value belongs.
+            name: Name of the variable being written.
+            config: Reporter configuration dict for this variable.
+            type_: Configured report type.
+            value: Current value used to infer substeps for array reports.
+
+        Raises:
+            ValueError: If an existing report array has an unexpected shape.
+        """
+        zarr_path: Path = self.report_folder / module_name / (name + ".zarr")
+        zarr_path.parent.mkdir(parents=True, exist_ok=True)
+        config["path"] = str(zarr_path)
+
+        store = zarr.storage.LocalStore(zarr_path, read_only=False)
+        config["_store"] = store
+
+        resume_enabled = hasattr(self.model, "_report_resume_from_timestep") and zarr_path.exists()
+        if not resume_enabled:
+            root_group = zarr.open_group(store, mode="w")
+            config["_root_group"] = root_group
+            config["_index"] = 0
+            return
+
+        root_group = zarr.open_group(store, mode="a")
+        config["_root_group"] = root_group
+
+        if type_ in ("grid", "HRU"):
+            assert isinstance(value, np.ndarray)
+            substeps = value.shape[0] if value.ndim == 3 else 1
+            zarr_array = root_group[name]
+            assert isinstance(zarr_array, zarr.Array)
+            if zarr_array.ndim != 3:
+                raise ValueError(
+                    f"Expected 3-D zarr array for {module_name}.{name}, got {zarr_array.ndim}-D."
+                )
+            resume_index = self._get_resume_index(root_group, substeps=substeps)
+            self._reset_existing_time_range(zarr_array, axis=2, start_index=resume_index)
+            config["_chunk_data"] = self._create_chunk_buffer_from_array(
+                zarr_array,
+                axis=2,
+                resume_index=resume_index,
+            )
+            config["_index"] = resume_index
+            return
+
+        if type_ == "agents":
+            zarr_array = root_group[name]
+            assert isinstance(zarr_array, zarr.Array)
+            if zarr_array.ndim not in (1, 2):
+                raise ValueError(
+                    f"Expected 1-D or 2-D zarr array for {module_name}.{name}, got {zarr_array.ndim}-D."
+                )
+            resume_index = self._get_resume_index(root_group, substeps=1)
+            self._reset_existing_time_range(zarr_array, axis=0, start_index=resume_index)
+            config["_chunk_data"] = self._create_chunk_buffer_from_array(
+                zarr_array,
+                axis=0,
+                resume_index=resume_index,
+            )
+            config["_index"] = resume_index
+            return
+
+        config["_index"] = 0
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk.
@@ -1614,6 +1791,14 @@ class Reporter:
         saved_variables = self.variables
         self.variables = {}
         return saved_state, saved_variables
+
+    def clone_variables(self) -> dict[str, Any]:
+        """Create a detached copy of the in-memory non-zarr report history.
+
+        Returns:
+            Deep copy of the current in-memory report variables.
+        """
+        return copy.deepcopy(self.variables)
 
     def _restore_runtime_state(
         self,

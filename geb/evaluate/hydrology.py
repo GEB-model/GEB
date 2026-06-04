@@ -58,7 +58,7 @@ mpl.rcParams["savefig.edgecolor"] = "#000000"
 
 def _calculate_discharge_validation_metrics(
     validation_df: pd.DataFrame,
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float, float, float]:
     """Calculate station-level discharge validation metrics.
 
     Args:
@@ -70,22 +70,28 @@ def _calculate_discharge_validation_metrics(
             - Kling-Gupta efficiency (dimensionless).
             - Nash-Sutcliffe efficiency (dimensionless).
             - Pearson correlation coefficient (dimensionless).
+            - Correlation coefficient (dimensionless).
+            - Beta coefficient (dimensionless).
+            - Gamma coefficient (dimensionless).
     """
     valid_pairs_df: pd.DataFrame = validation_df[
         ["discharge_observations", "discharge_simulations"]
     ].dropna()
     if valid_pairs_df.shape[0] < 2:
-        return np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
 
     y_true: np.ndarray = valid_pairs_df["discharge_observations"].values
     y_pred: np.ndarray = valid_pairs_df["discharge_simulations"].values
     evaluator: RegressionMetric = RegressionMetric(y_true, y_pred)
 
-    kge: float = float(evaluator.kling_gupta_efficiency())
+    metrics, kge = evaluator.kling_gupta_efficiency()
+    r: float = float(metrics["r"])
+    beta: float = float(metrics["beta"])
+    gamma: float = float(metrics["gamma"])
     nse: float = float(evaluator.nash_sutcliffe_efficiency())
     r_value: float = float(evaluator.pearson_correlation_coefficient())
 
-    return kge, nse, r_value
+    return kge, r, beta, gamma, nse, r_value
 
 
 def _plot_validation_return_periods(
@@ -1010,15 +1016,15 @@ def _create_discharge_folium_map(
     for station_id, row in evaluation_gdf.iterrows():
         coords: list[float] = [row.geometry.y, row.geometry.x]
 
-        return_period_fit_path = (
-            eval_plot_folder / f"return_period_fit_{station_id}.png"
-        )
+        # return_period_fit_path = (
+        #     eval_plot_folder / f"return_period_fit_{station_id}.png"
+        # )
         time_series_plot_path = eval_plot_folder / f"timeseries_plot_{station_id}.png"
 
-        with open(return_period_fit_path, "rb") as img_file:
-            encoded_image_return_period = base64.b64encode(img_file.read()).decode(
-                "utf-8"
-            )
+        # with open(return_period_fit_path, "rb") as img_file:
+        #     encoded_image_return_period = base64.b64encode(img_file.read()).decode(
+        #         "utf-8"
+        #     )
         with open(time_series_plot_path, "rb") as img_file:
             encoded_image_time_series = base64.b64encode(img_file.read()).decode(
                 "utf-8"
@@ -1028,7 +1034,7 @@ def _create_discharge_folium_map(
 
         # Accumulate image data for the post-loop JS injection.
         station_images[str(station_id)] = {
-            "returnPeriod": f"data:image/png;base64,{encoded_image_return_period}",
+            # "returnPeriod": f"data:image/png;base64,{encoded_image_return_period}",
             "timeSeries": f"data:image/png;base64,{encoded_image_time_series}",
         }
 
@@ -2940,7 +2946,9 @@ class Hydrology:
                 if validation_df.empty:
                     continue
 
-                KGE, NSE, R = _calculate_discharge_validation_metrics(validation_df)
+                KGE, r, Beta, Gamma, NSE, R = _calculate_discharge_validation_metrics(
+                    validation_df
+                )
 
                 if create_plots:
                     _plot_discharge_validation_graphs(
@@ -2967,6 +2975,9 @@ class Hydrology:
                         ID, "GEB_upstream_area_from_grid"
                     ],
                     "KGE": KGE,
+                    "r": r,
+                    "Beta": Beta,
+                    "Gamma": Gamma,
                     "NSE": NSE,
                     "R": R,
                     f"KGE_{freq_label}": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
@@ -2981,12 +2992,15 @@ class Hydrology:
                     validation_df_daily = (
                         validation_df.resample("D").mean()[counts == 24].dropna()
                     )
-                    KGE_daily, NSE_daily, R_daily = (
+                    KGE_daily, r_daily, Beta_daily, Gamma_daily, NSE_daily, R_daily = (
                         _calculate_discharge_validation_metrics(validation_df_daily)
                     )
                     station_evaluation.update(
                         {
                             "KGE_daily": KGE_daily,
+                            "r_daily": r_daily,
+                            "Beta_daily": Beta_daily,
+                            "Gamma_daily": Gamma_daily,
                             "NSE_daily": NSE_daily,
                             "R_daily": R_daily,
                         }
@@ -2997,6 +3011,9 @@ class Hydrology:
                     station_evaluation.update(
                         {
                             "KGE_hourly": np.nan,
+                            "r_hourly": np.nan,
+                            "Beta_hourly": np.nan,
+                            "Gamma_hourly": np.nan,
                             "NSE_hourly": np.nan,
                             "R_hourly": np.nan,
                         }
@@ -3008,12 +3025,20 @@ class Hydrology:
 
                 # Calculate montly metrics for the station
                 validation_df_monthly = validation_df.resample("M").mean().dropna()
-                KGE_monthly, NSE_monthly, R_monthly = (
-                    _calculate_discharge_validation_metrics(validation_df_monthly)
-                )
+                (
+                    KGE_monthly,
+                    r_monthly,
+                    Beta_monthly,
+                    Gamma_monthly,
+                    NSE_monthly,
+                    R_monthly,
+                ) = _calculate_discharge_validation_metrics(validation_df_monthly)
                 station_evaluation.update(
                     {
                         "KGE_monthly": KGE_monthly,
+                        "r_monthly": r_monthly,
+                        "Beta_monthly": Beta_monthly,
+                        "Gamma_monthly": Gamma_monthly,
                         "NSE_monthly": NSE_monthly,
                         "R_monthly": R_monthly,
                     }

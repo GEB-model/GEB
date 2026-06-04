@@ -16,7 +16,8 @@ import xarray as xr
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from rasterio.crs import CRS  # ty:ignore[unresolved-import]
-from rasterio.features import geometry_mask
+from rasterio.features import geometry_mask, shapes
+from shapely.geometry import shape
 
 from geb.workflows.io import read_geom, read_zarr
 
@@ -35,12 +36,18 @@ def calculate_critical_success_index(
         observations: Observed flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
 
     Returns:
-        Critical success index as a float.
+        Critical success index as a float. Returns ``np.nan`` when the metric
+        is undefined (no hits, misses, or false alarms).
     """
     hit = np.sum(((model == 1) & (observations == 1)).values)
     false_alarm = np.sum(((model == 1) & (observations == 0)).values)
     miss = np.sum(((model == 0) & (observations == 1)).values)
-    csi = hit / (hit + false_alarm + miss)
+    denominator = hit + false_alarm + miss
+    if denominator == 0:
+        # Undefined when there are no observed/predicted flooded cells.
+        return float(np.nan)
+
+    csi = hit / denominator
     return float(csi)
 
 
@@ -54,11 +61,17 @@ def calculate_false_alarm_ratio(
         observations: Observed flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
 
     Returns:
-        False alarm ratio as a float.
+        False alarm ratio as a float. Returns ``np.nan`` when the metric is
+        undefined (no predicted flooded cells).
     """
     false_alarm = np.sum(((model == 1) & (observations == 0)).values)
     hit = np.sum(((model == 1) & (observations == 1)).values)
-    false_alarm_ratio = false_alarm / (false_alarm + hit)
+    denominator = false_alarm + hit
+    if denominator == 0:
+        # Undefined when the model predicts no flooded cells.
+        return float(np.nan)
+
+    false_alarm_ratio = false_alarm / denominator
     return float(false_alarm_ratio)
 
 
@@ -70,11 +83,17 @@ def calculate_hit_rate(model: xr.DataArray, observations: xr.DataArray) -> float
         observations: Observed flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
 
     Returns:
-        Hit rate as a float.
+        Hit rate as a float. Returns ``np.nan`` when the metric is undefined
+        (no observed flooded cells).
     """
     miss = np.sum(((model == 0) & (observations == 1)).values)
     hit = np.sum(((model == 1) & (observations == 1)).values)
-    hit_rate = hit / (hit + miss)
+    denominator = hit + miss
+    if denominator == 0:
+        # Undefined when there are no observed flooded cells.
+        return float(np.nan)
+
+    hit_rate = hit / denominator
     return float(hit_rate)
 
 
@@ -88,18 +107,31 @@ class Hydrodynamics:
 
     def evaluate_hydrodynamics(
         self, run_name: str = "default", *args: Any, **kwargs: Any
-    ) -> None:
+    ) -> dict[str, float | None]:
         """Evaluate hydrodynamic model performance against flood observations.
 
         This method loads modelled flood maps and corresponding observations,
         computes spatial performance metrics (e.g., hit rate, false alarm ratio,
         critical success index), and generates diagnostic visualisations and
-        summary outputs for the specified simulation run.
+                summary outputs for the specified simulation run.
+
+                Validation extent depends on the number of configured observation files:
+                - One observation file: assumed to represent the full catchment. The
+                    observation raster is reprojected to the simulation grid and validation
+                    is evaluated on the catchment extent.
+                - Multiple observation files: treated as region-specific observations.
+                    Each simulation map is evaluated against every observation file, and
+                    validation/plotting are restricted to each observation extent.
 
         Args:
             run_name: Name of the simulation run to evaluate.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            Dictionary with mean metrics across evaluated flood maps, containing
+            ``hit_rate``, ``false_alarm_rate``, ``csi``, and
+            ``flooded_area_km2``. Values are ``None`` when no maps are evaluated.
 
         Raises:
             FileNotFoundError: If the flood map folder does not exist in the output directory.
@@ -107,52 +139,52 @@ class Hydrodynamics:
         """
 
         def parse_flood_forecast_initialisation(
-            filename: str,
+            flood_map_path: Path,
         ) -> tuple[str | None, str | None, str, str, str]:
-            """Parse flood map filename to extract components.
+            """Parse flood map path to extract forecast components.
 
-            Expected format: YYYYMMDDTHHMMSS - MEMBER - EVENT_START - EVENT_END.zarr
+            Supports two folder structures:
+            - No forecasts: ``flood_maps/EVENT_START - EVENT_END.zarr``
+            - With forecasts: ``flood_maps/forecast_YYYYMMDDTHHMMSS/member_N/EVENT_START - EVENT_END.zarr``
 
             Args:
-                filename: Name of the flood map file.
+                flood_map_path: Full path to the flood map file.
 
             Returns:
-                Tuple containing (forecast_init, member, event_start, event_end, event_name)
+                Tuple containing (forecast_init, member, event_start, event_end, event_name),
+                where forecast_init and member are None when forecasts are not used.
 
             Raises:
-                ValueError: If the filename does not match the expected format.
+                ValueError: If the filename does not match the expected event name format.
 
             """
-            # Remove .zarr extension
+            filename = flood_map_path.name
             name_without_ext = filename.replace(".zarr", "")
-
-            # Split by ' - ' to get components
             parts = name_without_ext.split(" - ")
 
-            if len(parts) >= 4:
-                # Handle case with forecasts included
-                forecast_init = parts[0]  # First 17 characters: YYYYMMDDTHHMMSS
-                member = parts[1]  # Member number
-                event_start = parts[2]  # Event start time
-                event_end = parts[3]  # Event end time
+            if len(parts) != 2:
+                raise ValueError(
+                    f"Filename '{filename}' does not match expected flood map format "
+                    "'EVENT_START - EVENT_END.zarr'."
+                )
 
-                # Create event name from start and end times
-                event_name = f"{event_start} - {event_end}"
+            event_start = parts[0]
+            event_end = parts[1]
+            event_name = f"{event_start} - {event_end}"
 
-            elif len(parts) == 2:
-                # Handle case with no forecasts included
+            # Extract forecast init and member from parent directory names when present:
+            # expected structure: flood_maps/forecast_YYYYMMDDTHHMMSS/member_N/event.zarr
+            member_dir = flood_map_path.parent
+            forecast_dir = member_dir.parent
+
+            if member_dir.name.startswith("member_") and forecast_dir.name.startswith(
+                "forecast_"
+            ):
+                forecast_init: str | None = forecast_dir.name.removeprefix("forecast_")
+                member: str | None = member_dir.name.removeprefix("member_")
+            else:
                 forecast_init = None
                 member = None
-                event_start = parts[0]  # Event start time
-                event_end = parts[1]  # Event end time
-
-                # Create event name from start and end times
-                event_name = f"{event_start} - {event_end}"
-
-            else:
-                raise ValueError(
-                    f"Filename '{filename}' does not match expected flood map format."
-                )
 
             return forecast_init, member, event_start, event_end, event_name
 
@@ -162,6 +194,8 @@ class Hydrodynamics:
             flood_map_path: Path | str,
             output_folder: Path,
             visualization_type: str = "Hillshade",
+            validate_on_observation_extent: bool = False,
+            observation_region_name: str | None = None,
         ) -> dict[str, float | int] | None:
             """Calculate performance metrics for flood maps against observations.
 
@@ -170,6 +204,15 @@ class Hydrodynamics:
                 flood_map_path: Path to the model-generated flood map data (.zarr format).
                 visualization_type: Type of visualization for plotting (default is "Hillshade").
                 output_folder: Path to the folder where results will be saved.
+                validate_on_observation_extent: If True, validate and plot on the
+                    observation extent. If False, treat observation as catchment-wide
+                    and validate on the catchment extent after reprojecting observation
+                    to the simulation grid.
+                    When True, the simulation raster is clipped to a 50 m buffer around
+                    the observation extent before metric calculation.
+                observation_region_name: Optional region label used in output file names.
+                    If not provided, the value is derived from the observation filename
+                    stem before the first underscore.
 
             Returns:
                 Dictionary containing performance metrics:
@@ -183,24 +226,36 @@ class Hydrodynamics:
                 ValueError: If the observation file is not in .zarr format.
             """
             # Step 1: Open needed datasets
+            observation_path = Path(observation)
+            region_name_for_output = (
+                observation_region_name
+                if observation_region_name is not None
+                else observation_path.stem.split("_", 1)[0]
+            )
+
             flood_map = read_zarr(flood_map_path)
             obs = read_zarr(observation)
+            obs.rio.write_crs(
+                "EPSG:4326", inplace=True
+            )  # Ensure CRS is set for observations
             print("obs CRS", obs.rio.crs)
-            sim = flood_map.rio.reproject_match(obs)
+
+            # When there is a single observation file, we assume it represents the full
+            # catchment and align the observation to the simulation grid. For multiple
+            # observation files, we keep the observation grid and align simulation to it.
+            if validate_on_observation_extent:
+                sim = flood_map.rio.reproject_match(obs)
+            else:
+                obs = obs.rio.reproject_match(flood_map)
+                sim = flood_map
+
             rivers = read_geom(
-                Path("simulation_root")
-                / run_name
-                / "SFINCS"
-                / "group_0"
-                / "rivers.geoparquet"
+                Path("simulation_root") / run_name / "group_0" / "rivers.geoparquet"
             ).to_crs(obs.rio.crs)
             region = read_geom(
-                Path("simulation_root")
-                / run_name
-                / "SFINCS"
-                / "group_0"
-                / "region.geoparquet"
+                Path("simulation_root") / run_name / "group_0" / "subbasins.geoparquet"
             ).to_crs(obs.rio.crs)
+            region = region.dissolve()
 
             crs_mercator = CRS.from_epsg(3857)
             gdf_mercator = rivers.to_crs(crs_mercator)
@@ -228,8 +283,12 @@ class Hydrodynamics:
             )
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
-            # Clip out region from observations
-            obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
+            # For regional observations, validate directly on observation extent.
+            # For a single catchment-wide observation file, clip to catchment boundary.
+            if validate_on_observation_extent:
+                obs_region = obs_no_rivers
+            else:
+                obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
 
             # Optionally clip using extra validation region from config yml
             extra_validation_path = self.config["floods"].get(
@@ -255,8 +314,36 @@ class Hydrodynamics:
                 sim_extra_clipped = sim_no_rivers
                 clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
 
-            sim_extra_clipped = sim_extra_clipped.rio.reproject_like(obs_region)
-            simulation_final = sim_extra_clipped > hmin
+            if validate_on_observation_extent:
+                sim_for_evaluation = sim_extra_clipped.rio.reproject_match(obs_region)
+
+                # Build a 50 m buffer around the observation extent in a metric CRS,
+                # then clip the simulation to that buffered extent.
+                obs_region_flooded = obs_region.where(obs_region > 0)
+                geoms = [
+                    shape(geom)
+                    for geom, value in shapes(
+                        obs_region_flooded.values, transform=obs_region.rio.transform()
+                    )
+                    if value == 1
+                ]
+
+                flood_gdf = gpd.GeoDataFrame(geometry=geoms, crs=obs_region.rio.crs)
+                flood_gdf = flood_gdf.to_crs(3857)
+
+                buffered_gdf = gpd.GeoDataFrame(
+                    geometry=flood_gdf.buffer(distance=50), crs=3857
+                )
+
+                buffered_gdf = buffered_gdf.to_crs(obs_region.rio.crs)
+
+                sim_for_evaluation = sim_for_evaluation.rio.clip(
+                    buffered_gdf.geometry.values, buffered_gdf.crs
+                )
+            else:
+                sim_for_evaluation = sim_extra_clipped
+
+            simulation_final = sim_for_evaluation > hmin
             observation_final = obs_region > 0
 
             xmin, ymin, xmax, ymax = region.total_bounds
@@ -264,6 +351,16 @@ class Hydrodynamics:
 
             xmin, ymin, xmax, ymax = observation_final.rio.bounds()
             flood_extent: tuple[float, float, float, float] = (xmin, xmax, ymin, ymax)
+            plot_extent: tuple[float, float, float, float]
+            if validate_on_observation_extent:
+                plot_extent = flood_extent
+            else:
+                plot_extent = (
+                    catchment_extent[0],
+                    catchment_extent[1],
+                    catchment_extent[2],
+                    catchment_extent[3],
+                )
 
             # Calculate performance metrics
             # Compute the arrays first to get concrete values
@@ -317,16 +414,17 @@ class Hydrodynamics:
                     simulation_masked = simulation_masked.squeeze()
                     misses_masked = misses_masked.squeeze()
 
-                    margin = 3000
+                    margin = 0.1
                     fig, ax = plt.subplots(figsize=(10, 10))
-
+                    fig.patch.set_facecolor("white")
+                    ax.set_facecolor("white")
                     # clipped_out_raster.plot(
                     #     ax=ax, cmap=blue_cmap, add_colorbar=False, add_labels=False
                     # )
 
                     ax.imshow(
                         simulation_masked,  # False alarms
-                        extent=flood_extent,
+                        extent=plot_extent,
                         # origin="lower",
                         cmap="Wistia",
                         vmin=0,
@@ -336,7 +434,7 @@ class Hydrodynamics:
                     )
                     ax.imshow(
                         misses_masked,  # Misses
-                        extent=flood_extent,
+                        extent=plot_extent,
                         # origin="lower",
                         cmap="autumn_r",
                         vmin=0,
@@ -347,7 +445,7 @@ class Hydrodynamics:
 
                     ax.imshow(
                         hits,
-                        extent=flood_extent,
+                        extent=plot_extent,
                         # origin="lower",
                         cmap="brg",
                         vmin=0,
@@ -378,16 +476,12 @@ class Hydrodynamics:
                     ax.set_xlabel("x [m]")
                     ax.set_ylabel("y [m]")
 
-                    # Set the extent based on the raster bounds
-                    ax.set_xlim(
-                        catchment_extent[0] - margin, catchment_extent[1] + margin
-                    )
-                    ax.set_ylim(
-                        catchment_extent[2] - margin, catchment_extent[3] + margin
-                    )
+                    # Keep map view equal to the selected validation extent.
+                    ax.set_xlim(plot_extent[0] - margin, plot_extent[1] + margin)
+                    ax.set_ylim(plot_extent[2] - margin, plot_extent[3] + margin)
                     ax.set_aspect("equal", adjustable="box")
 
-                    green_patch = mpatches.Patch(color="#94f944", label="Hits")
+                    green_patch = mpatches.Patch(color="#74FF5E", label="Hits")
                     orange_patch = mpatches.Patch(color="orange", label="False Alarms")
                     red_patch = mpatches.Patch(color="red", label="Misses")
 
@@ -405,14 +499,17 @@ class Hydrodynamics:
                             orange_patch,
                             red_patch,
                             catchment_patch,
-                        ]
+                        ],
+                        loc="upper right",
+                        fontsize=10,
+                        frameon=True,
+                        framealpha=0.9,
                     )
 
                     # Add a comment about the metrics in the plot
                     legend_bbox = legend.get_window_extent(
                         renderer=fig.canvas.get_renderer()  # ty:ignore[unresolved-attribute]
                     )
-                    legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
 
                     # Add text below legend using axes coordinates
                     ax.annotate(
@@ -420,16 +517,18 @@ class Hydrodynamics:
                         f"HR    = {hit_rate:.2f} %\n"
                         f"FAR   = {false_rate:.2f} %\n"
                         f"CSI   = {csi:.2f} %",
-                        xy=(legend_bbox_ax.x0 + 0.055, legend_bbox_ax.y0 + 0.002),
+                        xy=(0.01, 0.01),
                         xycoords="axes fraction",
                         fontsize=10,
+                        color="white",
+                        backgroundcolor="black",
                         bbox=dict(
-                            facecolor="white",
-                            edgecolor="grey",
+                            facecolor="black",
+                            edgecolor="black",
                             boxstyle="round,pad=0.2",
                             alpha=0.8,
                         ),
-                        verticalalignment="top",
+                        verticalalignment="bottom",
                         horizontalalignment="left",
                         zorder=5,
                     )
@@ -437,12 +536,13 @@ class Hydrodynamics:
                     crs_text = f"CRS: {target_crs.to_string()}"
                     ax.annotate(
                         crs_text,
-                        xy=(0.99, 0.02),  # Bottom right corner in axes coordinates
+                        xy=(0.99, 0.01),  # Bottom right corner in axes coordinates
                         xycoords="axes fraction",
+                        color="white",
                         fontsize=8,
                         bbox=dict(
-                            facecolor="white",
-                            edgecolor="grey",
+                            facecolor="black",
+                            edgecolor="black",
                             boxstyle="round,pad=0.2",
                             alpha=0.8,
                         ),
@@ -454,14 +554,15 @@ class Hydrodynamics:
                     simulation_filename = os.path.splitext(
                         os.path.basename(flood_map_path)
                     )[0]
+                    output_basename = f"{simulation_filename}_{region_name_for_output}"
                     fig.savefig(
                         output_folder
-                        / f"{simulation_filename}_validation_floodextent_plot.png",
+                        / f"{output_basename}_validation_floodextent_plot.png",
                         dpi=600,
                         bbox_inches="tight",
                     )
                     print(
-                        f"Figure with {visualization_type} saved as: {output_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
+                        f"Figure with {visualization_type} saved as: {output_folder / f'{output_basename}_validation_floodextent_plot.png'}"
                     )
 
                 elif visualization_type == "Hillshade":
@@ -527,12 +628,13 @@ class Hydrodynamics:
                     simulation_filename = os.path.splitext(
                         os.path.basename(flood_map_path)
                     )[0]
+                    output_basename = f"{simulation_filename}_{region_name_for_output}"
                     plt.savefig(
                         output_folder
-                        / f"{simulation_filename}_validation_floodextent_plot.png"
+                        / f"{output_basename}_validation_floodextent_plot.png"
                     )
                     print(
-                        f"Figure with {visualization_type} saved as: {output_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
+                        f"Figure with {visualization_type} saved as: {output_folder / f'{output_basename}_validation_floodextent_plot.png'}"
                     )
 
                 else:
@@ -541,7 +643,7 @@ class Hydrodynamics:
                     )
 
                 performance_numbers = (
-                    output_folder / f"{simulation_filename}_performance_metrics.txt"
+                    output_folder / f"{output_basename}_performance_metrics.txt"
                 )
 
                 with open(performance_numbers, "w") as f:
@@ -784,7 +886,7 @@ class Hydrodynamics:
                 Path | None: The matching observation file if found, otherwise None.
             """
             for f in files:
-                if f.stem == event_name:
+                if event_name in f.stem:
                     return f
             return None
 
@@ -796,6 +898,10 @@ class Hydrodynamics:
 
         eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
 
+        # Collect metrics across all evaluated flood maps/events so this method
+        # can return a summary dictionary for CLI JSON output.
+        all_performance_metrics: list[dict[str, float]] = []
+        flood_maps_folder = self.model.output_folder / "flood_maps"
         # Calculate performance metrics for every event in config file
         for event in self.config["floods"]["events"]:
             event_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
@@ -805,13 +911,9 @@ class Hydrodynamics:
             if self.model.config["general"]["forecasts"]["use"]:
                 event_folder = eval_hydrodynamics_folders / "forecasts" / event_name
                 event_folder.mkdir(parents=True, exist_ok=True)
-                flood_maps_folder = (
-                    self.model.output_folder / "flood_maps" / "forecasts"
-                )
             else:
                 event_folder = eval_hydrodynamics_folders / event_name
                 event_folder.mkdir(parents=True, exist_ok=True)
-                flood_maps_folder = self.model.output_folder / "flood_maps"
 
             # check if run file exists, if not, raise an error
             if not flood_maps_folder.exists():
@@ -825,30 +927,38 @@ class Hydrodynamics:
                 observation_files = [Path(obs_raw)]
             else:
                 observation_files = [Path(p) for p in obs_raw]
-            obs_file = find_exact_observation_file(event_name, observation_files)
+            validate_on_observation_extent = len(observation_files) > 1
 
-            # check if observation file exists, if not, raise an error
-            if obs_file is None:
+            if len(observation_files) == 1:
+                # One observation file is interpreted as catchment-wide coverage and
+                # is reused for all flood maps/events.
+                observation_files_for_event = [observation_files[0]]
                 print(
-                    f"No observation file for this event: '{event_name}'. Skipping event."
+                    f"Using single observation file for all events: {observation_files_for_event[0].name}"
                 )
-                continue
-            if not obs_file.exists():
-                raise FileNotFoundError(
-                    "Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
-                )
-            if obs_file.suffix != ".zarr":
-                raise ValueError(
-                    "Flood observation file is not in the correct format. Please provide a .zarr file."
-                )
+            else:
+                # Multiple observation files are interpreted as region-specific layers.
+                # Every simulation map is evaluated against all provided observations.
+                observation_files_for_event = observation_files
+
+            for obs_file in observation_files_for_event:
+                if not obs_file.exists():
+                    raise FileNotFoundError(
+                        "Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
+                    )
+                if obs_file.suffix != ".zarr":
+                    raise ValueError(
+                        "Flood observation file is not in the correct format. Please provide a .zarr file."
+                    )
 
             # Find all flood maps corresponding to the event
-            all_flood_map_files = list(flood_maps_folder.glob("*.zarr"))
+            # Use recursive glob to handle both forecast and non-forecast folder structures
+            all_flood_map_files = list(flood_maps_folder.glob("**/*.zarr"))
 
             # Filter flood_map_files for the current event only
             flood_map_files = []
             for flood_map_path in all_flood_map_files:
-                parsed = parse_flood_forecast_initialisation(flood_map_path.name)
+                parsed = parse_flood_forecast_initialisation(flood_map_path)
 
                 # Skip files that do not match the expected format
                 if parsed is None:
@@ -867,16 +977,32 @@ class Hydrodynamics:
                 print(
                     "Only one flood map found, assuming no forecasts were included in the simulation."
                 )
-                flood_map_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
-                flood_map_path = (
-                    Path(self.model.output_folder) / "flood_maps" / flood_map_name
+                flood_map_path = flood_map_files[0]
+                forecast_init_single, member_single, _, _, _ = (
+                    parse_flood_forecast_initialisation(flood_map_path)
                 )
-                calculate_performance_metrics(
-                    observation=str(obs_file),
-                    flood_map_path=flood_map_path,
-                    output_folder=event_folder,
-                    visualization_type="OSM",
-                )
+
+                single_output_folder = event_folder
+                if forecast_init_single is not None:
+                    single_output_folder = single_output_folder / forecast_init_single
+                if member_single is not None:
+                    single_output_folder = (
+                        single_output_folder / f"member_{member_single}"
+                    )
+                single_output_folder.mkdir(parents=True, exist_ok=True)
+
+                for obs_file in observation_files_for_event:
+                    observation_region_name = obs_file.stem.split("_", 1)[0]
+                    metrics = calculate_performance_metrics(
+                        observation=str(obs_file),
+                        flood_map_path=flood_map_path,
+                        output_folder=single_output_folder,
+                        visualization_type="OSM",
+                        validate_on_observation_extent=validate_on_observation_extent,
+                        observation_region_name=observation_region_name,
+                    )
+                    if metrics is not None:
+                        all_performance_metrics.append(metrics)
                 print(f"Successfully evaluated: {flood_map_path.name}")
 
             elif len(flood_map_files) == 0:
@@ -896,7 +1022,7 @@ class Hydrodynamics:
                     # Parse the flood map filename to extract components
                     print(f"flood_map_name: {flood_map_name}")
                     forecast_init, member, event_start, event_end, parsed_event_name = (
-                        parse_flood_forecast_initialisation(flood_map_name.name)
+                        parse_flood_forecast_initialisation(flood_map_name)
                     )
                     unique_forecast_inits.add(forecast_init)
 
@@ -918,9 +1044,7 @@ class Hydrodynamics:
 
                     matching_flood_maps = []
                     for flood_map_path in flood_map_files:
-                        parsed = parse_flood_forecast_initialisation(
-                            flood_map_path.name
-                        )
+                        parsed = parse_flood_forecast_initialisation(flood_map_path)
 
                         # Skip files that do not match the expected format
                         if parsed is None:
@@ -944,29 +1068,43 @@ class Hydrodynamics:
                     for flood_map_path in matching_flood_maps:
                         print(f"   Evaluating: {flood_map_path.name}")
 
-                        metrics = calculate_performance_metrics(
-                            observation=str(obs_file),
-                            flood_map_path=flood_map_path,
-                            visualization_type="OSM",
-                            output_folder=forecast_folder,
-                        )
-                        if metrics is None:
-                            continue
-                        print("   Flood map evaluation complete.")
-                        # Add metadata to metrics
                         forecast_init_parsed, member, _, _, _ = (
-                            parse_flood_forecast_initialisation(flood_map_path.name)
+                            parse_flood_forecast_initialisation(flood_map_path)
                         )
-                        metrics_with_metadata = {
-                            "forecast_init": forecast_init_parsed,
-                            "member": member,
-                            "filename": flood_map_path.name,
-                            **metrics,
-                        }
+                        member_output_folder = forecast_folder
+                        if member is not None:
+                            member_output_folder = forecast_folder / f"member_{member}"
+                        member_output_folder.mkdir(parents=True, exist_ok=True)
 
-                        performance_metrics_list.append(metrics_with_metadata)
-                        forecast_metrics_list.append(metrics)
-                        print(f"   Successfully evaluated: {flood_map_path.name}")
+                        for obs_file in observation_files_for_event:
+                            observation_region_name = obs_file.stem.split("_", 1)[0]
+                            metrics = calculate_performance_metrics(
+                                observation=str(obs_file),
+                                flood_map_path=flood_map_path,
+                                visualization_type="OSM",
+                                output_folder=member_output_folder,
+                                validate_on_observation_extent=validate_on_observation_extent,
+                                observation_region_name=observation_region_name,
+                            )
+                            if metrics is None:
+                                continue
+                            print("   Flood map evaluation complete.")
+                            # Add metadata to metrics
+                            metrics_with_metadata = {
+                                "forecast_init": forecast_init_parsed,
+                                "member": member,
+                                "observation_region": observation_region_name,
+                                "filename": flood_map_path.name,
+                                **metrics,
+                            }
+
+                            performance_metrics_list.append(metrics_with_metadata)
+                            forecast_metrics_list.append(metrics)
+                            all_performance_metrics.append(metrics)
+                            print(
+                                "   Successfully evaluated: "
+                                f"{flood_map_path.name} vs {obs_file.name}"
+                            )
 
                 if performance_metrics_list:
                     performance_df = pd.DataFrame(performance_metrics_list)
@@ -986,3 +1124,19 @@ class Hydrodynamics:
             print(f"Completed processing event: {event_name}\n")
 
         print("Flood map performance metrics calculated for all events.")
+
+        if not all_performance_metrics:
+            return {
+                "hit_rate": None,
+                "false_alarm_rate": None,
+                "csi": None,
+                "flooded_area_km2": None,
+            }
+
+        metrics_df = pd.DataFrame(all_performance_metrics)
+        return {
+            "hit_rate": float(metrics_df["hit_rate"].mean()),
+            "false_alarm_rate": float(metrics_df["false_alarm_rate"].mean()),
+            "csi": float(metrics_df["csi"].mean()),
+            "flooded_area_km2": float(metrics_df["flooded_area_km2"].mean()),
+        }
