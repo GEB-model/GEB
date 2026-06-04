@@ -24,12 +24,11 @@ import pandas as pd
 import pyflwdir
 import rasterio.features
 import xarray as xr
-import yaml
 import zarr
 from affine import Affine
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
-from shapely.geometry import Point, shape
+from shapely.geometry import Point, box, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
@@ -74,6 +73,19 @@ from .modules.hydrography import (
 from .workflows.hydrography import (
     get_river_graph,
 )
+
+INIT_MULTIPLE_EXCLUDED_OUTLET_ISO3_CODES: frozenset[str] = frozenset(
+    {
+        "DZA",  # Algeria
+        "EGY",  # Egypt
+        "ESH",  # Western Sahara
+        "LBY",  # Libya
+        "MAR",  # Morocco
+        "MLT",  # Malta
+        "SDN",  # Sudan
+        "TUN",  # Tunisia
+    }
+)  # these are areas that are included in the squared BBOX but that should be excluded
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
@@ -413,6 +425,115 @@ def _load_merit_catchments(
         )
 
     return catchments
+
+
+def get_init_multiple_region_geometry(
+    geometry_bounds: str, region_shapefile: str | None, working_directory: Path
+) -> gpd.GeoDataFrame:
+    """Create the region geometry used to find init-multiple outlet basins.
+
+    Args:
+        geometry_bounds: Bounding box as ``xmin,ymin,xmax,ymax`` in degrees.
+        region_shapefile: Optional path to a region shapefile.
+        working_directory: Working directory used to resolve relative shapefile paths.
+
+    Returns:
+        Region geometry in EPSG:4326.
+
+    Raises:
+        FileNotFoundError: If the region shapefile does not exist.
+        ValueError: If geometry_bounds format is invalid.
+    """
+    if region_shapefile:
+        region_shapefile_path: Path = Path(region_shapefile).expanduser()
+        if not region_shapefile_path.is_absolute():
+            region_shapefile_path = working_directory / region_shapefile_path
+        if not region_shapefile_path.exists():
+            raise FileNotFoundError(
+                f"Region shapefile not found at: {region_shapefile_path}"
+            )
+        region_geometry: gpd.GeoDataFrame = gpd.read_file(region_shapefile_path)
+    else:
+        bounds: list[float] = [
+            float(value.strip()) for value in geometry_bounds.split(",")
+        ]
+        if len(bounds) != 4:
+            raise ValueError(
+                "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
+            )
+        region_geometry = gpd.GeoDataFrame(geometry=[box(*bounds)], crs="EPSG:4326")
+
+    if region_geometry.crs != "EPSG:4326":
+        region_geometry = region_geometry.to_crs("EPSG:4326")
+    return region_geometry
+
+
+def remove_init_multiple_excluded_outlets(
+    data_catalog: DataCatalog,
+    clusters: list[list[int]],
+    excluded_iso3_codes: Iterable[str] = INIT_MULTIPLE_EXCLUDED_OUTLET_ISO3_CODES,
+) -> tuple[list[list[int]], list[int]]:
+    """Remove init-multiple outlet COMIDs that intersect excluded countries.
+
+    Args:
+        data_catalog: Data catalog containing MERIT Basins catchments and GADM level 0 countries.
+        clusters: Outlet COMID values grouped by cluster.
+        excluded_iso3_codes: ISO3 country codes whose outlet COMIDs should be removed.
+
+    Returns:
+        Filtered clusters and sorted removed outlet COMID values.
+
+    Raises:
+        ValueError: If no clusters are provided.
+    """
+    if not clusters:
+        raise ValueError("At least one cluster is required.")
+
+    outlet_ids: list[int] = sorted(
+        {int(subbasin_id) for cluster in clusters for subbasin_id in cluster}
+    )
+    excluded_iso3_code_set: set[str] = {
+        str(iso3_code).upper() for iso3_code in excluded_iso3_codes
+    }
+    if not excluded_iso3_code_set:
+        return clusters, []
+
+    countries: gpd.GeoDataFrame = data_catalog.fetch("GADM_level0").read(
+        columns=["GID_0", "geometry"]
+    )
+    excluded_countries: gpd.GeoDataFrame = countries[
+        countries["GID_0"].isin(excluded_iso3_code_set)
+    ]
+    if excluded_countries.empty:
+        return clusters, []
+
+    outlet_catchments: gpd.GeoDataFrame = _load_merit_catchments(
+        data_catalog, outlet_ids, columns=["geometry"]
+    )
+    if excluded_countries.crs != outlet_catchments.crs:
+        excluded_countries = excluded_countries.to_crs(outlet_catchments.crs)
+
+    excluded_geometry: BaseGeometry = excluded_countries.union_all()
+    removed_ids: set[int] = set(
+        int(subbasin_id)
+        for subbasin_id in outlet_catchments.index[
+            outlet_catchments.geometry.intersects(excluded_geometry)
+        ]
+    )
+    if not removed_ids:
+        return clusters, []
+
+    filtered_clusters: list[list[int]] = []
+    for cluster in clusters:
+        filtered_cluster: list[int] = [
+            int(subbasin_id)
+            for subbasin_id in cluster
+            if int(subbasin_id) not in removed_ids
+        ]
+        if filtered_cluster:
+            filtered_clusters.append(filtered_cluster)
+
+    return filtered_clusters, sorted(removed_ids)
 
 
 def _get_upstream_subbasin_ids(
@@ -1264,13 +1385,7 @@ def create_multi_basin_configs(
 
         build_config_path = base_dir / "build.yml"
         build_config: dict[str, str] = {"inherits": "../../build.yml"}
-        with open(build_config_path, "w") as build_config_file:
-            yaml.dump(
-                build_config,
-                build_config_file,
-                default_flow_style=False,
-                sort_keys=False,
-            )
+        write_params(build_config, build_config_path)
 
         model_config_path = base_dir / "model.yml"
         cluster_subbasin_ids: list[int] = [int(subbasin_id) for subbasin_id in cluster]
@@ -1289,13 +1404,7 @@ def create_multi_basin_configs(
         if total_basin_area_km2 is not None:
             model_config["basin"] = {"total_area_km2": round(total_basin_area_km2, 2)}
 
-        with open(model_config_path, "w") as model_config_file:
-            yaml.dump(
-                model_config,
-                model_config_file,
-                default_flow_style=False,
-                sort_keys=False,
-            )
+        write_params(model_config, model_config_path)
 
         print(
             f"  Created configuration files in {base_dir.relative_to(working_directory)}"

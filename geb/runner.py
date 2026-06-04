@@ -16,20 +16,20 @@ from operator import attrgetter
 from pathlib import Path
 from typing import Any, TextIO, TypeVar, cast
 
-import geopandas as gpd
 import pandas as pd
 import yaml
 from pydantic import BaseModel, ValidationError
-from shapely.geometry import box
 
 from geb import GEB_PACKAGE_DIR
-from geb.build import GEBModel as GEBModelBuild
-from geb.build.__init__ import (
+from geb.build import (
+    GEBModel as GEBModelBuild,
     cluster_subbasins_following_coastline,
     create_cluster_outline_geodataframe,
     create_cluster_visualization_map,
     create_multi_basin_configs,
     get_all_downstream_subbasins_in_geom,
+    get_init_multiple_region_geometry,
+    remove_init_multiple_excluded_outlets,
     save_clusters_as_merged_geometries,
     save_clusters_to_geoparquet,
 )
@@ -1506,58 +1506,6 @@ def clean_fn(
     return items_to_delete
 
 
-def _resolve_init_multiple_directory(
-    working_directory: Path, init_multiple_dir: str
-) -> Path:
-    """Resolve where init-multiple model directories should be created.
-
-    A plain name such as ``large_scale`` is placed under the nearest existing
-    ``models`` directory for backward compatibility. Absolute paths and relative
-    paths with directory components are used directly, which supports Snellius
-    layouts where ``models`` is not next to the package checkout.
-
-    Args:
-        working_directory: Working directory for the init-multiple command.
-        init_multiple_dir: Directory name or path for the large-scale model set.
-
-    Returns:
-        Resolved directory path for the large-scale model set.
-
-    Raises:
-        FileNotFoundError: If a plain directory name is requested and no models
-            directory can be found.
-    """
-    resolved_working_directory: Path = working_directory.expanduser().resolve()
-    requested_directory: Path = Path(init_multiple_dir).expanduser()
-
-    if requested_directory.is_absolute():
-        return requested_directory
-    if requested_directory.parent != Path("."):
-        return (resolved_working_directory / requested_directory).resolve()
-
-    candidate_model_dirs: list[Path] = [
-        resolved_working_directory / "models",
-        resolved_working_directory.parent / "models",
-        Path(__file__).resolve().parents[2] / "models",
-    ]
-    checked_model_dirs: list[Path] = []
-    for model_dir in candidate_model_dirs:
-        resolved_model_dir: Path = model_dir.resolve()
-        if resolved_model_dir in checked_model_dirs:
-            continue
-        checked_model_dirs.append(resolved_model_dir)
-        if resolved_model_dir.is_dir():
-            return resolved_model_dir / requested_directory
-
-    checked_paths: str = "\n".join(f"  - {path}" for path in checked_model_dirs)
-    raise FileNotFoundError(
-        "Models directory not found. Checked:\n"
-        f"{checked_paths}\n"
-        "Pass --init-multiple-dir as an absolute path or a relative path with a "
-        "directory component to create the model set elsewhere."
-    )
-
-
 def init_multiple_fn(
     config: str | Path,
     build_config: str | Path,
@@ -1607,84 +1555,110 @@ def init_multiple_fn(
 
     logger = create_logger("init_multiple")
 
-    working_directory_path: Path = Path(working_directory).expanduser()
-    init_multiple_dir_path: Path = _resolve_init_multiple_directory(
-        working_directory_path, init_multiple_dir
-    )
+    working_directory_path: Path = Path(working_directory).expanduser().resolve()
+    requested_init_multiple_dir: Path = Path(init_multiple_dir).expanduser()
+    if requested_init_multiple_dir.is_absolute():
+        init_multiple_dir_path: Path = requested_init_multiple_dir
+    elif requested_init_multiple_dir.parent != Path("."):
+        init_multiple_dir_path = (
+            working_directory_path / requested_init_multiple_dir
+        ).resolve()
+    else:
+        candidate_model_dirs: list[Path] = [
+            working_directory_path / "models",
+            working_directory_path.parent / "models",
+            GEB_PACKAGE_DIR.parents[1] / "models",
+        ]
+        existing_model_dir: Path | None = next(
+            (
+                candidate_model_dir.resolve()
+                for candidate_model_dir in candidate_model_dirs
+                if candidate_model_dir.resolve().is_dir()
+            ),
+            None,
+        )
+        if existing_model_dir is None:
+            checked_paths: str = "\n".join(
+                f"  - {candidate_model_dir.resolve()}"
+                for candidate_model_dir in candidate_model_dirs
+            )
+            raise FileNotFoundError(
+                "Models directory not found. Checked:\n"
+                f"{checked_paths}\n"
+                "Pass --init-multiple-dir as an absolute path or a relative path "
+                "with a directory component to create the model set elsewhere."
+            )
+        init_multiple_dir_path = existing_model_dir / requested_init_multiple_dir
     init_multiple_dir_path.mkdir(parents=True, exist_ok=True)
 
-    data_catalog_instance = DataCatalog(logger=logger)
-
-    # create river
     logger.info("Starting multiple model initialization")
     logger.info(f"Target area: {target_area_km2:,.0f} km²")
 
-    logger.info("Loading river network...")
-    river_graph = get_river_graph(data_catalog_instance)
-
-    # Create bounding box geometry or read region shapefile
-    if not region_shapefile:
-        logger.info(f"Using geometry bounds: {geometry_bounds}")
-        # Parse geometry bounds and convert to geodataframe
-        bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
-        if len(bounds) != 4:
-            raise ValueError(
-                "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
-            )
-        xmin, ymin, xmax, ymax = bounds
-
-        bbox_geom = gpd.GeoDataFrame(
-            geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
-        )
-    else:
-        logger.info(f"Using region shapefile: {region_shapefile}")
-        region_shapefile_path: Path = Path(region_shapefile).expanduser()
-        if not region_shapefile_path.is_absolute():
-            region_shapefile_path = working_directory_path / region_shapefile_path
-        if not region_shapefile_path.exists():
-            raise FileNotFoundError(
-                f"Region shapefile not found at: {region_shapefile_path}"
-            )
-        bbox_geom = gpd.read_file(region_shapefile_path)
-
-    # check crs bounding box geometry
-    if bbox_geom.crs != "EPSG:4326":
-        bbox_geom = bbox_geom.to_crs("EPSG:4326")
-
-    downstream_subbasins = get_all_downstream_subbasins_in_geom(
-        data_catalog_instance, bbox_geom, ocean_outlets_only, logger
-    )  # get all downstream subbasins in the bounding box geometry
-
-    if not downstream_subbasins:
-        raise ValueError("No downstream subbasins found in the specified geometry")
-
-    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins")
-
-    logger.info("Clustering subbasins by following coastline...")
-    clusters = cluster_subbasins_following_coastline(
-        data_catalog_instance,
-        downstream_subbasins,
-        target_area_km2=target_area_km2,
-        logger=logger,
-        river_graph=river_graph,
-        min_bbox_efficiency=min_bbox_efficiency,
-    )
-
-    logger.info(f"Created {len(clusters)} clusters")
-
-    # Verify example folder exists
     example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
     if not example_folder.exists():
         raise FileNotFoundError(
             f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
         )
 
+    data_catalog = DataCatalog(logger=logger)
+
+    logger.info("Loading river network...")
+    river_graph = get_river_graph(data_catalog)
+
+    logger.info(
+        f"Using region shapefile: {region_shapefile}"
+        if region_shapefile
+        else f"Using geometry bounds: {geometry_bounds}"
+    )
+    region_geometry = get_init_multiple_region_geometry(
+        geometry_bounds, region_shapefile, working_directory_path
+    )
+    outlet_subbasin_ids: list[int] = get_all_downstream_subbasins_in_geom(
+        data_catalog, region_geometry, ocean_outlets_only, logger
+    )
+    if not outlet_subbasin_ids:
+        raise ValueError("No downstream subbasins found in the specified geometry")
+
+    logger.info(f"Found {len(outlet_subbasin_ids)} downstream subbasins")
+
+    logger.info("Clustering subbasins by following coastline...")
+    outlet_clusters: list[list[int]] = cluster_subbasins_following_coastline(
+        data_catalog,
+        outlet_subbasin_ids,
+        target_area_km2=target_area_km2,
+        logger=logger,
+        river_graph=river_graph,
+        min_bbox_efficiency=min_bbox_efficiency,
+    )
+
+    logger.info(f"Created {len(outlet_clusters)} clusters")
+
+    # Keep the large-scale Europe setup focused on the intended mainland outlets.
+    logger.info("Postprocessing Malta and North Africa outlets...")
+    outlet_clusters, removed_outlet_ids = remove_init_multiple_excluded_outlets(
+        data_catalog=data_catalog,
+        clusters=outlet_clusters,
+    )
+    if removed_outlet_ids:
+        logger.info(
+            "Removed %s downstream COMID values before writing outputs: %s",
+            len(removed_outlet_ids),
+            removed_outlet_ids,
+        )
+    else:
+        logger.info("No Malta or North Africa outlet COMID values found")
+    if not outlet_clusters:
+        raise ValueError(
+            "No downstream subbasins remain after Malta and North Africa postprocessing"
+        )
+
     logger.info(f"Creating cluster configurations using example: {from_example}")
 
+    # Build outlines after outlet cleanup so every written output uses the same clusters.
     logger.info("Creating exact merged basin outlines for all clusters...")
-    cluster_outlines: gpd.GeoDataFrame = create_cluster_outline_geodataframe(
-        clusters=clusters,
-        data_catalog=data_catalog_instance,
+    cluster_outlines = create_cluster_outline_geodataframe(
+        clusters=outlet_clusters,
+        data_catalog=data_catalog,
         river_graph=river_graph,
         cluster_prefix=cluster_prefix,
     )
@@ -1694,8 +1668,8 @@ def init_multiple_fn(
     }
 
     # Create cluster configurations
-    cluster_directories = create_multi_basin_configs(
-        clusters=clusters,
+    create_multi_basin_configs(
+        clusters=outlet_clusters,
         working_directory=init_multiple_dir_path,
         cluster_prefix=cluster_prefix,
         from_example=from_example,
@@ -1708,8 +1682,8 @@ def init_multiple_fn(
 
     logger.info(f"Saving outlet basins to geoparquet: {save_geoparquet}")
     save_clusters_to_geoparquet(
-        clusters=clusters,
-        data_catalog=data_catalog_instance,
+        clusters=outlet_clusters,
+        data_catalog=data_catalog,
         output_path=save_geoparquet,
         cluster_prefix=cluster_prefix,
     )
@@ -1738,6 +1712,4 @@ def init_multiple_fn(
     else:
         logger.info("Skipping visualization map (--skip-visualization flag set)")
 
-    logger.info(
-        f"Successfully created {len(cluster_directories)} model configurations:"
-    )
+    logger.info(f"Successfully created {len(outlet_clusters)} model configurations:")
