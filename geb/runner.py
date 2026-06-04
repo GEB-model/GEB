@@ -26,6 +26,7 @@ from geb import GEB_PACKAGE_DIR
 from geb.build import GEBModel as GEBModelBuild
 from geb.build.__init__ import (
     cluster_subbasins_following_coastline,
+    create_cluster_outline_geodataframe,
     create_cluster_visualization_map,
     create_multi_basin_configs,
     get_all_downstream_subbasins_in_geom,
@@ -1505,6 +1506,58 @@ def clean_fn(
     return items_to_delete
 
 
+def _resolve_init_multiple_directory(
+    working_directory: Path, init_multiple_dir: str
+) -> Path:
+    """Resolve where init-multiple model directories should be created.
+
+    A plain name such as ``large_scale`` is placed under the nearest existing
+    ``models`` directory for backward compatibility. Absolute paths and relative
+    paths with directory components are used directly, which supports Snellius
+    layouts where ``models`` is not next to the package checkout.
+
+    Args:
+        working_directory: Working directory for the init-multiple command.
+        init_multiple_dir: Directory name or path for the large-scale model set.
+
+    Returns:
+        Resolved directory path for the large-scale model set.
+
+    Raises:
+        FileNotFoundError: If a plain directory name is requested and no models
+            directory can be found.
+    """
+    resolved_working_directory: Path = working_directory.expanduser().resolve()
+    requested_directory: Path = Path(init_multiple_dir).expanduser()
+
+    if requested_directory.is_absolute():
+        return requested_directory
+    if requested_directory.parent != Path("."):
+        return (resolved_working_directory / requested_directory).resolve()
+
+    candidate_model_dirs: list[Path] = [
+        resolved_working_directory / "models",
+        resolved_working_directory.parent / "models",
+        Path(__file__).resolve().parents[2] / "models",
+    ]
+    checked_model_dirs: list[Path] = []
+    for model_dir in candidate_model_dirs:
+        resolved_model_dir: Path = model_dir.resolve()
+        if resolved_model_dir in checked_model_dirs:
+            continue
+        checked_model_dirs.append(resolved_model_dir)
+        if resolved_model_dir.is_dir():
+            return resolved_model_dir / requested_directory
+
+    checked_paths: str = "\n".join(f"  - {path}" for path in checked_model_dirs)
+    raise FileNotFoundError(
+        "Models directory not found. Checked:\n"
+        f"{checked_paths}\n"
+        "Pass --init-multiple-dir as an absolute path or a relative path with a "
+        "directory component to create the model set elsewhere."
+    )
+
+
 def init_multiple_fn(
     config: str | Path,
     build_config: str | Path,
@@ -1540,7 +1593,7 @@ def init_multiple_fn(
         skip_visualization: If True, skip creating visualization map (faster).
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
         ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
-        init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created (e.g. 'large_scale' or 'large_scale2').
+        init_multiple_dir: Name or path for the directory where large scale model directories are created.
         optimize: If True, run the init-multiple in optimized mode.
         timing: If True, run the init-multiple with timing.
         cores: Number of cores to restrict the init-multiple to.
@@ -1554,31 +1607,13 @@ def init_multiple_fn(
 
     logger = create_logger("init_multiple")
 
-    # set paths
-    config: Path = Path(config)
-    build_config: Path = Path(build_config)
-    update_config: Path = Path(update_config)
-    working_directory: Path = Path(working_directory)
-
-    # Initialize data catalog and logger
-    data_catalog_instance = DataCatalog(logger=logger)
-    with WorkingDirectory(working_directory):
-        logger = create_logger("init_multiple")
-
-    # Create the models/init_multiple_dir directory structure.
-    # models_dir is the parent 'models' folder expected at the parent of GEB repository.
-    # init_multiple_dir_path is the target subdirectory to create.
-    models_dir = Path(__file__).parents[2] / "models"
-    if region_shapefile:
-        region_shapefile: Path = Path(region_shapefile)
-    if not models_dir.is_dir():
-        raise FileNotFoundError(
-            f"Models directory not found: {models_dir}\n"
-            "Run 'geb init-multiple' from within the GEB repository root, "
-            f"or ensure a 'models' directory exists at {models_dir}."
-        )
-    init_multiple_dir_path: Path = models_dir / init_multiple_dir
+    working_directory_path: Path = Path(working_directory).expanduser()
+    init_multiple_dir_path: Path = _resolve_init_multiple_directory(
+        working_directory_path, init_multiple_dir
+    )
     init_multiple_dir_path.mkdir(parents=True, exist_ok=True)
+
+    data_catalog_instance = DataCatalog(logger=logger)
 
     # create river
     logger.info("Starting multiple model initialization")
@@ -1603,7 +1638,9 @@ def init_multiple_fn(
         )
     else:
         logger.info(f"Using region shapefile: {region_shapefile}")
-        region_shapefile_path: Path = working_directory / region_shapefile
+        region_shapefile_path: Path = Path(region_shapefile).expanduser()
+        if not region_shapefile_path.is_absolute():
+            region_shapefile_path = working_directory_path / region_shapefile_path
         if not region_shapefile_path.exists():
             raise FileNotFoundError(
                 f"Region shapefile not found at: {region_shapefile_path}"
@@ -1644,13 +1681,25 @@ def init_multiple_fn(
 
     logger.info(f"Creating cluster configurations using example: {from_example}")
 
+    logger.info("Creating exact merged basin outlines for all clusters...")
+    cluster_outlines: gpd.GeoDataFrame = create_cluster_outline_geodataframe(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        river_graph=river_graph,
+        cluster_prefix=cluster_prefix,
+    )
+    cluster_basin_areas_km2: dict[int, float] = {
+        int(row.cluster_number): float(row.total_basin_area_km2)
+        for _row_index, row in cluster_outlines.iterrows()
+    }
+
     # Create cluster configurations
     cluster_directories = create_multi_basin_configs(
         clusters=clusters,
         working_directory=init_multiple_dir_path,
         cluster_prefix=cluster_prefix,
-        data_catalog=data_catalog_instance,
-        river_graph=river_graph,
+        from_example=from_example,
+        cluster_basin_areas_km2=cluster_basin_areas_km2,
     )
 
     # save geoparquet and maps to default location
@@ -1658,7 +1707,6 @@ def init_multiple_fn(
     save_map = init_multiple_dir_path / f"{cluster_prefix}_clusters_map.png"
 
     logger.info(f"Saving outlet basins to geoparquet: {save_geoparquet}")
-    # Save outlet-only clusters to geoparquet (simplified geometries)
     save_clusters_to_geoparquet(
         clusters=clusters,
         data_catalog=data_catalog_instance,
@@ -1666,22 +1714,16 @@ def init_multiple_fn(
         cluster_prefix=cluster_prefix,
     )
 
-    # Save complete basins as merged geometries (full upstream basins as single polygons)
-    # This is slow for large datasets, so allow skipping
     if not skip_merged_geometries:
         merged_basins_path = (
             init_multiple_dir_path / f"{cluster_prefix}_complete_basins.geoparquet"
         )
         logger.info(
-            f"Saving complete basins as merged geometries: {merged_basins_path}"
+            f"Saving complete basin outlines as merged geometries: {merged_basins_path}"
         )
         save_clusters_as_merged_geometries(
-            clusters=clusters,
-            data_catalog=data_catalog_instance,
-            river_graph=river_graph,
+            cluster_outlines=cluster_outlines,
             output_path=merged_basins_path,
-            cluster_prefix=cluster_prefix,
-            buffer_distance_km=5.0,  # 5km buffer to merge nearby polygons (reduces MultiPolygon complexity)
         )
     else:
         logger.info("Skipping merged geometries (--skip-merged-geometries flag set)")
@@ -1690,11 +1732,8 @@ def init_multiple_fn(
     if not skip_visualization:
         logger.info(f"Creating visualization map: {save_map}")
         create_cluster_visualization_map(
-            clusters=clusters,
-            data_catalog=data_catalog_instance,
-            river_graph=river_graph,
+            cluster_outlines=cluster_outlines,
             output_path=save_map,
-            cluster_prefix=cluster_prefix,
         )
     else:
         logger.info("Skipping visualization map (--skip-visualization flag set)")

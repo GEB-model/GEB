@@ -1006,7 +1006,7 @@ def workflow(
 @click.option(
     "--init-multiple-dir",
     required=True,
-    help="Name of the subdirectory in models/ where the large scale model directories will be created (e.g. 'large_scale' or 'large_scale2').",
+    help="Name under models/ or explicit path where the large scale model directories will be created.",
 )
 @working_directory_option
 def init_multiple(*args: Any, **kwargs: Any) -> None:
