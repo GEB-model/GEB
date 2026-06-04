@@ -71,7 +71,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "era5": {
         "adapter": DestinationEarth(),
-        "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "url": None,
         "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
     },
     "ecmwf_geopotential": {
