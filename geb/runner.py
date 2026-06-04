@@ -1713,3 +1713,7 @@ def init_multiple_fn(
         logger.info("Skipping visualization map (--skip-visualization flag set)")
 
     logger.info(f"Successfully created {len(outlet_clusters)} model configurations:")
+    logger.info(
+        "Reminder: review and edit the generated build.yml and model.yml files "
+        "before running the models if you need settings other than the example defaults."
+    )
