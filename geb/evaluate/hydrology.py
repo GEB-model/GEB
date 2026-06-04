@@ -586,7 +586,7 @@ def _plot_outflow_discharge_timeseries(
     Returns:
         Number of outflow plots created (dimensionless).
     """
-    routing_dir: Path = output_folder / "report" / run_name / "hydrology.routing"
+    routing_dir: Path = output_folder / "report" / "hydrology.routing"
     if not routing_dir.exists():
         model.logger.info(
             f"No hydrology routing directory found at {routing_dir}. Skipping outflow plots."
@@ -818,7 +818,7 @@ def create_validation_df(
         ValueError: If NaN values are found in the GEB discharge data after loading.
     """
     # Check if the hydrology.routing directory exists
-    routing_dir = output_folder / "report" / run_name / "hydrology.routing"
+    routing_dir = output_folder / "report" / "hydrology.routing"
     if not routing_dir.exists():
         raise FileNotFoundError(
             f"Hydrology routing directory does not exist: {routing_dir}"
@@ -1722,8 +1722,10 @@ class Hydrology:
             A GeoDataFrame containing the river geometries and a DataFrame containing the discharge data for each river.
         """
         # check if discharge files exists
-        discharge_folder = (
-            self.model.output_folder / "report" / run_name / "hydrology.routing"
+        discharge_folder: Path = (
+            self.evaluator.output_folder_evaluate.parent
+            / "report"
+            / "hydrology.routing"
         )
         if not discharge_folder.exists():
             raise FileNotFoundError(
@@ -1905,7 +1907,7 @@ class Hydrology:
         self.model.logger.info(f"Loaded discharge simulation from {run_name} run.")
 
         # check if run file exists, if not, raise an error
-        if not (self.model.output_folder / "report" / run_name).exists():
+        if not (self.model.output_folder / "report").exists():
             raise FileNotFoundError(
                 f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
             )
@@ -1949,20 +1951,15 @@ class Hydrology:
                     # Smaller catchments tend to be dominated by local timing and snapping
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
-                try:
-                    validation_df = create_validation_df(
-                        self.model.output_folder,
-                        run_name,
-                        station_id,
-                        observed_discharge_series,
-                        correct_discharge_observations,
-                        discharge_observations_to_GEB_upstream_area_ratio,
-                    )
-                except FileNotFoundError:
-                    self.model.logger.warning(
-                        f"Simulation discharge data for station {station_id} not found. Skipping this station."
-                    )
-                    continue
+
+                validation_df: pd.DataFrame = create_validation_df(
+                    self.model.output_folder,
+                    run_name,
+                    station_id,
+                    observed_discharge_series,
+                    correct_discharge_observations,
+                    discharge_observations_to_GEB_upstream_area_ratio,
+                )
 
                 minimum_valid_steps = (
                     minimum_timeseries_length_years
@@ -2533,7 +2530,7 @@ class Hydrology:
         Returns:
             A matplotlib Figure object representing the water circle.
         """
-        folder = self.model.output_folder / "report" / run_name
+        folder = self.model.output_folder / "report"
 
         def read_parquet_with_date_index(
             folder: Path, module: str, name: str, skip_first_day: bool = True
@@ -2675,7 +2672,7 @@ class Hydrology:
         Raises:
             ValueError: If the water balance dataframe does not contain any rows.
         """
-        folder = self.model.output_folder / "report" / run_name
+        folder = self.model.output_folder / "report"
         df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(folder)
         context_series: dict[str, pd.Series] = _load_contextual_water_balance_series(
             folder
@@ -2804,7 +2801,7 @@ class Hydrology:
         plt.show()
         plt.close(fig)
 
-        folder: Path = self.model.output_folder / "report" / run_name
+        folder: Path = self.model.output_folder / "report"
         water_balance_df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(
             folder
         )
@@ -3321,7 +3318,7 @@ class Hydrology:
         Raises:
             ValueError: If the water storage dataframe does not contain any rows.
         """
-        folder: Path = self.model.output_folder / "report" / run_name
+        folder: Path = self.model.output_folder / "report"
         water_storage_df_m: pd.DataFrame = _load_water_storage_dataframe(folder)
 
         if water_storage_df_m.empty:
