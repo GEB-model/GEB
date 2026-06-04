@@ -17,7 +17,10 @@ from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
-from geb.evaluate.workflows.dashboard import create_discharge_folium_map
+from geb.evaluate.workflows.dashboard import (
+    build_discharge_dashboard_chart_data,
+    create_discharge_folium_map,
+)
 from geb.evaluate.workflows.hydrology_plot_engine import (
     plot_skill_score_boxplots as _plot_skill_score_boxplots,
     plot_skill_score_maps as _plot_skill_score_maps,
@@ -126,6 +129,7 @@ def _plot_validation_return_periods(
         station_name: Human-readable station name.
         eval_plot_folder: Output directory for generated plots.
         frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
+
     """
     return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
 
@@ -919,6 +923,7 @@ def _plot_discharge_validation_graphs(
         eval_plot_folder: Output directory for generated plots.
         include_yearly_plots: Whether to generate per-year timeseries plots.
         frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
+
     """
     fig, ax = plt.subplots(figsize=(13, 4))
     ax.plot(
@@ -1910,7 +1915,8 @@ class Hydrology:
                 f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
             )
 
-        evaluation_per_station: list = []
+        evaluation_per_station: list[dict[str, Any]] = []
+        station_dashboard_charts: dict[str, dict[str, Any]] = {}
 
         self.model.logger.info("Starting discharge evaluation...")
         for frequency_label, discharge_observations_df in zip(
@@ -1989,6 +1995,15 @@ class Hydrology:
                         eval_plot_folder=self.evaluate_discharge_output_folder,
                         include_yearly_plots=include_yearly_plots,
                         frequency=frequency_label,
+                    )
+                    station_dashboard_charts[str(station_id)] = (
+                        build_discharge_dashboard_chart_data(
+                            validation_df=validation_df,
+                            station_name=discharge_observations_station_name,
+                            upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                            metrics=discharge_metrics._asdict(),
+                            frequency=frequency_label,
+                        )
                     )
 
                 station_evaluation: dict[str, Any] = {
@@ -2116,6 +2131,7 @@ class Hydrology:
                     region_geom=region_geom,
                     rivers=rivers,
                     waterbodies=waterbodies,
+                    station_chart_data=station_dashboard_charts,
                 )
 
                 self.model.logger.info("Discharge evaluation dashboard created.")
