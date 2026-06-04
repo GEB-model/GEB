@@ -247,6 +247,7 @@ class Floods(Module):
         self,
         name: str,
         rivers: gpd.GeoDataFrame,
+        discharge_by_river: pd.DataFrame,
         subbasins: gpd.GeoDataFrame,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
@@ -263,6 +264,7 @@ class Floods(Module):
             name: Name of the SFINCS model (used for the model root directory).
             subbasins: The subbasins to build the SFINCS model for. If None, the entire model subbasins is used.
             rivers: The rivers to include in the SFINCS model.
+            discharge_by_river: DataFrame containing discharge data for each river.
             coastal: Whether to only include coastal areas in the model.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundary cells.
@@ -283,7 +285,7 @@ class Floods(Module):
             subbasins=subbasins,
             DEMs=self.DEM_config,
             rivers=rivers,
-            discharge_by_river=self.discharge_by_river_spinup,
+            discharge_by_river=discharge_by_river,
             river_width_alpha=self.model.hydrology.grid.decompress(
                 self.model.hydrology.grid.var.river_width_alpha
             ),
@@ -469,9 +471,14 @@ class Floods(Module):
             )
             subbasins_group = subbasins[subbasins.index.isin(group)]
 
+            discharge_by_river = self.discharge_by_river(
+                self.model.config["general"]["spinup_name"]
+            )
+
             sfincs_root_model = self.build(
                 f"group_{group_id}",
                 rivers=rivers,
+                discharge_by_river=discharge_by_river,
                 subbasins=subbasins_group,
             )  # build or read the model
             sfincs_simulation = self.set_forcing(  # set the forcing
@@ -509,8 +516,11 @@ class Floods(Module):
                     flood_depth=flood_depth
                 )
 
-    def get_return_period_maps(self) -> None:
+    def get_return_period_maps(self, run_name: str) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
+
+        Args:
+            run_name: The name of the run to use for estimating return periods (e.g., "spinup").
 
         Raises:
             ValueError: If no hydrograph is found for a node and return period.
@@ -527,6 +537,9 @@ class Floods(Module):
         coastal = subbasins["is_coastal"].any()
 
         rivers = self.model.hydrology.routing.rivers
+        discharge_by_river = self.discharge_by_river(
+            self.model.config["general"]["spinup_name"]
+        )
         # if coastal load files
         if coastal:
             # Load mask of lower elevation coastal zones to activate cells for the different sfincs model regions
@@ -596,6 +609,7 @@ class Floods(Module):
                 subbasins=coastal_subbasins,
                 coastal=True,
                 rivers=rivers[rivers.intersects(coastal_subbasins.union_all())],
+                discharge_by_river=discharge_by_river,
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
                 initial_water_level=initial_water_level,
@@ -635,10 +649,11 @@ class Floods(Module):
                     name=f"inland_subbasin_{subbasin_id}",
                     subbasins=region_subbasins,
                     rivers=region_rivers,
+                    discharge_by_river=discharge_by_river,
                     coastal=False,
                 )
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge_by_river=self.discharge_by_river_spinup,
+                    discharge_by_river=self.discharge_by_river(run_name),
                     return_periods=self.config["return_periods"],
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
@@ -763,9 +778,11 @@ class Floods(Module):
             overland_runoff_m
         )  # this is a deque, so it will automatically remove the oldest runoff
 
-    @property
-    def discharge_by_river_spinup(self) -> pd.DataFrame:
+    def discharge_by_river(self, run_name: str) -> pd.DataFrame:
         """Open the discharge datasets from the model output folder.
+
+        Args:
+            run_name: The name of the run to use for estimating discharge (e.g., "spinup").
 
         Returns:
             A pandas DataFrame containing the discharge time series for each river, indexed by timestamp.
@@ -780,14 +797,19 @@ class Floods(Module):
 
         discharge = read_discharge_per_river(
             folder=self.model.report_folder.parent.parent
-            / "spinup"
+            / run_name
             / "report"
             / "hydrology.routing",
             rivers=rivers,
             all_rivers=all_rivers,
         )
 
-        start_time = discharge.index[0] + pd.DateOffset(years=10)
+        # if spinup is requested, at least discard the first 10 years of data.
+        if run_name == self.model.config["general"]["spinup_name"]:
+            start_time = discharge.index[0] + pd.DateOffset(years=10)
+        else:
+            start_time = discharge.index[0]
+
         discharge = discharge.loc[start_time:]
 
         # set the frequency of the index
@@ -796,7 +818,7 @@ class Floods(Module):
         # make sure there is at least 20 years of data
         if (discharge.index[-1].year - discharge.index[0].year) < 20:
             raise ValueError(
-                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                f"""Not enough data available for reliable {run_name}, should be at least 20 years of data left.
                 Please run the model for at least 30 years (10 years of data is discarded)."""
             )
 

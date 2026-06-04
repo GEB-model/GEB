@@ -818,7 +818,7 @@ def create_validation_df(
         ValueError: If NaN values are found in the GEB discharge data after loading.
     """
     # Check if the hydrology.routing directory exists
-    routing_dir = output_folder / "report" / run_name / "hydrology.routing"
+    routing_dir = output_folder / "report" / "hydrology.routing"
     if not routing_dir.exists():
         raise FileNotFoundError(
             f"Hydrology routing directory does not exist: {routing_dir}"
@@ -1951,20 +1951,15 @@ class Hydrology:
                     # Smaller catchments tend to be dominated by local timing and snapping
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
-                try:
-                    validation_df = create_validation_df(
-                        self.model.output_folder,
-                        run_name,
-                        station_id,
-                        observed_discharge_series,
-                        correct_discharge_observations,
-                        discharge_observations_to_GEB_upstream_area_ratio,
-                    )
-                except FileNotFoundError:
-                    self.model.logger.warning(
-                        f"Simulation discharge data for station {station_id} not found. Skipping this station."
-                    )
-                    continue
+
+                validation_df: pd.DataFrame = create_validation_df(
+                    self.model.output_folder,
+                    run_name,
+                    station_id,
+                    observed_discharge_series,
+                    correct_discharge_observations,
+                    discharge_observations_to_GEB_upstream_area_ratio,
+                )
 
                 minimum_valid_steps = (
                     minimum_timeseries_length_years

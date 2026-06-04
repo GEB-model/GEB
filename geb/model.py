@@ -742,18 +742,17 @@ class GEBModel(Module):
                 f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
             )
 
-    def estimate_return_periods(self) -> None:
+    def estimate_return_periods(self, run_name: str = "spinup") -> None:
         """Estimate flood maps for different return periods."""
         current_time: datetime.datetime = self.run_start
-        self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(
             create_reporter=False,
+            in_spinup=run_name == self.model.config["general"]["spinup_name"],
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
             load_data_from_store=True,
-            # omit="agents",
             simulate_hydrology=True,
             clean_report_folder=False,
         )
@@ -763,7 +762,7 @@ class GEBModel(Module):
         if subbasins["is_coastal"].any():
             generate_storm_surge_hydrographs(self)
 
-        self.hazard_driver.floods.get_return_period_maps()
+        self.hazard_driver.floods.get_return_period_maps(run_name)
 
     def evaluate(self, *args: Any, **kwargs: Any) -> Any:
         """Call the evaluator to evaluate the model results.
