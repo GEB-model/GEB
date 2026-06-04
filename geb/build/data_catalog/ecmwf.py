@@ -247,7 +247,8 @@ class ECMWFForecasts(Adapter):
                     str, Any
                 ] = {  # Build MARS request dictionary with all parameters
                     "class": mars_class,
-                    "date": forecast_date.strftime("%Y-%m-%d"),
+                    "hdate": forecast_date.strftime("%Y-%m-%d"),
+                    "date": "2025-01-01",
                     "expver": mars_expver,
                     "levtype": mars_levtype,
                     "param": mars_param,
