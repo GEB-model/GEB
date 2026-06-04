@@ -779,7 +779,10 @@ class Floods(Module):
         all_rivers = self.model.hydrology.routing.rivers
 
         discharge = read_discharge_per_river(
-            folder=self.model.report_folder.parent / "spinup" / "hydrology.routing",
+            folder=self.model.report_folder.parent.parent
+            / "spinup"
+            / "report"
+            / "hydrology.routing",
             rivers=rivers,
             all_rivers=all_rivers,
         )

@@ -494,7 +494,7 @@ class GEBModel(Module):
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
 
-        self.report_folder = self.model.output_folder / "report" / self.model.run_name
+        self.report_folder = self.model.output_folder / "report"
 
         if create_reporter:
             self.reporter = Reporter(
@@ -548,6 +548,7 @@ class GEBModel(Module):
 
         self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
+        self.create_done_file()
 
     def run_yearly(self) -> None:
         """Run the model in yearly mode, where timesteps are yearly rather than daily.
@@ -602,6 +603,7 @@ class GEBModel(Module):
 
         self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
+        self.create_done_file()
 
     def refresh_agent_attributes(self, agent_type: str = "households") -> None:
         """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
@@ -708,6 +710,7 @@ class GEBModel(Module):
         self.store.save()
 
         self.reporter.finalize()
+        self.create_done_file()
 
     def _store_spinup_time_range(self) -> None:
         """Store the spinup time range in the variable store.
@@ -854,7 +857,7 @@ class GEBModel(Module):
         Returns:
             Path to the folder where output files will be saved.
         """
-        return Path(self.config["general"]["output_folder"])
+        return Path(self.config["general"]["output_folder"]) / self.model.run_name
 
     @property
     def input_folder(self) -> Path:
@@ -976,6 +979,10 @@ class GEBModel(Module):
             raise ValueError(
                 "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
             )
+
+    def create_done_file(self) -> None:
+        """Create a file to indicate that the model run or spinup is done."""
+        (self.output_folder / "done.txt").touch()
 
     @property
     def spinup_start(self) -> datetime.datetime:

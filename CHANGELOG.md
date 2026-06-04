@@ -1,5 +1,7 @@
 # dev
-- Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801))
+- Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801)).
+- Reorganize output folder so that all output files are saved under the run name ([#852](https://github.com/GEB-model/GEB/issues/852)).
+- Migrate to new Destination Earth API ([#846](https://github.com/GEB-model/GEB/issues/844)).
 
 # v1.0.0b27
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
@@ -452,3 +454,6 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
+
+
+
