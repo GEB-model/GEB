@@ -94,8 +94,7 @@ def read_flood_depth(
     )
     model.config.read()
 
-    # to detect whether SFINCS was run with subgrid, we check if the 'sbgfile' key exists in the config
-    # to be extra safe, we also check if the value is not None or has has length > 0
+    # to detect whether SFINCS was run with subgrid
     if model.config.data.sbgfile is not None:
         if method == "max":
             # get maximum water surface elevation (with respect to sea level)
