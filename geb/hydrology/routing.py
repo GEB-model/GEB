@@ -1794,7 +1794,7 @@ class Routing(Module):
             average_discharge: ArrayFloat32 = (
                 self.var.sum_of_all_discharge_steps / (self.var.discharge_step_count)
             ).astype(np.float64)
-
+            # re-arranged formula for alpha, where we use the observed average river width and the average discharge to calculate alpha
             alpha: ArrayFloat32 = np.full_like(
                 self.observed_average_river_width,
                 default_alpha,
