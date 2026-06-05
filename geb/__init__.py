@@ -168,8 +168,7 @@ xr.set_options(use_bottleneck=False, keep_attrs=True)
 np.seterr(divide="raise", over="raise", under="ignore", invalid="raise")
 
 # force solving of all warnings as errors, to catch potential issues early on
-# Due to an issue in hydromt-sfincs, we need to ignore FutureWarnings for now
-# warnings.simplefilter(action="error", category=FutureWarning)
+warnings.simplefilter(action="error", category=FutureWarning)
 
 # specific warning for pandas
 warnings.simplefilter(action="error", category=SettingWithCopyWarning)

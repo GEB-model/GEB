@@ -598,17 +598,23 @@ class SFINCSRootModel:
                 # retrieve the elevation and mannings grids
                 # burn the rivers into these grids
                 # and write the burned grids back to the model
-                sf.elevation.data["dep"], sf.roughness.data["manning"] = (
-                    burn_river_rect(
-                        da_elv=sf.elevation.data["dep"],
-                        gdf_riv=rivers_to_burn,
-                        da_man=sf.roughness.data["manning"],
-                        rivwth_name="width",
-                        rivdph_name="depth",
-                        manning_name="manning",
-                        segment_length=90.0,
+                with warnings.catch_warnings():
+                    # This seems to be solved by pandas 3.0.
+                    warnings.filterwarnings(
+                        action="default",
+                        category=FutureWarning,
                     )
-                )
+                    sf.elevation.data["dep"], sf.roughness.data["manning"] = (
+                        burn_river_rect(
+                            da_elv=sf.elevation.data["dep"],
+                            gdf_riv=rivers_to_burn,
+                            da_man=sf.roughness.data["manning"],
+                            rivwth_name="width",
+                            rivdph_name="depth",
+                            manning_name="manning",
+                            segment_length=90.0,
+                        )
+                    )
 
         sf.write()
 
