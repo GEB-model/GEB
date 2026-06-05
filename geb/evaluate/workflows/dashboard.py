@@ -5,7 +5,7 @@ import html
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import branca.colormap as cm
 import folium
@@ -64,6 +64,25 @@ def _as_finite_float(value: float | int | np.floating | None) -> float | None:
         return None
     float_value: float = float(value)
     return float_value if np.isfinite(float_value) else None
+
+
+def _timestamp_to_isoformat(timestamp: Any) -> str:
+    """Convert a dashboard timestamp to an ISO-formatted string.
+
+    Args:
+        timestamp: Timestamp-like value from a discharge time-series index.
+
+    Returns:
+        ISO-formatted timestamp string.
+
+    Raises:
+        ValueError: If ``timestamp`` is missing or cannot be represented as a
+            timestamp.
+    """
+    timestamp_value: pd.Timestamp = cast(pd.Timestamp, pd.Timestamp(timestamp))
+    if pd.isna(timestamp_value):
+        raise ValueError("Dashboard chart timestamps must not contain missing values.")
+    return timestamp_value.isoformat()
 
 
 def _pick_timeseries_points(
@@ -126,12 +145,21 @@ def _build_timeseries_payload(
 
     Returns:
         Dictionary with ISO timestamps and discharge values (m3/s).
+
+    Raises:
+        ValueError: If ``validation_df`` is not indexed by timestamps.
     """
+    if not isinstance(validation_df.index, pd.DatetimeIndex):
+        raise ValueError("validation_df must use a DateTimeIndex for dashboard charts.")
+
     chart_df: pd.DataFrame = validation_df.iloc[
         _pick_timeseries_points(validation_df, maximum_points)
     ]
     return {
-        "time": [timestamp.isoformat() for timestamp in chart_df.index],
+        "time": [
+            _timestamp_to_isoformat(timestamp)
+            for timestamp in pd.DatetimeIndex(chart_df.index)
+        ],
         "observed": [
             _as_finite_float(value)
             for value in chart_df["discharge_observations"].to_numpy()
@@ -288,20 +316,93 @@ def _inject_popup_chart_script(
     return '<div id="' + id + '" class="geb-popup__chart"></div>';
   }
 
+  function finiteNumbers(values, minimumValue) {
+    return (values || []).map(Number).filter(function(value) {
+      return Number.isFinite(value) && (minimumValue === undefined || value >= minimumValue);
+    });
+  }
+
+  function linearRange(values) {
+    var numbers = finiteNumbers(values);
+    if (!numbers.length) return undefined;
+    var minimum = Math.min.apply(null, numbers);
+    var maximum = Math.max.apply(null, numbers);
+    if (minimum === maximum) {
+      var padding = Math.max(Math.abs(minimum) * 0.05, 1);
+      return [minimum - padding, maximum + padding];
+    }
+    return [minimum, maximum];
+  }
+
+  function logRange(values) {
+    var numbers = finiteNumbers(values, Number.MIN_VALUE);
+    if (!numbers.length) return undefined;
+    var minimum = Math.min.apply(null, numbers);
+    var maximum = Math.max.apply(null, numbers);
+    if (minimum === maximum) {
+      return [Math.log10(minimum) - 0.05, Math.log10(maximum) + 0.05];
+    }
+    return [Math.log10(minimum), Math.log10(maximum)];
+  }
+
+  function dateRange(values) {
+    var times = (values || []).map(function(value) {
+      return new Date(value).getTime();
+    }).filter(Number.isFinite);
+    if (!times.length) return undefined;
+    return [new Date(Math.min.apply(null, times)), new Date(Math.max.apply(null, times))];
+  }
+
+  function sortedUniqueNumbers(values) {
+    var seen = {};
+    return finiteNumbers(values).filter(function(value) {
+      var key = String(value);
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).sort(function(firstValue, secondValue) {
+      return firstValue - secondValue;
+    });
+  }
+
+  function formatTick(value) {
+    return Number.isInteger(value) ? String(value) : value.toPrecision(3);
+  }
+
   function renderCharts(stationId, data) {
     var safeStationId = encodeURIComponent(stationId);
     var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
-    function trace(name, x, y, kind, mode) {
-      return {x: x, y: y, name: name, type: kind, mode: mode, line: {color: colors[name.toLowerCase()], width: 1.5}};
+    function trace(name, x, y, kind, mode, hoverTemplate) {
+      return {
+        x: x,
+        y: y,
+        name: name,
+        type: kind,
+        mode: mode,
+        connectgaps: true,
+        hovertemplate: hoverTemplate,
+        line: {color: colors[name.toLowerCase()], width: 1.5},
+        marker: {color: colors[name.toLowerCase()], size: 5}
+      };
     }
+    var timeRange = dateRange(data.timeseries.time);
+    var observedReturnPeriodRange = linearRange(data.returnPeriods.observed.returnPeriod);
+    var simulatedReturnPeriodRange = linearRange(data.returnPeriods.simulated.returnPeriod);
+    var returnPeriodValues = [];
+    if (observedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(observedReturnPeriodRange);
+    if (simulatedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(simulatedReturnPeriodRange);
+    var returnPeriodRange = logRange(returnPeriodValues);
+    var returnPeriodTicks = sortedUniqueNumbers(
+      data.returnPeriods.observed.returnPeriod.concat(data.returnPeriods.simulated.returnPeriod)
+    );
     Plotly.newPlot('geb-time-' + safeStationId, [
-      trace('Observed', data.timeseries.time, data.timeseries.observed, 'scattergl', 'lines'),
-      trace('Simulated', data.timeseries.time, data.timeseries.simulated, 'scattergl', 'lines')
-    ], Object.assign({}, layoutBase, {yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+      trace('Observed', data.timeseries.time, data.timeseries.observed, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
+      trace('Simulated', data.timeseries.time, data.timeseries.simulated, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
+    ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
     Plotly.newPlot('geb-return-' + safeStationId, [
-      trace('Observed', data.returnPeriods.observed.returnPeriod, data.returnPeriods.observed.discharge, 'scatter', 'lines+markers'),
-      trace('Simulated', data.returnPeriods.simulated.returnPeriod, data.returnPeriods.simulated.discharge, 'scatter', 'lines+markers')
-    ], Object.assign({}, layoutBase, {xaxis: Object.assign({}, layoutBase.xaxis, {type: 'log', title: 'Return period (years)'}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+      trace('Observed', data.returnPeriods.observed.returnPeriod, data.returnPeriods.observed.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
+      trace('Simulated', data.returnPeriods.simulated.returnPeriod, data.returnPeriods.simulated.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
+    ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'log', range: returnPeriodRange, tickmode: 'array', tickvals: returnPeriodTicks, ticktext: returnPeriodTicks.map(formatTick), title: 'Return period (years)'}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
   }
 
   function renderStation(el, stationId) {
@@ -335,7 +436,7 @@ def _inject_popup_chart_script(
   }
 
   var style = document.createElement('style');
-  style.textContent = '.geb-popup{width:820px;max-width:82vw;color:#e2e8f0;font-family:Inter,system-ui,sans-serif}.geb-popup__title{font-size:18px;font-weight:750}.geb-popup__subtitle{color:#94a3b8;font-size:12px;margin-bottom:8px}.geb-popup__metrics{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 10px}.geb-popup__metrics span{background:#111827;border:1px solid #263244;border-radius:6px;padding:5px 8px}.geb-popup__chart{height:260px;background:#020617;border:1px solid #263244;border-radius:8px;margin-bottom:10px}.geb-popup__chart-title{font-weight:700;font-size:13px;margin:10px 0 4px}.geb-popup__error{color:#fca5a5;padding:18px}.geb-popup img{width:100%;height:auto;display:block}';
+  style.textContent = '.geb-popup{width:820px;max-width:86vw;color:#0f172a;font-family:Inter,system-ui,sans-serif}.geb-popup__title{color:#0f172a;font-size:18px;font-weight:750}.geb-popup__subtitle{color:#475569;font-size:12px;margin-bottom:8px}.geb-popup__metrics{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 10px}.geb-popup__metrics span{background:#111827;border:1px solid #263244;border-radius:6px;color:#e2e8f0;padding:5px 8px}.geb-popup__chart{height:260px;background:#020617;border:1px solid #263244;border-radius:8px;margin-bottom:10px}.geb-popup__chart-title{color:#334155;font-weight:700;font-size:13px;margin:10px 0 4px}.geb-popup__error{color:#b91c1c;padding:18px}.geb-popup img{width:100%;height:auto;display:block}';
   document.head.appendChild(style);
 
 """
