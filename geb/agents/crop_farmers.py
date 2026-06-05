@@ -254,7 +254,7 @@ class CropFarmersVariables(Bucket):
     pump_efficiency: float
     lifespan_irrigation: int
     loan_tracker: DynamicArray
-    yearly_SPEI_probability: DynamicArray
+    yearly_drought_probability: DynamicArray
     maintenance_factor: float
     max_initial_sat_thickness: float
     cumulative_pr_mm: DynamicArray
@@ -813,7 +813,7 @@ class CropFarmers(AgentBaseClass):
             n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=99
         )
 
-        self.var.yearly_SPEI_probability = DynamicArray(
+        self.var.yearly_drought_probability = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
             extra_dims=(self.var.total_spinup_time,),
@@ -2733,7 +2733,7 @@ class CropFarmers(AgentBaseClass):
 
         print("Yearly probability", np.nanmean(1 - SPEI_probability))
 
-        shift_and_update(self.var.yearly_SPEI_probability, (1 - SPEI_probability))
+        shift_and_update(self.var.yearly_drought_probability, (1 - SPEI_probability))
         shift_and_update(self.var.yearly_SPEI, (spei))
 
         # Reset the cumulative SPEI array at the beginning of the year
@@ -2773,7 +2773,7 @@ class CropFarmers(AgentBaseClass):
     def calculate_yield_spei_relation_group_exp(
         self,
         yearly_yield_ratio: DynamicArray,
-        yearly_SPEI_probability: DynamicArray,
+        yearly_drought_probability: DynamicArray,
         unique_group_differentiator: npt.NDArray[np.bool_] = None,
         drop_k: int = 2,
     ) -> npt.NDArray[np.floating]:
@@ -2787,8 +2787,8 @@ class CropFarmers(AgentBaseClass):
         Args:
             yearly_yield_ratio: Yearly yield ratio per
                 farmer-year (0-1).
-            yearly_SPEI_probability: Yearly SPEI exceedance
-                probabilities per farmer-year.
+            yearly_drought_probability: Yearly exceedance
+                probabilities per farmer-year derived from the SPEI.
             drop_k: Number of worst absolute residuals to drop per
                 group before refitting. Defaults to ``2``.
             unique_group_differentiator: npt.NDArray = None: an additional
@@ -2807,10 +2807,10 @@ class CropFarmers(AgentBaseClass):
 
         # Create groups (unchanged)
         group_indices, n_groups = self.create_unique_groups(unique_group_differentiator)
-        assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
+        assert (np.any(self.var.yearly_drought_probability != 0, axis=1) > 0).all()
 
         masked_yearly_yield_ratio = yearly_yield_ratio
-        masked_SPEI_probability = yearly_SPEI_probability
+        masked_SPEI_probability = yearly_drought_probability
 
         a_array = np.zeros(n_groups)
         b_array = np.zeros(n_groups)
@@ -2884,7 +2884,7 @@ class CropFarmers(AgentBaseClass):
     def calculate_yield_spei_relation_group_lin(
         self,
         yearly_yield_ratio: DynamicArray | np.ndarray,
-        yearly_SPEI_probability: DynamicArray | np.ndarray,
+        yearly_drought_probability: DynamicArray | np.ndarray,
         unique_group_differentiator: npt.NDArray[np.bool_] = None,
         drop_k: int = 2,
     ) -> npt.NDArray[np.floating]:
@@ -2898,8 +2898,8 @@ class CropFarmers(AgentBaseClass):
         Args:
             yearly_yield_ratio: Yearly yield ratio per
                 farmer-year (0-1).
-            yearly_SPEI_probability: Yearly SPEI
-                exceedance probabilities per farmer-year.
+            yearly_drought_probability: Yearly exceedance
+                probabilities per farmer-year derived from the SPEI
             unique_group_differentiator: npt.NDArray = None: an additional
                 array with classes that distinguish between agents based on chosen parameters
                 (e.g., irrigation source or basin location)
@@ -2914,10 +2914,10 @@ class CropFarmers(AgentBaseClass):
             unique_group_differentiator = np.zeros(self.var.n, dtype=np.bool_)
 
         group_indices, n_groups = self.create_unique_groups(unique_group_differentiator)
-        assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
+        assert (np.any(self.var.yearly_drought_probability != 0, axis=1) > 0).all()
 
         y_all = yearly_yield_ratio
-        X_all = yearly_SPEI_probability
+        X_all = yearly_drought_probability
 
         c_array = np.full(n_groups, np.nan)  # intercept
         m_array = np.full(n_groups, np.nan)  # slope
@@ -3244,8 +3244,8 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_potential_income[SEUT_adaptation_decision, :] = (
             self.var.yearly_potential_income[new_id_final, :]
         )
-        self.var.yearly_SPEI_probability[SEUT_adaptation_decision, :] = (
-            self.var.yearly_SPEI_probability[new_id_final, :]
+        self.var.yearly_drought_probability[SEUT_adaptation_decision, :] = (
+            self.var.yearly_drought_probability[new_id_final, :]
         )
         timer_crops.finish_split("final steps")
         self.model.logger.debug(timer_crops)
@@ -3879,8 +3879,8 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_potential_income[SEUT_adaptation_decision, :] = (
             self.var.yearly_potential_income[new_id_final, :]
         )
-        self.var.yearly_SPEI_probability[SEUT_adaptation_decision, :] = (
-            self.var.yearly_SPEI_probability[new_id_final, :]
+        self.var.yearly_drought_probability[SEUT_adaptation_decision, :] = (
+            self.var.yearly_drought_probability[new_id_final, :]
         )
         return SEUT_adaptation_decision
 
@@ -4545,8 +4545,8 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_potential_income[expired_adaptations, :] = (
             self.var.yearly_potential_income[new_id_final, :]
         )
-        self.var.yearly_SPEI_probability[expired_adaptations, :] = (
-            self.var.yearly_SPEI_probability[new_id_final, :]
+        self.var.yearly_drought_probability[expired_adaptations, :] = (
+            self.var.yearly_drought_probability[new_id_final, :]
         )
 
     def adaptation_water_cost_difference(
@@ -4981,7 +4981,7 @@ class CropFarmers(AgentBaseClass):
                 self.farmer_yield_probability_relation = (
                     self.calculate_yield_spei_relation_group_exp(
                         self.var.yearly_yield_ratio,
-                        self.var.yearly_SPEI_probability,
+                        self.var.yearly_drought_probability,
                     )
                 )
                 self.farmer_yield_probability_relation_budget_cap = (
@@ -5268,7 +5268,7 @@ class CropFarmers(AgentBaseClass):
     #         "yield_ratios_drought_event": 1,
     #         "risk_perception": 1,
     #         "drought_timer": 1,
-    #         "yearly_SPEI_probability": 1,
+    #         "yearly_drought_probability": 1,
     #         "yearly_yield_ratio": 1,
     #         "yearly_income": 1,
     #         "yearly_potential_income": 1,

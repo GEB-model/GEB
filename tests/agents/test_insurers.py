@@ -159,14 +159,14 @@ def test_insured_yields() -> None:
 
     def fake_relation(
         insured_yearly_yield_ratio: np.ndarray,
-        yearly_spei_probability: np.ndarray,
+        yearly_drought_probability: np.ndarray,
     ) -> np.ndarray:
         captured["yield_ratio"] = insured_yearly_yield_ratio.copy()
-        captured["probability"] = yearly_spei_probability.copy()
-        return insured_yearly_yield_ratio + yearly_spei_probability
+        captured["probability"] = yearly_drought_probability.copy()
+        return insured_yearly_yield_ratio + yearly_drought_probability
 
     insurers.agents.crop_farmers.calculate_yield_spei_relation_group_lin = fake_relation
-    insurers.agents.crop_farmers.var.yearly_SPEI_probability = types.SimpleNamespace(
+    insurers.agents.crop_farmers.var.yearly_drought_probability = types.SimpleNamespace(
         data=np.array(
             [
                 [0.1, 0.2],

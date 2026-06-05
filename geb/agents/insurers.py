@@ -775,7 +775,7 @@ class Insurers(AgentBaseClass):
         insured_yield_probability_relation = (
             self.agents.crop_farmers.calculate_yield_spei_relation_group_lin(
                 insured_yearly_yield_ratio,
-                self.agents.crop_farmers.var.yearly_SPEI_probability.data[
+                self.agents.crop_farmers.var.yearly_drought_probability.data[
                     :, valid_years
                 ],
             )
