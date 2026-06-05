@@ -946,6 +946,23 @@ class Hydrography(BuildModelBase):
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
+        height_above_nearest_drainage_m = self.full_like(
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+        )
+        height_above_nearest_drainage_m.values = flow_raster.hand(
+            COMID_IDs_raster != -1, elevation_min
+        ).astype(np.float32)
+        height_above_nearest_drainage_m.values[
+            height_above_nearest_drainage_m.values == -9999.0
+        ] = np.nan
+        assert not np.isnan(
+            height_above_nearest_drainage_m.values[~self.grid["mask"].values]
+        ).all()
+        self.set_grid(
+            height_above_nearest_drainage_m,
+            name="routing/height_above_nearest_drainage_m",
+        )
+
         basin_ids = self.full_like(
             elevation_min, fill_value=-1, nodata=-1, dtype=np.int32
         )
