@@ -4,6 +4,7 @@ The groundwater module uses MODFLOW to simulate groundwater flow and interaction
 with surface water and the unsaturated zone.
 """
 
+import logging
 import math
 from copy import deepcopy
 from pathlib import Path
@@ -27,9 +28,11 @@ from geb.hydrology.groundwater.model import (
     get_groundwater_storage_m,
     get_water_table_depth,
 )
-from geb.workflows.raster import calculate_cell_area, compress
+from geb.workflows.raster import calculate_cell_area_m2, compress
 
 from ..testconfig import GEB_PACKAGE_DIR, output_folder, tmp_folder
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class ModFlowParams(TypedDict):
@@ -48,6 +51,7 @@ class ModFlowParams(TypedDict):
     heads_update_callback: Callable[[ArrayFloat64], None]
     verbose: bool
     never_load_from_disk: bool
+    logger: logging.Logger
 
 
 def decompress(
@@ -98,7 +102,7 @@ gt: tuple[float, float, float, float, float, float] = (
     -0.0001,
 )
 
-cell_area = calculate_cell_area(Affine.from_gdal(*gt), YSIZE, XSIZE)
+cell_area = calculate_cell_area_m2(Affine.from_gdal(*gt), YSIZE, XSIZE)
 
 
 layer_boundary_elevation = np.full((NLAY + 1, YSIZE, XSIZE), np.nan, dtype=np.float32)
@@ -126,6 +130,7 @@ default_params: ModFlowParams = {
     "verbose": True,
     "never_load_from_disk": True,
     "heads_update_callback": lambda heads: None,
+    "logger": logger,
 }
 
 
@@ -139,6 +144,42 @@ def test_modflow_simulation_initialization() -> None:
     assert sim.n_active_cells == (~basin_mask).sum()
     # In the Netherlands, the average area of a cell with this gt is ~75.8 m2
     assert np.allclose(sim.area, 75.8, atol=0.1)
+
+
+def test_modflow_bmi_pointer_stability() -> None:
+    """Test that repeated BMI pointer retrieval returns the same underlying memory.
+
+    Verifies that values are updated in place and that a pointer retrieved before
+    a time step still points to the same memory location afterwards.
+    """
+    sim: ModFlowSimulation = ModFlowSimulation(**deepcopy(default_params))
+    try:
+        head_tag = sim.mf6.get_var_address("X", sim.name)
+        heads_ptr_first = sim.mf6.get_value_ptr(head_tag)
+        heads_ptr_second = sim.mf6.get_value_ptr(head_tag)
+
+        assert np.shares_memory(heads_ptr_first, heads_ptr_second)
+        assert (
+            heads_ptr_first.__array_interface__["data"][0]
+            == heads_ptr_second.__array_interface__["data"][0]
+        )
+
+        heads_first_2d = heads_ptr_first.reshape(sim.nlay, sim.n_active_cells)
+        heads_second_2d = heads_ptr_second.reshape(sim.nlay, sim.n_active_cells)
+
+        initial_column = heads_second_2d[:, 0].copy()
+        heads_first_2d[:, 0] = initial_column - 0.25
+        np.testing.assert_allclose(heads_second_2d[:, 0], initial_column - 0.25)
+
+        pointer_address_before_step = heads_ptr_first.__array_interface__["data"][0]
+        sim.step()
+        heads_ptr_after_step = sim.mf6.get_value_ptr(head_tag)
+        assert (
+            heads_ptr_after_step.__array_interface__["data"][0]
+            == pointer_address_before_step
+        )
+    finally:
+        sim.finalize()
 
 
 def test_step() -> None:

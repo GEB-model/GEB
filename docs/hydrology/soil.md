@@ -1,3 +1,0 @@
-# Soil
-
-::: geb.hydrology.soil

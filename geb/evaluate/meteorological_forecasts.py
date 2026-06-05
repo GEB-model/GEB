@@ -5,8 +5,6 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
-from __future__ import annotations
-
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -345,10 +343,10 @@ class MeteorologicalForecasts:
                 plot_type: str = "cumulative",
                 show_legend: bool = False,
                 moment_of_flooding: pd.Timestamp | None = None,
-                x_start: pd.Timestamp = pd.Timestamp("2024-04-26 00:00"),
-                x_end: pd.Timestamp = pd.Timestamp("2024-05-12 00:00"),
                 spatial_ax: plt.Axes | None = None,
                 spatial_data: dict | None = None,
+                x_start: pd.Timestamp = pd.Timestamp("2024-04-26 00:00"),  # ty:ignore[invalid-parameter-default]
+                x_end: pd.Timestamp = pd.Timestamp("2024-05-16 00:00"),  # ty:ignore[invalid-parameter-default]
             ) -> None:
                 """Plot precipitation data (intensity or cumulative) for a single subplot.
 

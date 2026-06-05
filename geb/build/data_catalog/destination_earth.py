@@ -1,7 +1,5 @@
 """Data adapter for obtaining ERA5 data from the Destination Earth."""
 
-from __future__ import annotations
-
 import base64
 import os
 import time
@@ -12,7 +10,7 @@ import aiohttp
 import numpy as np
 import xarray as xr
 
-from geb.workflows.raster import convert_nodata, interpolate_na_along_time_dim
+from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
@@ -40,7 +38,7 @@ class DestinationEarth(Adapter):
         if DESTINATION_EARTH_KEY is None:
             print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
             print(
-                "Please set your Personal Access Token in your .env file or export it in your shell."
+                "Please set your API KEY in your .env file or export it in your shell."
             )
             raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
 
@@ -53,16 +51,40 @@ class DestinationEarth(Adapter):
         auth_headers: dict[str, str] = {"Authorization": f"Basic {encoded_auth}"}
         return auth_headers
 
-    def fetch(self, url: str) -> DestinationEarth:
+    def fetch(self, url: None) -> DestinationEarth:
         """Set the URL for the Destination Earth data source.
 
         Args:
             url: The URL of the Destination Earth data source.
+                Must be None, because there are multiple URLs that can be used to access the data, and the correct one is determined automatically.
 
         Returns:
             The current instance of the DestinationEarth adapter.
+
+        Raises:
+            ValueError: If the DESTINATION_EARTH_KEY environment variable is not set or has an invalid format.
         """
-        self.url = url
+        assert url is None, (
+            "URL must be None for Destination Earth, as it is determined automatically."
+        )
+
+        DESTINATION_EARTH_KEY: str | None = os.getenv(key="DESTINATION_EARTH_KEY")
+        if DESTINATION_EARTH_KEY is None:
+            print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
+            print(
+                "Please set your API KEY in your .env file or export it in your shell."
+            )
+            raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
+
+        if DESTINATION_EARTH_KEY.startswith("edh_pat_"):
+            self.url = "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
+        elif DESTINATION_EARTH_KEY.startswith("edh_key_"):
+            self.url = "https://api.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
+        else:
+            raise ValueError(
+                "Invalid DESTINATION_EARTH_KEY format. It should start with 'edh_pat_' for Personal Access Tokens or 'edh_key_' for API keys."
+            )
+
         return self
 
     def connect_API(
@@ -148,6 +170,8 @@ class DestinationEarth(Adapter):
                 ),
             )
 
+        da = da.chunk({"y": -1, "x": -1})
+
         # Reorder x to be between -180 and 180 degrees
         da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
 
@@ -157,6 +181,7 @@ class DestinationEarth(Adapter):
 
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
         da: xr.DataArray = convert_nodata(da, np.nan)
+
         return da
 
     def read(
@@ -206,10 +231,6 @@ class DestinationEarth(Adapter):
 
         assert da.time.dt.hour.min().item() == 0, "time does not start at hour 0"
 
-        # rechunk to have all data for a time step in one chunk
-        da = da.chunk({"x": -1, "y": -1, "time": 24})
-
         da: xr.DataArray = da.rio.write_crs(4326)
-        da: xr.DataArray = interpolate_na_along_time_dim(da)
 
         return da

@@ -16,7 +16,9 @@ class ForecastsConfig(BaseModel):
 class RegionConfig(BaseModel):
     """Configuration for region."""
 
-    subbasin: int | None = Field(None, description="Subbasin ID.")
+    subbasin: int | list[int] | None = Field(
+        None, description="Subbasin ID or list of subbasin IDs."
+    )
 
 
 class GeneralConfig(BaseModel):
@@ -85,7 +87,6 @@ class FloodsConfig(BaseModel):
         "auto",
         description="Whether to overwrite existing flood model. True, False, 'auto'. If 'auto', it will check if a GPU is available using nvidia-smi.",
     )
-    force_overwrite: bool = Field(False, description="Whether to force overwrite.")
     coastal_only: bool = Field(
         False, description="Whether to simulate coastal floods only."
     )
@@ -96,8 +97,19 @@ class FloodsConfig(BaseModel):
         [2, 5, 10, 25, 50, 100, 250, 500, 1000],
         description="Return periods for flood maps.",
     )
+    p_value_threshold: float = Field(
+        0.05,
+        description="Anderson-Darling p-value threshold for threshold selection.",
+    )
+    selection_strategy: Literal["first_significant", "best_fit"] = Field(
+        "first_significant",
+        description="Strategy for selecting the best threshold: 'first_significant' (early stopping) or 'best_fit' (maximize p-value).",
+    )
+    fixed_shape: float | None = Field(
+        0.0,
+        description="Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted.",
+    )
     flood_risk: bool = Field(False, description="Whether to calculate flood risk.")
-    ncpus: int | Literal["auto"] = Field("auto", description="Number of CPUs to use.")
     events: list[FloodEventConfig] = Field(
         default_factory=list, description="List of flood events."
     )
@@ -171,11 +183,43 @@ class RoutingConfig(BaseModel):
     )
 
 
+class DischargeEvaluationConfig(BaseModel):
+    """Configuration for discharge evaluation."""
+
+    minimum_upstream_area_km2: float = Field(
+        400.0,
+        ge=0.0,
+        description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
+    )
+    minimum_timeseries_length_years: float = Field(
+        5.0,
+        ge=0.0,
+        description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
+    )
+    external_evaluation_folder: str | None = Field(
+        "external_evaluation_data/",
+        description="Folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+    )
+
+
+class HydrologyEvaluationConfig(BaseModel):
+    """Configuration for hydrology evaluation."""
+
+    discharge: DischargeEvaluationConfig = Field(
+        default_factory=DischargeEvaluationConfig,
+        description="Discharge evaluation configuration.",
+    )
+
+
 class HydrologyConfig(BaseModel):
     """Configuration for hydrology."""
 
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
+    )
+    evaluation: HydrologyEvaluationConfig = Field(
+        default_factory=HydrologyEvaluationConfig,
+        description="Hydrology evaluation configuration.",
     )
 
 
@@ -577,9 +621,6 @@ class ParametersConfig(BaseModel):
     )
     reservoir_release_factor: float = Field(
         0.1, description="Reservoir release factor."
-    )
-    water_demand_multiplier_industry: float = Field(
-        1.0, description="Water demand multiplier for industry."
     )
     lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
 

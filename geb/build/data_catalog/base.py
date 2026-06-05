@@ -1,7 +1,6 @@
 """Base class for data adapters in the GEB data catalog."""
 
-from __future__ import annotations
-
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -9,6 +8,7 @@ from typing import Any
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+import yaml
 
 from geb.workflows.geometry import read_parquet_with_geom
 from geb.workflows.io import read_zarr
@@ -97,17 +97,19 @@ class Adapter:
         if self.cache == "global":
             geb_data_root: str | None = os.getenv(key="GEB_DATA_ROOT", default=None)
             if geb_data_root:
-                catalog_root: Path = Path(geb_data_root) / ".." / "datacatalog"
+                catalog_root: Path = Path(geb_data_root)
             else:
                 catalog_root: Path = Path.home() / ".geb_cache"
 
             root = catalog_root / self.folder / f"v{self.local_version}"
-            root.mkdir(parents=True, exist_ok=True)
-            return root
         elif self.cache == "local":
-            return Path("cache") / self.folder / f"v{self.local_version}"
+            root = Path("cache") / self.folder / f"v{self.local_version}"
         else:
             raise ValueError("Cache must be either 'global' or 'local'")
+
+        # create the root directory if it doesn't exist
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     @property
     def is_ready(self) -> bool:
@@ -157,6 +159,9 @@ class Adapter:
             return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix in (".tif", ".asc"):
             return xr.open_dataarray(self.path, **kwargs)
+        elif self.path.suffix == ".yml" or self.path.suffix == ".yaml":
+            with open(self.path, "r") as file:
+                return yaml.safe_load(file)
         elif self.path.suffix == ".parquet":
             if "columns" in kwargs and "geometry" not in kwargs["columns"]:
                 return pd.read_parquet(path=self.path, **kwargs)
@@ -170,5 +175,30 @@ class Adapter:
             return pd.read_csv(self.path, **kwargs)
         elif self.path.suffix == ".xlsx":
             return pd.read_excel(self.path, **kwargs)
+        elif self.path.suffix == ".pkl":
+            return pd.read_pickle(self.path, **kwargs)
         else:
             raise ValueError("Unsupported file format for reading data.")
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Get a logger for the adapter.
+
+        Returns:
+            A logging.Logger instance with the adapter's class name as the logger name.
+
+        Raises:
+            ValueError: If the logger is not set.
+        """
+        if not hasattr(self, "_logger"):
+            raise ValueError("Logger is not set")
+        return self._logger
+
+    @logger.setter
+    def logger(self, logger: logging.Logger) -> None:
+        """Set a logger for the adapter.
+
+        Args:
+            logger: A logging.Logger instance to be used by the adapter.
+        """
+        self._logger = logger
