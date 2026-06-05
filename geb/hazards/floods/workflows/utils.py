@@ -16,6 +16,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
+from hydromt_sfincs.components.config.config_variables import SfincsConfigVariables
 from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
@@ -91,29 +92,18 @@ def read_flood_depth(
         str(simulation_root),
         mode="r",
     )
-    model.read_config()
-
-    # For unknown reasons, sometimes reading the results fails the first time
-    # but succeeds the second time. Therefore, we try twice here.
-    try:
-        model.read_results()
-    except OSError:
-        model.read_results()
+    model.config.read()
 
     # to detect whether SFINCS was run with subgrid, we check if the 'sbgfile' key exists in the config
     # to be extra safe, we also check if the value is not None or has has length > 0
-    if (
-        "sbgfile" in model.config
-        and model.config["sbgfile"] is not None
-        and len(model.config["sbgfile"]) > 0
-    ):
+    if model.config.data.sbgfile is not None:
         if method == "max":
             # get maximum water surface elevation (with respect to sea level)
-            water_surface_elevation = model.results["zsmax"].max(dim="timemax")
+            water_surface_elevation = model.output.data["zsmax"].max(dim="timemax")
             assert isinstance(water_surface_elevation, xr.DataArray)
         elif method == "final":
             # get water surface elevation at the final time step (with respect to sea level)
-            all_water_surface_elevation: xr.Dataset | xr.DataArray = model.results["zs"]
+            all_water_surface_elevation = model.output.data["zs"]
             assert isinstance(all_water_surface_elevation, xr.DataArray)
             try:
                 water_surface_elevation: xr.DataArray = all_water_surface_elevation.sel(
@@ -150,12 +140,12 @@ def read_flood_depth(
 
     else:
         if method == "max":
-            flood_depth_m: xr.Dataset | xr.DataArray = model.results["hmax"].max(
+            flood_depth_m: xr.Dataset | xr.DataArray = model.output.data["hmax"].max(
                 dim="timemax"
             )
             assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
-            flood_depth_m_all_steps: xr.Dataset | xr.DataArray = model.results["h"]
+            flood_depth_m_all_steps = model.output.data["h"]
             assert isinstance(flood_depth_m_all_steps, xr.DataArray)
             try:
                 flood_depth_m: xr.DataArray = flood_depth_m_all_steps.sel(time=end_time)
@@ -223,7 +213,7 @@ def to_sfincs_datetime(dt: datetime) -> str:
 
 
 def make_relative_paths(
-    config: dict[str, Any],
+    config: SfincsConfigVariables,
     model_root: Path,
     new_root: Path,
 ) -> dict[str, Any]:
@@ -249,16 +239,16 @@ def make_relative_paths(
         raise ValueError("model_root and new_root must have a common path")
     relpath = Path(os.path.relpath(commonpath, new_root))
 
-    config_kwargs = dict()
-    for k, v in config.items():
+    config_kwargs: dict[str, str] = dict()
+    for key, value in config:
         if (
-            isinstance(v, str)
-            and isfile(join(model_root, v))
-            and not isfile((join(new_root, v)))
+            isinstance(value, str)
+            and isfile(join(model_root, value))
+            and not isfile((join(new_root, value)))
         ):
             # Ensure paths are consistent across platforms
-            path = Path(relpath) / Path(v)  # Ensure both are Path objects
-            config_kwargs[k] = (
+            path = Path(relpath) / Path(value)  # Ensure both are Path objects
+            config_kwargs[key] = (
                 path.as_posix()
             )  # Always use POSIX format for Docker compatibility
 

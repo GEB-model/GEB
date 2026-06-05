@@ -277,9 +277,9 @@ class Floods(Module):
             self.model.simulation_root, name, logger=self.model.logger
         )
         for entry in self.DEM_config:
-            entry["elevtn"] = read_zarr(
+            entry["elevation"] = read_zarr(
                 self.model.files["other"][entry["path"]]
-            ).to_dataset(name="elevtn")
+            ).to_dataset(name="elevation")
 
         sfincs_model.build(
             subbasins=subbasins,

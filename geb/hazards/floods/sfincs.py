@@ -180,6 +180,7 @@ class SFINCSRootModel:
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_river_outflow_boundary: bool = True,
         outflow_boundary_width_m: float = 500.0,
+        maximum_elevation_for_coastal_boundary_cells_m: float = 3.0,
         initial_water_level: float | None = 0.0,
         custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
         overwrite: bool | Literal["auto"] = True,
@@ -210,6 +211,7 @@ class SFINCSRootModel:
             coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
             setup_river_outflow_boundary: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
             outflow_boundary_width_m: The width of the outflow boundary condition in meters. Defaults to 500 m.
+            maximum_elevation_for_coastal_boundary_cells_m: The maximum elevation for cells to be considered as coastal boundary condition cells. Defaults to 3 m.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
             custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
                 dataframe must contain 'width' and 'depth' columns.
@@ -295,12 +297,6 @@ class SFINCSRootModel:
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
         self.sfincs_model = sf
 
-        # Configure the model's logger and all handlers to DEBUG level
-        # This must be done AFTER creating SfincsModel when handlers are initialized
-        sf.logger.setLevel(logging.DEBUG)
-        for handler in sf.logger.handlers:
-            handler.setLevel(logging.DEBUG)
-
         # we need this later to exclude these subbasins from the area of interest
         subbasins_of_interest = subbasins[
             (~subbasins["is_downstream_outflow"].astype(bool))
@@ -324,7 +320,7 @@ class SFINCSRootModel:
         if not crs.is_epsg_code:
             raise ValueError("CRS must be an EPSG code")
 
-        sf.setup_grid(
+        sf.grid.create(
             x0=geotransformation.c,
             y0=geotransformation.f,
             dx=geotransformation.a,
@@ -335,7 +331,7 @@ class SFINCSRootModel:
             epsg=crs.to_epsg(),
         )
         if crs.is_geographic:
-            sf.setup_config(crsgeo=1)
+            sf.config.update(crsgeo=1)
 
         # Copy DEMs to avoid modifying input
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = [
@@ -349,7 +345,7 @@ class SFINCSRootModel:
             DEM.pop("fill_depressions", None)
             DEM["reproj_method"] = "bilinear"
 
-        sf.setup_dep(datasets_dep=DEMs)
+        sf.elevation.create(elevation_list=DEMs)
 
         # Remove rivers that are not represented in the grid and have no upstream rivers
         # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
@@ -367,7 +363,7 @@ class SFINCSRootModel:
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
-        sf.setup_mask_active(flood_plain, reset_mask=True)
+        sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
 
         self.rivers["outflow_elevation"] = np.nan
         self.rivers["outflow_point_xy"] = None
@@ -375,30 +371,23 @@ class SFINCSRootModel:
 
         if coastal:
             # set zsini based on the minimum elevation
-            assert isinstance(sf.config, dict)
-            sf.config["zsini"] = initial_water_level  # ty: ignore[invalid-assignment]
-
-            if not isinstance(coastal_boundary_exclude_mask, gpd.GeoDataFrame):
-                raise ValueError(
-                    "coastal_boundary_exclude_mask must be provided when coastal is True"
-                )
+            sf.config.update(zsini=initial_water_level)
 
             # activate low elevation coastal zone
             if not isinstance(low_elevation_coastal_zone_mask, gpd.GeoDataFrame):
                 raise ValueError(
                     "low_elevation_coastal_zone_mask must be provided when coastal is True"
                 )
-            sf.setup_mask_active(
-                include_mask=low_elevation_coastal_zone_mask,
-                mask_buffer=5000,
+            sf.mask.create_active(
+                include_polygon=low_elevation_coastal_zone_mask,
                 reset_mask=False,
-            )
+            )  # TODO: CHECK IF BUFFER SHOULD BE ADDED. This was supported in hydromt-sfincs 1.x, but not in 2.x.
 
             # setup the coastal boundary conditions
-            sf.setup_mask_bounds(
+            sf.mask.create_boundary(
                 btype="waterlevel",
-                zmax=3,  # maximum elevation for valid boundary cells
-                exclude_mask=coastal_boundary_exclude_mask,
+                zmax=maximum_elevation_for_coastal_boundary_cells_m,  # maximum elevation for valid boundary cells
+                exclude_polygon=coastal_boundary_exclude_mask,  # ty:ignore[invalid-argument-type]
                 all_touched=True,
             )
         else:
@@ -419,8 +408,8 @@ class SFINCSRootModel:
                     (self.outflow_boundary_width_m / 2) * 1.1
                 ).to_crs(self.crs)
 
-                sf.setup_mask_active(
-                    include_mask=outflow_points,
+                sf.mask.create_active(
+                    include_polygon=outflow_points,
                     all_touched=False,
                     reset_mask=False,
                 )
@@ -568,14 +557,14 @@ class SFINCSRootModel:
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
             # only burn rivers that are wider than the subgrid pixel size
-            sf.setup_subgrid(
-                datasets_dep=DEMs,
-                datasets_rgh=[
+            sf.subgrid.create(
+                elevation_list=DEMs,
+                roughness_list=[
                     {
                         "manning": mannings.to_dataset(name="manning"),
                     }
                 ],
-                datasets_riv=[
+                river_list=[
                     {
                         "centerlines": rivers_to_burn.rename(
                             columns={"width": "rivwth", "depth": "rivdph"}
@@ -587,19 +576,18 @@ class SFINCSRootModel:
                 write_dep_tif=True,
                 write_man_tif=True,
                 nr_subgrid_pixels=grid_size_multiplier,
-                nlevels=20,
+                nr_levels=20,
                 nrmax=500,
             )
 
-            sf.write_subgrid()
         else:
             self.logger.info(
                 "Setting up SFINCS without subgrid - burning rivers into main grid..."
             )
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
-            sf.setup_manning_roughness(
-                datasets_rgh=[
+            sf.roughness.create(
+                roughness_list=[
                     {
                         "manning": mannings.to_dataset(name="manning"),
                     }
@@ -609,29 +597,23 @@ class SFINCSRootModel:
             if rivers_to_burn is not None:
                 # retrieve the elevation and mannings grids
                 # burn the rivers into these grids
-                elevation, mannings = burn_river_rect(
-                    da_elv=sf.grid.dep,
-                    gdf_riv=rivers_to_burn,
-                    da_man=sf.grid.manning,
-                    rivwth_name="width",
-                    rivdph_name="depth",
-                    manning_name="manning",
-                    segment_length=90.0,
+                # and write the burned grids back to the model
+                sf.elevation.data["dep"], sf.roughness.data["manning"] = (
+                    burn_river_rect(
+                        da_elv=sf.elevation.data["dep"],
+                        gdf_riv=rivers_to_burn,
+                        da_man=sf.roughness.data["manning"],
+                        rivwth_name="width",
+                        rivdph_name="depth",
+                        manning_name="manning",
+                        segment_length=90.0,
+                    )
                 )
-                # set the modified grids back to the model
-                sf.set_grid(elevation, name="dep")
-                sf.set_grid(mannings, name="manning")
 
-        # write all components, except forcing which must be done after the model building
-        sf.write_grid()
-        sf.write_subgrid()
-        sf.write_geoms()
-        sf.write_states()
-        sf.write_config()
+        sf.write()
 
-        self.subbasins.to_parquet(self.path / "subbasins.geoparquet")
-        self.rivers.to_parquet(self.path / "rivers.geoparquet")
-
+        write_geom(self.rivers, self.path / "rivers.geoparquet")
+        write_geom(self.subbasins, self.path / "subbasins.geoparquet")
         write_zarr(
             self.area_of_interest,
             self.path / "area_of_interest.zarr",
@@ -640,10 +622,6 @@ class SFINCSRootModel:
 
         fig, _ = sf.plot_basemap(
             fn_out=str((self.figures_path / "basemap.png").resolve()),
-            vmin=math.floor(self.elevation.min()),
-            vmax=max(
-                math.ceil(self.elevation.max()), 1
-            ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
         )
         plt.close(fig)
 
@@ -675,10 +653,10 @@ class SFINCSRootModel:
         Returns:
             The created model mask as an xarray DataArray.
         """
-        mask_ds = DEMs[0]["elevtn"]
+        mask_ds = DEMs[0]["elevation"]
         assert isinstance(mask_ds, xr.Dataset)
 
-        mask: xr.DataArray = mask_ds["elevtn"].astype(bool)
+        mask: xr.DataArray = mask_ds["elevation"].astype(bool)
         mask.attrs["_FillValue"] = None  # ensure no fill value
         mask.name = "mask"
 
@@ -901,9 +879,12 @@ class SFINCSRootModel:
                         )
 
                 self.rivers.at[river_idx, "outflow_elevation"] = 0
-                self.rivers.at[river_idx, "outflow_point_xy"] = (
-                    outflow_point.x,
-                    outflow_point.y,
+                self.rivers.at[river_idx, "outflow_point_xy"] = np.array(
+                    [
+                        outflow_point.x,
+                        outflow_point.y,
+                    ],
+                    dtype=np.float64,
                 )
                 self.rivers.at[river_idx, "is_outflow_boundary"] = True
 
@@ -987,9 +968,12 @@ class SFINCSRootModel:
                     outflow_row, outflow_col
                 ].item()
                 self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation
-                self.rivers.at[river_idx, "outflow_point_xy"] = (
-                    outflow_point.x,
-                    outflow_point.y,
+                self.rivers.at[river_idx, "outflow_point_xy"] = np.array(
+                    [
+                        outflow_point.x,
+                        outflow_point.y,
+                    ],
+                    dtype=np.float64,
                 )
                 self.rivers.at[river_idx, "is_outflow_boundary"] = True
 
@@ -1149,7 +1133,7 @@ class SFINCSRootModel:
         Returns:
             The mask grid as an xarray DataArray.
         """
-        return self.sfincs_model.grid["msk"]
+        return self.sfincs_model.mask.data["mask"]
 
     @property
     def elevation(self) -> xr.DataArray:
@@ -1158,7 +1142,7 @@ class SFINCSRootModel:
         Returns:
             The elevation grid as an xarray DataArray.
         """
-        return self.sfincs_model.grid["dep"]
+        return self.sfincs_model.elevation.data["dep"]
 
     @property
     def crs(self) -> rasterio.crs.CRS:
@@ -1176,7 +1160,7 @@ class SFINCSRootModel:
         Returns:
             The shape of the SFINCS model grid as a tuple (nrows, ncols).
         """
-        return self.sfincs_model.grid["dep"].shape
+        return self.sfincs_model.mask.data["mask"].shape
 
     @property
     def is_geographic(self) -> bool:
@@ -1211,10 +1195,7 @@ class SFINCSRootModel:
         else:
             return xr.full_like(
                 self.elevation,
-                (
-                    self.sfincs_model.grid["dep"].rio.resolution()[0]
-                    * self.sfincs_model.grid["dep"].rio.resolution()[1]
-                ),
+                math.prod(self.sfincs_model.mask.data["mask"].rio.resolution()),
                 dtype=np.float32,
             )
 
@@ -1235,8 +1216,8 @@ class SFINCSRootModel:
             return estimated_cell_size
         else:
             return math.sqrt(
-                self.sfincs_model.grid["msk"].rio.resolution()[0]
-                * self.sfincs_model.grid["msk"].rio.resolution()[1]
+                self.sfincs_model.mask.data["mask"].rio.resolution()[0]
+                * self.sfincs_model.mask.data["mask"].rio.resolution()[1]
             )
 
     def assign_return_periods(
@@ -1535,7 +1516,7 @@ class SFINCSRootModel:
         Returns:
             A boolean mask of the active cells in the SFINCS model.
         """
-        return self.sfincs_model.grid["msk"] == 1
+        return self.sfincs_model.mask.data["mask"] == 1
 
     @property
     def inflow_rivers(self) -> gpd.GeoDataFrame:
@@ -1702,6 +1683,7 @@ class SFINCSSimulation:
         spinup_seconds: int = 86400,
         write_figures: bool = True,
         flood_map_output_interval_seconds: int | None = None,
+        setup_river_outflow: bool = True,
     ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
@@ -1717,6 +1699,7 @@ class SFINCSSimulation:
             write_figures: Whether to generate and save figures for the model. Defaults to False.
             flood_map_output_interval_seconds: The interval in seconds at which to output flood maps. Defaults to None (15 minutes).
                 None means no output.
+            setup_river_outflow: Whether to set up river outflow boundary conditions. Defaults to True.
         """
         self.logger = logger
         self._name = simulation_name
@@ -1732,15 +1715,9 @@ class SFINCSSimulation:
         self.cleanup()
 
         sfincs_model = self.root_model.sfincs_model
-        sfincs_model.set_root(str(self.path), mode="w+")
+        sfincs_model.root.set(self.path, mode="w+")
 
-        # Configure the model's logger and all handlers to DEBUG level
-        # This must be done AFTER reading SfincsModel when handlers are initialized
-        sfincs_model.logger.setLevel(logging.DEBUG)
-        for handler in sfincs_model.logger.handlers:
-            handler.setLevel(logging.DEBUG)
-
-        sfincs_model.setup_config(
+        sfincs_model.config.update(
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
             # h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster, disabled by default. Enabling this may cause instability issues in the GPU runs, so use with caution.
             nc_deflate_level=9,  # compression level for netcdf output files (0-9)
@@ -1751,9 +1728,11 @@ class SFINCSSimulation:
             tref=to_sfincs_datetime(start_time),  # reference time for the simulation
             tstart=to_sfincs_datetime(start_time),  # simulation start time
             tstop=to_sfincs_datetime(end_time),  # simulation end time
-            **make_relative_paths(sfincs_model.config, self.root_path, self.path),
+            **make_relative_paths(
+                sfincs_model.config.data, model_root=self.root_path, new_root=self.path
+            ),
         )
-        sfincs_model.write_config()
+        sfincs_model.config.write()
 
         self.sfincs_model: SfincsModel = sfincs_model
 
@@ -1761,7 +1740,8 @@ class SFINCSSimulation:
         self.total_runoff_volume_m3: float = 0.0
         self.total_discharge_volume_m3: float = 0.0
 
-        self.set_river_outflow_boundary_condition()
+        if setup_river_outflow:
+            self.set_river_outflow_boundary_condition()
 
     def print_forcing_volume(self) -> None:
         """Print all forcing volumes for debugging the water balance."""
@@ -1788,15 +1768,14 @@ class SFINCSSimulation:
             offset: The offset of water levels based on the m
         """
         # select only locations that are in the model
-        self.sfincs_model.read_forcing()
-        self.sfincs_model.setup_waterlevel_forcing(
+        self.sfincs_model.water_level.create(
             locations=locations,
             timeseries=timeseries,
             buffer=buffer,
-            offset=offset,  # ty: ignore[invalid-argument-type]
+            offset=offset,  # ty:ignore[invalid-argument-type]
         )
-        self.sfincs_model.write_forcing()
-        self.sfincs_model.write_config()
+        self.sfincs_model.water_level.write()
+        self.sfincs_model.config.write()
 
         if self.write_figures:
             fig, _ = self.sfincs_model.plot_forcing(
@@ -1805,10 +1784,6 @@ class SFINCSSimulation:
             plt.close(fig)
             fig, _ = self.sfincs_model.plot_basemap(
                 fn_out=str(self.figures_path / "basemap.png"),
-                vmin=math.floor(self.root_model.elevation.min()),
-                vmax=max(
-                    math.ceil(self.root_model.elevation.max()), 1
-                ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324)
             )
             plt.close(fig)
 
@@ -1833,10 +1808,11 @@ class SFINCSSimulation:
                 index=pd.date_range(start=self.start_time, end=self.end_time, freq="h"),
             )
 
-            self.sfincs_model.set_forcing_1d(
-                gdf_locs=outflow_points,
-                df_ts=elevation_time_series_constant,
+            self.sfincs_model.water_level.create(
+                locations=outflow_points,
+                timeseries=elevation_time_series_constant,
             )
+            self.sfincs_model.water_level.write()
 
     def set_river_inflow(
         self, nodes: gpd.GeoDataFrame, timeseries: pd.DataFrame
@@ -1878,9 +1854,9 @@ class SFINCSSimulation:
         """
         assert set(timeseries.columns) == set(nodes.index)
 
-        if "dis" in self.sfincs_model.forcing:
+        if self.sfincs_model.discharge_points.nr_points > 0:
             assert not np.isin(
-                nodes.index, self.sfincs_model.forcing["dis"].index
+                nodes.index, self.sfincs_model.discharge_points.data.index.values
             ).any(), "This forcing would overwrite existing discharge forcing points"
 
         assert (
@@ -1889,7 +1865,7 @@ class SFINCSSimulation:
             .all()
         ), "All forcing locations must be within the model subbasins"
 
-        reprojected_nodes = nodes.to_crs(self.sfincs_model.grid["msk"].rio.crs)
+        reprojected_nodes = nodes.to_crs(self.sfincs_model.crs)
         x_points: xr.DataArray = xr.DataArray(
             reprojected_nodes.geometry.x,
             dims="points",
@@ -1899,7 +1875,7 @@ class SFINCSSimulation:
             dims="points",
         )
 
-        in_masked_area: xr.DataArray = self.sfincs_model.grid["msk"].sel(
+        in_masked_area: xr.DataArray = self.sfincs_model.mask.data["mask"].sel(
             x=x_points,
             y=y_points,
             method="nearest",
@@ -1907,12 +1883,12 @@ class SFINCSSimulation:
         if not (in_masked_area > 0).all():
             raise ValueError("Some forcing locations are outside the active model area")
 
-        self.sfincs_model.setup_discharge_forcing(
+        self.sfincs_model.discharge_points.create(
             locations=nodes, timeseries=timeseries, merge=True
         )
 
-        self.sfincs_model.write_forcing()
-        self.sfincs_model.write_config()
+        self.sfincs_model.discharge_points.write()
+        self.sfincs_model.config.write()
 
         assert self.end_time == timeseries.index[-1], (
             "End time of timeseries does not match simulation end time, this will lead to accounting errors"
@@ -1930,10 +1906,6 @@ class SFINCSSimulation:
         if self.write_figures:
             fig, _ = self.sfincs_model.plot_basemap(
                 fn_out=str(self.figures_path / "src_points_check.png"),
-                vmin=math.floor(self.root_model.elevation.min()),
-                vmax=max(
-                    math.ceil(self.root_model.elevation.max()), 1
-                ),  # vmax is required until bug in hydromt-sfincs fixed, see: https://github.com/Deltares/hydromt_sfincs/issues/324
             )
             plt.close(fig)
             fig, _ = self.sfincs_model.plot_forcing(
@@ -2225,19 +2197,16 @@ class SFINCSSimulation:
         # Calculate cell area based on the model's CRS
         if self.sfincs_model.crs.is_geographic:
             cell_area: xr.DataArray = xr.full_like(
-                self.sfincs_model.grid["dep"], np.nan, dtype=np.float32
+                self.sfincs_model.mask.data["mask"], np.nan, dtype=np.float32
             )
-            height, width = self.sfincs_model.grid["dep"].shape
+            height, width = cell_area.shape
             cell_area.values = calculate_cell_area_m2(
-                self.sfincs_model.grid["dep"].rio.transform(), height, width
+                cell_area.rio.transform(), height, width
             )
         else:
             cell_area = xr.full_like(
-                self.sfincs_model.grid["dep"],
-                (
-                    self.sfincs_model.grid["dep"].rio.resolution()[0]
-                    * self.sfincs_model.grid["dep"].rio.resolution()[1]
-                ),
+                self.sfincs_model.mask.data["mask"],
+                math.prod(self.sfincs_model.mask.data["mask"].rio.resolution()),
                 dtype=np.float32,
             )
         return (flood_depth * cell_area).sum().item()
@@ -2276,18 +2245,7 @@ class SFINCSSimulation:
         Returns:
             True if the SFINCS model has an outflow boundary condition, False otherwise.
         """
-        return (self.sfincs_model.grid["msk"] == 2).any().item()
-
-    def get_cumulative_precipitation(self) -> xr.DataArray:
-        """Reads the cumulative precipitation from the SFINCS model results.
-
-        Returns:
-            An xarray DataArray containing the cumulative precipitation.
-        """
-        self.sfincs_model.read_results()
-        cumulative_precipitation = self.sfincs_model.results["cumprcp"].isel(timemax=-1)
-        assert isinstance(cumulative_precipitation, xr.DataArray)
-        return cumulative_precipitation
+        return (self.sfincs_model.mask.data["mask"] == 2).any().item()
 
     def setup_thin_dams(self, dam_locations: gpd.GeoDataFrame) -> None:
         """Sets up thin dams in the ModFlow groundwater model.
@@ -2295,5 +2253,5 @@ class SFINCSSimulation:
         Args:
             dam_locations: A GeoDataFrame containing the locations of the dams.
         """
-        self.sfincs_model.setup_structures(dam_locations, stype="thd")
-        self.sfincs_model.write_geoms(data_vars=["thd"])
+        self.sfincs_model.thin_dams.create(dam_locations, merge=True)
+        self.sfincs_model.thin_dams.write()
