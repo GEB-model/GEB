@@ -41,6 +41,8 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
         "SFINCS_CONTAINER_GPU",
         "/ada-software/containers/sfincs-gpu.coldeze_combo_ccall.sif",
     )
+elif Path("/gpfs/work5/0/prjs2035/GEB").exists():
+    os.environ.setdefault("GEB_DATA_ROOT", "/gpfs/work5/0/prjs2035/GEB/data")
 else:
     os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
         "SFINCS_SIF_CONTAINER", "deltares/sfincs-cpu:sfincs-v2.3.0-mt-Faber-Release"
