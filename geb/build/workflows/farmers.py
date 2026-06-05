@@ -742,27 +742,6 @@ def get_farm_locations(farms: xr.DataArray, method: str = "centroid") -> TwoDArr
     return locations
 
 
-def decode_crop_type_with_secondary_crop(
-    combined_crop_type: xr.DataArray | np.ndarray,
-    *,
-    invalid_crop_values: tuple[int, ...] = (0, 65535),
-) -> tuple[xr.DataArray | np.ndarray, xr.DataArray | np.ndarray]:
-    """Decode combined crop-secondary codes into main and secondary crop codes.
-
-    Returns:
-        One DataArray with the main-crop and one with the secondary-crop information.
-    """
-    main_crop = (combined_crop_type // 10) * 10
-    secondary_crop = combined_crop_type % 10
-
-    invalid_crop = np.isin(combined_crop_type, invalid_crop_values)
-
-    main_crop = np.where(invalid_crop, combined_crop_type, main_crop)
-    secondary_crop = np.where(invalid_crop, 0, secondary_crop)
-
-    return main_crop, secondary_crop
-
-
 @dataclass(frozen=True)
 class TargetFarm:
     """Lowder-derived target farm used during synthetic farm construction.
@@ -1941,6 +1920,7 @@ def grow_farms_from_prepared_fields(
     field_sequences: np.ndarray,
     target_farms: list[TargetFarm],
     *,
+    crop_columns: list[str] | None = None,
     max_distance_m: float = 500.0,
     max_neighbors: int = 32,
     distance_weight: float = 0.45,
@@ -1957,6 +1937,11 @@ def grow_farms_from_prepared_fields(
     field scoring is batched into arrays and evaluated with Numba to reduce Python
     overhead in large candidate frontiers.
 
+    If ``crop_columns`` is provided, the final representative crop sequence for
+    each farmer is written to the returned farmer table. This sequence follows the
+    same representative-sequence logic used while growing the farm, rather than an
+    area-dominant post-processing rule.
+
     Args:
         projected_fields: Field GeoDataFrame in projected coordinates.
         original_crs: CRS to convert the output fields back to.
@@ -1966,6 +1951,9 @@ def grow_farms_from_prepared_fields(
         field_sequences: Field crop-sequence array with shape
             ``(n_fields, n_years)``.
         target_farms: Lowder-derived target farms.
+        crop_columns: Optional names for the crop-sequence years. If provided,
+            one representative crop-sequence column per year is added to the
+            returned farmer table.
         max_distance_m: Maximum neighbor distance in metres.
         max_neighbors: Maximum number of neighbors stored per field.
         distance_weight: Weight for spatial proximity in candidate scoring.
@@ -1975,11 +1963,14 @@ def grow_farms_from_prepared_fields(
 
     Returns:
         Tuple containing the field GeoDataFrame with assigned ``farmer_id`` and a
-        compact farmer table.
+        compact farmer table. If ``crop_columns`` is provided, the farmer table
+        also contains one representative HRL crop-sequence column per year.
 
     Raises:
         ValueError: If no fields are available.
         ValueError: If no target farms are available.
+        ValueError: If ``crop_columns`` does not match the number of crop-sequence
+            years.
         RuntimeError: If one or more fields remain unassigned.
     """
     if projected_fields.empty:
@@ -1987,6 +1978,13 @@ def grow_farms_from_prepared_fields(
 
     if not target_farms:
         raise ValueError("No target farms available for farm growing.")
+
+    if crop_columns is not None and len(crop_columns) != field_sequences.shape[1]:
+        raise ValueError(
+            "crop_columns must have the same length as the number of "
+            f"field-sequence years. Got {len(crop_columns)} column names and "
+            f"{field_sequences.shape[1]} sequence years."
+        )
 
     target_farms = sorted(
         target_farms,
@@ -2014,6 +2012,9 @@ def grow_farms_from_prepared_fields(
     farmer_n_fields: list[int] = []
     farmer_size_class: list[str] = []
     farmer_target_area_m2: list[float] = []
+    farmer_crop_sequences: list[np.ndarray] = []
+    farmer_unique_sequences: list[np.ndarray] = []
+    farmer_unique_sequence_counts: list[np.ndarray] = []
 
     for target_farm in target_farms:
         if n_unassigned == 0:
@@ -2114,6 +2115,9 @@ def grow_farms_from_prepared_fields(
         farmer_n_fields.append(len(farm_field_indices))
         farmer_size_class.append(target_farm.size_class)
         farmer_target_area_m2.append(float(target_farm.target_area_m2))
+        farmer_crop_sequences.append(farm_crop_sequence.copy())
+        farmer_unique_sequences.append(unique_farm_sequences.copy())
+        farmer_unique_sequence_counts.append(unique_farm_sequence_counts.copy())
 
     # Attach leftover fields to the nearest assigned neighbor, or create a
     # singleton farm if no assigned neighbor exists.
@@ -2137,12 +2141,17 @@ def grow_farms_from_prepared_fields(
                 best_distance = distance_m
                 best_farmer_id = neighbor_farmer_id
 
+        created_fallback_farm = False
         if best_farmer_id < 0:
             best_farmer_id = len(farmer_areas_m2)
             farmer_areas_m2.append(0.0)
             farmer_n_fields.append(0)
             farmer_size_class.append("fallback")
             farmer_target_area_m2.append(float(field_areas_m2[field_index]))
+            farmer_crop_sequences.append(field_sequences[field_index].copy())
+            farmer_unique_sequences.append(field_sequences[[field_index]].copy())
+            farmer_unique_sequence_counts.append(np.ones(1, dtype=np.int32))
+            created_fallback_farm = True
 
         assigned_farmer_ids[field_index] = best_farmer_id
         unassigned[field_index] = False
@@ -2150,6 +2159,18 @@ def grow_farms_from_prepared_fields(
 
         farmer_areas_m2[best_farmer_id] += float(field_areas_m2[field_index])
         farmer_n_fields[best_farmer_id] += 1
+
+        if not created_fallback_farm:
+            (
+                farmer_unique_sequences[best_farmer_id],
+                farmer_unique_sequence_counts[best_farmer_id],
+                farmer_crop_sequences[best_farmer_id],
+            ) = _update_farm_crop_sequence_incremental(
+                farmer_unique_sequences[best_farmer_id],
+                farmer_unique_sequence_counts[best_farmer_id],
+                field_sequences[field_index],
+                missing_value=-1,
+            )
 
     projected_fields = projected_fields.copy()
     projected_fields["farmer_id"] = assigned_farmer_ids.astype(np.int32)
@@ -2167,6 +2188,15 @@ def grow_farms_from_prepared_fields(
             "n_fields": np.asarray(farmer_n_fields, dtype=np.int32),
         }
     )
+
+    if crop_columns is not None:
+        farmer_crop_sequence_array = np.vstack(farmer_crop_sequences).astype(
+            np.int32,
+            copy=False,
+        )
+
+        for crop_index, crop_column in enumerate(crop_columns):
+            farmers[crop_column] = farmer_crop_sequence_array[:, crop_index]
 
     fields_with_farms = projected_fields.to_crs(original_crs)
 
@@ -2365,58 +2395,72 @@ def compact_farm_raster_values(
     row_chunk_size: int = 512,
     logger: logging.Logger | None = None,
 ) -> tuple[xr.DataArray, pd.DataFrame]:
-    """Compact an already-rasterized farm-ID array and matching farmer table.
+    """Compact an already-rasterized farm-ID array and farmer table.
 
-    This is the low-memory counterpart of ``rasterize_and_compact_field_farms``.
-    It is useful when field polygons are rasterized region by region into a shared
-    output array, so the full all-region field GeoDataFrame never has to be kept
-    in memory. ``farm_values`` is compacted in place.
+    Some field-derived farmers may disappear when field polygons are rasterized
+    to the model grid. This function keeps only farmer IDs that are actually
+    present in ``farm_values`` and remaps them to a contiguous zero-based ID
+    range. The returned farm raster is guaranteed to contain exactly the IDs
+    ``0..len(compact_farmers)-1`` wherever it is not nodata.
 
     Args:
-        farm_values: Two-dimensional farm-ID raster values. This array is modified
-            in place to contain compact contiguous farmer IDs.
-        farmers: Farmer table with one row per pre-compaction farmer.
-        template: Target model grid used to provide coordinates, dimensions, and
-            raster metadata for the returned farm DataArray.
-        farmer_id_column: Name of the farmer ID column.
+        farm_values: Rasterized farmer-ID values. Non-farm cells must equal
+            ``nodata``.
+        farmers: Farmer table containing one row per pre-compaction farmer.
+        template: Template DataArray that provides coordinates, dimensions, CRS,
+            and attributes for the returned farm raster.
+        farmer_id_column: Name of the farmer-ID column in ``farmers``.
         nodata: Nodata value in ``farm_values``.
-        row_chunk_size: Number of raster rows processed at once while finding and
-            remapping represented farmer IDs.
-        logger: Optional logger used to report removed farmers.
+        row_chunk_size: Number of raster rows remapped at once.
+        logger: Optional logger used to report dropped farmers.
 
     Returns:
         Tuple containing the compact farm raster and compact farmer table.
 
     Raises:
-        ValueError: If required farmer ID columns are missing.
-        ValueError: If the farm-value grid does not match the template shape.
+        ValueError: If the farmer table does not contain ``farmer_id_column``.
+        ValueError: If duplicate farmer IDs are present in ``farmers``.
+        ValueError: If the raster contains invalid negative IDs other than
+            ``nodata``.
         ValueError: If no farmers are represented in the raster.
+        ValueError: If the raster contains farmer IDs that are missing from the
+            farmer table.
+        RuntimeError: If the compacted raster IDs are not contiguous.
     """
     if farmer_id_column not in farmers.columns:
         raise ValueError(f"farmers must contain '{farmer_id_column}'.")
 
-    if farm_values.shape != template.shape:
+    if farmers[farmer_id_column].duplicated().any():
+        duplicated_ids = farmers.loc[
+            farmers[farmer_id_column].duplicated(), farmer_id_column
+        ].tolist()
         raise ValueError(
-            "farm_values must have the same shape as template. "
-            f"Got {farm_values.shape} and {template.shape}."
+            f"farmers contains duplicate {farmer_id_column!r} values. "
+            f"Examples: {duplicated_ids[:10]}"
         )
 
-    if farm_values.dtype != np.int32:
-        farm_values = farm_values.astype(np.int32, copy=False)
+    farm_values = np.asarray(farm_values, dtype=np.int32)
 
-    present_chunks: list[np.ndarray] = []
-    for row_start in range(0, farm_values.shape[0], row_chunk_size):
-        row_stop = min(row_start + row_chunk_size, farm_values.shape[0])
-        farm_chunk = farm_values[row_start:row_stop]
-        valid_farm_pixels = farm_chunk != nodata
-
-        if np.any(valid_farm_pixels):
-            present_chunks.append(np.unique(farm_chunk[valid_farm_pixels]))
-
-    if not present_chunks:
+    valid_values = farm_values[farm_values != nodata]
+    if valid_values.size == 0:
         raise ValueError("No farmers are represented in the rasterized farm map.")
 
-    present_farmer_ids = np.unique(np.concatenate(present_chunks)).astype(np.int32)
+    invalid_negative_values = np.unique(valid_values[valid_values < 0])
+    if invalid_negative_values.size:
+        raise ValueError(
+            "Farm raster contains negative farmer IDs other than nodata. "
+            f"Values: {invalid_negative_values.tolist()}"
+        )
+
+    present_farmer_ids = np.unique(valid_values).astype(np.int32)
+
+    farmer_ids_in_table = farmers[farmer_id_column].to_numpy(dtype=np.int32)
+    missing_from_table = np.setdiff1d(present_farmer_ids, farmer_ids_in_table)
+    if missing_from_table.size:
+        raise ValueError(
+            "Farm raster contains farmer IDs that are missing from the farmer "
+            f"table. Examples: {missing_from_table[:10].tolist()}"
+        )
 
     if present_farmer_ids.size < len(farmers) and logger is not None:
         logger.warning(
@@ -2426,23 +2470,41 @@ def compact_farm_raster_values(
             len(farmers),
         )
 
-    old_to_new = np.full(int(present_farmer_ids.max()) + 1, -1, dtype=np.int32)
-    old_to_new[present_farmer_ids] = np.arange(present_farmer_ids.size, dtype=np.int32)
+    old_to_new = np.full(int(present_farmer_ids.max()) + 1, nodata, dtype=np.int32)
+    old_to_new[present_farmer_ids] = np.arange(
+        present_farmer_ids.size,
+        dtype=np.int32,
+    )
 
+    # Remap in row chunks to avoid allocating a full-grid boolean mask.
     for row_start in range(0, farm_values.shape[0], row_chunk_size):
         row_stop = min(row_start + row_chunk_size, farm_values.shape[0])
         farm_chunk = farm_values[row_start:row_stop]
-        valid_farm_pixels = farm_chunk != nodata
-        farm_chunk[valid_farm_pixels] = old_to_new[farm_chunk[valid_farm_pixels]]
+        valid_chunk = farm_chunk != nodata
+        farm_chunk[valid_chunk] = old_to_new[farm_chunk[valid_chunk]]
+
+    compact_ids = np.unique(farm_values[farm_values != nodata]).astype(np.int32)
+    expected_ids = np.arange(present_farmer_ids.size, dtype=np.int32)
+    if not np.array_equal(compact_ids, expected_ids):
+        missing_ids = np.setdiff1d(expected_ids, compact_ids)
+        extra_ids = np.setdiff1d(compact_ids, expected_ids)
+        raise RuntimeError(
+            "Compacted farm raster IDs are not contiguous. "
+            f"Missing examples: {missing_ids[:10].tolist()}; "
+            f"extra examples: {extra_ids[:10].tolist()}."
+        )
 
     compact_farms = xr.DataArray(
         farm_values,
         coords=template.coords,
         dims=template.dims,
-        attrs=dict(template.attrs),
+        attrs=template.attrs.copy(),
         name="agents/farmers/farms",
     )
     compact_farms.attrs["_FillValue"] = nodata
+
+    if template.rio.crs is not None:
+        compact_farms = compact_farms.rio.write_crs(template.rio.crs)
 
     compact_farmers = (
         farmers.set_index(farmer_id_column)
