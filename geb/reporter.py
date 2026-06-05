@@ -1690,8 +1690,6 @@ class Reporter:
                 # re-raise any exception from the worker thread
                 future.result()
 
-        (self.report_folder / "done.txt").touch()
-
     def report(
         self,
         module: Module,

@@ -39,6 +39,7 @@ from geb.runner import (
     update_version_fn,
 )
 from geb.workflows.io import WorkingDirectory
+from geb.workflows.merge import merge_model_outputs
 from geb.workflows.raster import rechunk_zarr_file
 
 IS_WINDOWS = sys.platform == "win32"
@@ -1101,6 +1102,59 @@ def rechunk(
 ) -> None:
     """Rechunk a Zarr file."""
     rechunk_zarr_file(input_path, output_path, how, not no_intermediate)  # type: ignore
+
+
+@tool.command()
+@click.argument(
+    "models_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--run-name",
+    default="default",
+    show_default=True,
+    help="Name of the model run whose outputs are merged.",
+)
+@click.option(
+    "--cluster-prefix",
+    default="Europe",
+    show_default=True,
+    help="Prefix used for cluster directory names (e.g. 'Europe').",
+)
+@click.option(
+    "--merged-name",
+    default="merged",
+    show_default=True,
+    help="Name for the merged directory inside MODELS_DIR.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Overwrite an existing merged directory.",
+)
+def merge(
+    models_dir: Path,
+    run_name: str,
+    cluster_prefix: str,
+    merged_name: str,
+    overwrite: bool,
+) -> None:
+    """Merge GEB cluster outputs into a single model directory for evaluation.
+
+    Scans MODELS_DIR for cluster subdirectories matching CLUSTER_PREFIX, merges
+    geometry files and discharge observation tables, symlinks report parquets, and
+    writes a model.yml so the result can be passed to ``geb evaluate``.
+    """
+    logger = create_logger("merge")
+    merge_model_outputs(
+        models_dir=models_dir,
+        run_name=run_name,
+        cluster_prefix=cluster_prefix,
+        merged_dir_name=merged_name,
+        overwrite=overwrite,
+        logger=logger,
+    )
 
 
 if __name__ == "__main__":
