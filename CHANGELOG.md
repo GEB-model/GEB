@@ -1,4 +1,5 @@
 # dev
+- Require MERIT Hydro dir/elv tiles to be downloaded manually and report missing tile filenames during build.
 - Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801)).
 - Reorganize output folder so that all output files are saved under the run name ([#852](https://github.com/GEB-model/GEB/issues/852)). This allows us to keep files from different runs nicely separated.
 - Migrate to new Destination Earth API ([#846](https://github.com/GEB-model/GEB/issues/844)).

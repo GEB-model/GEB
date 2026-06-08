@@ -83,14 +83,20 @@ Most of the data that the build module uses to create the input data for GEB is 
 
 ### Configuration
 
-Some of the data that is obtained from online sources and APIs requires keys. You should take the following steps:
+Some of the data that is obtained from online sources and APIs requires keys or manual downloads. You should take the following steps:
 
-1.  Request access to MERIT Hydro dataset [MERIT Hydro](https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/), and create a ".env"-file in the GEB repository with the following content:
+1.  In case MERIT Hydro is not fully downloaded in the global cache, download the MERIT Hydro `dir` and `elv` tiles manually using the [MERIT Hydro instructions](https://global-hydrodynamics.github.io/MERIT_Hydro/). Put the GeoTIFF files in the GEB data root cache.
+
+The files must be placed in:
 
 ``` text
-MERIT_USERNAME=<your_username>
-MERIT_PASSWORD=<your_password>
+$GEB_DATA_ROOT/merit_hydro_dir/v1/dir/
+$GEB_DATA_ROOT/merit_hydro_elv/v1/elv/
 ```
+
+On Snellius, `GEB_DATA_ROOT` is set automatically to `/gpfs/work5/0/prjs2035/GEB/data` unless it is already defined.
+
+During `geb build`, GEB checks which tiles are needed for the model region. If any required tile is missing, GEB stops and prints the exact filenames and target folder.
 
 2.  To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on [Destination Earth](https://earthdatahub.destine.eu/). Then, create a [Standard API key](https://earthdatahub.destine.eu/account-settings) and add the content to the ".env"-file in the GEB repository:
 
