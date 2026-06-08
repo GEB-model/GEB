@@ -1961,7 +1961,7 @@ class Hydrology:
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
                 try:
-                    validation_df = create_validation_df(
+                    validation_df: pd.DataFrame = create_validation_df(
                         self.model.output_folder,
                         run_name,
                         station_id,
