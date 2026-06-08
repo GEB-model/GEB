@@ -309,7 +309,7 @@ def test_spinup() -> None:
         geb.reporter.finalize()
 
         routing_report_folder: Path = (
-            working_directory / "output" / "report" / "spinup" / "hydrology.routing"
+            working_directory / "output" / "spinup" / "report" / "hydrology.routing"
         )
 
         for ID, river in outflow_rivers.iterrows():
@@ -411,17 +411,35 @@ def test_run() -> None:
             evaluate_args["method_args"] = {"method": evaluation_method}
             run_model_with_method(method="evaluate", **evaluate_args)
 
-        hydrology_eval_folder: Path = Path("output") / "evaluate" / "hydrology"
-        assert (hydrology_eval_folder / "water_balance_timeseries.svg").exists()
-        assert (hydrology_eval_folder / "water_balance_timeseries_yearly.svg").exists()
+        hydrology_eval_folder: Path = (
+            Path("output") / "default" / "evaluate" / "hydrology"
+        )
         assert (
-            hydrology_eval_folder / "water_balance_top_soil_timeseries.svg"
+            hydrology_eval_folder / "water_balance" / "water_balance_timeseries.svg"
         ).exists()
         assert (
-            hydrology_eval_folder / "water_balance_top_soil_timeseries_yearly.svg"
+            hydrology_eval_folder
+            / "water_balance"
+            / "water_balance_timeseries_yearly.svg"
         ).exists()
-        assert (hydrology_eval_folder / "water_storage_timeseries.svg").exists()
-        assert (hydrology_eval_folder / "water_storage_timeseries_yearly.svg").exists()
+        assert (
+            hydrology_eval_folder
+            / "water_balance"
+            / "water_balance_top_soil_timeseries.svg"
+        ).exists()
+        assert (
+            hydrology_eval_folder
+            / "water_balance"
+            / "water_balance_top_soil_timeseries_yearly.svg"
+        ).exists()
+        assert (
+            hydrology_eval_folder / "water_storage" / "water_storage_timeseries.svg"
+        ).exists()
+        assert (
+            hydrology_eval_folder
+            / "water_storage"
+            / "water_storage_timeseries_yearly.svg"
+        ).exists()
 
         method_args = {
             "method": "hydrology.evaluate_discharge",

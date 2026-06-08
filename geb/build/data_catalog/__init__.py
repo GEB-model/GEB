@@ -71,7 +71,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "era5": {
         "adapter": DestinationEarth(),
-        "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "url": None,
         "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
     },
     "ecmwf_geopotential": {
@@ -868,7 +868,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -883,7 +883,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",

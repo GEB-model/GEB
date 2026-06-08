@@ -1,5 +1,12 @@
 # dev
+- Require MERIT Hydro dir/elv tiles to be downloaded manually and report missing tile filenames during build.
+- Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801)).
+- Reorganize output folder so that all output files are saved under the run name ([#852](https://github.com/GEB-model/GEB/issues/852)). This allows us to keep files from different runs nicely separated.
+- Migrate to new Destination Earth API ([#846](https://github.com/GEB-model/GEB/issues/844)).
 - Fix error with zero discharge in routing, closing [#819](https://github.com/GEB-model/GEB/issues/819)
+
+Important notes:
+- In this version, the output folder is re-organized. For a specific run name (e.g., default or spinup) all files (i.e., reported data, evaluation data, flood maps etc.) are saved in the folder output/run_name.
 
 # v1.0.0b27
 - Fix error with zero discharge in routing, closing [#819](https://github.com/GEB-model/GEB/issues/819)
@@ -25,6 +32,7 @@
 - Include an array tracking household expected annual damages (based on adaptation status). 
 - Support exporting household attributes (such as ead) using the reporter in run_yearly.
 - When multiple outflow basins were selected that are not coastal basins, it could happen that some basins were erroneously excluded. This is now fixed.
+- Support new Destination Earth keys ([#844](https://github.com/GEB-model/GEB/issues/844)).
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
@@ -452,3 +460,6 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
+
+
+
