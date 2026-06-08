@@ -938,21 +938,6 @@ def workflow(
 
 
 @cli.command()
-@click_config
-@click.option(
-    "--build-config",
-    "-b",
-    type=click.Path(path_type=Path),
-    default=Path(BUILD_DEFAULT),
-    help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
-)
-@click.option(
-    "--update-config",
-    "-u",
-    type=click.Path(path_type=Path),
-    default=Path(UPDATE_DEFAULT),
-    help="Path of the model update configuration file.",
-)
 @click.option(
     "--from-example",
     default="geul",

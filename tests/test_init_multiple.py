@@ -16,9 +16,6 @@ def test_init_multiple_rejects_directory_path(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must be a name"):
         init_multiple_fn(
-            config="model.yml",
-            build_config="build.yml",
-            update_config="update.yml",
             working_directory=tmp_path,
             from_example="geul",
             geometry_bounds="0,0,1,1",
@@ -32,9 +29,6 @@ def test_init_multiple_requires_models_directory(tmp_path: Path) -> None:
     """Test that init-multiple requires a models directory."""
     with pytest.raises(FileNotFoundError, match="Models directory not found"):
         init_multiple_fn(
-            config="model.yml",
-            build_config="build.yml",
-            update_config="update.yml",
             working_directory=tmp_path,
             from_example="geul",
             geometry_bounds="0,0,1,1",
@@ -96,9 +90,6 @@ def test_init_multiple_creates_model_set_under_models(
     )
 
     init_multiple_fn(
-        config="model.yml",
-        build_config="build.yml",
-        update_config="update.yml",
         working_directory=tmp_path,
         from_example="geul",
         geometry_bounds="0,0,1,1",

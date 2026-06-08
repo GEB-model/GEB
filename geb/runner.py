@@ -1507,9 +1507,6 @@ def clean_fn(
 
 
 def init_multiple_fn(
-    config: str | Path,
-    build_config: str | Path,
-    update_config: str | Path,
     working_directory: str | Path,
     from_example: str,
     geometry_bounds: str,
@@ -1523,9 +1520,6 @@ def init_multiple_fn(
     """Create multiple models from a geometry by clustering downstream subbasins.
 
     Args:
-        config: Path to the model configuration file to create.
-        build_config: Path to the model build configuration file to create.
-        update_config: Path to the model update configuration file to create.
         working_directory: Working directory for the models.
         from_example: Name of the example to use as a base for the models.
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
@@ -1545,9 +1539,6 @@ def init_multiple_fn(
     """
     logger = create_logger("init_multiple")
 
-    config_path: Path = Path(config)
-    build_config_path: Path = Path(build_config)
-    update_config_path: Path = Path(update_config)
     working_directory_path: Path = Path(working_directory).expanduser().resolve()
     requested_directory: Path = Path(init_multiple_dir).expanduser()
     if requested_directory.is_absolute() or requested_directory.parent != Path("."):
@@ -1645,9 +1636,6 @@ def init_multiple_fn(
     create_multi_basin_configs(
         clusters=outlet_clusters,
         working_directory=init_multiple_dir_path,
-        config=config_path,
-        build_config=build_config_path,
-        update_config=update_config_path,
         cluster_prefix=cluster_prefix,
         from_example=from_example,
         cluster_basin_areas_km2=cluster_basin_areas_km2,
