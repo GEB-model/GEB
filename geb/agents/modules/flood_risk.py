@@ -33,7 +33,7 @@ class FloodRiskModule:
         self.model = model
         self.households = households
         self.load_damage_curves()
-        self.alter_damage_curves_for_flood_proofed_buildings()
+        self.alter_damage_curves_based_on_actions()
         self.load_max_damage_values()
         self.load_flood_maps()
 
@@ -262,8 +262,11 @@ class FloodRiskModule:
                 columns={"damage_ratio": "rail"}
             )
 
-    def alter_damage_curves_for_flood_proofed_buildings(self) -> None:
+    def alter_damage_curves_based_on_actions(self) -> None:
         """Alter the global damage curves for flood-proofed buildings by applying a reduction factor to the unprotected building curves."""
+        damage_reduction_over_leadtime = self.households.model.config["agent_settings"][
+            "households"
+        ]["warning_system"]["damage_reduction_over_leadtime"]
         # insert a row with depth of 1.01m and damage ratio corresponding to the damage ratio at 1m depth modeling dry flood proofing until 1m depth.
         self.households.buildings_structure_curve.loc[1.01] = (
             self.households.buildings_structure_curve.loc[1]
@@ -362,6 +365,33 @@ class FloodRiskModule:
         self.households.buildings_content_curve["building_all_forecast_based"] = (
             self.households.buildings_content_curve["building_unprotected"] * 0.85
         )
+
+        if damage_reduction_over_leadtime:
+            # create timing-based structure curves for elevated possessions - no effect on structure
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_early"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_medium"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_late"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            # create timing-based damage curves for elevated possessions
+            # Early action (>48h lead time): 20% damage (80% reduction)
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_early"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.20
+
+            # Medium action (24-48h lead time): 80% damage (20% reduction)
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_medium"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.80
+
+            # Late action (<24h lead time): 80% damage (20% reduction) - same as standard
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_late"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.90
 
     def calculate_building_flood_damages(
         self, verbose: bool = False, export_building_damages: bool = False

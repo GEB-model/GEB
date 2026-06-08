@@ -96,6 +96,8 @@ agent_settings:
       area_threshold: 0.1 # Area threshold (percentage of postal code area) for warnings (0.0-1.0)
       building_threshold: 0.1 # Building threshold (percentage of buildings in postal code) for warnings (0.0-1.0)
       communication_efficiency: 0.78 # Communication efficiency: fraction of households that can be reached (0.0-1.0)
+      weight_by_socioeconomic_factors: false # Whether to consider the social economic factors in the distribution of warnings.
+      damage_reduction_over_leadtime: true # Whether to consider the reduction of damage over lead time due to more effective warnings. The earlier the action the more damage reduction.
       evacuation_lead_time_threshold: 24 # Lead time threshold for evacuation warnings (hours)
       response_rates: # Response rates for different warning types
         flood_general_warnings: 0.35 # Response rate for flood general warnings (0.0-1.0)
@@ -103,7 +105,7 @@ agent_settings:
       strategies: # Warning strategy settings
         water_level_warnings: true # Enable water level based warnings with measures
         critical_infrastructure_warnings: false  # Enable critical infrastructure based evacuation warnings  
-        warning_type: "flood_general" # Type of warnings: "flood_general" for basic flood warnings or "impact_based" for measure-specific warnings
+        warning_type: "area_based" # Type of warnings: "area_based" for basic flood warnings or "building_based" for impact-based warnings
 
     expected_utility:
       flood_risk_calculations:

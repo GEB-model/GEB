@@ -385,6 +385,17 @@ class GEBModel(Module):
                 / self.config["general"]["forecasts"]["processing"]
             )
 
+            # extract unique forecast issue datetimes from files keys
+            forecast_issue_dates: list[datetime.datetime] = sorted(
+                {
+                    datetime.datetime.strptime(Path(file_key).parts[3], "%Y%m%dT%H%M%S")
+                    for file_key in other_files
+                    if file_key.startswith(forecast_prefix)
+                    and len(Path(file_key).parts) >= 5
+                    and Path(file_key).parts[3].replace("T", "").isdigit()
+                }
+            )
+
             if forecast_base_path.exists():
                 forecast_dirs: list[Path] = [
                     d
@@ -421,13 +432,39 @@ class GEBModel(Module):
             forecast_issue_dates = list(
                 set(forecast_issue_dates)
             )  # only keep unique dates
+            # Get warning system config settings
+            warning_config = self.model.config["agent_settings"]["households"][
+                "warning_system"
+            ]
+
+            prob_threshold = warning_config["probability_threshold"]
+            area_threshold = warning_config["area_threshold"]
+            building_threshold = warning_config["building_threshold"]
+            warning_type = warning_config["strategies"]["warning_type"]
+            communication_efficiency = warning_config["communication_efficiency"]
+            evacuation_lead_time_threshold = warning_config[
+                "evacuation_lead_time_threshold"
+            ]
+            weight_by_socioeconomic_factors = warning_config[
+                "weight_by_socioeconomic_factors"
+            ]
             for dt in forecast_issue_dates:
+                self.logger.debug(
+                    "Checking forecast issue datetime: %s vs current model time: %s",
+                    dt,
+                    self.current_time,
+                )
+
                 if (
-                    dt.date() == self.current_time.date()
-                ):  # Check if forecast was issued for the current date
-                    print(
-                        f"Found forecast issued at {dt.strftime('%Y-%m-%d %H:%M:%S')} for current time {self.current_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    dt == self.current_time
+                ):  # change to include hours (for when we move to hourly)
+                    self.logger.debug(
+                        "Forecast issue datetime matched current model time: %s",
+                        dt.isoformat(),
                     )
+                    forecast_datetime = datetime.datetime.combine(
+                        dt, datetime.time(0)
+                    )  # Convert date back to datetime for the multiverse method
 
                     self.multiverse(
                         forecast_issue_datetime=dt,
@@ -440,20 +477,22 @@ class GEBModel(Module):
                             f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
                         # Run warning strategies based on config settings
-                        if (
-                            self.config.get("warning_system", {})
-                            .get("water_level_strategy", {})
-                            .get("enabled", True)
-                        ):
+                        # Check whether water level warnings are enabled
+                        if warning_config["strategies"]["water_level_warnings"]:
                             self.agents.households.water_level_warning_strategy(
-                                date_time=self.current_time, exceedance=True
+                                date_time=self.current_time,
+                                warning_type=warning_type,
+                                prob_threshold=prob_threshold,
+                                buildings_hit_threshold=building_threshold,
+                                area_hit_threshold=area_threshold,
+                                communication_efficiency=communication_efficiency,
+                                evacuation_lead_time_threshold=evacuation_lead_time_threshold,
+                                weight_by_socioeconomic_factors=weight_by_socioeconomic_factors,
+                                exceedance=True,
                             )
-
-                        if (
-                            self.config.get("warning_system", {})
-                            .get("critical_infrastructure_strategy", {})
-                            .get("enabled", True)
-                        ):
+                        if warning_config["strategies"][
+                            "critical_infrastructure_warnings"
+                        ]:
                             self.agents.households.critical_infrastructure_warning_strategy(
                                 date_time=self.current_time, exceedance=True
                             )
