@@ -1515,81 +1515,55 @@ def init_multiple_fn(
     geometry_bounds: str,
     target_area_km2: float,
     cluster_prefix: str,
-    init_multiple_dir: str,
+    init_multiple_dir: str | Path,
     region_shapefile: str | None = None,
-    skip_merged_geometries: bool = False,
-    skip_visualization: bool = False,
     min_bbox_efficiency: float = 0.99,
     ocean_outlets_only: bool = False,
-    optimize: bool = OPTIMIZE_DEFAULT,
-    timing: bool = TIMING_DEFAULT,
-    cores: int | None = CORES_DEFAULT,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
     Args:
-        config: Path to the base model configuration file.
-        build_config: Path to the base model build configuration file.
-        update_config: Path to the base model update configuration file.
+        config: Path to the model configuration file to create.
+        build_config: Path to the model build configuration file to create.
+        update_config: Path to the model update configuration file to create.
         working_directory: Working directory for the models.
         from_example: Name of the example to use as a base for the models.
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         cluster_prefix: Prefix for cluster directory names.
         region_shapefile: Optional path to region shape file. Defaults to geometry bounds if not specified.
-        skip_merged_geometries: If True, skip creating dissolved basin polygon file (much faster).
-        skip_visualization: If True, skip creating visualization map (faster).
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
         ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
-        init_multiple_dir: Name or path for the directory where large scale model directories are created.
-        optimize: If True, run the init-multiple in optimized mode.
-        timing: If True, run the init-multiple with timing.
-        cores: Number of cores to restrict the init-multiple to.
+        init_multiple_dir: Name under the working-directory ``models`` folder
+            where large scale model directories are created.
 
     Raises:
-        FileNotFoundError: If the example folder does not exist, or if the parent
-            models/ directory does not exist.
-        ValueError: If geometry_bounds format is invalid.
+        FileNotFoundError: If the example folder or working-directory ``models``
+            directory does not exist.
+        ValueError: If geometry_bounds format is invalid, or if
+            init_multiple_dir is not a model set name.
     """
-    _restart_if_needed(optimize=optimize, cores=cores)
-
     logger = create_logger("init_multiple")
 
+    config_path: Path = Path(config)
+    build_config_path: Path = Path(build_config)
+    update_config_path: Path = Path(update_config)
     working_directory_path: Path = Path(working_directory).expanduser().resolve()
-    requested_init_multiple_dir: Path = Path(init_multiple_dir).expanduser()
-    if requested_init_multiple_dir.is_absolute():
-        init_multiple_dir_path: Path = requested_init_multiple_dir
-    elif requested_init_multiple_dir.parent != Path("."):
-        init_multiple_dir_path = (
-            working_directory_path / requested_init_multiple_dir
-        ).resolve()
-    else:
-        candidate_model_dirs: list[Path] = [
-            working_directory_path / "models",
-            working_directory_path.parent / "models",
-            GEB_PACKAGE_DIR.parents[1] / "models",
-        ]
-        existing_model_dir: Path | None = next(
-            (
-                candidate_model_dir.resolve()
-                for candidate_model_dir in candidate_model_dirs
-                if candidate_model_dir.resolve().is_dir()
-            ),
-            None,
+    requested_directory: Path = Path(init_multiple_dir).expanduser()
+    if requested_directory.is_absolute() or requested_directory.parent != Path("."):
+        raise ValueError(
+            "--init-multiple-dir must be a name under the models directory."
         )
-        if existing_model_dir is None:
-            checked_paths: str = "\n".join(
-                f"  - {candidate_model_dir.resolve()}"
-                for candidate_model_dir in candidate_model_dirs
-            )
-            raise FileNotFoundError(
-                "Models directory not found. Checked:\n"
-                f"{checked_paths}\n"
-                "Pass --init-multiple-dir as an absolute path or a relative path "
-                "with a directory component to create the model set elsewhere."
-            )
-        init_multiple_dir_path = existing_model_dir / requested_init_multiple_dir
-    init_multiple_dir_path.mkdir(parents=True, exist_ok=True)
+
+    models_directory: Path = working_directory_path / "models"
+    if not models_directory.is_dir():
+        raise FileNotFoundError(
+            f"Models directory not found: {models_directory}. "
+            "Create it first, or choose a working directory that contains models/."
+        )
+
+    init_multiple_dir_path: Path = models_directory / requested_directory
+    init_multiple_dir_path.mkdir(exist_ok=True)
 
     logger.info("Starting multiple model initialization")
     logger.info(f"Target area: {target_area_km2:,.0f} km²")
@@ -1671,14 +1645,19 @@ def init_multiple_fn(
     create_multi_basin_configs(
         clusters=outlet_clusters,
         working_directory=init_multiple_dir_path,
+        config=config_path,
+        build_config=build_config_path,
+        update_config=update_config_path,
         cluster_prefix=cluster_prefix,
         from_example=from_example,
         cluster_basin_areas_km2=cluster_basin_areas_km2,
     )
 
-    # save geoparquet and maps to default location
     save_geoparquet = init_multiple_dir_path / f"{cluster_prefix}_outlets.geoparquet"
     save_map = init_multiple_dir_path / f"{cluster_prefix}_clusters_map.png"
+    merged_basins_path = (
+        init_multiple_dir_path / f"{cluster_prefix}_complete_basins.geoparquet"
+    )
 
     logger.info(f"Saving outlet basins to geoparquet: {save_geoparquet}")
     save_clusters_to_geoparquet(
@@ -1688,29 +1667,19 @@ def init_multiple_fn(
         cluster_prefix=cluster_prefix,
     )
 
-    if not skip_merged_geometries:
-        merged_basins_path = (
-            init_multiple_dir_path / f"{cluster_prefix}_complete_basins.geoparquet"
-        )
-        logger.info(
-            f"Saving complete basin outlines as merged geometries: {merged_basins_path}"
-        )
-        save_clusters_as_merged_geometries(
-            cluster_outlines=cluster_outlines,
-            output_path=merged_basins_path,
-        )
-    else:
-        logger.info("Skipping merged geometries (--skip-merged-geometries flag set)")
+    logger.info(
+        f"Saving complete basin outlines as merged geometries: {merged_basins_path}"
+    )
+    save_clusters_as_merged_geometries(
+        cluster_outlines=cluster_outlines,
+        output_path=merged_basins_path,
+    )
 
-    # Create visualization map (optional)
-    if not skip_visualization:
-        logger.info(f"Creating visualization map: {save_map}")
-        create_cluster_visualization_map(
-            cluster_outlines=cluster_outlines,
-            output_path=save_map,
-        )
-    else:
-        logger.info("Skipping visualization map (--skip-visualization flag set)")
+    logger.info(f"Creating visualization map: {save_map}")
+    create_cluster_visualization_map(
+        cluster_outlines=cluster_outlines,
+        output_path=save_map,
+    )
 
     logger.info(f"Successfully created {len(outlet_clusters)} model configurations:")
     logger.info(

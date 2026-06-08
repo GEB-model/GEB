@@ -1323,6 +1323,9 @@ def create_cluster_visualization_map(
 def create_multi_basin_configs(
     clusters: list[list[int]],
     working_directory: Path,
+    config: Path = Path("model.yml"),
+    build_config: Path = Path("build.yml"),
+    update_config: Path = Path("update.yml"),
     cluster_prefix: str = "cluster",
     from_example: str = "geul",
     cluster_basin_areas_km2: dict[int, float] | None = None,
@@ -1332,6 +1335,9 @@ def create_multi_basin_configs(
     Args:
         clusters: List of clusters, where each cluster is a list of COMID values.
         working_directory: Working directory for the models (init_multiple_dir).
+        config: Path to the model configuration file to create.
+        build_config: Path to the model build configuration file to create.
+        update_config: Path to the model update configuration file to create.
         cluster_prefix: Prefix for cluster directory names.
         from_example: Example model name to inherit build and model settings from.
         cluster_basin_areas_km2: Optional basin area by cluster number (km2).
@@ -1347,6 +1353,7 @@ def create_multi_basin_configs(
     example_directory: Path = GEB_PACKAGE_DIR / "examples" / from_example
     example_model_config_path: Path = example_directory / "model.yml"
     example_build_config_path: Path = example_directory / "build.yml"
+    example_update_config_path: Path = example_directory / "update.yml"
     if not example_model_config_path.exists():
         raise FileNotFoundError(
             f"Example model.yml not found: {example_model_config_path}"
@@ -1355,20 +1362,35 @@ def create_multi_basin_configs(
         raise FileNotFoundError(
             f"Example build.yml not found: {example_build_config_path}"
         )
+    if not example_update_config_path.exists():
+        raise FileNotFoundError(
+            f"Example update.yml not found: {example_update_config_path}"
+        )
 
-    print("Creating build.yml in main init multiple directory...")
-    build_config_path: Path = working_directory / "build.yml"
+    config_path: Path = working_directory / config
+    build_config_path: Path = working_directory / build_config
+    update_config_path: Path = working_directory / update_config
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    build_config_path.parent.mkdir(parents=True, exist_ok=True)
+    update_config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"Creating {build_config_path.name} in main init multiple directory...")
     build_config_path.write_text(
         f'inherits: "{{GEB_PACKAGE_DIR}}/examples/{from_example}/build.yml"\n'
     )
 
-    print(f"Created build.yml in {working_directory}")
-    print("Creating model.yml in init_multiple_dir directory...")
-    model_config_path: Path = working_directory / "model.yml"
+    print(f"Created {build_config_path.name} in {working_directory}")
+    print(f"Creating {config_path.name} in init_multiple_dir directory...")
     print(f"Reading model configuration from: {example_model_config_path}")
-    model_config_path.write_text(example_model_config_path.read_text())
+    config_path.write_text(example_model_config_path.read_text())
 
-    print(f"Created model.yml in {working_directory}")
+    print(f"Created {config_path.name} in {working_directory}")
+    print(f"Creating {update_config_path.name} in init_multiple_dir directory...")
+    update_config_path.write_text(
+        f'inherits: "{{GEB_PACKAGE_DIR}}/examples/{from_example}/update.yml"\n'
+    )
+
+    print(f"Created {update_config_path.name} in {working_directory}")
 
     print("Creating cluster directories and configuration files...")
     cluster_directories: list[Path] = []
@@ -1383,11 +1405,18 @@ def create_multi_basin_configs(
         base_dir.mkdir(parents=True, exist_ok=True)
         cluster_directories.append(cluster_dir)
 
-        build_config_path = base_dir / "build.yml"
-        build_config: dict[str, str] = {"inherits": "../../build.yml"}
-        write_params(build_config, build_config_path)
+        relative_build_config: str = os.path.relpath(build_config_path, base_dir)
+        base_build_config_path: Path = base_dir / "build.yml"
+        base_build_config: dict[str, str] = {"inherits": relative_build_config}
+        write_params(base_build_config, base_build_config_path)
 
-        model_config_path = base_dir / "model.yml"
+        relative_update_config: str = os.path.relpath(update_config_path, base_dir)
+        base_update_config_path: Path = base_dir / "update.yml"
+        base_update_config: dict[str, str] = {"inherits": relative_update_config}
+        write_params(base_update_config, base_update_config_path)
+
+        relative_model_config: str = os.path.relpath(config_path, base_dir)
+        base_model_config_path: Path = base_dir / "model.yml"
         cluster_subbasin_ids: list[int] = [int(subbasin_id) for subbasin_id in cluster]
         total_basin_area_km2: float | None = (
             cluster_basin_areas_km2.get(cluster_index)
@@ -1398,13 +1427,13 @@ def create_multi_basin_configs(
             print(f"  Basin area: {total_basin_area_km2:,.0f} km²")
 
         model_config: dict[str, Any] = {
-            "inherits": "../../model.yml",
+            "inherits": relative_model_config,
             "general": {"region": {"subbasin": cluster_subbasin_ids}},
         }
         if total_basin_area_km2 is not None:
             model_config["basin"] = {"total_area_km2": round(total_basin_area_km2, 2)}
 
-        write_params(model_config, model_config_path)
+        write_params(model_config, base_model_config_path)
 
         print(
             f"  Created configuration files in {base_dir.relative_to(working_directory)}"
