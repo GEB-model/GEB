@@ -2,12 +2,12 @@
 - Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801)).
 - Reorganize output folder so that all output files are saved under the run name ([#852](https://github.com/GEB-model/GEB/issues/852)). This allows us to keep files from different runs nicely separated.
 - Migrate to new Destination Earth API ([#846](https://github.com/GEB-model/GEB/issues/844)).
+- Fix error with zero discharge in routing, closing [#819](https://github.com/GEB-model/GEB/issues/819)
 
 Important notes:
 - In this version, the output folder is re-organized. For a specific run name (e.g., default or spinup) all files (i.e., reported data, evaluation data, flood maps etc.) are saved in the folder output/run_name.
-- Fix error with zero discharge in routing, closing [#819](https://github.com/GEB-model/GEB/issues/819)
-# v1.0.0b27
 
+# v1.0.0b27
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 - Implement retry mechanism for 429 web error GLOPOP-SG data adapter. Zenodo rate limited making too many range requests. If we get rate limited now, we now go to sleep for a bit and try again later.
 - Further reduce memory use of reporter by using numpy views for identical time series data.
