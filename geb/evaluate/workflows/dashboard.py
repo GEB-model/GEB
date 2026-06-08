@@ -30,6 +30,12 @@ _ESRI_TOPO_ATTR = (
 
 
 StationMarkerIndex = dict[str, str | list[str]]
+_METRIC_COLORS: list[str] = ["red", "orange", "yellow", "blue", "green"]
+_WATERBODY_STYLE: dict[int, dict[str, str]] = {
+    1: {"color": "#4FC3F7", "label": "Lake"},
+    2: {"color": "#FF8A65", "label": "Reservoir"},
+    3: {"color": "#81C784", "label": "Lake (controlled)"},
+}
 
 
 class _JavascriptMacro(MacroElement):
@@ -569,10 +575,13 @@ def _build_metric_colormaps() -> tuple[
     Returns:
         Tuple of (colormap_r, colormap_kge, colormap_nse).
     """
-    colors = ["red", "orange", "yellow", "blue", "green"]
-    colormap_r = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="R")
-    colormap_kge = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="KGE")
-    colormap_nse = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="NSE")
+    colormap_r = cm.LinearColormap(colors=_METRIC_COLORS, vmin=0, vmax=1, caption="R")
+    colormap_kge = cm.LinearColormap(
+        colors=_METRIC_COLORS, vmin=0, vmax=1, caption="KGE"
+    )
+    colormap_nse = cm.LinearColormap(
+        colors=_METRIC_COLORS, vmin=0, vmax=1, caption="NSE"
+    )
     return colormap_r, colormap_kge, colormap_nse
 
 
@@ -628,6 +637,106 @@ def _add_station_marker(
     return marker.get_name()
 
 
+def _add_metric_station_markers(
+    row: pd.Series,
+    metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
+    coords: list[float],
+    circle_radius: float,
+    popup_html: str,
+    popup_width: int,
+    tooltip: str,
+) -> list[str]:
+    """Add one station marker to each metric layer.
+
+    Args:
+        row: Evaluation metrics for one station (dimensionless).
+        metric_layers: Layers, colormaps, and metric names to render.
+        coords: Marker coordinates as ``[latitude, longitude]`` (degrees).
+        circle_radius: Marker radius (pixels).
+        popup_html: Popup placeholder HTML.
+        popup_width: Popup width (pixels).
+        tooltip: Marker tooltip text.
+
+    Returns:
+        Folium JavaScript variable names for the created markers.
+    """
+    marker_names: list[str] = []
+    for layer, colormap, metric_name in metric_layers:
+        metric_value: float = row[metric_name]
+        fill_color: str = colormap(metric_value) if pd.notna(metric_value) else "gray"
+        marker_names.append(
+            _add_station_marker(
+                layer=layer,
+                coords=coords,
+                radius=circle_radius,
+                fill_color=fill_color,
+                popup_html=popup_html,
+                popup_width=popup_width,
+                tooltip=tooltip,
+            )
+        )
+    return marker_names
+
+
+def _add_waterbody_layers(
+    discharge_map: folium.Map,
+    waterbodies: gpd.GeoDataFrame,
+) -> None:
+    """Add lake and reservoir point layers to the discharge map.
+
+    Args:
+        discharge_map: Folium map receiving waterbody layers.
+        waterbodies: Waterbody GeoDataFrame with polygon geometries and
+            ``waterbody_type`` identifiers.
+    """
+    waterbody_layers: dict[int, folium.FeatureGroup] = {
+        waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=True)
+        for waterbody_type, style in _WATERBODY_STYLE.items()
+    }
+    waterbodies_wgs84: gpd.GeoDataFrame = waterbodies.to_crs(epsg=4326)
+    for _, waterbody_row in waterbodies_wgs84.iterrows():
+        waterbody_type: int = int(waterbody_row["waterbody_type"])
+        waterbody_style: dict[str, str] | None = _WATERBODY_STYLE.get(waterbody_type)
+        if waterbody_style is None:
+            continue
+
+        centroid = waterbody_row.geometry.centroid
+        area_km2: float | None = (
+            float(waterbody_row["average_area"]) / 1e6
+            if "average_area" in waterbody_row.index
+            else None
+        )
+        volume_km3: float | None = (
+            float(waterbody_row["volume_total"]) / 1e9
+            if "volume_total" in waterbody_row.index
+            else None
+        )
+        popup_lines: list[str] = [
+            f"<b>{waterbody_style['label']}</b> "
+            f"(ID {waterbody_row.get('waterbody_id', '?')})<br>"
+        ]
+        if area_km2 is not None:
+            popup_lines.append(f"Area: {area_km2:.1f} km²<br>")
+        if volume_km3 is not None:
+            popup_lines.append(f"Volume: {volume_km3:.3f} km³<br>")
+
+        folium.CircleMarker(
+            location=[centroid.y, centroid.x],
+            radius=5,
+            color="black",
+            weight=0.5,
+            fill=True,
+            fill_color=waterbody_style["color"],
+            fill_opacity=0.8,
+            popup=folium.Popup("".join(popup_lines), max_width=200),
+            tooltip=f"{waterbody_style['label']} {waterbody_row.get('waterbody_id', '')}",
+            z_index=500,
+        ).add_to(waterbody_layers[waterbody_type])
+
+    for waterbody_layer in waterbody_layers.values():
+        waterbody_layer.add_to(discharge_map)
+
+
 def create_discharge_folium_map(
     evaluation_gdf: gpd.GeoDataFrame,
     output_path: Path,
@@ -675,7 +784,7 @@ def create_discharge_folium_map(
     """
     min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-    m = folium.Map(
+    discharge_map = folium.Map(
         location=map_center,
         tiles=TileLayer(
             tiles=_ESRI_TOPO_TILES,
@@ -683,14 +792,14 @@ def create_discharge_folium_map(
             name="Topographic Map",
         ),
     )
-    m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
+    discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
 
     folium.GeoJson(
         region_geom,
         name="Catchment",
         style_function=lambda x: {"fillColor": "none", "color": "black", "weight": 2},
         z_index=1,
-    ).add_to(m)
+    ).add_to(discharge_map)
 
     max_discharge = np.nanmax(rivers["discharge_m3_per_s"])
     max_discharge_sqrt: float | None = (
@@ -717,7 +826,7 @@ def create_discharge_folium_map(
         name="Rivers",
         style_function=_river_style,
         z_index=2,
-    ).add_to(m)
+    ).add_to(discharge_map)
 
     colormap_r, colormap_kge, colormap_nse = _build_metric_colormaps()
 
@@ -729,7 +838,7 @@ def create_discharge_folium_map(
         .any()
     ):
         colormap_upstream = cm.LinearColormap(
-            colors=["red", "orange", "yellow", "blue", "green"],
+            colors=_METRIC_COLORS,
             vmin=0.5,
             vmax=2.0,
             caption="Upstream Area Ratio",
@@ -743,6 +852,11 @@ def create_discharge_folium_map(
     layer_kge = folium.FeatureGroup(name="KGE", show=True)
     layer_nse = folium.FeatureGroup(name="NSE", show=False)
     layer_r = folium.FeatureGroup(name="R", show=False)
+    metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]] = [
+        (layer_kge, colormap_kge, "KGE"),
+        (layer_nse, colormap_nse, "NSE"),
+        (layer_r, colormap_r, "R"),
+    ]
 
     popup_width = 800
 
@@ -760,8 +874,6 @@ def create_discharge_folium_map(
             if "station_name" in row.index and pd.notna(row["station_name"])
             else station_id_str
         )
-        station_marker_names: list[str] = []
-
         if station_id_str not in station_chart_data:
             station_images[station_id_str] = {
                 "returnPeriod": _image_data_uri(
@@ -785,24 +897,15 @@ def create_discharge_folium_map(
         circle_radius: float = (
             5 + math.sqrt(row["upstream_area_GEB"]) / largest_upstream_area_sqrt * 5
         )
-
-        for layer, colormap, metric in [
-            (layer_kge, colormap_kge, "KGE"),
-            (layer_nse, colormap_nse, "NSE"),
-            (layer_r, colormap_r, "R"),
-        ]:
-            fill_color = colormap(row[metric]) if pd.notna(row[metric]) else "gray"
-            station_marker_names.append(
-                _add_station_marker(
-                    layer=layer,
-                    coords=coords,
-                    radius=circle_radius,
-                    fill_color=fill_color,
-                    popup_html=popup_html,
-                    popup_width=popup_width,
-                    tooltip=tooltip,
-                )
-            )
+        station_marker_names: list[str] = _add_metric_station_markers(
+            row=row,
+            metric_layers=metric_layers,
+            coords=coords,
+            circle_radius=circle_radius,
+            popup_html=popup_html,
+            popup_width=popup_width,
+            tooltip=tooltip,
+        )
 
         if layer_upstream is not None and colormap_upstream is not None:
             color_upstream = colormap_upstream(
@@ -834,69 +937,22 @@ def create_discharge_folium_map(
         (colormap_kge, layer_kge),
         (colormap_nse, layer_nse),
     ]:
-        colormap.add_to(m)
-        layer.add_to(m)
+        colormap.add_to(discharge_map)
+        layer.add_to(discharge_map)
 
     if layer_upstream is not None and colormap_upstream is not None:
-        colormap_upstream.add_to(m)
-        layer_upstream.add_to(m)
+        colormap_upstream.add_to(discharge_map)
+        layer_upstream.add_to(discharge_map)
 
     # Inject station chart/image data as single JS globals shared by all layers.
-    _inject_popup_chart_script(m, station_images, station_chart_data)
-    _inject_station_search_script(m, station_marker_index)
+    _inject_popup_chart_script(discharge_map, station_images, station_chart_data)
+    _inject_station_search_script(discharge_map, station_marker_index)
 
     # Waterbodies: render lakes and reservoirs as dot markers at polygon centroids.
     if waterbodies is not None and not waterbodies.empty:
-        # Type constants match geb/hydrology/waterbodies.py
-        _WATERBODY_STYLE: dict[int, dict[str, str]] = {
-            1: {"color": "#4FC3F7", "label": "Lake"},
-            2: {"color": "#FF8A65", "label": "Reservoir"},
-            3: {"color": "#81C784", "label": "Lake (controlled)"},
-        }
-        wb_layers: dict[int, folium.FeatureGroup] = {
-            wtype: folium.FeatureGroup(name=style["label"] + "s", show=True)
-            for wtype, style in _WATERBODY_STYLE.items()
-        }
-        waterbodies_wgs84 = waterbodies.to_crs(epsg=4326)
-        for _, wb_row in waterbodies_wgs84.iterrows():
-            wtype = int(wb_row["waterbody_type"])
-            style = _WATERBODY_STYLE.get(wtype)
-            if style is None:
-                continue
-            centroid = wb_row.geometry.centroid
-            area_km2: float | None = (
-                float(wb_row["average_area"]) / 1e6
-                if "average_area" in wb_row.index
-                else None
-            )
-            volume_km3: float | None = (
-                float(wb_row["volume_total"]) / 1e9
-                if "volume_total" in wb_row.index
-                else None
-            )
-            popup_lines = [
-                f"<b>{style['label']}</b> (ID {wb_row.get('waterbody_id', '?')})<br>"
-            ]
-            if area_km2 is not None:
-                popup_lines.append(f"Area: {area_km2:.1f} km²<br>")
-            if volume_km3 is not None:
-                popup_lines.append(f"Volume: {volume_km3:.3f} km³<br>")
-            folium.CircleMarker(
-                location=[centroid.y, centroid.x],
-                radius=5,
-                color="black",
-                weight=0.5,
-                fill=True,
-                fill_color=style["color"],
-                fill_opacity=0.8,
-                popup=folium.Popup("".join(popup_lines), max_width=200),
-                tooltip=f"{style['label']} {wb_row.get('waterbody_id', '')}",
-                z_index=500,
-            ).add_to(wb_layers[wtype])
-        for wb_layer in wb_layers.values():
-            wb_layer.add_to(m)
+        _add_waterbody_layers(discharge_map, waterbodies)
 
-    folium.LayerControl(collapsed=False).add_to(m)
+    folium.LayerControl(collapsed=False).add_to(discharge_map)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    m.save(str(output_path))
-    return m
+    discharge_map.save(str(output_path))
+    return discharge_map
