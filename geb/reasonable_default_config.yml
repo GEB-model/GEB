@@ -81,9 +81,9 @@ agent_settings:
       steepness: 5
       infliction_point: 1.0 
     indicator_weights:
-      EAD_weight: 0.5
-      equity_weight: 0.25
-      ecosystem_weight: 0.25
+      EAD_weight: 0.33
+      equity_weight: 0.33
+      ecosystem_weight: 0.33
     adaptation_costs:
       available_budget: 100000
       floodproofing_cost_per_household: 2000

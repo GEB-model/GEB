@@ -611,6 +611,23 @@ class Government(AgentBaseClass):
         if not hasattr(households, "flood_risk_module"):
             raise RuntimeError("Household flood risk module is not available.")
 
+        fr = households.flood_risk_module
+        # Ensure damage curves and maximum-damage values are loaded (idempotent)
+        fr.load_damage_curves()
+        fr.load_max_damage_values()
+        # Load flood maps so downstream code can sample them
+        fr.load_flood_maps()
+
+        # Ensure the `flooded` building attribute exists. If not, compute it
+        # using the households helper that populates building attributes.
+        if "flooded" not in households.buildings.columns:
+            if hasattr(households, "update_building_attributes"):
+                households.update_building_attributes()
+            else:
+                self.model.logger.warning(
+                    "Missing 'flooded' column and no update_building_attributes() available."
+                )
+
         total_damage_per_rp = np.zeros(len(return_periods), dtype=np.float64)
         flood_maps = {}
         for i, return_period in enumerate(return_periods):
@@ -794,6 +811,8 @@ class Government(AgentBaseClass):
 
             # use the function to floodproof the buildings of the households who are selected to adapt.
             households.update_building_adaptation_status(adapting_households_sample)
+            # fr = households.flood_risk_module do we need to do this? Maybe now we only update the status of the building but we dont actually lower the damage curve for these buildings.
+            # fr.alter_damage_curves_for_flood_proofed_buildings()
             print(
                 f"the government adapted {n_to_adapt} of the "
                 f"{len(eligible_households)} eligible households in the floodzone by floodproofing their buildings"

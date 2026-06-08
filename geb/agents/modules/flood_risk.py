@@ -179,6 +179,7 @@ class FloodRiskModule:
             self.households.buildings_content_curve = (
                 self.households.buildings_structure_curve.copy()
             )
+
         else:
             self.households.buildings_content_curve = read_table(
                 self.households.model.files["table"][
@@ -683,6 +684,12 @@ class FloodRiskModule:
         damage_folder: Path = self.households.model.output_folder / "damage_maps"
         damage_folder.mkdir(parents=True, exist_ok=True)
 
+        self.households.buildings_content_curve = (
+            self.households.buildings_content_curve.rename(
+                columns={"damage_ratio": "building_unprotected"}
+            )
+        )
+
         damages_buildings_content = VectorScanner(
             features=buildings_centroid,
             hazard=flood_depth,
@@ -702,6 +709,13 @@ class FloodRiskModule:
 
         # Compute damages for buildings structure
         buildings = buildings[buildings.geometry.notna()].copy()
+
+        self.households.buildings_structure_curve = (
+            self.households.buildings_structure_curve.rename(
+                columns={"damage_ratio": "building_unprotected"}
+            )
+        )
+
         damages_buildings_structure: pd.Series = VectorScanner(
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
