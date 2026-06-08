@@ -895,7 +895,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -910,7 +910,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",

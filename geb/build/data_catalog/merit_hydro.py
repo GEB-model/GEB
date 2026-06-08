@@ -1,9 +1,7 @@
-"""Utilities to download MERIT Hydro tiles for a given bounding box.
+"""Utilities to read local MERIT Hydro tiles for a given bounding box.
 
-This module provides a streaming downloader that extracts only the needed
-GeoTIFF tiles from the remote 30x30-degree tar packages hosted by MERIT Hydro.
-It avoids saving the full tar archives to disk by iterating over the HTTP
-response stream and writing only the requested members.
+This module checks which local GeoTIFF tiles are needed for a model region and
+merges them into a single raster.
 
 Notes:
     - MERIT Hydro distributes 5x5-degree tiles grouped in 30x30-degree tar files.
@@ -11,33 +9,26 @@ Notes:
       to the lower-left corner of the tile in degrees. Package tar files follow
       the pattern "elv_n30w120.tar" where the coordinates indicate the lower-left
       corner of the 30x30 group. See the MERIT Hydro documentation for details.
-    - Coverage spans from S60 to N90. Some packages or tiles are fully ocean and
-      therefore do not exist. This module distinguishes between "missing because
-      ocean/not provided" and actual download errors.
+    - Coverage spans from S60 to N90. Some tiles are fully ocean and therefore
+      do not exist. Missing land tiles must be downloaded manually.
 
 """
 
-import os
-import tarfile
-import time
 from pathlib import Path
-from typing import IO, Any, Iterable
+from typing import Any
 
 import numpy as np
-import requests
 import rioxarray as rxr
 import xarray as xr
-from requests.auth import HTTPBasicAuth
 from rioxarray import merge
-from tqdm import tqdm
 
 from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
 # MERIT Hydro is only available over land, so not all tiles exist. This is a set of
-# all available 5x5-degree tile names which we use to check if the tile
-# should exist before attempting to read and if that fails download it.
+# all available 5x5-degree tile names which we use to report only land tiles
+# that users need to download manually.
 available_tiles: set[str] = {
     "n00e005",
     "n00e010",
@@ -1192,37 +1183,6 @@ available_tiles: set[str] = {
 }
 
 
-class _ProgressReader:
-    """Wrapper for file-like object to track read progress."""
-
-    def __init__(self, fileobj: IO[bytes], pbar: tqdm) -> None:
-        """Initialize the progress reader.
-
-        Args:
-            fileobj: File-like object to read from.
-            pbar: tqdm progress bar to update.
-        """
-        self.fileobj: IO[bytes] = fileobj
-        self.pbar: tqdm = pbar
-
-    def read(self, size: int = -1) -> bytes:
-        """Read data and update progress bar.
-
-        Args:
-            size: Read size in bytes. If -1, read all available. Defaults to -1.
-
-        Returns:
-            Data read from the file-like object.
-        """
-        data = self.fileobj.read(size)
-        if data:
-            self.pbar.update(len(data))
-        return data
-
-    def close(self) -> None:
-        self.fileobj.close()
-
-
 class MeritHydro(Adapter):
     """Dataset adapter for MERIT Hydro variables."""
 
@@ -1237,7 +1197,7 @@ class MeritHydro(Adapter):
         """Initialize the adapter for a specific MERIT Hydro variable.
 
         Args:
-            variable: MERIT Hydro variable to download ("elv" or "dir").
+            variable: MERIT Hydro variable to read ("elv" or "dir").
 
             *args: Additional positional arguments passed to the base Adapter class.
             **kwargs: Additional keyword arguments passed to the base Adapter class.
@@ -1247,7 +1207,7 @@ class MeritHydro(Adapter):
 
     @property
     def is_ready(self) -> bool:
-        """Check if the data is already downloaded and processed.
+        """Check if the data is available for a specific region.
 
         For MERIT Hydro, we always return False because readiness depends
         on the required tiles for a specific bounding box, which are checked
@@ -1315,26 +1275,6 @@ class MeritHydro(Adapter):
         ew, alon = self._get_longitude_hemisphere_and_degrees(lon_ll)
         return f"{ns}{alat:02d}{ew}{alon:03d}_{self.variable}.tif"
 
-    def _package_name(self, lat_ll: int, lon_ll: int) -> str:
-        """Compose a 30x30-degree package tar filename for a MERIT variable.
-
-        The package is defined by the lower-left corner of the 30-degree grid cell
-        that contains the tile lower-left corner.
-
-        Args:
-            lat_ll: Lower-left latitude of tile (integer multiple of 5) (degrees).
-            lon_ll: Lower-left longitude of tile (integer multiple of 5) (degrees).
-
-        Returns:
-            Package tar filename like "elv_n30w120.tar".
-        """
-        # Floor to 30-degree grid
-        lat30 = (lat_ll // 30) * 30 if lat_ll >= 0 else -(((-lat_ll + 29) // 30) * 30)
-        lon30 = (lon_ll // 30) * 30 if lon_ll >= 0 else -(((-lon_ll + 29) // 30) * 30)
-        ns, alat = self._get_latitude_hemisphere_and_degrees(lat30)
-        ew, alon = self._get_longitude_hemisphere_and_degrees(lon30)
-        return f"{self.variable}_{ns}{alat:02d}{ew}{alon:03d}.tar"
-
     def _tiles_for_bbox(
         self, xmin: float, xmax: float, ymin: float, ymax: float
     ) -> list[tuple[int, int]]:
@@ -1395,35 +1335,6 @@ class MeritHydro(Adapter):
         tiles = sorted(set(tiles))
         return tiles
 
-    def _group_tiles_by_package(
-        self, tiles: Iterable[tuple[int, int]]
-    ) -> dict[str, list[tuple[int, int]]]:
-        """Group tile ll coords by the 30x30 package tar they belong to.
-
-        Args:
-            tiles: Iterable of (lat_ll, lon_ll) pairs (degrees).
-
-        Returns:
-            Mapping of package tar filename -> list of tile coords in that package.
-        """
-        groups: dict[str, list[tuple[int, int]]] = {}
-        for lat_ll, lon_ll in tiles:
-            pkg = self._package_name(lat_ll, lon_ll)
-            groups.setdefault(pkg, []).append((lat_ll, lon_ll))
-        return groups
-
-    def _package_url(self, package_name: str, base_url: str) -> str:
-        """Construct the full URL to a MERIT tar package for the given variable.
-
-        Args:
-            package_name: Tar filename produced by _package_name.
-            base_url: Base URL for MERIT Hydro downloads.
-
-        Returns:
-            Full URL string to the tar file.
-        """
-        return f"{base_url}/{package_name}"
-
     def _merge_merit_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
         """Load MERIT Hydro tiles into a single xarray DataArray.
 
@@ -1431,7 +1342,7 @@ class MeritHydro(Adapter):
         merges them into a single DataArray, and returns it in memory.
 
         Args:
-            tile_paths: List of Paths to GeoTIFF files from download_merit.
+            tile_paths: List of paths to local GeoTIFF files.
 
         Returns:
             xarray DataArray with merged tiles, preserving CRS and coordinates.
@@ -1463,18 +1374,36 @@ class MeritHydro(Adapter):
             da = da.astype(np.uint8)
         return da
 
-    def _missing_marker_path(self, tile_name: str) -> Path:
-        """Construct path for a missing tile marker file.
+    def _format_missing_tiles_error(self, missing_names: set[str]) -> str:
+        """Create a user-facing error for missing MERIT Hydro tiles.
 
         Args:
-            tile_name: Name of the tile.
+            missing_names: Missing MERIT Hydro tile filenames.
 
         Returns:
-            Path to the marker file.
+            Error message with the tile names and target cache folder.
         """
-        root = self.root
-        assert root is not None
-        return root / f"{tile_name}.missing.txt"
+        tile_dir: Path = self.root / self.variable
+        dir_tile_dir: Path = self.root.parent.parent / "merit_hydro_dir" / "v1" / "dir"
+        elv_tile_dir: Path = self.root.parent.parent / "merit_hydro_elv" / "v1" / "elv"
+        missing_tiles: str = "\n".join(f"  - {name}" for name in sorted(missing_names))
+        return (
+            f"Missing MERIT Hydro {self.variable} tiles:\n"
+            f"{missing_tiles}\n\n"
+            "Download the missing MERIT Hydro tiles manually from:\n"
+            "https://global-hydrodynamics.github.io/MERIT_Hydro/\n\n"
+            "Place the files in the GEB data root cache folder:\n"
+            f"{tile_dir}\n\n"
+            "MERIT Hydro requires both flow direction (dir) and elevation (elv) tiles. "
+            "Use these folders:\n"
+            f"  dir: {dir_tile_dir}\n"
+            f"  elv: {elv_tile_dir}\n\n"
+            "For example, after setting:\n"
+            "export GEB_DATA_ROOT=/path/to/GEB/data\n"
+            "the files should be in:\n"
+            "  $GEB_DATA_ROOT/merit_hydro_dir/v1/dir/\n"
+            "  $GEB_DATA_ROOT/merit_hydro_elv/v1/elv/"
+        )
 
     def fetch(
         self,
@@ -1486,60 +1415,35 @@ class MeritHydro(Adapter):
         url: str,
         source_nodata: int | float | bool,
         target_nodata: int | float | bool,
-        session: requests.Session | None = None,
-        request_timeout_s: float = 60.0,
-        attempts: int = 3,
     ) -> MeritHydro:
         """Ensure MERIT Hydro tiles intersecting a bbox are available locally.
 
-        The function first checks for pre-staged 5x5-degree tiles in
-        ``{cache_root}/{variable}/`` or ``{cache_root}/``. If tiles are
-        missing, it downloads only the required GeoTIFFs for a single MERIT variable
-        by streaming the remote 30x30-degree tar packages without saving the tars.
-        If a package does not exist (HTTP 404), it is silently skipped. If a needed
-        tile is not present inside an existing package (commonly ocean), it is also
-        silently skipped. If a tile should be on disk but is missing, it tries to download it.
-        Any other error is retried up to ``attempts`` times and
-        then raised.
-
-        Authentication:
-            Basic auth is required and read from environment variables:
-            MERIT_USERNAME and MERIT_PASSWORD.
+        The function checks for pre-staged 5x5-degree tiles in
+        ``{cache_root}/{variable}/`` or ``{cache_root}/``. Missing land tiles are
+        reported to the user; GEB does not download MERIT Hydro automatically.
 
         Args:
             xmin: Minimum longitude of area of interest (degrees).
             xmax: Maximum longitude of area of interest (degrees).
             ymin: Minimum latitude of area of interest (degrees).
             ymax: Maximum latitude of area of interest (degrees).
-            url: Base URL of the MERIT Hydro server.
+            url: MERIT Hydro information URL.
             source_nodata: Nodata value in the source GeoTIFF files.
             target_nodata: Nodata value to use in the output DataArray.
-            session: Optional requests.Session (used in tests or advanced usage).
-            request_timeout_s: Timeout per HTTP request (seconds).
-            attempts: Number of attempts for transient failures (errors are raised after this many tries).
 
         Returns:
             The MeritHydro instance.
 
         Raises:
-            ValueError: If inputs are invalid or auth variables are missing.
-            RuntimeError: If the HTTP client dependency is not available.
-            requests.RequestException: If repeated HTTP errors occur.
-            tarfile.ReadError: If tar parsing repeatedly fails.
+            FileNotFoundError: If required MERIT Hydro land tiles are missing.
         """
+        _ = url
         self._xmin = xmin
         self._xmax = xmax
         self._ymin = ymin
         self._ymax = ymax
         self._source_nodata = source_nodata
         self._target_nodata = target_nodata
-
-        username = os.getenv("MERIT_USERNAME")
-        password = os.getenv("MERIT_PASSWORD")
-        if not username or not password:
-            raise ValueError(
-                "Authentication required: set MERIT_USERNAME and MERIT_PASSWORD in environment."
-            )
 
         tiles: list[tuple[int, int]] = self._tiles_for_bbox(xmin, xmax, ymin, ymax)
 
@@ -1552,146 +1456,14 @@ class MeritHydro(Adapter):
                 and not (local_tile_dir / tile_name).exists()
                 and tile_name[:7] in available_tiles
             ):
-                if not self._missing_marker_path(tile_name).exists():
-                    missing_names.add(tile_name)
+                missing_names.add(tile_name)
 
         if not missing_names:
             return self
 
-        # Prepare HTTP session
-        if session is None:
-            if requests is None:
-                raise RuntimeError(
-                    "requests is required for downloading but is not available."
-                )
-            session = requests.Session()
-        auth = HTTPBasicAuth(username, password)
-
-        missing_coords = []
-        for lat_ll, lon_ll in tiles:
-            if self._compose_tile_filename(lat_ll, lon_ll) in missing_names:
-                missing_coords.append((lat_ll, lon_ll))
-
-        groups = self._group_tiles_by_package(missing_coords)
-
-        for package_name, coords in groups.items():
-            package_url = self._package_url(package_name, base_url=url)
-            needed_names = {
-                self._compose_tile_filename(lat, lon) for lat, lon in coords
-            }
-
-            # HEAD to detect ocean/no-data packages (404) → skip silently
-            try:
-                head_resp = session.head(
-                    package_url,
-                    auth=auth,
-                    allow_redirects=True,
-                    timeout=request_timeout_s,
-                )
-            except Exception:
-                if attempts <= 1:
-                    raise
-                retried = 1
-                while retried < attempts:
-                    time.sleep(min(2.0 * retried, 5.0))
-                    try:
-                        head_resp = session.head(
-                            package_url,
-                            auth=auth,
-                            allow_redirects=True,
-                            timeout=request_timeout_s,
-                        )
-                        break
-                    except Exception:
-                        retried += 1
-                else:
-                    raise
-
-            if head_resp.status_code == 404:
-                for tname in needed_names:
-                    mm = self._missing_marker_path(tname)
-                    mm.write_text(
-                        "MERIT Hydro: tile not provided (ocean/no-data).\n",
-                        encoding="utf-8",
-                    )
-                continue
-            if head_resp.status_code in (401, 403):
-                raise requests.RequestException(
-                    f"Unauthorized: HTTP {head_resp.status_code} for {package_url}"
-                )
-            if head_resp.status_code >= 400:
-                raise requests.RequestException(
-                    f"HEAD error: HTTP {head_resp.status_code} for {package_url}"
-                )
-
-            content_length = int(head_resp.headers.get("Content-Length", 0))
-            found_names: set[str] = set()
-            for attempt in range(1, attempts + 1):
-                try:
-                    resp = session.get(
-                        package_url, auth=auth, stream=True, timeout=request_timeout_s
-                    )
-                except Exception:
-                    if attempt >= attempts:
-                        raise
-                    time.sleep(min(2.0 * attempt, 5.0))
-                    continue
-
-                if resp.status_code >= 400:
-                    resp.close()
-                    if attempt >= attempts:
-                        raise requests.RequestException(
-                            f"GET error: HTTP {resp.status_code} for {package_url}"
-                        )
-                    time.sleep(min(2.0 * attempt, 5.0))
-                    continue
-
-                try:
-                    resp.raw.decode_content = True
-                    print(f"Downloading and extracting from: {package_url}")
-                    with tqdm(
-                        total=content_length if content_length > 0 else None,
-                        desc=f"Downloading {package_name}",
-                        unit="B",
-                        unit_scale=True,
-                    ) as pbar:
-                        progress_reader = _ProgressReader(resp.raw, pbar)
-                        with tarfile.open(fileobj=progress_reader, mode="r|*") as tf:  # type: ignore
-                            for member in tf:
-                                if not member.isreg():
-                                    continue
-                                mname = Path(member.name).name
-                                if mname in needed_names:
-                                    ex = tf.extractfile(member)
-                                    if ex is None:
-                                        continue
-                                    out_file = self.root / mname
-                                    with out_file.open("wb") as fout:
-                                        while True:
-                                            chunk = ex.read(1024 * 1024)
-                                            if not chunk:
-                                                break
-                                            fout.write(chunk)
-                                    found_names.add(mname)
-                                    if found_names == needed_names:
-                                        break
-                except tarfile.ReadError:
-                    if attempt >= attempts:
-                        raise
-                    time.sleep(min(2.0 * attempt, 5.0))
-                    continue
-                finally:
-                    resp.close()
-                break
-
-            for tname in needed_names - found_names:
-                mm = self._missing_marker_path(tname)
-                mm.write_text(
-                    "MERIT Hydro: tile not present in package (likely ocean).\n",
-                    encoding="utf-8",
-                )
-
-        return self
+        message: str = self._format_missing_tiles_error(missing_names)
+        print(message)
+        raise FileNotFoundError(message)
 
     def read(self, **kwargs: Any) -> xr.DataArray:
         """Read and merge the MERIT Hydro tiles into a single DataArray.
@@ -1774,7 +1546,7 @@ class MeritHydroDir(MeritHydro):
         super().__init__(variable="dir", **kwargs)
 
     def fetch(self, **kwargs: Any) -> MeritHydro:
-        """Process and download flow direction data with specific fill value.
+        """Check local flow direction tiles and set the fill value.
 
         Args:
             **kwargs: Keyword arguments passed to the base class fetcher.
@@ -1808,7 +1580,7 @@ class MeritHydroElv(MeritHydro):
         super().__init__(variable="elv", **kwargs)
 
     def fetch(self, **kwargs: Any) -> MeritHydro:
-        """Process and download elevation data with specific fill value.
+        """Check local elevation tiles and set the fill value.
 
         Args:
             **kwargs: Keyword arguments passed to the base class fetcher.
