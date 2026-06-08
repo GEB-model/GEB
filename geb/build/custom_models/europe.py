@@ -770,10 +770,9 @@ def _select_mirca2000_calendar_for_farmer(
 
     Raises:
         ValueError: If no calendar exists for the MIRCA unit.
-        ValueError: If no calendar can be found for the crop combination.
+        ValueError: If no calendar can be found for the crop combination in any
+            MIRCA2000 unit.
     """
-    # Missing HRL crop should stay missing. Do not invent a MIRCA2000 crop
-    # calendar for farmers without a valid HRL-derived crop.
     if main_crop == -1:
         return np.full((3, 5), -1, dtype=np.int32)
 
@@ -781,8 +780,6 @@ def _select_mirca2000_calendar_for_farmer(
 
     if lookup_unit not in crop_calendar or not crop_calendar[lookup_unit]:
         raise ValueError(f"No crop calendar found for MIRCA2000 unit {lookup_unit}.")
-
-    entries = crop_calendar[lookup_unit]
 
     def _contains_main_crop(entry: tuple[float, np.ndarray]) -> bool:
         _, calendar = entry
@@ -813,7 +810,6 @@ def _select_mirca2000_calendar_for_farmer(
     def _select_from_candidates(
         candidates: list[tuple[float, np.ndarray]],
     ) -> np.ndarray | None:
-        # First preference: same main crop and exact secondary timing match.
         exact_candidates = [
             entry
             for entry in candidates
@@ -828,8 +824,6 @@ def _select_mirca2000_calendar_for_farmer(
         if selected_calendar is not None:
             return selected_calendar
 
-        # If HRL indicates a secondary crop, prefer any MIRCA double-crop calendar
-        # with the same main crop before falling back to a single-crop calendar.
         if secondary_crop_type != HRL_SECONDARY_CROP_NONE:
             second_crop_candidates = [
                 entry
@@ -841,37 +835,70 @@ def _select_mirca2000_calendar_for_farmer(
             if selected_calendar is not None:
                 return selected_calendar
 
-        # Final within-status fallback: same main crop, regardless of secondary
-        # crop timing. This catches cases where only a single-crop calendar exists.
         return _select_best_candidate(candidates)
 
-    # Preferred search: keep both the HRL crop identity and assigned irrigation
-    # status. This uses irrigated calendars for irrigated farmers where possible.
-    crop_candidates_matching_irrigation = [
+    local_entries = crop_calendar[lookup_unit]
+
+    # Preferred local search: same MIRCA unit, same crop, and matching
+    # rainfed/irrigated calendar class.
+    local_matching_irrigation_candidates = [
         entry
-        for entry in entries
+        for entry in local_entries
         if _contains_main_crop(entry) and _has_irrigation_status(entry)
     ]
 
-    selected_calendar = _select_from_candidates(crop_candidates_matching_irrigation)
+    selected_calendar = _select_from_candidates(local_matching_irrigation_candidates)
     if selected_calendar is not None:
         return selected_calendar
 
-    # Fallback search: keep the HRL crop identity, but ignore the MIRCA2000
-    # rainfed/irrigated calendar flag. This is needed when a farmer is assigned
-    # irrigation access but MIRCA2000 only has a rainfed calendar for that crop
-    # in this unit, or vice versa.
-    crop_candidates_any_irrigation = [
-        entry for entry in entries if _contains_main_crop(entry)
+    # Local fallback: keep the same MIRCA unit and crop, but ignore whether the
+    # available MIRCA2000 calendar is rainfed or irrigated.
+    local_any_irrigation_candidates = [
+        entry for entry in local_entries if _contains_main_crop(entry)
     ]
 
-    selected_calendar = _select_from_candidates(crop_candidates_any_irrigation)
+    selected_calendar = _select_from_candidates(local_any_irrigation_candidates)
+    if selected_calendar is not None:
+        return selected_calendar
+
+    # Cross-unit fallback 1: if this MIRCA unit does not contain this crop at all,
+    # search other MIRCA units for the same crop and same rainfed/irrigated class.
+    other_unit_matching_irrigation_candidates: list[tuple[float, np.ndarray]] = []
+    for unit_code, entries in crop_calendar.items():
+        if unit_code == lookup_unit:
+            continue
+
+        other_unit_matching_irrigation_candidates.extend(
+            entry
+            for entry in entries
+            if _contains_main_crop(entry) and _has_irrigation_status(entry)
+        )
+
+    selected_calendar = _select_from_candidates(
+        other_unit_matching_irrigation_candidates
+    )
+    if selected_calendar is not None:
+        return selected_calendar
+
+    # Cross-unit fallback 2: final fallback for this crop. Search all other units
+    # for the same crop, ignoring the rainfed/irrigated calendar class.
+    other_unit_any_irrigation_candidates: list[tuple[float, np.ndarray]] = []
+    for unit_code, entries in crop_calendar.items():
+        if unit_code == lookup_unit:
+            continue
+
+        other_unit_any_irrigation_candidates.extend(
+            entry for entry in entries if _contains_main_crop(entry)
+        )
+
+    selected_calendar = _select_from_candidates(other_unit_any_irrigation_candidates)
     if selected_calendar is not None:
         return selected_calendar
 
     raise ValueError(
         f"No MIRCA2000 calendar found for unit={lookup_unit}, crop={main_crop}, "
-        f"secondary_type={secondary_crop_type}, is_irrigated={is_irrigated}."
+        f"secondary_type={secondary_crop_type}, is_irrigated={is_irrigated}, "
+        "including cross-unit fallbacks."
     )
 
 
@@ -2390,8 +2417,6 @@ class Europe(GEBModel):
             crop_calendar_per_farmer[farmer_id] = selected_calendar[:, [0, 2, 3, 4]]
 
         check_crop_calendar(crop_calendar_per_farmer)
-
-        crop_calendar_old = self.array["agents/farmers/crop_calendar"]
 
         self.set_array(
             crop_calendar_per_farmer,
