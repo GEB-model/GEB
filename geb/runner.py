@@ -1630,15 +1630,26 @@ def init_multiple_fn(
             geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
         )
     else:
-        logger.info(f"Using region shapefile: {region_shapefile}")
-        region_shapefile_path: Path = working_directory / region_shapefile
-        if not region_shapefile_path.exists():
-            raise FileNotFoundError(
-                f"Region shapefile not found at: {region_shapefile_path}"
-            )
-        bbox_geom = gpd.read_file(region_shapefile_path)
+        region_geometry_path = Path(region_shapefile).expanduser()
 
-    # check crs bounding box geometry
+        if not region_geometry_path.is_absolute():
+            region_geometry_path = working_directory / region_geometry_path
+
+        region_geometry_path = region_geometry_path.resolve()
+
+        logger.info("Using region geometry file: %s", region_geometry_path)
+
+        if not region_geometry_path.exists():
+            raise FileNotFoundError(
+                f"Region geometry file not found at: {region_geometry_path}"
+            )
+
+        if region_geometry_path.suffix.lower() in {".parquet", ".geoparquet"}:
+            bbox_geom = gpd.read_parquet(region_geometry_path)
+        else:
+            bbox_geom = gpd.read_file(region_geometry_path)
+
+    # Check CRS of bounding box geometry.
     if bbox_geom.crs != "EPSG:4326":
         bbox_geom = bbox_geom.to_crs("EPSG:4326")
 
