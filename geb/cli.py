@@ -938,19 +938,6 @@ def workflow(
 
 
 @cli.command()
-@click_config
-@click.option(
-    "--build-config",
-    "-b",
-    default=BUILD_DEFAULT,
-    help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
-)
-@click.option(
-    "--update-config",
-    "-u",
-    default=UPDATE_DEFAULT,
-    help="Path of the model update configuration file.",
-)
 @click.option(
     "--from-example",
     default="geul",
@@ -980,18 +967,6 @@ def workflow(
     help="Prefix for cluster directory names. Defaults to 'cluster'.",
 )
 @click.option(
-    "--skip-merged-geometries",
-    is_flag=True,
-    default=False,
-    help="Skip creating merged geometry file (faster, but no dissolved basin polygons).",
-)
-@click.option(
-    "--skip-visualization",
-    is_flag=True,
-    default=False,
-    help="Skip creating visualization map (faster).",
-)
-@click.option(
     "--min-bbox-efficiency",
     default=0.99,
     type=float,
@@ -1006,13 +981,18 @@ def workflow(
 @click.option(
     "--init-multiple-dir",
     required=True,
-    help="Name under models/ or explicit path where the large scale model directories will be created.",
+    help="Name under the working-directory models/ folder where the large scale model directories will be created.",
 )
 @working_directory_option
-def init_multiple(*args: Any, **kwargs: Any) -> None:
+def init_multiple(
+    init_multiple_dir: str, working_directory: Path, **kwargs: Any
+) -> None:
     """Initialize a new model for multiple subbasins."""
-    # Initialize the model with the given config and build config
-    init_multiple_fn(*args, **kwargs)
+    init_multiple_fn(
+        init_multiple_dir=init_multiple_dir,
+        working_directory=working_directory,
+        **kwargs,
+    )
 
 
 @cli.command()
