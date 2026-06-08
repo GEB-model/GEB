@@ -2110,12 +2110,12 @@ class GEBModel(
         self.logger.info("Finding sinks in river network of requested region.")
         if "subbasin" in region:
             if isinstance(region["subbasin"], list):
-                sink_subbasin_ids = region["subbasin"]
+                sink_subbasin_ids: list[int] = region["subbasin"]
             else:
-                sink_subbasin_ids = [region["subbasin"]]
+                sink_subbasin_ids: list[int] = [region["subbasin"]]
         elif "outflow" in region:
             lat, lon = region["outflow"]["lat"], region["outflow"]["lon"]
-            sink_subbasin_ids = [
+            sink_subbasin_ids: list[int] = [
                 get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
             ]
         elif "geom" in region:
@@ -2124,7 +2124,7 @@ class GEBModel(
             regions = regions[
                 regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
-            sink_subbasin_ids = get_sink_subbasin_id_for_geom(
+            sink_subbasin_ids: list[int] = get_sink_subbasin_id_for_geom(
                 self.data_catalog, regions, river_graph
             )
         else:

@@ -42,7 +42,9 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
-from .mirca_os import MIRCAOS
+from .mirca_os_admin_boundaries import MIRCAOSAdminBoundaries
+from .mirca_os_crop_calendar import MIRCAOSCropCalendar
+from .mirca_os_harvested_grids import MIRCAOSHarvestedGrids
 from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
@@ -69,7 +71,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "era5": {
         "adapter": DestinationEarth(),
-        "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "url": None,
         "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
     },
     "ecmwf_geopotential": {
@@ -866,7 +868,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -881,7 +883,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -1175,7 +1177,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     **{
         f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}": {
-            "adapter": MIRCAOS(
+            "adapter": MIRCAOSHarvestedGrids(
                 folder="mirca_os",
                 filename=f"Annual Harvested Area Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{irrigation}.tif",
                 local_version=1,
@@ -1217,6 +1219,43 @@ data_catalog: dict[str, dict[str, Any]] = {
             "Pulses",
         ]
         for irrigation in ["ir", "rf"]
+    },
+    **{
+        f"mirca_os_crop_calendar_{year}_{irrigation}": {
+            "adapter": MIRCAOSCropCalendar(
+                folder="mirca_os",
+                filename=f"Crop Calendar/MIRCA-OS_{year}_{irrigation}.csv",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/data/contents/Crop%20Calendar",
+            "source": {
+                "name": "MIRCA-OS Crop Calendar",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://doi.org/10.4211/hs.60a890eb841c460192c03bb590687145",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
+        for irrigation in ["ir", "rf"]
+    },
+    **{
+        f"mirca_os_admin_boundaries_{year}": {
+            "adapter": MIRCAOSAdminBoundaries(
+                folder="mirca_os",
+                filename=f"Admin Boundaries/MIRCAOS_{year}_Admin_v1.shp",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
+            "source": {
+                "name": "MIRCA-OS Admin Boundaries",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
     },
 }
 

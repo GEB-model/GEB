@@ -13,6 +13,13 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b27": [
+        "[update-method;setup_hydrography]",
+    ],
+    "1.0.0b26": [
+        "[update-method;setup_farmer_crop_calendar]",
+        "[update-method;setup_retention_basins]",
+    ],
     "1.0.0b25": [
         "[update-method;setup_elevation]",
         "[update-method;setup_geomorphology]",

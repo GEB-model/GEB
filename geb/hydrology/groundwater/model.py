@@ -58,7 +58,7 @@ from geb.workflows.raster import decompress_with_mask
 if TYPE_CHECKING:
     pass
 
-MODFLOW_VERSION: str = "6.6.3"
+MODFLOW_VERSION: str = "6.7.0"
 
 
 @njit(cache=True)
