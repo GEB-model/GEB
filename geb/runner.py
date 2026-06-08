@@ -1566,18 +1566,46 @@ def init_multiple_fn(
         logger = create_logger("init_multiple")
 
     # Create the models/init_multiple_dir directory structure.
-    # models_dir is the parent 'models' folder expected at the parent of GEB repository.
-    # init_multiple_dir_path is the target subdirectory to create.
-    models_dir = Path(__file__).parents[2] / "models"
-    if region_shapefile:
-        region_shapefile: Path = Path(region_shapefile)
-    if not models_dir.is_dir():
-        raise FileNotFoundError(
-            f"Models directory not found: {models_dir}\n"
-            "Run 'geb init-multiple' from within the GEB repository root, "
-            f"or ensure a 'models' directory exists at {models_dir}."
+    # If init_multiple_dir is absolute, use it directly. Otherwise, search for a
+    # nearby models directory and place init_multiple_dir inside it.
+    models_search_root = Path(__file__).resolve().parents[2]
+    init_multiple_dir = Path(init_multiple_dir).expanduser()
+
+    if init_multiple_dir.is_absolute():
+        init_multiple_dir_path = init_multiple_dir
+        models_dir = init_multiple_dir_path.parent
+        logger.info(
+            "Using absolute init-multiple directory: %s",
+            init_multiple_dir_path,
         )
-    init_multiple_dir_path: Path = models_dir / init_multiple_dir
+
+    else:
+        models_dir_candidates = [
+            models_search_root / "models",
+            *models_search_root.glob("*/models"),
+            *models_search_root.glob("*/*/models"),
+        ]
+
+        models_dir = next(
+            (candidate for candidate in models_dir_candidates if candidate.is_dir()),
+            None,
+        )
+
+        if models_dir is None:
+            models_dir = models_search_root / "models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(
+                "Models directory not found. Created models directory at: %s",
+                models_dir,
+            )
+        else:
+            logger.info("Using models directory: %s", models_dir)
+
+        init_multiple_dir_path = models_dir / init_multiple_dir
+
+    if region_shapefile:
+        region_shapefile = Path(region_shapefile)
+
     init_multiple_dir_path.mkdir(parents=True, exist_ok=True)
 
     # create river
