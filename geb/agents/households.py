@@ -1944,7 +1944,7 @@ class Households(AgentBaseClass):
         else:
             damages_do_not_adapt = np.zeros((1, self.n), np.float32)
             damages_adapt = np.zeros((1, self.n), np.float32)
-            self.return_periods = np.array([1])
+            self.return_periods = np.array([np.inf])
 
         # --- Wind damages and risk perceptions ---
         if adapt_wind:
@@ -1960,7 +1960,7 @@ class Households(AgentBaseClass):
         else:
             damages_unprotected_w = np.zeros((1, self.n), np.float32)
             damages_adapt_w = np.zeros((1, self.n), np.float32)
-            self.windstorm_return_periods = np.array([1])
+            self.windstorm_return_periods = np.array([np.inf])
 
         # risk_perception_multi = np.maximum(
         #     self.var.risk_perception.data, self.var.risk_perception_windstorm.data
@@ -1972,78 +1972,85 @@ class Households(AgentBaseClass):
         eu_cap = 1  # 1e9 if shared_cap_on else 1.0
         # self.var.risk_perception_windstorm.data = 2        )
 
-        # calculate expected utilities
-        EU_adapt = self.decision_module.calcEU_adapt_flood(
-            geom_id="NoID",
-            n_agents=self.n,
-            wealth=self.var.wealth.data,
-            income=self.var.income.data,
-            expendature_cap=eu_cap,
-            amenity_value=self.var.amenity_value.data,
-            amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,
-            expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data / loan_duration_flood,
-            time_adapted=self.var.time_adapted.data,
-            loan_duration=loan_duration_flood,
-            p_floods=1 / self.return_periods,
-            T=35,
-            r=0.03,
-            sigma=1,
-        )
+        # --- Flood expected utilities ---
+        if adapt_flood:
+            EU_adapt = self.decision_module.calcEU_adapt_flood(
+                geom_id="NoID",
+                n_agents=self.n,
+                wealth=self.var.wealth.data,
+                income=self.var.income.data,
+                expendature_cap=eu_cap,
+                amenity_value=self.var.amenity_value.data,
+                amenity_weight=1,
+                risk_perception=self.var.risk_perception.data,
+                expected_damages_adapt=damages_adapt,
+                adaptation_costs=self.var.adaptation_costs.data / loan_duration_flood,
+                time_adapted=self.var.time_adapted.data,
+                loan_duration=loan_duration_flood,
+                p_floods=1 / self.return_periods,
+                T=35,
+                r=0.03,
+                sigma=1,
+            )
+            EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
+                geom_id="NoID",
+                n_agents=self.n,
+                wealth=self.var.wealth.data,
+                income=self.var.income.data,
+                amenity_value=self.var.amenity_value.data,
+                amenity_weight=1,
+                risk_perception=self.var.risk_perception.data,
+                expected_damages=damages_do_not_adapt,
+                adapted=self.var.adapted.data == 1,
+                p_floods=1 / self.return_periods,
+                T=35,
+                r=0.03,
+                sigma=1,
+            )
+        else:
+            EU_adapt = np.zeros(self.n, dtype=np.float64)
+            EU_do_not_adapt = np.zeros(self.n, dtype=np.float64)
 
-        EU_adapt_shutters = self.decision_module.calcEU_shutters_windstorm(
-            geom_id="NoID",
-            n_agents=self.n,
-            wealth=self.var.wealth.data,
-            income=self.var.income.data,
-            expendature_cap=eu_cap,
-            amenity_value=self.var.amenity_value.data,
-            amenity_weight=1,
-            risk_perception=self.var.risk_perception_windstorm.data,  # + 10,
-            expected_damages_adapt=damages_adapt_w,
-            adaptation_costs=self.var.adaptation_costs_shutters.data / loan_duration_wind,
-            time_adapted=self.var.time_adapted_shutters.data,
-            loan_duration=loan_duration_wind,
-            p_windstorm=1 / self.windstorm_return_periods,
-            T=35,
-            r=0.03,
-            sigma=1,
-            # adapted_shutters=self.var.adapted_shutters.data == 1,
-        )
-
-        EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
-            geom_id="NoID",
-            n_agents=self.n,
-            wealth=self.var.wealth.data,
-            income=self.var.income.data,
-            amenity_value=self.var.amenity_value.data,
-            amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,
-            expected_damages=damages_do_not_adapt,
-            adapted=self.var.adapted.data == 1,
-            p_floods=1 / self.return_periods,
-            T=35,
-            r=0.03,
-            sigma=1,
-        )
-
-        EU_unprotected_w = self.decision_module.calcEU_do_nothing_w(
-            geom_id="NoID",
-            n_agents=self.n,
-            wealth=self.var.wealth.data,
-            income=self.var.income.data,
-            expendature_cap=eu_cap,
-            amenity_value=self.var.amenity_value.data,
-            amenity_weight=1,
-            risk_perception=self.var.risk_perception_windstorm.data,
-            expected_damages=damages_unprotected_w,
-            adapted=self.var.adapted_shutters.data == 1,
-            p_windstorm=1 / self.windstorm_return_periods,
-            T=35,
-            r=0.03,
-            sigma=1,
-        )
+        # --- Wind expected utilities ---
+        if adapt_wind:
+            EU_adapt_shutters = self.decision_module.calcEU_shutters_windstorm(
+                geom_id="NoID",
+                n_agents=self.n,
+                wealth=self.var.wealth.data,
+                income=self.var.income.data,
+                expendature_cap=eu_cap,
+                amenity_value=self.var.amenity_value.data,
+                amenity_weight=1,
+                risk_perception=self.var.risk_perception_windstorm.data,  # + 10,
+                expected_damages_adapt=damages_adapt_w,
+                adaptation_costs=self.var.adaptation_costs_shutters.data / loan_duration_wind,
+                time_adapted=self.var.time_adapted_shutters.data,
+                loan_duration=loan_duration_wind,
+                p_windstorm=1 / self.windstorm_return_periods,
+                T=35,
+                r=0.03,
+                sigma=1,
+                # adapted_shutters=self.var.adapted_shutters.data == 1,
+            )
+            EU_unprotected_w = self.decision_module.calcEU_do_nothing_w(
+                geom_id="NoID",
+                n_agents=self.n,
+                wealth=self.var.wealth.data,
+                income=self.var.income.data,
+                expendature_cap=eu_cap,
+                amenity_value=self.var.amenity_value.data,
+                amenity_weight=1,
+                risk_perception=self.var.risk_perception_windstorm.data,
+                expected_damages=damages_unprotected_w,
+                adapted=self.var.adapted_shutters.data == 1,
+                p_windstorm=1 / self.windstorm_return_periods,
+                T=35,
+                r=0.03,
+                sigma=1,
+            )
+        else:
+            EU_adapt_shutters = np.zeros(self.n, dtype=np.float64)
+            EU_unprotected_w = np.zeros(self.n, dtype=np.float64)
 
         EU_do_nothing = self.decision_module.calcEU_no_insure(
             n_agents=self.n,
@@ -2102,6 +2109,16 @@ class Households(AgentBaseClass):
         self._last_premium = premium
         self._last_premium_private = premium_private
         self._last_premium_public = premium_public
+
+        # Premium distribution diagnostics
+        _prem = np.asarray(premium, dtype=np.float32).reshape(-1)
+        print(
+            f"[premium] p25={float(np.percentile(_prem, 25)):.2f}, "
+            f"p50={float(np.median(_prem)):.2f}, "
+            f"p75={float(np.percentile(_prem, 75)):.2f}, "
+            f"p95={float(np.percentile(_prem, 95)):.2f}, "
+            f"max={float(np.max(_prem)):.2f}"
+        )
 
         # CARO DEBUG: premium affordability
         # inc = self.var.income.data.astype(np.float32)

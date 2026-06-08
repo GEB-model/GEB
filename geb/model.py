@@ -449,8 +449,8 @@ class GEBModel(Module):
         clean_report_folder: bool = False,
         load_data_from_store: bool = False,
         omit: None | str = None,
-        # initialize_hazards: bool = False,  # CARO
-        # enabled_agents: list[str] | None = None,
+        #initialize_hazards: bool = False,  # CARO
+        #enabled_agents: list[str] | None = None,
     ) -> None:
         """Initializes the model.
 
@@ -481,7 +481,7 @@ class GEBModel(Module):
 
         ## CARO
         # if self.simulate_hydrology:
-        #    self.hydrology = Hydrology(self)
+        #   self.hydrology = Hydrology(self)
         # else:
         #    self.hydrology = None
 

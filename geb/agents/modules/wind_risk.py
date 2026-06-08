@@ -125,9 +125,12 @@ class WindRiskModule:
             {"building_id_of_household": self.households.var.building_id_of_household}
         )
 
-        mask = (self.households.buildings["n_occupants"] > 0)
-        # Optional filter to focus only on flooded households
-        if only_flooded_buildings:
+        if "n_occupants" in self.households.buildings.columns:
+            mask = self.households.buildings["n_occupants"] > 0
+        else:
+            mask = pd.Series(True, index=self.households.buildings.index)
+        # Optional filter to focus only on flooded households (only if flood data available)
+        if only_flooded_buildings and "flooded" in self.households.buildings.columns:
             mask &= self.households.buildings["flooded"]
         buildings = self.households.buildings[mask]
     
