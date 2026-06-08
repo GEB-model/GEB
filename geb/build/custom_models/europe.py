@@ -2204,6 +2204,30 @@ class Europe(GEBModel):
             )
 
         cultivated_land_subgrid.attrs["_FillValue"] = None
+
+        land_use_classes_subgrid: xr.DataArray = self.subgrid[
+            "landsurface/land_use_classes"
+        ]
+
+        land_use_classes_subgrid = xr.where(
+            cultivated_land_subgrid,
+            np.int8(1),
+            land_use_classes_subgrid,
+            keep_attrs=True,
+        ).astype(np.int8)
+
+        if land_use_classes_subgrid.rio.crs is None and farms.rio.crs is not None:
+            land_use_classes_subgrid = land_use_classes_subgrid.rio.write_crs(
+                farms.rio.crs
+            )
+
+        land_use_classes_subgrid.attrs["_FillValue"] = -1
+
+        self.set_subgrid(
+            land_use_classes_subgrid,
+            name="landsurface/land_use_classes",
+        )
+
         self.set_subgrid(
             cultivated_land_subgrid,
             name="landsurface/cultivated_land",
