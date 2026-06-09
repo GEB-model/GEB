@@ -138,14 +138,14 @@ def test_prepare_skill_score_boxplot_inputs_matches_after_geb_filter(
     output_folder.mkdir()
     evaluation_df: pd.DataFrame = pd.DataFrame(
         {
-            "station_name": ["station_a", "station_b"],
-            "upstream_area_GEB": [500_000_000.0, 200_000_000.0],
-            "KGE": [0.8, 0.7],
+            "station_name": ["station_a", "station_b", "station_c"],
+            "upstream_area_GEB": [500_000_000.0, 200_000_000.0, 600_000_000.0],
+            "KGE": [0.8, 0.7, float("nan")],
         }
     )
     external_df: pd.DataFrame = pd.DataFrame(
-        {"KGE": [0.6, 0.5]},
-        index=pd.Index(["station_a", "station_b"]),
+        {"KGE": [0.6, 0.5, 0.4]},
+        index=pd.Index(["station_a", "station_b", "station_c"]),
     )
     evaluation_df.to_excel(evaluation_metrics_path, index=False)
     external_df.to_csv(external_folder / "reference.csv")
@@ -165,6 +165,47 @@ def test_prepare_skill_score_boxplot_inputs_matches_after_geb_filter(
 
     assert prepared_geb_df["station_name"].to_list() == ["station_a"]
     assert external_models["reference"].index.to_list() == ["STATION_A"]
+
+
+def test_prepare_skill_score_boxplot_inputs_can_skip_external_models(
+    tmp_path: Path,
+) -> None:
+    """Plain skill-score plots can keep `evaluation_skill_scores.png` GEB-only."""
+    evaluation_metrics_path: Path = tmp_path / "evaluation_metrics.xlsx"
+    external_folder: Path = tmp_path / "external"
+    external_folder.mkdir()
+    output_folder: Path = tmp_path / "output"
+    output_folder.mkdir()
+    evaluation_df: pd.DataFrame = pd.DataFrame(
+        {
+            "station_name": ["station_a"],
+            "upstream_area_GEB": [500_000_000.0],
+            "KGE": [0.8],
+        }
+    )
+    external_df: pd.DataFrame = pd.DataFrame(
+        {"KGE": [0.6]},
+        index=pd.Index(["station_a"]),
+    )
+    evaluation_df.to_excel(evaluation_metrics_path, index=False)
+    external_df.to_csv(external_folder / "reference.csv")
+
+    prepared_geb_df, external_models = prepare_skill_score_boxplot_inputs(
+        evaluation_metrics_path=evaluation_metrics_path,
+        snapped_locations_path=tmp_path / "unused.geoparquet",
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=external_folder,
+        model_folder=tmp_path,
+        output_folder=output_folder,
+        logger=logging.getLogger(__name__),
+        minimum_upstream_area_km2=400.0,
+        include_geb=True,
+        matched_only=False,
+        include_external=False,
+    )
+
+    assert prepared_geb_df["station_name"].to_list() == ["station_a"]
+    assert external_models == {}
 
 
 def _write_google_metric_file(

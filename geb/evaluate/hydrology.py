@@ -2324,14 +2324,16 @@ class Hydrology:
         matched_only: bool = False,
         minimum_upstream_area_km2: float | None = None,
         external_evaluation_folder: str | Path | None = None,
+        include_external: bool = False,
         **kwargs: Any,
     ) -> None:
         """Create skill score violin+boxplot graphs for each evaluation metric.
 
         Produces a 2×3 grid of violin/box plots across gauging stations.
-        When ``matched_only=False`` (default), each model uses its full station
-        set. When ``matched_only=True``, both GEB and external data are restricted
-        to their overlapping stations for a fair comparison.
+        When ``matched_only=False`` (default), the plot is GEB-only unless
+        ``include_external=True`` is passed. When ``matched_only=True``, both
+        GEB and external data are restricted to their overlapping stations for
+        a fair comparison.
 
         Args:
             export: Save the figure to disk.
@@ -2341,6 +2343,9 @@ class Hydrology:
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             external_evaluation_folder: Optional folder containing external
                 model skill scores or Google streamflow `metrics.tgz`.
+            include_external: Include external model scores in non-matched plots.
+                External scores are always included for `matched_only=True` and
+                when `include_geb=False`.
             **kwargs: Ignored (CLI compatibility).
         """
         if minimum_upstream_area_km2 is None:
@@ -2350,6 +2355,9 @@ class Hydrology:
         configured_folder: str | Path | None = self.model.config["hydrology"][
             "evaluation"
         ]["discharge"].get("external_evaluation_folder")
+        should_include_external: bool = (
+            include_external or matched_only or not include_geb
+        )
         evaluation_df, external_models = _prepare_skill_score_boxplot_inputs(
             evaluation_metrics_path=self.evaluate_discharge_output_folder
             / "evaluation_metrics.xlsx",
@@ -2364,6 +2372,7 @@ class Hydrology:
             minimum_upstream_area_km2=minimum_upstream_area_km2,
             include_geb=include_geb,
             matched_only=matched_only,
+            include_external=should_include_external,
         )
 
         if include_geb and evaluation_df.empty:

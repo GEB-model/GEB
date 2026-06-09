@@ -31,6 +31,14 @@ _UTRECHT_CATCHMENT_AREA_COLUMNS: tuple[str, ...] = (
     "catchment_area_km2",
     "catchment_area_m2",
 )
+_PLOTTED_SKILL_SCORE_COLUMNS: tuple[str, ...] = (
+    "KGE",
+    "NSE",
+    "R",
+    "R2",
+    "RMSE",
+    "RRMSE",
+)
 
 
 def _first_existing_column(
@@ -117,6 +125,31 @@ def _filter_evaluation_to_station_keys(
         )
         retain_mask |= grdc_keys.isin(station_keys)
     return evaluation_df[retain_mask].copy()
+
+
+def _filter_evaluation_to_valid_skill_scores(
+    evaluation_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Keep GEB rows with at least one finite plotted skill-score value.
+
+    Args:
+        evaluation_df: GEB skill-score table after station matching.
+
+    Returns:
+        Filtered GEB skill-score table.
+    """
+    available_metric_columns: list[str] = [
+        column_name
+        for column_name in _PLOTTED_SKILL_SCORE_COLUMNS
+        if column_name in evaluation_df.columns
+    ]
+    if not available_metric_columns:
+        return evaluation_df
+
+    valid_metric_values: pd.DataFrame = evaluation_df[available_metric_columns].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    return evaluation_df[valid_metric_values.notna().any(axis=1)].copy()
 
 
 def filter_utrecht_skill_scores(
@@ -685,6 +718,7 @@ def prepare_skill_score_boxplot_inputs(
     minimum_upstream_area_km2: float,
     include_geb: bool,
     matched_only: bool,
+    include_external: bool = True,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """Prepare GEB and external skill-score tables for boxplot rendering.
 
@@ -700,6 +734,7 @@ def prepare_skill_score_boxplot_inputs(
             retained GEB stations (km2).
         include_geb: Whether GEB scores will be included in the plot.
         matched_only: Whether to restrict GEB and external scores to overlapping stations.
+        include_external: Whether external model scores should be included.
 
     Returns:
         Tuple containing the prepared GEB skill-score table and external model tables.
@@ -710,12 +745,14 @@ def prepare_skill_score_boxplot_inputs(
         logger=logger,
     )
 
-    external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
-        external_evaluation_folder=external_evaluation_folder,
-        configured_external_evaluation_folder=configured_external_evaluation_folder,
-        model_folder=model_folder,
-        logger=logger,
-    )
+    external_models: dict[str, pd.DataFrame] = {}
+    if include_external:
+        external_models = read_external_evaluation_raw(
+            external_evaluation_folder=external_evaluation_folder,
+            configured_external_evaluation_folder=configured_external_evaluation_folder,
+            model_folder=model_folder,
+            logger=logger,
+        )
     if matched_only and external_models:
         station_names: set[str] = get_geb_station_names(
             evaluation_metrics_path=evaluation_metrics_path,
@@ -748,10 +785,24 @@ def prepare_skill_score_boxplot_inputs(
             len(evaluation_df),
         )
 
+        before_valid_score_count: int = len(evaluation_df)
+        evaluation_df = _filter_evaluation_to_valid_skill_scores(evaluation_df)
+        if len(evaluation_df) != before_valid_score_count:
+            logger.info(
+                "matched_only=True: GEB retained %d/%d matched stations with at "
+                "least one finite plotted skill score.",
+                len(evaluation_df),
+                before_valid_score_count,
+            )
+
         geb_station_names: set[str] = _get_evaluation_station_keys(evaluation_df)
-        external_models = {
-            model_name: model_df[model_df.index.isin(geb_station_names)].copy()
-            for model_name, model_df in external_models.items()
-        }
+        valid_external_models: dict[str, pd.DataFrame] = {}
+        for model_name, model_df in external_models.items():
+            matched_model_df: pd.DataFrame = model_df[
+                model_df.index.isin(geb_station_names)
+            ].copy()
+            if not matched_model_df.empty:
+                valid_external_models[model_name] = matched_model_df
+        external_models = valid_external_models
 
     return evaluation_df, external_models
