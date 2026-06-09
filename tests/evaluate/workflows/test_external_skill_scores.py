@@ -8,12 +8,20 @@ import pandas as pd
 import pytest
 
 from geb.evaluate.workflows.external_skill_scores import (
+    GOOGLE_STREAMFLOW_METRICS_URL,
     GOOGLE_STREAMFLOW_MODEL_NAME,
     prepare_skill_score_boxplot_inputs,
     read_external_evaluation_raw,
     read_google_streamflow_skill_scores,
     read_google_streamflow_skill_scores_from_archive,
 )
+
+
+def test_google_streamflow_metrics_url_points_to_zenodo_archive() -> None:
+    """Google metrics URL points to the Zenodo metrics archive."""
+    assert GOOGLE_STREAMFLOW_METRICS_URL.startswith(
+        "https://zenodo.org/records/10397664/files/metrics.tgz"
+    )
 
 
 def test_read_external_evaluation_raw_reads_csv_scores(
@@ -287,6 +295,48 @@ def test_prepare_skill_score_boxplot_inputs_matches_google_with_snapped_index(
     )
 
     assert prepared_geb_df.empty
+    assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
+        "GRDC_1001"
+    ]
+
+
+def test_prepare_skill_score_boxplot_inputs_uses_snapped_index_when_metrics_empty(
+    tmp_path: Path,
+) -> None:
+    """Empty evaluation metrics fall back to snapped station IDs for matching."""
+    gpd = pytest.importorskip("geopandas")
+    shapely_geometry = pytest.importorskip("shapely.geometry")
+    _write_google_metrics_tree(tmp_path / "external")
+    evaluation_metrics_path: Path = tmp_path / "evaluation_metrics.xlsx"
+    empty_evaluation_df: pd.DataFrame = pd.DataFrame(
+        {
+            "station_ID": pd.Series(dtype="int64"),
+            "station_name": pd.Series(dtype="str"),
+        }
+    )
+    empty_evaluation_df.to_excel(evaluation_metrics_path, index=False)
+    snapped_locations_path: Path = tmp_path / "snapped_locations.geoparquet"
+    snapped_locations_gdf = gpd.GeoDataFrame(
+        {"discharge_observations_station_name": ["Local Name"]},
+        index=pd.Index([1001], name="discharge_observations_station_ID"),
+        geometry=[shapely_geometry.Point(0.0, 0.0)],
+        crs="EPSG:4326",
+    )
+    snapped_locations_gdf.to_parquet(snapped_locations_path)
+
+    _, external_models = prepare_skill_score_boxplot_inputs(
+        evaluation_metrics_path=evaluation_metrics_path,
+        snapped_locations_path=snapped_locations_path,
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=tmp_path / "external",
+        model_folder=tmp_path,
+        output_folder=tmp_path,
+        logger=logging.getLogger(__name__),
+        minimum_upstream_area_km2=400.0,
+        include_geb=False,
+        matched_only=True,
+    )
+
     assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
         "GRDC_1001"
     ]

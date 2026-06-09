@@ -1,4 +1,4 @@
-"""External discharge skill-score processing helpers."""
+"""External discharge skill-score helpers."""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ import pandas as pd
 from geb.workflows.io import read_geom
 
 GOOGLE_STREAMFLOW_MODEL_NAME: str = "Google Streamflow"
+GOOGLE_STREAMFLOW_METRICS_URL: str = (
+    "https://zenodo.org/records/10397664/files/metrics.tgz?download=1"
+)
 GOOGLE_STREAMFLOW_LEAD_TIME: str = "0"
 GOOGLE_STREAMFLOW_METRIC_FILES: dict[str, str] = {
     "KGE": "KGE.csv",
@@ -187,50 +190,33 @@ def _find_google_metric_folders(folder: Path) -> list[Path]:
     Returns:
         Candidate folders that should contain the Google per-metric CSV files.
     """
+    candidates: list[Path] = [
+        folder / GOOGLE_STREAMFLOW_METRIC_ROOT,
+        folder / GOOGLE_STREAMFLOW_METRIC_ROOT.relative_to("metrics"),
+        folder,
+    ]
+    candidates.extend(
+        metrics_folder / GOOGLE_STREAMFLOW_METRIC_ROOT.relative_to("metrics")
+        for metrics_folder in sorted(folder.glob("**/metrics"))
+    )
+    candidates.extend(
+        hydrograph_metrics_folder
+        / "per_metric"
+        / "google"
+        / "2014"
+        / "dual_lstm"
+        / "hydrologically_separated"
+        for hydrograph_metrics_folder in sorted(folder.glob("**/hydrograph_metrics"))
+    )
+
     metric_folders: list[Path] = []
-    seen_paths: set[Path] = set()
-
-    def add_metric_folder(metric_folder: Path) -> None:
-        resolved_metric_folder: Path = metric_folder.resolve()
-        if resolved_metric_folder not in seen_paths:
-            metric_folders.append(metric_folder)
-            seen_paths.add(resolved_metric_folder)
-
-    add_metric_folder(folder / GOOGLE_STREAMFLOW_METRIC_ROOT)
-    add_metric_folder(folder / GOOGLE_STREAMFLOW_METRIC_ROOT.relative_to("metrics"))
-    add_metric_folder(folder)
-
-    # Users often place the downloaded Google repository or extracted Zenodo
-    # archive inside the external-evaluation folder rather than at its root.
-    for metrics_folder in sorted(folder.glob("**/metrics")):
-        add_metric_folder(
-            metrics_folder / GOOGLE_STREAMFLOW_METRIC_ROOT.relative_to("metrics")
-        )
-    for hydrograph_metrics_folder in sorted(folder.glob("**/hydrograph_metrics")):
-        add_metric_folder(
-            hydrograph_metrics_folder
-            / "per_metric"
-            / "google"
-            / "2014"
-            / "dual_lstm"
-            / "hydrologically_separated"
-        )
-
+    seen_folders: set[Path] = set()
+    for candidate in candidates:
+        resolved_candidate: Path = candidate.resolve()
+        if resolved_candidate not in seen_folders:
+            metric_folders.append(candidate)
+            seen_folders.add(resolved_candidate)
     return metric_folders
-
-
-def _find_google_streamflow_metrics_archive(
-    folder: Path,
-) -> Path | None:
-    """Find the first Google `metrics.tgz` archive below a folder.
-
-    Args:
-        folder: External evaluation folder to inspect.
-    Returns:
-        Path to the first archive found, or `None` when no archive exists.
-    """
-    archive_paths: list[Path] = sorted(folder.glob("**/metrics.tgz"))
-    return archive_paths[0] if archive_paths else None
 
 
 def read_google_streamflow_skill_scores(
@@ -370,10 +356,10 @@ def read_external_evaluation_raw(
     google_metrics_df: pd.DataFrame = read_google_streamflow_skill_scores(
         folder, logger
     )
-    metrics_archive_path: Path | None = _find_google_streamflow_metrics_archive(folder)
-    if google_metrics_df.empty and metrics_archive_path is not None:
+    metrics_archive_paths: list[Path] = sorted(folder.glob("**/metrics.tgz"))
+    if google_metrics_df.empty and metrics_archive_paths:
         google_metrics_df = read_google_streamflow_skill_scores_from_archive(
-            metrics_archive_path, logger
+            metrics_archive_paths[0], logger
         )
     if not google_metrics_df.empty:
         external_models[GOOGLE_STREAMFLOW_MODEL_NAME] = google_metrics_df
@@ -408,16 +394,9 @@ def prepare_external_evaluation(
         matched_stations_df: pd.DataFrame = all_stations_df[
             all_stations_df.index.isin(station_keys_upper)
         ].copy()
-        duplicate_count: int = int(matched_stations_df.index.duplicated().sum())
-        if duplicate_count > 0:
-            logger.info(
-                "External model '%s': dropping %d duplicate matched station rows.",
-                model_name,
-                duplicate_count,
-            )
-            matched_stations_df = matched_stations_df[
-                ~matched_stations_df.index.duplicated(keep="first")
-            ].copy()
+        matched_stations_df = matched_stations_df[
+            ~matched_stations_df.index.duplicated(keep="first")
+        ].copy()
         matched_stations_df = _filter_to_complete_plotted_skill_scores(
             matched_stations_df
         )
@@ -489,10 +468,15 @@ def get_geb_station_keys(
     """
     if evaluation_metrics_path.exists():
         evaluation_df: pd.DataFrame = pd.read_excel(evaluation_metrics_path)
-        station_keys: set[str] = set(evaluation_df["station_name"].dropna().str.upper())
-        if "station_ID" in evaluation_df.columns:
-            station_keys.update(_format_grdc_station_keys(evaluation_df["station_ID"]))
-        return station_keys
+        if not evaluation_df.empty:
+            station_keys: set[str] = set(
+                evaluation_df["station_name"].dropna().str.upper()
+            )
+            if "station_ID" in evaluation_df.columns:
+                station_keys.update(
+                    _format_grdc_station_keys(evaluation_df["station_ID"])
+                )
+            return station_keys
 
     snapped_locations = read_geom(snapped_locations_path)
     station_keys = set(
