@@ -328,6 +328,72 @@ def _assemble_google_streamflow_metrics(
     return google_metrics_df.dropna(how="all")
 
 
+def _find_google_streamflow_metric_roots(folder: Path) -> list[Path]:
+    """Find extracted Google streamflow metric folders below a folder.
+
+    Args:
+        folder: External evaluation folder to inspect.
+
+    Returns:
+        Candidate folders that should contain the Google per-metric CSV files.
+    """
+    metric_roots: list[Path] = []
+    seen_paths: set[Path] = set()
+
+    def add_metric_root(metric_root: Path) -> None:
+        resolved_metric_root: Path = metric_root.resolve()
+        if resolved_metric_root not in seen_paths:
+            metric_roots.append(metric_root)
+            seen_paths.add(resolved_metric_root)
+
+    add_metric_root(folder / GOOGLE_STREAMFLOW_METRIC_ROOT)
+    add_metric_root(folder / GOOGLE_STREAMFLOW_METRIC_ROOT.relative_to("metrics"))
+    add_metric_root(folder)
+
+    # Users often place the downloaded Google repository or extracted Zenodo
+    # archive inside the external-evaluation folder rather than at its root.
+    for metrics_folder in sorted(folder.glob("**/metrics")):
+        add_metric_root(
+            metrics_folder / GOOGLE_STREAMFLOW_METRIC_ROOT.relative_to("metrics")
+        )
+    for hydrograph_metrics_folder in sorted(folder.glob("**/hydrograph_metrics")):
+        add_metric_root(
+            hydrograph_metrics_folder
+            / "per_metric"
+            / "google"
+            / "2014"
+            / "dual_lstm"
+            / "hydrologically_separated"
+        )
+
+    return metric_roots
+
+
+def _find_google_streamflow_metrics_archive(
+    folder: Path,
+    logger: logging.Logger,
+) -> Path | None:
+    """Find a Google streamflow `metrics.tgz` archive below a folder.
+
+    Args:
+        folder: External evaluation folder to inspect.
+        logger: Logger used for diagnostics when multiple archives are found.
+
+    Returns:
+        Path to the first archive found, or `None` when no archive exists.
+    """
+    archive_paths: list[Path] = sorted(folder.glob("**/metrics.tgz"))
+    if not archive_paths:
+        return None
+    if len(archive_paths) > 1:
+        logger.warning(
+            "Found multiple Google streamflow metrics.tgz archives below %s. Using %s.",
+            folder,
+            archive_paths[0],
+        )
+    return archive_paths[0]
+
+
 def read_google_streamflow_skill_scores(
     folder: Path,
     logger: logging.Logger,
@@ -342,12 +408,7 @@ def read_google_streamflow_skill_scores(
         Per-station Google streamflow skill-score table. Empty when the expected
         Google metrics files are not present.
     """
-    metric_roots: tuple[Path, ...] = (
-        folder / GOOGLE_STREAMFLOW_METRIC_ROOT,
-        folder / GOOGLE_STREAMFLOW_METRIC_ROOT.relative_to("metrics"),
-        folder,
-    )
-    for metric_root in metric_roots:
+    for metric_root in _find_google_streamflow_metric_roots(folder):
         metric_paths: dict[str, Path] = {
             metric_name: metric_root / file_name
             for metric_name, file_name in GOOGLE_STREAMFLOW_METRIC_FILES.items()
@@ -360,6 +421,11 @@ def read_google_streamflow_skill_scores(
                     for metric_name, metric_path in metric_paths.items()
                 }
             )
+    logger.info(
+        "No extracted Google streamflow metrics found below %s. Expected %s.",
+        folder,
+        GOOGLE_STREAMFLOW_METRIC_ROOT,
+    )
     return pd.DataFrame()
 
 
@@ -481,9 +547,12 @@ def read_external_evaluation_raw(
     google_metrics_df: pd.DataFrame = read_google_streamflow_skill_scores(
         folder, logger
     )
-    if google_metrics_df.empty and (folder / "metrics.tgz").exists():
+    metrics_archive_path: Path | None = _find_google_streamflow_metrics_archive(
+        folder, logger
+    )
+    if google_metrics_df.empty and metrics_archive_path is not None:
         google_metrics_df = read_google_streamflow_skill_scores_from_archive(
-            folder / "metrics.tgz", logger
+            metrics_archive_path, logger
         )
     if not google_metrics_df.empty:
         external_models[GOOGLE_STREAMFLOW_MODEL_NAME] = google_metrics_df

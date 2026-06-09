@@ -324,6 +324,42 @@ def _draw_violin_box(
     )
 
 
+def _get_robust_error_metric_ylim(metric_values: np.ndarray) -> tuple[float, float]:
+    """Get readable y-axis limits for unbounded error-metric distributions.
+
+    Extreme RMSE and RRMSE outliers can make the violin and box unreadable. This
+    keeps the visible range around the boxplot whisker while preserving all
+    values for the plotted statistics.
+
+    Args:
+        metric_values: Error metric values across all plotted models.
+
+    Returns:
+        Lower and upper y-axis limits for the error metric.
+    """
+    finite_values: np.ndarray = metric_values[np.isfinite(metric_values)]
+    if finite_values.size == 0:
+        return (0.0, 1.0)
+
+    nonnegative_values: np.ndarray = finite_values[finite_values >= 0.0]
+    if nonnegative_values.size == 0:
+        return (0.0, 1.0)
+
+    first_quartile: float = float(np.nanpercentile(nonnegative_values, 25))
+    third_quartile: float = float(np.nanpercentile(nonnegative_values, 75))
+    interquartile_range: float = third_quartile - first_quartile
+    whisker_upper_limit: float = third_quartile + 1.5 * interquartile_range
+    values_inside_whisker: np.ndarray = nonnegative_values[
+        nonnegative_values <= whisker_upper_limit
+    ]
+    if values_inside_whisker.size == 0:
+        visible_upper_limit: float = float(third_quartile)
+    else:
+        visible_upper_limit = float(values_inside_whisker.max())
+
+    return (0.0, max(visible_upper_limit * 1.15, 1.0))
+
+
 def plot_skill_score_boxplots(
     evaluation_df: pd.DataFrame,
     external_models: dict[str, pd.DataFrame],
@@ -386,6 +422,7 @@ def plot_skill_score_boxplots(
             "label": "RMSE",
             "title": "Root Mean Squared Error",
             "ylim": None,
+            "robust_error_ylim": True,
             "reference": 0.0,
             "unit": "(m³/s)",
         },
@@ -394,6 +431,7 @@ def plot_skill_score_boxplots(
             "label": "RRMSE",
             "title": "Relative RMSE",
             "ylim": None,
+            "robust_error_ylim": True,
             "reference": 0.0,
             "unit": "(−)",
         },
@@ -491,6 +529,11 @@ def plot_skill_score_boxplots(
             )
             if config["ylim"] is not None:
                 axis.set_ylim(*config["ylim"])
+            elif config.get("robust_error_ylim", False):
+                combined_metric_values: np.ndarray = np.concatenate(
+                    [metric_values for _, metric_values in models_with_data]
+                )
+                axis.set_ylim(*_get_robust_error_metric_ylim(combined_metric_values))
             axis.set_xticks([])
             axis.tick_params(axis="y", labelsize=8, colors="white")
             axis.set_xlabel("")

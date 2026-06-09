@@ -224,6 +224,24 @@ def test_read_google_streamflow_skill_scores_from_extracted_metrics(
     assert google_df.loc["GRDC_1001", "R2"] == pytest.approx(0.81)
 
 
+def test_read_external_evaluation_raw_finds_nested_google_metrics(
+    tmp_path: Path,
+) -> None:
+    """Google streamflow metrics are discovered inside nested external folders."""
+    _write_google_metrics_tree(tmp_path / "global_streamflow_model_paper")
+
+    external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=tmp_path,
+        model_folder=tmp_path,
+        logger=logging.getLogger(__name__),
+    )
+
+    google_df: pd.DataFrame = external_models[GOOGLE_STREAMFLOW_MODEL_NAME]
+    assert google_df.index.to_list() == ["GRDC_1001", "GRDC_1002"]
+    assert google_df.loc["GRDC_1001", "KGE"] == 0.8
+
+
 def test_read_google_streamflow_skill_scores_from_metrics_archive(
     tmp_path: Path,
 ) -> None:

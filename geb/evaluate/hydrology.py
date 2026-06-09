@@ -2323,6 +2323,7 @@ class Hydrology:
         include_geb: bool = True,
         matched_only: bool = False,
         minimum_upstream_area_km2: float | None = None,
+        external_evaluation_folder: str | Path | None = None,
         **kwargs: Any,
     ) -> None:
         """Create skill score violin+boxplot graphs for each evaluation metric.
@@ -2338,6 +2339,8 @@ class Hydrology:
             matched_only: Restrict all models to overlapping stations only.
             minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted GEB stations (km2).
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            external_evaluation_folder: Optional folder containing external
+                model skill scores or Google streamflow `metrics.tgz`.
             **kwargs: Ignored (CLI compatibility).
         """
         if minimum_upstream_area_km2 is None:
@@ -2353,7 +2356,7 @@ class Hydrology:
             snapped_locations_path=self.model.files["geom"][
                 "discharge/discharge_snapped_locations"
             ],
-            external_evaluation_folder=None,
+            external_evaluation_folder=external_evaluation_folder,
             configured_external_evaluation_folder=configured_folder,
             model_folder=self.model.input_folder.parent,
             output_folder=self.evaluate_discharge_output_folder,
