@@ -58,18 +58,24 @@ def test_filter_utrecht_skill_scores_converts_m2_area_column() -> None:
     assert filtered_evaluation_df.index.to_list() == ["passes"]
 
 
-def test_filter_utrecht_skill_scores_requires_metadata_columns() -> None:
-    """Utrecht filtering fails clearly when the published criteria cannot be applied."""
+def test_filter_utrecht_skill_scores_keeps_score_only_tables(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Utrecht score-only tables are kept because metadata filters need metadata."""
     external_evaluation_df: pd.DataFrame = pd.DataFrame(
         {"KGE": [0.8]},
         index=pd.Index(["station"]),
     )
 
-    with pytest.raises(ValueError, match="Utrecht external skill-score filtering"):
-        filter_utrecht_skill_scores(
+    with caplog.at_level(logging.WARNING):
+        filtered_evaluation_df: pd.DataFrame = filter_utrecht_skill_scores(
             external_evaluation_df,
             logging.getLogger(__name__),
         )
+
+    pd.testing.assert_frame_equal(filtered_evaluation_df, external_evaluation_df)
+    assert filtered_evaluation_df is not external_evaluation_df
+    assert "Skipping Utrecht GRDC station-criteria filter" in caplog.text
 
 
 def test_read_external_evaluation_raw_filters_only_utrecht_sources(

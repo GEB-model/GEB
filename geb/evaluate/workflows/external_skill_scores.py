@@ -139,10 +139,14 @@ def filter_utrecht_skill_scores(
         minimum_catchment_area_km2: Minimum station catchment area (km2).
 
     Returns:
-        Filtered Utrecht skill-score table.
+        Filtered Utrecht skill-score table when the required metadata columns
+        are present. If the table only contains skill scores, the original
+        table is returned unchanged because the published station criteria
+        cannot be reconstructed from scores alone.
 
     Raises:
-        ValueError: If required Utrecht metadata columns are missing.
+        RuntimeError: If metadata-column validation reaches an inconsistent
+            internal state.
     """
     end_year_column: str | None = _first_existing_column(
         external_evaluation_df, _UTRECHT_END_YEAR_COLUMNS
@@ -167,14 +171,22 @@ def filter_utrecht_skill_scores(
             f"catchment area ({', '.join(_UTRECHT_CATCHMENT_AREA_COLUMNS)})"
         )
     if missing_metadata:
-        raise ValueError(
-            "Utrecht external skill-score filtering requires metadata columns for: "
-            + "; ".join(missing_metadata)
-            + "."
+        logger.warning(
+            "Skipping Utrecht GRDC station-criteria filter because the external "
+            "skill-score table lacks metadata columns for: %s. The scores will "
+            "still be matched to GEB stations, but the Utrecht record-length, "
+            "end-year, and catchment-area criteria cannot be applied from skill "
+            "scores alone.",
+            "; ".join(missing_metadata),
         )
-    assert end_year_column is not None
-    assert data_years_column is not None
-    assert catchment_area_column is not None
+        return external_evaluation_df.copy()
+
+    if (
+        end_year_column is None
+        or data_years_column is None
+        or catchment_area_column is None
+    ):
+        raise RuntimeError("Utrecht metadata-column validation failed unexpectedly.")
 
     numeric_end_years: pd.Series = pd.to_numeric(
         external_evaluation_df[end_year_column], errors="coerce"
