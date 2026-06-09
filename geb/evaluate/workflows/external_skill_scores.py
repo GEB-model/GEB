@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import tarfile
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +13,17 @@ from geb.workflows.io import read_geom
 UTRECHT_MINIMUM_END_YEAR: int = 1991
 UTRECHT_MINIMUM_DATA_YEARS: float = 10.0
 UTRECHT_MINIMUM_CATCHMENT_AREA_KM2: float = 400.0
+GOOGLE_STREAMFLOW_MODEL_NAME: str = "Google Streamflow"
+GOOGLE_STREAMFLOW_LEAD_TIME: str = "0"
+GOOGLE_STREAMFLOW_METRIC_FILES: dict[str, str] = {
+    "KGE": "KGE.csv",
+    "NSE": "NSE.csv",
+    "R": "Pearson-r.csv",
+    "RMSE": "RMSE.csv",
+}
+GOOGLE_STREAMFLOW_METRIC_ROOT: Path = Path(
+    "metrics/hydrograph_metrics/per_metric/google/2014/dual_lstm/hydrologically_separated"
+)
 
 _UTRECHT_END_YEAR_COLUMNS: tuple[str, ...] = ("end_year", "end_date")
 _UTRECHT_DATA_YEARS_COLUMNS: tuple[str, ...] = ("data_years", "n_years")
@@ -40,6 +52,71 @@ def _first_existing_column(
         if column_name in available_columns:
             return column_name
     return None
+
+
+def _format_grdc_station_keys(station_ids: pd.Series) -> set[str]:
+    """Format station IDs as GRDC keys used by Google streamflow metrics.
+
+    Args:
+        station_ids: Station IDs from GEB evaluation outputs.
+
+    Returns:
+        Uppercase GRDC-style station keys.
+    """
+    station_keys: set[str] = set()
+    for station_id in station_ids.dropna():
+        station_id_text: str = str(station_id).strip()
+        try:
+            station_id_text = str(int(float(station_id_text)))
+        except ValueError:
+            station_id_text = station_id_text.removeprefix("GRDC_")
+        station_keys.add(f"GRDC_{station_id_text}".upper())
+    return station_keys
+
+
+def _get_evaluation_station_keys(evaluation_df: pd.DataFrame) -> set[str]:
+    """Get station-name and GRDC-style station-ID keys from GEB metrics.
+
+    Args:
+        evaluation_df: GEB skill-score table.
+
+    Returns:
+        Uppercase station keys.
+    """
+    station_keys: set[str] = set()
+    if "station_name" in evaluation_df.columns:
+        station_keys.update(evaluation_df["station_name"].dropna().str.upper())
+    if "station_ID" in evaluation_df.columns:
+        station_keys.update(_format_grdc_station_keys(evaluation_df["station_ID"]))
+    return station_keys
+
+
+def _filter_evaluation_to_station_keys(
+    evaluation_df: pd.DataFrame,
+    station_keys: set[str],
+) -> pd.DataFrame:
+    """Keep GEB metric rows whose station name or station ID is in `station_keys`.
+
+    Args:
+        evaluation_df: GEB skill-score table.
+        station_keys: Uppercase station-name or GRDC-style station-ID keys to retain.
+
+    Returns:
+        Filtered GEB skill-score table.
+    """
+    retain_mask: pd.Series = pd.Series(False, index=evaluation_df.index)
+    if "station_name" in evaluation_df.columns:
+        retain_mask |= evaluation_df["station_name"].str.upper().isin(station_keys)
+    if "station_ID" in evaluation_df.columns:
+        grdc_keys: pd.Series = evaluation_df["station_ID"].apply(
+            lambda station_id: (
+                next(iter(_format_grdc_station_keys(pd.Series([station_id]))))
+                if pd.notna(station_id)
+                else ""
+            )
+        )
+        retain_mask |= grdc_keys.isin(station_keys)
+    return evaluation_df[retain_mask].copy()
 
 
 def filter_utrecht_skill_scores(
@@ -155,6 +232,151 @@ def prepare_google_streamflow_skill_scores(
     return external_evaluation_df.copy()
 
 
+def _read_google_metric_file(metric_path: Path, metric_name: str) -> pd.Series:
+    """Read one Google streamflow per-station metric file.
+
+    Args:
+        metric_path: Path to a Google metric CSV file.
+        metric_name: Output metric name.
+
+    Returns:
+        Per-station metric values for lead time 0.
+
+    Raises:
+        ValueError: If the lead-time column is missing.
+    """
+    metric_df: pd.DataFrame = pd.read_csv(metric_path, index_col=0)
+    if GOOGLE_STREAMFLOW_LEAD_TIME not in metric_df.columns:
+        raise ValueError(
+            f"Google streamflow metric file {metric_path} is missing "
+            f"lead-time column {GOOGLE_STREAMFLOW_LEAD_TIME!r}."
+        )
+    metric_series: pd.Series = pd.to_numeric(
+        metric_df[GOOGLE_STREAMFLOW_LEAD_TIME], errors="coerce"
+    )
+    metric_series.name = metric_name
+    return metric_series
+
+
+def _read_google_metric_tar_member(
+    metrics_archive_path: Path,
+    member_name: str,
+    metric_name: str,
+) -> pd.Series:
+    """Read one Google streamflow metric CSV from `metrics.tgz`.
+
+    Args:
+        metrics_archive_path: Path to the Zenodo `metrics.tgz` file.
+        member_name: Metric CSV member path inside the tar archive.
+        metric_name: Output metric name.
+
+    Returns:
+        Per-station metric values for lead time 0.
+
+    Raises:
+        FileNotFoundError: If the metric member is missing.
+        ValueError: If the lead-time column is missing.
+    """
+    with tarfile.open(metrics_archive_path, "r:gz") as archive:
+        member_file = archive.extractfile(member_name)
+        if member_file is None:
+            raise FileNotFoundError(
+                f"Google streamflow metric {member_name} was not found in "
+                f"{metrics_archive_path}."
+            )
+        metric_df: pd.DataFrame = pd.read_csv(member_file, index_col=0)
+
+    if GOOGLE_STREAMFLOW_LEAD_TIME not in metric_df.columns:
+        raise ValueError(
+            f"Google streamflow metric {member_name} is missing lead-time "
+            f"column {GOOGLE_STREAMFLOW_LEAD_TIME!r}."
+        )
+    metric_series: pd.Series = pd.to_numeric(
+        metric_df[GOOGLE_STREAMFLOW_LEAD_TIME], errors="coerce"
+    )
+    metric_series.name = metric_name
+    return metric_series
+
+
+def _assemble_google_streamflow_metrics(
+    metric_series: dict[str, pd.Series],
+) -> pd.DataFrame:
+    """Combine Google metric series into the external skill-score table shape.
+
+    Args:
+        metric_series: Metric series keyed by GEB-compatible metric name.
+
+    Returns:
+        Per-station Google streamflow skill-score table.
+    """
+    google_metrics_df: pd.DataFrame = pd.concat(metric_series.values(), axis=1)
+    google_metrics_df.index = google_metrics_df.index.str.upper()
+    if "R" in google_metrics_df.columns:
+        google_metrics_df["R2"] = google_metrics_df["R"] ** 2
+    return google_metrics_df.dropna(how="all")
+
+
+def read_google_streamflow_skill_scores(
+    folder: Path,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """Read Google streamflow GRDC skill scores from an extracted metrics folder.
+
+    Args:
+        folder: External evaluation folder or extracted Google metrics folder.
+        logger: Logger used for processing diagnostics.
+
+    Returns:
+        Per-station Google streamflow skill-score table. Empty when the expected
+        Google metrics files are not present.
+    """
+    metric_roots: tuple[Path, ...] = (
+        folder / GOOGLE_STREAMFLOW_METRIC_ROOT,
+        folder / GOOGLE_STREAMFLOW_METRIC_ROOT.relative_to("metrics"),
+        folder,
+    )
+    for metric_root in metric_roots:
+        metric_paths: dict[str, Path] = {
+            metric_name: metric_root / file_name
+            for metric_name, file_name in GOOGLE_STREAMFLOW_METRIC_FILES.items()
+        }
+        if all(metric_path.exists() for metric_path in metric_paths.values()):
+            logger.info("Reading Google streamflow metrics from %s.", metric_root)
+            return _assemble_google_streamflow_metrics(
+                {
+                    metric_name: _read_google_metric_file(metric_path, metric_name)
+                    for metric_name, metric_path in metric_paths.items()
+                }
+            )
+    return pd.DataFrame()
+
+
+def read_google_streamflow_skill_scores_from_archive(
+    metrics_archive_path: Path,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """Read Google streamflow GRDC skill scores from the Zenodo `metrics.tgz` archive.
+
+    Args:
+        metrics_archive_path: Path to the Zenodo `metrics.tgz` archive.
+        logger: Logger used for processing diagnostics.
+
+    Returns:
+        Per-station Google streamflow skill-score table.
+    """
+    logger.info("Reading Google streamflow metrics from %s.", metrics_archive_path)
+    return _assemble_google_streamflow_metrics(
+        {
+            metric_name: _read_google_metric_tar_member(
+                metrics_archive_path=metrics_archive_path,
+                member_name=str(GOOGLE_STREAMFLOW_METRIC_ROOT / file_name),
+                metric_name=metric_name,
+            )
+            for metric_name, file_name in GOOGLE_STREAMFLOW_METRIC_FILES.items()
+        }
+    )
+
+
 def prepare_external_skill_scores(
     model_name: str,
     external_evaluation_df: pd.DataFrame,
@@ -212,6 +434,15 @@ def read_external_evaluation_raw(
     folder: Path = Path(selected_folder)
     if not folder.is_absolute():
         folder = model_folder / folder
+    if folder.is_file() and folder.name == "metrics.tgz":
+        google_metrics_df: pd.DataFrame = (
+            read_google_streamflow_skill_scores_from_archive(folder, logger)
+        )
+        return (
+            {GOOGLE_STREAMFLOW_MODEL_NAME: google_metrics_df}
+            if not google_metrics_df.empty
+            else {}
+        )
     if not folder.exists():
         logger.info("No external evaluation data folder found at %s, skipping.", folder)
         return {}
@@ -221,13 +452,10 @@ def read_external_evaluation_raw(
         )
         return {}
 
-    csv_paths: list[Path] = sorted(folder.glob("*.csv"))
-    if not csv_paths:
-        logger.info("No external evaluation CSV files found at %s, skipping.", folder)
-        return {}
-
-    logger.info("Reading external evaluation data from %s.", folder)
     external_models: dict[str, pd.DataFrame] = {}
+    csv_paths: list[Path] = sorted(folder.glob("*.csv"))
+    if csv_paths:
+        logger.info("Reading external evaluation data from %s.", folder)
     for csv_path in csv_paths:
         model_name: str = csv_path.stem
         external_evaluation_df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
@@ -236,6 +464,21 @@ def read_external_evaluation_raw(
             model_name=model_name,
             external_evaluation_df=external_evaluation_df,
             logger=logger,
+        )
+
+    google_metrics_df: pd.DataFrame = read_google_streamflow_skill_scores(
+        folder, logger
+    )
+    if google_metrics_df.empty and (folder / "metrics.tgz").exists():
+        google_metrics_df = read_google_streamflow_skill_scores_from_archive(
+            folder / "metrics.tgz", logger
+        )
+    if not google_metrics_df.empty:
+        external_models[GOOGLE_STREAMFLOW_MODEL_NAME] = google_metrics_df
+
+    if not external_models:
+        logger.info(
+            "No external evaluation CSV or Google metrics files found at %s.", folder
         )
     return external_models
 
@@ -320,7 +563,7 @@ def get_geb_station_names(
     evaluation_metrics_path: Path,
     snapped_locations_path: Path,
 ) -> set[str]:
-    """Get GEB station names for matching external skill-score tables.
+    """Get GEB station keys for matching external skill-score tables.
 
     Args:
         evaluation_metrics_path: Path to `evaluation_metrics.xlsx`, used when
@@ -329,16 +572,25 @@ def get_geb_station_names(
             used as a fallback before `evaluate_discharge` has produced metrics.
 
     Returns:
-        Uppercase GEB station names.
+        Uppercase GEB station names and GRDC-style station ID keys.
     """
     if evaluation_metrics_path.exists():
         evaluation_df: pd.DataFrame = pd.read_excel(evaluation_metrics_path)
-        return set(evaluation_df["station_name"].dropna().str.upper())
+        station_keys: set[str] = set(evaluation_df["station_name"].dropna().str.upper())
+        if "station_ID" in evaluation_df.columns:
+            station_keys.update(_format_grdc_station_keys(evaluation_df["station_ID"]))
+        return station_keys
 
     snapped_locations = read_geom(snapped_locations_path)
-    return set(
+    station_keys = set(
         snapped_locations["discharge_observations_station_name"].dropna().str.upper()
     )
+    station_keys.update(
+        _format_grdc_station_keys(
+            snapped_locations["discharge_observations_station_ID"]
+        )
+    )
+    return station_keys
 
 
 def prepare_skill_score_boxplot_inputs(
@@ -406,18 +658,16 @@ def prepare_skill_score_boxplot_inputs(
             external_station_names.update(external_df.index.str.upper())
 
         before_filter_count: int = len(evaluation_df)
-        evaluation_df = evaluation_df[
-            evaluation_df["station_name"].str.upper().isin(external_station_names)
-        ].copy()
+        evaluation_df = _filter_evaluation_to_station_keys(
+            evaluation_df, external_station_names
+        )
         logger.info(
             "matched_only=True: GEB restricted from %d to %d stations.",
             before_filter_count,
             len(evaluation_df),
         )
 
-        geb_station_names: set[str] = set(
-            evaluation_df["station_name"].dropna().str.upper()
-        )
+        geb_station_names: set[str] = _get_evaluation_station_keys(evaluation_df)
         external_models = {
             model_name: model_df[model_df.index.isin(geb_station_names)].copy()
             for model_name, model_df in external_models.items()
