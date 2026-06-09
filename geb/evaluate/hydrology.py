@@ -18,6 +18,12 @@ from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import create_discharge_folium_map
+from geb.evaluate.workflows.external_skill_scores import (
+    get_geb_station_names as _get_geb_station_names,
+    prepare_external_evaluation as _prepare_external_evaluation,
+    prepare_skill_score_boxplot_inputs as _prepare_skill_score_boxplot_inputs,
+    read_external_evaluation_raw as _read_external_evaluation_raw,
+)
 from geb.evaluate.workflows.hydrology_plot_engine import (
     plot_skill_score_boxplots as _plot_skill_score_boxplots,
     plot_skill_score_maps as _plot_skill_score_maps,
@@ -2165,7 +2171,10 @@ class Hydrology:
     def _read_external_evaluation_raw(
         self, external_evaluation_folder: str | Path | None = None
     ) -> dict[str, pd.DataFrame]:
-        """Read all external model evaluation CSVs without filtering to GEB stations.
+        """Read external model evaluation CSVs without matching to GEB stations.
+
+        Source-specific filters, such as the Utrecht GRDC station criteria, are
+        applied before the external scores are returned.
 
         Args:
             external_evaluation_folder: Directory with one CSV per external model.
@@ -2173,47 +2182,18 @@ class Hydrology:
                 when relative.
 
         Returns:
-            Mapping from model label to full (unfiltered) DataFrame
-            (index = station name, columns = metrics).
+            Mapping from model label to prepared external DataFrame (index =
+            station name, columns = metrics and optional metadata).
         """
-        configured_folder = self.model.config["hydrology"]["evaluation"][
-            "discharge"
-        ].get("external_evaluation_folder")
-        folder = Path(
-            external_evaluation_folder
-            if external_evaluation_folder is not None
-            else configured_folder
+        configured_folder: str | Path | None = self.model.config["hydrology"][
+            "evaluation"
+        ]["discharge"].get("external_evaluation_folder")
+        external_models: dict[str, pd.DataFrame] = _read_external_evaluation_raw(
+            external_evaluation_folder=external_evaluation_folder,
+            configured_external_evaluation_folder=configured_folder,
+            model_folder=self.model.input_folder.parent,
+            logger=self.model.logger,
         )
-        if not folder.is_absolute():
-            folder = self.model.input_folder.parent / folder
-        if not folder.exists():
-            self.model.logger.info(
-                "No external evaluation data folder found at %s, skipping.", folder
-            )
-            return {}
-        if not folder.is_dir():
-            self.model.logger.warning(
-                "External evaluation path is not a folder: %s. Skipping.", folder
-            )
-            return {}
-
-        csv_paths: list[Path] = sorted(folder.glob("*.csv"))
-        if not csv_paths:
-            self.model.logger.info(
-                "No external evaluation CSV files found at %s, skipping.", folder
-            )
-            return {}
-
-        self.model.logger.info(
-            "Reading external evaluation data from %s.",
-            folder,
-        )
-
-        external_models: dict[str, pd.DataFrame] = {}
-        for csv_path in csv_paths:
-            external_evaluation_df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
-            external_evaluation_df.index = external_evaluation_df.index.str.upper()
-            external_models[csv_path.stem] = external_evaluation_df
         return external_models
 
     def prepare_external_evaluation(
@@ -2242,44 +2222,27 @@ class Hydrology:
         Returns:
             Mapping from model label to matched-stations DataFrame.
         """
-        external_models = self._read_external_evaluation_raw(external_evaluation_folder)
+        external_models: dict[str, pd.DataFrame] = self._read_external_evaluation_raw(
+            external_evaluation_folder
+        )
         if not external_models:
             self.model.logger.info("No external evaluation data found, skipping.")
             return {}
 
-        # Use already-evaluated station list when available; fall back to geom file.
         geb_xlsx = self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
-        if geb_xlsx.exists():
-            our_stations: set[str] = set(
-                pd.read_excel(geb_xlsx)["station_name"].dropna().str.upper()
-            )
-        else:
-            snapped = read_geom(
-                self.model.files["geom"]["discharge/discharge_snapped_locations"]
-            )
-            our_stations = set(
-                snapped["discharge_observations_station_name"].dropna().str.upper()
-            )
+        station_names: set[str] = _get_geb_station_names(
+            evaluation_metrics_path=geb_xlsx,
+            snapped_locations_path=self.model.files["geom"][
+                "discharge/discharge_snapped_locations"
+            ],
+        )
 
-        matched_external_models: dict[str, pd.DataFrame] = {}
-        for model_name, all_stations_df in external_models.items():
-            matched_stations_df: pd.DataFrame = all_stations_df[
-                all_stations_df.index.isin(our_stations)
-            ].copy()
-            self.model.logger.info(
-                "External model '%s': %d/%d stations matched.",
-                model_name,
-                len(matched_stations_df),
-                len(all_stations_df),
-            )
-            matched_stations_df.to_excel(
-                self.evaluate_discharge_output_folder
-                / f"external_evaluation_filtered_{model_name}.xlsx"
-            )
-            if not matched_stations_df.empty:
-                matched_external_models[model_name] = matched_stations_df
-
-        return matched_external_models
+        return _prepare_external_evaluation(
+            external_models=external_models,
+            station_names=station_names,
+            output_folder=self.evaluate_discharge_output_folder,
+            logger=self.model.logger,
+        )
 
     def plot_skill_score_maps(
         self,
@@ -2381,66 +2344,30 @@ class Hydrology:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
                 "discharge"
             ]["minimum_upstream_area_km2"]
-        geb_evaluation_xlsx = (
-            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        configured_folder: str | Path | None = self.model.config["hydrology"][
+            "evaluation"
+        ]["discharge"].get("external_evaluation_folder")
+        evaluation_df, external_models = _prepare_skill_score_boxplot_inputs(
+            evaluation_metrics_path=self.evaluate_discharge_output_folder
+            / "evaluation_metrics.xlsx",
+            snapped_locations_path=self.model.files["geom"][
+                "discharge/discharge_snapped_locations"
+            ],
+            external_evaluation_folder=None,
+            configured_external_evaluation_folder=configured_folder,
+            model_folder=self.model.input_folder.parent,
+            output_folder=self.evaluate_discharge_output_folder,
+            logger=self.model.logger,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            include_geb=include_geb,
+            matched_only=matched_only,
         )
-        evaluation_df: pd.DataFrame = (
-            pd.read_excel(geb_evaluation_xlsx)
-            if geb_evaluation_xlsx.exists()
-            else pd.DataFrame()
-        )
-
-        if not evaluation_df.empty:
-            before_filter_count: int = len(evaluation_df)
-            evaluation_df = evaluation_df[
-                evaluation_df["upstream_area_GEB"]
-                >= minimum_upstream_area_km2 * 1_000_000.0
-            ].copy()
-            self.model.logger.info(
-                "Upstream-area plot filter retained %d/%d GEB stations at %.1f km2 or larger.",
-                len(evaluation_df),
-                before_filter_count,
-                minimum_upstream_area_km2,
-            )
 
         if include_geb and evaluation_df.empty:
             self.model.logger.info(
                 "No discharge stations found for evaluation. Skipping skill score graphs."
             )
             return
-
-        if matched_only:
-            external_models: dict[str, pd.DataFrame] = (
-                self.prepare_external_evaluation()
-            )
-        else:
-            external_models = self._read_external_evaluation_raw()
-
-        if external_models:
-            self.model.logger.info("External models in plot: %s", list(external_models))
-        else:
-            self.model.logger.info("No external models found; showing GEB only.")
-
-        if matched_only and include_geb and external_models and not evaluation_df.empty:
-            matched_station_names: set[str] = set()
-            for ext_df in external_models.values():
-                matched_station_names.update(ext_df.index.str.upper())
-            before_n: int = len(evaluation_df)
-            evaluation_df = evaluation_df[
-                evaluation_df["station_name"].str.upper().isin(matched_station_names)
-            ].copy()
-            self.model.logger.info(
-                "matched_only=True: GEB restricted from %d to %d stations.",
-                before_n,
-                len(evaluation_df),
-            )
-            geb_station_names: set[str] = set(
-                evaluation_df["station_name"].dropna().str.upper()
-            )
-            external_models = {
-                model_name: model_df[model_df.index.isin(geb_station_names)].copy()
-                for model_name, model_df in external_models.items()
-            }
 
         _plot_skill_score_boxplots(
             evaluation_df=evaluation_df,
