@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import create_discharge_folium_map
 from geb.evaluate.workflows.external_skill_scores import (
-    get_geb_station_names as _get_geb_station_names,
+    get_geb_station_keys as _get_geb_station_keys,
     prepare_external_evaluation as _prepare_external_evaluation,
     prepare_skill_score_boxplot_inputs as _prepare_skill_score_boxplot_inputs,
     read_external_evaluation_raw as _read_external_evaluation_raw,
@@ -2230,7 +2230,7 @@ class Hydrology:
             return {}
 
         geb_xlsx = self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
-        station_names: set[str] = _get_geb_station_names(
+        station_keys: set[str] = _get_geb_station_keys(
             evaluation_metrics_path=geb_xlsx,
             snapped_locations_path=self.model.files["geom"][
                 "discharge/discharge_snapped_locations"
@@ -2239,7 +2239,7 @@ class Hydrology:
 
         return _prepare_external_evaluation(
             external_models=external_models,
-            station_names=station_names,
+            station_keys=station_keys,
             output_folder=self.evaluate_discharge_output_folder,
             logger=self.model.logger,
         )

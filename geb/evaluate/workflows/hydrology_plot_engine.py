@@ -327,9 +327,9 @@ def _draw_violin_box(
 def _get_robust_error_metric_ylim(metric_values: np.ndarray) -> tuple[float, float]:
     """Get readable y-axis limits for unbounded error-metric distributions.
 
-    Extreme RMSE and RRMSE outliers can make the violin and box unreadable. This
-    keeps the visible range around the boxplot whisker while preserving all
-    values for the plotted statistics.
+    Extreme RMSE and RRMSE outliers can make the violin and box unreadable. The
+    95th percentile keeps the main distribution visible while medians still use
+    all values.
 
     Args:
         metric_values: Error metric values across all plotted models.
@@ -345,19 +345,8 @@ def _get_robust_error_metric_ylim(metric_values: np.ndarray) -> tuple[float, flo
     if nonnegative_values.size == 0:
         return (0.0, 1.0)
 
-    first_quartile: float = float(np.nanpercentile(nonnegative_values, 25))
-    third_quartile: float = float(np.nanpercentile(nonnegative_values, 75))
-    interquartile_range: float = third_quartile - first_quartile
-    whisker_upper_limit: float = third_quartile + 1.5 * interquartile_range
-    values_inside_whisker: np.ndarray = nonnegative_values[
-        nonnegative_values <= whisker_upper_limit
-    ]
-    if values_inside_whisker.size == 0:
-        visible_upper_limit: float = float(third_quartile)
-    else:
-        visible_upper_limit = float(values_inside_whisker.max())
-
-    return (0.0, max(visible_upper_limit * 1.15, 1.0))
+    visible_upper_limit: float = float(np.nanpercentile(nonnegative_values, 95))
+    return (0.0, max(visible_upper_limit * 1.1, 1.0))
 
 
 def plot_skill_score_boxplots(

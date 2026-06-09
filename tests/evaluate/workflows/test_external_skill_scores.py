@@ -9,8 +9,6 @@ import pytest
 
 from geb.evaluate.workflows.external_skill_scores import (
     GOOGLE_STREAMFLOW_MODEL_NAME,
-    filter_utrecht_skill_scores,
-    prepare_google_streamflow_skill_scores,
     prepare_skill_score_boxplot_inputs,
     read_external_evaluation_raw,
     read_google_streamflow_skill_scores,
@@ -18,77 +16,12 @@ from geb.evaluate.workflows.external_skill_scores import (
 )
 
 
-def test_filter_utrecht_skill_scores_applies_grdc_station_criteria() -> None:
-    """Utrecht skill scores are filtered to record length, end year, and area criteria."""
-    external_evaluation_df: pd.DataFrame = pd.DataFrame(
-        {
-            "KGE": [0.8, 0.7, 0.6, 0.5],
-            "end_year": [1991, 1990, 1995, 2000],
-            "data_years": [10.0, 10.0, 9.9, 12.0],
-            "catchment_area_km2": [400.0, 500.0, 800.0, 399.9],
-        },
-        index=pd.Index(["passes", "too_early", "too_short", "too_small"]),
-    )
-
-    filtered_evaluation_df: pd.DataFrame = filter_utrecht_skill_scores(
-        external_evaluation_df,
-        logging.getLogger(__name__),
-    )
-
-    assert filtered_evaluation_df.index.to_list() == ["passes"]
-
-
-def test_filter_utrecht_skill_scores_converts_m2_area_column() -> None:
-    """Utrecht catchment-area metadata in square meters is converted to km2."""
-    external_evaluation_df: pd.DataFrame = pd.DataFrame(
-        {
-            "KGE": [0.8, 0.7],
-            "end_date": ["1991-12-31", "1991-12-31"],
-            "n_years": [10.0, 10.0],
-            "catchment_area_m2": [400_000_000.0, 399_000_000.0],
-        },
-        index=pd.Index(["passes", "too_small"]),
-    )
-
-    filtered_evaluation_df: pd.DataFrame = filter_utrecht_skill_scores(
-        external_evaluation_df,
-        logging.getLogger(__name__),
-    )
-
-    assert filtered_evaluation_df.index.to_list() == ["passes"]
-
-
-def test_filter_utrecht_skill_scores_keeps_score_only_tables(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Utrecht score-only tables are kept because metadata filters need metadata."""
-    external_evaluation_df: pd.DataFrame = pd.DataFrame(
-        {"KGE": [0.8]},
-        index=pd.Index(["station"]),
-    )
-
-    with caplog.at_level(logging.WARNING):
-        filtered_evaluation_df: pd.DataFrame = filter_utrecht_skill_scores(
-            external_evaluation_df,
-            logging.getLogger(__name__),
-        )
-
-    pd.testing.assert_frame_equal(filtered_evaluation_df, external_evaluation_df)
-    assert filtered_evaluation_df is not external_evaluation_df
-    assert "Skipping Utrecht GRDC station-criteria filter" in caplog.text
-
-
-def test_read_external_evaluation_raw_filters_only_utrecht_sources(
+def test_read_external_evaluation_raw_reads_csv_scores(
     tmp_path: Path,
 ) -> None:
-    """External CSV reading applies Utrecht filtering without affecting Google data."""
+    """External CSV reading keeps score-only tables unchanged."""
     utrecht_df: pd.DataFrame = pd.DataFrame(
-        {
-            "KGE": [0.8, 0.7],
-            "end_year": [1991, 1990],
-            "data_years": [10.0, 10.0],
-            "catchment_area_km2": [400.0, 500.0],
-        },
+        {"KGE": [0.8, 0.7]},
         index=pd.Index(["station_a", "station_b"]),
     )
     google_df: pd.DataFrame = pd.DataFrame(
@@ -105,26 +38,11 @@ def test_read_external_evaluation_raw_filters_only_utrecht_sources(
         logger=logging.getLogger(__name__),
     )
 
-    assert external_models["utrecht"].index.to_list() == ["STATION_A"]
+    assert external_models["utrecht"].index.to_list() == ["STATION_A", "STATION_B"]
     assert external_models["google_streamflow"].index.to_list() == [
         "STATION_A",
         "STATION_B",
     ]
-
-
-def test_prepare_google_streamflow_skill_scores_is_pass_through() -> None:
-    """Google streamflow preparation currently keeps the external table unchanged."""
-    external_evaluation_df: pd.DataFrame = pd.DataFrame(
-        {"KGE": [0.6]},
-        index=pd.Index(["station"]),
-    )
-
-    prepared_evaluation_df: pd.DataFrame = prepare_google_streamflow_skill_scores(
-        external_evaluation_df
-    )
-
-    pd.testing.assert_frame_equal(prepared_evaluation_df, external_evaluation_df)
-    assert prepared_evaluation_df is not external_evaluation_df
 
 
 def test_prepare_skill_score_boxplot_inputs_matches_after_geb_filter(
@@ -332,6 +250,43 @@ def test_prepare_skill_score_boxplot_inputs_matches_google_by_grdc_station_id(
     )
 
     assert prepared_geb_df["station_ID"].to_list() == [1001]
+    assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
+        "GRDC_1001"
+    ]
+
+
+def test_prepare_skill_score_boxplot_inputs_matches_google_with_snapped_index(
+    tmp_path: Path,
+) -> None:
+    """Google station IDs match when snapped locations store IDs in the index."""
+    gpd = pytest.importorskip("geopandas")
+    shapely_geometry = pytest.importorskip("shapely.geometry")
+    _write_google_metrics_tree(tmp_path / "external")
+    snapped_locations_path: Path = tmp_path / "snapped_locations.geoparquet"
+    snapped_locations_gdf = gpd.GeoDataFrame(
+        {
+            "discharge_observations_station_name": ["Local Name"],
+        },
+        index=pd.Index([1001], name="discharge_observations_station_ID"),
+        geometry=[shapely_geometry.Point(0.0, 0.0)],
+        crs="EPSG:4326",
+    )
+    snapped_locations_gdf.to_parquet(snapped_locations_path)
+
+    prepared_geb_df, external_models = prepare_skill_score_boxplot_inputs(
+        evaluation_metrics_path=tmp_path / "missing_evaluation_metrics.xlsx",
+        snapped_locations_path=snapped_locations_path,
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=tmp_path / "external",
+        model_folder=tmp_path,
+        output_folder=tmp_path,
+        logger=logging.getLogger(__name__),
+        minimum_upstream_area_km2=400.0,
+        include_geb=False,
+        matched_only=True,
+    )
+
+    assert prepared_geb_df.empty
     assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
         "GRDC_1001"
     ]
